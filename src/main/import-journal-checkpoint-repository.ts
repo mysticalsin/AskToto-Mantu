@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { TextDecoder, TextEncoder } from 'node:util'
+import { TextDecoder } from 'node:util'
 import { IncrementalMeetingRecordSchema } from '@shared/incremental-meeting'
 import type { TranscriptLine } from '@shared/ipc'
 import type {
@@ -22,6 +22,7 @@ import {
 } from './import-job-checkpoint-contract'
 import type { ImportLegacyOriginHandle } from './import-legacy-origin'
 import type { ImportPersistencePolicy } from './import-persistence-policy'
+import { canonicalizeIncrementalMeetingRecord } from './features/meetings/incremental-record-canonical'
 import {
   checkpointFromMetadata,
   decodeCheckpointMetadata,
@@ -41,7 +42,6 @@ const JOB_ID =
   /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-f]{32})$/
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/
 const decoder = new TextDecoder('utf-8', { fatal: true })
-const encoder = new TextEncoder()
 
 /** A single root/key/writer-bound session. Implementations are composed from the root and key services. */
 export interface ImportJournalSession {
@@ -177,12 +177,9 @@ function safeRecordJson(line: TranscriptLine, recordId: string, policy: ImportPe
     throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
   }
   const record = IncrementalMeetingRecordSchema.parse(candidate)
-  const bytes = encoder.encode(JSON.stringify(record))
-  if (bytes.byteLength > policy.speech.maxRecordBytes) {
-    bytes.fill(0)
-    throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
-  }
-  return bytes
+  const canonical = canonicalizeIncrementalMeetingRecord(record, policy.speech, policy.speech.maxRecordBytes)
+  if (!canonical.ok) throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
+  return canonical.value.canonicalBytes
 }
 
 export function createImportJournalCheckpointRepository(
@@ -291,10 +288,21 @@ export function createImportJournalCheckpointRepository(
                 !result.success ||
                 result.data.source !== 'local-final' ||
                 result.data.identity.kind !== 'local' ||
-                result.data.identity.recordId !== pending.recordId ||
-                JSON.stringify(result.data) !== text
+                result.data.identity.recordId !== pending.recordId
               )
                 throw new ImportCheckpointUnavailableError('CONFLICT')
+              const canonical = canonicalizeIncrementalMeetingRecord(
+                result.data,
+                state.session.policy.speech,
+                state.session.policy.speech.maxRecordBytes
+              )
+              if (!canonical.ok) throw new ImportCheckpointUnavailableError('CONFLICT')
+              try {
+                if (decoder.decode(canonical.value.canonicalBytes) !== text)
+                  throw new ImportCheckpointUnavailableError('CONFLICT')
+              } finally {
+                canonical.value.canonicalBytes.fill(0)
+              }
               matchedRecord = true
             },
             () => {
@@ -534,28 +542,29 @@ export function createImportJournalCheckpointRepository(
             JSON.stringify(activePending.nextHeader) !== JSON.stringify(nextHeader)
           )
             throw new ImportCheckpointUnavailableError('CONFLICT')
-        } else {
-          const reserved: CheckpointMetadata = { ...state.metadata, pending }
-          assertMetadataFits(reserved, state.session.policy.legacy.maxDescriptorBytes)
-          await commitMetadata(state, current.revision, reserved)
-          activePending = pending
         }
-        const recordBytes = safeRecordJson(change.record, activePending.recordId!, state.session.policy)
-        let appendResult
+        const pendingToUse = activePending ?? pending
+        const recordBytes = safeRecordJson(change.record, pendingToUse.recordId!, state.session.policy)
+        let appendResult: Awaited<ReturnType<ImportJournalSession['appender']['append']>>
         try {
-          appendResult = await state.session.appender.append(recordBytes, activePending.baseRevision)
+          if (!activePending) {
+            const reserved: CheckpointMetadata = { ...state.metadata, pending }
+            assertMetadataFits(reserved, state.session.policy.legacy.maxDescriptorBytes)
+            await commitMetadata(state, current.revision, reserved)
+          }
+          appendResult = await state.session.appender.append(recordBytes, pendingToUse.baseRevision)
+          state.session.assertCurrent()
+          if (appendResult.status !== 'durable') {
+            throw new ImportCheckpointUnavailableError(
+              appendResult.reason === 'STALE_OWNER'
+                ? 'STALE_OWNER'
+                : appendResult.reason === 'LIMIT' || appendResult.reason === 'INVALID_RECORD'
+                  ? 'RESOURCE_LIMIT'
+                  : 'CONFLICT'
+            )
+          }
         } finally {
           recordBytes.fill(0)
-        }
-        state.session.assertCurrent()
-        if (appendResult.status !== 'durable') {
-          throw new ImportCheckpointUnavailableError(
-            appendResult.reason === 'STALE_OWNER'
-              ? 'STALE_OWNER'
-              : appendResult.reason === 'LIMIT' || appendResult.reason === 'INVALID_RECORD'
-                ? 'RESOURCE_LIMIT'
-                : 'CONFLICT'
-          )
         }
         const snapshot = await state.session.storage.readSnapshot(state.session.meetingId, () => {
           try {

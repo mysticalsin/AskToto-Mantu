@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { shell } from 'electron'
 import { execFile, execSync } from 'node:child_process'
 import { IPC } from '@shared/ipc'
+import type { Settings } from '@shared/ipc'
 import type { ImportJob, ImportJobManager } from '../import-jobs'
+import { createImportJobAuthority } from '../import-job-authority'
 import { registerImportJobsIpc } from './import-jobs'
 
 vi.mock('electron')
@@ -133,6 +135,62 @@ function setup({
 }
 
 describe('import jobs IPC adapter', () => {
+  it('runs positive Start, Batch, Resume, and List through the captured settings authority', async () => {
+    const configured = {
+      enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
+      meetingsFolder: '/meetings-a',
+      encryptTranscripts: false,
+      asrEngine: 'whisper',
+      asrLanguage: 'auto'
+    } as Settings
+    let epoch = 1
+    const receipt = Object.freeze({})
+    let current = {
+      settings: configured,
+      readable: true,
+      epoch,
+      allowedProviders: null,
+      localSpeechPack: null,
+      lockedKeys: [],
+      history: { import: receipt, persistence: null }
+    }
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 4,
+      readAuthority: async () => {
+        current = { ...current, settings: { ...configured }, epoch: ++epoch }
+        return current
+      },
+      currentObservation: () => current,
+      captureAuthorityReceipt: () => receipt,
+      isAuthorityReceiptCurrent: (candidate) => candidate === receipt
+    })
+    const context = setup({
+      refreshImportAuthority: authority.refreshSettings,
+      captureImportOperation: authority.captureOperation,
+      assertImportAdmissionAllowed: authority.assertAdmissionAllowed,
+      assertImportAdmissionCurrent: authority.assertAdmissionCurrent
+    })
+
+    await expect(context.invoke(IPC.importAudioStart, { token: 'a'.repeat(24) })).resolves.toMatchObject({
+      jobId: 'job-1'
+    })
+    await expect(
+      context.invoke(IPC.importAudioStartBatch, { tokens: ['b'.repeat(24), 'c'.repeat(24)] })
+    ).resolves.toMatchObject([{ jobId: 'job-1' }])
+    await expect(
+      context.invoke(IPC.importJobResume, { jobId: '11111111-1111-4111-8111-111111111111' })
+    ).resolves.toMatchObject({ jobId: 'job-1' })
+    await expect(context.invoke(IPC.importJobsList)).resolves.toMatchObject({
+      policyState: 'allowed',
+      persistenceState: 'configured',
+      jobs: [{ jobId: 'job-1' }]
+    })
+    expect(context.manager.start).toHaveBeenCalledOnce()
+    expect(context.manager.startMany).toHaveBeenCalledOnce()
+    expect(context.manager.resume).toHaveBeenCalledOnce()
+  })
+
   it('checks current policy before consuming a one-shot token', async () => {
     const context = setup({
       assertImportAdmissionAllowed: () => {

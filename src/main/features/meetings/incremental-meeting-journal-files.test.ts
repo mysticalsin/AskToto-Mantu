@@ -97,11 +97,13 @@ describe('encrypted incremental meeting journal files', () => {
     roots.push(root)
     const journal = await store(root)
     await journal.initialize()
-    const metadata = Uint8Array.from({ length: 11_827 }, (_, index) => index % 251)
+    const metadata = Uint8Array.from({ length: 11_828 }, (_, index) => index % 251)
     await expect(journal.commitApplicationMetadata(0, metadata, 16_384, () => true)).resolves.toMatchObject({
       status: 'ok',
       revision: 1
     })
+    const activeManifest = await readFile(join(root, 'manifest.v1'))
+    expect(activeManifest.byteLength + 259).toBe(16_385)
     await expect(appender(journal).append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
     await expect(journal.readApplicationMetadata(() => true)).resolves.toMatchObject({
       status: 'ok',
@@ -122,6 +124,26 @@ describe('encrypted incremental meeting journal files', () => {
       bytes: metadata
     })
     reopened.dispose()
+  })
+
+  it('measures below-cap and exact-cap pending manifest admission from the encoded active manifest', async () => {
+    for (const metadataLength of [11_826, 11_827]) {
+      const root = await mkdtemp(join(tmpdir(), 'metis-incremental-manifest-boundary-'))
+      roots.push(root)
+      const journal = await store(root)
+      await journal.initialize()
+      const metadata = Uint8Array.from({ length: metadataLength }, (_, index) => index % 251)
+      await expect(journal.commitApplicationMetadata(0, metadata, 16_384, () => true)).resolves.toMatchObject({
+        status: 'ok',
+        revision: 1
+      })
+      const activeManifest = await readFile(join(root, 'manifest.v1'))
+      const candidatePendingBytes = activeManifest.byteLength + 259
+      expect(candidatePendingBytes).toBe(metadataLength === 11_827 ? 16_384 : 16_383)
+      await expect(appender(journal).append(recordJson, 0)).resolves.toMatchObject({ status: 'durable' })
+      expect((await readFile(join(root, 'manifest.v1'))).byteLength).toBeLessThanOrEqual(16_384)
+      journal.dispose()
+    }
   })
 
   it('stores application cursor metadata in the authenticated manifest with revision CAS', async () => {

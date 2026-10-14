@@ -9,6 +9,7 @@ import { createBoundedJournalFileReader } from './incremental-meeting-journal-fi
 import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journal-root'
 import { consumeIncrementalRecordReceipt } from './incremental-record-receipt'
 import { createApplicationMetadataStore } from './incremental-meeting-journal-application-metadata'
+import { createIncrementalJournalStateOperations } from './incremental-meeting-journal-state-operations'
 import { readIncrementalJournalPage } from './incremental-meeting-journal-page-reader'
 import {
   MAX_MANIFEST_BYTES,
@@ -245,16 +246,18 @@ export function createIncrementalMeetingJournalFileStorage(
       return writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
     }
   })
+  const stateOperations = createIncrementalJournalStateOperations({
+    baseCurrent,
+    activeCheck,
+    readManifest,
+    writeAtomic,
+    manifestName,
+    maxJournalBytes,
+    key: key!
+  })
 
   const storage: IncrementalMeetingJournalFileStorage = {
-    async readPendingAppend(isCurrent) {
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent()) return 'unavailable'
-      const pending = loaded.core.pending !== null
-      loaded.bytes.fill(0)
-      return requestCurrent() ? (pending ? 'pending' : 'clear') : 'unavailable'
-    },
+    readPendingAppend: stateOperations.readPendingAppend,
 
     async initialize() {
       const requestCurrent = baseCurrent
@@ -719,30 +722,7 @@ export function createIncrementalMeetingJournalFileStorage(
       })
     },
 
-    async transitionState(state, isCurrent) {
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      if (!requestCurrent()) return 'stale-owner'
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent()) return 'unavailable'
-      if (loaded.core.state !== 'active' || loaded.core.pending) {
-        loaded.bytes.fill(0)
-        return 'unavailable'
-      }
-      const core: ManifestCore = { ...loaded.core, state, manifestBytes: 0 }
-      const recordBytes = core.storedBytes - loaded.core.manifestBytes
-      const bytes = setManifestStoredBytes(core, recordBytes, key!)
-      loaded.bytes.fill(0)
-      if (!requestCurrent()) {
-        bytes.fill(0)
-        return 'stale-owner'
-      }
-      if (bytes.byteLength > MAX_MANIFEST_BYTES || core.storedBytes > maxJournalBytes) {
-        bytes.fill(0)
-        return 'unavailable'
-      }
-      const wrote = await writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
-      return wrote ? 'committed' : requestCurrent() ? 'unavailable' : 'stale-owner'
-    },
+    transitionState: stateOperations.transitionState,
 
     ...applicationMetadata,
 

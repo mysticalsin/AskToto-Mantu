@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { resolve } from 'node:path'
 import type { TranscriptLine } from '@shared/ipc'
 import type {
   IncrementalMeetingAppender,
@@ -153,7 +154,7 @@ function fixture() {
     keyId: 'key_1',
     owner: { profileNamespace: 'profile_1', principalAssociation: 'principal_1', generation: 'generation_1' },
     source: {
-      canonicalPath: '/private/audio.wav',
+      canonicalPath: resolve('synthetic-import-audio.wav'),
       device: '1',
       inode: '2',
       size: 42,
@@ -200,7 +201,7 @@ function fixture() {
 function header(): ImportJobHeader {
   return {
     jobId: JOB_ID,
-    sourcePath: '/private/audio.wav',
+    sourcePath: resolve('synthetic-import-audio.wav'),
     sourceName: 'audio.wav',
     sourceSizeBytes: 42,
     sourceMtimeMs: 3,

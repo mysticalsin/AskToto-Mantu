@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import type { TranscriptLine } from '@shared/ipc'
@@ -62,10 +62,10 @@ function detector(): DatalessDetector {
   return { classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, 'local'])) }
 }
 
-function header(): ImportJobHeader {
+function header(sourcePath: string): ImportJobHeader {
   return {
     jobId,
-    sourcePath: '/private/audio.wav',
+    sourcePath,
     sourceName: 'audio.wav',
     sourceSizeBytes: 42,
     sourceMtimeMs: 3,
@@ -140,7 +140,14 @@ describe('encrypted import checkpoint repository recovery', () => {
         journalId: meetingId,
         keyId: 'key_1',
         owner: { profileNamespace: 'profile_1', principalAssociation: 'principal_1', generation: 'generation_1' },
-        source: { canonicalPath: '/private/audio.wav', device: '1', inode: '2', size: 42, mtimeNs: '3', ctimeNs: '4' },
+        source: {
+          canonicalPath: resolve(join(root, 'audio.wav')),
+          device: '1',
+          inode: '2',
+          size: 42,
+          mtimeNs: '3',
+          ctimeNs: '4'
+        },
         policy: configured,
         storage,
         appender,
@@ -170,13 +177,37 @@ describe('encrypted import checkpoint repository recovery', () => {
       assertOriginCurrent() {}
     }
     const repository = createImportJournalCheckpointRepository(runtime)
-    const created = await repository.createNew(header(), origin)
+    const sourcePath = resolve(join(root, 'audio.wav'))
+    const created = await repository.createNew(header(sourcePath), origin)
     expect(created.status).toBe('ready')
     if (created.status !== 'ready') return
+    const beforeAdmission = await active!.storage.readApplicationMetadata(() => true)
+    expect(beforeAdmission.status).toBe('ok')
+    const invalidAdmission = await repository.appendWindow(
+      created.checkpoint,
+      {
+        expectedCursor: 0,
+        nextCursor: 1,
+        record: { speaker: 'unknown', text: 'x'.repeat(configured.speech.maxFieldBytes + 1), t: 1 } as TranscriptLine,
+        headerPatch: { cursor: 1, totalChunks: 1, updatedAt: 2 }
+      },
+      origin
+    )
+    expect(invalidAdmission).toEqual({ status: 'held', reason: 'RESOURCE_LIMIT' })
+    await expect(active!.storage.readApplicationMetadata(() => true)).resolves.toEqual(beforeAdmission)
+    await expect(active!.storage.readSnapshot(active!.meetingId, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      snapshot: { durableRevision: 0, recordCount: 0 }
+    })
+    if (beforeAdmission.status === 'ok') beforeAdmission.bytes?.fill(0)
     const change = {
       expectedCursor: 0,
       nextCursor: 1,
-      record: { speaker: 'unknown', text: 'durable transcript', t: 1_700_000_000_000 } as TranscriptLine,
+      record: {
+        speaker: 'unknown',
+        text: 'Use <tag> & "quotes"\n café\t ready',
+        t: 1_700_000_000_000
+      } as TranscriptLine,
       headerPatch: { cursor: 1, totalChunks: 1, updatedAt: 2 }
     }
     await expect(repository.appendWindow(created.checkpoint, change, origin)).resolves.toMatchObject({

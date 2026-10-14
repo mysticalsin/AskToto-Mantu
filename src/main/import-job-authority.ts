@@ -11,11 +11,17 @@ import type { PrepareSavedReplacement } from './infra/storage/atomic-saved-write
 
 export type ImportCapabilityState = 'available' | 'cloud-only-unsupported' | 'unavailable'
 
+type ImportAuthoritySnapshot = SettingsPolicyAuthoritySnapshot & {
+  readonly history: Readonly<{ import: object | null }>
+}
+
 export interface ImportJobAuthorityDependencies {
   requireAuth(): boolean
   authGeneration(): number
-  readAuthority(): Promise<SettingsPolicyAuthoritySnapshot>
+  readAuthority(): Promise<ImportAuthoritySnapshot>
   currentObservation(): SettingsObservation | null
+  captureAuthorityReceipt(): object | null
+  isAuthorityReceiptCurrent(receipt: object): boolean
 }
 
 export interface ImportOperationAuthority {
@@ -23,11 +29,29 @@ export interface ImportOperationAuthority {
   refreshSameScope(): Promise<void>
 }
 
+const IMPORT_POLICY_LOCK_KEYS = new Set([
+  'meetingsFolder',
+  'encryptTranscripts',
+  'enterpriseLive',
+  'asrEngine',
+  'asrLanguage',
+  'azureClientId',
+  'azureTenantId',
+  'azureAllowedDomain',
+  'localSpeechPack',
+  'allowedProviders'
+])
+
 function importWriteScope(settings: Settings): string {
+  const enterpriseLive = resolveEnterpriseLiveProfile(settings.enterpriseLive)
   return JSON.stringify({
     meetingsFolder: settings.meetingsFolder,
     encryptTranscripts: settings.encryptTranscripts,
-    enterpriseLive: settings.enterpriseLive,
+    enterpriseLive: {
+      managed: enterpriseLive.managed,
+      inferenceMode: enterpriseLive.inferenceMode,
+      summaryOnly: enterpriseLive.summaryOnly
+    },
     asrEngine: settings.asrEngine,
     asrLanguage: settings.asrLanguage,
     azureClientId: settings.azureClientId,
@@ -39,9 +63,9 @@ function importWriteScope(settings: Settings): string {
 function authorityScope(authority: SettingsPolicyAuthoritySnapshot): string {
   return JSON.stringify({
     settings: importWriteScope(authority.settings),
-    allowedProviders: authority.allowedProviders,
+    allowedProviders: authority.allowedProviders === null ? null : [...new Set(authority.allowedProviders)].sort(),
     localSpeechPack: authority.localSpeechPack,
-    lockedKeys: authority.lockedKeys
+    lockedKeys: [...new Set(authority.lockedKeys.filter((key) => IMPORT_POLICY_LOCK_KEYS.has(key)))].sort()
   })
 }
 
@@ -50,6 +74,7 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
   let authorityQueue: Promise<void> = Promise.resolve()
   let authorityRevision = 0
   let lastVerifiedEpoch: number | undefined
+  let lastVerifiedReceipt: object | undefined
   let lastAuthGeneration: number | undefined
   let lastAuthorityScope: string | undefined
 
@@ -70,16 +95,34 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     return observation
   }
 
+  function receiptCurrent(receipt: object): boolean {
+    try {
+      return deps.isAuthorityReceiptCurrent(receipt)
+    } catch {
+      return false
+    }
+  }
+
+  function captureReceipt(): object {
+    let receipt: object | null
+    try {
+      receipt = deps.captureAuthorityReceipt()
+    } catch {
+      receipt = null
+    }
+    if (!receipt || !receiptCurrent(receipt)) throw unavailable()
+    return receipt
+  }
+
   function assertAuthorityRevision(expectedRevision: number): void {
     const observation = deps.currentObservation()
     const authGeneration = deps.authGeneration()
     if (!deps.requireAuth() || !observation?.readable || !Number.isSafeInteger(authGeneration)) throw unavailable()
     if (
-      (lastVerifiedEpoch !== undefined && observation.epoch !== lastVerifiedEpoch) ||
+      (lastVerifiedReceipt !== undefined && !receiptCurrent(lastVerifiedReceipt)) ||
       (lastAuthGeneration !== undefined && authGeneration !== lastAuthGeneration)
     ) {
       authorityRevision += 1
-      lastVerifiedEpoch = observation.epoch
       lastAuthGeneration = authGeneration
     }
     if (authorityRevision !== expectedRevision) throw unavailable()
@@ -87,12 +130,11 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
 
   async function readFreshSettings(): Promise<Settings> {
     if (!deps.requireAuth()) throw unavailable()
-    const before = deps.currentObservation()
+    const receipt = captureReceipt()
     const beforeAuthGeneration = deps.authGeneration()
     if (!Number.isSafeInteger(beforeAuthGeneration)) throw unavailable()
-    // A new observation epoch can be a benign publication of the same effective authority. Wait
-    // for the trusted read below before deciding; eagerly advancing the revision would revoke
-    // every operation when Settings is reparsed into a fresh object.
+    // Equivalent settings publications retain their semantic receipt; policy or authority changes
+    // invalidate it in the publisher before any callback can refresh or adopt a later scope.
     if (lastAuthGeneration !== undefined && beforeAuthGeneration !== lastAuthGeneration) authorityRevision += 1
     const revisionBeforeRead = authorityRevision
     const authority = await deps.readAuthority()
@@ -103,6 +145,9 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
       beforeAuthGeneration !== afterAuthGeneration ||
       !authority.readable ||
       !current?.readable ||
+      !receiptCurrent(receipt) ||
+      !authority.history?.import ||
+      !receiptCurrent(authority.history.import) ||
       current.epoch !== authority.epoch ||
       current.settings !== authority.settings
     ) {
@@ -112,24 +157,17 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
       throw unavailable()
     }
     const signature = authorityScope(authority)
-    const equivalentPublication = Boolean(before && current.epoch === before.epoch + 1)
-    if (
-      (lastAuthorityScope !== undefined && signature !== lastAuthorityScope) ||
-      (before && current.epoch !== before.epoch && !equivalentPublication)
-    ) {
+    if (lastAuthorityScope !== undefined && signature !== lastAuthorityScope) {
       authorityRevision += 1
     }
-    // Only a single equivalent publication from this forced read is allowed to advance the observation
-    // epoch. Any other change during the await was an intervening policy/tenant transition.
-    if (
-      revisionBeforeRead !== authorityRevision ||
-      (before && current.epoch !== before.epoch && !equivalentPublication)
-    ) {
+    if (revisionBeforeRead !== authorityRevision || !receiptCurrent(receipt)) {
       lastVerifiedEpoch = current.epoch
       lastAuthorityScope = signature
+      lastVerifiedReceipt = receipt
       throw unavailable()
     }
     lastVerifiedEpoch = current.epoch
+    lastVerifiedReceipt = receipt
     lastAuthGeneration = afterAuthGeneration
     lastAuthorityScope = signature
     return authority.settings
@@ -190,8 +228,14 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
   }
 
   function assertAdmissionCurrent(): void {
-    const observed = currentObservation()
-    if (lastVerifiedEpoch !== observed.epoch || lastAuthGeneration !== deps.authGeneration()) throw unavailable()
+    currentObservation()
+    if (
+      lastVerifiedEpoch === undefined ||
+      lastVerifiedReceipt === undefined ||
+      !receiptCurrent(lastVerifiedReceipt) ||
+      lastAuthGeneration !== deps.authGeneration()
+    )
+      throw unavailable()
     assertRetentionAllowed()
     const capability = currentCapabilityState()
     if (capability === 'unavailable') throw unavailable()
@@ -204,6 +248,7 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     // Pin the invocation before entering the serialized refresh queue. A request that waits behind
     // another read must never inherit a later auth generation or settings scope.
     const invocation = currentObservation()
+    const invocationReceipt = captureReceipt()
     const invocationAuthGeneration = deps.authGeneration()
     if (!Number.isSafeInteger(invocationAuthGeneration)) throw unavailable()
     const invocationSettings = importWriteScope(invocation.settings)
@@ -213,9 +258,9 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     const observation = currentObservation()
     const authGeneration = deps.authGeneration()
     if (
+      !receiptCurrent(invocationReceipt) ||
       authGeneration !== invocationAuthGeneration ||
       authorityRevision !== invocationRevision ||
-      observation.epoch > invocation.epoch + 1 ||
       importWriteScope(observation.settings) !== invocationSettings ||
       (invocationAuthorityScope !== undefined && lastAuthorityScope !== invocationAuthorityScope)
     )
@@ -223,16 +268,24 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     const expectedRevision = authorityRevision
     const expectedScope = lastAuthorityScope
     const expectedSettings = importWriteScope(observation.settings)
+    let retired = false
 
     function assertCurrent(): void {
-      const current = currentObservation()
-      if (
-        authorityRevision !== expectedRevision ||
-        deps.authGeneration() !== authGeneration ||
-        lastVerifiedEpoch !== current.epoch ||
-        importWriteScope(current.settings) !== expectedSettings ||
-        lastAuthorityScope !== expectedScope
-      ) {
+      if (retired) throw unavailable()
+      try {
+        const current = currentObservation()
+        if (
+          !receiptCurrent(invocationReceipt) ||
+          authorityRevision !== expectedRevision ||
+          deps.authGeneration() !== authGeneration ||
+          importWriteScope(current.settings) !== expectedSettings ||
+          lastAuthorityScope !== expectedScope
+        ) {
+          retired = true
+          throw unavailable()
+        }
+      } catch {
+        retired = true
         throw unavailable()
       }
     }
@@ -241,19 +294,24 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
       assertCurrent,
       async refreshSameScope(): Promise<void> {
         assertCurrent()
-        const refreshed = await refreshSettings()
-        const current = currentObservation()
-        if (
-          authorityRevision !== expectedRevision ||
-          deps.authGeneration() !== authGeneration ||
-          importWriteScope(refreshed) !== expectedSettings ||
-          lastAuthorityScope !== expectedScope ||
-          current.settings !== refreshed ||
-          current.epoch !== lastVerifiedEpoch
-        ) {
+        try {
+          const refreshed = await refreshSettings()
+          const current = currentObservation()
+          if (
+            !receiptCurrent(invocationReceipt) ||
+            authorityRevision !== expectedRevision ||
+            deps.authGeneration() !== authGeneration ||
+            importWriteScope(refreshed) !== expectedSettings ||
+            lastAuthorityScope !== expectedScope ||
+            importWriteScope(current.settings) !== expectedSettings
+          ) {
+            throw unavailable()
+          }
+          assertCurrent()
+        } catch {
+          retired = true
           throw unavailable()
         }
-        assertCurrent()
       }
     }
   }
@@ -268,11 +326,14 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
   }
 
   async function captureAsrAdmission() {
+    const receipt = captureReceipt()
     const settings = await assertAdmissionAllowed()
     const observed = currentObservation()
     if (
       observed.settings !== settings ||
-      lastVerifiedEpoch !== observed.epoch ||
+      !receiptCurrent(receipt) ||
+      lastVerifiedReceipt === undefined ||
+      !receiptCurrent(lastVerifiedReceipt) ||
       lastAuthGeneration !== deps.authGeneration()
     ) {
       throw unavailable()
@@ -284,7 +345,11 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
       assertCurrent(): void {
         const latest = currentObservation()
         assertAuthorityRevision(revision)
-        if (importWriteScope(latest.settings) !== importWriteScope(settings) || lastAuthorityScope !== scope) {
+        if (
+          !receiptCurrent(receipt) ||
+          importWriteScope(latest.settings) !== importWriteScope(settings) ||
+          lastAuthorityScope !== scope
+        ) {
           throw unavailable()
         }
         assertAdmissionCurrent()
@@ -294,9 +359,10 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
 
   function prepareReplacement(expectedSettings?: Settings): PrepareSavedReplacement {
     const expected = currentObservation()
+    const expectedReceipt = captureReceipt()
     const expectedRevision = authorityRevision
     if (
-      lastVerifiedEpoch !== expected.epoch ||
+      !receiptCurrent(expectedReceipt) ||
       (expectedSettings && importWriteScope(expected.settings) !== importWriteScope(expectedSettings))
     ) {
       throw unavailable()
@@ -304,11 +370,16 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     const expectedScope = importWriteScope(expected.settings)
     return async () => {
       const beforeRead = currentObservation()
+      if (!receiptCurrent(expectedReceipt)) throw unavailable()
       assertAuthorityRevision(expectedRevision)
       if (importWriteScope(beforeRead.settings) !== expectedScope) throw unavailable()
       const settings = await refreshSettings()
       const afterRead = currentObservation()
-      if (authorityRevision !== expectedRevision || importWriteScope(settings) !== expectedScope) {
+      if (
+        !receiptCurrent(expectedReceipt) ||
+        authorityRevision !== expectedRevision ||
+        importWriteScope(settings) !== expectedScope
+      ) {
         throw unavailable()
       }
       if (!canRetainImportedTranscript(settings)) throw new ImportRetentionBlockedError()
@@ -321,8 +392,8 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
       return () => {
         const latest = currentObservation()
         if (
+          !receiptCurrent(expectedReceipt) ||
           authorityRevision !== expectedRevision ||
-          lastVerifiedEpoch !== latest.epoch ||
           importWriteScope(latest.settings) !== expectedScope
         ) {
           throw unavailable()

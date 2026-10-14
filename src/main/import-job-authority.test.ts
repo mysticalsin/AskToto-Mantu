@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '@shared/ipc'
 import type { SettingsObservation, SettingsPolicyAuthoritySnapshot } from './settings-observation'
+import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { createImportJobAuthority } from './import-job-authority'
 
 function settings(summaryOnly = false, cloudOnly = false): Settings {
   return {
     enterpriseLive: cloudOnly
       ? { managed: true, inferenceMode: 'cloud-only', summaryOnly }
-      : { managed: false, inferenceMode: 'local', summaryOnly },
+      : summaryOnly
+        ? { managed: true, inferenceMode: 'legacy', summaryOnly: true }
+        : { managed: false, inferenceMode: 'legacy', summaryOnly: false },
     meetingsFolder: '/meetings-a',
     encryptTranscripts: false,
     asrEngine: 'whisper',
@@ -15,25 +18,54 @@ function settings(summaryOnly = false, cloudOnly = false): Settings {
   } as Settings
 }
 
-function snapshot(value: Settings, epoch: number, readable = true): SettingsPolicyAuthoritySnapshot {
-  return { settings: value, readable, epoch, allowedProviders: null, localSpeechPack: null, lockedKeys: [] }
+const authorityReceipt = Object.freeze({})
+
+function snapshot(
+  value: Settings,
+  epoch: number,
+  readable = true,
+  receipt: object | null = authorityReceipt
+): SettingsPolicyAuthoritySnapshot & { history: { import: object | null; persistence?: object | null } } {
+  return {
+    settings: value,
+    readable,
+    epoch,
+    allowedProviders: null,
+    localSpeechPack: null,
+    lockedKeys: [],
+    history: { import: receipt }
+  }
+}
+
+function testAuthorityReceipt() {
+  return {
+    captureAuthorityReceipt: () => authorityReceipt,
+    isAuthorityReceiptCurrent: (receipt: object) => receipt === authorityReceipt
+  }
 }
 
 describe('import job authority boundary', () => {
   it('keeps an operation current across verified equivalent fresh Settings publications', async () => {
     let current: SettingsObservation | null = null
     let epoch = 1
+    let reads = 0
     const value = settings()
     current = snapshot(value, epoch)
     const authority = createImportJobAuthority({
       requireAuth: () => true,
       authGeneration: () => 4,
       readAuthority: async () => {
-        const fresh = snapshot({ ...value }, ++epoch)
+        reads += 1
+        const fresh = {
+          ...snapshot({ ...value }, ++epoch),
+          allowedProviders: reads % 2 ? ['cloud', 'whisper'] : ['whisper', 'cloud'],
+          lockedKeys: ['meetingsFolder', reads % 2 ? 'unrelatedA' : 'unrelatedB']
+        }
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
 
     const operation = await authority.captureOperation()
@@ -64,7 +96,8 @@ describe('import job authority boundary', () => {
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
 
     const captured = authority.captureOperation()
@@ -75,7 +108,8 @@ describe('import job authority boundary', () => {
   })
 
   it('rejects a settings A to B to A transition while the initial authority refresh is queued', async () => {
-    let current: SettingsObservation | null = snapshot(settings(), 1)
+    let receipt: object = Object.freeze({ generation: 1 })
+    let current: SettingsObservation | null = snapshot(settings(), 1, true, receipt)
     let releaseRead: (() => void) | undefined
     let announceRead: (() => void) | undefined
     const readStarted = new Promise<void>((resolve) => {
@@ -89,19 +123,99 @@ describe('import job authority boundary', () => {
         await new Promise<void>((resolve) => {
           releaseRead = resolve
         })
-        const fresh = snapshot(settings(), 3)
+        const fresh = snapshot(settings(), 3, true, receipt)
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      captureAuthorityReceipt: () => receipt,
+      isAuthorityReceiptCurrent: (candidate) => candidate === receipt
     })
 
     const captured = authority.captureOperation()
     await readStarted
-    current = snapshot(settings(true), 2)
-    current = snapshot(settings(), 3)
+    receipt = Object.freeze({ generation: 2 })
+    current = snapshot(settings(true), 2, true, receipt)
+    receipt = Object.freeze({ generation: 3 })
+    current = snapshot(settings(), 3, true, receipt)
     releaseRead?.()
     await expect(captured).rejects.toThrow(/policy could not be verified/)
+  })
+
+  it('never revives an operation across a completed semantic A to B to A before a generic refresh', async () => {
+    let receipt: object = Object.freeze({ generation: 1 })
+    let current: SettingsObservation | null = snapshot(settings(), 1, true, receipt)
+    let epoch = 1
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 2,
+      readAuthority: async () => {
+        const fresh = snapshot(settings(), ++epoch, true, receipt)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current,
+      captureAuthorityReceipt: () => receipt,
+      isAuthorityReceiptCurrent: (candidate) => candidate === receipt
+    })
+    const operation = await authority.captureOperation()
+    const firstReceipt = receipt
+    receipt = Object.freeze({ generation: 2 })
+    current = snapshot(settings(true), ++epoch, true, receipt)
+    receipt = Object.freeze({ generation: 3 })
+    current = snapshot(settings(), ++epoch, true, receipt)
+
+    await authority.assertAdmissionAllowed()
+    expect(receipt).not.toBe(firstReceipt)
+    expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
+    await authority.assertAdmissionAllowed()
+    expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
+  })
+
+  it('keeps a refused operation retired after its settings are restored and authority is refreshed', async () => {
+    let receipt: object = Object.freeze({ generation: 1 })
+    let current: SettingsObservation | null = snapshot(settings(), 1, true, receipt)
+    let epoch = 1
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 2,
+      readAuthority: async () => {
+        const fresh = snapshot(settings(), ++epoch, true, receipt)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current,
+      captureAuthorityReceipt: () => receipt,
+      isAuthorityReceiptCurrent: (candidate) => candidate === receipt
+    })
+    const operation = await authority.captureOperation()
+    receipt = Object.freeze({ generation: 2 })
+    current = snapshot(settings(true), ++epoch, true, receipt)
+    expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
+
+    receipt = Object.freeze({ generation: 3 })
+    current = snapshot(settings(), ++epoch, true, receipt)
+    await authority.assertAdmissionAllowed()
+    expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
+  })
+
+  it('allows multiple queued equivalent settings refreshes without rejecting the captured scope', async () => {
+    let current: SettingsObservation | null = snapshot(settings(), 1)
+    let epoch = 1
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 2,
+      readAuthority: async () => {
+        const fresh = snapshot(settings(), ++epoch)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
+    })
+    const operation = await authority.captureOperation()
+    await Promise.all([authority.refreshSettings(), authority.refreshSettings(), authority.refreshSettings()])
+    operation.assertCurrent()
   })
 
   it('requires fresh readable settings and a matching published epoch', async () => {
@@ -116,7 +230,8 @@ describe('import job authority boundary', () => {
       requireAuth: () => allowed,
       authGeneration: () => 0,
       readAuthority,
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
 
     await expect(authority.assertAdmissionAllowed()).resolves.toMatchObject(settings())
@@ -136,7 +251,8 @@ describe('import job authority boundary', () => {
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
 
     await authority.refreshSettings()
@@ -152,6 +268,16 @@ describe('import job authority boundary', () => {
   })
 
   it('reports a fresh summary-only policy refusal without treating it as stale authority', async () => {
+    expect(resolveEnterpriseLiveProfile(settings(true))).toEqual({
+      managed: true,
+      inferenceMode: 'legacy',
+      summaryOnly: true
+    })
+    expect(resolveEnterpriseLiveProfile(settings())).toEqual({
+      managed: false,
+      inferenceMode: 'legacy',
+      summaryOnly: false
+    })
     let current: SettingsObservation | null = null
     const authority = createImportJobAuthority({
       requireAuth: () => true,
@@ -161,7 +287,8 @@ describe('import job authority boundary', () => {
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
     const settingsSnapshot = await authority.refreshSettings()
     const prepareRename = authority.prepareReplacement(settingsSnapshot)
@@ -182,7 +309,8 @@ describe('import job authority boundary', () => {
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
     await authority.refreshSettings()
     const prepare = authority.prepareReplacement(currentSettings)
@@ -195,28 +323,31 @@ describe('import job authority boundary', () => {
     expect(authorityReads).toBe(originalReads)
   })
 
-  it('refuses an epoch-only ABA during a held write instead of adopting the restored scope', async () => {
-    let current: SettingsObservation | null = null
+  it('keeps the original scope across equivalent settings publications during a held write', async () => {
     const original = settings()
     let epoch = 8
+    const receipt = authorityReceipt
+    let current: SettingsObservation | null = snapshot(original, epoch, true, receipt)
     const authority = createImportJobAuthority({
       requireAuth: () => true,
       authGeneration: () => 0,
       readAuthority: async () => {
-        const fresh = snapshot(original, epoch)
+        const fresh = snapshot(original, epoch, true, receipt)
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      captureAuthorityReceipt: () => receipt,
+      isAuthorityReceiptCurrent: (candidate) => candidate === receipt
     })
     await authority.refreshSettings()
     const prepare = authority.prepareReplacement(original)
-    const savedEpoch = epoch
-    epoch += 2 // policy/settings changed and returned to its prior value during the temp write
+    epoch += 2
     current = snapshot(original, epoch)
 
-    await expect(prepare()).rejects.toThrow(/policy could not be verified/)
-    expect(epoch).not.toBe(savedEpoch)
+    const guard = await prepare()
+    expect(typeof guard).toBe('function')
+    if (typeof guard === 'function') guard()
   })
 
   it('keeps cloud-only capability refusal separate from summary-only retention state', async () => {
@@ -229,7 +360,8 @@ describe('import job authority boundary', () => {
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
 
     await expect(authority.refreshRetentionState()).resolves.toBe('allowed')
@@ -248,7 +380,8 @@ describe('import job authority boundary', () => {
         current = fresh
         return fresh
       },
-      currentObservation: () => current
+      currentObservation: () => current,
+      ...testAuthorityReceipt()
     })
     const lease = await authority.captureAsrAdmission()
 
