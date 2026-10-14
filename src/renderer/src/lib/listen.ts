@@ -8,10 +8,7 @@ import {
   resolveEnterpriseLiveProfile,
   type EnterpriseLiveProfile
 } from '@shared/enterprise-live-profile'
-import {
-  effectiveCloudSttProvider,
-  shouldUseCloudSttEngine
-} from '@shared/cloud-stt-provider'
+import { effectiveCloudSttProvider, shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
 import {
   resolveNova3LanguageQuery,
   resolveNova3LanguageQueryPinned,
@@ -76,7 +73,6 @@ export function cloudSttLanguageForListen(
     soniox: resolveSonioxLanguageConfigPinned(lang, pin)
   }
 }
-
 
 // The AudioWorklet module is loaded from an inlined Blob URL (created once, reused) so it resolves in
 // both the Vite dev server and the packaged Electron build. See whisper-worklet-src.ts for the why.
@@ -143,8 +139,7 @@ const THEM_SILENT_MSG = isWindows
 // lid-close sleep kills a capture track with no error anywhere — the UI kept saying "Listening" while
 // a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
 const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep); reconnecting automatically…'
-const THEM_LOST_MSG =
-  'System-audio capture stopped (display sleep or a device change); reconnecting automatically…'
+const THEM_LOST_MSG = 'System-audio capture stopped (display sleep or a device change); reconnecting automatically…'
 // Backpressure became user-visible truncation: transcription fell behind capture long enough that
 // audio windows were discarded. Exact-string contract like the other sticky notes.
 const DROPPED_MSG = 'Transcription fell behind, so some audio was skipped. The transcript may have gaps.'
@@ -355,7 +350,8 @@ type LiveAudioWindow = { audio: Float32Array; speaker: Speaker; partial?: boolea
 /** Soft audible chime generated in-browser (no asset file). */
 export function playListenChime(): void {
   try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    const AudioCtx =
+      window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!AudioCtx) return
     const ctx = new AudioCtx()
     const osc = ctx.createOscillator()
@@ -774,7 +770,9 @@ export function useListen(
     const next = captureHealthIfCurrent(sessionEpochRef.current, epoch, captureHealthRef.current, health)
     if (sameCaptureHealth(captureHealthRef.current, next)) return
     captureHealthRef.current = next
-    setState((current) => (sameCaptureHealth(current.captureHealth, next) ? current : { ...current, captureHealth: next }))
+    setState((current) =>
+      sameCaptureHealth(current.captureHealth, next) ? current : { ...current, captureHealth: next }
+    )
   }, [])
   function clearNoSpeechWarning(): void {
     if (noSpeechTimerRef.current) {
@@ -932,9 +930,7 @@ export function useListen(
   // by the `t` timestamp commitLine returned when it committed. Upgrades empty / session ("Speaker N") /
   // unknown placeholders; never overwrites a confirmed person name.
   const attachSpeakerName = useCallback((t: number, name: string): void => {
-    const idx = linesRef.current.findIndex(
-      (l) => l.t === t && l.speaker === 'them' && canUpgradeSpeakerLabel(l.name)
-    )
+    const idx = linesRef.current.findIndex((l) => l.t === t && l.speaker === 'them' && canUpgradeSpeakerLabel(l.name))
     if (idx < 0) return
     const next = linesRef.current.slice()
     next[idx] = { ...next[idx], name }
@@ -949,67 +945,68 @@ export function useListen(
   // Speaker-Intelligence name once it resolves later — null on every path that did NOT commit a line
   // (phantom text, a suppressed dupe run, or a dead/stopped session), so a caller can skip that follow-up
   // work entirely instead of resolving a name for a line that was never shown.
-  const commitLine = useCallback((text: string, speaker: Speaker, name?: string, provisional?: boolean): number | null => {
-    // Drop phantom/hallucinated lines + non-speech sound-event captions ("[BELL RINGS]", "(applause)",
-    // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
-    // Single chokepoint for both the Whisper worker and Parakeet paths.
-    if (isNonSpeechLine(text)) return null
-    // Collapse an intra-line decoder loop BEFORE corrections/casing so those run on the short form.
-    let corrected = collapseRepeatedPhrase(text)
-    for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
-    // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
-    if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
-    // During a cloud provider's bounded graceful close, main may still deliver the protocol's final
-    // transcript. Accept only that explicitly marked tail window; all other stopped-session results stay
-    // rejected so an old worker cannot bleed into the next meeting.
-    if (!corrected || (!liveRef.current && !cloudSttFinalizingRef.current)) return null
-    // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
-    const key = repeatKey(corrected)
-    const run = repeatRunRef.current
-    if (key && run.key === key && run.speaker === (speaker || 'you')) {
-      run.count += 1
-      if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
-    } else {
-      repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
-    }
-    // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
-    // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
-    // the single chokepoint — so Parakeet and Apple Speech lines get tagged exactly like Whisper's.
-    const lang = detectLanguage(corrected).lang ?? undefined
-    const line: TranscriptLine = {
-      speaker: speaker || 'you',
-      text: corrected,
-      t: Date.now(),
-      ...(name ? { name } : {}),
-      ...(lang ? { lang } : {}),
-      ...(provisional ? { provisional: true } : {})
-    }
-    // A final window replaces any streaming partial from the same speaker; a newer partial replaces
-    // the previous one so TTFC stays one live caption, not a stack of drafts.
-    const withoutStale = linesRef.current.filter(
-      (l) => !(l.provisional && l.speaker === line.speaker)
-    )
-    const next = [...withoutStale, line]
-    // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
-    // includes the line that triggered the auto-answer.
-    linesRef.current = next
-    setLines(next)
-    // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
-    // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
-    // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
-    if (provisional) return line.t
-    if (line.speaker === 'them') {
-      themRunRef.current = themRunRef.current ? `${themRunRef.current} ${line.text}` : line.text
-      if (themRunRef.current.length > 600) themRunRef.current = themRunRef.current.slice(-600) // bound memory
-      if (isQuestion(themRunRef.current)) {
-        themRunRef.current = ''
-        onQRef.current?.(line)
+  const commitLine = useCallback(
+    (text: string, speaker: Speaker, name?: string, provisional?: boolean): number | null => {
+      // Drop phantom/hallucinated lines + non-speech sound-event captions ("[BELL RINGS]", "(applause)",
+      // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
+      // Single chokepoint for both the Whisper worker and Parakeet paths.
+      if (isNonSpeechLine(text)) return null
+      // Collapse an intra-line decoder loop BEFORE corrections/casing so those run on the short form.
+      let corrected = collapseRepeatedPhrase(text)
+      for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
+      // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
+      if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
+      // During a cloud provider's bounded graceful close, main may still deliver the protocol's final
+      // transcript. Accept only that explicitly marked tail window; all other stopped-session results stay
+      // rejected so an old worker cannot bleed into the next meeting.
+      if (!corrected || (!liveRef.current && !cloudSttFinalizingRef.current)) return null
+      // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
+      const key = repeatKey(corrected)
+      const run = repeatRunRef.current
+      if (key && run.key === key && run.speaker === (speaker || 'you')) {
+        run.count += 1
+        if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
+      } else {
+        repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
       }
-    } else {
-      themRunRef.current = ''
-    }
-    return line.t
-  }, [])
+      // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
+      // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
+      // the single chokepoint — so Parakeet and Apple Speech lines get tagged exactly like Whisper's.
+      const lang = detectLanguage(corrected).lang ?? undefined
+      const line: TranscriptLine = {
+        speaker: speaker || 'you',
+        text: corrected,
+        t: Date.now(),
+        ...(name ? { name } : {}),
+        ...(lang ? { lang } : {}),
+        ...(provisional ? { provisional: true } : {})
+      }
+      // A final window replaces any streaming partial from the same speaker; a newer partial replaces
+      // the previous one so TTFC stays one live caption, not a stack of drafts.
+      const withoutStale = linesRef.current.filter((l) => !(l.provisional && l.speaker === line.speaker))
+      const next = [...withoutStale, line]
+      // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
+      // includes the line that triggered the auto-answer.
+      linesRef.current = next
+      setLines(next)
+      // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
+      // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
+      // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
+      if (provisional) return line.t
+      if (line.speaker === 'them') {
+        themRunRef.current = themRunRef.current ? `${themRunRef.current} ${line.text}` : line.text
+        if (themRunRef.current.length > 600) themRunRef.current = themRunRef.current.slice(-600) // bound memory
+        if (isQuestion(themRunRef.current)) {
+          themRunRef.current = ''
+          onQRef.current?.(line)
+        }
+      } else {
+        themRunRef.current = ''
+      }
+      return line.t
+    },
+    []
+  )
 
   // Probes ONE window through Parakeet (main-side IPC, language-agnostic) to pin/re-pin the live Whisper
   // worker's decode language — see PROBE_EVERY's block comment above and whisper.worker.ts's for the full
@@ -1028,27 +1025,25 @@ export function useListen(
         // The epoch stamped at dispatch is what makes "same session" checkable: liveRef is true again for
         // the NEXT meeting, so without it a probe from the previous one pinned this worker (MQA-157).
         if (
-          probeResultIsStale(
-            epoch,
-            sessionEpochRef.current,
-            liveRef.current,
-            engineRef.current,
-            asrLanguageRef.current
-          )
+          probeResultIsStale(epoch, sessionEpochRef.current, liveRef.current, engineRef.current, asrLanguageRef.current)
         )
           return
         const text = typeof res === 'string' ? res : res.text
         // A near-empty window ("Hello") can only mislead — wait for a window with real substance. The bar
         // itself relaxes (once) if the opening probe burst spent PROBE_WINDOW_BUDGET windows without ever
         // pinning — see probeMinWords/PROBE_MIN_WORDS_AGGRESSIVE's block comment above.
-        if (text.trim().split(/\s+/).filter(Boolean).length < probeMinWords(probePinnedRef.current, probeWindowCountRef.current)) return
+        if (
+          text.trim().split(/\s+/).filter(Boolean).length <
+          probeMinWords(probePinnedRef.current, probeWindowCountRef.current)
+        )
+          return
         const found = detectLanguages(text)
         const detected = found.primary
         if (!detected) return
         // Mid-sentence switch: if the window itself is mixed, prefer the language that is NOT the pin.
         const switchTo =
           found.mixed && pinnedLangRef.current
-            ? found.langs.find((l) => l !== pinnedLangRef.current) ?? detected
+            ? (found.langs.find((l) => l !== pinnedLangRef.current) ?? detected)
             : detected
         // MQA-235 (live): require SWITCH_AFTER consecutive confirming probes before the FIRST pin too —
         // a greeting in the wrong language used to latch the whole meeting (import already majority-votes).
@@ -1067,24 +1062,26 @@ export function useListen(
             recognizerStatus:
               state.recognizerStatus?.engine === engineRef.current
                 ? engineRef.current === 'parakeet'
-                  ? { ...state.recognizerStatus, languageMode: 'engine-auto', language: null, requestedLanguage: asrLanguageRef.current === 'auto' ? null : asrLanguageRef.current }
-                  : { ...state.recognizerStatus, languageMode: 'pinned', language: next.pinnedLang, requestedLanguage: null }
+                  ? {
+                      ...state.recognizerStatus,
+                      languageMode: 'engine-auto',
+                      language: null,
+                      requestedLanguage: asrLanguageRef.current === 'auto' ? null : asrLanguageRef.current
+                    }
+                  : {
+                      ...state.recognizerStatus,
+                      languageMode: 'pinned',
+                      language: next.pinnedLang,
+                      requestedLanguage: null
+                    }
                 : recognizerStatusFor(engineRef.current, null, asrLanguageRef.current, next.pinnedLang)
           }))
           // Sticky + mid-meeting switch for cloud Nova/Soniox path (applies when WS attaches).
-          cloudSttNovaLangRef.current = resolveNova3LanguageQueryPinned(
-            asrLanguageRef.current,
-            next.pinnedLang
-          )
-          cloudSttSonioxLangRef.current = resolveSonioxLanguageConfigPinned(
-            asrLanguageRef.current,
-            next.pinnedLang
-          )
+          cloudSttNovaLangRef.current = resolveNova3LanguageQueryPinned(asrLanguageRef.current, next.pinnedLang)
+          cloudSttSonioxLangRef.current = resolveSonioxLanguageConfigPinned(asrLanguageRef.current, next.pinnedLang)
           if (engineRef.current === 'cloud') {
             const cloudCaptureId = cloudCaptureIdRef.current ?? undefined
-            void window.toto
-              .cloudSttUpdateLang(asrLanguageRef.current, next.pinnedLang, cloudCaptureId)
-              .catch(() => {})
+            void window.toto.cloudSttUpdateLang(asrLanguageRef.current, next.pinnedLang, cloudCaptureId).catch(() => {})
           }
           workerRef.current?.postMessage({ type: 'pinLanguage', language: next.pinnedLang })
         }
@@ -1273,10 +1270,9 @@ export function useListen(
     }
     pendingWhisperEpochRef.current = jobEpoch
     pendingWhisperStartedAtRef.current = job.startedAt
-    workerRef.current.postMessage(
-      { type: 'audio', audio: job.audio, speaker: job.speaker, partial: !!job.partial },
-      [job.audio.buffer]
-    )
+    workerRef.current.postMessage({ type: 'audio', audio: job.audio, speaker: job.speaker, partial: !!job.partial }, [
+      job.audio.buffer
+    ])
     // fallBackToWhisper (called in the parakeet .catch above) is forward-declared below and intentionally
     // omitted from deps: pump → fallBackToWhisper → ensureWorker → pump is a cycle, so listing it would TDZ
     // at render. All four callbacks are stable (created once), so pump's captured reference never goes stale.
@@ -1351,12 +1347,7 @@ export function useListen(
         const speakerStartedAt = pendingWhisperStartedAtRef.current
         pendingWhisperEmbedRef.current = null
         pendingWhisperStartedAtRef.current = undefined
-        const committedAt = commitLine(
-          m.text || '',
-          (m.speaker as Speaker) || 'you',
-          undefined,
-          !!m.partial
-        )
+        const committedAt = commitLine(m.text || '', (m.speaker as Speaker) || 'you', undefined, !!m.partial)
         // Speaker Intelligence (1C.2) — fire-and-forget AFTER the line already committed: never blocks
         // the live decode, and a slow/failed round trip just leaves the line unlabeled (the pre-P2
         // outcome). Only for 'them' windows that actually produced a line — nothing to attach a name to
@@ -1468,7 +1459,12 @@ export function useListen(
     void getAsrBundled()
       .then((bundled) => {
         if (sessionEpochRef.current !== epoch || engineRef.current !== 'whisper') return
-        ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
+        ensureWorker().postMessage({
+          type: 'init',
+          quality: requestedQualityRef.current,
+          bundled,
+          language: asrLanguageRef.current
+        })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
@@ -1506,7 +1502,12 @@ export function useListen(
         void getAsrBundled()
           .then((bundled) => {
             if (!liveRef.current || readyRef.current) return
-            ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
+            ensureWorker().postMessage({
+              type: 'init',
+              quality: requestedQualityRef.current,
+              bundled,
+              language: asrLanguageRef.current
+            })
           })
           .catch(() => {})
       }
@@ -1533,11 +1534,7 @@ export function useListen(
       // Cloud STT: pump() does not locally decode, but sticky language still needs the same
       // whisper/parakeet probe cadence so Nova/Soniox refs pin + follow mid-meeting switches
       // before / when the live WS attaches.
-      if (
-        engineRef.current === 'cloud' &&
-        asrLanguageRef.current === 'auto' &&
-        !partial
-      ) {
+      if (engineRef.current === 'cloud' && asrLanguageRef.current === 'auto' && !partial) {
         probeWindowCountRef.current += 1
         if (shouldProbeLanguageWindow(probeWindowCountRef.current, probePinnedRef.current)) {
           probeLanguageWindow(audio, sp, startedAt)
@@ -1600,12 +1597,7 @@ export function useListen(
       // audio callback) keeps the capture hot path allocation-free.
       const ch = channels.current.them
       const hasDeathEvidence = !themHeardRef.current || themTracksLookDead(ch ? ch.stream.getAudioTracks() : [])
-      const verdict = themDeviceChangeAction(
-        wantsSystemRef.current,
-        !!ch,
-        themWindowSeenRef.current,
-        hasDeathEvidence
-      )
+      const verdict = themDeviceChangeAction(wantsSystemRef.current, !!ch, themWindowSeenRef.current, hasDeathEvidence)
       if (verdict !== 'recycle') return
       console.warn('[listen] them silent since the device change — recycling the loopback capture')
       closeChannel('them') // recoverSystemAudio refuses to run while a channel is still registered
@@ -1632,15 +1624,17 @@ export function useListen(
 
   const openChannel = useCallback(
     (sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture): Promise<boolean> => {
-    const prev = openSeqRef.current[sp] ?? Promise.resolve()
-    // Chain regardless of the predecessor's outcome — a failed open must not wedge every later one.
-    const run = prev.catch(() => {}).then(() => {
-      const open = openChannelNowRef.current
-      if (open) return open(sp, stream, admissionEpoch, micCapture)
-      stream.getTracks().forEach((track) => track.stop())
-      return false
-    })
-    openSeqRef.current[sp] = run.catch(() => {}) as Promise<void> // keep the chain alive past a failure
+      const prev = openSeqRef.current[sp] ?? Promise.resolve()
+      // Chain regardless of the predecessor's outcome — a failed open must not wedge every later one.
+      const run = prev
+        .catch(() => {})
+        .then(() => {
+          const open = openChannelNowRef.current
+          if (open) return open(sp, stream, admissionEpoch, micCapture)
+          stream.getTracks().forEach((track) => track.stop())
+          return false
+        })
+      openSeqRef.current[sp] = run.catch(() => {}) as Promise<void> // keep the chain alive past a failure
       return run
     },
     []
@@ -1797,7 +1791,11 @@ export function useListen(
                 captureHealthForTrack(t, micCapture.health.requestedDevice, micCapture.health.selectionOutcome)
               )
             }
-            setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
+            setState((s) => ({
+              ...s,
+              error: MIC_LOST_MSG,
+              captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
+            }))
             void recoverMicRef.current?.()
           } else {
             themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
@@ -1851,7 +1849,8 @@ export function useListen(
         mic.stream.getTracks().forEach((t) => t.stop())
         return
       }
-      if (!(await openChannel('you', mic.stream, admissionEpoch, mic)) || !captureAdmissionIsOpen(admissionEpoch)) return
+      if (!(await openChannel('you', mic.stream, admissionEpoch, mic)) || !captureAdmissionIsOpen(admissionEpoch))
+        return
       setState((s) => ({
         ...s,
         error: s.error === MIC_LOST_MSG ? null : s.error,
@@ -1874,7 +1873,11 @@ export function useListen(
       )
       // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
       // retriggers recovery or the user restarts Listen.
-      setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
+      setState((s) => ({
+        ...s,
+        error: MIC_LOST_MSG,
+        captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
+      }))
     } finally {
       micRecoveringRef.current = false
     }
@@ -1899,8 +1902,7 @@ export function useListen(
   const recoverSystemAudioRef = useRef<(() => Promise<void>) | null>(null)
   recoverSystemAudioRef.current = async (): Promise<void> => {
     const admissionEpoch = sessionEpochRef.current
-    const systemAdmissionIsOpen = (): boolean =>
-      captureAdmissionIsOpen(admissionEpoch) && wantsSystemRef.current
+    const systemAdmissionIsOpen = (): boolean => captureAdmissionIsOpen(admissionEpoch) && wantsSystemRef.current
     if (!systemAdmissionIsOpen() || sysRecoveringRef.current) return
     if (channels.current.them) return // already have a live 'them' channel — nothing to recover
     sysRecoveringRef.current = true
@@ -2133,11 +2135,7 @@ export function useListen(
           cloudSttUnsubRef.current = null
           const retiringCloudCaptureId = cloudCaptureIdRef.current
           void window.toto
-            .cloudSttStop(
-              retiringCloudCaptureId
-                ? { force: true, captureId: retiringCloudCaptureId }
-                : { force: true }
-            )
+            .cloudSttStop(retiringCloudCaptureId ? { force: true, captureId: retiringCloudCaptureId } : { force: true })
             .catch(() => {})
         }
         // Do not let an unresponsive cloud IPC from the superseded meeting hold the fresh meeting's
@@ -2255,19 +2253,11 @@ export function useListen(
             cloudSttUnsubRef.current?.()
             cloudSttUnsubRef.current = null
             const offFinal = window.toto.onCloudSttFinal((line) => {
-              if (
-                (!liveRef.current && !cloudSttFinalizingRef.current) ||
-                sessionEpochRef.current !== myEpoch
-              )
-                return
+              if ((!liveRef.current && !cloudSttFinalizingRef.current) || sessionEpochRef.current !== myEpoch) return
               const committedAt = commitLine(line.text, line.speaker, line.name)
               // Cloud finals already carry Speaker N / Unknown from mapCloudFinalToLine — voiceprint
               // upgrade mirrors Whisper echo handling so enrolled names replace session placeholders.
-              if (
-                committedAt !== null &&
-                line.speaker === 'them' &&
-                canUpgradeSpeakerLabel(line.name)
-              ) {
+              if (committedAt !== null && line.speaker === 'them' && canUpgradeSpeakerLabel(line.name)) {
                 const emb = lastThemEmbedRef.current
                 if (emb?.audio?.length && !speakerEmbedResultIsStale(emb.epoch, sessionEpochRef.current)) {
                   const speakerEpoch = emb.epoch
@@ -2288,11 +2278,7 @@ export function useListen(
               }
             })
             const offErr = window.toto.onCloudSttError((message) => {
-              if (
-                (!liveRef.current && !cloudSttFinalizingRef.current) ||
-                sessionEpochRef.current !== myEpoch
-              )
-                return
+              if ((!liveRef.current && !cloudSttFinalizingRef.current) || sessionEpochRef.current !== myEpoch) return
               setState((s) => ({ ...s, error: message || s.error }))
             })
             cloudSttUnsubRef.current = () => {
@@ -2423,7 +2409,13 @@ export function useListen(
             } else {
               // resetFollow: a fresh session must never inherit the previous meeting's converged
               // language-follow state from a warm worker (see whisper.worker.ts's init handler).
-              ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
+              ensureWorker().postMessage({
+                type: 'init',
+                quality,
+                bundled,
+                language: asrLanguageRef.current,
+                resetFollow: true
+              })
             }
             if (readyRef.current) pump() // warm worker already ready → drain immediately
           }
@@ -2512,9 +2504,7 @@ export function useListen(
         // in the renderer.  Surface the real cause rather than blaming a sleeping display.
         const isSysPermDenied =
           sysErr !== null &&
-          (sysErr.name === 'AbortError' ||
-            sysErr.name === 'NotAllowedError' ||
-            /abort/i.test(sysErr.message ?? ''))
+          (sysErr.name === 'AbortError' || sysErr.name === 'NotAllowedError' || /abort/i.test(sysErr.message ?? ''))
 
         if (!captureAdmissionIsOpen(myEpoch)) return
         const currentCapture = captureStateRef.current.snapshot(myEpoch)
@@ -2577,8 +2567,11 @@ export function useListen(
         // Preserve Whisper failure/retry state reported while capture acquisition was pending.
         if (!captureAdmissionIsOpen(myEpoch)) return
         setState((s) => ({
-          ...s, captureDegraded, listening: true, capturing: capturedTracks.length > 0,
-          error: engineRef.current === 'whisper' ? s.error ?? note : note,
+          ...s,
+          captureDegraded,
+          listening: true,
+          capturing: capturedTracks.length > 0,
+          error: engineRef.current === 'whisper' ? (s.error ?? note) : note,
           loading: !readyRef.current && (engineRef.current !== 'whisper' || s.error === null || s.loading)
         }))
       } finally {
@@ -2647,11 +2640,7 @@ export function useListen(
           cloudCaptureIdRef.current = null
         }
         void window.toto
-          .cloudSttStop(
-            options.cloudCaptureId
-              ? { force: true, captureId: options.cloudCaptureId }
-              : { force: true }
-          )
+          .cloudSttStop(options.cloudCaptureId ? { force: true, captureId: options.cloudCaptureId } : { force: true })
           .catch(() => {})
       }
       void window.toto.setListeningState(false, startedAt).catch(() => {})
@@ -2744,12 +2733,7 @@ export function useListen(
   stopFlushAckRef.current = (speaker, requestId): void => {
     const operation = stopDrainRef.current
     const channel = operation?.pendingAcks.get(speaker)
-    if (
-      !operation ||
-      operation.epoch !== sessionEpochRef.current ||
-      operation.requestId !== requestId ||
-      !channel
-    )
+    if (!operation || operation.epoch !== sessionEpochRef.current || operation.requestId !== requestId || !channel)
       return
     operation.pendingAcks.delete(speaker)
     // MessagePort ordering guarantees final audio was delivered before this ACK. Stop the exact sealed
@@ -2758,225 +2742,228 @@ export function useListen(
     if (operation.pendingAcks.size === 0) operation.beginDrain()
   }
 
-  const stop = useCallback((onDrained?: () => void): void => {
-    // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
-    // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
-    if (crashedRef.current) {
-      // The crash handler already tore capture down and surfaced the failure; there is no live drain to join.
-      onDrained?.()
-      return
-    }
-    if (stoppingRef.current) {
-      // Join the exact active stop. "Already stopping" never means "already drained": the prior operation
-      // may still own a worklet flush, queued PCM, or an in-flight decode.
-      if (onDrained) stopDrainRef.current?.callbacks.push(onDrained)
-      return
-    }
-    stoppingRef.current = true
-    const myEpoch = sessionEpochRef.current
-    const cloudCaptureId = cloudCaptureIdRef.current
-    const startedAt = sessionStartedAtRef.current
-    const ownedSession = liveRef.current
-    const requestId = `stop:${myEpoch}:${nextStopRequestRef.current++}`
-
-    // 0. A worklet's port message is handled on the audio-rendering thread — it won't run while that
-    //    thread is suspended. Resume before flushing so a Stop hit while Paused still processes the flush
-    //    and commits the final window, instead of silently dropping it.
-    if (pausedRef.current) {
-      pausedRef.current = false
-      for (const ch of Object.values(channels.current)) void ch?.ctx.resume().catch(() => {})
-    }
-
-    // 1. Atomically seal and flush each open worklet WHILE liveRef is still true. Each worklet posts its
-    //    final audio first, then the matching request-id ACK. Only after all ACKs do we know the producer
-    //    frontier is closed and the in-memory queue is finite enough for the existing drain stage.
-    const speakers: Speaker[] = ['you', 'them']
-    let operation!: StopDrainOperation
-    const beginDrain = (): void => {
-      if (
-        stopDrainRef.current !== operation ||
-        operation.epoch !== sessionEpochRef.current ||
-        operation.phase !== 'sealing'
-      )
+  const stop = useCallback(
+    (onDrained?: () => void): void => {
+      // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
+      // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
+      if (crashedRef.current) {
+        // The crash handler already tore capture down and surfaced the failure; there is no live drain to join.
+        onDrained?.()
         return
-      operation.phase = 'draining'
-      if (operation.ackTimer) clearTimeout(operation.ackTimer)
-      operation.ackTimer = null
-      setState((state) => (state.capturing ? { ...state, capturing: false } : state))
+      }
+      if (stoppingRef.current) {
+        // Join the exact active stop. "Already stopping" never means "already drained": the prior operation
+        // may still own a worklet flush, queued PCM, or an in-flight decode.
+        if (onDrained) stopDrainRef.current?.callbacks.push(onDrained)
+        return
+      }
+      stoppingRef.current = true
+      const myEpoch = sessionEpochRef.current
+      const cloudCaptureId = cloudCaptureIdRef.current
+      const startedAt = sessionStartedAtRef.current
+      const ownedSession = liveRef.current
+      const requestId = `stop:${myEpoch}:${nextStopRequestRef.current++}`
 
-      // 2. Once the producer frontier is sealed, drain the finite queue/busy state. Healthy serial work can
-      //    take longer than one decode window in aggregate, so bound *lack of progress*, not total elapsed
-      //    time. Only a strict decrease in queue + in-flight work earns a fresh engine-specific interval.
-      const outstandingWork = (): number =>
-        queue.current.length +
-        Number(busy.current) +
-        (engineRef.current === 'cloud' ? (cloudSttPushesRef.current.get(myEpoch)?.size ?? 0) : 0)
-      let leastOutstanding = outstandingWork()
-      let lastProgressAt = Date.now()
-      let noProgressMs =
-        engineRef.current === 'parakeet' || engineRef.current === 'apple'
-          ? NATIVE_STOP_DRAIN_NO_PROGRESS_MS
-          : WHISPER_STOP_DRAIN_NO_PROGRESS_MS
-      const finishTeardown = (): void => {
-        // A new start() ran while we were draining — it already owns the session; do not clobber it.
+      // 0. A worklet's port message is handled on the audio-rendering thread — it won't run while that
+      //    thread is suspended. Resume before flushing so a Stop hit while Paused still processes the flush
+      //    and commits the final window, instead of silently dropping it.
+      if (pausedRef.current) {
+        pausedRef.current = false
+        for (const ch of Object.values(channels.current)) void ch?.ctx.resume().catch(() => {})
+      }
+
+      // 1. Atomically seal and flush each open worklet WHILE liveRef is still true. Each worklet posts its
+      //    final audio first, then the matching request-id ACK. Only after all ACKs do we know the producer
+      //    frontier is closed and the in-memory queue is finite enough for the existing drain stage.
+      const speakers: Speaker[] = ['you', 'them']
+      let operation!: StopDrainOperation
+      const beginDrain = (): void => {
         if (
-          sessionEpochRef.current !== myEpoch ||
           stopDrainRef.current !== operation ||
-          operation.phase !== 'draining'
+          operation.epoch !== sessionEpochRef.current ||
+          operation.phase !== 'sealing'
         )
           return
-        liveRef.current = false
-        activeMicTrackRef.current = null
-        captureHealthRef.current = null
-        clearNoSpeechWarning()
-        disarmNetworkRetry()
-        queue.current = [] // drop anything still undispatched once the bounded drain ends
-        clearProvisional()
-        pendingWhisperEmbedRef.current = null
-        pendingWhisperStartedAtRef.current = undefined
-        themRunRef.current = ''
-        closeChannel('you')
-        closeChannel('them')
-        captureStateRef.current.clear(myEpoch)
-        const completeStop = (finalizeIncomplete = false): void => {
+        operation.phase = 'draining'
+        if (operation.ackTimer) clearTimeout(operation.ackTimer)
+        operation.ackTimer = null
+        setState((state) => (state.capturing ? { ...state, capturing: false } : state))
+
+        // 2. Once the producer frontier is sealed, drain the finite queue/busy state. Healthy serial work can
+        //    take longer than one decode window in aggregate, so bound *lack of progress*, not total elapsed
+        //    time. Only a strict decrease in queue + in-flight work earns a fresh engine-specific interval.
+        const outstandingWork = (): number =>
+          queue.current.length +
+          Number(busy.current) +
+          (engineRef.current === 'cloud' ? (cloudSttPushesRef.current.get(myEpoch)?.size ?? 0) : 0)
+        let leastOutstanding = outstandingWork()
+        let lastProgressAt = Date.now()
+        let noProgressMs =
+          engineRef.current === 'parakeet' || engineRef.current === 'apple'
+            ? NATIVE_STOP_DRAIN_NO_PROGRESS_MS
+            : WHISPER_STOP_DRAIN_NO_PROGRESS_MS
+        const finishTeardown = (): void => {
+          // A new start() ran while we were draining — it already owns the session; do not clobber it.
           if (
             sessionEpochRef.current !== myEpoch ||
             stopDrainRef.current !== operation ||
-            (operation.phase !== 'draining' && operation.phase !== 'finalizing')
+            operation.phase !== 'draining'
           )
             return
-          operation.phase = 'finished'
-          cloudSttFinalizingRef.current = false
-          cloudSttUnsubRef.current?.()
-          cloudSttUnsubRef.current = null
-          cloudSttPushesRef.current.delete(myEpoch)
-          if (cloudCaptureId && cloudCaptureIdRef.current === cloudCaptureId) {
-            cloudCaptureIdRef.current = null
+          liveRef.current = false
+          activeMicTrackRef.current = null
+          captureHealthRef.current = null
+          clearNoSpeechWarning()
+          disarmNetworkRetry()
+          queue.current = [] // drop anything still undispatched once the bounded drain ends
+          clearProvisional()
+          pendingWhisperEmbedRef.current = null
+          pendingWhisperStartedAtRef.current = undefined
+          themRunRef.current = ''
+          closeChannel('you')
+          closeChannel('them')
+          captureStateRef.current.clear(myEpoch)
+          const completeStop = (finalizeIncomplete = false): void => {
+            if (
+              sessionEpochRef.current !== myEpoch ||
+              stopDrainRef.current !== operation ||
+              (operation.phase !== 'draining' && operation.phase !== 'finalizing')
+            )
+              return
+            operation.phase = 'finished'
+            cloudSttFinalizingRef.current = false
+            cloudSttUnsubRef.current?.()
+            cloudSttUnsubRef.current = null
+            cloudSttPushesRef.current.delete(myEpoch)
+            if (cloudCaptureId && cloudCaptureIdRef.current === cloudCaptureId) {
+              cloudCaptureIdRef.current = null
+            }
+            if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
+            setState((s) => {
+              const warnings = [
+                operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null,
+                operation.drainIncomplete ? STOP_DRAIN_INCOMPLETE_MSG : null,
+                finalizeIncomplete ? CLOUD_STT_FINALIZE_INCOMPLETE_MSG : null
+              ].filter((warning): warning is string => warning !== null)
+              let error = s.error
+              for (const warning of warnings) {
+                if (!error) error = warning
+                else if (!error.includes(warning)) error = `${error} ${warning}`
+              }
+              return {
+                ...s,
+                listening: false,
+                capturing: false,
+                paused: false,
+                loading: false,
+                error,
+                captureDegraded: null,
+                captureHealth: null
+              }
+            })
+            drainTimerRef.current = null
+            stopDrainRef.current = null
+            stoppingRef.current = false
+            settleStopCallbacks(operation)
+            // MQA-285: keep the hot engine. Unmount still tears the worker down.
           }
-          if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
-          setState((s) => {
-          const warnings = [
-            operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null,
-            operation.drainIncomplete ? STOP_DRAIN_INCOMPLETE_MSG : null,
-            finalizeIncomplete ? CLOUD_STT_FINALIZE_INCOMPLETE_MSG : null
-          ].filter((warning): warning is string => warning !== null)
-          let error = s.error
-          for (const warning of warnings) {
-            if (!error) error = warning
-            else if (!error.includes(warning)) error = `${error} ${warning}`
+
+          if (engineRef.current !== 'cloud') {
+            completeStop()
+            return
           }
-          return {
-            ...s,
-            listening: false,
-            capturing: false,
-            paused: false,
-            loading: false,
-            error,
-            captureDegraded: null,
-            captureHealth: null
+
+          // Keep `listening` true until main has delivered and committed the provider's terminal response.
+          // App starts its automatic recap only when that flag turns false, so ending it earlier would save a
+          // summary without the final words that this protocol close exists to preserve.
+          operation.phase = 'finalizing'
+          cloudSttFinalizingRef.current = true
+          void Promise.resolve()
+            .then(() => window.toto.cloudSttStop(cloudCaptureId ? { captureId: cloudCaptureId } : undefined))
+            .then((result) => completeStop(result.timedOut))
+            .catch(() => completeStop(true))
+        }
+        const waitForDrain = (): void => {
+          if (sessionEpochRef.current !== myEpoch || stopDrainRef.current !== operation) return
+          const outstanding = outstandingWork()
+          if (outstanding === 0) {
+            finishTeardown()
+            return
           }
+          if (outstanding < leastOutstanding) {
+            leastOutstanding = outstanding
+            lastProgressAt = Date.now()
+            noProgressMs =
+              engineRef.current === 'parakeet' || engineRef.current === 'apple'
+                ? NATIVE_STOP_DRAIN_NO_PROGRESS_MS
+                : WHISPER_STOP_DRAIN_NO_PROGRESS_MS
+          } else if (Date.now() - lastProgressAt >= noProgressMs) {
+            operation.drainIncomplete = true
+            queue.current = []
+            busy.current = false
+            if (engineRef.current === 'whisper') {
+              const stalledWorker = workerRef.current
+              workerRef.current = null // invalidate late messages before terminating this exact generation
+              readyRef.current = false
+              stalledWorker?.terminate()
+            }
+            finishTeardown()
+            return
+          }
+          drainTimerRef.current = setTimeout(waitForDrain, 60)
+        }
+        waitForDrain()
+      }
+
+      operation = {
+        epoch: myEpoch,
+        requestId,
+        phase: 'sealing',
+        pendingAcks: new Map(
+          speakers.flatMap((speaker) => {
+            const channel = channels.current[speaker]
+            return channel ? [[speaker, channel] as const] : []
           })
-          drainTimerRef.current = null
-          stopDrainRef.current = null
-          stoppingRef.current = false
-          settleStopCallbacks(operation)
-          // MQA-285: keep the hot engine. Unmount still tears the worker down.
-        }
-
-        if (engineRef.current !== 'cloud') {
-          completeStop()
-          return
-        }
-
-        // Keep `listening` true until main has delivered and committed the provider's terminal response.
-        // App starts its automatic recap only when that flag turns false, so ending it earlier would save a
-        // summary without the final words that this protocol close exists to preserve.
-        operation.phase = 'finalizing'
-        cloudSttFinalizingRef.current = true
-        void Promise.resolve()
-          .then(() => window.toto.cloudSttStop(cloudCaptureId ? { captureId: cloudCaptureId } : undefined))
-          .then((result) => completeStop(result.timedOut))
-          .catch(() => completeStop(true))
+        ),
+        callbacks: onDrained ? [onDrained] : [],
+        ackTimer: null,
+        flushIncomplete: false,
+        drainIncomplete: false,
+        beginDrain
       }
-      const waitForDrain = (): void => {
-        if (sessionEpochRef.current !== myEpoch || stopDrainRef.current !== operation) return
-        const outstanding = outstandingWork()
-        if (outstanding === 0) {
-          finishTeardown()
-          return
-        }
-        if (outstanding < leastOutstanding) {
-          leastOutstanding = outstanding
-          lastProgressAt = Date.now()
-          noProgressMs =
-            engineRef.current === 'parakeet' || engineRef.current === 'apple'
-              ? NATIVE_STOP_DRAIN_NO_PROGRESS_MS
-              : WHISPER_STOP_DRAIN_NO_PROGRESS_MS
-        } else if (Date.now() - lastProgressAt >= noProgressMs) {
-          operation.drainIncomplete = true
-          queue.current = []
-          busy.current = false
-          if (engineRef.current === 'whisper') {
-            const stalledWorker = workerRef.current
-            workerRef.current = null // invalidate late messages before terminating this exact generation
-            readyRef.current = false
-            stalledWorker?.terminate()
-          }
-          finishTeardown()
-          return
-        }
-        drainTimerRef.current = setTimeout(waitForDrain, 60)
+      stopDrainRef.current = operation
+
+      if (operation.pendingAcks.size === 0) {
+        beginDrain()
+        return
       }
-      waitForDrain()
-    }
-
-    operation = {
-      epoch: myEpoch,
-      requestId,
-      phase: 'sealing',
-      pendingAcks: new Map(
-        speakers.flatMap((speaker) => {
-          const channel = channels.current[speaker]
-          return channel ? [[speaker, channel] as const] : []
-        })
-      ),
-      callbacks: onDrained ? [onDrained] : [],
-      ackTimer: null,
-      flushIncomplete: false,
-      drainIncomplete: false,
-      beginDrain
-    }
-    stopDrainRef.current = operation
-
-    if (operation.pendingAcks.size === 0) {
-      beginDrain()
-      return
-    }
-    operation.ackTimer = setTimeout(() => {
-      if (stopDrainRef.current !== operation || operation.pendingAcks.size === 0) return
-      operation.flushIncomplete = true
-      // A missing ACK means the worklet never confirmed its producer frontier. Close those exact channels
-      // now so capture is nevertheless bounded, then drain whatever audio did reach the renderer.
-      for (const [speaker, channel] of operation.pendingAcks) closeChannel(speaker, channel)
-      operation.pendingAcks.clear()
-      beginDrain()
-    }, STOP_FLUSH_ACK_TIMEOUT_MS)
-
-    for (const [speaker, channel] of [...operation.pendingAcks]) {
-      if (channels.current[speaker] !== channel) {
-        operation.pendingAcks.delete(speaker)
-        continue
-      }
-      try {
-        channel.worklet.port.postMessage({ type: 'seal-and-flush', requestId })
-      } catch {
+      operation.ackTimer = setTimeout(() => {
+        if (stopDrainRef.current !== operation || operation.pendingAcks.size === 0) return
         operation.flushIncomplete = true
-        operation.pendingAcks.delete(speaker)
-        closeChannel(speaker, channel)
+        // A missing ACK means the worklet never confirmed its producer frontier. Close those exact channels
+        // now so capture is nevertheless bounded, then drain whatever audio did reach the renderer.
+        for (const [speaker, channel] of operation.pendingAcks) closeChannel(speaker, channel)
+        operation.pendingAcks.clear()
+        beginDrain()
+      }, STOP_FLUSH_ACK_TIMEOUT_MS)
+
+      for (const [speaker, channel] of [...operation.pendingAcks]) {
+        if (channels.current[speaker] !== channel) {
+          operation.pendingAcks.delete(speaker)
+          continue
+        }
+        try {
+          channel.worklet.port.postMessage({ type: 'seal-and-flush', requestId })
+        } catch {
+          operation.flushIncomplete = true
+          operation.pendingAcks.delete(speaker)
+          closeChannel(speaker, channel)
+        }
       }
-    }
-    if (operation.pendingAcks.size === 0) beginDrain()
-  }, [closeChannel, disarmNetworkRetry])
+      if (operation.pendingAcks.size === 0) beginDrain()
+    },
+    [closeChannel, disarmNetworkRetry]
+  )
 
   const clear = useCallback((): void => {
     setLines([])
@@ -3091,8 +3078,18 @@ export function useListen(
         recognizerStatus:
           state.recognizerStatus?.engine === engineRef.current
             ? engineRef.current === 'parakeet'
-              ? { ...state.recognizerStatus, languageMode: 'engine-auto', language: null, requestedLanguage: language === 'auto' ? null : language }
-              : { ...state.recognizerStatus, languageMode: language === 'auto' ? 'detecting' : 'explicit', language: language === 'auto' ? null : language, requestedLanguage: language === 'auto' ? null : language }
+              ? {
+                  ...state.recognizerStatus,
+                  languageMode: 'engine-auto',
+                  language: null,
+                  requestedLanguage: language === 'auto' ? null : language
+                }
+              : {
+                  ...state.recognizerStatus,
+                  languageMode: language === 'auto' ? 'detecting' : 'explicit',
+                  language: language === 'auto' ? null : language,
+                  requestedLanguage: language === 'auto' ? null : language
+                }
             : recognizerStatusFor(engineRef.current, null, language, null)
       }))
       if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return

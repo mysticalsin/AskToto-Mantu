@@ -13,7 +13,11 @@ import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 // keys.ts freezes navigator.platform at import time, before beforeEach can stub the browser. Keep
 // each scenario's platform explicit so a Mac permission test cannot silently take Windows's branch.
 const platform = vi.hoisted(() => ({ isWindows: false }))
-vi.mock('./keys', () => ({ get isWindows() { return platform.isWindows } }))
+vi.mock('./keys', () => ({
+  get isWindows() {
+    return platform.isWindows
+  }
+}))
 
 type Slot = { current: unknown }
 const host = vi.hoisted(() => {
@@ -21,7 +25,7 @@ const host = vi.hoisted(() => {
   let cursor = 0
   let effectCursor = 0
   let effects: Array<{ run: () => void | (() => void); cleanup: void | (() => void) }> = []
-  const slot = <T,>(initial: T): { current: T } => {
+  const slot = <T>(initial: T): { current: T } => {
     const i = cursor++
     if (!slots[i]) slots[i] = { current: initial }
     return slots[i] as { current: T }
@@ -70,11 +74,11 @@ const host = vi.hoisted(() => {
 })
 
 vi.mock('react', () => ({
-  useRef: <T,>(initial: T) => host.useRef(initial),
-  useState: <T,>(initial: T) => host.useState(initial),
+  useRef: <T>(initial: T) => host.useRef(initial),
+  useState: <T>(initial: T) => host.useState(initial),
   useEffect: (effect: () => void | (() => void)) => host.useEffect(effect),
-  useCallback: <T,>(fn: T) => fn,
-  useMemo: <T,>(fn: () => T) => fn()
+  useCallback: <T>(fn: T) => fn,
+  useMemo: <T>(fn: () => T) => fn()
 }))
 
 type WorkletMessage = {
@@ -146,7 +150,9 @@ class FakeAudioWorkletNode {
   }
 
   emit(message: WorkletMessage): void {
-    this.port.onmessage?.({ data: message.audio ? { sampleRate: 16000, ...message } : message } as MessageEvent<WorkletMessage>)
+    this.port.onmessage?.({
+      data: message.audio ? { sampleRate: 16000, ...message } : message
+    } as MessageEvent<WorkletMessage>)
   }
 
   connect(): void {}
@@ -491,9 +497,7 @@ describe('live audio transport identity', () => {
     await api.start('both', 'fast', 'cloud', 'English', 123)
     await settle()
 
-    expect(window.toto.cloudSttStart).toHaveBeenCalledWith(
-      expect.objectContaining({ captureId: 'listen:1' })
-    )
+    expect(window.toto.cloudSttStart).toHaveBeenCalledWith(expect.objectContaining({ captureId: 'listen:1' }))
     expect(window.toto.cloudSttStop).toHaveBeenNthCalledWith(1, {
       force: true,
       captureId: 'listen:1'
@@ -657,9 +661,7 @@ describe('live audio transport identity', () => {
 
   it('does not bypass an already-started Stop drain when a late Parakeet failure reaches CLOUD_ONLY', async () => {
     let rejectFeed!: (reason?: unknown) => void
-    vi.mocked(window.toto.parakeetFeed).mockImplementation(
-      () => new Promise((_, reject) => void (rejectFeed = reject))
-    )
+    vi.mocked(window.toto.parakeetFeed).mockImplementation(() => new Promise((_, reject) => void (rejectFeed = reject)))
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const api = await start('parakeet', 123)
@@ -694,14 +696,18 @@ describe('live audio transport identity', () => {
   })
 
   it('uses the admitted identity for a failed capture start', async () => {
-    getUserMediaImpl = async () => { throw new Error('Synthetic microphone refusal') }
+    getUserMediaImpl = async () => {
+      throw new Error('Synthetic microphone refusal')
+    }
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await render().start('mic', 'fast', 'parakeet', 'English', 123)
       expect(window.toto.setListeningState).toHaveBeenNthCalledWith(1, true, 123)
       expect(window.toto.setListeningState).toHaveBeenNthCalledWith(2, false, 123)
       expect(render().listening).toBe(false)
-    } finally { warning.mockRestore() }
+    } finally {
+      warning.mockRestore()
+    }
   })
 
   it('notifies the exact current session once after a live Whisper worker crash', async () => {
@@ -721,7 +727,7 @@ describe('live audio transport identity', () => {
     expect(window.toto.setListeningState).not.toHaveBeenCalled()
   })
 
-  it.each([false, true])('unmount closes only its owned session (Stop pending=%s)', async stopping => {
+  it.each([false, true])('unmount closes only its owned session (Stop pending=%s)', async (stopping) => {
     const api = await start('parakeet', 123)
     if (stopping) {
       sealMode.acknowledge = false
@@ -730,7 +736,8 @@ describe('live audio transport identity', () => {
     host.unmount()
     await settle()
     expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
-      [true, 123], [false, 123]
+      [true, 123],
+      [false, 123]
     ])
   })
 
@@ -740,7 +747,10 @@ describe('live audio transport identity', () => {
     api.stop()
     await start('parakeet', 456)
     await vi.advanceTimersByTimeAsync(4_001)
-    expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([[true, 123], [true, 456]])
+    expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+      [true, 123],
+      [true, 456]
+    ])
     sealMode.acknowledge = true
     render().stop()
     await vi.advanceTimersByTimeAsync(1)
@@ -842,7 +852,7 @@ describe('live audio transport identity', () => {
     expect(offFinal).toHaveBeenCalledOnce()
   })
 
-  it.each(['parakeet', 'apple'] as const)('%s queues the window owner and keeps legacy ASR usable', async engine => {
+  it.each(['parakeet', 'apple'] as const)('%s queues the window owner and keeps legacy ASR usable', async (engine) => {
     const feed = engine === 'parakeet' ? window.toto.parakeetFeed : window.toto.appleSpeechFeed
     vi.mocked(feed).mockResolvedValue({ text: 'Identity-bound speech.' })
     await start(engine, 123)
@@ -978,11 +988,13 @@ describe('ASR idle prewarm ownership', () => {
     await settle()
     expect(workers).toHaveLength(1)
     expect(workers[0].postMessage).toHaveBeenCalledTimes(1)
-    expect(workers[0].postMessage).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'init',
-      resetFollow: true,
-      language: 'English'
-    }))
+    expect(workers[0].postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'init',
+        resetFollow: true,
+        language: 'English'
+      })
+    )
 
     bundledResolvers[0](true)
     await settle()
@@ -1104,9 +1116,7 @@ describe('useListen Stop flush ownership', () => {
 
   it('keeps every repeated Stop subscriber pending until the shared active decode drains', async () => {
     let resolveFeed!: (value: { text: string; name?: string }) => void
-    vi.mocked(window.toto.parakeetFeed).mockImplementation(
-      () => new Promise((resolve) => void (resolveFeed = resolve))
-    )
+    vi.mocked(window.toto.parakeetFeed).mockImplementation(() => new Promise((resolve) => void (resolveFeed = resolve)))
     const api = await start()
     const worklet = worklets.at(-1)
     if (!worklet) throw new Error('test worklet did not open')
@@ -1596,7 +1606,6 @@ describe('useListen Stop flush ownership', () => {
   })
 })
 
-
 describe('M2-0535 Whisper initialization error ownership', () => {
   it.each([false, true])('surfaces a first-Listen load failure with prewarm=%s', async (prewarm) => {
     const api = render('whisper')
@@ -1615,8 +1624,14 @@ describe('M2-0535 Whisper initialization error ownership', () => {
 
   it.each([false, true])('keeps an early load failure through capture admission (degraded=%s)', async (degraded) => {
     let resolveDisplay!: (stream: MediaStream) => void
-    getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
-    if (degraded) getUserMediaImpl = async () => { throw new Error('Synthetic microphone unavailable') }
+    getDisplayMediaImpl = () =>
+      new Promise((resolve) => {
+        resolveDisplay = resolve
+      })
+    if (degraded)
+      getUserMediaImpl = async () => {
+        throw new Error('Synthetic microphone unavailable')
+      }
     const starting = render('whisper').start(degraded ? 'both' : 'system', 'fast', 'whisper', 'English')
     await settle()
     const worker = workers.at(-1)!
@@ -1636,7 +1651,10 @@ describe('M2-0535 Whisper initialization error ownership', () => {
 
   it('keeps a pending network retry through capture admission until the replacement is ready', async () => {
     let resolveDisplay!: (stream: MediaStream) => void
-    getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
+    getDisplayMediaImpl = () =>
+      new Promise((resolve) => {
+        resolveDisplay = resolve
+      })
     const starting = render('whisper').start('system', 'fast', 'whisper', 'English')
     await settle()
     const retired = workers.at(-1)!
@@ -1649,7 +1667,11 @@ describe('M2-0535 Whisper initialization error ownership', () => {
     resolveDisplay(makeStream('system'))
     await starting
     await settle()
-    expect(render('whisper')).toMatchObject({ error: 'Back online. Restarting the speech model…', loading: true, capturing: true })
+    expect(render('whisper')).toMatchObject({
+      error: 'Back online. Restarting the speech model…',
+      loading: true,
+      capturing: true
+    })
     retry.emit({ type: 'ready', qualityDegraded: false })
     await settle()
     expect(render('whisper')).toMatchObject({ error: null, loading: false })
@@ -1719,7 +1741,10 @@ describe('M2-0535 Whisper initialization error ownership', () => {
   it('keeps a replacement Apple session ready when an old Parakeet fallback lookup resolves', async () => {
     let resolveBundled!: (bundled: boolean) => void
     vi.mocked(window.toto.asrBundled).mockImplementationOnce(
-      () => new Promise<boolean>((resolve) => { resolveBundled = resolve })
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveBundled = resolve
+        })
     )
     vi.mocked(window.toto.parakeetFeed).mockRejectedValue(new Error('Synthetic native rejection'))
     await start('parakeet')
