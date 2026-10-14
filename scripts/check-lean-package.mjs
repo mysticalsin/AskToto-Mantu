@@ -206,7 +206,7 @@ const rendererScripts = rawAsarEntries.filter((entry) => {
   const normalized = normalizeEntry(entry)
   return normalized.startsWith('/out/renderer/') && /\.(?:js|mjs)$/.test(normalized)
 })
-const profileMarker = '/* metis-package-profile:lean */'
+const profileMarker = '/*! metis-package-profile:lean */'
 if (
   !rendererScripts.some((entry) =>
     extractFile(asarPath, entry.replace(/^[\\/]+/, ''))
