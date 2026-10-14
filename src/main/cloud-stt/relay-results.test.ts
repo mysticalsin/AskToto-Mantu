@@ -81,4 +81,9 @@ describe('RelayResultSequence', () => {
       code: 'OUTPUT_LIMIT'
     })
   })
+
+  it('accounts actual wire bytes even when JSON contains ignorable whitespace', () => {
+    const results = new RelayResultSequence(expected, 60_000, 1_000)
+    expect(results.accept(fixture.events.partial, 1_001)).toMatchObject({ ok: false, code: 'OUTPUT_LIMIT' })
+  })
 })

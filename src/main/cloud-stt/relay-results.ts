@@ -118,7 +118,7 @@ export class RelayResultSequence {
     return [...this.segments.values()].some((segment) => !segment.final)
   }
 
-  accept(value: unknown): RelayResultAcceptance {
+  accept(value: unknown, wireBytes?: number): RelayResultAcceptance {
     if (this.terminal) return { ok: false, code: 'AFTER_TERMINAL' }
     const parsed = RelayEventSchema.safeParse(value)
     if (!parsed.success) return { ok: false, code: 'MALFORMED' }
@@ -145,7 +145,7 @@ export class RelayResultSequence {
       } else if (this.segments.size >= this.maxSegments) {
         return { ok: false, code: 'OUTPUT_LIMIT' }
       }
-      if (!this.accountEvent(event)) return { ok: false, code: 'OUTPUT_LIMIT' }
+      if (!this.accountEvent(event, wireBytes)) return { ok: false, code: 'OUTPUT_LIMIT' }
       this.segments.set(event.segmentIndex, {
         revision: event.revision,
         final: event.final,
@@ -157,16 +157,16 @@ export class RelayResultSequence {
 
     if (event.type === 'terminal') {
       if (event.lastSequence !== this.lastSequence) return { ok: false, code: 'TERMINAL_MISMATCH' }
-      if (!this.accountEvent(event)) return { ok: false, code: 'OUTPUT_LIMIT' }
+      if (!this.accountEvent(event, wireBytes)) return { ok: false, code: 'OUTPUT_LIMIT' }
       this.terminal = true
-    } else if (event.type === 'error' && !this.accountEvent(event)) {
+    } else if (event.type === 'error' && !this.accountEvent(event, wireBytes)) {
       return { ok: false, code: 'OUTPUT_LIMIT' }
     }
     return { ok: true, event }
   }
 
-  private accountEvent(event: RelayEvent): boolean {
-    const bytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
+  private accountEvent(event: RelayEvent, wireBytes?: number): boolean {
+    const bytes = wireBytes ?? Buffer.byteLength(JSON.stringify(event), 'utf8')
     if (!Number.isSafeInteger(bytes) || bytes < 1 || this.outputBytes + bytes > this.maxOutputBytes) return false
     this.outputBytes += bytes
     return true

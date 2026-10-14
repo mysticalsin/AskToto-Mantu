@@ -25,7 +25,7 @@ export type RelaySessionFinish = {
   reason: 'normal' | 'incomplete' | 'cancelled'
 }
 
-export type RelaySessionFailureCode = BrokerFailureCode | 'TRACK_OPEN' | 'CANCELLED'
+export type RelaySessionFailureCode = BrokerFailureCode | 'TRACK_OPEN' | 'CANCELLED' | 'LEASE_DRAINING'
 export type RelaySessionStartResult =
   | { ok: true; value: RelaySpeechSession }
   | { ok: false; code: RelaySessionFailureCode }
@@ -68,6 +68,8 @@ type TrackRuntime = {
   resolveClosure: (value: RelayTrackClosure) => void
   finishPromise: Promise<RelayTrackClosure> | null
   failureReason: RelayTerminal['reason'] | null
+  deliveryFailed: boolean
+  terminalUnexpected: boolean
   stopped: boolean
 }
 
@@ -82,9 +84,10 @@ type DeadlineResult<T> = { done: true; value: T } | { done: false }
 function toUtf8Text(data: WebSocket.RawData): string | null {
   try {
     if (typeof data === 'string') return data
-    if (Buffer.isBuffer(data)) return data.toString('utf8')
-    if (Array.isArray(data)) return Buffer.concat(data).toString('utf8')
-    if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8')
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    if (Buffer.isBuffer(data)) return decoder.decode(data)
+    if (Array.isArray(data)) return decoder.decode(Buffer.concat(data))
+    if (data instanceof ArrayBuffer) return decoder.decode(data)
     return null
   } catch {
     return null
@@ -120,6 +123,7 @@ export class RelaySpeechSession {
   private cancelled = false
   private startupComplete = false
   private startupFailed = false
+  private finishIncomplete = false
   private finishPromise: Promise<RelaySessionFinish> | null = null
   private cancelPromise: Promise<void> | null = null
   private renewPromise: Promise<RelaySessionStartResult> | null = null
@@ -169,6 +173,7 @@ export class RelaySpeechSession {
     }
     const created = await options.client.createSession(options.createRequest)
     if (!created.ok) return created
+    const allocationAt = Date.now()
     try {
       options.onAllocated?.(created.value.sessionId)
     } catch {
@@ -194,10 +199,15 @@ export class RelaySpeechSession {
       return { ok: false, code: 'SCHEMA' }
     }
     const now = Date.now()
+    const effectiveMaxStreamMs = Math.min(created.value.limits.maxStreamMs, MAX_STREAM_MS)
+    const effectiveAudioDeadlineAt = Math.min(
+      created.value.limits.audioDeadlineAt,
+      created.value.leaseExpiresAt,
+      allocationAt + effectiveMaxStreamMs
+    )
     if (
       now >= created.value.grantExpiresAt ||
-      now >= created.value.leaseExpiresAt ||
-      now >= created.value.limits.audioDeadlineAt ||
+      now >= effectiveAudioDeadlineAt ||
       created.value.limits.maxStreamMs < 100 ||
       created.value.limits.maxInputBytesPerTrack < MAX_CLOUD_FRAME_BYTES ||
       created.value.limits.maxClientFrameBytes < MAX_CLOUD_FRAME_BYTES
@@ -209,8 +219,8 @@ export class RelaySpeechSession {
       options.client,
       created.value.sessionId,
       created.value.captureGeneration,
-      Math.min(created.value.limits.maxStreamMs, MAX_STREAM_MS),
-      created.value.limits.audioDeadlineAt,
+      effectiveMaxStreamMs,
+      effectiveAudioDeadlineAt,
       Math.min(created.value.limits.maxInputBytesPerTrack, MAX_INPUT_BYTES),
       Math.min(created.value.limits.maxClientFrameBytes, MAX_CLOUD_FRAME_BYTES),
       Math.min(created.value.limits.maxOutputBytesPerTrack, MAX_OUTPUT_BYTES),
@@ -256,11 +266,15 @@ export class RelaySpeechSession {
     if (
       !isCurrent() ||
       session.startupFailed ||
+      Date.now() >= session.audioDeadlineAt ||
       session.tracks.size !== options.createRequest.tracks.length ||
       [...session.tracks.values()].some((runtime) => runtime.stopped || runtime.socket.readyState !== WebSocket.OPEN)
     ) {
       await session.cancel()
-      return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
+      return {
+        ok: false,
+        code: isCurrent() ? (Date.now() >= session.audioDeadlineAt ? 'LEASE_DRAINING' : 'TRACK_OPEN') : 'CANCELLED'
+      }
     }
     session.startupComplete = true
     return { ok: true, value: session }
@@ -486,6 +500,8 @@ export class RelaySpeechSession {
       resolveClosure,
       finishPromise: null,
       failureReason: null,
+      deliveryFailed: false,
+      terminalUnexpected: false,
       stopped: false
     }
   }
@@ -493,7 +509,10 @@ export class RelaySpeechSession {
   private currentClosure(runtime: TrackRuntime): RelayTrackClosure {
     if (runtime.terminal) {
       const closure = closureFromTerminal(runtime.track, runtime.streamEpoch, runtime.terminal)
-      if (closure.tail === 'complete' && runtime.results.hasUnfinalizedSegments) {
+      if (
+        closure.tail === 'complete' &&
+        (runtime.results.hasUnfinalizedSegments || runtime.deliveryFailed || runtime.terminalUnexpected)
+      ) {
         closure.tail = 'incomplete'
         closure.reason = 'unknown'
       }
@@ -504,7 +523,11 @@ export class RelaySpeechSession {
 
   private attachTrack(runtime: TrackRuntime): void {
     runtime.socket.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
-      if (isBinary || runtime.stopped) return
+      if (runtime.stopped) return
+      if (isBinary) {
+        this.failTrack(runtime, 'unknown')
+        return
+      }
       const text = toUtf8Text(data)
       if (text === null || Buffer.byteLength(text, 'utf8') > SPEECH_BROKER_WS_MAX_PAYLOAD) {
         this.failTrack(runtime, 'unknown')
@@ -517,12 +540,17 @@ export class RelaySpeechSession {
         this.failTrack(runtime, 'unknown')
         return
       }
-      const accepted = runtime.results.accept(value)
+      const accepted = runtime.results.accept(value, Buffer.byteLength(text, 'utf8'))
       if (!accepted.ok) {
         this.failTrack(runtime, 'unknown')
         return
       }
       if (accepted.event.type === 'transcript') {
+        if (!this.startupComplete) {
+          this.startupFailed = true
+          this.failTrack(runtime, 'unknown')
+          return
+        }
         if (!this.isCurrent()) {
           void this.cancel()
           return
@@ -533,7 +561,8 @@ export class RelaySpeechSession {
             firstCaptureSampleOffset: runtime.firstCaptureSampleOffset ?? 0
           })
         } catch {
-          /* transcript consumer failure does not change relay ownership or leak provider data */
+          runtime.deliveryFailed = true
+          runtime.failureReason = 'unknown'
         }
       } else if (accepted.event.type === 'terminal') {
         if (!this.startupComplete) {
@@ -542,9 +571,14 @@ export class RelaySpeechSession {
           return
         }
         runtime.terminal = accepted.event
+        runtime.terminalUnexpected = !this.finishing || !runtime.queue.isDrained
+        runtime.queue.close()
         runtime.stopped = true
         const terminalClosure = closureFromTerminal(runtime.track, runtime.streamEpoch, accepted.event)
-        if (accepted.event.tail === 'complete' && runtime.results.hasUnfinalizedSegments) {
+        if (
+          accepted.event.tail === 'complete' &&
+          (runtime.results.hasUnfinalizedSegments || runtime.deliveryFailed || runtime.terminalUnexpected)
+        ) {
           terminalClosure.tail = 'incomplete'
           terminalClosure.reason = 'unknown'
         }
@@ -624,6 +658,7 @@ export class RelaySpeechSession {
   }
 
   private async finishOneTrack(runtime: TrackRuntime, deadlineAt: number): Promise<RelayTrackClosure> {
+    if (runtime.terminal) return this.currentClosure(runtime)
     runtime.queue.seal()
     const draining = runtime.queue.drain((pcm) => {
       if (!this.isCurrent()) {
@@ -648,6 +683,7 @@ export class RelaySpeechSession {
     })
     const drainResult = await this.untilDeadline(draining, deadlineAt)
     if (!drainResult.done) return this.stopAtDeadline(runtime)
+    if (runtime.terminal) return this.currentClosure(runtime)
     if (!drainResult.value.ok || this.cancelled || runtime.stopped || runtime.socket.readyState !== WebSocket.OPEN) {
       const incomplete = incompleteClosure(runtime.track, runtime.streamEpoch, runtime.results.sequence)
       runtime.resolveClosure(incomplete)
@@ -682,7 +718,10 @@ export class RelaySpeechSession {
         (item) => item.track === runtime.track && item.streamEpoch === runtime.streamEpoch
       )
       if (row?.closeConfirmed && row.lastSequence === runtime.results.sequence) {
-        const tail = runtime.results.hasUnfinalizedSegments ? 'incomplete' : (row.tail ?? 'incomplete')
+        const tail =
+          runtime.results.hasUnfinalizedSegments || runtime.deliveryFailed || runtime.terminalUnexpected
+            ? 'incomplete'
+            : (row.tail ?? 'incomplete')
         return {
           track: runtime.track,
           streamEpoch: runtime.streamEpoch,
@@ -718,6 +757,7 @@ export class RelaySpeechSession {
   }
 
   private async stopAtDeadline(runtime: TrackRuntime): Promise<RelayTrackClosure> {
+    this.finishIncomplete = true
     const incomplete = incompleteClosure(runtime.track, runtime.streamEpoch, runtime.results.sequence)
     runtime.stopped = true
     runtime.queue.close()
@@ -740,7 +780,11 @@ export class RelaySpeechSession {
       }
     const tracks = await Promise.all([...this.tracks.values()].map((runtime) => this.finishTrack(runtime, deadlineAt)))
     const complete = tracks.length > 0 && tracks.every((track) => track.closeConfirmed && track.tail === 'complete')
-    return { complete, tracks, reason: complete ? 'normal' : this.cancelled ? 'cancelled' : 'incomplete' }
+    return {
+      complete,
+      tracks,
+      reason: complete ? 'normal' : this.finishIncomplete ? 'incomplete' : this.cancelled ? 'cancelled' : 'incomplete'
+    }
   }
 }
 

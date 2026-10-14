@@ -90,14 +90,15 @@ class MockRelaySocket extends EventEmitter {
   }
 }
 
-function makeClient(): SpeechBrokerClient {
+function makeClient(afterCreate?: () => void): SpeechBrokerClient {
   const response = {
     ...fixture.create.responseTemplate,
     grants: [{ track: 'microphone', streamEpoch: 11, token: 'B'.repeat(43) }]
   }
-  const fetchImpl = vi.fn(
-    async () => new Response(JSON.stringify(response), { status: 200, headers: { 'content-type': 'application/json' } })
-  )
+  const fetchImpl = vi.fn(async () => {
+    afterCreate?.()
+    return new Response(JSON.stringify(response), { status: 200, headers: { 'content-type': 'application/json' } })
+  })
   const WebSocketImpl = class extends MockRelaySocket {
     constructor(url: string, options: unknown) {
       super(url, options, () => queueMicrotask(() => this.emitTerminal()))
@@ -128,11 +129,14 @@ describe('RelaySpeechSession', () => {
   it('cancels an allocation that no longer belongs to the active capture owner', async () => {
     MockRelaySocket.instances = []
     let allocatedSessionId: string | null = null
+    let current = true
     const started = await RelaySpeechSession.create({
-      client: makeClient(),
+      client: makeClient(() => {
+        current = false
+      }),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
-      isCurrent: () => false,
+      isCurrent: () => current,
       onAllocated: (id) => {
         allocatedSessionId = id
       }
@@ -253,6 +257,65 @@ describe('RelaySpeechSession', () => {
               startMs: 0,
               endMs: 100,
               final: false
+            })
+          ),
+          false
+        )
+        socket.emitTerminal(1)
+      })
+    const stopped = await started.value.finish(500)
+    expect(stopped.complete).toBe(false)
+    expect(stopped.tracks[0]).toMatchObject({ closeConfirmed: true, tail: 'incomplete', lastSequence: 1 })
+  })
+
+  it('retains a valid terminal received before finish but reports an incomplete tail', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    MockRelaySocket.instances[0].emitTerminal()
+    const stopped = await started.value.finish(500)
+    expect(stopped.complete).toBe(false)
+    expect(stopped.tracks[0]).toMatchObject({ closeConfirmed: true, tail: 'incomplete', lastSequence: 0 })
+  })
+
+  it('keeps close confirmation but reports incomplete when transcript delivery throws', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      onTranscript: () => {
+        throw new Error('synthetic consumer failure')
+      }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    started.value.pushFrame('microphone', { sequence: 1, sampleOffset: 0, pcm16le: new Uint8Array(3_200) })
+    const socket = MockRelaySocket.instances[0]
+    socket.onFinish = () =>
+      queueMicrotask(() => {
+        socket.emit(
+          'message',
+          Buffer.from(
+            JSON.stringify({
+              type: 'transcript',
+              protocolVersion: 1,
+              sessionId,
+              captureGeneration: 7,
+              track: 'microphone',
+              streamEpoch: 11,
+              sequence: 1,
+              segmentIndex: 1,
+              revision: 1,
+              text: 'final',
+              startMs: 0,
+              endMs: 100,
+              final: true
             })
           ),
           false
