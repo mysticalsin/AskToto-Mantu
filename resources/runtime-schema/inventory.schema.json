@@ -24,10 +24,7 @@
       "const": 1
     },
     "kind": {
-      "enum": [
-        "runtime",
-        "model"
-      ]
+      "enum": ["runtime", "model"]
     },
     "componentId": {
       "type": "string",
@@ -40,24 +37,13 @@
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "platform",
-        "arch"
-      ],
+      "required": ["platform", "arch"],
       "properties": {
         "platform": {
-          "enum": [
-            "darwin",
-            "win32",
-            "any"
-          ]
+          "enum": ["darwin", "win32", "any"]
         },
         "arch": {
-          "enum": [
-            "arm64",
-            "x64",
-            "any"
-          ]
+          "enum": ["arm64", "x64", "any"]
         }
       }
     },
@@ -69,13 +55,7 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "electronVersion",
-            "nodeAbi",
-            "napi",
-            "chromiumVersion",
-            "hostProtocol"
-          ],
+          "required": ["electronVersion", "nodeAbi", "napi", "chromiumVersion", "hostProtocol"],
           "properties": {
             "electronVersion": {
               "type": "string",
@@ -152,12 +132,7 @@
     "builder": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "nodeVersion",
-        "npmVersion",
-        "zlibVersion",
-        "packages"
-      ],
+      "required": ["nodeVersion", "npmVersion", "zlibVersion", "packages"],
       "properties": {
         "nodeVersion": {
           "type": "string",
@@ -179,10 +154,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "name",
-              "version"
-            ],
+            "required": ["name", "version"],
             "properties": {
               "name": {
                 "type": "string",
@@ -206,13 +178,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "name",
-          "version",
-          "sourceUri",
-          "revision",
-          "digest"
-        ],
+        "required": ["name", "version", "sourceUri", "revision", "digest"],
         "properties": {
           "name": {
             "type": "string",
@@ -236,16 +202,10 @@
           "digest": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "algorithm",
-              "value"
-            ],
+            "required": ["algorithm", "value"],
             "properties": {
               "algorithm": {
-                "enum": [
-                  "sha256",
-                  "sha512"
-                ]
+                "enum": ["sha256", "sha512"]
               },
               "value": {
                 "type": "string",
@@ -263,12 +223,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "path",
-          "bytes",
-          "sha256",
-          "executable"
-        ],
+        "required": ["path", "bytes", "sha256", "executable"],
         "properties": {
           "path": {
             "$ref": "#/$defs/relativePath"
@@ -370,11 +325,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "id",
-          "root",
-          "members"
-        ],
+        "required": ["id", "root", "members"],
         "properties": {
           "id": {
             "enum": [
@@ -409,25 +360,17 @@
             "const": "runtime"
           }
         },
-        "required": [
-          "kind"
-        ]
+        "required": ["kind"]
       },
       "then": {
         "properties": {
           "target": {
             "properties": {
               "platform": {
-                "enum": [
-                  "darwin",
-                  "win32"
-                ]
+                "enum": ["darwin", "win32"]
               },
               "arch": {
-                "enum": [
-                  "arm64",
-                  "x64"
-                ]
+                "enum": ["arm64", "x64"]
               }
             }
           },
@@ -461,9 +404,7 @@
             "const": "runtime"
           }
         },
-        "required": [
-          "kind"
-        ]
+        "required": ["kind"]
       },
       "then": {
         "properties": {

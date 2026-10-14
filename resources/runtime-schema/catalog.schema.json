@@ -4,13 +4,7 @@
   "title": "Métis Runtime Catalog v1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "protocolVersion",
-    "catalogId",
-    "trustRoot",
-    "targets"
-  ],
+  "required": ["schemaVersion", "protocolVersion", "catalogId", "trustRoot", "targets"],
   "properties": {
     "schemaVersion": {
       "const": 1
@@ -29,12 +23,7 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "path",
-            "bytes",
-            "sha256",
-            "receipt"
-          ],
+          "required": ["path", "bytes", "sha256", "receipt"],
           "properties": {
             "path": {
               "const": "runtime-trust/sigstore-trusted-root.json"
@@ -50,11 +39,7 @@
             "receipt": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "path",
-                "bytes",
-                "sha256"
-              ],
+              "required": ["path", "bytes", "sha256"],
               "properties": {
                 "path": {
                   "const": "runtime-trust/acquisition-receipt.json"
@@ -108,10 +93,7 @@
       ],
       "properties": {
         "kind": {
-          "enum": [
-            "runtime",
-            "model"
-          ]
+          "enum": ["runtime", "model"]
         },
         "componentId": {
           "type": "string",
@@ -124,24 +106,13 @@
         "target": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "platform",
-            "arch"
-          ],
+          "required": ["platform", "arch"],
           "properties": {
             "platform": {
-              "enum": [
-                "darwin",
-                "win32",
-                "any"
-              ]
+              "enum": ["darwin", "win32", "any"]
             },
             "arch": {
-              "enum": [
-                "arm64",
-                "x64",
-                "any"
-              ]
+              "enum": ["arm64", "x64", "any"]
             }
           }
         },
@@ -153,13 +124,7 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "electronVersion",
-                "nodeAbi",
-                "napi",
-                "chromiumVersion",
-                "hostProtocol"
-              ],
+              "required": ["electronVersion", "nodeAbi", "napi", "chromiumVersion", "hostProtocol"],
               "properties": {
                 "electronVersion": {
                   "type": "string",
@@ -187,12 +152,7 @@
         "archive": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "bytes",
-            "sha256",
-            "url",
-            "releaseAssetId"
-          ],
+          "required": ["bytes", "sha256", "url", "releaseAssetId"],
           "properties": {
             "bytes": {
               "type": "integer",
@@ -215,12 +175,7 @@
         "inventory": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "bytes",
-            "sha256",
-            "url",
-            "releaseAssetId"
-          ],
+          "required": ["bytes", "sha256", "url", "releaseAssetId"],
           "properties": {
             "bytes": {
               "type": "integer",
@@ -243,12 +198,7 @@
         "bundle": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "bytes",
-            "sha256",
-            "url",
-            "releaseAssetId"
-          ],
+          "required": ["bytes", "sha256", "url", "releaseAssetId"],
           "properties": {
             "bytes": {
               "type": "integer",
@@ -343,11 +293,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "root",
-              "members"
-            ],
+            "required": ["id", "root", "members"],
             "properties": {
               "id": {
                 "enum": [
@@ -382,25 +328,17 @@
                 "const": "runtime"
               }
             },
-            "required": [
-              "kind"
-            ]
+            "required": ["kind"]
           },
           "then": {
             "properties": {
               "target": {
                 "properties": {
                   "platform": {
-                    "enum": [
-                      "darwin",
-                      "win32"
-                    ]
+                    "enum": ["darwin", "win32"]
                   },
                   "arch": {
-                    "enum": [
-                      "arm64",
-                      "x64"
-                    ]
+                    "enum": ["arm64", "x64"]
                   }
                 }
               },
@@ -434,9 +372,7 @@
                 "const": "runtime"
               }
             },
-            "required": [
-              "kind"
-            ]
+            "required": ["kind"]
           },
           "then": {
             "properties": {
