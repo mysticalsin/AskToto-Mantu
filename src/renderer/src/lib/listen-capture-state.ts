@@ -83,6 +83,11 @@ export function captureHealthIfCurrent<T>(currentEpoch: number, eventEpoch: numb
   return currentEpoch === eventEpoch ? next : current
 }
 
+/** A speaker label belongs only to the meeting epoch that dispatched its async embedding request. */
+export function speakerEmbedResultIsStale(requestEpoch: number, currentEpoch: number): boolean {
+  return requestEpoch !== currentEpoch
+}
+
 export function sameCaptureHealth(left: CaptureHealth | null, right: CaptureHealth | null): boolean {
   return (
     left === right ||
