@@ -1,0 +1,69 @@
+name: global-agent parent compatibility
+
+on:
+  push:
+    paths:
+      - '.github/workflows/global-agent-compatibility.yml'
+      - 'scripts/qa/global-agent-consumers.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/global-agent-compatibility.yml'
+      - 'scripts/qa/global-agent-consumers.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: global-agent-compatibility-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  compatibility:
+    name: Parent proxy compatibility (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install the pinned dependency graph without install hooks
+        run: npm ci --ignore-scripts
+      - name: Verify actual global-agent parent behavior
+        id: compatibility-tests
+        shell: bash
+        run: |
+          set +e
+          node --test --test-reporter=tap scripts/qa/global-agent-consumers.test.mjs > global-agent-compatibility.tap 2>&1
+          result=$?
+          cat global-agent-compatibility.tap
+          echo "exit-code=$result" >> "$GITHUB_OUTPUT"
+          exit "$result"
+      - name: Upload TAP report regardless of test outcome
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: global-agent-compatibility-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: global-agent-compatibility.tap
+          if-no-files-found: error
+          retention-days: 7
+      - name: Require the complete eight-test report
+        if: always()
+        shell: bash
+        env:
+          TEST_EXIT_CODE: ${{ steps.compatibility-tests.outputs.exit-code }}
+        run: |
+          node -e 'const fs = require("node:fs"); const report = fs.readFileSync("global-agent-compatibility.tap", "utf8"); const expected = ["# tests 8", "# pass 8", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"]; for (const line of expected) { if (!report.split(/\r?\n/).includes(line)) throw new Error(`missing exact TAP summary: ${line}`); } if (process.env.TEST_EXIT_CODE !== "0") throw new Error(`compatibility test process failed: ${process.env.TEST_EXIT_CODE || "no exit status"}`);'
