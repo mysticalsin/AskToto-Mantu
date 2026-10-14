@@ -155,9 +155,19 @@ test('partitions a maximum-density analyzer result losslessly below the annotati
     'part',
     'partCount'
   ])
-  const serializedParts = payloads.map((payload) =>
-    Object.fromEntries(Object.entries(payload).filter(([key]) => !envelopeKeys.has(key)))
-  )
+  const serializedParts = payloads.map((payload) => {
+    const entries = Object.entries(payload).filter(([key]) => !envelopeKeys.has(key))
+    if (payload.section === 'summary') {
+      entries.splice(
+        1,
+        0,
+        ['originalVerdict', payload.originalVerdict],
+        ['st1Evidence', payload.st1Evidence],
+        ['causalConclusion', payload.causalConclusion]
+      )
+    }
+    return Object.fromEntries(entries)
+  })
   assert.equal(
     summarySha256,
     createHash('sha256')
