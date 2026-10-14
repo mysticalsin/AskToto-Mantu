@@ -42,6 +42,18 @@ describe('settings publication', () => {
     expect(successor).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps the legacy epoch tied to Settings object identity, even for an equal clone', async () => {
+    const bus = await import('./settings-observation')
+    const initial = structuredClone(DEFAULT_SETTINGS)
+    bus.publishSettingsSnapshot(initial, true)
+    const epoch = bus.getSettingsObservationEpoch()
+    bus.publishSettingsSnapshot(structuredClone(initial), true)
+    expect(bus.getSettingsObservationEpoch()).toBe(epoch + 1)
+    const changed = { ...initial, encryptTranscripts: !initial.encryptTranscripts }
+    bus.publishSettingsSnapshot(changed, true)
+    expect(bus.getSettingsObservationEpoch()).toBe(epoch + 2)
+  })
+
   it('closes the epoch on observer failure without breaking legacy settings reads', async () => {
     const bus = await import('./settings-observation')
     bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)
