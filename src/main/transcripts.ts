@@ -831,6 +831,9 @@ const draftFilename = (started: number): string =>
  * — that's a real, disclosed limitation: this closes the data-loss gap, it doesn't build recovery UX.
  */
 export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): Promise<void> {
+  // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
+  // Leave previously permitted files untouched, as the normal summary-only save does.
+  if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))) return
   try {
     const folder = ensureMeetingsFolder(settings)
     const started = m.startedAt || Date.now()
