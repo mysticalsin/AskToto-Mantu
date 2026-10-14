@@ -16,6 +16,16 @@ vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
   return {
     ...actual,
+    execFile: (...args: unknown[]) => {
+      probes.count++
+      if (managedBytesRace.aclOutput !== null) {
+        const callback = args[3] as (error: null, stdout: string) => void
+        const output = managedBytesRace.aclOutput
+        queueMicrotask(() => callback(null, output))
+        return {}
+      }
+      return (actual.execFile as (...a: unknown[]) => unknown)(...args)
+    },
     execFileSync: (...args: unknown[]) => {
       probes.count++
       if (managedBytesRace.aclOutput !== null) return managedBytesRace.aclOutput
@@ -52,11 +62,14 @@ vi.mock('electron')
 
 import {
   evaluateAclTrust,
+  evaluateCurrentUserPrivateAcl,
   isAdminManagedTrusted,
   readAclForTest,
   readManagedPolicyAuthorityFile,
   readTrustedAdminManaged,
   readTrustedAdminManagedBytes,
+  preparePrivateCurrentUserAcl,
+  verifyPrivateCurrentUserAcl,
   trustedAdminManagedPath,
   WINDOWS_POWERSHELL,
   resetAclMemoForTests,
@@ -91,6 +104,80 @@ const USERS = 'S-1-5-32-545'
 const AUTH_USERS = 'S-1-5-11'
 const EVERYONE = 'S-1-1-0'
 const ATTACKER = 'S-1-5-21-111-222-333-1005' // a normal domain/local user RID
+
+describe('evaluateCurrentUserPrivateAcl — private user-data owner and writers', () => {
+  const current = 'S-1-5-21-111-222-333-1001'
+  const base: AclProbe = {
+    owner: current,
+    processOwner: current,
+    aces: [
+      { sid: current, rights: FULL, type: 'Allow' },
+      { sid: SYSTEM, rights: FULL, type: 'Allow' },
+      { sid: ADMINS, rights: FULL, type: 'Allow' }
+    ]
+  }
+
+  it('accepts the exact process owner and reviewed SYSTEM/admin writers', () => {
+    expect(evaluateCurrentUserPrivateAcl(base)).toBe(true)
+  })
+
+  it('rejects owner mismatch, foreign read/write grants, and unknown ACE kinds', () => {
+    expect(evaluateCurrentUserPrivateAcl({ ...base, owner: ATTACKER })).toBe(false)
+    expect(
+      evaluateCurrentUserPrivateAcl({ ...base, aces: [...base.aces, { sid: USERS, rights: WRITE, type: 'Allow' }] })
+    ).toBe(false)
+    expect(
+      evaluateCurrentUserPrivateAcl({ ...base, aces: [...base.aces, { sid: USERS, rights: READ, type: 'Allow' }] })
+    ).toBe(false)
+    expect(
+      evaluateCurrentUserPrivateAcl({ ...base, aces: [...base.aces, { sid: EVERYONE, rights: READ, type: 'Allow' }] })
+    ).toBe(false)
+    expect(
+      evaluateCurrentUserPrivateAcl({ ...base, aces: [...base.aces, { sid: ATTACKER, rights: READ, type: 'Allow' }] })
+    ).toBe(false)
+    expect(
+      evaluateCurrentUserPrivateAcl({ ...base, aces: [...base.aces, { sid: current, rights: 0, type: 'Unknown' }] })
+    ).toBe(false)
+    expect(
+      evaluateCurrentUserPrivateAcl({ ...base, aces: [...base.aces, { sid: current, rights: READ, type: 'Deny' }] })
+    ).toBe(false)
+    expect(evaluateCurrentUserPrivateAcl({ ...base, processOwner: '' })).toBe(false)
+  })
+})
+
+describe('verifyPrivateCurrentUserAcl — fresh DACL reads for private persistence paths', () => {
+  it('accepts exact-owner private DACLs and rejects foreign read grants or unreadable ACLs', async () => {
+    setPlatform('win32')
+    const current = 'S-1-5-21-111-222-333-1001'
+    managedBytesRace.aclOutput = JSON.stringify({
+      owner: current,
+      processOwner: current,
+      aces: [{ sid: current, rights: FULL, type: 'Allow' }]
+    })
+    await expect(verifyPrivateCurrentUserAcl('C:\\private\\key.bin')).resolves.toBe(true)
+    await expect(preparePrivateCurrentUserAcl('C:\\private\\key.bin')).resolves.toBe(true)
+    managedBytesRace.aclOutput = JSON.stringify({
+      owner: current,
+      processOwner: current,
+      aces: [
+        { sid: current, rights: FULL, type: 'Allow' },
+        { sid: USERS, rights: READ, type: 'Allow' }
+      ]
+    })
+    await expect(verifyPrivateCurrentUserAcl('C:\\private\\key.bin')).resolves.toBe(false)
+    managedBytesRace.aclOutput = JSON.stringify({
+      owner: current,
+      processOwner: current,
+      aces: [
+        { sid: current, rights: FULL, type: 'Allow' },
+        { sid: EVERYONE, rights: READ, type: 'Allow' }
+      ]
+    })
+    await expect(verifyPrivateCurrentUserAcl('C:\\private\\key.bin')).resolves.toBe(false)
+    managedBytesRace.aclOutput = ''
+    await expect(verifyPrivateCurrentUserAcl('C:\\private\\key.bin')).resolves.toBe(false)
+  })
+})
 
 describe('WINDOWS_POWERSHELL — the shared pinned interpreter path', () => {
   // Every main-process powershell spawn resolves through this constant, so pin its shape here once:
