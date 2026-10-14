@@ -60,10 +60,12 @@ describe('packaged restart recovery candidate scenario', () => {
     })
     expect(installerKindForScenario('packaged-restart-recovery', 'mac')).toBe('mac-dmg')
     expect(installerKindForScenario('packaged-restart-recovery', 'win')).toBe('win')
-    expect(resolveScenario({
-      scenario: 'packaged-restart-recovery',
-      sha256: { mac: MAC_SHA, win: WIN_SHA }
-    })).toMatchObject({
+    expect(
+      resolveScenario({
+        scenario: 'packaged-restart-recovery',
+        sha256: { mac: MAC_SHA, win: WIN_SHA }
+      })
+    ).toMatchObject({
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA },
       win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA }
     })
@@ -169,19 +171,17 @@ describe('packaged restart recovery candidate scenario', () => {
     expect(shutdownVerdict({ ...evidence, quitAcknowledged: false }).clean).toBe(false)
     expect(shutdownVerdict({ ...evidence, exitCode: 1 }).clean).toBe(false)
     expect(shutdownVerdict({ ...evidence, exitCode: null, signalCode: 'SIGTERM' }).clean).toBe(false)
-    expect(
-      shutdownVerdict({ ...evidence, survivorCountAfterGrace: 1, survivorCount: 0 })
-    ).toEqual({ clean: false, teardown: 'ACKNOWLEDGED' })
+    expect(shutdownVerdict({ ...evidence, survivorCountAfterGrace: 1, survivorCount: 0 })).toEqual({
+      clean: false,
+      teardown: 'ACKNOWLEDGED'
+    })
   })
 
   it('preserves launch-time process ownership when quit-time census loses a reparented helper', () => {
     const launchedMain = { pid: 10, startedMs: 100 }
     const launchedHelper = { pid: 11, startedMs: 101 }
     const quitMain = { pid: 10, startedMs: 100, ppid: 1 }
-    const merged = mergeOwnedProcessBaselines(
-      [launchedMain, launchedHelper],
-      [quitMain]
-    )
+    const merged = mergeOwnedProcessBaselines([launchedMain, launchedHelper], [quitMain])
 
     expect(merged).toHaveLength(2)
     expect(merged.map(({ pid, startedMs }) => `${pid}:${startedMs}`)).toEqual(['10:100', '11:101'])

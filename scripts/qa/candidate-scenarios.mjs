@@ -1063,7 +1063,8 @@ export function assessPackagedSmokeReport(report, platform) {
 export function assessPackagedRecoveryReport(report, platform = undefined) {
   const problems = packagedRecoveryReportProblems(report)
   const expectedPlatform = platform === 'mac' ? 'darwin' : platform === 'win' ? 'win32' : undefined
-  if (expectedPlatform && report?.platform !== expectedPlatform) problems.push('packaged recovery report platform does not match the scenario platform.')
+  if (expectedPlatform && report?.platform !== expectedPlatform)
+    problems.push('packaged recovery report platform does not match the scenario platform.')
   const allowedIds = new Set(RECOVERY_ASSERTIONS)
   const row_verdicts = {
     recovery: Array.isArray(report?.assertions)
