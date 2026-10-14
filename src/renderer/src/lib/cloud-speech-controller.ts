@@ -261,13 +261,12 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   const cancelRequestedIdentity = async (deadline: number): Promise<void> => {
     if (deadline - now() <= 0) return
-    let pending: Promise<unknown>
     try {
-      pending = options.bridge.cloudSpeechCancel(identity())
+      const pending = options.bridge.cloudSpeechCancel(identity())
+      await bounded(pending, deadline, undefined)
     } catch {
-      return
+      // Cleanup is best effort; never replace the original start failure.
     }
-    await bounded(pending, deadline, undefined)
   }
 
   const cancelBridgeWithin = async (deadline: number): Promise<CloudSpeechCancelResult> => {
