@@ -1,4 +1,8 @@
-import { projectOperatorIngestMetadata, sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
+import {
+  projectOperatorIngestMetadata,
+  sanitizeOperatorHostname,
+  sanitizeOperatorSsoEmail
+} from '../../src/shared/operator'
 import { normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionType } from '../../src/shared/question-type'
 import {
   clearSessionCookie,
@@ -11,7 +15,6 @@ import {
   resolveAdminIdentity,
   mintSessionToken,
   sessionCookieHeader,
-  SESSION_REMINT_AFTER_MS,
   unauthorized,
   type AccessCtx
 } from './access'
@@ -77,7 +80,10 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
 /** A device-supplied id (ask or CRM) is stored and later echoed in audit rows and exports, so it is
  *  stripped of control characters, trimmed and capped before use; an empty result gets a fresh UUID. */
 function deviceSuppliedId(raw: unknown): string {
-  const s = String(raw ?? '').replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').trim().slice(0, 128)
+  const s = String(raw ?? '')
+    .replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ')
+    .trim()
+    .slice(0, 128)
   return s || crypto.randomUUID()
 }
 
@@ -96,7 +102,17 @@ function questionTypeFromBody(body: Record<string, unknown>): QuestionType {
 function projectHeartbeatBody(raw: Record<string, unknown>): Record<string, unknown> {
   const seat = projectOperatorIngestMetadata({ ...raw, event: 'ask', id: 'heartbeat', questionType: 'unknown' }) ?? {}
   const projected: Record<string, unknown> = {}
-  for (const key of ['seatHash', 'os', 'appVersion', 'hostname', 'ssoEmail', 'license', 'licenseLast4', 'licenseId', 'lastIndexAt']) {
+  for (const key of [
+    'seatHash',
+    'os',
+    'appVersion',
+    'hostname',
+    'ssoEmail',
+    'license',
+    'licenseLast4',
+    'licenseId',
+    'lastIndexAt'
+  ]) {
     if (seat[key] !== undefined) projected[key] = seat[key]
   }
   for (const key of ['queued', 'dropped']) {
@@ -133,7 +149,12 @@ function csrfRefused(): Response {
   return json({ ok: false, error: 'cross-site request refused', code: 'csrf' }, 403)
 }
 
-export async function handleRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  ctx: AccessCtx,
+  opts: HandleOpts = {}
+): Promise<Response> {
   const startedAt = Date.now()
   const res = await routeRequest(request, env, ctx, opts)
   logRequest(request, res, startedAt)
@@ -285,9 +306,15 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/integrations' ||
     url.pathname === '/v1/model-policy'
   ) {
-    const bodyText = request.method === 'GET' ? '' :
-      url.pathname === '/v1/ask' || url.pathname === '/v1/use' ? await readUseBody(request) : await request.text()
-    if (bodyText === null) return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
+    const bodyText =
+      request.method === 'GET'
+        ? ''
+        : url.pathname === '/v1/ask' || url.pathname === '/v1/use'
+          ? await readUseBody(request)
+          : await request.text()
+    if (bodyText === null) {
+      return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
+    }
     const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
@@ -311,7 +338,15 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     }
     if (url.pathname === '/v1/ask') {
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
-      return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
+      return handleAsk(
+        store,
+        env,
+        hmac.deviceId,
+        bodyText,
+        now,
+        opts.providerFetch ?? opts.cfFetch ?? fetch,
+        request.signal
+      )
     }
     return ingest(store, hmac.deviceId, bodyText, now, geo, hmac.license)
   }
@@ -319,11 +354,9 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
   return json({ ok: false, error: 'not found' }, 404)
 }
 
-/** Mints (or reconstructs) the session cookie for an authenticated admin response. A session that came
- *  from a fresh Access identity (no `sessionIat`) always gets a new cookie; an existing session is only
- *  re-minted, and `Set-Cookie` re-sent, once it has been alive longer than `SESSION_REMINT_AFTER_MS` -
- *  otherwise the browser keeps the cookie it already has and this just recomputes the same token bytes
- *  for the `/session` JSON body and the `X-Metis-Session` header. */
+/** Mints a session only from a freshly verified Access identity. An existing app session retains its
+ *  original `iat` and cookie deadline; reflecting it into `/session` and `X-Metis-Session` never renews
+ *  its absolute lifetime. */
 async function withSession(
   res: Response,
   env: Env,
@@ -333,11 +366,11 @@ async function withSession(
 ): Promise<Response> {
   const secret = await deriveSessionSecret(env)
   if (!secret) return res
-  const shouldRemint = ident.sessionIat === undefined || now - ident.sessionIat > SESSION_REMINT_AFTER_MS
-  const iat = shouldRemint ? now : ident.sessionIat!
+  const shouldMint = ident.sessionIat === undefined
+  const iat = shouldMint ? now : ident.sessionIat!
   const token = await mintSessionToken(ident.email, iat, secret)
   const headers = new Headers(res.headers)
-  if (shouldRemint) headers.append('Set-Cookie', sessionCookieHeader(token, now))
+  if (shouldMint) headers.append('Set-Cookie', sessionCookieHeader(token, now))
   headers.set('X-Metis-Session', token)
   if (pathname === '/session') {
     headers.set('content-type', 'application/json; charset=utf-8')
@@ -362,23 +395,31 @@ async function adminRoute(
 }
 
 async function heartbeat(
-  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+  store: OperatorStore,
+  deviceId: string,
+  bodyText: string,
+  now: number,
+  geo: CfGeo,
+  license?: VerifiedDeviceLicense
 ): Promise<Response> {
-  const rawBody = withVerifiedLicense(bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {}, license)
+  const rawBody = withVerifiedLicense(bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}, license)
   const body = projectHeartbeatBody(rawBody)
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
   const stored = (await store.getSeat(deviceId)) ?? seat
   const pulseId = crypto.randomUUID()
-  await store.recordPulseSession({
-    id: pulseId,
-    device_id: deviceId,
-    ts: now,
-    kind: 'heartbeat',
-    country: geo.country,
-    city: geo.city,
-    region: geo.region ?? null
-  }, seat)
+  await store.recordPulseSession(
+    {
+      id: pulseId,
+      device_id: deviceId,
+      ts: now,
+      kind: 'heartbeat',
+      country: geo.country,
+      city: geo.city,
+      region: geo.region ?? null
+    },
+    seat
+  )
   await store.insertEvent({
     id: pulseId,
     ts: now,
@@ -415,7 +456,12 @@ async function heartbeat(
 }
 
 async function ingest(
-  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+  store: OperatorStore,
+  deviceId: string,
+  bodyText: string,
+  now: number,
+  geo: CfGeo,
+  license?: VerifiedDeviceLicense
 ): Promise<Response> {
   const rawBody = withVerifiedLicense(JSON.parse(bodyText || '{}') as Record<string, unknown>, license)
   if (rawBody.event === 'crm' && rawBody.confidential === true) {
@@ -508,7 +554,7 @@ async function ingest(
     question_type: questionType,
     path_tag: parseAskPathTag(body.pathTag ?? body.path_tag)
   }
-  if (!await store.insertAsk(projectAskTelemetry(row))) return json({ ok: false, error: 'forbidden' }, 403)
+  if (!(await store.insertAsk(projectAskTelemetry(row)))) return json({ ok: false, error: 'forbidden' }, 403)
   // A lost response can replay the same Ask from the durable outbox. Stable activity IDs let each
   // replay repair a partial event write without making a second pulse or second feed entry.
   const pulseId = `ask:${id}`
@@ -523,15 +569,18 @@ async function ingest(
     country: geo.country,
     detail: safeEventDetail(row.mode || row.cache_status || 'ask')
   })
-  await store.recordPulseSession({
-    id: pulseId,
-    device_id: deviceId,
-    ts: row.ts,
-    kind: 'ask',
-    country: geo.country,
-    city: geo.city,
-    region: geo.region ?? null
-  }, seat)
+  await store.recordPulseSession(
+    {
+      id: pulseId,
+      device_id: deviceId,
+      ts: row.ts,
+      kind: 'ask',
+      country: geo.country,
+      city: geo.city,
+      region: geo.region ?? null
+    },
+    seat
+  )
   return json({ ok: true, id })
 }
 
@@ -595,32 +644,38 @@ async function upsertCrmEvent(
   const connector = typeof projected.connector === 'string' ? projected.connector : 'unknown'
   const err = typeof projected.error === 'string' ? projected.error : null
   const attempt = typeof projected.attempt === 'number' ? Math.floor(projected.attempt) : 0
-  const latencyMs =
-    typeof projected.latencyMs === 'number' ? Math.floor(projected.latencyMs) : 0
+  const latencyMs = typeof projected.latencyMs === 'number' ? Math.floor(projected.latencyMs) : 0
   const prev = await store.getCrm(id)
   // A CRM row (and the retry instruction the console attaches to it) belongs to the device that sent it.
   if (prev && prev.device_id !== deviceId) return 'foreign'
-  await store.upsertCrm(normalizeCrmRow({
-    id,
-    device_id: deviceId,
-    ts: typeof projected.ts === 'number' ? projected.ts : now,
-    status,
-    title: CRM_CANONICAL_TITLE,
-    connector,
-    meeting_file: null,
-    meeting_hash: null,
-    last_error: err,
-    retry_requested: 0,
-    attempt: attempt || prev?.attempt || 0,
-    latency_ms: latencyMs || prev?.latency_ms || 0,
-    remote_id: null,
-    remote_url: null,
-    action: null
-  }))
+  await store.upsertCrm(
+    normalizeCrmRow({
+      id,
+      device_id: deviceId,
+      ts: typeof projected.ts === 'number' ? projected.ts : now,
+      status,
+      title: CRM_CANONICAL_TITLE,
+      connector,
+      meeting_file: null,
+      meeting_hash: null,
+      last_error: err,
+      retry_requested: 0,
+      attempt: attempt || prev?.attempt || 0,
+      latency_ms: latencyMs || prev?.latency_ms || 0,
+      remote_id: null,
+      remote_url: null,
+      action: null
+    })
+  )
   return 'written'
 }
 
-async function ingestCrmList(store: OperatorStore, deviceId: string, body: Record<string, unknown>, now: number): Promise<void> {
+async function ingestCrmList(
+  store: OperatorStore,
+  deviceId: string,
+  body: Record<string, unknown>,
+  now: number
+): Promise<void> {
   if (!Array.isArray(body.crm)) return
   for (const item of body.crm.slice(0, 40)) {
     if (!item || typeof item !== 'object') continue
