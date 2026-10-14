@@ -14,7 +14,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { constants as fsConstants } from 'node:fs'
-import { copyFile, lstat, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, rename, rm, stat, statfs, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
@@ -80,24 +80,153 @@ export async function pathExists(path: string): Promise<boolean> {
 export async function reuseVerifiedFiles(options: {
   candidates: readonly string[]
   destination: string
-  files: readonly { path: string }[]
+  files: readonly { path: string; bytes: number; sha256: string }[]
   authorize: () => boolean | Promise<boolean>
   validateCurrent: () => boolean
 }): Promise<boolean> {
   for (const candidate of options.candidates) {
     for (const file of options.files) {
       const target = join(options.destination, ...file.path.split('/'))
-      if (await pathExists(target)) continue
-      if (!(await options.authorize()) || !options.validateCurrent()) return false
-      await mkdir(dirname(target), { recursive: true })
       try {
-        await copyFile(join(candidate, ...file.path.split('/')), target, fsConstants.COPYFILE_EXCL)
+        const targetInfo = await lstat(target)
+        if (!targetInfo.isFile() || targetInfo.isSymbolicLink() || targetInfo.nlink !== 1) return false
+        continue
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      if (!(await options.authorize()) || !options.validateCurrent()) return false
+      const source = join(candidate, ...file.path.split('/'))
+      let sourceHandle: Awaited<ReturnType<typeof open>> | undefined
+      let targetHandle: Awaited<ReturnType<typeof open>> | undefined
+      let verified = false
+      try {
+        await assertContainedDirectory(candidate, dirname(source))
+        const before = await lstat(source)
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== file.bytes)
+          return false
+        sourceHandle = await open(
+          source,
+          fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
+        )
+        const heldBefore = await sourceHandle.stat()
+        if (!sameFileVersion(before, heldBefore) || !heldBefore.isFile() || heldBefore.nlink !== 1) return false
+        await ensureContainedDirectory(options.destination, dirname(target))
+        targetHandle = await open(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600)
+        const hash = createHash('sha256')
+        const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, file.bytes + 1))
+        let copied = 0
+        while (copied <= file.bytes) {
+          const read = await sourceHandle.read(buffer, 0, Math.min(buffer.length, file.bytes + 1 - copied), copied)
+          if (read.bytesRead === 0) break
+          copied += read.bytesRead
+          if (copied > file.bytes) return false
+          const chunk = buffer.subarray(0, read.bytesRead)
+          hash.update(chunk)
+          let offset = 0
+          while (offset < chunk.length) {
+            const written = await targetHandle.write(
+              chunk,
+              offset,
+              chunk.length - offset,
+              copied - read.bytesRead + offset
+            )
+            if (written.bytesWritten <= 0) throw new Error('verified-file copy made no progress')
+            offset += written.bytesWritten
+          }
+        }
+        const heldAfter = await sourceHandle.stat()
+        const pathAfter = await lstat(source)
+        const targetHeld = await targetHandle.stat()
+        const targetPath = await lstat(target)
+        if (
+          copied !== file.bytes ||
+          hash.digest('hex') !== file.sha256 ||
+          !sameFileVersion(heldBefore, heldAfter) ||
+          !sameFileVersion(heldAfter, pathAfter) ||
+          heldAfter.nlink !== 1 ||
+          pathAfter.nlink !== 1 ||
+          !sameFileVersion(targetHeld, targetPath) ||
+          !targetHeld.isFile() ||
+          targetHeld.nlink !== 1 ||
+          targetHeld.size !== file.bytes ||
+          !options.validateCurrent()
+        )
+          return false
+        await targetHandle.sync()
+        verified = true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+        throw error
+      } finally {
+        await targetHandle?.close().catch(() => undefined)
+        await sourceHandle?.close().catch(() => undefined)
+        if (targetHandle && !verified) {
+          try {
+            await unlink(target)
+          } catch {
+            // A failed copy leaves no trusted destination; the caller's staging verifier rejects it.
+          }
+        }
       }
     }
   }
   return true
+}
+
+async function ensureContainedDirectory(root: string, target: string): Promise<void> {
+  const boundary = resolve(root)
+  const resolvedTarget = resolve(target)
+  const rel = relative(boundary, resolvedTarget)
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('reuse target escaped staging')
+  let current = boundary
+  const rootStat = await lstat(current)
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('reuse staging root is unsafe')
+  for (const part of rel.split(sep).filter(Boolean)) {
+    current = join(current, part)
+    try {
+      await mkdir(current)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+    const item = await lstat(current)
+    if (!item.isDirectory() || item.isSymbolicLink()) throw new Error('reuse target parent is unsafe')
+  }
+}
+
+async function assertContainedDirectory(root: string, target: string): Promise<void> {
+  const boundary = resolve(root)
+  const resolvedTarget = resolve(target)
+  const rel = relative(boundary, resolvedTarget)
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('reuse source escaped its pack')
+  let current = boundary
+  const rootStat = await lstat(current)
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('reuse source pack is unsafe')
+  for (const part of rel.split(sep).filter(Boolean)) {
+    current = join(current, part)
+    const item = await lstat(current)
+    if (!item.isDirectory() || item.isSymbolicLink()) throw new Error('reuse source parent is unsafe')
+  }
+}
+
+function sameFileVersion(
+  a: {
+    dev: number | bigint
+    ino: number | bigint
+    nlink: number
+    size: number
+    mtimeMs: number
+    ctimeMs: number
+  },
+  b: { dev: number | bigint; ino: number | bigint; nlink: number; size: number; mtimeMs: number; ctimeMs: number }
+): boolean {
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.nlink === b.nlink &&
+    a.size === b.size &&
+    a.mtimeMs === b.mtimeMs &&
+    a.ctimeMs === b.ctimeMs
+  )
 }
 
 /** Find a parent whose filesystem can report available bytes for a not-yet-created staging path. */

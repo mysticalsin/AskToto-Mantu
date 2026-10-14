@@ -73,6 +73,7 @@ interface InstallPlanRecord {
   authorityRevision: number
   selectedEngine: 'whisper' | 'parakeet' | 'apple'
   packageStatus: PackageRuntimeContract['status']
+  packageIdentity: string | null
   policyIdentity: string
   selectionIdentity: string
   captureIdentity: string
@@ -116,8 +117,16 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   >()
   const rollbackAuthority = new Map<
     SpeechPackComponentId,
-    { transaction: symbol; markerIdentity: string | null | undefined }
+    {
+      transaction: symbol
+      rootDir: string
+      packageStatus: PackageRuntimeContract['status']
+      packageIdentity: string | null
+      selectionIdentity: string
+      captureIdentity: string
+    }
   >()
+  const rollbackMarkerIdentity = new WeakMap<object, string | null>()
   const pendingAdmissions = new Map<SpeechPackComponentId, symbol>()
   let authorityRevision = 0
   let captureActive = false
@@ -177,12 +186,22 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return false
     }
   }
-  const rollbackTicket = (id: SpeechPackComponentId, marker: PriorReadyMarker | null) => {
+  const rollbackTicket = (id: SpeechPackComponentId, marker: PriorReadyMarker | null, transaction?: symbol) => {
     const authority = rollbackAuthority.get(id)
-    if (!authority || isCaptureActive()) return null
+    if (
+      !authority ||
+      !transaction ||
+      authority.transaction !== transaction ||
+      authority.rootDir !== options.rootDir ||
+      isCaptureActive() ||
+      currentCaptureIdentity() !== authority.captureIdentity ||
+      currentSelectionIdentity() !== authority.selectionIdentity
+    )
+      return null
     const identity = marker ? `${marker.version}:${marker.manifestIdentity}` : null
-    if (authority.markerIdentity === undefined) authority.markerIdentity = identity
-    return typeof authority.transaction === 'symbol' && authority.markerIdentity === identity ? authority : null
+    const boundIdentity = rollbackMarkerIdentity.get(authority)
+    if (boundIdentity === undefined) rollbackMarkerIdentity.set(authority, identity)
+    return rollbackMarkerIdentity.get(authority) === identity ? authority : null
   }
   let observedSelectionIdentity = currentSelectionIdentity()
   let observedPolicyIdentity = currentPolicyIdentity()
@@ -232,13 +251,28 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
             currentSelectionIdentity() === authority.selectionIdentity
         )
       },
-      authorizeRollback: async (id, marker) => {
-        const ticket = rollbackTicket(id, marker)
+      authorizeRollback: async (id, marker, transaction) => {
+        const ticket = rollbackTicket(id, marker, transaction)
         if (!ticket || !(await refreshRollbackAuthority())) return false
-        return rollbackAuthority.get(id) === ticket && rollbackTicket(id, marker) === ticket
+        let currentPackage: PackageRuntimeContract
+        try {
+          currentPackage = await currentPackageContract()
+        } catch {
+          return false
+        }
+        return (
+          currentPackage.status === ticket.packageStatus &&
+          (currentPackage.status === 'verified' ? currentPackage.inventory.identity : null) ===
+            ticket.packageIdentity &&
+          rollbackAuthority.get(id) === ticket &&
+          rollbackTicket(id, marker, transaction) === ticket
+        )
       },
-      authorizeRollbackCurrent: (id, marker) =>
-        rollbackTicket(id, marker) !== null && (options.rollbackAuthorityCurrent?.() ?? true)
+      authorizeRollbackCurrent: (id, marker, transaction) =>
+        rollbackTicket(id, marker, transaction) !== null && (options.rollbackAuthorityCurrent?.() ?? true),
+      onTransactionSettled: (id, transaction) => {
+        if (rollbackAuthority.get(id)?.transaction === transaction) rollbackAuthority.delete(id)
+      }
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
@@ -271,7 +305,6 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') {
         activity.delete(id)
         activeAuthority.delete(id)
-        rollbackAuthority.delete(id)
       }
     })
     return engine
@@ -511,6 +544,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       authorityRevision,
       selectedEngine,
       packageStatus: packageContract.status,
+      packageIdentity: profileIdentity,
       policyIdentity,
       selectionIdentity,
       captureIdentity,
@@ -618,7 +652,15 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     }
     activity.add(component.id)
     const transaction = Symbol('speech-pack-activation')
-    rollbackAuthority.set(component.id, { transaction, markerIdentity: undefined })
+    const rollbackTicket = Object.freeze({
+      transaction,
+      rootDir: options.rootDir,
+      packageStatus: record.packageStatus,
+      packageIdentity: record.packageIdentity,
+      selectionIdentity: record.selectionIdentity,
+      captureIdentity: record.captureIdentity
+    })
+    rollbackAuthority.set(component.id, rollbackTicket)
     activeAuthority.set(component.id, {
       policyIdentity: record.policyIdentity,
       selectionIdentity: record.selectionIdentity,
@@ -631,8 +673,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       bytesTotal: componentDownloadBytes(component),
       state: 'queued'
     }
-    if (request.action === 'repair') instance.repair(component.id)
-    else instance.enqueue([component.id], component.id)
+    if (request.action === 'repair') instance.repair(component.id, transaction)
+    else instance.enqueue([component.id], component.id, transaction)
     return SpeechPackActionResultSchema.parse({ ok: true })
   }
 

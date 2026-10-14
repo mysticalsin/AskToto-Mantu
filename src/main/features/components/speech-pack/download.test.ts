@@ -4,7 +4,7 @@ import { open as openAsync, rm as rmAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_TIMING, downloadVerified, type DownloadDeps } from './download'
+import { DEFAULT_TIMING, downloadVerified, reuseVerifiedFiles, type DownloadDeps } from './download'
 import { SpeechPackError } from './errors'
 import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-helpers/test-server.fixture'
 
@@ -567,5 +567,48 @@ describe('downloadVerified', () => {
     expect(readFileSync(join(dir, 'model.bin.partial')).length).toBe(32_000)
     expect(existsSync(join(dir, 'model.bin'))).toBe(false)
     expect(cancelled).toBe(true)
+  })
+})
+
+describe('reuseVerifiedFiles', () => {
+  it('copies only pinned bytes from a held regular file and rechecks content after copy', async () => {
+    const source = join(dir, 'source')
+    const destination = join(dir, 'destination')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const pinned = Buffer.from('previously verified model bytes')
+    writeFileSync(join(source, 'weights.bin'), pinned)
+    const authorize = vi.fn(() => true)
+    const copied = await reuseVerifiedFiles({
+      candidates: [source],
+      destination,
+      files: [{ path: 'weights.bin', bytes: pinned.length, sha256: createHash('sha256').update(pinned).digest('hex') }],
+      authorize,
+      validateCurrent: () => true
+    })
+    expect(copied).toBe(true)
+    expect(readFileSync(join(destination, 'weights.bin'))).toEqual(pinned)
+    expect(authorize).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a changed or linked candidate without leaving copied data', async () => {
+    const source = join(dir, 'source')
+    const destination = join(dir, 'destination')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const outside = join(dir, 'outside.bin')
+    writeFileSync(outside, 'changed bytes')
+    symlinkSync(outside, join(source, 'weights.bin'))
+    await expect(
+      reuseVerifiedFiles({
+        candidates: [source],
+        destination,
+        files: [{ path: 'weights.bin', bytes: 13, sha256: createHash('sha256').update('changed bytes').digest('hex') }],
+        authorize: () => true,
+        validateCurrent: () => true
+      })
+    ).resolves.toBe(false)
+    expect(existsSync(join(destination, 'weights.bin'))).toBe(false)
+    expect(readFileSync(outside, 'utf8')).toBe('changed bytes')
   })
 })

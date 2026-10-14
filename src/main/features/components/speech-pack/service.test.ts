@@ -31,6 +31,11 @@ vi.mock('electron', () => ({
 function fakeEngine(): {
   engine: SpeechPackEngine
   update: (id: SpeechPackComponentId, state: SpeechPackState, freshlyVerified?: boolean) => void
+  enqueue: ReturnType<
+    typeof vi.fn<
+      (ids: readonly SpeechPackComponentId[], selected?: SpeechPackComponentId, transaction?: symbol) => void
+    >
+  >
 } {
   const states = new Map(
     SPEECH_PACK_COMPONENTS.map((component) => [component.id, { status: 'not-installed' } as SpeechPackState])
@@ -50,9 +55,11 @@ function fakeEngine(): {
     states.set(id, state)
     for (const listener of listeners) listener({ id, state, freshlyVerified })
   }
-  const enqueue = vi.fn((ids: readonly SpeechPackComponentId[], _selected?: SpeechPackComponentId) => {
-    for (const id of ids) update(id, { status: 'queued' })
-  })
+  const enqueue = vi.fn(
+    (ids: readonly SpeechPackComponentId[], _selected?: SpeechPackComponentId, _transaction?: symbol) => {
+      for (const id of ids) update(id, { status: 'queued' })
+    }
+  )
   const repair = vi.fn((id: SpeechPackComponentId) => update(id, { status: 'queued' }))
   const engine: SpeechPackEngine = {
     initialise: async () => undefined,
@@ -68,7 +75,7 @@ function fakeEngine(): {
     cancel: vi.fn((id) => update(id, { status: 'error', kind: 'cancelled' })),
     whenIdle: async () => undefined
   }
-  return { engine, update }
+  return { engine, update, enqueue }
 }
 
 function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]> = {}) {
@@ -195,7 +202,7 @@ describe('explicit speech-pack service boundary', () => {
     const result = await service.installWithPlan({ planId: preview.plan.planId, action: 'install' })
     expect(result).toEqual({ ok: true })
     expect(createEngine).toHaveBeenCalledTimes(1)
-    expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id)
+    expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id, expect.any(Symbol))
     expect((await service.snapshot()).progress?.componentId).toBe(WHISPER_BASE_Q8.id)
   })
 
@@ -524,16 +531,32 @@ describe('explicit speech-pack service boundary', () => {
     expect(await install(service)).toMatchObject({ ok: true })
     const admittedOptions = engineOptions as unknown as SpeechPackEngineOptions
     const marker = { version: '1', manifestIdentity: 'a'.repeat(64) }
+    const transaction = fake.enqueue.mock.calls[0][2]
+    expect(transaction).toEqual(expect.any(Symbol))
+    if (!transaction) throw new Error('expected engine transaction token')
 
     policyIdentity = 'speech-proof:5:scope-b:revision-2'
     service.policyChanged()
     await expect(admittedOptions.authorizeActivation?.(WHISPER_BASE_Q8.id)).resolves.toBe(false)
-    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker)).resolves.toBe(true)
-    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker)).toBe(true)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, transaction)).resolves.toBe(true)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, transaction)).toBe(true)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, Symbol('stale'))).resolves.toBe(false)
+    admittedOptions.onTransactionSettled?.(WHISPER_BASE_Q8.id, transaction)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, transaction)).resolves.toBe(false)
+
+    fake.update(WHISPER_BASE_Q8.id, { status: 'error', kind: 'http' })
+    policyIdentity = 'speech-proof:7:scope-a:revision-3'
+    service.policyChanged()
+    expect(await install(service)).toMatchObject({ ok: true })
+    const nextTransaction = fake.enqueue.mock.calls[1][2]
+    expect(nextTransaction).toEqual(expect.any(Symbol))
+    if (!nextTransaction) throw new Error('expected successor transaction token')
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, transaction)).resolves.toBe(false)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, nextTransaction)).toBe(true)
 
     capture = true
     service.captureActivityChanged(true)
-    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker)).toBe(false)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, nextTransaction)).toBe(false)
     await service.shutdown()
   })
 

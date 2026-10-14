@@ -121,6 +121,20 @@ describe('speech-pack engine', () => {
     expect(existsSync(join(root, '.staging', WHISPER, '1'))).toBe(false)
   })
 
+  it('keeps the rollback transaction alive when a ready listener synchronously cancels', async () => {
+    server = await serveFiles()
+    const c = whisper(server.base)
+    const engine = make([c])
+    engine.subscribe(({ id, state }) => {
+      if (id === WHISPER && state.status === 'ready') engine.cancel(id)
+    })
+    engine.enqueue([WHISPER])
+    await engine.whenIdle()
+    expect(engine.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+    expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+    expect(existsSync(marker(WHISPER))).toBe(false)
+  })
+
   it('refuses on a disk shortfall with the required and free bytes, and writes nothing', async () => {
     server = await serveFiles()
     const c = whisper(server.base)
@@ -572,28 +586,50 @@ describe('speech-pack engine', () => {
       expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
     })
 
-    it('keeps the prior marker and its exact backup when owned rollback is denied', async () => {
+    it('keeps the prior marker and exact same-version backup when owned rollback is denied', async () => {
       server = await serveFiles()
       const previous = whisper(server.base)
       const first = make([previous])
       first.enqueue([WHISPER])
       await first.whenIdle()
       const previousMarker = readFileSync(marker(WHISPER))
-      const nextComponent = { ...previous, version: '2' }
       let activationRevoked = false
-      const replacing = make([nextComponent], {
+      const replacing = make([previous], {
         authorizeActivation: async () => !activationRevoked,
         authorizeRollback: async () => false,
         onActivationStep: (step) => {
           if (step === 'renamed') activationRevoked = true
         }
       })
-      replacing.enqueue([WHISPER])
+      replacing.repair(WHISPER)
       await replacing.whenIdle()
       expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
       expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(activationRevoked).toBe(true)
       expect(asideDirs()).toHaveLength(1)
-      expect(packMatches(previous, asideDirs()[0])).toBe(true)
+      expect(packMatches(previous, join(root, WHISPER, asideDirs()[0]))).toBe(true)
+    })
+
+    it('preserves the prior version directory and marker when a newer activation is revoked', async () => {
+      server = await serveFiles()
+      const previous = whisper(server.base)
+      const first = make([previous])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      const previousMarker = readFileSync(marker(WHISPER))
+      let activationRevoked = false
+      const newer = make([{ ...previous, version: '2' }], {
+        authorizeActivation: async () => !activationRevoked,
+        onActivationStep: (step) => {
+          if (step === 'renamed') activationRevoked = true
+        }
+      })
+      newer.enqueue([WHISPER])
+      await newer.whenIdle()
+      expect(newer.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+      expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
     })
 
     describe('component version transitions', () => {

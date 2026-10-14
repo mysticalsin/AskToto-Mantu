@@ -30,12 +30,22 @@ export async function authorizePriorPackRestore(
   componentId: SpeechPackComponentId,
   marker: PriorReadyMarker | null,
   refresh:
-    | ((componentId: SpeechPackComponentId, marker: PriorReadyMarker | null) => boolean | Promise<boolean>)
+    | ((
+        componentId: SpeechPackComponentId,
+        marker: PriorReadyMarker | null,
+        transaction: symbol
+      ) => boolean | Promise<boolean>)
     | undefined,
-  current: ((componentId: SpeechPackComponentId, marker: PriorReadyMarker | null) => boolean) | undefined
+  current:
+    | ((componentId: SpeechPackComponentId, marker: PriorReadyMarker | null, transaction: symbol) => boolean)
+    | undefined,
+  transaction: symbol
 ): Promise<boolean> {
   try {
-    return (await refresh?.(componentId, marker)) !== false && current?.(componentId, marker) !== false
+    return (
+      (await refresh?.(componentId, marker, transaction)) !== false &&
+      current?.(componentId, marker, transaction) !== false
+    )
   } catch {
     return false
   }
@@ -44,10 +54,13 @@ export async function authorizePriorPackRestore(
 export function priorPackRestoreStillCurrent(
   componentId: SpeechPackComponentId,
   marker: PriorReadyMarker | null,
-  current: ((componentId: SpeechPackComponentId, marker: PriorReadyMarker | null) => boolean) | undefined
+  current:
+    | ((componentId: SpeechPackComponentId, marker: PriorReadyMarker | null, transaction: symbol) => boolean)
+    | undefined,
+  transaction: symbol
 ): boolean {
   try {
-    return current?.(componentId, marker) !== false
+    return current?.(componentId, marker, transaction) !== false
   } catch {
     return false
   }
