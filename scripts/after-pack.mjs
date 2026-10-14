@@ -99,8 +99,9 @@ export default async function afterPack(context) {
   // signtool-rewritten by the time this runs. There is no hook between that copy and afterPack, so the
   // packaged-but-unsigned bytes are observable to nothing: run --post-sign. signtool signs .exe only
   // (WinPackager.shouldSignFile), so every DLL and .node addon stays byte-verified.
+  const leanProfile = process.env.METIS_PACKAGE_PROFILE === 'lean'
   const runtimeCheckArgs = [
-    join(SCRIPTS_DIR, 'check-packaged-runtime.mjs'),
+    join(SCRIPTS_DIR, leanProfile ? 'check-lean-package.mjs' : 'check-packaged-runtime.mjs'),
     isMac ? 'mac' : 'win',
     resourceDir
   ]
@@ -109,16 +110,19 @@ export default async function afterPack(context) {
   // verifier so afterPack checks the binary electron-builder actually produced.
   if (isWin) {
     runtimeCheckArgs.push(`--executable=${context.packager.appInfo.productFilename}.exe`)
-    runtimeCheckArgs.push('--post-sign')
+    // Lean candidates are explicitly unsigned. Compare all staged executable bytes, including the
+    // reviewed FFmpeg sidecar, through the package boundary instead of using the signed-release skip.
+    if (!leanProfile) runtimeCheckArgs.push('--post-sign')
   }
   // Verify exactly the architectures this package is meant to carry — the same set the pruning above
   // enforced, so the guard and the pruning can never disagree about what "correct" means.
-  if (isMac) {
+  if (isMac && !leanProfile) {
     runtimeCheckArgs.push(`--arches=${packagedArches.join(',')}`)
     // The bundle executable is still thin in each sub-build and only becomes fat after the lipo merge,
     // so this tracks context.arch rather than the payload arch set.
     runtimeCheckArgs.push(`--macho-arches=${arch === 'universal' ? 'arm64,x64' : arch}`)
   }
+  if (leanProfile) runtimeCheckArgs.push(`--arch=${arch}`)
   try {
     execFileSync(
       process.execPath,
