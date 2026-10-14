@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 1,
+  "catalogId": "metis-runtime-catalog-v1",
+  "trustRoot": {
+    "path": "runtime-trust/sigstore-trusted-root.json",
+    "bytes": 6787,
+    "sha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+    "source": "https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json",
+    "receipt": {
+      "path": "runtime-trust/acquisition-receipt.json",
+      "bytes": 663,
+      "sha256": "1ad8c2f7d308b9c2a76cbbc48c8880c338a8f89f44f9ce7427ecf99acc6ec456"
+    }
+  },
+  "targets": []
+}
