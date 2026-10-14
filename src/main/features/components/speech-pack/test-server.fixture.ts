@@ -34,6 +34,8 @@ export function sha256Hex(buf: Buffer): string {
 export interface RangeOptions {
   etag?: string
   ignoreRange?: boolean
+  /** Simulates a server that returns a partial response after the representation validator changed. */
+  changeValidatorOnResume?: boolean
   /** Send this many bytes of the first response, then drop the connection. */
   cutFirstAt?: number
   /** Transform the body served to request number `index`. */
@@ -46,12 +48,13 @@ export function rangeHandler(body: Buffer, o: RangeOptions = {}): Handler {
   return (req, res, index) => {
     const wanted = /^bytes=(\d+)-$/.exec(req.headers.range ?? '')
     const resume = wanted !== null && !o.ignoreRange && req.headers['if-range'] === etag
+    const responseEtag = resume && index > 0 && o.changeValidatorOnResume ? '"v2"' : etag
     const start = resume ? Number(wanted?.[1]) : 0
     const payload = o.mutate ? o.mutate(body, index) : body
     const slice = payload.subarray(start)
     res.statusCode = resume ? 206 : 200
     res.setHeader('content-type', 'application/octet-stream')
-    res.setHeader('etag', etag)
+    res.setHeader('etag', responseEtag)
     res.setHeader('content-length', String(slice.length))
     if (resume) res.setHeader('content-range', `bytes ${start}-${payload.length - 1}/${payload.length}`)
     if (index === 0 && o.cutFirstAt !== undefined) {

@@ -1,5 +1,6 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { open as openAsync, rm as rmAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -86,6 +87,23 @@ describe('downloadVerified', () => {
     server = await serve((req, res, i) => (served++ === 0 ? first(req, res, i) : second(req, res, i)))
     await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
     expect(readFileSync(join(dir, 'model.bin')).equals(body)).toBe(true)
+  })
+
+  it('rejects a 206 response with a changed validator before appending its body', async () => {
+    const progressByRequest: Array<{ requestCount: number; bytes: number }> = []
+    server = await serve(rangeHandler(body, { cutFirstAt: 60_000, changeValidatorOnResume: true }))
+    await downloadVerified(
+      {
+        ...request(`${server.base}/pin/model.bin`),
+        onProgress: (bytes) => progressByRequest.push({ requestCount: server!.requests.length, bytes })
+      },
+      deps()
+    )
+    expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
+    expect(server.requests).toHaveLength(3)
+    expect(server.requests[1].headers.range).toBe('bytes=60000-')
+    expect(server.requests[2].headers.range).toBeUndefined()
+    expect(progressByRequest.some(({ requestCount, bytes }) => requestCount === 2 && bytes > 60_000)).toBe(false)
   })
 
   it('retries once from zero after one flipped byte, then succeeds', async () => {
@@ -202,6 +220,147 @@ describe('downloadVerified', () => {
     writeFileSync(join(dir, 'model.bin'), body)
     await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
     expect(server.requests).toHaveLength(0)
+  })
+
+  it.each([
+    ['missing Content-Length', undefined],
+    ['matching Content-Length', '5']
+  ])('rejects an oversized streamed chunk with %s before writing or reading further', async (_label, contentLength) => {
+    const expected = Buffer.from('12345')
+    const prior = Buffer.from('previous verified artifact')
+    writeFileSync(join(dir, 'model.bin'), prior)
+
+    let reads = 0
+    let cancelled = false
+    let body: ReadableStream<Uint8Array>
+    body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          reads += 1
+          if (reads === 1) controller.enqueue(Buffer.from('123456'))
+          else controller.enqueue(Buffer.from('must not be consumed'))
+        },
+        cancel() {
+          cancelled = true
+        }
+      },
+      { highWaterMark: 0 }
+    )
+    const headers = new Headers()
+    if (contentLength !== undefined) headers.set('content-length', contentLength)
+    const fetch = (async () => new Response(body, { status: 200, headers })) as typeof globalThis.fetch
+    const progress: number[] = []
+    const err = await failure(
+      downloadVerified(
+        {
+          url: 'https://models.example.test/resolve/0123456789abcdef0123456789abcdef01234567/model.bin',
+          dest: join(dir, 'model.bin'),
+          bytes: expected.length,
+          sha256: createHash('sha256').update(expected).digest('hex'),
+          signal: new AbortController().signal,
+          onProgress: (n) => progress.push(n)
+        },
+        deps({ fetch }, { maxAttempts: 1 })
+      )
+    )
+
+    expect(err.kind).toBe('tamper')
+    expect(progress.every((n) => n <= expected.length)).toBe(true)
+    expect(reads).toBe(1)
+    expect(cancelled).toBe(true)
+    expect(body.locked).toBe(false)
+    expect(readFileSync(join(dir, 'model.bin'))).toEqual(prior)
+    expect(existsSync(join(dir, 'model.bin.partial'))).toBe(false)
+  })
+
+  it('accepts an exact-size chunked response with no Content-Length', async () => {
+    const chunks = [body.subarray(0, 31_337), body.subarray(31_337)]
+    let index = 0
+    const fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              if (index === chunks.length) controller.close()
+              else controller.enqueue(chunks[index++])
+            }
+          },
+          { highWaterMark: 0 }
+        ),
+        { status: 200 }
+      )) as typeof globalThis.fetch
+    await downloadVerified(request('https://models.example.test/resolve/0123456789abcdef0123456789abcdef01234567/model.bin'), deps({ fetch }))
+    expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
+    expect(existsSync(join(dir, 'model.bin.partial'))).toBe(false)
+  })
+
+  it('waits for the partial file handle to close before cleanup', async () => {
+    let releaseClose!: () => void
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve
+    })
+    let markCloseStarted!: () => void
+    const closeStarted = new Promise<void>((resolve) => {
+      markCloseStarted = resolve
+    })
+    let closed = false
+    let cleanupObserved = false
+    let settled = false
+    const openFile = (async (path, flags) => {
+      const handle = await openAsync(path, flags)
+      const actualClose = handle.close.bind(handle)
+      handle.close = async () => {
+        markCloseStarted()
+        await closeGate
+        await actualClose()
+        closed = true
+      }
+      return handle
+    }) as typeof openAsync
+    const removeFile = (async (path, options) => {
+      if (path.endsWith('model.bin.partial')) cleanupObserved = closed
+      return rmAsync(path, options)
+    }) as typeof rmAsync
+    const fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(Buffer.from('123456'))
+          }
+        }, { highWaterMark: 0 }),
+        { status: 200 }
+      )) as typeof globalThis.fetch
+    const operation = downloadVerified(
+      {
+        url: 'https://models.example.test/resolve/0123456789abcdef0123456789abcdef01234567/model.bin',
+        dest: join(dir, 'model.bin'),
+        bytes: 5,
+        sha256: createHash('sha256').update('12345').digest('hex'),
+        signal: new AbortController().signal,
+        onProgress: () => undefined
+      },
+      deps({ fetch, openFile, removeFile }, { maxAttempts: 1 })
+    )
+    const outcome = operation.catch((err) => err)
+    void outcome.then(() => {
+      settled = true
+    })
+
+    try {
+      await closeStarted
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      expect(cleanupObserved).toBe(false)
+    } finally {
+      releaseClose()
+    }
+
+    const err = await outcome
+    expect(err).toBeInstanceOf(SpeechPackError)
+    expect((err as SpeechPackError).kind).toBe('tamper')
+    expect(closed).toBe(true)
+    expect(cleanupObserved).toBe(true)
+    expect(existsSync(join(dir, 'model.bin.partial'))).toBe(false)
   })
 
   it('treats a stalled body as a timeout and resumes', async () => {
