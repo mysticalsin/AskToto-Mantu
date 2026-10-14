@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { annotationMessage, createNotice } from '../qa/st1-evidence-notice.mjs'
 
@@ -134,6 +135,61 @@ describe('strict ST-1 GitHub notice serializer', () => {
       state: 'unavailable',
       reason: 'report_schema_invalid'
     })
+
+    const malformedProvenance = fixture(validReport())
+    writeFileSync(
+      malformedProvenance.provenancePath,
+      JSON.stringify({ schema: 2, repository: env.GITHUB_REPOSITORY, commit, run: { id: runId, attempt }, builds: {} })
+    )
+    expect(() => createNotice({ argv: malformedProvenance.argv, env })).not.toThrow()
+    expect(createNotice({ argv: malformedProvenance.argv, env })).toMatchObject({
+      state: 'unavailable',
+      reason: 'context_invalid'
+    })
+  })
+
+  it('rejects symlinks and non-regular inputs without following or blocking on them', () => {
+    const input = fixture(validReport())
+    if (process.platform !== 'win32') {
+      const target = join(dirname(input.reportPath), 'target.json')
+      const symlink = join(dirname(input.reportPath), 'linked-report.json')
+      writeFileSync(target, input.reportText)
+      symlinkSync(target, symlink)
+      const linked = ['--report', symlink, '--provenance', input.provenancePath, '--row', 'fifo']
+      expect(createNotice({ argv: linked, env })).toMatchObject({ state: 'unavailable' })
+
+      const fifo = join(dirname(input.reportPath), 'fifo-report.json')
+      execFileSync('mkfifo', [fifo])
+      const fifoArgs = ['--report', fifo, '--provenance', input.provenancePath, '--row', 'fifo']
+      expect(createNotice({ argv: fifoArgs, env })).toMatchObject({ state: 'unavailable' })
+    }
+  })
+
+  it('prints a notice through the real CLI and keeps malformed input out of stderr', () => {
+    const input = fixture(validReport())
+    const script = resolve(__dirname, '..', 'qa', 'st1-evidence-notice.mjs')
+    const result = spawnSync(process.execPath, [script, ...input.argv], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env }
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('::notice::{')
+    expect(result.stdout).toContain('"verdict":"FAIL"')
+    expect(result.stdout).not.toContain('private')
+
+    const malformed = fixture('{broken private input')
+    const failed = spawnSync(process.execPath, [script, ...malformed.argv], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env }
+    })
+    expect(failed.error).toBeUndefined()
+    expect(failed.status).toBe(0)
+    expect(failed.stderr).toBe('')
+    expect(failed.stdout).toContain('"reason":"report_malformed"')
+    expect(failed.stdout).not.toContain('broken private input')
+    expect(failed.stdout).not.toContain(input.reportPath)
   })
 
   it('rejects mismatched workflow context and escapes annotation control characters', () => {
@@ -148,6 +204,6 @@ describe('strict ST-1 GitHub notice serializer', () => {
       state: 'unavailable',
       reason: 'report_context_mismatch'
     })
-    expect(annotationMessage({ value: '%\r\n' })).toBe('::notice::{"value":"%25%0D%0A"}')
+    expect(annotationMessage({ value: '%\r\n' })).toBe('::notice::{"value":"%25\\r\\n"}')
   })
 })
