@@ -112,11 +112,13 @@ describe('meeting speech persistence worker host', () => {
       isCurrent: () => true,
       workerFactory: () => worker
     })
-    const recordBytes = new TextEncoder().encode(JSON.stringify({
-      identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
-      source: 'local-final',
-      line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
-    }))
+    const recordBytes = new TextEncoder().encode(
+      JSON.stringify({
+        identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
+      })
+    )
     const result = await service.canonicalizeIncrementalRecord(recordBytes)
 
     expect(worker.requests).toHaveLength(1)
@@ -139,11 +141,15 @@ describe('meeting speech persistence worker host', () => {
       }
     })
     await expect(
-      service.canonicalizeIncrementalRecord(new TextEncoder().encode(JSON.stringify({
-        identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
-        source: 'local-final',
-        line: { speaker: 'you', text: 'closed', t: 1_700_000_000_000 }
-      })))
+      service.canonicalizeIncrementalRecord(
+        new TextEncoder().encode(
+          JSON.stringify({
+            identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+            source: 'local-final',
+            line: { speaker: 'you', text: 'closed', t: 1_700_000_000_000 }
+          })
+        )
+      )
     ).rejects.toMatchObject({ name: 'UNCONFIGURED' })
     expect(starts).toBe(0)
     await service.dispose()

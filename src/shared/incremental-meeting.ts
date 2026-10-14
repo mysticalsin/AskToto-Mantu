@@ -41,7 +41,7 @@ export const IncrementalMeetingIdentitySchema = z.discriminatedUnion('kind', [
 ])
 export type IncrementalMeetingIdentity = z.infer<typeof IncrementalMeetingIdentitySchema>
 
-const IncrementalRecordSchema = z
+export const IncrementalMeetingRecordSchema = z
   .object({
     identity: IncrementalMeetingIdentitySchema,
     source: z.enum(['local-final', 'cloud-final']),
@@ -82,7 +82,7 @@ const AppendRecordSchema = z
     operation: z.literal('append-record'),
     meetingId: MeetingIdSchema,
     expectedRevision: RevisionSchema,
-    record: IncrementalRecordSchema
+    record: IncrementalMeetingRecordSchema
   })
   .strict()
 const PatchRecordSchema = z
@@ -166,6 +166,14 @@ export type IncrementalMeetingRecord = {
   identity: IncrementalMeetingIdentity
   source: 'local-final' | 'cloud-final'
   line: TranscriptLine
+}
+
+export type CanonicalIncrementalRecord = {
+  identityKey: string
+  sha256: string
+  canonicalBytes: Uint8Array
+  canonicalByteLength: number
+  wordCount: number
 }
 
 export type IncrementalMeetingCommandParse =
