@@ -1,24 +1,9 @@
 import { createHash } from 'node:crypto'
-import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import { IncrementalMeetingRecordSchema, type CanonicalIncrementalRecord } from '@shared/incremental-meeting'
+import type { IncrementalRecordReceipt, IncrementalRecordReceiptBinding } from '@shared/incremental-record-receipt'
 import { fitsIncrementalMeetingRecordPreflight } from './incremental-record-canonical'
 
-export interface IncrementalRecordReceiptBinding {
-  readonly ownerToken: object
-  readonly meetingId: string
-  readonly limits: SpeechProvenanceLimits
-  readonly maxCanonicalBytes: number
-  readonly isCurrent: () => boolean
-}
-
-export interface IncrementalRecordReceipt {
-  readonly identityKey: string
-  readonly sha256: string
-  readonly canonicalByteLength: number
-  readonly wordCount: number
-  readonly linePayloadBytes: number
-  readonly clock: string
-}
+export type { IncrementalRecordReceipt, IncrementalRecordReceiptBinding } from '@shared/incremental-record-receipt'
 
 type ReceiptBody = Omit<CanonicalIncrementalRecord, 'canonicalBytes'> & { canonicalBytes: Uint8Array }
 
