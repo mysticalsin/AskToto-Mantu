@@ -32,6 +32,8 @@ const hardware = vi.hoisted(() => ({
 }))
 const highTierFiles = vi.hoisted(() => ({ ready: vi.fn(async () => true) }))
 const modelsPath = vi.hoisted(() => ({ resolve: vi.fn(async () => '/tmp/metis-test-models') }))
+const floorAssets = vi.hoisted(() => ({ ensure: vi.fn(async () => undefined) }))
+const runtimeAdmission = vi.hoisted(() => ({ acquire: vi.fn(async () => null as unknown) }))
 
 vi.mock('electron', () => electron)
 vi.mock('node:os', () => ({ totalmem: hardware.totalmem, freemem: hardware.freemem }))
@@ -41,9 +43,16 @@ vi.mock('./asr-model-download', () => ({
   isHighTierAsrModelReady: highTierFiles.ready
 }))
 vi.mock('./asr-bundled-ensure', () => ({
-  ensureWhisperFloorAssets: vi.fn(async () => undefined),
+  ensureWhisperFloorAssets: floorAssets.ensure,
   resolveWhisperModelsRoot: modelsPath.resolve
 }))
+vi.mock('./features/components/speech-pack/runtime-admission', () => ({
+  acquirePackageRuntimeLease: runtimeAdmission.acquire
+}))
+vi.mock('./features/components/speech-pack/runtime-lease', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./features/components/speech-pack/runtime-lease')>()
+  return { ...original, runtimeHostEnvironment: vi.fn(() => ({})) }
+})
 
 import {
   applyInitLanguage,
@@ -406,6 +415,8 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
     hardware.freemem.mockReset().mockReturnValue(5 * 1024 ** 3)
     highTierFiles.ready.mockReset().mockResolvedValue(true)
     modelsPath.resolve.mockReset().mockResolvedValue('/tmp/metis-test-models')
+    floorAssets.ensure.mockReset().mockResolvedValue(undefined)
+    runtimeAdmission.acquire.mockReset().mockResolvedValue(null)
     resetLanguageFollow('auto')
     await setWhisperImportTierAdmission(16 * 1024 ** 3, 5 * 1024 ** 3, true)
   })
@@ -436,6 +447,29 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
     child.emit('message', { type: 'result', id: req.id, text: 'hello there' })
 
     await expect(pending).resolves.toBe('hello there')
+  })
+
+  it('transcribes from the exact leased Whisper model without requiring model-only floor readiness', async () => {
+    const lease = {
+      generationIdentity: 'a'.repeat(64),
+      entry: vi.fn(() => '/verified/whisper-import-host'),
+      model: vi.fn(() => '/verified/generation/models/whisper-base'),
+      release: vi.fn(async () => undefined)
+    }
+    runtimeAdmission.acquire.mockResolvedValueOnce(lease)
+    floorAssets.ensure.mockClear()
+
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const init = await waitForInit(child)
+    expect(electron.utilityProcess.fork.mock.calls[0]?.[0]).toBe('/verified/whisper-import-host')
+    expect(init.modelsPath).toBe('/verified/generation/models/whisper-base')
+    expect(floorAssets.ensure).not.toHaveBeenCalled()
+
+    const req = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: req.id, text: 'leased compact model' })
+    await expect(pending).resolves.toBe('leased compact model')
+    await stopWhisperHost()
+    expect(lease.release).toHaveBeenCalledOnce()
   })
 
   it('rejects every in-flight call when the child exits mid-request', async () => {

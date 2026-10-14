@@ -69,7 +69,17 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
   const source = record(inventory.source)
   if (
     !source ||
-    !exactKeys(source, ['repositoryUri', 'commit', 'workflowPath', 'workflowCommit', 'runId', 'attempt', 'lockSha256'])
+    !exactKeys(source, [
+      'repositoryUri',
+      'commit',
+      'ref',
+      'workflowPath',
+      'workflowCommit',
+      'runId',
+      'attempt',
+      'lockSha256',
+      'runnerEnvironment'
+    ])
   ) {
     throw new Error('RUNTIME_INVENTORY_INVALID')
   }
@@ -94,8 +104,10 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
     runtime.hostProtocol !== row.runtime.hostProtocol ||
     source.repositoryUri !== SOURCE_REPOSITORY ||
     source.commit !== row.signer.sourceCommit ||
+    source.ref !== row.signer.ref ||
     source.workflowPath !== row.signer.workflowPath ||
     source.workflowCommit !== row.signer.workflowCommit ||
+    source.runnerEnvironment !== row.signer.runnerEnvironment ||
     typeof source.runId !== 'string' ||
     !/^\d{1,20}$/.test(source.runId) ||
     !Number.isSafeInteger(source.attempt) ||

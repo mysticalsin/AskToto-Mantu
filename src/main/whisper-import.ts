@@ -174,6 +174,7 @@ async function createHost(): Promise<UtilityProcess> {
       if (admissionVersion !== importTierAdmissionVersion) continue
       // Lean installs use the verified compact model closure only. Full/development builds preserve the
       // existing separately admitted high-memory user model path.
+      if (!runtimeLease) await ensureWhisperFloorAssets()
       const tierAdmission = runtimeLease ? { allowHighMemoryTier: false } : await admitHostTierAtStart()
       await waitForStoppedHost()
       if (host) return host
@@ -547,7 +548,6 @@ export async function whisperImportTranscribe(
   language: string,
   probe?: LanguageProbe
 ): Promise<string> {
-  await ensureWhisperFloorAssets()
   applyInitLanguage(language)
   await probeLanguage(samples, probe)
   await reprobeForSwitch(samples, probe)

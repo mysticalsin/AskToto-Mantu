@@ -5,7 +5,7 @@
  * activated feature generation. Paths stay inside the main process and are never accepted from IPC.
  * A lease pins that generation until the corresponding child/worker has crossed its shutdown barrier.
  */
-import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path'
+import { delimiter, isAbsolute, relative, resolve, sep, win32 } from 'node:path'
 import type { OptionalRuntimeTarget } from './runtime-components'
 
 export type RuntimeFeatureId = 'offline-asr' | 'speaker-embedding' | 'local-llm'
@@ -100,19 +100,24 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
   assertLiveLease(lease)
   const env: NodeJS.ProcessEnv = {}
   for (const key of CHILD_ENV_ALLOWLIST) {
+    if (key === 'SystemRoot' || key === 'SYSTEMROOT' || key === 'WINDIR') continue
     const value = process.env[key]
     if (typeof value === 'string' && value.length <= 4096 && !value.includes('\0')) env[key] = value
   }
   const ownedRoots = lease.loaderDirectories()
-  const systemRoots =
-    process.platform === 'win32'
-      ? [
-          process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows',
-          `${process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows'}\\System32`
-        ]
-      : process.platform === 'darwin'
+  let systemRoots: string[]
+  if (process.platform === 'win32') {
+    const [root, system32] = windowsSystemLoaderRoots(process.env.SystemRoot ?? process.env.SYSTEMROOT)
+    env.SystemRoot = root
+    env.SYSTEMROOT = root
+    env.WINDIR = root
+    systemRoots = [root, system32]
+  } else {
+    systemRoots =
+      process.platform === 'darwin'
         ? ['/usr/lib', '/System/Library/Frameworks']
         : ['/lib', '/usr/lib', '/lib64', '/usr/lib64']
+  }
   const loaderRoots = [...ownedRoots, ...systemRoots]
   if (process.platform === 'win32') env.PATH = loaderRoots.join(delimiter)
   if (process.platform === 'linux') {
@@ -124,6 +129,23 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
     env.DYLD_LIBRARY_PATH = loaderRoots.join(delimiter)
   }
   return env
+}
+
+export function windowsSystemLoaderRoots(value: string | undefined): readonly [string, string] {
+  if (
+    typeof value !== 'string' ||
+    value.length < 4 ||
+    value.length > 260 ||
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    value.includes(';') ||
+    !win32.isAbsolute(value) ||
+    !/^[A-Za-z]:\\/.test(value) ||
+    value.split(/[\\/]+/).some((part) => part === '.' || part === '..')
+  ) {
+    throw new Error('Windows system loader root is invalid.')
+  }
+  const root = win32.resolve(value)
+  return [root, win32.join(root, 'System32')]
 }
 
 /** A lease object is a main-only capability; plain objects from IPC or callers cannot imitate one. */
@@ -193,6 +215,24 @@ function exactRuntimeTarget(actual: OptionalRuntimeTarget, expected: OptionalRun
   if (!actual || typeof actual !== 'object' || Object.keys(actual).sort().join(',') !== [...keys].sort().join(','))
     return false
   return keys.every((key) => actual[key] === expected[key])
+}
+
+function snapshotGeneration(generation: VerifiedRuntimeGeneration): VerifiedRuntimeGeneration {
+  const models = Object.fromEntries(
+    Object.entries(generation.models).map(([id, model]) => [
+      id,
+      Object.freeze({ root: model.root, members: Object.freeze([...model.members]) })
+    ])
+  )
+  return Object.freeze({
+    ...generation,
+    target: Object.freeze({ ...generation.target }),
+    entries: Object.freeze({ ...generation.entries }),
+    models: Object.freeze(models),
+    nativeLibraryDirs: Object.freeze([...generation.nativeLibraryDirs]),
+    rendererFiles: Object.freeze({ ...generation.rendererFiles }),
+    release: generation.release.bind(generation)
+  })
 }
 
 function validateGeneration(
@@ -332,13 +372,15 @@ export async function acquireFeatureRuntime(
 ): Promise<RuntimeFeatureLease> {
   if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
   if (!configuredProvider) throw new Error('Optional runtimes are not configured for this package.')
-  const generation = await configuredProvider.acquire({ feature, target, selectedModelId, signal })
-  if (!generation) throw new Error('The required offline runtime is not installed or is not trusted.')
+  const acquiredGeneration = await configuredProvider.acquire({ feature, target, selectedModelId, signal })
+  if (!acquiredGeneration) throw new Error('The required offline runtime is not installed or is not trusted.')
+  let generation = acquiredGeneration
   try {
+    generation = snapshotGeneration(acquiredGeneration)
     validateGeneration(feature, generation, target, selectedModelId)
     if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
   } catch (error) {
-    await generation.release()
+    await acquiredGeneration.release()
     throw error
   }
   let released = false

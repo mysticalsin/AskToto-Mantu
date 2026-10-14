@@ -9,15 +9,25 @@ class FakeChild extends EventEmitter {
 }
 
 const electron = vi.hoisted(() => ({ utilityProcess: { fork: vi.fn() } }))
+const runtimeAdmission = vi.hoisted(() => ({ acquire: vi.fn(async () => null as unknown) }))
 vi.mock('electron', () => electron)
 vi.mock('./logger', () => ({ mainLog: { warn: vi.fn(), error: vi.fn() } }))
+vi.mock('./features/components/speech-pack/runtime-admission', () => ({
+  acquirePackageRuntimeLease: runtimeAdmission.acquire
+}))
+vi.mock('./features/components/speech-pack/runtime-lease', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./features/components/speech-pack/runtime-lease')>()
+  return { ...original, runtimeHostEnvironment: vi.fn(() => ({})) }
+})
 
 let child: FakeChild
 let api: typeof import('./speaker-embedding-client')
 
 async function request(type = 'embed', target = child): Promise<Record<string, unknown>> {
   for (let i = 0; i < 20; i++) {
-    const found = target.postMessage.mock.calls.map((call) => call[0] as Record<string, unknown>).find((m) => m.type === type)
+    const found = target.postMessage.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .find((m) => m.type === type)
     if (found) return found
     await Promise.resolve()
   }
@@ -28,6 +38,7 @@ beforeEach(async () => {
   vi.resetModules()
   child = new FakeChild()
   electron.utilityProcess.fork.mockReset().mockReturnValue(child)
+  runtimeAdmission.acquire.mockReset().mockResolvedValue(null)
   api = await import('./speaker-embedding-client')
 })
 
@@ -50,8 +61,12 @@ describe('speaker embedding utility client', () => {
   })
 
   it('validates finite and maximum PCM before spawning', async () => {
-    await expect(api.computeSpeakerEmbedding('/model.onnx', Float32Array.from([Number.NaN]), 'live')).rejects.toThrow(/finite/i)
-    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(16_000 * 30 + 1), 'live')).rejects.toThrow(/large/i)
+    await expect(api.computeSpeakerEmbedding('/model.onnx', Float32Array.from([Number.NaN]), 'live')).rejects.toThrow(
+      /finite/i
+    )
+    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(16_000 * 30 + 1), 'live')).rejects.toThrow(
+      /large/i
+    )
     expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
   })
 
@@ -61,7 +76,9 @@ describe('speaker embedding utility client', () => {
     const first = await request()
     const b = api.computeSpeakerEmbedding('/model.onnx', max, 'live')
     for (let i = 0; i < 5; i++) await Promise.resolve()
-    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({
+      code: 'SPEAKER_EMBEDDING_BUSY'
+    })
     expect(child.postMessage).toHaveBeenCalledTimes(2)
     child.emit('message', { type: 'result', id: first.id, embedding: new Float32Array(512).buffer })
     await a
@@ -79,7 +96,9 @@ describe('speaker embedding utility client', () => {
     const pending = Array.from({ length: 16 }, () => api.speakerEmbeddingAvailable('/model.onnx', 'live'))
     for (let i = 0; i < 20 && child.postMessage.mock.calls.length < 16; i++) await Promise.resolve()
     expect(child.postMessage).toHaveBeenCalledTimes(16)
-    await expect(api.speakerEmbeddingAvailable('/model.onnx', 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+    await expect(api.speakerEmbeddingAvailable('/model.onnx', 'live')).rejects.toMatchObject({
+      code: 'SPEAKER_EMBEDDING_BUSY'
+    })
     for (const [sent] of child.postMessage.mock.calls) {
       child.emit('message', { type: 'result', id: (sent as { id: string }).id })
     }
@@ -104,7 +123,7 @@ describe('speaker embedding utility client', () => {
   it('uses immutable byte accounting when a resizable caller buffer shrinks', async () => {
     const bytes = 16_000 * 30 * Float32Array.BYTES_PER_ELEMENT
     const ResizableArrayBuffer = ArrayBuffer as unknown as {
-      new(byteLength: number, options: { maxByteLength: number }): ArrayBuffer & { resize(size: number): void }
+      new (byteLength: number, options: { maxByteLength: number }): ArrayBuffer & { resize(size: number): void }
     }
     const buffer = new ResizableArrayBuffer(bytes, { maxByteLength: bytes })
     const samples = new Float32Array(buffer)
@@ -120,7 +139,11 @@ describe('speaker embedding utility client', () => {
     for (let i = 0; i < 20 && child.postMessage.mock.calls.length < 2; i++) await Promise.resolve()
     expect(child.postMessage).toHaveBeenCalledTimes(2)
     for (const [request] of child.postMessage.mock.calls) {
-      child.emit('message', { type: 'result', id: (request as { id: string }).id, embedding: new Float32Array(512).buffer })
+      child.emit('message', {
+        type: 'result',
+        id: (request as { id: string }).id,
+        embedding: new Float32Array(512).buffer
+      })
     }
     await Promise.all([a, b])
   })
@@ -156,7 +179,9 @@ describe('speaker embedding utility client', () => {
     await expect(warm).resolves.toBe(true)
 
     let settled = false
-    const release = api.releaseSpeakerEmbedding('live').then(() => { settled = true })
+    const release = api.releaseSpeakerEmbedding('live').then(() => {
+      settled = true
+    })
     await Promise.resolve()
     expect(settled).toBe(false)
     expect(child.kill).toHaveBeenCalledTimes(1)
@@ -174,7 +199,9 @@ describe('speaker embedding utility client', () => {
     await vi.advanceTimersByTimeAsync(5_001)
     await assertion
     child.emit('exit', 0)
-    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toThrow(/could not confirm/i)
+    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toThrow(
+      /could not confirm/i
+    )
     expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(2)
   })
 
@@ -182,7 +209,10 @@ describe('speaker embedding utility client', () => {
     const importing = api.computeSpeakerEmbedding('/model.onnx', new Float32Array(4), 'import')
     const req = await request()
     let settled = false
-    const release = api.releaseSpeakerEmbedding('live').then((result) => { settled = true; return result })
+    const release = api.releaseSpeakerEmbedding('live').then((result) => {
+      settled = true
+      return result
+    })
     await Promise.resolve()
     expect(settled).toBe(false)
     expect(child.kill).not.toHaveBeenCalled()
@@ -240,5 +270,48 @@ describe('speaker embedding utility client', () => {
     const finalRelease = api.releaseSpeakerEmbedding('live')
     child.emit('exit', 0)
     await finalRelease
+  })
+
+  it('does not post after owner cancellation while releasing an unused concurrent lease', async () => {
+    const deferred: Array<(lease: unknown) => void> = []
+    runtimeAdmission.acquire.mockImplementation(() => new Promise((resolve) => deferred.push(resolve)))
+    const lease = (name: string, release: () => Promise<void>) => ({
+      generationIdentity: name,
+      entry: () => '/owned/speaker-host',
+      modelFile: () => '/owned/speaker.onnx',
+      loaderDirectories: () => [],
+      release: vi.fn(release)
+    })
+    const firstLease = lease('first', async () => undefined)
+    let finishUnusedRelease: () => void = () => {}
+    const unusedLease = lease(
+      'unused',
+      () =>
+        new Promise<void>((resolve) => {
+          finishUnusedRelease = resolve
+        })
+    )
+
+    const first = api.computeSpeakerEmbedding('/model.onnx', new Float32Array([1]), 'live')
+    const second = api.computeSpeakerEmbedding('/model.onnx', new Float32Array([2]), 'live')
+    await Promise.resolve()
+    expect(deferred).toHaveLength(2)
+    deferred[0](firstLease)
+    const firstRequest = await request()
+    deferred[1](unusedLease)
+    for (let i = 0; i < 20 && unusedLease.release.mock.calls.length === 0; i++) await Promise.resolve()
+    expect(unusedLease.release).toHaveBeenCalledOnce()
+
+    const firstFailure = expect(first).rejects.toThrow(/cancelled/i)
+    const ending = api.releaseSpeakerEmbedding('live')
+    child.emit('exit', 0)
+    await ending
+    finishUnusedRelease()
+    await expect(second).rejects.toThrow(/cancelled/i)
+    await firstFailure
+
+    expect(firstLease.release).toHaveBeenCalledOnce()
+    expect(unusedLease.release).toHaveBeenCalledOnce()
+    expect(child.postMessage.mock.calls.map(([message]) => (message as { id: string }).id)).toEqual([firstRequest.id])
   })
 })

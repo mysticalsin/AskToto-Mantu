@@ -223,8 +223,16 @@ async function requestHost(
   }
   if (!generation) throw new Error('Speaker embedding host generation was not created.')
   const requestGeneration = generation
+  if (ownerEpoch[owner] !== admittedEpoch) throw new Error('Speaker embedding processing was cancelled.')
+  if (requestGeneration.state !== 'active' || current !== requestGeneration) {
+    throw new Error('Speaker embedding host generation is no longer active.')
+  }
   const id = `g${requestGeneration.number}:r${requestNumber++}`
   return new Promise<SpeakerEmbeddingHostResponse>((resolve, reject) => {
+    if (ownerEpoch[owner] !== admittedEpoch || requestGeneration.state !== 'active' || current !== requestGeneration) {
+      reject(new Error('Speaker embedding processing was cancelled.'))
+      return
+    }
     const timer = setTimeout(() => {
       requestGeneration.pending.delete(id)
       const failure = new Error(`Speaker embedding ${request.type} timed out.`)

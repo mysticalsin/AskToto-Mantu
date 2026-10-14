@@ -1,11 +1,10 @@
 /** Strict verification of a promoted optional-runtime catalog row and its Sigstore/SLSA bundle. */
 import { createHash } from 'node:crypto'
-import { lstat, open } from 'node:fs/promises'
-import { constants } from 'node:fs'
 import { bundleFromJSON } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
 import { parseRuntimeInventory } from './runtime-inventory'
+import { hashPinnedArchive } from './runtime-archive'
 
 const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
 const MAX_INVENTORY_BYTES = 20 * 1024 * 1024
@@ -84,11 +83,13 @@ export interface RuntimeInventoryV1 {
   readonly source: {
     readonly repositoryUri: string
     readonly commit: string
+    readonly ref: string
     readonly workflowPath: string
     readonly workflowCommit: string
     readonly runId: string
     readonly attempt: number
     readonly lockSha256: string
+    readonly runnerEnvironment: string
   }
   readonly builder: {
     readonly nodeVersion: string
@@ -412,50 +413,6 @@ export function parseRuntimeCatalog(bytes: Uint8Array): RuntimeCatalogV1 {
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
-}
-
-async function hashPinnedArchive(path: string, expectedBytes: number): Promise<string> {
-  const before = await lstat(path)
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== expectedBytes) {
-    throw new Error('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
-  }
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-  try {
-    const opened = await handle.stat()
-    if (
-      !opened.isFile() ||
-      opened.nlink !== 1 ||
-      opened.size !== expectedBytes ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino
-    ) {
-      throw new Error('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
-    }
-    const hash = createHash('sha256')
-    const buffer = Buffer.allocUnsafe(64 * 1024)
-    let offset = 0
-    while (offset < expectedBytes) {
-      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, expectedBytes - offset), offset)
-      if (bytesRead === 0) throw new Error('RUNTIME_ARCHIVE_TRUNCATED')
-      hash.update(buffer.subarray(0, bytesRead))
-      offset += bytesRead
-    }
-    const after = await handle.stat()
-    const pathAfter = await lstat(path)
-    if (
-      after.dev !== opened.dev ||
-      after.ino !== opened.ino ||
-      after.size !== opened.size ||
-      pathAfter.dev !== opened.dev ||
-      pathAfter.ino !== opened.ino ||
-      pathAfter.size !== opened.size
-    ) {
-      throw new Error('RUNTIME_ARCHIVE_CHANGED_DURING_VERIFY')
-    }
-    return hash.digest('hex')
-  } finally {
-    await handle.close().catch(() => undefined)
-  }
 }
 
 function textClaim(value: unknown): string | null {
