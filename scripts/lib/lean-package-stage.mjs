@@ -286,13 +286,14 @@ export function retainedElectronArchiveSource(fd, byteLength) {
         offset < 0 ||
         offset > byteLength ||
         !Number.isSafeInteger(length) ||
-        length < 0 ||
-        length > byteLength - offset
+        length < 0
       )
         throw new Error('Pinned Electron archive reader requested an invalid range')
+      // Unzipper requests padding past the member and sometimes past EOF; the retained file is the cap.
+      const boundedLength = Math.min(length, byteLength - offset)
       function* chunks() {
         let position = offset
-        const end = offset + length
+        const end = offset + boundedLength
         while (position < end) {
           const chunk = Buffer.allocUnsafe(Math.min(65_536, end - position))
           const count = readSync(fd, chunk, 0, chunk.length, position)
