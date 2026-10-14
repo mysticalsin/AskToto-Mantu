@@ -889,6 +889,28 @@ export function waitForChildExit(child, timeoutMs) {
   })
 }
 
+/** Request graceful quit through the app-owned control surface and report only an observed zero exit. */
+export async function requestOwnedAppQuit(child, requestQuit, timeoutMs) {
+  try {
+    if ((await requestQuit()) !== true) return false
+  } catch {
+    return false
+  }
+  const exited = await waitForChildExit(child, timeoutMs)
+  return exited && child.exitCode === 0 && child.signalCode === null
+}
+
+/** Keep automation transports alive through the owned quit request and exit observation. */
+export async function quitOwnedAppBeforeAutomationClose(child, requestQuit, closeAutomation, timeoutMs) {
+  let cleanShutdown = false
+  try {
+    cleanShutdown = await requestOwnedAppQuit(child, requestQuit, timeoutMs)
+  } finally {
+    await closeAutomation()
+  }
+  return cleanShutdown
+}
+
 /**
  * Close only the app this driver launched: ask it to quit, close the Playwright handle, then signal that
  * specific child (SIGTERM, then SIGKILL) if it did not comply. Métis stays alive after its last window

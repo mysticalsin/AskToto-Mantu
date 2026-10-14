@@ -22,6 +22,8 @@ import {
   ownedCensus,
   packagedLaunchFailed,
   readNumericConstants,
+  quitOwnedAppBeforeAutomationClose,
+  requestOwnedAppQuit,
   strictLaunchEnvironment,
   waitFor,
   withTimeout
@@ -1289,6 +1291,143 @@ describe('killOwned', () => {
     const entry = (pid: number) => ({ pid, ppid: 1, startedMs: 1, exe: null, role: 'x' })
     killOwned([entry(1), entry(2), entry(process.pid), entry(3)], kill)
     expect(killed).toEqual([1, 3])
+  })
+})
+
+describe('requestOwnedAppQuit', () => {
+  function fakeOwnedProcess() {
+    return Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      signalCode: null as string | null
+    })
+  }
+
+  it('requires a delivered app-owned quit and observes the owned child exiting cleanly', async () => {
+    const child = fakeOwnedProcess()
+    const pending = requestOwnedAppQuit(
+      child,
+      async () => {
+        setImmediate(() => {
+          child.exitCode = 0
+          child.emit('exit', 0, null)
+        })
+        return true
+      },
+      100
+    )
+
+    await expect(pending).resolves.toBe(true)
+    expect(child.exitCode).toBe(0)
+  })
+
+  it('does not claim clean shutdown when the owned quit request is refused or rejects', async () => {
+    const refusedChild = fakeOwnedProcess()
+    await expect(requestOwnedAppQuit(refusedChild, async () => false, 100)).resolves.toBe(false)
+    expect(refusedChild.listenerCount('exit')).toBe(0)
+
+    const rejectedChild = fakeOwnedProcess()
+    await expect(
+      requestOwnedAppQuit(
+        rejectedChild,
+        async () => {
+          throw new Error('quit request rejected')
+        },
+        100
+      )
+    ).resolves.toBe(false)
+    expect(rejectedChild.listenerCount('exit')).toBe(0)
+  })
+
+  it('does not report a signaled or nonzero owned process exit as clean', async () => {
+    const signalChild = fakeOwnedProcess()
+    const signaled = requestOwnedAppQuit(
+      signalChild,
+      async () => {
+        setImmediate(() => {
+          signalChild.signalCode = 'SIGTERM'
+          signalChild.emit('exit', null, 'SIGTERM')
+        })
+        return true
+      },
+      100
+    )
+    await expect(signaled).resolves.toBe(false)
+
+    const failedChild = fakeOwnedProcess()
+    const failed = requestOwnedAppQuit(
+      failedChild,
+      async () => {
+        setImmediate(() => {
+          failedChild.exitCode = 1
+          failedChild.emit('exit', 1, null)
+        })
+        return true
+      },
+      100
+    )
+    await expect(failed).resolves.toBe(false)
+  })
+})
+
+describe('quitOwnedAppBeforeAutomationClose', () => {
+  it('observes the owned app exit before closing automation transports', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      signalCode: null as string | null
+    })
+    const order: string[] = []
+    const pending = quitOwnedAppBeforeAutomationClose(
+      child,
+      async () => {
+        order.push('quit-request')
+        setImmediate(() => {
+          child.exitCode = 0
+          child.emit('exit', 0, null)
+          order.push('process-exit')
+        })
+        return true
+      },
+      async () => {
+        order.push('automation-close')
+      },
+      100
+    )
+
+    await expect(pending).resolves.toBe(true)
+    expect(order).toEqual(['quit-request', 'process-exit', 'automation-close'])
+  })
+
+  it('still closes automation after the app-owned quit request is rejected', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      signalCode: null as string | null
+    })
+    const closeAutomation = vi.fn(async () => undefined)
+
+    await expect(
+      quitOwnedAppBeforeAutomationClose(
+        child,
+        async () => {
+          throw new Error('quit request rejected')
+        },
+        closeAutomation,
+        100
+      )
+    ).resolves.toBe(false)
+    expect(closeAutomation).toHaveBeenCalledOnce()
+    expect(child.listenerCount('exit')).toBe(0)
+  })
+
+  it('still cleans a connected CLI session when no owned browser page is available', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      signalCode: null as string | null
+    })
+    const closeAutomation = vi.fn(async () => undefined)
+
+    await expect(quitOwnedAppBeforeAutomationClose(child, async () => false, closeAutomation, 100)).resolves.toBe(false)
+    expect(closeAutomation).toHaveBeenCalledOnce()
+    expect(child.listenerCount('exit')).toBe(0)
   })
 })
 
