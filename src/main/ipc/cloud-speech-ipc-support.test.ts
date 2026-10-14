@@ -56,7 +56,8 @@ describe('cloud speech IPC capability binding', () => {
       cancel: vi.fn(async () => ({ ok: true as const }))
     } as unknown as SpeechBrokerClient
     const onAllocated = vi.fn()
-    const beginAttempt = vi.fn(() => ({ candidate: true as const }))
+    const slot = { attempted: false, sessionId: null }
+    const beginAttempt = vi.fn(() => slot)
     const wrapped = bindCreateToCapability(
       client,
       {
@@ -73,6 +74,7 @@ describe('cloud speech IPC capability binding', () => {
     expect(beginAttempt).toHaveBeenCalledTimes(1)
     resolveCreate(response as Awaited<ReturnType<SpeechBrokerClient['createSession']>>)
     await expect(pending).resolves.toEqual(response)
-    expect(onAllocated).toHaveBeenCalledWith(response.value.sessionId, { candidate: true })
+    expect(onAllocated).toHaveBeenCalledWith(response.value.sessionId, slot)
+    expect(slot).toEqual({ attempted: true, sessionId: response.value.sessionId })
   })
 })
