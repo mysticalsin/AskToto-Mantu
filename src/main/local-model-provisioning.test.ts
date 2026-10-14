@@ -88,7 +88,7 @@ function setup(
   }
   let reads = 0
   let captureIdentity = 'capture:0'
-  let proofIdentity = 'proof:1:policy-a'
+  let proofIdentity = overrides.status === 'unconfigured' ? 'proof:1:unconfigured' : 'proof:1:policy-a'
   const ensure = vi.fn(async (_id: string, authorize: () => Promise<boolean>, validateCurrent: () => boolean) => {
     overrides.beforeEnsure?.()
     return (await authorize()) && validateCurrent()

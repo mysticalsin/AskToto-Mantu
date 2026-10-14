@@ -36,9 +36,15 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
   })
 
   it('MQA-178 — explicit model installation re-arms it when weights land mid-session', () => {
-    const download = sliceBetween(indexSrc, 'ipcMain.handle(IPC.localModelsEnsure', '// MQA-247')
-    expect(download).toMatch(/const ready = await provisionLocalModel\(admittedModel/)
-    expect(download).toMatch(/if \(ready && getSettings\(\)\.localLlm === admittedModel\) refreshScreenPreprocess\(\)/)
+    // The owned IPC registration moved into speech-pack-bootstrap.ts; its admitted/denied onReady behavior
+    // is exercised at that helper's actual registration boundary.
+    const registration = sliceBetween(
+      indexSrc,
+      'registerOptionalModelProvisioningIpc({',
+      'ipcMain.handle(IPC.asrModelRemove'
+    )
+    expect(registration).toContain('refreshScreenPreprocess,')
+    expect(registration).toContain('registerOptionalModelProvisioningIpc({')
   })
 })
 
