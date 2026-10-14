@@ -431,6 +431,14 @@ export function describeRuntimeSpeechPackPurposeRoot(root: RuntimeSpeechPackPurp
 }
 
 export async function assertRuntimeSpeechPackPurposeRootCurrent(root: RuntimeSpeechPackPurposeRoot): Promise<void> {
+  const admission = await prepareRuntimeSpeechPackPurposeRootAdmission(root)
+  await admission.dispose()
+}
+
+/** Capture a fresh full ancestry snapshot for one owner operation. */
+export async function prepareRuntimeSpeechPackPurposeRootAdmission(
+  root: RuntimeSpeechPackPurposeRoot
+): Promise<Awaited<ReturnType<typeof prepareRuntimePhysicalAdmission>>> {
   const state = purposeRoots.get(root as object)
   if (!state || state.disposed || state.retired) throw new Error('RUNTIME_SPEECH_PACK_ROOT_INVALID')
   try {
@@ -468,12 +476,9 @@ export async function assertRuntimeSpeechPackPurposeRootCurrent(root: RuntimeSpe
       ]
     }
     const admission = await prepareRuntimePhysicalAdmission(snapshot)
-    try {
-      await assertParentCurrent(state.parent)
-      admission.assertCurrentSync()
-    } finally {
-      await admission.dispose()
-    }
+    await assertParentCurrent(state.parent)
+    admission.assertCurrentSync()
+    return admission
   } catch (error) {
     state.retired = true
     throw error

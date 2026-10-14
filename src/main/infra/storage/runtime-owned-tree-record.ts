@@ -2,10 +2,18 @@ import type { BigIntStats } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { RuntimeDirectoryCreationReceipt } from './runtime-owned-files'
 import type { RuntimePhysicalSnapshotInput } from './runtime-owned-files'
+import {
+  runtimePayloadPlanBudget,
+  runtimePayloadPlanFileClaims,
+  runtimePayloadPlanIdentity,
+  runtimePayloadPlanRoot,
+  type RuntimePayloadWritePlan
+} from './runtime-payload-plan'
 
 const MAX_TREE_NODES = 4096
 const MAX_TREE_PATH_BYTES = 4 * 1024 * 1024
 declare const authenticatedRuntimeOwnedTreeRecord: unique symbol
+declare const authenticatedRuntimeOwnedTreeMoveIntent: unique symbol
 
 export interface RuntimeOwnedTreeIdentity {
   readonly dev: string
@@ -65,6 +73,40 @@ export interface RuntimeOwnedTreeRecordIssuer {
   retire(): void
 }
 
+export interface RuntimeRecordedTreeParent {
+  readonly relativePath: string
+  readonly identity: RuntimeOwnedTreeIdentity
+  readonly children: readonly string[]
+}
+
+export interface RuntimeOwnedTreeMoveAuthenticatedInput {
+  readonly schemaVersion: 1
+  readonly operation: 'tree-move'
+  readonly purpose: 'metis-speech-pack-owner-key/v1'
+  readonly profileBinding: string
+  readonly principalBinding: string
+  readonly rootBinding: string
+  readonly keyId: string
+  readonly transactionId: string
+  readonly source: string
+  readonly destination: string
+  readonly preMoveManifest: RuntimeOwnedTreeManifest
+  readonly sourceParent: RuntimeRecordedTreeParent
+  readonly destinationParent: RuntimeRecordedTreeParent
+  readonly destinationWasAbsent: true
+  readonly disposition: 'cleanup-owned' | 'restore-only'
+  readonly payloadPlanIdentity: string
+}
+
+export interface AuthenticatedRuntimeOwnedTreeMoveIntent {
+  readonly [authenticatedRuntimeOwnedTreeMoveIntent]: true
+}
+
+export interface RuntimeOwnedTreeMoveIntentIssuer {
+  issue(record: RuntimeOwnedTreeMoveAuthenticatedInput): AuthenticatedRuntimeOwnedTreeMoveIntent
+  retire(): void
+}
+
 export interface RuntimeOwnedTreeFileSink {
   write(chunk: Uint8Array): Promise<void>
   sync(): Promise<void>
@@ -102,6 +144,224 @@ interface IssuedTreeRecord {
 }
 
 const issuedTreeRecords = new WeakMap<object, IssuedTreeRecord>()
+const issuedTreeMoveIntents = new WeakMap<
+  object,
+  {
+    readonly binding: RuntimeOwnedTreeMoveIntentBinding
+    readonly record: RuntimeOwnedTreeMoveAuthenticatedInput
+    retired: boolean
+  }
+>()
+
+export interface RuntimeOwnedTreeMoveIntentBinding {
+  readonly profileBinding: string
+  readonly principalBinding: string
+  readonly rootBinding: string
+  readonly keyId: string
+  readonly plan: RuntimePayloadWritePlan
+}
+
+/** Create this issuer only inside the authenticated main registry verifier. */
+export function createRuntimeOwnedTreeMoveIntentIssuer(
+  binding: RuntimeOwnedTreeMoveIntentBinding
+): RuntimeOwnedTreeMoveIntentIssuer {
+  if (
+    !binding.profileBinding ||
+    !binding.principalBinding ||
+    !/^[a-f0-9]{64}$/.test(binding.rootBinding) ||
+    !/^[a-f0-9]{64}$/.test(binding.keyId)
+  ) {
+    throw new Error('RUNTIME_TREE_MOVE_ISSUER_BINDING_INVALID')
+  }
+  const fixed = Object.freeze({ ...binding })
+  let retired = false
+  const issued: { retired: boolean }[] = []
+  return Object.freeze({
+    issue(record: RuntimeOwnedTreeMoveAuthenticatedInput): AuthenticatedRuntimeOwnedTreeMoveIntent {
+      if (retired) throw new Error('RUNTIME_TREE_MOVE_ISSUER_RETIRED')
+      const copied = copyAndValidateMoveIntent(record, fixed)
+      if (issued.length >= 8) throw new Error('RUNTIME_TREE_MOVE_INTENT_LIMIT')
+      const token = Object.freeze({}) as AuthenticatedRuntimeOwnedTreeMoveIntent
+      const state = { binding: fixed, record: copied, retired: false }
+      issuedTreeMoveIntents.set(token, state)
+      issued.push(state)
+      return token
+    },
+    retire(): void {
+      if (retired) return
+      retired = true
+      for (const state of issued) state.retired = true
+    }
+  })
+}
+
+export function readIssuedRuntimeOwnedTreeMoveIntent(
+  intent: AuthenticatedRuntimeOwnedTreeMoveIntent
+): RuntimeOwnedTreeMoveAuthenticatedInput {
+  const state = issuedTreeMoveIntents.get(intent as object)
+  if (!state || state.retired) throw new Error('RUNTIME_TREE_MOVE_INTENT_NOT_AUTHENTICATED')
+  return state.record
+}
+
+function copyAndValidateMoveIntent(
+  record: RuntimeOwnedTreeMoveAuthenticatedInput,
+  binding: RuntimeOwnedTreeMoveIntentBinding
+): RuntimeOwnedTreeMoveAuthenticatedInput {
+  const expectedKeys = [
+    'destination',
+    'destinationParent',
+    'destinationWasAbsent',
+    'disposition',
+    'keyId',
+    'operation',
+    'payloadPlanIdentity',
+    'preMoveManifest',
+    'principalBinding',
+    'profileBinding',
+    'purpose',
+    'rootBinding',
+    'schemaVersion',
+    'source',
+    'sourceParent',
+    'transactionId'
+  ].sort()
+  if (
+    !record ||
+    Object.keys(record).sort().join('\0') !== expectedKeys.join('\0') ||
+    record.schemaVersion !== 1 ||
+    record.operation !== 'tree-move' ||
+    record.purpose !== 'metis-speech-pack-owner-key/v1' ||
+    record.profileBinding !== binding.profileBinding ||
+    record.principalBinding !== binding.principalBinding ||
+    record.rootBinding !== binding.rootBinding ||
+    record.keyId !== binding.keyId ||
+    record.payloadPlanIdentity !== runtimePayloadPlanIdentity(binding.plan) ||
+    record.source !== runtimePayloadPlanRoot(binding.plan) ||
+    !/^[a-f0-9-]{36}$/.test(record.transactionId) ||
+    record.destinationWasAbsent !== true ||
+    (record.disposition !== 'cleanup-owned' && record.disposition !== 'restore-only') ||
+    !isSafeRelativePath(record.source) ||
+    !isSafeRelativePath(record.destination) ||
+    record.source === record.destination ||
+    record.destination.startsWith(`${record.source}/`) ||
+    record.source.startsWith(`${record.destination}/`)
+  ) {
+    throw new Error('RUNTIME_TREE_MOVE_INTENT_INVALID')
+  }
+  const sourceParentPath = relativeParent(record.source)
+  const destinationParentPath = relativeParent(record.destination)
+  const sourceParent = copyRecordedParent(record.sourceParent)
+  const destinationParent = copyRecordedParent(record.destinationParent)
+  const sourceName = record.source.split('/').at(-1)!
+  const destinationName = record.destination.split('/').at(-1)!
+  if (
+    sourceParent.relativePath !== sourceParentPath ||
+    destinationParent.relativePath !== destinationParentPath ||
+    !sourceParent.children.includes(sourceName) ||
+    destinationParent.children.includes(destinationName) ||
+    (sourceParentPath === destinationParentPath &&
+      (sourceParent.children.join('\0') !== destinationParent.children.join('\0') ||
+        JSON.stringify(sourceParent.identity) !== JSON.stringify(destinationParent.identity)))
+  ) {
+    throw new Error('RUNTIME_TREE_MOVE_PARENT_RECORD_INVALID')
+  }
+  const manifest = copyAndValidateManifest(record.preMoveManifest)
+  const claims = runtimePayloadPlanFileClaims(binding.plan)
+  const budget = runtimePayloadPlanBudget(binding.plan)
+  const expectedFiles = new Map(claims.map((claim) => [claim.relativePath, claim]))
+  const actualFiles = new Map(
+    manifest.entries
+      .filter((entry): entry is Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }> => entry.kind === 'file')
+      .map((entry) => [entry.path, entry])
+  )
+  const expectedDirectories = new Set<string>()
+  for (const claim of claims) {
+    const parts = claim.relativePath.split('/')
+    for (let index = 1; index < parts.length; index++) expectedDirectories.add(parts.slice(0, index).join('/'))
+  }
+  const actualDirectories = new Set(
+    manifest.entries
+      .filter(
+        (entry): entry is Extract<RuntimeOwnedTreeEntry, { readonly kind: 'directory' }> => entry.kind === 'directory'
+      )
+      .map((entry) => entry.path)
+  )
+  const manifestPathBytes = manifest.entries.reduce(
+    (total, entry) =>
+      total +
+      Buffer.byteLength(entry.path) +
+      (entry.kind === 'directory' ? entry.children.reduce((sum, name) => sum + Buffer.byteLength(name), 0) : 0),
+    0
+  )
+  if (
+    expectedFiles.size !== actualFiles.size ||
+    [...expectedFiles].some(([path, claim]) => {
+      const actual = actualFiles.get(path)
+      return !actual || actual.sha256 !== claim.sha256 || actual.identity.size !== String(claim.byteLength)
+    }) ||
+    expectedDirectories.size !== actualDirectories.size ||
+    [...expectedDirectories].some((path) => !actualDirectories.has(path)) ||
+    manifestPathBytes > budget.maximumPathBytes ||
+    !sameIdentityValues(manifest.rootParent, sourceParent.identity) ||
+    budget.fileCount !== expectedFiles.size ||
+    claims.reduce((total, claim) => total + claim.byteLength, 0) > budget.maximumBytes
+  ) {
+    throw new Error('RUNTIME_TREE_MOVE_PAYLOAD_PLAN_MISMATCH')
+  }
+  return Object.freeze({
+    ...record,
+    preMoveManifest: manifest,
+    sourceParent,
+    destinationParent
+  })
+}
+
+function copyRecordedParent(parent: RuntimeRecordedTreeParent): RuntimeRecordedTreeParent {
+  if (
+    !parent ||
+    typeof parent.relativePath !== 'string' ||
+    (parent.relativePath !== '' && !isSafeRelativePath(parent.relativePath)) ||
+    !Array.isArray(parent.children) ||
+    parent.children.length > 128
+  ) {
+    throw new Error('RUNTIME_TREE_MOVE_PARENT_RECORD_INVALID')
+  }
+  const children = [...parent.children]
+  if (
+    children.some((name) => !isSingleName(name)) ||
+    new Set(children).size !== children.length ||
+    children.some((name) => Buffer.byteLength(name) > 255)
+  ) {
+    throw new Error('RUNTIME_TREE_MOVE_PARENT_RECORD_INVALID')
+  }
+  return Object.freeze({
+    relativePath: parent.relativePath,
+    identity: copyIdentity(parent.identity),
+    children: Object.freeze(children.sort())
+  })
+}
+
+function relativeParent(path: string): string {
+  const parent = dirname(path)
+  return parent === '.' ? '' : parent.split(sep).join('/')
+}
+
+function sameIdentityValues(left: RuntimeOwnedTreeIdentity, right: RuntimeOwnedTreeIdentity): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.rdev === right.rdev &&
+    left.size === right.size &&
+    left.blocks === right.blocks &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs &&
+    left.birthtimeNs === right.birthtimeNs
+  )
+}
 
 /** Inject this issuer only into the main-owned authenticated receipt-store verifier. */
 export function createRuntimeOwnedTreeRecordIssuer(

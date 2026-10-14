@@ -249,3 +249,17 @@ export function runtimePayloadPlanBudget(plan: RuntimePayloadWritePlan): Readonl
     directoryCount: state.directories.size
   })
 }
+
+export function runtimePayloadPlanFileClaims(plan: RuntimePayloadWritePlan): readonly Readonly<{
+  relativePath: string
+  byteLength: number
+  sha256: string
+}>[] {
+  const state = plans.get(plan as object)
+  if (!state || state.retired) throw new Error('RUNTIME_PAYLOAD_PLAN_INVALID')
+  return Object.freeze(
+    [...state.files.values()].map((file) =>
+      Object.freeze({ relativePath: file.path, byteLength: file.byteLength, sha256: file.sha256 })
+    )
+  )
+}
