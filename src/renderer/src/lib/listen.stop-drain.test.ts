@@ -10,6 +10,7 @@ import { BUNDLE_REPAIR } from '@shared/bundle-response'
 import { CaptureSchema, type Track } from '@shared/contracts/speech'
 import {
   CLOUD_SPEECH_FULL_FRAME_BYTES,
+  CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES,
   CLOUD_SPEECH_MAX_PENDING_AUDIO_MS,
   CLOUD_SPEECH_MAX_PENDING_BYTES,
   CLOUD_SPEECH_MAX_PENDING_FRAMES,
@@ -431,6 +432,21 @@ beforeEach(() => {
           reason: 'normal' as const
         }))
       })),
+      cloudSpeechAckCaptureCeiling: vi.fn(
+        async (request: {
+          type: 'capture-ceiling-ack'
+          captureId: string
+          captureGeneration: number
+          ceilingId: string
+          tracks: Array<{ track: Track; finalSequence: number; finalSampleOffset: number }>
+        }) => ({
+          ok: true as const,
+          captureId: request.captureId,
+          captureGeneration: request.captureGeneration,
+          ceilingId: request.ceilingId,
+          tracks: request.tracks
+        })
+      ),
       cloudSpeechCancel: vi.fn(async (identity: { captureId: string; captureGeneration: number }) => ({
         ok: true as const,
         captureId: identity.captureId,
@@ -1677,6 +1693,143 @@ describe('broker cloud speech Listen lifecycle', () => {
     await settle()
     api = renderBroker()
     expect(api.lines).toContainEqual(expect.objectContaining({ text: 'Oui. Oui.', lang: 'fr-CA', speech: event }))
+  })
+
+  it('keeps Listen active through a ceiling drain, then tears down after the final result is applied', async () => {
+    let releaseFinish!: () => void
+    const finish = vi.mocked(window.toto.cloudSpeechFinish).getMockImplementation()
+    if (!finish) throw new Error('expected cloud finish mock')
+    vi.mocked(window.toto.cloudSpeechFinish).mockImplementation(
+      async (request) => await new Promise<void>((resolve) => (releaseFinish = resolve)).then(() => finish(request))
+    )
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 321, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    const stream = cloudSpeechStreams.get('microphone')
+    if (!request || !stream) throw new Error('expected active broker capture')
+
+    const ceiling: CloudSpeechEvent = {
+      type: 'capture-ceiling',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000901',
+      maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
+    }
+    for (const listener of cloudSpeechListeners) listener(ceiling)
+    await settle()
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
+    expect(renderBroker()).toMatchObject({ listening: true, capturing: true, ready: true })
+    expect(streams[0]?.track.stop).not.toHaveBeenCalled()
+    expect(window.toto.setListeningState.mock.calls).toEqual([[true, 321]])
+
+    const finalEvent: CloudSpeechEvent = {
+      type: 'segment',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'The final ceiling result is retained.',
+        startMs: 0,
+        endMs: 700
+      }
+    }
+    for (const listener of cloudSpeechListeners) listener(finalEvent)
+    await settle()
+    api = renderBroker()
+    expect(api.lines).toContainEqual(expect.objectContaining({ text: finalEvent.segment.text, speech: finalEvent }))
+    expect(streams[0]?.track.stop).not.toHaveBeenCalled()
+
+    releaseFinish()
+    await settle()
+    api = renderBroker()
+    expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
+    expect(api.error).toContain('four-hour capture limit')
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 321],
+      [false, 321]
+    ])
+  })
+
+  it('reports an incomplete ceiling tail honestly while releasing the current Listen capture', async () => {
+    vi.mocked(window.toto.cloudSpeechFinish).mockImplementation(async (request) => ({
+      ok: true,
+      captureId: request.captureId,
+      captureGeneration: request.captureGeneration,
+      complete: false,
+      reason: 'incomplete',
+      tracks: request.tracks.map(({ track }) => ({
+        stream: cloudSpeechStreams.get(track)!,
+        lastSequence: 0,
+        closeConfirmed: false,
+        tail: 'incomplete',
+        reason: 'unknown' as const
+      }))
+    }))
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 654, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    if (!request) throw new Error('expected active broker capture')
+    const ceiling: CloudSpeechEvent = {
+      type: 'capture-ceiling',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000902',
+      maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
+    }
+    for (const listener of cloudSpeechListeners) listener(ceiling)
+    await settle()
+
+    api = renderBroker()
+    expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
+    expect(api.error).toContain('final transcript could not be confirmed')
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 654],
+      [false, 654]
+    ])
+  })
+
+  it('lets an active Pause drain the ceiling result before final capture teardown', async () => {
+    sealMode = { delayMs: 80, acknowledge: true, throwOnPost: false }
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 987, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    if (!request) throw new Error('expected active broker capture')
+    const track = streams[0]?.track
+    if (!track) throw new Error('expected active microphone track')
+
+    api.pause()
+    await settle()
+    expect(window.toto.cloudSpeechFinish).not.toHaveBeenCalled()
+    const ceiling: CloudSpeechEvent = {
+      type: 'capture-ceiling',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000903',
+      maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
+    }
+    for (const listener of cloudSpeechListeners) listener(ceiling)
+
+    await vi.advanceTimersByTimeAsync(80)
+    await settle()
+    api = renderBroker()
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
+    expect(api).toMatchObject({ listening: false, capturing: false, paused: false, ready: false })
+    expect(api.error).toContain('four-hour capture limit')
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 987],
+      [false, 987]
+    ])
   })
 
   it('fails closed and cancels broker speech when an acquired track ends', async () => {

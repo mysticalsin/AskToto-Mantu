@@ -32,6 +32,7 @@ import type { Capture, Track } from '@shared/contracts/speech'
 import type { BrokerSpeechSettingsLoaded } from '@shared/broker-speech-settings'
 import {
   cloudSpeechTranscriptSegment,
+  cloudSpeechListenOwnerCallbacks,
   cloudSpeechConsentMatches,
   startCloudSpeechSession,
   type CloudSpeechConsentAcknowledgement
@@ -1328,9 +1329,8 @@ export function useListen(
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
-      for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
+      for (const stream of Object.values(brokerRetainedStreamsRef.current))
         stream?.getTracks().forEach((track) => track.stop())
-      }
       brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
       if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
@@ -2360,6 +2360,7 @@ export function useListen(
       const brokerCapture = activeBrokerSpeechRef.current?.transport === 'broker-v1'
       const brokerController = cloudSpeechControllerRef.current
       if (brokerCapture) {
+        cloudSttFinalizingRef.current = false
         cloudSpeechControllerRef.current = null
         activeBrokerSpeechRef.current = null
         if (brokerController) {
@@ -2379,11 +2380,10 @@ export function useListen(
       pendingWhisperStartedAtRef.current = undefined
       themRunRef.current = ''
       disarmNetworkRetry()
-      closeChannel('you')
-      closeChannel('them')
-      for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
+      for (const speaker of ['you', 'them'] as const) closeChannel(speaker)
+      Object.values(brokerRetainedStreamsRef.current).forEach((stream) =>
         stream?.getTracks().forEach((track) => track.stop())
-      }
+      )
       brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
       if (options.forceCloudStop && !brokerCapture) {
@@ -2412,6 +2412,14 @@ export function useListen(
     [clearProvisional, closeChannel, disarmNetworkRetry]
   )
   failAdmittedCaptureRef.current = failAdmittedCapture
+  const brokerOwnerCallbacks = cloudSpeechListenOwnerCallbacks(
+    (identity, reason) =>
+      captureAdmissionIsOpen(identity.epoch) &&
+      cloudCaptureIdRef.current === identity.captureId &&
+      activeBrokerSpeechRef.current?.transport === 'broker-v1' &&
+      (reason === 'ceiling' || !cloudSttFinalizingRef.current),
+    failAdmittedCapture
+  )
   startBrokerSessionRef.current = (input) =>
     startCloudSpeechSession(input, {
       bridge: window.toto,
@@ -2435,16 +2443,8 @@ export function useListen(
             speech: segment.speech
           })
       },
-      onFailure: (code, identity) => {
-        if (
-          sessionEpochRef.current !== identity.epoch ||
-          cloudCaptureIdRef.current !== identity.captureId ||
-          stoppingRef.current ||
-          cloudSttFinalizingRef.current
-        )
-          return
-        failAdmittedCapture(`Cloud speech stopped safely (${code}).`, { cloudCaptureId: identity.captureId })
-      },
+      onFailure: brokerOwnerCallbacks.onFailure,
+      onStopped: brokerOwnerCallbacks.onStopped,
       attachTrack: async (track, controller) => {
         const speaker: Speaker = track === 'microphone' ? 'you' : 'them'
         const channel = channels.current[speaker]
@@ -2573,7 +2573,7 @@ export function useListen(
         } catch {
           result = null
         }
-        if (sessionEpochRef.current !== epoch) return
+        if (sessionEpochRef.current !== epoch || !captureAdmissionIsOpen(epoch)) return
         if (!result?.ok || !result.complete) {
           cloudSttFinalizingRef.current = false
           failAdmittedCapture('Cloud speech could not finish safely before Pause.')

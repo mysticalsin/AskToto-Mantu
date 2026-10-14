@@ -245,7 +245,7 @@ describe('cloud speech capture controller', () => {
       ceilingId: ceiling.ceilingId,
       tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 0 }]
     })
-    await vi.waitFor(() => expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling'))
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling', true))
     next.instance.dispose()
   })
 
@@ -1784,7 +1784,7 @@ describe('cloud speech capture controller', () => {
     }
     for (const listener of next.events) listener(ceiling)
     await vi.waitFor(() => expect(stopped).toHaveBeenCalledTimes(1))
-    expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling')
+    expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling', false)
     expect(onFailure).not.toHaveBeenCalled()
     expect(next.bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1)
     next.instance.dispose()
