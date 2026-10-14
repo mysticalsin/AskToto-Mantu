@@ -38,6 +38,9 @@ describe('packaged restart recovery candidate scenario', () => {
     expect(scenario.ticket).toBe('WORKSTREAM-electron-packaged-acceptance')
     expect(scenario.m2Crosswalk).toBe('UNKNOWN')
     expect(scenario.reportAssessment).toBe('packaged-restart-recovery')
+    expect(RECOVERY_REPORT_SCHEMA).toBe('metis.packaged-restart-recovery.v2')
+    expect(RECOVERY_ASSERTIONS).toContain('note-readable-after-restart')
+    expect(RECOVERY_ASSERTIONS).toContain('note-bytes-preserved')
     expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
     expect(scenario.platforms.mac).toMatchObject({
       variant: 'mac',

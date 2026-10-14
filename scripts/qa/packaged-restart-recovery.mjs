@@ -33,7 +33,7 @@ import {
 import { listProcesses, ownedProcesses, survivors as findSurvivors } from './owned-processes.mjs'
 import { stopOwnedChild } from './lib/st-1-termination.mjs'
 
-export const RECOVERY_REPORT_SCHEMA = 'metis.packaged-restart-recovery.v1'
+export const RECOVERY_REPORT_SCHEMA = 'metis.packaged-restart-recovery.v2'
 export const RECOVERY_ASSERTIONS = Object.freeze([
   'isolated-profile',
   'meeting-saved-and-readable',
@@ -41,7 +41,8 @@ export const RECOVERY_ASSERTIONS = Object.freeze([
   'settings-written',
   'first-shutdown-clean',
   'meeting-survives-restart',
-  'note-survives-restart',
+  'note-readable-after-restart',
+  'note-bytes-preserved',
   'settings-survive-restart',
   'second-shutdown-clean',
   'isolated-profile-removed'
@@ -497,11 +498,13 @@ async function runFirstLaunch(instance, marker) {
   const fixture = {
     title: `Candidate persistence ${marker}`,
     noteTitle: `Candidate note ${marker}`,
+    question: `Synthetic recovery question ${marker}`,
+    answer: `Synthetic recovery answer ${marker}`,
     marker
   }
   return boundedCall(
     () =>
-      instance.page.evaluate(async ({ title, noteTitle, marker }) => {
+      instance.page.evaluate(async ({ title, noteTitle, question, answer, marker }) => {
         const savedMeeting = await window.toto.saveTranscript({
           title,
           mode: 'meeting',
@@ -515,8 +518,8 @@ async function runFirstLaunch(instance, marker) {
         const savedNote = await window.toto.saveNote({
           title: noteTitle,
           mode: 'general',
-          question: `Synthetic recovery question ${marker}`,
-          answer: `Synthetic recovery answer ${marker}`
+          question,
+          answer
         })
         const meetingName = String(savedMeeting?.path ?? '').replaceAll('\\', '/').split('/').pop()
         const meetingRead = meetingName ? await window.toto.recallRead(meetingName) : null
@@ -529,8 +532,12 @@ async function runFirstLaunch(instance, marker) {
         )
         return {
           ready,
+          title,
           meetingPath: savedMeeting?.path ?? null,
-          notePath: savedNote?.path ?? null
+          notePath: savedNote?.path ?? null,
+          noteTitle,
+          question,
+          answer
         }
       }, fixture),
     30_000,
@@ -541,10 +548,21 @@ async function runFirstLaunch(instance, marker) {
 async function runSecondLaunch(instance, expected, profile) {
   return boundedCall(
     () =>
-      instance.page.evaluate(async ({ meetingName, title, marker, placement, layout }) => {
+      instance.page.evaluate(async ({
+        meetingName,
+        noteName,
+        title,
+        noteTitle,
+        question,
+        answer,
+        marker,
+        placement,
+        layout
+      }) => {
         const settings = await window.toto.getSettings()
         const meetingRead = await window.toto.recallRead(meetingName)
         const inHistory = (await window.toto.recallList()).some((meeting) => meeting.title === title)
+        const noteRead = await window.toto.recallRead(noteName)
         return {
           settingsReady:
             settings.onboardingDone === true &&
@@ -555,7 +573,13 @@ async function runSecondLaunch(instance, expected, profile) {
             meetingRead?.ok === true &&
             meetingRead.title === title &&
             meetingRead.lines?.some((line) => line.text.includes(marker)),
-          historyReady: inHistory
+          historyReady: inHistory,
+          noteReadableReady:
+            noteRead?.ok === true &&
+            noteRead.kind === 'note' &&
+            noteRead.title === noteTitle &&
+            noteRead.question === question &&
+            noteRead.answer === answer
         }
       }, expected),
     30_000,
@@ -570,7 +594,7 @@ async function runSecondLaunch(instance, expected, profile) {
     const meetingStat = lstatSync(meetingPath)
     const noteExists = noteStat.isFile() && !noteStat.isSymbolicLink() && noteStat.nlink === 1 && hashFile(notePath) === noteHash
     const meetingExists = meetingStat.isFile() && !meetingStat.isSymbolicLink() && meetingStat.nlink === 1 && hashFile(meetingPath) === meetingHash
-    return { ...result, noteReady: noteExists, meetingBytesReady: meetingExists }
+    return { ...result, noteBytesReady: noteExists, meetingBytesReady: meetingExists }
   })
 }
 
@@ -623,7 +647,11 @@ async function execute({ appArg, platform, out }) {
       instance,
       {
         meetingName,
-        title: `Candidate persistence ${marker}`,
+        noteName: reportPlatform === 'win32' ? win32.basename(notePath) : posix.basename(notePath),
+        title: first.title,
+        noteTitle: first.noteTitle,
+        question: first.question,
+        answer: first.answer,
         marker,
         placement: 'top-center',
         layout: 'bar',
@@ -637,11 +665,13 @@ async function execute({ appArg, platform, out }) {
     if (second.meetingReady && second.historyReady && second.meetingBytesReady) {
       assertions['meeting-survives-restart'] = 'PASS'
     }
-    if (second.noteReady) assertions['note-survives-restart'] = 'PASS'
+    if (second.noteReadableReady) assertions['note-readable-after-restart'] = 'PASS'
+    if (second.noteBytesReady) assertions['note-bytes-preserved'] = 'PASS'
     if (second.settingsReady) assertions['settings-survive-restart'] = 'PASS'
     if (
       assertions['meeting-survives-restart'] !== 'PASS' ||
-      assertions['note-survives-restart'] !== 'PASS' ||
+      assertions['note-readable-after-restart'] !== 'PASS' ||
+      assertions['note-bytes-preserved'] !== 'PASS' ||
       assertions['settings-survive-restart'] !== 'PASS'
     ) {
       throw new Error('restart-data-missing')
@@ -662,7 +692,12 @@ async function execute({ appArg, platform, out }) {
       else if (assertions['second-shutdown-clean'] === 'NOT_RUN') assertions['second-shutdown-clean'] = 'FAIL'
     }
     if (failure === 'restart-data-missing') {
-      for (const id of ['meeting-survives-restart', 'note-survives-restart', 'settings-survive-restart']) {
+      for (const id of [
+        'meeting-survives-restart',
+        'note-readable-after-restart',
+        'note-bytes-preserved',
+        'settings-survive-restart'
+      ]) {
         if (assertions[id] === 'NOT_RUN') assertions[id] = 'FAIL'
       }
     }
