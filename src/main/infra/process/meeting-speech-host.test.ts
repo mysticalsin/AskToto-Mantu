@@ -147,14 +147,18 @@ describe('meeting speech persistence worker host', () => {
         line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
       })
     )
+    // The service transfers recordBytes; the admitted budget must survive that buffer's detachment.
+    const maxInputBytes = recordBytes.byteLength
     const service = createMeetingSpeechPersistenceService({
       readLimits: () => policy.limits,
-      readBounds: () => ({ ...policy, maxInputBytes: recordBytes.byteLength }),
+      readBounds: () => ({ ...policy, maxInputBytes }),
       isCurrent: () => true,
       workerFactory: () => worker
     })
     const binding = receiptBinding()
     const receipt = await service.canonicalizeIncrementalRecord(recordBytes, binding)
+    expect(recordBytes.byteLength).toBe(0)
+    expect(worker.requests[0].policy.maxInputBytes).toBe(maxInputBytes)
     expect(consumeIncrementalRecordReceipt({ ...receipt }, binding)).toBeNull()
     const result = consumeIncrementalRecordReceipt(receipt, binding)
     expect(consumeIncrementalRecordReceipt(receipt, binding)).toBeNull()
@@ -179,15 +183,18 @@ describe('meeting speech persistence worker host', () => {
         line: { speaker: 'you', text: 'tamper', t: 1_700_000_000_000 }
       })
     )
+    const maxInputBytes = bytes.byteLength
     const service = createMeetingSpeechPersistenceService({
       readLimits: () => policy.limits,
-      readBounds: () => ({ ...policy, maxInputBytes: bytes.byteLength }),
+      readBounds: () => ({ ...policy, maxInputBytes }),
       isCurrent: () => true,
       workerFactory: () => worker
     })
     await expect(service.canonicalizeIncrementalRecord(bytes, receiptBinding())).rejects.toMatchObject({
       name: 'WORKER_FAILED'
     })
+    expect(bytes.byteLength).toBe(0)
+    expect(worker.requests[0].policy.maxInputBytes).toBe(maxInputBytes)
     await service.dispose()
   })
 
