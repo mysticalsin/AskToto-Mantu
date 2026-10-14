@@ -40,7 +40,12 @@ function fakeGateway(
   return {
     list: async () => ({ status: 'unavailable', code: 'NOT_USED' }),
     classify: async (paths) =>
-      new Map(paths.map((path) => [path, options.fileClass ?? { status: 'ok', version: sourceVersion }])),
+      new Map(
+        paths.map((path) => [
+          path,
+          options.fileClass ?? { status: 'ok', version: sourceVersion, isSymlink: false, isRegular: true }
+        ])
+      ),
     read: async () => ({ status: 'unavailable', code: 'NOT_USED' }),
     stream: async (_path, sink, streamLimits) => {
       if (options.streamResult && options.streamResult.status !== 'ok') return options.streamResult
@@ -74,7 +79,7 @@ function reader(
     options.current?.() === false
       ? undefined
       : authority({
-          rootIdentity: options.rootIdentity,
+          rootIdentity: options.rootIdentity ?? 'root-generation-1',
           limits: { ...limits, maxPublicBytes: options.publicLimit ?? limits.maxPublicBytes }
         })
   return createMeetingPublicProjectionReader({
