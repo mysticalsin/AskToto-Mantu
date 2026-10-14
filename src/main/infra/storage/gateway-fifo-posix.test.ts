@@ -24,7 +24,7 @@ async function releaseUntilSettled(fifos: readonly string[], pending: Promise<un
   }
 }
 
-describe('kernel-blocking pool protection (K0-K2, POSIX)', () => {
+describe.skipIf(process.platform === 'win32')('kernel-blocking pool protection (K0-K2, POSIX)', () => {
   const pool = threadpoolSize(process.env.UV_THREADPOOL_SIZE)
   let dir: string
 
