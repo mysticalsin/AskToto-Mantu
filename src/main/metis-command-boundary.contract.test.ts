@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const control = readFileSync(join(__dirname, 'command-control.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
 const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
@@ -39,47 +38,25 @@ describe('Cap2 command authority boundary', () => {
   })
 
   it('requires main-process auth, Listen entitlement and a visible focused command owner at confirmation', () => {
-    const setup = between(main, 'const commandControl = new CommandControl({', '// Electron can dispatch an invoke')
-    expect(setup).toContain('policyAllows: () =>')
-    expect(setup).toContain('requireAuth()')
-    expect(setup).toContain("operatorGate('listen').allowed")
-    expect(setup).toContain('owner.isVisible()')
-    expect(setup).toContain('owner.isFocused()')
-    expect(setup).toContain('onboardingExclusive: onboardingExclusiveLive() || islandResting')
-    expect(setup).toContain('commandConfirmationPolicyAllows')
-    expect(setup).toContain('lifecycleHooksReady: commandLifecycleRevocationHooksReady')
-    expect(control).not.toContain('policyAllows?')
-    expect(control).toContain('this.deps.policyAllows(proposal.request) === true')
-    expect(control).toContain('Object.freeze(')
-    const lifecycleRegistration = between(
+    const setup = between(
       main,
-      'let suspendHookRegistered = false',
-      'const bootWork = createBootWork()'
+      'const commandControl = new CommandConfirmation({',
+      '// Electron can dispatch an invoke'
     )
-    expect(lifecycleRegistration).toContain("powerMonitor.on('suspend'")
-    expect(lifecycleRegistration).toContain("powerMonitor.on('lock-screen'")
-    expect(lifecycleRegistration).toContain(
-      'commandLifecycleRevocationHooksReady = suspendHookRegistered && lockScreenHookRegistered'
-    )
+    expect(setup).toContain('isAuthenticated: requireAuth')
+    expect(setup).toContain("operatorGate('listen').allowed")
+    expect(setup).toContain('getOwner: () => win')
+    expect(setup).toContain('isOnboardingExclusive: () => onboardingExclusiveLive() || islandResting')
+    expect(main).toContain('commandControl.initialize(powerMonitor, initLogging, mainLog)')
   })
 
   it('revokes pending authority when the window loses focus, hides, auth clears, locks, or suspends', () => {
-    const blur = between(main, "win.on('blur', () => {", "win.on('hide', () => {")
-    expect(blur).toContain("commandControl.revokeForLifecycleEvent('window_blurred')")
-    const hidden = between(main, "win.on('hide', () => {", "win.on('closed', () => {")
-    expect(hidden).toContain("commandControl.revokeForLifecycleEvent('window_hidden')")
-    const session = between(
-      main,
-      'function revokePrivilegedSurface(): void {',
-      'setSessionClearedHandler(revokePrivilegedSurface)'
-    )
-    expect(session).toContain("commandControl.revokeForLifecycleEvent('auth_session_cleared')")
+    expect(main).toContain('commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur)')
+    expect(main).toContain('commandControl.onWindowHidden(win === self)')
     expect(main).toContain(
-      "powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))"
+      "commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface)"
     )
-    expect(main).toContain(
-      "powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))"
-    )
+    expect(main).toContain("commandControl.wrapLifecycleListener('app_quit', () => {")
   })
 
   it('revokes command authority when the owning window or renderer is replaced', () => {

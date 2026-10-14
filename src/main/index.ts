@@ -669,7 +669,7 @@ import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
-import { CommandControl, commandConfirmationPolicyAllows } from './command-control'
+import { CommandConfirmation } from './command-confirmation'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
 import {
@@ -1092,29 +1092,13 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
-let commandLifecycleRevocationHooksReady = false
-const commandControl = new CommandControl({
+const commandControl = new CommandConfirmation({
   execute: executeDesktopAction,
-  // Command input is a microphone capability. Reuse the existing Listen entitlement instead of
-  // inventing a new license field, and re-evaluate auth, entitlement and foreground state at Confirm.
-  policyAllows: () => {
-    const owner = win
-    const ownerState =
-      owner && !owner.isDestroyed()
-        ? { destroyed: false, visible: owner.isVisible(), focused: owner.isFocused() }
-        : null
-    return commandConfirmationPolicyAllows({
-      authenticated: requireAuth(),
-      listenEntitled: operatorGate('listen').allowed,
-      owner: ownerState,
-      onboardingExclusive: onboardingExclusiveLive() || islandResting,
-      lifecycleHooksReady: commandLifecycleRevocationHooksReady
-    })
-  },
-  audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata),
-  onState: (state) => {
-    if (win && !win.isDestroyed()) win.webContents.send(IPC.metisCommandState, state)
-  }
+  isAuthenticated: requireAuth,
+  hasListenEntitlement: () => operatorGate('listen').allowed,
+  getOwner: () => win,
+  isOnboardingExclusive: () => onboardingExclusiveLive() || islandResting,
+  audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata)
 })
 
 // Electron can dispatch an invoke that the retiring overlay queued just before a constructor-required
@@ -2915,14 +2899,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
-  win.on('blur', () => {
-    if (win !== self) return
-    commandControl.revokeForLifecycleEvent('window_blurred')
-    parkRightEdgeReaderOnBlur()
-  })
-  win.on('hide', () => {
-    if (win === self) commandControl.revokeForLifecycleEvent('window_hidden')
-  })
+  win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
+  win.on('hide', () => commandControl.onWindowHidden(win === self))
   win.on('closed', () => {
     clearCompletedOnboardingExitFallback(self)
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
@@ -4587,12 +4565,11 @@ function refreshScreenPreprocess(): void {
 
 /** Revoke every privileged surface that outlives one IPC call when the session ends. */
 function revokePrivilegedSurface(): void {
-  commandControl.revokeForLifecycleEvent('auth_session_cleared')
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   if (!requireAuth()) closeIntelligenceWindow()
 }
-setSessionClearedHandler(revokePrivilegedSurface)
+setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
 
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
 // to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
@@ -9646,28 +9623,7 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
-      initLogging() // route main-process logs to a rotated file before anything else can fail
-      // Register before the overlay can issue proposals. A laptop lock or sleep must revoke any
-      // outstanding confirmation even if its TTL timer pauses with the process. Confirmation stays
-      // disabled unless BOTH hooks register successfully.
-      let suspendHookRegistered = false
-      let lockScreenHookRegistered = false
-      try {
-        powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))
-        suspendHookRegistered = true
-      } catch (e) {
-        mainLog.warn('[boot] command confirmation disabled: suspend revocation hook registration failed:', e)
-      }
-      try {
-        powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))
-        lockScreenHookRegistered = true
-      } catch (e) {
-        mainLog.warn('[boot] command confirmation disabled: lock-screen revocation hook registration failed:', e)
-      }
-      commandLifecycleRevocationHooksReady = suspendHookRegistered && lockScreenHookRegistered
-      if (!commandLifecycleRevocationHooksReady) {
-        mainLog.error('[boot] command confirmation disabled: lifecycle revocation hooks are not ready')
-      }
+      commandControl.initialize(powerMonitor, initLogging, mainLog)
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
@@ -10403,8 +10359,7 @@ app.on('before-quit', (e) => {
   setTimeout(() => app.quit(), 2000)
 })
 
-app.on('will-quit', () => {
-  commandControl.revokeForLifecycleEvent('app_quit')
+app.on('will-quit', commandControl.wrapLifecycleListener('app_quit', () => {
   // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
   invalidateCloudSttOwner()
   // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
@@ -10447,4 +10402,4 @@ app.on('will-quit', () => {
   } catch (e) {
     mainLog.warn('[will-quit] observability.shutdownClean failed', e)
   }
-})
+}))
