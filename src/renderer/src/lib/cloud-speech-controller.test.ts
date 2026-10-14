@@ -1507,34 +1507,54 @@ describe('cloud speech capture controller', () => {
     await next.instance.start()
     const oldStream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
     const newStream = { ...oldStream, epoch: 4 }
-    for (const listener of next.events) {
-      listener({
-        type: 'terminal',
-        captureId,
-        captureGeneration,
-        stream: oldStream,
-        lastSequence: 0,
-        closeConfirmed: true,
-        tail: 'complete',
-        reason: 'normal'
-      })
-      listener({
-        type: 'segment',
-        captureId,
-        captureGeneration,
-        sequence: 1,
-        segment: {
-          stream: newStream,
-          engine: 'cloudflare-nova3',
-          index: 1,
-          revision: 1,
-          final: true,
-          text: 'same words after renewal are a new stream result',
-          startMs: 100,
-          endMs: 150
-        }
-      })
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream: oldStream,
+      lastSequence: 0,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
     }
+    for (const listener of next.events) listener(terminal)
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 8,
+      handoffNonce: '00000000-0000-4000-8000-000000000708',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    const opened: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: closed.transitionId,
+      handoffNonce: closed.handoffNonce,
+      stage: 'opened',
+      streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 4, lastSequence: 0 }]
+    }
+    for (const event of [closed, opened]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(next.acknowledgeEpochTransition).toHaveBeenCalledTimes(2))
+    const successor: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream: newStream,
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'same words after renewal are a new stream result',
+        startMs: 100,
+        endMs: 150
+      }
+    }
+    for (const listener of next.events) listener(successor)
     await vi.waitFor(() => expect(applied).toHaveLength(2))
     expect(onFailure).not.toHaveBeenCalled()
 
