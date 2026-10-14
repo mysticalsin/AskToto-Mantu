@@ -43,30 +43,55 @@ describe('buildSpawnArgs', () => {
     // list that varies by hardware is not a contract. MQA-270 (B5) added -t/-tb/--threads-http; (B1)
     // made the projector conditional — vision:false is the new text-only default, spawning --no-mmproj.
     const args = buildSpawnArgs(
-      { gguf: '/models/model.gguf', vision: false, mmproj: '/models/mmproj.gguf', ctxSize: 65536, parallel: 2, gpuLayers: 99 },
+      {
+        gguf: '/models/model.gguf',
+        vision: false,
+        mmproj: '/models/mmproj.gguf',
+        ctxSize: 65536,
+        parallel: 2,
+        gpuLayers: 99
+      },
       4
     )
     expect(args).toEqual([
-      '-m', '/models/model.gguf',
+      '-m',
+      '/models/model.gguf',
       '--no-mmproj',
-      '--host', '127.0.0.1',
-      '--port', '0',
-      '-c', '65536',
-      '--parallel', '2',
-      '--cache-ram', '128',
-      '-ngl', '99',
-      '-t', '4',
-      '-tb', '4',
-      '--threads-http', '2',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+      '-c',
+      '65536',
+      '--parallel',
+      '2',
+      '--cache-ram',
+      '128',
+      '-ngl',
+      '99',
+      '-t',
+      '4',
+      '-tb',
+      '4',
+      '--threads-http',
+      '2',
       '--no-ui',
       '--jinja',
-      '--reasoning', 'off'
+      '--reasoning',
+      'off'
     ])
   })
 
   it.each(['mac', 'win'] as const)('the vision spawn carries the projector path on %s', () => {
     const args = buildSpawnArgs(
-      { gguf: '/models/model.gguf', vision: true, mmproj: '/models/mmproj.gguf', ctxSize: 65536, parallel: 2, gpuLayers: 99 },
+      {
+        gguf: '/models/model.gguf',
+        vision: true,
+        mmproj: '/models/mmproj.gguf',
+        ctxSize: 65536,
+        parallel: 2,
+        gpuLayers: 99
+      },
       4
     )
     expect(args).toContain('--mmproj')
@@ -77,8 +102,12 @@ describe('buildSpawnArgs', () => {
   it('passes the per-model context window through rather than a hardcoded one', () => {
     // Context is per-model (local-models.ts LocalModelEntry.ctxSize) because the KV cache, not the
     // weights, is what decides whether a bigger model fits a small machine.
-    expect(buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 16384, parallel: 2, gpuLayers: 99 })).toContain('16384')
-    expect(buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })).toContain('65536')
+    expect(
+      buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 16384, parallel: 2, gpuLayers: 99 })
+    ).toContain('16384')
+    expect(
+      buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
+    ).toContain('65536')
   })
 
   it('never includes --cache-reuse (disabled upstream for multimodal loads — PLAN.md §3)', () => {
@@ -93,10 +122,7 @@ describe('buildSpawnArgs', () => {
     const totalContext = Number(args[args.indexOf('-c') + 1])
     const slots = Number(args[args.indexOf('--parallel') + 1])
     expect(totalContext / slots).toBe(32768)
-    expect(args.slice(args.indexOf('--cache-ram'), args.indexOf('--cache-ram') + 2)).toEqual([
-      '--cache-ram',
-      '128'
-    ])
+    expect(args.slice(args.indexOf('--cache-ram'), args.indexOf('--cache-ram') + 2)).toEqual(['--cache-ram', '128'])
   })
 
   it('never puts the api key on argv — it travels via the LLAMA_API_KEY env var instead (ps-visibility fix)', () => {
@@ -138,7 +164,7 @@ describe('parseBoundPort', () => {
 
   it('finds the line inside a larger multi-line buffer (real stdout carries model-load logging first)', () => {
     const buffer = [
-      '0.00.050.937 I srv    load_model: loading model \'Qwen3.5-0.8B-UD-Q4_K_XL.gguf\'',
+      "0.00.050.937 I srv    load_model: loading model 'Qwen3.5-0.8B-UD-Q4_K_XL.gguf'",
       '0.00.776.143 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 32768',
       '0.00.787.103 I srv  llama_server: listening on http://127.0.0.1:60310'
     ].join('\n')
@@ -305,7 +331,7 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
         })
         expect(authed.status).toBe(200)
       } finally {
-        stop()
+        await stop()
       }
       expect(isRunning()).toBe(false)
     },
@@ -341,10 +367,9 @@ interface Harness {
   }
 }
 
-async function loadIsolatedRuntime(options: {
-  spawnedRegistryWrite?: Promise<void>
-  supervisorMode?: 'real' | 'async-fallback' | 'supervised'
-} = {}): Promise<Harness> {
+async function loadIsolatedRuntime(
+  options: { spawnedRegistryWrite?: Promise<void>; supervisorMode?: 'real' | 'async-fallback' | 'supervised' } = {}
+): Promise<Harness> {
   vi.resetModules()
   const procs: FakeProc[] = []
   const calls: Array<{ path: string; args: string[] }> = []
@@ -397,7 +422,9 @@ async function loadIsolatedRuntime(options: {
             audit: (event: string, fields: Record<string, unknown>) => void,
             _env?: NodeJS.ProcessEnv,
             _platform?: NodeJS.Platform,
-            hooks?: { onUnsupervisedFallbackSpawned?: (child: import('node:child_process').ChildProcess) => Promise<void> | void }
+            hooks?: {
+              onUnsupervisedFallbackSpawned?: (child: import('node:child_process').ChildProcess) => Promise<void> | void
+            }
           ) => {
             const child = childProcess.spawn(command, [...args], spawnOptions)
             const fallbackRecorded = Promise.resolve(hooks?.onUnsupervisedFallbackSpawned?.(child))
@@ -532,9 +559,11 @@ describe('sidecar registry ordering', () => {
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
 
     let resolved = false
-    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
-      resolved = true
-    })
+    const started = h.runtime
+      .start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      .then(() => {
+        resolved = true
+      })
     emitListening(h, 0, 55901)
     await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
     await Promise.resolve()
@@ -556,9 +585,11 @@ describe('sidecar registry ordering', () => {
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
 
     let resolved = false
-    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
-      resolved = true
-    })
+    const started = h.runtime
+      .start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      .then(() => {
+        resolved = true
+      })
     emitListening(h, 0, 55902)
     await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
     await Promise.resolve()
@@ -592,9 +623,11 @@ describe('supervised launch registry coverage', () => {
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
 
     let resolved = false
-    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
-      resolved = true
-    })
+    const started = h.runtime
+      .start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      .then(() => {
+        resolved = true
+      })
     emitListening(h, 0, 55903)
     await waitUntil(() => h.registry.recordSidecarSupervisedSpawned.mock.calls.length === 1)
     await Promise.resolve()
@@ -646,7 +679,7 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
       expect.stringMatching(/pinning CPU sidecar/),
       expect.objectContaining({ code: 3221225477 })
     )
-    h.runtime.stop()
+    await h.runtime.stop()
   })
 
   it('leaves the Vulkan-first order intact when no Vulkan crash has happened this session', async () => {
@@ -663,6 +696,6 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
     expect(h.calls[1].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
     emitListening(h, 1, 56002)
     await p2
-    h.runtime.stop()
+    await h.runtime.stop()
   })
 })

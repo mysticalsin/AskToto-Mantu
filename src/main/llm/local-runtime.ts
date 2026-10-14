@@ -25,6 +25,7 @@ import { assertLegacyRuntimeClosure } from '../features/components/speech-pack/p
 import type { RuntimeFeatureLease } from '../features/components/speech-pack/runtime-lease'
 import { runtimeHostEnvironment } from '../features/components/speech-pack/runtime-lease'
 import { acquirePackageRuntimeLease } from '../features/components/speech-pack/runtime-admission'
+import { trackLocalRuntimeChild, type LocalRuntimeChildLifecycle } from './local-runtime-child'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -244,8 +245,9 @@ async function pollHealth(port: number, budgetMs: number): Promise<void> {
 // ─── Session state (per app process — see the module doc comment) ─────────────────────────────────────
 const apiKey = randomBytes(32).toString('hex') // 32 bytes -> 64 hex chars, generated once per app session
 let child: ChildProcess | null = null
-const childRuntimeLeases = new WeakMap<ChildProcess, RuntimeFeatureLease>()
-let leaseReleaseBarrier: Promise<void> = Promise.resolve()
+const childLifecycles = new WeakMap<ChildProcess, LocalRuntimeChildLifecycle>()
+let currentChildLifecycle: { readonly child: ChildProcess; readonly lifecycle: LocalRuntimeChildLifecycle } | null =
+  null
 let port: number | null = null
 let state: RuntimeState = 'stopped'
 let idleTimer: NodeJS.Timeout | null = null
@@ -329,7 +331,7 @@ function scheduleIdleStop(): void {
   if (state !== 'running') return
   idleTimer = setTimeout(() => {
     auditLog('local.runtime.stop', { reason: 'idle' })
-    stop()
+    void stop().catch((error: unknown) => mainLog.warn('local runtime idle stop failed', { error: errMsg(error) }))
   }, IDLE_STOP_MS)
 }
 
@@ -433,7 +435,15 @@ function spawnAndWaitHealthy(
       return
     }
     child = proc
-    if (modelPaths.runtimeLease) childRuntimeLeases.set(proc, modelPaths.runtimeLease)
+    const lifecycle = trackLocalRuntimeChild(proc, (error) =>
+      mainLog.warn('local runtime child lifecycle failed', { error: errMsg(error) })
+    )
+    childLifecycles.set(proc, lifecycle)
+    const ownedChild = { child: proc, lifecycle }
+    currentChildLifecycle = ownedChild
+    void lifecycle.exit.finally(() => {
+      if (currentChildLifecycle === ownedChild) currentChildLifecycle = null
+    })
     observeSidecar('llama-server', proc, auditLog)
     let settled = false
     let boundPort: number | null = null
@@ -445,16 +455,10 @@ function spawnAndWaitHealthy(
     let portLineTimer: NodeJS.Timeout | null = setTimeout(() => {
       portLineTimer = null
       if (settled) return
-      settled = true
-      // Kill + reap before rejecting. The candidate loop's stopChildProcess() only kills a child that is
-      // still the module's CURRENT one, so a superseded/cancelled attempt would otherwise leave a live
-      // llama-server.exe behind holding the model's RAM. The 'exit' handler below clears child/port once
-      // the kill lands; a stale proc's exit is already ignored by its `child !== proc` guard.
-      stopSidecarProcess(proc)
       const tail = outputBuffer.trim()
       const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
       mainLog.warn('local runtime: sidecar never reported a listening port', { platform, variant })
-      reject(
+      rejectAfterExit(
         new Error(
           `llama-server started but never reported a listening port within ${PORT_LINE_BUDGET_MS[platform]}ms (${binaryPath})${detail}`
         )
@@ -465,6 +469,13 @@ function spawnAndWaitHealthy(
         clearTimeout(portLineTimer)
         portLineTimer = null
       }
+    }
+
+    const rejectAfterExit = (error: Error): void => {
+      if (settled) return
+      settled = true
+      clearPortLineTimer()
+      void stopChildProcess(proc).finally(() => reject(error))
     }
 
     const onOutput = (chunk: Buffer): void => {
@@ -479,23 +490,20 @@ function spawnAndWaitHealthy(
       // after stop() and even after a newer generation is already healthy; publishing here would redirect
       // the running app to the killed process's endpoint.
       if (generation !== startGeneration || child !== proc) {
-        settled = true
-        reject(new StartCancelledError())
+        rejectAfterExit(new StartCancelledError())
         return
       }
       pollHealth(parsed, HEALTH_BUDGET_MS[platform]).then(
         async () => {
           if (!settled) {
             if (generation !== startGeneration || child !== proc) {
-              settled = true
-              reject(new StartCancelledError())
+              rejectAfterExit(new StartCancelledError())
               return
             }
             await waitForSpawnRecorded()
             if (settled) return
             if (generation !== startGeneration || child !== proc) {
-              settled = true
-              reject(new StartCancelledError())
+              rejectAfterExit(new StartCancelledError())
               return
             }
             markSidecarProcessUsable(proc)
@@ -518,19 +526,18 @@ function spawnAndWaitHealthy(
     proc.once('error', (err) => {
       clearPortLineTimer()
       if (!settled) {
-        settled = true
-        reject(err)
+        const error = err instanceof Error ? err : new Error(String(err))
+        if (proc.pid == null) {
+          settled = true
+          lifecycle.confirmNoChild()
+          reject(error)
+        } else rejectAfterExit(error)
       }
     })
 
     proc.once('exit', (code, signal) => {
       clearPortLineTimer()
-      const heldLease = childRuntimeLeases.get(proc)
-      childRuntimeLeases.delete(proc)
-      if (heldLease) leaseReleaseBarrier = leaseReleaseBarrier.then(() => heldLease.release()).catch(() => undefined)
-      // This process is no longer the module's current child: stop() already detached it, or a newer start
-      // owns the global child/port/state. Its own pre-health promise must still reject, but a stale exit must
-      // never clear or restart the newer child. A settled stale process needs no further action at all.
+      // A stale child may reject its own start, but must never mutate a newer child's state.
       if (child !== proc) {
         if (!settled) {
           settled = true
@@ -561,18 +568,18 @@ function spawnAndWaitHealthy(
           cpuPinned = true
           mainLog.warn('local runtime: pinning CPU sidecar for this session after a Vulkan crash', { code, signal })
         }
-        maybeAutoRestart(platform)
+        maybeAutoRestart(platform, lifecycle.exit)
       }
     })
   })
 }
 
-function maybeAutoRestart(platform: LlamaPlatform): void {
+function maybeAutoRestart(platform: LlamaPlatform, exited: Promise<void>): void {
+  const generation = startGeneration
   const now = Date.now()
   restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS)
   if (restartTimestamps.length >= 1) {
-    // Already restarted once in this 10-minute window — stay down for the rest of the session; the
-    // provider waterfall (index.ts, Rock 3) covers cloud fallback from here.
+    // One restart per 10-minute window; the provider waterfall covers fallback after exhaustion.
     state = 'unavailable'
     auditLog('local.runtime.missing', { platform, reason: 'restart_budget_exhausted' })
     return
@@ -581,37 +588,37 @@ function maybeAutoRestart(platform: LlamaPlatform): void {
   if (!lastModelPaths) return
   auditLog('local.runtime.restart', { platform })
   void (async () => {
-    await leaseReleaseBarrier
-    const previous = lastModelPaths
-    if (!previous) return
-    let next = previous
-    if (previous.runtimeLease) {
-      if (!previous.runtimeModelId) throw new Error('Managed local model identity is unavailable.')
-      const lease = await acquirePackageRuntimeLease('local-llm', previous.runtimeModelId)
-      if (!lease) throw new Error('Managed local model runtime is unavailable.')
-      next = {
-        ...previous,
-        runtimeLease: lease,
-        runtimeBinary: lease.entry('llama-server'),
-        gguf: lease.modelFile(previous.runtimeModelId, 'model.gguf'),
-        mmproj: lease.modelFile(previous.runtimeModelId, 'mmproj.gguf')
+    let lease: RuntimeFeatureLease | null = null
+    try {
+      await exited
+      assertCurrentGeneration(generation)
+      const previous = lastModelPaths
+      if (!previous) return
+      let next = previous
+      if (previous.runtimeLease) {
+        if (!previous.runtimeModelId) throw new Error('Managed local model identity is unavailable.')
+        lease = await acquirePackageRuntimeLease('local-llm', previous.runtimeModelId)
+        if (!lease) throw new Error('Managed local model runtime is unavailable.')
+        assertCurrentGeneration(generation)
+        next = {
+          ...previous,
+          runtimeLease: lease,
+          runtimeBinary: lease.entry('llama-server'),
+          gguf: lease.modelFile(previous.runtimeModelId, 'model.gguf'),
+          mmproj: lease.modelFile(previous.runtimeModelId, 'mmproj.gguf')
+        }
       }
+      await start(next, platform)
+      lease = null
+    } finally {
+      await lease?.release()
     }
-    await start(next, platform)
   })().catch(() => {
-    state = 'unavailable'
+    if (generation === startGeneration) state = 'unavailable'
   })
 }
 
-/** True when `a` (the currently-running/loaded model paths, if any) is the SAME model as `b` (a fresh
- *  start() request) — the switch/no-op decision (F2) hinges on this. */
-/** Does the RUNNING configuration `a` satisfy the REQUEST `b`? MQA-270 (B1): vision is one-way sticky —
- *  a runtime holding the projector satisfies a text request (superset), but a text-only runtime does NOT
- *  satisfy a vision request, which forces the switch path and its restart. Without the asymmetry an
- *  interleaved text/vision session would thrash a 14.6 s reload on every alternation; with it, the
- *  projector loads at most once per runtime lifetime and is only released by the idle stop. This
- *  comparison previously ignored vision entirely, which would have reported "same model" and silently
- *  never restarted for the first screen ask. */
+/** A vision-loaded runtime satisfies text requests; the reverse requires a restart. */
 function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
   return (
     !!a &&
@@ -623,11 +630,6 @@ function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
   )
 }
 
-/**
- * The candidate-spawn loop for one start attempt — unchanged in substance from before F1/F2, just
- * extracted so the public start() below can own startPromise/switch bookkeeping around it. Mutates module
- * state (child/port/state) exactly as it always has.
- */
 class StartCancelledError extends Error {
   constructor() {
     super('local runtime start cancelled')
@@ -640,8 +642,7 @@ function assertCurrentGeneration(generation: number): void {
 }
 
 async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, generation: number): Promise<void> {
-  // cpuPinned drops the Vulkan candidate for the rest of the session (no-op on mac, which has no Vulkan
-  // candidate). Filtered here rather than in resolveBinaryPath() so that stays a pure path resolver.
+  // Filter the sticky Windows Vulkan fallback here, keeping resolveBinaryPath() pure.
   const candidates = modelPaths.runtimeBinary
     ? [{ path: modelPaths.runtimeBinary, variant: platform === 'win' ? ('cpu' as const) : ('mac' as const) }]
     : resolveBinaryPath(platform).filter((c) => !(cpuPinned && c.variant === 'vulkan'))
@@ -662,8 +663,7 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
       return
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
-      // A cancelled generation was already detached/killed by stop(). Do not touch the module-level child
-      // here: a newer start may already own it by the time this stale continuation resumes.
+      // Cancellation already owns this process's exit barrier; never mutate newer state here.
       if (generation !== startGeneration || err instanceof StartCancelledError) throw new StartCancelledError()
       await stopChildProcess()
       // Windows only: a failed Vulkan spawn/health falls back to the CPU candidate once.
@@ -676,27 +676,17 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
   throw lastErr ?? new Error('llama-server failed to start')
 }
 
-/**
- * Start the sidecar against `modelPaths`. Idempotent per-model (F2): a caller while the SAME model is
- * already 'running' resolves immediately with no restart; a caller for a DIFFERENT model while one is
- * 'running' stops the old sidecar first (two llama-server processes must never race for the same loopback
- * port/RAM) and starts the new one. Concurrent callers while a start is already 'starting' (F1) await the
- * SAME in-flight promise instead of racing ahead on their own — baseURL()/sessionKey() are never reachable
- * by a caller whose await resolved before the sidecar actually finished spawning + health. Once that
- * in-flight start settles, a caller whose requested model differs from what actually started re-evaluates
- * (via recursion) and triggers a switch if still needed.
- * Throws (does not silently swallow) when the session has been marked unavailable, or when every binary
- * candidate fails — the caller (Rock 3's eligibility check) treats a rejection as "local ineligible now."
- */
+/** Reuse a matching runtime or drain streams and await exact child exit before switching models. */
 export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = detectPlatform()): Promise<void> {
+  const requestGeneration = startGeneration
   if (!modelPaths.runtimeLease) await assertLegacyRuntimeClosure('local LLM')
-  if (state === 'unavailable') {
-    await modelPaths.runtimeLease?.release()
-    throw new Error('local runtime unavailable for this session (restart budget exhausted)')
-  }
   if (state === 'starting') {
     await startPromise
     return start(modelPaths, platform)
+  }
+  assertCurrentGeneration(requestGeneration)
+  if (state === 'unavailable') {
+    throw new Error('local runtime unavailable for this session (restart budget exhausted)')
   }
   if (state === 'running') {
     if (samePaths(lastModelPaths, modelPaths)) {
@@ -713,12 +703,23 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
       // security-relevant action has happened yet; the eventual stop/start still audits as it always did.
       mainLog.info('local runtime: model switch deferred — stream(s) active', { activeStreamCount })
       await waitForDrain()
+      assertCurrentGeneration(requestGeneration)
       return start(modelPaths, platform)
     }
-    // Model switch: kill the running sidecar synchronously before spawning the newly requested model.
+    // Mark this as an intentional stop before waiting for the exact child's exit.
     clearIdleTimer()
-    await stopChildProcess()
+    state = 'stopped'
+    port = null
+    await stopChildProcess(child)
+    assertCurrentGeneration(requestGeneration)
     auditLog('local.runtime.stop', { reason: 'model_switch' })
+  }
+  if (child) {
+    await stopChildProcess(child)
+    assertCurrentGeneration(requestGeneration)
+  } else if (currentChildLifecycle) {
+    await currentChildLifecycle.lifecycle.exit
+    assertCurrentGeneration(requestGeneration)
   }
   lastModelPaths = modelPaths
   state = 'starting'
@@ -727,31 +728,42 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
   startPromise = p
   try {
     await p
+    assertCurrentGeneration(generation)
+    if (modelPaths.runtimeLease) {
+      const startedChild = child
+      const lifecycle = startedChild && childLifecycles.get(startedChild)
+      if (!lifecycle || lifecycle.exited) throw new StartCancelledError()
+      lifecycle.transferLease(modelPaths.runtimeLease)
+    }
   } finally {
     // A stale start may finish after a newer one has already installed its own shared promise.
     if (startPromise === p) startPromise = null
   }
 }
 
-async function stopChildProcess(): Promise<void> {
-  const stopping = child
-  if (stopping && stopping.exitCode === null && stopping.signalCode === null) {
-    const exited = new Promise<void>((resolve) => stopping.once('exit', () => resolve()))
-    stopSidecarProcess(stopping)
-    await exited
+async function stopChildProcess(stopping: ChildProcess | null = child): Promise<void> {
+  if (!stopping) {
+    await currentChildLifecycle?.lifecycle.exit
+    return
   }
-  child = null
-  port = null
+  const lifecycle = childLifecycles.get(stopping)
+  if (!lifecycle) throw new Error('Local runtime child is missing its exit barrier.')
+  await lifecycle.stop(stopSidecarProcess)
+  if (child === stopping) {
+    child = null
+    port = null
+  }
 }
 
-/** Kill the sidecar (SIGKILL) and clear idle bookkeeping. Idempotent. */
-export function stop(): void {
+/** Kill the sidecar (SIGKILL) and resolve only after its exact exit and lease release. */
+export async function stop(): Promise<void> {
   clearIdleTimer()
   const wasRunning = state === 'running' || state === 'starting'
   startGeneration++
-  void stopChildProcess()
   state = 'stopped'
+  port = null
   if (wasRunning) auditLog('local.runtime.stop', { reason: 'explicit' })
+  await stopChildProcess(child)
 }
 
 /**

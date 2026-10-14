@@ -20,6 +20,10 @@ const SPAWN_PROFILE = { ...spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1]
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
+vi.mock('../features/components/speech-pack/runtime-lease', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../features/components/speech-pack/runtime-lease')>()
+  return { ...original, runtimeHostEnvironment: vi.fn(() => ({})) }
+})
 
 // The fake binary must "exist" so start() never short-circuits on the missing-binary path — only the
 // spawn/health timing matters for these tests.
@@ -64,6 +68,7 @@ vi.mock('node:child_process', async () => {
 
 import { start, stop, isRunning, baseURL, beginStream, endStream, getState } from './local-runtime'
 import { auditLog, mainLog } from '../logger'
+import type { RuntimeFeatureLease } from '../features/components/speech-pack/runtime-lease'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
@@ -76,13 +81,18 @@ beforeEach(() => {
   vi.stubGlobal('fetch', (...args: unknown[]) => fetchImpl(...args))
 })
 
-afterEach(() => {
-  stop()
+afterEach(async () => {
+  const stopping = stop()
+  for (const proc of spawnState.procs) if (proc.killed) proc.emit('exit', null, 'SIGKILL')
+  await stopping
   vi.unstubAllGlobals()
 })
 
 function emitListening(procIndex: number, port: number): void {
-  spawnState.procs[procIndex].stdout.emit('data', Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`))
+  spawnState.procs[procIndex].stdout.emit(
+    'data',
+    Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`)
+  )
 }
 
 async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -91,6 +101,20 @@ async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
     if (Date.now() > deadline) throw new Error('waitUntil timed out')
     await new Promise((r) => setTimeout(r, 1))
   }
+}
+
+function testLease(
+  generationIdentity: string,
+  releaseLease: () => Promise<void> = async () => undefined
+): { lease: RuntimeFeatureLease; release: ReturnType<typeof vi.fn> } {
+  const release = vi.fn(releaseLease)
+  const lease = {
+    generationIdentity,
+    entry: vi.fn(() => '/managed/llama-server'),
+    modelFile: vi.fn((_, member: string) => `/managed/model/${member}`),
+    release
+  } as unknown as RuntimeFeatureLease
+  return { lease, release }
 }
 
 describe('F1 — concurrent start() calls share one in-flight start', () => {
@@ -158,11 +182,10 @@ describe('quit cancellation — Windows fallback', () => {
     expect(spawnState.calls).toHaveLength(1)
     expect(spawnState.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
 
-    // Reproduce app will-quit while Vulkan is still loading. The fake kill emits its exit event on the
-    // next microtask, exactly the window where the old candidate loop mistook shutdown for a Vulkan
-    // startup failure and launched the CPU fallback after stop() had already returned.
-    stop()
+    // Reproduce app will-quit while Vulkan is still loading; start() must settle only after the child exits.
+    const stopping = stop()
     await waitUntil(() => outcome !== undefined || spawnState.calls.length > 1)
+    await stopping
 
     expect(outcome).toBe('rejected')
     expect(spawnState.calls).toHaveLength(1)
@@ -171,7 +194,125 @@ describe('quit cancellation — Windows fallback', () => {
     expect(isRunning()).toBe(false)
   })
 
-  it('a detached old start cannot overwrite a newer generation port with a delayed listening line', async () => {
+  it('does not release a startup lease until the cancelled child has actually exited', async () => {
+    const { lease, release } = testLease('managed-start')
+    const paths = {
+      gguf: '/managed/model.gguf',
+      mmproj: '/managed/mmproj.gguf',
+      ...SPAWN_PROFILE,
+      runtimeLease: lease,
+      runtimeBinary: '/managed/llama-server'
+    }
+    let settled = false
+    const caller = (async () => {
+      try {
+        await start(paths, 'mac')
+      } finally {
+        await lease.release()
+      }
+    })().finally(() => {
+      settled = true
+    })
+    const proc = spawnState.procs[0]!
+    proc.kill = vi.fn(() => {
+      proc.killed = true
+    })
+
+    const stopping = stop()
+    await Promise.resolve()
+    expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(settled).toBe(false)
+    expect(release).not.toHaveBeenCalled()
+
+    proc.emit('exit', null, 'SIGKILL')
+    await stopping
+    await expect(caller).rejects.toThrow(/cancelled/i)
+    expect(release).toHaveBeenCalledOnce()
+    expect(spawnState.calls).toHaveLength(1)
+  })
+
+  it('transfers a successful child lease once and holds it through stop plus replacement startup', async () => {
+    const oldLease = testLease('managed-old')
+    const oldPaths = {
+      gguf: '/managed/old.gguf',
+      mmproj: '/managed/mmproj.gguf',
+      ...SPAWN_PROFILE,
+      runtimeLease: oldLease.lease,
+      runtimeBinary: '/managed/llama-server'
+    }
+    const startedOld = start(oldPaths, 'mac')
+    emitListening(0, 55920)
+    await startedOld
+    const oldProc = spawnState.procs[0]!
+    oldProc.kill = vi.fn(() => {
+      oldProc.killed = true
+    })
+
+    const stopping = stop()
+    const nextStart = start({ gguf: '/m/new.gguf', mmproj: '/m/new.mmproj', ...SPAWN_PROFILE }, 'mac')
+    await Promise.resolve()
+    expect(spawnState.calls).toHaveLength(1)
+    expect(oldLease.release).not.toHaveBeenCalled()
+
+    oldProc.emit('exit', null, 'SIGKILL')
+    await stopping
+    await waitUntil(() => spawnState.calls.length === 2)
+    emitListening(1, 55921)
+    await nextStart
+    expect(oldLease.release).toHaveBeenCalledOnce()
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55921/v1')
+
+    await stop()
+  })
+
+  it('keeps a replacement behind the emitted exit and completion of the owned lease release', async () => {
+    let finishRelease: () => void = () => {}
+    const oldLease = testLease(
+      'managed-held-exit',
+      () =>
+        new Promise<void>((resolve) => {
+          finishRelease = resolve
+        })
+    )
+    const oldPaths = {
+      gguf: '/managed/old.gguf',
+      mmproj: '/managed/mmproj.gguf',
+      ...SPAWN_PROFILE,
+      runtimeLease: oldLease.lease,
+      runtimeBinary: '/managed/llama-server'
+    }
+    const startedOld = start(oldPaths, 'mac')
+    emitListening(0, 55930)
+    await startedOld
+    const oldProc = spawnState.procs[0]!
+    oldProc.kill = vi.fn(() => {
+      oldProc.killed = true
+    })
+
+    let stopSettled = false
+    const stopping = stop().finally(() => {
+      stopSettled = true
+    })
+    const nextStart = start({ gguf: '/m/new.gguf', mmproj: '/m/new.mmproj', ...SPAWN_PROFILE }, 'mac')
+    oldProc.emit('exit', null, 'SIGKILL')
+    await waitUntil(() => oldLease.release.mock.calls.length === 1)
+
+    expect(stopSettled).toBe(false)
+    expect(spawnState.calls).toHaveLength(1)
+    expect(oldLease.release).toHaveBeenCalledOnce()
+
+    finishRelease()
+    await stopping
+    await waitUntil(() => spawnState.calls.length === 2)
+    emitListening(1, 55931)
+    await nextStart
+    expect(spawnState.calls).toHaveLength(2)
+    expect(isRunning()).toBe(true)
+    await stop()
+  })
+
+  it('a new start waits for the cancelled child exit and stale output cannot replace its port', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
     let outcomeA: 'resolved' | 'rejected' | undefined
@@ -185,14 +326,17 @@ describe('quit cancellation — Windows fallback', () => {
       }
     )
     const procA = spawnState.procs[0]
-    // Hold A's OS exit notification so a new generation can become healthy first, then simulate the
-    // buffered stdout line from A arriving late after it was detached by stop().
+    // Hold A's OS exit notification so B proves it cannot launch while A still owns the model/process.
     procA.kill = vi.fn(() => {
       procA.killed = true
     })
-    stop()
+    const stopping = stop()
 
     const startB = start(pathsB, 'mac')
+    await Promise.resolve()
+    expect(spawnState.calls).toHaveLength(1)
+    procA.emit('exit', null, 'SIGKILL')
+    await stopping
     await waitUntil(() => spawnState.calls.length === 2)
     emitListening(1, 55902)
     await startB
@@ -204,7 +348,7 @@ describe('quit cancellation — Windows fallback', () => {
     expect(outcomeA).toBe('rejected')
     expect(isRunning()).toBe(true)
     expect(baseURL()).toBe('http://127.0.0.1:55902/v1')
-    stop()
+    await stop()
     expect(spawnState.procs[1].kill).toHaveBeenCalledWith('SIGKILL')
   })
 })
@@ -360,7 +504,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
 })
 
 describe('G1 — exit handler generation guard', () => {
-  it('a stale exit event from the OLD sidecar, arriving AFTER a switch to a NEW one is already healthy, does not clobber the new instance, fire a crash audit, or trigger an auto-restart — and will-quit-style stop() still kills the NEW instance', async () => {
+  it('old stop completion and duplicate stale exit cannot clear a newer child', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
@@ -369,38 +513,35 @@ describe('G1 — exit handler generation guard', () => {
     await p1
     const procA = spawnState.procs[0]
 
-    // Reproduce the real-world race deterministically: the OS-level 'exit' event for a SIGKILL'd process
-    // can land on a LATER tick than the kill() call itself. Override the mock's auto-fire-on-kill so we
-    // control exactly WHEN A's exit event arrives — specifically, after B is already confirmed healthy —
-    // instead of relying on however fast the queued microtask from kill() happens to resolve.
+    // Hold the exit so stop() and a replacement start share A's exact barrier.
     procA.kill = vi.fn(() => {
       procA.killed = true
     })
 
+    const stopping = stop()
     const p2 = start(pathsB, 'mac')
+    await Promise.resolve()
+    expect(spawnState.calls).toHaveLength(1)
+    procA.emit('exit', null, 'SIGKILL')
+    await stopping
     await waitUntil(() => spawnState.calls.length === 2)
     emitListening(1, 55502)
     await p2
     expect(isRunning()).toBe(true)
     expect(baseURL()).toBe('http://127.0.0.1:55502/v1')
 
-    // A's exit event finally arrives, well after the switch to B completed and B is healthy/running.
+    // A duplicate late exit must not clear B's state or port.
     procA.emit('exit', null, 'SIGKILL')
     await Promise.resolve()
     await Promise.resolve()
 
-    // FAILS on the old code: the unconditional exit handler would see state === 'running' (true, for B)
-    // and treat A's stale exit as B's crash — nulling child/port (orphaning B, breaking baseURL()),
-    // flipping state to 'stopped', firing a local.runtime.crash audit, and auto-restarting a THIRD sidecar
-    // for a switch that had already succeeded.
     expect(isRunning()).toBe(true)
     expect(baseURL()).toBe('http://127.0.0.1:55502/v1') // still B's port — untouched by A's stale exit
     expect(auditLog).not.toHaveBeenCalledWith('local.runtime.crash', expect.anything())
     expect(spawnState.calls.length).toBe(2) // no auto-restart spawn triggered by the stale exit
 
-    // will-quit's stop() must still kill the sidecar that's actually running (B), not silently no-op
-    // because A's stale exit nulled the module's `child` reference out from under it.
-    stop()
+    const finalStop = stop()
+    await finalStop
     expect(spawnState.procs[1].kill).toHaveBeenCalledWith('SIGKILL')
   })
 
