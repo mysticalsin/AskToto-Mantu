@@ -12,7 +12,9 @@ import type {
   CloudSpeechStartResult,
   CloudSpeechStatusResult
 } from '@shared/cloud-speech'
+import { createCloudSpeechCancellation } from './cloud-speech-cancel'
 import { createCloudSpeechController, type CloudSpeechControllerBridge } from './cloud-speech-controller'
+import { bounded as boundedWithClock } from './cloud-speech-deadline'
 
 const captureId = '9d87dc1a-0a52-4a5e-bbc2-f44320890cd4'
 const captureGeneration = 7
@@ -192,6 +194,139 @@ function controller(
   })
   return { ...fakes, instance }
 }
+
+describe('cloud speech cancellation dispatch', () => {
+  const cancellation = (
+    cloudSpeechCancel: CloudSpeechControllerBridge['cloudSpeechCancel'],
+    now: () => number,
+    isStarted: () => boolean
+  ) =>
+    createCloudSpeechCancellation({
+      request,
+      bridge: { cloudSpeechCancel },
+      now,
+      isStarted,
+      bounded: (operation, deadline, timeoutValue) => boundedWithClock(operation, deadline, now, timeoutValue),
+      failure
+    })
+
+  it('dispatches one owned cancel after the local deadline is already spent and returns without waiting', async () => {
+    let clock = 50
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+
+    await expect(next.cancelBridgeWithin(50)).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    expect(bridgeCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+    expect(next.hasPending()).toBe(true)
+
+    clock = 51
+    await expect(next.cancelBridgeWithin(60)).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+    await pendingCancel.promise
+  })
+
+  it('coalesces duplicate cancel requests around one pending owned IPC', async () => {
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => true
+    )
+    const first = next.cancel(100)
+    const duplicate = next.cancel(100)
+
+    expect(duplicate).toBe(first)
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+    await expect(first).resolves.toMatchObject({ ok: true, closure: 'confirmed' })
+    expect(next.hasPending()).toBe(false)
+  })
+
+  it('consumes a late bridge rejection and reports transport failure when the wait budget remains', async () => {
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => true
+    )
+    const result = next.cancelBridgeWithin(100)
+
+    pendingCancel.reject(new Error('synthetic cancel rejection'))
+    await expect(result).resolves.toEqual(failure('TRANSPORT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    expect(next.hasPending()).toBe(false)
+  })
+
+  it('consumes a bridge rejection after an expired caller has already received TIMEOUT', async () => {
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => 50,
+      () => true
+    )
+
+    await expect(next.cancelBridgeWithin(50)).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.reject(new Error('synthetic late cancel rejection'))
+    await vi.waitFor(() => expect(next.hasPending()).toBe(false))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a successful response for a foreign capture identity', async () => {
+    const bridgeCancel = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        captureId: 'f07371f0-8a95-43f6-b98a-ea24db2cb117',
+        captureGeneration: captureGeneration + 1,
+        closure: 'confirmed'
+      })
+    )
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => true
+    )
+
+    await expect(next.cancelBridgeWithin(100)).resolves.toEqual(failure('TRANSPORT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not dispatch when Start has not established an owned capture', async () => {
+    const bridgeCancel = vi.fn(() => Promise.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' }))
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => false
+    )
+
+    await expect(next.cancelBridgeWithin(100)).resolves.toEqual(failure('CLOSED'))
+    expect(bridgeCancel).not.toHaveBeenCalled()
+    expect(next.hasPending()).toBe(false)
+  })
+
+  it('dispatches requested-identity cleanup after a late successful Start even with no wait budget', async () => {
+    const bridgeCancel = vi.fn(() => Promise.resolve({ ok: true, captureId, captureGeneration, closure: 'unknown' }))
+    const next = cancellation(
+      bridgeCancel,
+      () => 50,
+      () => false
+    )
+
+    await next.cancelRequestedIdentity(50)
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    expect(bridgeCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+  })
+})
 
 afterEach(() => vi.useRealTimers())
 
