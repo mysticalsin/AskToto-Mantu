@@ -501,7 +501,7 @@ describe('bounded close and successful-save receipt join', () => {
       self: win,
       // Captured beside `const self = win`, outside this handler: the real callback runs after the
       // WebContents is torn down (MQA-340).
-      selfWebContentsId: 1,
+      selfOwner: { window: win, webContents: win.webContents, webContentsId: win.webContents.id },
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: vi.fn() },
       // M2-0037: within budget — the handler must still reload exactly as before.

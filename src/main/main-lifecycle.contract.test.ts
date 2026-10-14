@@ -152,8 +152,10 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
 
   it('MQA-340 — a destroyed overlay never dereferences its own dead WebContents in the closed callback', () => {
     const closed = sliceBetween('const self = win', '// Security: never let model-output')
-    expect(closed).toMatch(/const selfWebContentsId = self\.webContents\.id/)
-    expect(closed).toMatch(/invalidateCloudSttOwner\(selfWebContentsId\)/)
+    expect(closed).toMatch(/const selfWebContents = self\.webContents/)
+    expect(closed).toMatch(/const selfOwner: CloudSttWindowOwner<BrowserWindow, Electron\.WebContents>/)
+    expect(closed).toMatch(/webContentsId: selfWebContents\.id/)
+    expect(closed).toMatch(/invalidateCloudSttOwner\(selfOwner\)/)
     expect(closed).not.toMatch(/invalidateCloudSttOwner\(self\.webContents\.id\)/)
   })
 })
