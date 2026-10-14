@@ -1,0 +1,185 @@
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import { localModelAllowedByPolicy } from '@shared/model-policy'
+import { getActiveModelPolicy, getSpeechPolicyAuthorityStatus } from './model-policy-client'
+import {
+  getLocalModelProvisioningIdentity,
+  getSpeechPackPolicyIdentity,
+  getSpeechPackSelectionIdentity,
+  readSettingsAtAuthorityBoundary
+} from './store'
+import { resolveTrustedSpeechPackPolicy } from './speech-pack-bootstrap'
+import type { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
+import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
+import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
+import { acquirePackageRuntimeLease } from './features/components/speech-pack/runtime-admission'
+import {
+  configureRuntimeLeaseProvider,
+  initializeRuntimeHostEnvironment
+} from './features/components/speech-pack/runtime-lease'
+import { createRuntimeGenerationProvider } from './features/components/speech-pack/runtime-generation-provider'
+import { createRuntimeInstallService } from './features/components/speech-pack/runtime-install-service'
+import { runRuntimeCandidateSelfTest } from './features/components/speech-pack/runtime-candidate-self-test'
+import { runtimeTargetFor } from './features/components/speech-pack/runtime-components'
+import { createRuntimeWhisperHost } from './features/components/speech-pack/runtime-worker-host'
+import { registerRuntimeInstallIpc } from './ipc/runtime-install-ipc'
+import { registerRuntimeWhisperWorkerIpc } from './ipc/runtime-whisper-worker-ipc'
+
+export function registerRuntimeConsumers(options: {
+  readonly app: Pick<Electron.App, 'getPath' | 'getVersion'>
+  readonly ipcMain: Electron.IpcMain
+  readonly assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
+  readonly resourcesRoot: string
+  readonly packageContract: PackageRuntimeContract
+  readonly captureActive: () => boolean
+  readonly getWindow: () => Electron.BrowserWindow | null
+  readonly grants: SpeechCaptureGrantRegistry
+  readonly navigationEpoch: () => number
+  readonly captureRevision: () => number
+  readonly requireAuth: () => boolean
+  readonly runBootWork: (name: string, work: () => Promise<unknown>) => void
+}) {
+  const { app } = options
+  const storeRoot = join(app.getPath('userData'), 'optional-runtimes')
+  const provider = createRuntimeGenerationProvider({ resourcesRoot: options.resourcesRoot, storeRoot })
+  configureRuntimeLeaseProvider(provider)
+  options.runBootWork('validateRuntimeCatalog', async () => {
+    await provider.initialize()
+    await initializeRuntimeHostEnvironment()
+  })
+  const readAuthority = async (feature: 'offline-asr' | 'speaker-embedding' | 'local-llm') => {
+    const authority = await readSettingsAtAuthorityBoundary()
+    const settings = authority.settings
+    const policy = getSpeechPolicyAuthorityStatus(settings)
+    const selectedModelId =
+      feature === 'offline-asr'
+        ? settings.asrEngine === 'parakeet'
+          ? 'asr.parakeet-tdt-0.6b-v3-int8'
+          : settings.asrEngine === 'whisper'
+            ? 'asr.whisper-base-q8'
+            : null
+        : feature === 'speaker-embedding'
+          ? 'speaker.embedding'
+          : settings.localLlm.modelId === 'qwen3.5-0.8b' || settings.localLlm.modelId === 'qwen3.5-4b'
+            ? settings.localLlm.modelId
+            : null
+    const packageIdentity =
+      options.packageContract.status === 'verified'
+        ? `${options.packageContract.profile}:${options.packageContract.inventory.identity}`
+        : `${options.packageContract.status}:${options.packageContract.profile}`
+    const transferAllowed = resolveTrustedSpeechPackPolicy(settings, authority.localSpeechPack) !== 'blocked'
+    const featureAllowed =
+      feature === 'offline-asr'
+        ? settings.asrEngine === 'whisper' || settings.asrEngine === 'parakeet'
+        : feature === 'local-llm'
+          ? selectedModelId !== null && localModelAllowedByPolicy(getActiveModelPolicy(settings), selectedModelId)
+          : settings.speakerId.enabled === true
+    const allowed =
+      authority.readable &&
+      options.requireAuth() &&
+      options.packageContract.status === 'verified' &&
+      options.packageContract.profile === 'lean' &&
+      transferAllowed &&
+      !options.captureActive() &&
+      featureAllowed
+    const profileIdentity = createHash('sha256').update(packageIdentity).digest('hex')
+    const policyIdentity = createHash('sha256')
+      .update(`${policy.identity}:${getSpeechPackPolicyIdentity()}:${authority.epoch}`)
+      .digest('hex')
+    const selection = feature === 'local-llm' ? getLocalModelProvisioningIdentity() : getSpeechPackSelectionIdentity()
+    return {
+      readable: authority.readable,
+      allowedFeatures: allowed ? [feature] : [],
+      profileIdentity,
+      policyIdentity,
+      selectionIdentity: createHash('sha256').update(selection).digest('hex'),
+      captureIdentity: `capture:${options.captureRevision()}`,
+      captureActive: options.captureActive(),
+      transferAllowed: allowed,
+      selectedModelId
+    } as const
+  }
+  const installService = createRuntimeInstallService({
+    provider,
+    resourcesRoot: options.resourcesRoot,
+    storeRoot,
+    readAuthority,
+    readTarget: async () => runtimeTargetFor(await getPackageRuntimeContract(), app.getVersion()),
+    selfTest: runRuntimeCandidateSelfTest
+  })
+  const installCleanup = registerRuntimeInstallIpc({
+    ipcMain: options.ipcMain,
+    assertMainWindow: options.assertMainWindow,
+    plans: installService
+  }).cleanup
+  const whisper = registerRuntimeWhisperWorkerIpc({
+    ipcMain: options.ipcMain,
+    assertMainWindow: options.assertMainWindow,
+    readAuthority: async () => {
+      const authority = await readSettingsAtAuthorityBoundary()
+      const settings = authority.settings
+      const policy = getSpeechPolicyAuthorityStatus(settings)
+      const allowed =
+        authority.readable &&
+        options.requireAuth() &&
+        options.packageContract.status === 'verified' &&
+        options.packageContract.profile === 'lean' &&
+        (settings.asrEngine === 'whisper' || settings.asrEngine === 'parakeet') &&
+        policy.status !== 'unverified' &&
+        resolveTrustedSpeechPackPolicy(settings, authority.localSpeechPack) !== 'blocked'
+      const capture = options.grants.getAcceptedListenContext()
+      const win = options.getWindow()
+      const inputAllowed = Boolean(
+        options.captureActive() &&
+          win &&
+          !win.isDestroyed() &&
+          capture?.webContents === win.webContents &&
+          capture.frame === win.webContents.mainFrame &&
+          capture.navigationEpoch === options.navigationEpoch()
+      )
+      const identity = createHash('sha256')
+        .update(
+          `${authority.epoch}:${getSpeechPackSelectionIdentity()}:${policy.identity}:${options.packageContract.status}:${options.packageContract.profile}`
+        )
+        .digest('hex')
+      return { readable: authority.readable, allowed, identity, inputAllowed }
+    },
+    acquireLease: async (signal) => {
+      const lease = await acquirePackageRuntimeLease('offline-asr', 'asr.whisper-base-q8', signal)
+      if (!lease) throw new Error('RUNTIME_NOT_CONFIGURED')
+      return lease
+    },
+    createHost: createRuntimeWhisperHost
+  })
+  return { installService, installCleanup, whisperCleanup: whisper.cleanup, revokeWhisper: whisper.revokeAll }
+}
+
+type RuntimeConsumerLifetime = ReturnType<typeof registerRuntimeConsumers>
+
+export function registerRuntimeConsumerShutdown(
+  app: Electron.App,
+  current: () => RuntimeConsumerLifetime | null,
+  warn: (message: string) => void
+): void {
+  let shuttingDown = false
+  let shutdownComplete = false
+  app.on('before-quit', (event) => {
+    const consumers = current()
+    if (shutdownComplete || !consumers) return
+    event.preventDefault()
+    if (shuttingDown) return
+    shuttingDown = true
+    consumers.installCleanup()
+    consumers.installService.clear()
+    void consumers.whisperCleanup().then(
+      () => {
+        shutdownComplete = true
+        app.quit()
+      },
+      () => {
+        shuttingDown = false
+        warn('Optional Whisper worker exit was not confirmed; its lease and host remain retained.')
+      }
+    )
+  })
+}

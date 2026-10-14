@@ -6,8 +6,9 @@
  * A lease pins that generation until the corresponding child/worker has crossed its shutdown barrier.
  */
 import { createHash } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
-import { lstatSync, readFileSync } from 'node:fs'
+import { constants, type BigIntStats } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { lstat, open, stat } from 'node:fs/promises'
 import { delimiter, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { app } from 'electron'
 import type { OptionalRuntimeTarget } from './runtime-components'
@@ -100,6 +101,116 @@ const CHILD_ENV_ALLOWLIST = [
 
 let configuredProvider: RuntimeLeaseProvider | null = null
 const liveLeases = new WeakMap<object, { readonly feature: RuntimeFeatureId }>()
+let windowsRoots: { readonly windowsRoot: string; readonly systemRoot: string } | null = null
+let windowsRootsPromise: Promise<void> | null = null
+
+async function readBoundedHelperFile(path: string, maxBytes: number): Promise<Buffer> {
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
+  try {
+    const before = await handle.stat({ bigint: true })
+    const named = await lstat(path, { bigint: true })
+    const same = (left: BigIntStats, right: BigIntStats): boolean =>
+      left.dev === right.dev &&
+      left.ino === right.ino &&
+      left.mode === right.mode &&
+      left.nlink === right.nlink &&
+      left.size === right.size &&
+      left.mtimeNs === right.mtimeNs &&
+      left.ctimeNs === right.ctimeNs
+    if (
+      !before.isFile() ||
+      before.size < 1n ||
+      before.size > BigInt(maxBytes) ||
+      named.isSymbolicLink() ||
+      !same(before, named)
+    ) {
+      throw new Error('WINDOWS_OS_ROOT_FILE_INVALID')
+    }
+    const chunks: Buffer[] = []
+    let total = 0
+    let position = 0
+    while (total <= maxBytes) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total))
+      const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position)
+      if (!bytesRead) break
+      chunks.push(chunk.subarray(0, bytesRead))
+      total += bytesRead
+      position += bytesRead
+    }
+    const after = await handle.stat({ bigint: true })
+    const pathAfter = await lstat(path, { bigint: true })
+    if (total > maxBytes || BigInt(total) !== before.size || !same(before, after) || !same(before, pathAfter)) {
+      throw new Error('WINDOWS_OS_ROOT_FILE_CHANGED')
+    }
+    return Buffer.concat(chunks, total)
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
+}
+
+/** Validate the app.asar manifest, helper bytes and actual Windows API result before any native launch. */
+export async function initializeRuntimeHostEnvironment(): Promise<void> {
+  if (process.platform !== 'win32' || !app.isPackaged || windowsRoots) return
+  if (windowsRootsPromise) return windowsRootsPromise
+  windowsRootsPromise = (async () => {
+    const manifestPath = join(app.getAppPath(), 'out', 'main', 'win-os-roots.manifest.json')
+    const helperPath = join(process.resourcesPath, 'win-os-roots', 'osroots.exe')
+    const manifestBytes = await readBoundedHelperFile(manifestPath, WINDOWS_ROOT_MANIFEST_MAX_BYTES)
+    const helperBytes = await readBoundedHelperFile(helperPath, WINDOWS_ROOT_HELPER_MAX_BYTES)
+    let manifest: unknown
+    try {
+      manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes)) as unknown
+    } catch {
+      throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
+    }
+    if (
+      !exactObject(manifest, ['bytes', 'helperVersion', 'path', 'schemaVersion', 'sha256']) ||
+      manifest.schemaVersion !== 1 ||
+      manifest.helperVersion !== 1 ||
+      manifest.path !== 'win-os-roots/osroots.exe' ||
+      !Number.isSafeInteger(manifest.bytes) ||
+      manifest.bytes !== helperBytes.byteLength ||
+      typeof manifest.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(manifest.sha256) ||
+      createHash('sha256').update(helperBytes).digest('hex') !== manifest.sha256 ||
+      helperBytes.toString('ascii', 0, 2) !== 'MZ'
+    ) {
+      throw new Error('WINDOWS_OS_ROOT_HELPER_PIN_MISMATCH')
+    }
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>(
+      (resolvePromise, reject) => {
+        execFile(
+          helperPath,
+          ['--json'],
+          {
+            encoding: 'utf8',
+            maxBuffer: 2048,
+            timeout: 3000,
+            windowsHide: true,
+            env: { PATH: '' }
+          },
+          (error, stdout, stderr) => {
+            if (error) {
+              reject(new Error('WINDOWS_OS_ROOT_HELPER_FAILED'))
+              return
+            }
+            resolvePromise({ status: 0, stdout, stderr })
+          }
+        )
+      }
+    )
+    const roots = parseWindowsSystemRootsResponse(result)
+    for (const path of [roots.windowsRoot, roots.systemRoot]) {
+      const directory = await stat(path)
+      if (!directory.isDirectory()) throw new Error('WINDOWS_OS_ROOT_DIRECTORY_INVALID')
+    }
+    windowsRoots = roots
+  })().catch((error: unknown) => {
+    windowsRootsPromise = null
+    throw error
+  })
+  return windowsRootsPromise
+}
 
 /** Install the trusted main-process store/provider once, before speech or LLM consumers can run. */
 export function configureRuntimeLeaseProvider(provider: RuntimeLeaseProvider): void {
@@ -121,7 +232,11 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
   const ownedRoots = lease.loaderDirectories()
   let systemRoots: string[]
   if (process.platform === 'win32') {
-    const { windowsRoot, systemRoot } = windowsSystemRootsFromPackagedHelper()
+    const { windowsRoot, systemRoot } =
+      windowsRoots ??
+      (() => {
+        throw new Error('WINDOWS_OS_ROOTS_NOT_INITIALIZED')
+      })()
     env.SystemRoot = windowsRoot
     env.SYSTEMROOT = windowsRoot
     env.WINDIR = windowsRoot
@@ -188,81 +303,6 @@ export function parseWindowsSystemRootsResponse(input: {
     throw new Error('WINDOWS_OS_ROOT_RESPONSE_INVALID')
   }
   return Object.freeze({ windowsRoot, systemRoot: expectedSystemRoot })
-}
-
-function assertWindowsOsDirectories(roots: { windowsRoot: string; systemRoot: string }): void {
-  try {
-    for (const path of [roots.windowsRoot, roots.systemRoot]) {
-      const stat = lstatSync(path)
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('WINDOWS_OS_ROOT_DIRECTORY_INVALID')
-    }
-  } catch {
-    throw new Error('WINDOWS_OS_ROOT_DIRECTORY_INVALID')
-  }
-}
-
-function windowsSystemRootsFromPackagedHelper(): { windowsRoot: string; systemRoot: string } {
-  if (!app.isPackaged) throw new Error('WINDOWS_OS_ROOT_HELPER_UNAVAILABLE')
-  const manifestPath = join(app.getAppPath(), 'out', 'main', 'win-os-roots.manifest.json')
-  const helperPath = join(process.resourcesPath, 'win-os-roots', 'osroots.exe')
-  const manifestStat = lstatSync(manifestPath)
-  const helperStat = lstatSync(helperPath)
-  if (
-    !manifestStat.isFile() ||
-    manifestStat.isSymbolicLink() ||
-    !helperStat.isFile() ||
-    helperStat.isSymbolicLink() ||
-    helperStat.nlink !== 1 ||
-    manifestStat.size < 1 ||
-    manifestStat.size > WINDOWS_ROOT_MANIFEST_MAX_BYTES ||
-    helperStat.size < 64 ||
-    helperStat.size > WINDOWS_ROOT_HELPER_MAX_BYTES
-  ) {
-    throw new Error('WINDOWS_OS_ROOT_HELPER_INVALID')
-  }
-  const manifestBytes = readFileSync(manifestPath)
-  if (manifestBytes.byteLength !== manifestStat.size) throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
-  let manifest: unknown
-  try {
-    manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes)) as unknown
-  } catch {
-    throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
-  }
-  if (
-    !exactObject(manifest, ['bytes', 'helperVersion', 'path', 'schemaVersion', 'sha256']) ||
-    manifest.schemaVersion !== 1 ||
-    manifest.helperVersion !== 1 ||
-    manifest.path !== 'win-os-roots/osroots.exe' ||
-    !Number.isSafeInteger(manifest.bytes) ||
-    (manifest.bytes as number) !== helperStat.size ||
-    typeof manifest.sha256 !== 'string' ||
-    !/^[0-9a-f]{64}$/.test(manifest.sha256)
-  ) {
-    throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
-  }
-  const helperBytes = readFileSync(helperPath)
-  if (
-    helperBytes.byteLength !== helperStat.size ||
-    createHash('sha256').update(helperBytes).digest('hex') !== manifest.sha256 ||
-    helperBytes.toString('ascii', 0, 2) !== 'MZ'
-  ) {
-    throw new Error('WINDOWS_OS_ROOT_HELPER_PIN_MISMATCH')
-  }
-  const result = spawnSync(helperPath, ['--json'], {
-    encoding: 'utf8',
-    maxBuffer: 2048,
-    timeout: 3000,
-    windowsHide: true,
-    env: { PATH: '' }
-  })
-  if (result.error) throw new Error('WINDOWS_OS_ROOT_HELPER_FAILED')
-  const roots = parseWindowsSystemRootsResponse({
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr
-  })
-  assertWindowsOsDirectories(roots)
-  return roots
 }
 
 export function windowsSystemLoaderRoots(value: string | undefined): readonly [string, string] {

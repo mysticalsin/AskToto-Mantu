@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, type BigIntStats } from 'node:fs'
 import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm, statfs } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { DEFAULT_TIMING, downloadVerified } from './download'
@@ -64,6 +64,19 @@ async function readPinnedFile(path: string, max: number): Promise<Buffer> {
   try {
     const before = await handle.stat({ bigint: true })
     const named = await lstat(path, { bigint: true })
+    const sameVersion = (a: BigIntStats, b: BigIntStats): boolean =>
+      a.dev === b.dev &&
+      a.ino === b.ino &&
+      a.mode === b.mode &&
+      a.nlink === b.nlink &&
+      a.uid === b.uid &&
+      a.gid === b.gid &&
+      a.rdev === b.rdev &&
+      a.size === b.size &&
+      a.blocks === b.blocks &&
+      a.mtimeNs === b.mtimeNs &&
+      a.ctimeNs === b.ctimeNs &&
+      a.birthtimeNs === b.birthtimeNs
     if (
       !before.isFile() ||
       before.nlink !== 1n ||
@@ -71,21 +84,26 @@ async function readPinnedFile(path: string, max: number): Promise<Buffer> {
       before.size > BigInt(max) ||
       !named.isFile() ||
       named.nlink !== 1n ||
-      named.ino !== before.ino ||
-      named.dev !== before.dev
+      !sameVersion(before, named)
     ) {
       throw new Error('RUNTIME_INSTALL_FILE_INVALID')
     }
-    const bytes = await handle.readFile()
+    const chunks: Buffer[] = []
+    let total = 0
+    let position = 0
+    while (total <= max) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, max + 1 - total))
+      const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position)
+      if (bytesRead === 0) break
+      chunks.push(chunk.subarray(0, bytesRead))
+      total += bytesRead
+      position += bytesRead
+    }
+    if (total > max) throw new Error('RUNTIME_INSTALL_FILE_TOO_LARGE')
+    const bytes = Buffer.concat(chunks, total)
     const after = await handle.stat({ bigint: true })
-    if (
-      BigInt(bytes.byteLength) !== before.size ||
-      after.ino !== before.ino ||
-      after.dev !== before.dev ||
-      after.size !== before.size ||
-      after.mtimeNs !== before.mtimeNs ||
-      after.ctimeNs !== before.ctimeNs
-    ) {
+    const namedAfter = await lstat(path, { bigint: true })
+    if (BigInt(bytes.byteLength) !== before.size || !sameVersion(before, after) || !sameVersion(before, namedAfter)) {
       throw new Error('RUNTIME_INSTALL_FILE_CHANGED')
     }
     return bytes
@@ -296,8 +314,12 @@ export function createRuntimeInstaller(options: {
     const inventories: RuntimeInventoryV1[] = []
     let complete = false
     let retainStaging = false
+    let retainPublishedGeneration = false
     let publishedGeneration: string | null = null
     let temporaryPointer: string | null = null
+    const priorPointerPath = join(activeRoot, `${input.feature}.json`)
+    let priorPointer: Buffer | null = null
+    let finalPointerBytes: Buffer | null = null
     try {
       const trustRoot = await readPinnedFile(
         join(resourcesRoot, catalogSnapshot.catalog.trustRoot.path),
@@ -439,8 +461,6 @@ export function createRuntimeInstaller(options: {
       await check()
       await freezeTree(stage, check)
       await check()
-      const priorPointerPath = join(activeRoot, `${input.feature}.json`)
-      let priorPointer: Buffer | null = null
       try {
         priorPointer = await readPinnedFile(priorPointerPath, 64 * 1024)
       } catch (error) {
@@ -455,6 +475,8 @@ export function createRuntimeInstaller(options: {
         target: input.target,
         artifactIds: derivedIds
       }
+      const finalPointer = Buffer.from(`${canonicalJson(finalGeneration)}\n`)
+      finalPointerBytes = finalPointer
       if (
         await lstat(targetGeneration).then(
           () => true,
@@ -463,12 +485,13 @@ export function createRuntimeInstaller(options: {
       ) {
         throw new Error('RUNTIME_GENERATION_ALREADY_EXISTS')
       }
+      await check()
       await rename(stage, targetGeneration)
       publishedGeneration = targetGeneration
       await syncDirectory(generationsRoot)
       await check()
       temporaryPointer = `${priorPointerPath}.${randomBytes(16).toString('hex')}.tmp`
-      await writeExclusive(temporaryPointer, Buffer.from(`${canonicalJson(finalGeneration)}\n`), 0o600)
+      await writeExclusive(temporaryPointer, finalPointer, 0o600)
       await check()
       await rename(temporaryPointer, priorPointerPath)
       temporaryPointer = null
@@ -476,11 +499,22 @@ export function createRuntimeInstaller(options: {
         await syncDirectory(activeRoot)
         await check()
       } catch (error) {
-        const current = await readPinnedFile(priorPointerPath, 64 * 1024).catch(() => null)
-        if (current?.equals(Buffer.from(`${canonicalJson(finalGeneration)}\n`))) {
+        let current: Buffer | null
+        try {
+          current = await readPinnedFile(priorPointerPath, 64 * 1024)
+        } catch (readError) {
+          if ((readError as NodeJS.ErrnoException).code === 'ENOENT' && priorPointer === null) current = null
+          else {
+            retainPublishedGeneration = true
+            throw error
+          }
+        }
+        if (current?.equals(finalPointer)) {
           if (priorPointer) await writeBytesAtomic(priorPointerPath, priorPointer)
           else await rm(priorPointerPath, { force: true })
           await syncDirectory(activeRoot)
+        } else if (!(priorPointer ? current?.equals(priorPointer) : current === null)) {
+          retainPublishedGeneration = true
         }
         throw error
       }
@@ -490,11 +524,18 @@ export function createRuntimeInstaller(options: {
       if (!complete) {
         if (temporaryPointer) await rm(temporaryPointer, { force: true }).catch(() => undefined)
         if (!retainStaging) await removeOwnedTree(stagingRoot, stage).catch(() => undefined)
-        if (publishedGeneration) {
-          const current = await readPinnedFile(join(activeRoot, `${input.feature}.json`), 64 * 1024).catch(() => null)
-          if (!current?.toString('utf8').includes(generation)) {
-            await removeOwnedTree(generationsRoot, publishedGeneration).catch(() => undefined)
+        if (publishedGeneration && !retainPublishedGeneration && finalPointerBytes) {
+          try {
+            const current = await readPinnedFile(join(activeRoot, `${input.feature}.json`), 64 * 1024)
+            if (current.equals(finalPointerBytes)) retainPublishedGeneration = true
+            else if (!(priorPointer ? current.equals(priorPointer) : false)) retainPublishedGeneration = true
+          } catch (error) {
+            if (!((error as NodeJS.ErrnoException).code === 'ENOENT' && priorPointer === null)) {
+              retainPublishedGeneration = true
+            }
           }
+          if (!retainPublishedGeneration)
+            await removeOwnedTree(generationsRoot, publishedGeneration).catch(() => undefined)
         }
       }
     }

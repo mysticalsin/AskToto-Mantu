@@ -48,35 +48,71 @@ function waitFor<T>(promise: Promise<T>, ms = TEST_TIMEOUT_MS): Promise<T> {
 }
 
 function verifiedGeneration(input: Parameters<RuntimeInstallSelfTest>[0]): VerifiedRuntimeGeneration {
+  const roles: readonly RuntimeEntryRole[] =
+    input.feature === 'offline-asr'
+      ? ['parakeet-host', 'whisper-import-host', 'whisper-renderer-worker']
+      : input.feature === 'speaker-embedding'
+        ? ['speaker-embedding-host']
+        : ['llama-server']
+  const modelIds: readonly RuntimeModelId[] =
+    input.feature === 'offline-asr'
+      ? ['asr.parakeet-tdt-0.6b-v3-int8', 'asr.whisper-base-q8']
+      : input.feature === 'speaker-embedding'
+        ? ['speaker.embedding']
+        : input.selectedModelId
+          ? [input.selectedModelId]
+          : []
   const entries: Partial<Record<RuntimeEntryRole, string>> = {}
   const models: Partial<Record<RuntimeModelId, { root: string; members: readonly string[] }>> = {}
   const rendererFiles: Record<string, string> = {}
   const rendererPins: Record<string, { bytes: number; sha256: string }> = {}
   const nativeDirs = new Set<string>()
   for (const inventory of input.inventories) {
-    for (const [role, path] of Object.entries(inventory.entrypoints))
-      entries[role as RuntimeEntryRole] = `artifacts/${inventory.artifactId}/${path}`
+    for (const [role, path] of Object.entries(inventory.entrypoints)) {
+      if (roles.includes(role as RuntimeEntryRole))
+        entries[role as RuntimeEntryRole] = `artifacts/${inventory.artifactId}/${path}`
+    }
     for (const model of inventory.models) {
+      if (!modelIds.includes(model.id as RuntimeModelId)) continue
       models[model.id as RuntimeModelId] = {
         root: `artifacts/${inventory.artifactId}/${model.root}`,
         members: model.members
       }
       if (model.id === 'asr.whisper-base-q8') {
         for (const member of model.members) {
-          const path = `${model.root}/${member}`
-          const pin = inventory.files.find((file) => file.path === path)
+          const inventoryPath = `${model.root}/${member}`
+          const path = `artifacts/${inventory.artifactId}/${inventoryPath}`
+          const pin = inventory.files.find((file) => file.path === inventoryPath)
           if (!pin) throw new Error('RUNTIME_SELF_TEST_MODEL_PIN_MISSING')
-          rendererFiles[path] = `artifacts/${inventory.artifactId}/${path}`
+          rendererFiles[path] = `artifacts/${inventory.artifactId}/${inventoryPath}`
           rendererPins[path] = { bytes: pin.bytes, sha256: pin.sha256 }
         }
       }
     }
-    for (const file of inventory.files) {
-      if (/\.(?:node|dll|so|dylib)$/i.test(file.path))
-        nativeDirs.add(`artifacts/${inventory.artifactId}/${file.path.slice(0, file.path.lastIndexOf('/'))}`)
-      if (inventory.entrypoints['whisper-renderer-worker']) {
-        rendererFiles[file.path] = `artifacts/${inventory.artifactId}/${file.path}`
-        rendererPins[file.path] = { bytes: file.bytes, sha256: file.sha256 }
+    if (
+      inventory.kind === 'runtime' &&
+      Object.keys(inventory.entrypoints).some((role) => roles.includes(role as RuntimeEntryRole))
+    ) {
+      for (const file of inventory.files) {
+        if (/\.(?:node|dll|so|dylib)$/i.test(file.path))
+          nativeDirs.add(`artifacts/${inventory.artifactId}/${file.path.slice(0, file.path.lastIndexOf('/'))}`)
+      }
+    }
+    const workerPath = inventory.entrypoints['whisper-renderer-worker']
+    if (input.feature === 'offline-asr' && workerPath) {
+      const pin = inventory.files.find((file) => file.path === workerPath)
+      if (!pin) throw new Error('RUNTIME_SELF_TEST_RENDERER_PIN_MISSING')
+      const path = `artifacts/${inventory.artifactId}/${workerPath}`
+      rendererFiles[path] = path
+      rendererPins[path] = { bytes: pin.bytes, sha256: pin.sha256 }
+    }
+    if (input.feature === 'offline-asr') {
+      for (const path of inventory.directories['whisper-ort-wasm']?.members ?? []) {
+        const pin = inventory.files.find((file) => file.path === path)
+        if (!pin) throw new Error('RUNTIME_SELF_TEST_RENDERER_PIN_MISSING')
+        const resource = `artifacts/${inventory.artifactId}/${path}`
+        rendererFiles[resource] = resource
+        rendererPins[resource] = { bytes: pin.bytes, sha256: pin.sha256 }
       }
     }
   }
@@ -138,6 +174,13 @@ async function utilitySelfTest(input: {
   signal: AbortSignal
   assertCurrent: () => Promise<void>
 }): Promise<void> {
+  if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
+  const fixture = await readPinnedFixtureFile(FIXTURE, SELF_TEST_FIXTURE)
+  await input.assertCurrent()
+  if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
+  const pcm = parseFixturePcm(fixture)
+  await input.assertCurrent()
+  if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const child = utilityProcess.fork(input.lease.entry(input.role), [], {
     serviceName: `metis-runtime-selftest-${input.role}`,
     stdio: 'pipe',
@@ -158,20 +201,22 @@ async function utilitySelfTest(input: {
     }
   }
   input.signal.addEventListener('abort', abort, { once: true })
+  let failure: unknown
+  let exitUnconfirmed = false
   try {
     if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
-    const fixture = await readPinnedFixtureFile(FIXTURE, SELF_TEST_FIXTURE)
-    await input.assertCurrent()
     await input.requests(
       child,
       {
         model: (id: RuntimeModelId) => input.lease.model(id),
         members: (id, member) => input.lease.modelFile(id, member)
       },
-      parseFixturePcm(fixture),
+      pcm,
       input.assertCurrent
     )
     if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
+  } catch (error) {
+    failure = error
   } finally {
     input.signal.removeEventListener('abort', abort)
     try {
@@ -179,8 +224,14 @@ async function utilitySelfTest(input: {
     } catch {
       /* Awaiting exit below remains mandatory. */
     }
-    await exited
+    try {
+      await waitFor(exited)
+    } catch {
+      exitUnconfirmed = true
+    }
   }
+  if (exitUnconfirmed) throw new RetainedRuntimeCandidateSelfTestError(failure)
+  if (failure) throw failure
 }
 
 async function testParakeet(
@@ -279,7 +330,7 @@ async function testRendererWhisper(
 ): Promise<void> {
   let host: Awaited<ReturnType<typeof createRuntimeWhisperHost>>
   try {
-    host = await createRuntimeWhisperHost({ lease, assertCurrent })
+    host = await createRuntimeWhisperHost({ lease, assertCurrent, assertAudioCurrent: assertCurrent })
   } catch (error) {
     if (error instanceof RetainedRuntimeWhisperHostError) throw new RetainedRuntimeCandidateSelfTestError(error)
     throw error
@@ -334,6 +385,9 @@ async function testLlama(
   const executable = lease.entry('llama-server')
   const model = lease.modelFile(modelId, 'model.gguf')
   const key = randomBytes(32).toString('hex')
+  if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
+  await assertCurrent()
+  if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const child: ChildProcess = spawn(
     executable,
     [
@@ -383,7 +437,9 @@ async function testLlama(
   })
   child.stdout?.on('data', readPort)
   child.stderr?.on('data', readPort)
-  const exited = new Promise<void>((resolve) => child.once('exit', resolve))
+  const exited = new Promise<void>((resolve) => child.once('close', resolve))
+  let failure: unknown
+  let exitUnconfirmed = false
   try {
     const deadline = Date.now() + 90_000
     while (!port && Date.now() < deadline) {
@@ -415,10 +471,18 @@ async function testLlama(
     if (typeof content !== 'string' || !/\bREADY\b/i.test(content))
       throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
     await assertCurrent()
+  } catch (error) {
+    failure = error
   } finally {
     if (child.exitCode === null) child.kill('SIGKILL')
-    await exited
+    try {
+      await waitFor(exited)
+    } catch {
+      exitUnconfirmed = true
+    }
   }
+  if (exitUnconfirmed) throw new RetainedRuntimeCandidateSelfTestError(failure)
+  if (failure) throw failure
 }
 
 export const runRuntimeCandidateSelfTest: RuntimeInstallSelfTest = async (input) => {

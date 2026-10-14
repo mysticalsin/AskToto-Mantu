@@ -684,6 +684,11 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
       ) {
         await req.authorizeAsync?.()
         await removeFile(`${partial}.json`, { force: true })
+        if (req.signal.aborted) throw req.signal.reason
+        if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+        await req.authorizeAsync?.()
+        if (req.signal.aborted) throw req.signal.reason
+        if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
         await rename(partial, req.dest)
         req.onProgress(req.bytes)
         return

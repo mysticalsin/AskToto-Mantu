@@ -65,6 +65,17 @@ export interface RuntimeCatalogRow {
     readonly root: string
     readonly members: readonly string[]
   }[]
+  readonly directories: Readonly<
+    Partial<
+      Record<
+        'whisper-ort-wasm',
+        {
+          readonly root: string
+          readonly members: readonly string[]
+        }
+      >
+    >
+  >
   readonly signer: {
     readonly issuer: string
     readonly repositoryUri: string
@@ -141,6 +152,7 @@ export interface RuntimeInventoryV1 {
   }[]
   readonly entrypoints: RuntimeCatalogRow['entrypoints']
   readonly models: RuntimeCatalogRow['models']
+  readonly directories: RuntimeCatalogRow['directories']
 }
 
 export interface RuntimeExtractedFile {
@@ -339,7 +351,8 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
       'bundle',
       'signer',
       'entrypoints',
-      'models'
+      'models',
+      'directories'
     ])
   )
     return false
@@ -350,6 +363,7 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
   const bundle = record(row.bundle)
   const signer = record(row.signer)
   const entrypoints = record(row.entrypoints)
+  const directories = record(row.directories)
   const roles = [
     'parakeet-host',
     'whisper-import-host',
@@ -449,6 +463,24 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
       (bundle.releaseAssetId as number) > 0 &&
       entrypoints &&
       Object.keys(entrypoints).every((role) => roles.includes(role) && safePath(entrypoints[role])) &&
+      directories &&
+      Object.keys(directories).every((id) => id === 'whisper-ort-wasm') &&
+      (row.kind === 'runtime'
+        ? (entrypoints?.['whisper-renderer-worker'] !== undefined) ===
+            (directories['whisper-ort-wasm'] !== undefined) && Object.keys(directories).length <= 1
+        : Object.keys(directories).length === 0) &&
+      Object.entries(directories).every(([id, raw]) => {
+        const directory = record(raw)
+        return Boolean(
+          id === 'whisper-ort-wasm' &&
+            directory &&
+            exactKeys(directory, ['root', 'members']) &&
+            safePath(directory.root) &&
+            Array.isArray(directory.members) &&
+            directory.members.length > 0 &&
+            directory.members.every((member) => safePath(member) && member.startsWith(`${directory.root}/`))
+        )
+      }) &&
       modelRowsValid &&
       signer &&
       exactKeys(signer, [

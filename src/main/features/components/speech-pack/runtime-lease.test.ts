@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { resolve } from 'node:path'
 import {
   acquireFeatureRuntime,
   configureRuntimeLeaseProvider,
@@ -9,7 +10,7 @@ import {
 import type { OptionalRuntimeTarget } from './runtime-components'
 
 describe('Windows optional-host system loader roots', () => {
-  it('accepts only one absolute drive root and derives System32 beneath it', () => {
+  it('accepts one syntactically valid absolute drive root and derives System32 beneath it', () => {
     expect(windowsSystemLoaderRoots('C:\\Windows')).toEqual(['C:\\Windows', 'C:\\Windows\\System32'])
   })
 
@@ -33,17 +34,21 @@ describe('Windows optional-host system loader roots', () => {
     ).toEqual({ windowsRoot: 'C:\\Windows', systemRoot: 'C:\\Windows\\System32' })
   })
 
+  it('parses a syntactically valid response without asserting helper provenance', () => {
+    expect(
+      parseWindowsSystemRootsResponse({
+        status: 0,
+        stdout: '{"version":1,"windowsRoot":"Z:\\\\attacker","systemRoot":"Z:\\\\attacker\\\\System32"}\n',
+        stderr: ''
+      })
+    ).toEqual({ windowsRoot: 'Z:\\attacker', systemRoot: 'Z:\\attacker\\System32' })
+  })
+
   it.each([
     [
       'extra fields',
       0,
       '{"version":1,"windowsRoot":"C:\\\\Windows","systemRoot":"C:\\\\Windows\\\\System32","extra":true}\n',
-      ''
-    ],
-    [
-      'environment spoof',
-      0,
-      '{"version":1,"windowsRoot":"Z:\\\\attacker","systemRoot":"Z:\\\\attacker\\\\System32"}\n',
       ''
     ],
     ['mismatched system directory', 0, '{"version":1,"windowsRoot":"C:\\\\Windows","systemRoot":"C:\\\\Evil"}\n', ''],
@@ -95,16 +100,24 @@ describe('Windows optional-host system loader roots', () => {
       'asr.whisper-base-q8': { root: 'models/whisper', members: whisperMembers }
     }
     const rendererFiles: Record<string, string> = { 'worker/index.js': 'worker/index.js' }
+    const rendererPins: Record<string, { bytes: number; sha256: string }> = {
+      'worker/index.js': { bytes: 10, sha256: 'd'.repeat(64) }
+    }
+    for (const member of whisperMembers) {
+      const path = `models/whisper/${member}`
+      rendererFiles[path] = path
+      rendererPins[path] = { bytes: 10, sha256: 'e'.repeat(64) }
+    }
     const generation: VerifiedRuntimeGeneration = {
       generationIdentity: 'b'.repeat(64),
       catalogIdentity: 'c'.repeat(64),
       target,
-      rootDir: '/owned/runtime-generation',
+      rootDir: resolve('/owned/runtime-generation'),
       entries,
       models,
       nativeLibraryDirs: ['native'],
       rendererFiles,
-      rendererPins: { 'worker/index.js': { bytes: 10, sha256: 'd'.repeat(64) } },
+      rendererPins,
       release: async () => undefined
     }
     configureRuntimeLeaseProvider({ acquire: async () => generation })
@@ -114,11 +127,12 @@ describe('Windows optional-host system loader roots', () => {
     models['asr.whisper-base-q8'].members[0] = 'outside/attacker.onnx'
     rendererFiles['worker/index.js'] = 'outside/attacker.js'
 
-    expect(lease.entry('whisper-import-host')).toBe('/owned/runtime-generation/hosts/whisper.js')
+    expect(lease.entry('whisper-import-host')).toBe(resolve('/owned/runtime-generation/hosts/whisper.js'))
     expect(lease.modelFile('asr.whisper-base-q8', 'Xenova/whisper-base/config.json')).toBe(
-      '/owned/runtime-generation/models/whisper/Xenova/whisper-base/config.json'
+      resolve('/owned/runtime-generation/models/whisper/Xenova/whisper-base/config.json')
     )
-    expect(lease.rendererFile('worker/index.js')).toBe('/owned/runtime-generation/worker/index.js')
+    expect(lease.rendererFile('worker/index.js')).toBe(resolve('/owned/runtime-generation/worker/index.js'))
+    expect(lease.rendererModelRoot('asr.whisper-base-q8')).toBe('models/whisper')
     await lease.release()
   })
 })

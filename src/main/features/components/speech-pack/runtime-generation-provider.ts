@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, type BigIntStats } from 'node:fs'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { OptionalRuntimeTarget } from './runtime-components'
@@ -186,18 +186,43 @@ async function readBoundedRegular(path: string, maxBytes: number): Promise<Buffe
     if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > BigInt(maxBytes)) {
       throw new Error('RUNTIME_METADATA_SHAPE_INVALID')
     }
-    const bytes = await handle.readFile()
+    const namedBefore = await lstat(path, { bigint: true })
+    const sameVersion = (a: BigIntStats, b: BigIntStats): boolean =>
+      a.dev === b.dev &&
+      a.ino === b.ino &&
+      a.mode === b.mode &&
+      a.nlink === b.nlink &&
+      a.uid === b.uid &&
+      a.gid === b.gid &&
+      a.rdev === b.rdev &&
+      a.size === b.size &&
+      a.blocks === b.blocks &&
+      a.mtimeNs === b.mtimeNs &&
+      a.ctimeNs === b.ctimeNs &&
+      a.birthtimeNs === b.birthtimeNs
+    if (!namedBefore.isFile() || namedBefore.nlink !== 1n || !sameVersion(before, namedBefore)) {
+      throw new Error('RUNTIME_METADATA_CHANGED')
+    }
+    const chunks: Buffer[] = []
+    let total = 0
+    let position = 0
+    while (total <= maxBytes) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total))
+      const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position)
+      if (bytesRead === 0) break
+      chunks.push(chunk.subarray(0, bytesRead))
+      total += bytesRead
+      position += bytesRead
+    }
+    if (total > maxBytes) throw new Error('RUNTIME_METADATA_TOO_LARGE')
+    const bytes = Buffer.concat(chunks, total)
     const after = await handle.stat({ bigint: true })
     const atPath = await lstat(path, { bigint: true })
     if (
       BigInt(bytes.byteLength) !== before.size ||
-      after.ino !== before.ino ||
-      after.dev !== before.dev ||
-      after.size !== before.size ||
+      !sameVersion(before, after) ||
       !atPath.isFile() ||
-      atPath.nlink !== 1n ||
-      atPath.ino !== before.ino ||
-      atPath.dev !== before.dev
+      !sameVersion(before, atPath)
     ) {
       throw new Error('RUNTIME_METADATA_CHANGED')
     }
@@ -586,21 +611,35 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
           }
           if (feature === 'offline-asr' && model.id === 'asr.whisper-base-q8') {
             for (const member of model.members) {
-              const urlPath = `${model.root}/${member}`
-              const pin = inventory.files.find((file) => file.path === urlPath)
+              const inventoryPath = `${model.root}/${member}`
+              const urlPath = `artifacts/${artifactId}/${inventoryPath}`
+              const pin = inventory.files.find((file) => file.path === inventoryPath)
               if (!pin) throw new Error('RUNTIME_RENDERER_FILE_MISSING')
-              addRendererFile(urlPath, `artifacts/${artifactId}/${urlPath}`, pin)
+              addRendererFile(urlPath, `artifacts/${artifactId}/${inventoryPath}`, pin)
             }
           }
         }
-        if (inventory.entrypoints['whisper-renderer-worker']) {
-          for (const file of inventory.files) {
-            addRendererFile(file.path, `artifacts/${artifactId}/${file.path}`, file)
+        const workerPath = inventory.entrypoints['whisper-renderer-worker']
+        if (feature === 'offline-asr' && workerPath) {
+          const pin = inventory.files.find((file) => file.path === workerPath)
+          if (!pin) throw new Error('RUNTIME_RENDERER_FILE_MISSING')
+          addRendererFile(`artifacts/${artifactId}/${workerPath}`, `artifacts/${artifactId}/${workerPath}`, pin)
+        }
+        if (feature === 'offline-asr' && inventory.directories['whisper-ort-wasm']) {
+          for (const path of inventory.directories['whisper-ort-wasm'].members) {
+            const pin = inventory.files.find((file) => file.path === path)
+            if (!pin) throw new Error('RUNTIME_RENDERER_FILE_MISSING')
+            addRendererFile(`artifacts/${artifactId}/${path}`, `artifacts/${artifactId}/${path}`, pin)
           }
         }
-        for (const file of inventory.files) {
-          if (/\.(?:node|dll|so|dylib)$/i.test(file.path))
-            nativeDirectories.add(dirname(`artifacts/${artifactId}/${file.path}`).replaceAll('\\', '/'))
+        if (
+          row.kind === 'runtime' &&
+          Object.keys(inventory.entrypoints).some((role) => closure.roles.includes(role as RuntimeEntryRole))
+        ) {
+          for (const file of inventory.files) {
+            if (/\.(?:node|dll|so|dylib)$/i.test(file.path))
+              nativeDirectories.add(dirname(`artifacts/${artifactId}/${file.path}`).replaceAll('\\', '/'))
+          }
         }
       }
       if (

@@ -129,10 +129,19 @@ export function createRuntimeInstallPlanBook(options: {
     caller.assertCurrent()
     const catalog = await options.provider.catalogSnapshot()
     caller.assertCurrent()
+    const latestAuthority = await currentAuthority(plan.preview.feature)
+    caller.assertCurrent()
+    const latestTarget = await options.readTarget()
+    caller.assertCurrent()
+    const latestCatalog = await options.provider.catalogSnapshot()
+    caller.assertCurrent()
     if (
       identitySnapshot(authority) !== identitySnapshot(plan.authority) ||
       JSON.stringify(target) !== JSON.stringify(plan.target) ||
       catalog.catalogIdentity !== plan.catalogIdentity ||
+      identitySnapshot(latestAuthority) !== identitySnapshot(plan.authority) ||
+      JSON.stringify(latestTarget) !== JSON.stringify(plan.target) ||
+      latestCatalog.catalogIdentity !== plan.catalogIdentity ||
       !plan.artifactIds.every((id) => catalog.catalog.targets.some((row) => row.artifactId === id))
     ) {
       throw new Error('RUNTIME_INSTALL_PLAN_STALE')

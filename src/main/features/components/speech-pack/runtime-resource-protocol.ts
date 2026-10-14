@@ -216,6 +216,7 @@ export function createRuntimeResourceProtocol(options: {
     }
     const abort = new AbortController()
     let handle: Awaited<ReturnType<typeof open>> | null = null
+    let verifiedVersion: string | null = null
     let offset = 0
     let closed = false
     let pendingOperations = 0
@@ -259,7 +260,13 @@ export function createRuntimeResourceProtocol(options: {
           const before = await handle.stat({ bigint: true })
           const named = await lstat(pin.path, { bigint: true })
           await assertLive()
-          if (version(before) !== version(named) || offset > pin.bytes) throw new Error('RUNTIME_RESOURCE_CHANGED')
+          if (
+            !verifiedVersion ||
+            version(before) !== verifiedVersion ||
+            version(named) !== verifiedVersion ||
+            offset > pin.bytes
+          )
+            throw new Error('RUNTIME_RESOURCE_CHANGED')
           if (offset === pin.bytes) {
             if (streamedHash.digest('hex') !== pin.sha256) throw new Error('RUNTIME_RESOURCE_PIN_MISMATCH')
             await close(false)
@@ -272,7 +279,7 @@ export function createRuntimeResourceProtocol(options: {
           const after = await handle.stat({ bigint: true })
           const pathAfter = await lstat(pin.path, { bigint: true })
           await assertLive()
-          if (!bytesRead || version(after) !== version(before) || version(pathAfter) !== version(before)) {
+          if (!bytesRead || version(after) !== verifiedVersion || version(pathAfter) !== verifiedVersion) {
             throw new Error('RUNTIME_RESOURCE_CHANGED')
           }
           if (!active || abort.signal.aborted || closed) throw new Error('RUNTIME_RESOURCE_REVOKED')
@@ -299,6 +306,7 @@ export function createRuntimeResourceProtocol(options: {
             throw new Error('RUNTIME_RESOURCE_REVOKED')
           }
           handle = verified.handle
+          verifiedVersion = version(verified.opened)
         } catch {
           await close(true)
           stream.error(new Error('RUNTIME_RESOURCE_UNAVAILABLE'))

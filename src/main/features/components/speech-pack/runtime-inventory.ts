@@ -82,7 +82,8 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
       'files',
       'licenses',
       'entrypoints',
-      'models'
+      'models',
+      'directories'
     ])
   ) {
     throw new Error('RUNTIME_INVENTORY_INVALID')
@@ -120,6 +121,7 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
     target.arch !== row.target.arch ||
     !sameClosedJson(inventory.entrypoints, row.entrypoints) ||
     !sameClosedJson(inventory.models, row.models) ||
+    !sameClosedJson(inventory.directories, row.directories) ||
     (row.kind === 'runtime' &&
       (!runtime ||
         !row.runtime ||
@@ -289,6 +291,38 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
       }
       localMembers.add(foldedMember)
       modelMembers.add(foldedMember)
+    }
+  }
+  const directories = record(inventory.directories)
+  if (!directories || Object.keys(directories).some((id) => id !== 'whisper-ort-wasm')) {
+    throw new Error('RUNTIME_DIRECTORY_INVENTORY_INVALID')
+  }
+  for (const raw of Object.values(directories)) {
+    const directory = record(raw)
+    if (
+      !directory ||
+      !exactKeys(directory, ['root', 'members']) ||
+      !safePath(directory.root) ||
+      !Array.isArray(directory.members) ||
+      directory.members.length === 0
+    ) {
+      throw new Error('RUNTIME_DIRECTORY_INVENTORY_INVALID')
+    }
+    const members = new Set<string>()
+    for (const member of directory.members) {
+      if (
+        !safePath(member) ||
+        !member.startsWith(`${directory.root}/`) ||
+        members.has(member.toLowerCase()) ||
+        !exact.has(member)
+      ) {
+        throw new Error('RUNTIME_DIRECTORY_INVENTORY_INVALID')
+      }
+      members.add(member.toLowerCase())
+    }
+    const closure = [...exact.keys()].filter((path) => path.startsWith(`${directory.root}/`))
+    if (closure.length !== members.size || closure.some((path) => !members.has(path.toLowerCase()))) {
+      throw new Error('RUNTIME_DIRECTORY_INVENTORY_INVALID')
     }
   }
   for (const raw of inventory.licenses) {

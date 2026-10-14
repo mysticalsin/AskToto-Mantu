@@ -233,10 +233,12 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       const runtimeBase = msg.runtimeBase
       const wasmBase = msg.wasmBase
       if (runtimeBase !== undefined || wasmBase !== undefined) {
-        const validRuntimeResource = (value: string | undefined): value is string =>
+        const validRuntimeResource = (value: string | undefined, allowTrailingSlash = false): value is string =>
           typeof value === 'string' &&
-          /^metis-runtime:\/\/[0-9a-f]{64}\/runtime\/[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*$/.test(value)
-        if (!validRuntimeResource(runtimeBase) || !validRuntimeResource(wasmBase)) {
+          new RegExp(
+            `^metis-runtime:\\/\\/[0-9a-f]{64}\\/runtime\\/[A-Za-z0-9._@+-]+(?:\\/[A-Za-z0-9._@+-]+)*${allowTrailingSlash ? '\\/?' : ''}$`
+          ).test(value)
+        if (!validRuntimeResource(runtimeBase) || !validRuntimeResource(wasmBase, true)) {
           loading = false
           post({ type: 'error', message: 'The offline speech runtime is not available.' })
           return

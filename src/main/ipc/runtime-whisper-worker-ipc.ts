@@ -9,15 +9,18 @@ import {
 
 const OpenRequest = z.object({ requestId: z.string().regex(/^[0-9a-f]{32}$/) }).strict()
 const CloseRequest = z.object({ requestId: z.string().regex(/^[0-9a-f]{32}$/) }).strict()
-type Authority = Readonly<{ readable: boolean; allowed: boolean; identity: string }>
+type Authority = Readonly<{ readable: boolean; allowed: boolean; identity: string; inputAllowed: boolean }>
 type IpcMain = Pick<Electron.IpcMain, 'handle' | 'removeHandler'>
 type Owner = {
   identity: string
   navigation: number
   subscribed: boolean
+  retired?: boolean
   readonly pending: Map<string, AbortController>
   readonly hosts: Map<string, RuntimeWhisperHost>
 }
+const MAX_RUNTIME_WORKER_HOSTS = 2
+const MAX_RUNTIME_WORKER_PENDING = 2
 
 function snapshot(value: Authority): string {
   if (
@@ -42,10 +45,46 @@ export function registerRuntimeWhisperWorkerIpc(options: {
   readonly createHost: (input: {
     lease: RuntimeFeatureLease
     assertCurrent: () => Promise<void>
+    assertAudioCurrent: () => Promise<void>
   }) => Promise<RuntimeWhisperHost>
-}): { cleanup(): Promise<void> } {
+}): { cleanup(): Promise<void>; revokeAll(): Promise<void> } {
   const owners = new WeakMap<Electron.WebContents, Owner>()
   const liveOwners = new Set<Owner>()
+  const usage = (): { pending: number; hosts: number } => {
+    let pending = 0
+    let hosts = 0
+    for (const owner of liveOwners) {
+      pending += owner.pending.size
+      hosts += owner.hosts.size
+    }
+    return { pending, hosts }
+  }
+  const pruneOwner = (owner: Owner): void => {
+    if (owner.retired && owner.pending.size === 0 && owner.hosts.size === 0) liveOwners.delete(owner)
+  }
+  const retainHostUntilSettled = (owner: Owner, requestId: string, host: RuntimeWhisperHost): void => {
+    owner.hosts.set(requestId, host)
+    void host.settled.then(() => {
+      if (owner.hosts.get(requestId) === host) owner.hosts.delete(requestId)
+      pruneOwner(owner)
+    })
+  }
+  const revokeOwner = async (owner: Owner): Promise<void> => {
+    owner.identity = randomBytes(16).toString('hex')
+    owner.navigation += 1
+    for (const pending of owner.pending.values()) pending.abort(new Error('RUNTIME_WORKER_REVOKED'))
+    await Promise.all(
+      [...owner.hosts].map(async ([requestId, host]) => {
+        try {
+          await host.stop()
+          if (owner.hosts.get(requestId) === host) owner.hosts.delete(requestId)
+        } catch {
+          // Preserve the owner and its lease until the real renderer exit is observed.
+        }
+      })
+    )
+    pruneOwner(owner)
+  }
 
   const ownerFor = (event: Electron.IpcMainInvokeEvent): { owner: Owner; assertCurrent: () => void } => {
     options.assertMainWindow(event)
@@ -66,31 +105,11 @@ export function registerRuntimeWhisperWorkerIpc(options: {
       owner.subscribed = true
       sender.on('did-start-navigation', (details) => {
         if (!details.isMainFrame) return
-        owner!.navigation += 1
-        owner!.identity = randomBytes(16).toString('hex')
-        for (const pending of owner!.pending.values()) pending.abort(new Error('RUNTIME_WORKER_STALE'))
-        for (const [requestId, host] of owner!.hosts) {
-          void host
-            .stop()
-            .then(() => {
-              if (owner!.hosts.get(requestId) === host) owner!.hosts.delete(requestId)
-            })
-            .catch(() => undefined)
-        }
-        owner!.pending.clear()
+        void revokeOwner(owner!).catch(() => undefined)
       })
       sender.once('destroyed', () => {
-        for (const pending of owner!.pending.values()) pending.abort(new Error('RUNTIME_WORKER_STALE'))
-        for (const [requestId, host] of owner!.hosts) {
-          void host
-            .stop()
-            .then(() => {
-              if (owner!.hosts.get(requestId) === host) owner!.hosts.delete(requestId)
-            })
-            .catch(() => undefined)
-        }
-        owner!.pending.clear()
-        liveOwners.delete(owner!)
+        owner!.retired = true
+        void revokeOwner(owner!).catch(() => undefined)
       })
     }
     const frame = event.senderFrame
@@ -128,6 +147,13 @@ export function registerRuntimeWhisperWorkerIpc(options: {
     )
       return { ok: false }
     const { requestId } = parsed.data
+    const counts = usage()
+    if (
+      counts.pending >= MAX_RUNTIME_WORKER_PENDING ||
+      counts.hosts >= MAX_RUNTIME_WORKER_HOSTS ||
+      context.owner.pending.size + context.owner.hosts.size >= 1
+    )
+      return { ok: false }
     const controller = new AbortController()
     context.owner.pending.set(requestId, controller)
     let lease: RuntimeFeatureLease | null = null
@@ -144,9 +170,16 @@ export function registerRuntimeWhisperWorkerIpc(options: {
           throw new Error('RUNTIME_WORKER_AUTHORITY_CHANGED')
         context.assertCurrent()
       }
+      const assertAudioCurrent = async (): Promise<void> => {
+        await assertCurrent()
+        const authority = await options.readAuthority()
+        context.assertCurrent()
+        if (!authority.inputAllowed) throw new Error('RUNTIME_WORKER_CAPTURE_NOT_AUTHORIZED')
+        if (snapshot(authority) !== authorityIdentity) throw new Error('RUNTIME_WORKER_AUTHORITY_CHANGED')
+      }
       await assertCurrent()
-      host = await options.createHost({ lease, assertCurrent })
-      context.owner.hosts.set(requestId, host)
+      host = await options.createHost({ lease, assertCurrent, assertAudioCurrent })
+      retainHostUntilSettled(context.owner, requestId, host)
       lease = null // the host owns the lease until its observed renderer-process exit
       await assertCurrent()
       if (context.owner.pending.get(requestId) !== controller) throw new Error('RUNTIME_WORKER_CANCELLED')
@@ -158,7 +191,7 @@ export function registerRuntimeWhisperWorkerIpc(options: {
       if (error instanceof RetainedRuntimeWhisperHostError) {
         host = error.host
         lease = null
-        context.owner.hosts.set(requestId, host)
+        retainHostUntilSettled(context.owner, requestId, host)
       }
       if (host) {
         try {
@@ -172,6 +205,7 @@ export function registerRuntimeWhisperWorkerIpc(options: {
       return { ok: false }
     } finally {
       if (context.owner.pending.get(requestId) === controller) context.owner.pending.delete(requestId)
+      pruneOwner(context.owner)
     }
   })
 
@@ -183,9 +217,10 @@ export function registerRuntimeWhisperWorkerIpc(options: {
     context.owner.pending.get(requestId)?.abort(new Error('RUNTIME_WORKER_CANCELLED'))
     const host = context.owner.hosts.get(requestId)
     if (!host) return { ok: true }
-    context.owner.hosts.delete(requestId)
     try {
       await host.stop()
+      if (context.owner.hosts.get(requestId) === host) context.owner.hosts.delete(requestId)
+      pruneOwner(context.owner)
       context.assertCurrent()
       return { ok: true }
     } catch {
@@ -197,17 +232,15 @@ export function registerRuntimeWhisperWorkerIpc(options: {
 
   let cleaned = false
   return {
+    async revokeAll(): Promise<void> {
+      await Promise.all([...liveOwners].map((owner) => revokeOwner(owner)))
+    },
     async cleanup(): Promise<void> {
       if (cleaned) return
       cleaned = true
       options.ipcMain.removeHandler(IPC.runtimeWhisperWorkerOpen)
       options.ipcMain.removeHandler(IPC.runtimeWhisperWorkerClose)
-      const stopping: Promise<void>[] = []
-      for (const owner of liveOwners) {
-        for (const pending of owner.pending.values()) pending.abort(new Error('RUNTIME_WORKER_SHUTDOWN'))
-        for (const host of owner.hosts.values()) stopping.push(host.stop())
-      }
-      await Promise.all(stopping)
+      await Promise.all([...liveOwners].map((owner) => revokeOwner(owner)))
     }
   }
 }
