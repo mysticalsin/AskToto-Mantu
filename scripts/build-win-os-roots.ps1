@@ -27,6 +27,8 @@ New-Item -ItemType Directory -Force -Path $resourceRoot | Out-Null
 $output = Join-Path $resourceRoot 'osroots.exe'
 $object = Join-Path $tempRoot 'metis-osroots.obj'
 $commandFile = Join-Path $tempRoot 'metis-build-osroots.cmd'
+$stdoutLog = Join-Path $tempRoot 'metis-osroots-build-stdout.log'
+$stderrLog = Join-Path $tempRoot 'metis-osroots-build-stderr.log'
 $command = @"
 @echo off
 call "$vcvars" >nul
@@ -42,23 +44,79 @@ if not errorlevel 1 exit /b 1
 exit /b 0
 "@
 Set-Content -LiteralPath $commandFile -Value $command -Encoding Ascii
+
 $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
 $startInfo.FileName = 'cmd.exe'
 $startInfo.Arguments = '/d /s /c ""' + $commandFile + '""'
 $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
+$startInfo.RedirectStandardOutput = $true
+$startInfo.RedirectStandardError = $true
 $build = [System.Diagnostics.Process]::new()
 $build.StartInfo = $startInfo
 if (-not $build.Start()) { throw 'The Windows OS-root compiler process did not start.' }
-if (-not $build.WaitForExit(60000)) {
-  try { $build.Kill($true) } catch {}
-  $build.Dispose()
-  throw 'The Windows OS-root build exceeded its 60-second process deadline.'
+$maxLogCharacters = 65536
+$stdoutCapture = [System.Text.StringBuilder]::new()
+$stderrCapture = [System.Text.StringBuilder]::new()
+$stdoutBuffer = [char[]]::new(4096)
+$stderrBuffer = [char[]]::new(4096)
+$stdoutTask = $build.StandardOutput.ReadAsync($stdoutBuffer, 0, $stdoutBuffer.Length)
+$stderrTask = $build.StandardError.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length)
+$processExitTask = $build.WaitForExitAsync()
+$buildClock = [System.Diagnostics.Stopwatch]::StartNew()
+$drainClock = $null
+$timedOut = $false
+while ($true) {
+  if ($processExitTask.IsCompleted -and $null -eq $drainClock) {
+    $drainClock = [System.Diagnostics.Stopwatch]::StartNew()
+  }
+  if (-not $processExitTask.IsCompleted -and -not $timedOut -and $buildClock.ElapsedMilliseconds -ge 60000) {
+    $timedOut = $true
+    $drainClock = [System.Diagnostics.Stopwatch]::StartNew()
+    try { $build.Kill($true) } catch {}
+  }
+  if ($processExitTask.IsCompleted -and $null -eq $stdoutTask -and $null -eq $stderrTask) { break }
+  if ($null -ne $drainClock -and $drainClock.ElapsedMilliseconds -ge 5000) { break }
+
+  $pendingTasks = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
+  if ($null -ne $stdoutTask) { [void]$pendingTasks.Add($stdoutTask) }
+  if ($null -ne $stderrTask) { [void]$pendingTasks.Add($stderrTask) }
+  if (-not $processExitTask.IsCompleted) { [void]$pendingTasks.Add($processExitTask) }
+  [void]$pendingTasks.Add([System.Threading.Tasks.Task]::Delay(50))
+  $waitTask = [System.Threading.Tasks.Task]::WhenAny($pendingTasks.ToArray())
+  $null = $waitTask.GetAwaiter().GetResult()
+
+  if ($null -ne $stdoutTask -and $stdoutTask.IsCompleted) {
+    try { $readCount = $stdoutTask.GetAwaiter().GetResult() } catch { $readCount = 0 }
+    if ($readCount -eq 0) {
+      $stdoutTask = $null
+    } else {
+      $remaining = $maxLogCharacters - $stdoutCapture.Length
+      if ($remaining -gt 0) { [void]$stdoutCapture.Append($stdoutBuffer, 0, [Math]::Min($readCount, $remaining)) }
+      $stdoutTask = $build.StandardOutput.ReadAsync($stdoutBuffer, 0, $stdoutBuffer.Length)
+    }
+  }
+  if ($null -ne $stderrTask -and $stderrTask.IsCompleted) {
+    try { $readCount = $stderrTask.GetAwaiter().GetResult() } catch { $readCount = 0 }
+    if ($readCount -eq 0) {
+      $stderrTask = $null
+    } else {
+      $remaining = $maxLogCharacters - $stderrCapture.Length
+      if ($remaining -gt 0) { [void]$stderrCapture.Append($stderrBuffer, 0, [Math]::Min($readCount, $remaining)) }
+      $stderrTask = $build.StandardError.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length)
+    }
+  }
 }
-$exitCode = $build.ExitCode
+$build.StandardOutput.Close()
+$build.StandardError.Close()
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($stdoutLog, $stdoutCapture.ToString(), $utf8NoBom)
+[System.IO.File]::WriteAllText($stderrLog, $stderrCapture.ToString(), $utf8NoBom)
+$exitCode = if ($processExitTask.IsCompleted) { $build.ExitCode } else { 1 }
 $build.Dispose()
+if ($timedOut) { throw 'WIN_OSROOT_BUILD_TIMEOUT_60S' }
 if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $output -PathType Leaf)) {
-  throw "The Windows OS-root helper failed its x64 build and smoke checks (exit code $exitCode)."
+  throw 'WIN_OSROOT_BUILD_FAILED'
 }
 
 $bytes = [System.IO.File]::ReadAllBytes($output)
@@ -72,5 +130,5 @@ $manifest = [ordered]@{
 }
 $manifestPath = Join-Path $resourceRoot 'osroots.manifest.json'
 [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Compress) + "`n", [System.Text.UTF8Encoding]::new($false))
-Remove-Item -LiteralPath $object, $commandFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $object, $commandFile, $stdoutLog, $stderrLog -Force -ErrorAction SilentlyContinue
 Write-Output 'Built and inventoried the unsigned x64 Windows OS-root helper.'
