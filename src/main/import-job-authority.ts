@@ -18,6 +18,11 @@ export interface ImportJobAuthorityDependencies {
   currentObservation(): SettingsObservation | null
 }
 
+export interface ImportOperationAuthority {
+  assertCurrent(): void
+  refreshSameScope(): Promise<void>
+}
+
 function importWriteScope(settings: Settings): string {
   return JSON.stringify({
     meetingsFolder: settings.meetingsFolder,
@@ -189,6 +194,51 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     }
   }
 
+  async function captureOperation(): Promise<ImportOperationAuthority> {
+    await refreshSettings()
+    const observation = currentObservation()
+    const authGeneration = deps.authGeneration()
+    const expectedRevision = authorityRevision
+    const expectedScope = lastAuthorityScope
+    const expectedSettings = importWriteScope(observation.settings)
+    let expectedEpoch = observation.epoch
+
+    function assertCurrent(): void {
+      const current = currentObservation()
+      if (
+        authorityRevision !== expectedRevision ||
+        deps.authGeneration() !== authGeneration ||
+        lastVerifiedEpoch !== current.epoch ||
+        current.epoch !== expectedEpoch ||
+        importWriteScope(current.settings) !== expectedSettings ||
+        lastAuthorityScope !== expectedScope
+      ) {
+        throw unavailable()
+      }
+    }
+
+    return {
+      assertCurrent,
+      async refreshSameScope(): Promise<void> {
+        assertCurrent()
+        const refreshed = await refreshSettings()
+        const current = currentObservation()
+        if (
+          authorityRevision !== expectedRevision ||
+          deps.authGeneration() !== authGeneration ||
+          importWriteScope(refreshed) !== expectedSettings ||
+          lastAuthorityScope !== expectedScope ||
+          current.settings !== refreshed ||
+          current.epoch !== lastVerifiedEpoch
+        ) {
+          throw unavailable()
+        }
+        expectedEpoch = current.epoch
+        assertCurrent()
+      }
+    }
+  }
+
   async function assertAdmissionAllowed(): Promise<Settings> {
     const settings = await refreshSettings()
     if (!canRetainImportedTranscript(settings)) throw new ImportRetentionBlockedError()
@@ -264,6 +314,7 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
   }
 
   return {
+    captureOperation,
     currentSettings,
     refreshSettings,
     currentRetentionState,

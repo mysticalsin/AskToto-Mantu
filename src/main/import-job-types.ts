@@ -1,4 +1,5 @@
 import type { SaveMeeting, TranscriptLine } from '@shared/ipc'
+import type { ImportPersistenceState } from '@shared/import-jobs'
 import type { ImportRetentionState } from './import-retention-policy'
 import type { ImportAsrDecodeAdmission, ImportAsrLanguageProbe, ImportAsrTranscriber } from './import-asr-admission'
 
@@ -85,6 +86,12 @@ export interface ImportSpeakerAttempt {
   readonly attemptId: number
 }
 
+/** Main-owned persistent authority for one exact job attempt and its original scope. */
+export interface ImportJobAttemptAuthority {
+  assertCurrent(): void
+  retire(): void
+}
+
 /** OS memory snapshot taken exactly when a queued job claims the sole decoder admission slot. */
 export interface ImportDecodeMemoryAdmission {
   totalMemoryBytes: unknown
@@ -157,6 +164,14 @@ export interface ImportJobManagerDeps {
   refreshRetentionStatus?: () => Promise<ImportRetentionState>
   /** Current authenticated-session check for explicit held-job resume boundaries. */
   isImportAuthorized?: () => boolean
+  /** Production checkpoint admission is closed until a bounded reader and trusted origin are installed. */
+  persistenceState?: () => ImportPersistenceState
+  /** Captures original owner/root/key/policy/source association; Resume must prove the saved association. */
+  captureAttemptAuthority?: (
+    job: ImportJob,
+    attempt: ImportSpeakerAttempt,
+    explicitResume: boolean
+  ) => ImportJobAttemptAuthority
   /** Revalidates the exact source fingerprint before explicit resume. */
   validateSource?: (job: ImportJob) => void | Promise<void>
   /** Current OS free memory in bytes. Injected by tests; production reads node:os freemem(). */

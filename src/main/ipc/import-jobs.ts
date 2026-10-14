@@ -6,11 +6,14 @@ import {
   ImportJobIdSchema,
   IPC,
   type ImportCapabilityState,
+  type ImportPersistenceState,
   type ImportPolicyState,
   type ImportJobView
 } from '@shared/ipc'
 import { consumePickedAudio as consumePickedAudioDefault, offerAudioPaths, pickAudioFile } from '../import-audio'
 import type { ImportJob, ImportJobManager } from '../import-jobs'
+import { ImportCheckpointUnavailableError } from '../import-job-checkpoint-contract'
+import type { ImportOperationAuthority } from '../import-job-authority'
 
 export interface ImportJobsIpcOptions {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -19,10 +22,12 @@ export interface ImportJobsIpcOptions {
   requireAuth: () => boolean
   getImportJobs: () => ImportJobManager
   refreshImportAuthority: () => Promise<unknown>
+  captureImportOperation: () => Promise<ImportOperationAuthority>
   assertImportAdmissionAllowed: () => unknown | Promise<unknown>
   assertImportAdmissionCurrent: () => void
   currentImportRetentionState: () => ImportPolicyState
   currentImportCapabilityState: () => ImportCapabilityState
+  currentImportPersistenceState: () => ImportPersistenceState
   importJobView: (job: ImportJob) => ImportJobView
   consumeAudioToken?: typeof consumePickedAudioDefault
 }
@@ -36,10 +41,12 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     requireAuth,
     getImportJobs,
     refreshImportAuthority,
+    captureImportOperation,
     assertImportAdmissionAllowed,
     assertImportAdmissionCurrent,
     currentImportRetentionState,
     currentImportCapabilityState,
+    currentImportPersistenceState,
     importJobView,
     consumeAudioToken = consumePickedAudioDefault
   } = options
@@ -59,17 +66,25 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
   ipcMain.handle(IPC.importAudioStart, async (event, raw) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const operation = await captureImportOperation()
+    operation.assertCurrent()
     const parsed = ImportAudioStartSchema.parse(raw)
+    assertImportPersistenceConfigured(currentImportPersistenceState)
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     const jobs = getImportJobs()
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     assertMainWindow(event)
     assertImportAdmissionCurrent()
+    assertImportPersistenceConfigured(currentImportPersistenceState)
     const source = consumeAudioToken(parsed.token)
     const started = await jobs.start(source)
+    operation.assertCurrent()
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     assertImportAdmissionCurrent()
@@ -78,17 +93,24 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
   ipcMain.handle(IPC.importAudioStartBatch, async (event, raw) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const operation = await captureImportOperation()
+    operation.assertCurrent()
     const parsed = ImportAudioStartBatchSchema.parse(raw)
+    assertImportPersistenceConfigured(currentImportPersistenceState)
     // Refresh before touching one-shot tokens, then synchronously recheck before every consume. Keeping
     // the consume loop free of awaits prevents a mid-batch policy transition from consuming a prefix.
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     const jobs = getImportJobs()
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     const sources = []
     const errors: string[] = []
     for (const token of parsed.tokens) {
       assertMainWindow(event)
+      operation.assertCurrent()
       assertImportAdmissionCurrent()
+      assertImportPersistenceConfigured(currentImportPersistenceState)
       try {
         sources.push(consumeAudioToken(token))
       } catch (error) {
@@ -98,9 +120,11 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
     assertImportAdmissionCurrent()
     const started = await jobs.startMany(sources)
+    operation.assertCurrent()
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     assertImportAdmissionCurrent()
@@ -110,20 +134,28 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     assertMainWindow(event)
     if (!requireAuth()) return unavailableSnapshot()
     try {
-      await refreshImportAuthority()
+      const operation = await captureImportOperation()
+      operation.assertCurrent()
       const snapshot = await getImportJobs().snapshot()
+      operation.assertCurrent()
       assertMainWindow(event)
       if (!requireAuth()) return unavailableSnapshot()
-      await refreshImportAuthority()
+      await operation.refreshSameScope()
+      operation.assertCurrent()
       assertMainWindow(event)
       if (!requireAuth()) return unavailableSnapshot()
       const currentPolicyState = currentImportRetentionState()
+      const persistenceState = currentImportPersistenceState()
       return {
         ...snapshot,
-        jobs: requireAuth() && currentPolicyState === 'allowed' ? snapshot.jobs.map(importJobView) : [],
+        jobs:
+          requireAuth() && currentPolicyState === 'allowed' && persistenceState === 'configured'
+            ? snapshot.jobs.map(importJobView)
+            : [],
         policyState: currentPolicyState,
         policyBlocked: currentPolicyState !== 'allowed',
-        capabilityState: currentImportCapabilityState()
+        capabilityState: currentImportCapabilityState(),
+        persistenceState
       }
     } catch {
       return unavailableSnapshot()
@@ -132,18 +164,27 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
   ipcMain.handle(IPC.importJobCancel, async (event, raw) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const operation = await captureImportOperation()
+    operation.assertCurrent()
     const parsed = ImportJobIdSchema.parse(raw)
+    assertImportPersistenceConfigured(currentImportPersistenceState)
     await getImportJobs().cancel(parsed.jobId)
+    operation.assertCurrent()
   })
   ipcMain.handle(IPC.importJobResume, async (event, raw) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const operation = await captureImportOperation()
+    operation.assertCurrent()
     const parsed = ImportJobIdSchema.parse(raw)
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     const resumed = await getImportJobs().resume(parsed.jobId)
+    operation.assertCurrent()
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     await assertImportAdmissionAllowed()
+    operation.assertCurrent()
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     assertImportAdmissionCurrent()
@@ -152,8 +193,11 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
   ipcMain.handle(IPC.importJobRemove, async (event, raw) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const operation = await captureImportOperation()
+    operation.assertCurrent()
     const parsed = ImportJobIdSchema.parse(raw)
     await getImportJobs().remove(parsed.jobId)
+    operation.assertCurrent()
   })
 }
 
@@ -163,9 +207,14 @@ function unavailableSnapshot() {
     policyBlocked: true,
     policyState: 'unavailable' as const,
     capabilityState: 'unavailable' as const,
+    persistenceState: 'unconfigured' as const,
     heldJobIds: [],
     policyHeldJobIds: [],
     inventoryOverflow: false,
     policyHoldOverflow: false
   }
+}
+
+function assertImportPersistenceConfigured(state: () => ImportPersistenceState): void {
+  if (state() !== 'configured') throw new ImportCheckpointUnavailableError('UNCONFIGURED')
 }

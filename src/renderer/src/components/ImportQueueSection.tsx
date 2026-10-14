@@ -1,17 +1,30 @@
-import type { ImportAssetsProgress, ImportCapabilityState, ImportJobView, ImportPolicyState } from '@shared/ipc'
+import type {
+  ImportAssetsProgress,
+  ImportCapabilityState,
+  ImportJobView,
+  ImportPersistenceState,
+  ImportPolicyState
+} from '@shared/ipc'
 import { Upload } from 'lucide-react'
 import { ImportQueue } from './ImportQueue'
 import { TextButton } from './ui'
+import { importBlockNotice } from './useImportQueue'
 
 export function ImportActionButton({
-  disabled,
-  title,
+  policyState,
+  capabilityState,
+  persistenceState,
   onClick
 }: {
-  disabled: boolean
-  title: string
+  policyState: ImportPolicyState
+  capabilityState: ImportCapabilityState
+  persistenceState: ImportPersistenceState
   onClick: () => void
 }): JSX.Element {
+  const disabled = policyState !== 'allowed' || capabilityState !== 'available' || persistenceState !== 'configured'
+  const title = disabled
+    ? importBlockNotice(policyState, capabilityState, persistenceState)
+    : 'Import one or more recordings. They keep processing in the background while you navigate.'
   return (
     <TextButton icon={Upload} onClick={onClick} disabled={disabled} title={title}>
       Import meetings
@@ -23,6 +36,7 @@ export function ImportQueueSection({
   jobs,
   policyState,
   capabilityState,
+  persistenceState,
   policyHeldJobIds,
   inventoryOverflow,
   policyHoldOverflow,
@@ -37,6 +51,7 @@ export function ImportQueueSection({
   jobs: ImportJobView[]
   policyState: ImportPolicyState
   capabilityState: ImportCapabilityState
+  persistenceState: ImportPersistenceState
   policyHeldJobIds: string[]
   inventoryOverflow: boolean
   policyHoldOverflow: boolean
@@ -48,7 +63,8 @@ export function ImportQueueSection({
   onDismiss: (jobId: string) => void
   onOpenMeeting: (file: string) => void
 }): JSX.Element {
-  const actionsBlocked = policyState !== 'allowed' || capabilityState !== 'available'
+  const actionsBlocked =
+    policyState !== 'allowed' || capabilityState !== 'available' || persistenceState !== 'configured'
   return (
     <>
       {policyState === 'unavailable' && (
@@ -63,16 +79,30 @@ export function ImportQueueSection({
           prevents import. Your original recording is unchanged.
         </p>
       )}
-      {policyState === 'allowed' && capabilityState === 'cloud-only-unsupported' && (
-        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
-          Recording import is unavailable because this installation does not support its configured cloud-only speech
-          route. Existing recordings are unchanged.
-        </p>
-      )}
-      {policyState === 'allowed' && capabilityState === 'unavailable' && (
+      {policyState === 'allowed' &&
+        persistenceState === 'configured' &&
+        capabilityState === 'cloud-only-unsupported' && (
+          <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+            Recording import is unavailable because this installation does not support its configured cloud-only speech
+            route. Existing recordings are unchanged.
+          </p>
+        )}
+      {policyState === 'allowed' && persistenceState === 'configured' && capabilityState === 'unavailable' && (
         <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
           Import is paused because the available speech capability could not be verified. Existing recordings are
           unchanged.
+        </p>
+      )}
+      {policyState === 'allowed' && persistenceState === 'unconfigured' && (
+        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+          Saved imports are paused because bounded checkpoint recovery is not configured. Existing checkpoint and
+          recording files are unchanged.
+        </p>
+      )}
+      {policyState === 'allowed' && persistenceState === 'invalid' && (
+        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+          Saved imports are paused because checkpoint recovery configuration could not be validated. Existing checkpoint
+          and recording files are unchanged.
         </p>
       )}
       {!actionsBlocked && (policyHeldJobIds.length > 0 || policyHoldOverflow) && (

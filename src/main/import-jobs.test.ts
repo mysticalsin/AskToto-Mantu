@@ -173,6 +173,59 @@ function leadingSilenceTwoWindowPcm(): Float32Array {
 }
 
 describe('ImportJobManager', () => {
+  it('keeps manager start and explicit checkpoint resume closed until bounded persistence is configured', async () => {
+    const store = new MemoryStore()
+    store.jobs.set('legacy-job', {
+      jobId: 'legacy-job',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Recording',
+      state: 'failed',
+      cursor: 0,
+      totalChunks: 1,
+      lines: [],
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const loadHeld = vi.spyOn(store, 'loadHeld')
+    const { manager } = createManager({ store, persistenceState: () => 'unconfigured' })
+
+    await expect(manager.start(source)).rejects.toMatchObject({ reason: 'UNCONFIGURED' })
+    expect(store.jobs.size).toBe(1)
+    await manager.recover()
+    await expect(manager.resume('legacy-job')).rejects.toMatchObject({ reason: 'UNCONFIGURED' })
+    expect(loadHeld).not.toHaveBeenCalled()
+    expect(manager.get('legacy-job')).toBeUndefined()
+  })
+
+  it('revalidates the source before resuming a same-process failed job with a durable cursor', async () => {
+    const validateSource = vi.fn(() => {
+      throw new Error('Recording source changed.')
+    })
+    const { manager, store, decode } = createManager({ validateSource })
+    await store.save({
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interrupted import',
+      state: 'failed',
+      cursor: 1,
+      totalChunks: 2,
+      lines: [{ t: source.mtimeMs, speaker: 'unknown', text: 'durable line' }],
+      createdAt: 1,
+      updatedAt: 1
+    })
+    await manager.recover()
+    await expect(manager.resume('job-1')).rejects.toThrow('Recording source changed.')
+    expect(validateSource).toHaveBeenCalledWith(expect.objectContaining({ cursor: 1 }))
+    expect(decode).not.toHaveBeenCalled()
+    expect(manager.get('job-1')).toMatchObject({ state: 'failed', cursor: 1, lines: [{ text: 'durable line' }] })
+  })
+
   it('pins the persona active at start() into the job so a mid-queue persona switch cannot reshape the recap', async () => {
     let liveMode = 'sales'
     const { manager, store } = createManager({ personaMode: () => liveMode })

@@ -2,6 +2,14 @@ import { freemem, totalmem } from 'node:os'
 import { hasVadV2MemoryHeadroom } from '@shared/asr-hardware-preference'
 import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
 import * as ImportRetention from './import-retention-policy'
+import { ImportCheckpointUnavailableError } from './import-job-checkpoint-contract'
+import {
+  acceptImportDecodedChunk,
+  importPcmOf,
+  takeImportPcm,
+  type ImportDecodedAudioHost,
+  type ImportPcmBuffer
+} from './import-job-decoded-audio'
 import type { ImportAsrDecodeAdmission, ImportAsrLanguageProbe, ImportAsrTranscriber } from './import-asr-admission'
 import {
   consumeVadPcm,
@@ -24,6 +32,7 @@ import type {
   ImportJob,
   ImportJobStore,
   ImportSpeakerAttempt,
+  ImportJobAttemptAuthority,
   ImportDecodeMemoryAdmission,
   ImportJobsSnapshot,
   ImportJobManagerDeps,
@@ -36,6 +45,7 @@ export type {
   ImportJob,
   ImportJobStore,
   ImportSpeakerAttempt,
+  ImportJobAttemptAuthority,
   ImportDecodeMemoryAdmission,
   ImportJobsSnapshot,
   ImportJobManagerDeps,
@@ -52,12 +62,6 @@ export const MAX_CONCURRENT_DECODES = 1
 /** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
 export const MAX_CONCURRENT_IMPORTS = MAX_CONCURRENT_DECODES
 
-const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
-const SAMPLE_RATE = 16_000
-/** Whole-recording PCM is buffered in memory for VAD segmentation. 90 minutes at 16kHz f32 is ~345MB —
- *  acceptable for a desktop import; past it the job degrades to the legacy fixed-slab pipeline rather
- *  than risking an OOM (`vad-v2` is dropped and the buffered slabs are transcribed as-is). */
-const VAD_MAX_SAMPLES = SAMPLE_RATE * 60 * 90
 /** Majority-vote sample points across the recording's windows. Five spread probes beat the old single
  *  window-0 probe because window 0 is disproportionately a greeting in the OTHER language ("Hello" on a
  *  French call) — the documented 2026-08-05 failure that translated a whole meeting. */
@@ -65,6 +69,7 @@ const ATTEMPT_STOPPED = Symbol('import-attempt-stopped')
 
 interface SpeakerAttemptState {
   identity: ImportSpeakerAttempt
+  authority?: ImportJobAttemptAuthority
   accepting: boolean
   tailAllowed: boolean
   speakerOwned: boolean
@@ -112,7 +117,7 @@ export class ImportJobManager {
   private currentRetentionState: ImportRetentionState = 'unavailable'
   private readonly queue: string[] = []
   /** In-memory only: decoded PCM slabs per in-flight vad-v2 job (never persisted; resume re-decodes). */
-  private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
+  private readonly pcmByJob = new Map<string, ImportPcmBuffer>()
   /** Jobs that occupy the decoded-audio admission slot. Recap never belongs here. */
   private readonly decodeSlotIds = new Set<string>()
   /** Jobs whose whole-recording PCM has moved from pcmByJob into the VAD/ASR consumer's local scope. */
@@ -121,6 +126,7 @@ export class ImportJobManager {
   private readonly activeJobIds = new Set<string>()
   /** Exact transient ownership for the currently admitted attempt of each durable job. */
   private readonly speakerAttempts = new Map<string, SpeakerAttemptState>()
+  private readonly explicitResumeJobs = new Set<string>()
   private nextAttemptId = 0
   private transcribeLock: Promise<void> = Promise.resolve()
   private loaded = false
@@ -178,7 +184,9 @@ export class ImportJobManager {
 
   /** Create N durable jobs, then pump so as many as `maxConcurrent` begin decoding. */
   async startMany(sources: ImportJobSource[]): Promise<ImportJob[]> {
+    this.assertPersistenceConfigured()
     await this.refreshRetentionStatus()
+    this.assertPersistenceConfigured()
     this.retentionPolicy.assertAllowed()
     const started: string[] = []
     for (const source of sources) {
@@ -280,7 +288,14 @@ export class ImportJobManager {
     this.assertImportAuthorized()
     await this.refreshRetentionStatus()
     this.assertImportAuthorized()
-    const job = await this.retention.resume(jobId, this.deps.store, this.resumeHost())
+    this.explicitResumeJobs.add(jobId)
+    let job: ImportJob
+    try {
+      job = await this.retention.resume(jobId, this.deps.store, this.resumeHost())
+    } catch (error) {
+      this.explicitResumeJobs.delete(jobId)
+      throw error
+    }
     this.assertImportAuthorized()
     return job
   }
@@ -342,152 +357,36 @@ export class ImportJobManager {
 
   /** Called only by the authenticated hidden decoder, one chunk at a time. */
   async acceptDecodedChunk(jobId: string, seq: number, totalChunks: number, samples: Float32Array): Promise<void> {
-    const job = this.requireJob(jobId)
-    if (!this.retentionPolicy.allowed()) {
-      await this.holdForPolicy(job)
-      return
-    }
-    const attempt = this.speakerAttempts.get(jobId)
-    if (job.state === 'cancelled') throw new Error('Import was cancelled.')
-    if (terminal(job.state)) throw new Error('Import is no longer accepting audio.')
-    if (!this.attemptAccepts(attempt)) throw new Error('Import is not accepting audio for this attempt.')
-    if (!Number.isInteger(seq) || seq < 0 || !Number.isInteger(totalChunks) || totalChunks < 0) {
-      throw new Error('Invalid decoded audio chunk.')
-    }
-    // A window should never exceed one decode chunk plus a few seconds of slack for FFmpeg/decoder jitter.
-    if (samples.length > 16_000 * (IMPORT_CHUNK_SECONDS + 5)) throw new Error('Decoded audio chunk is too large.')
-    // vad-v2: cursor counts WINDOWS (phase 2), not slabs — order is enforced against the count of
-    // slabs already buffered instead. Legacy keeps the original cursor-based replay/order contract.
-    const expectedSeq = job.pipeline === 'vad-v2' ? this.pcmOf(job.jobId).slabs.length : job.cursor
-    if (seq < expectedSeq) return // replay during resume: this checkpoint already exists
-    if (seq !== expectedSeq) {
-      await this.fail(job, `Decoded audio arrived out of order (expected chunk ${expectedSeq + 1}).`)
-      throw new Error(job.error)
-    }
-    if (job.totalChunks && job.totalChunks !== totalChunks) {
-      await this.fail(job, 'The decoder changed the recording chunk count while importing.')
-      throw new Error(job.error)
-    }
-
-    if (totalChunks > 0) job.totalChunks = totalChunks
-
-    // MQA-235 (vad-v2): phase 1 only BUFFERS — segmentation and ASR happen in finishDecoding, where the
-    // whole recording is known. Past the memory cap the job degrades to the legacy slab pipeline: the
-    // backlog is transcribed slab-by-slab right here, then this and every later slab take the legacy
-    // branch below.
-    let drainBufferedPcm = false
-    let ownsRetainedPcm = false
-    try {
-      if (job.pipeline === 'vad-v2') {
-        const buf = this.pcmOf(job.jobId)
-        if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
-          // Own copy: the decoder reuses its buffer across chunks.
-          buf.slabs.push(samples.slice())
-          buf.samples += samples.length
-          return
-        }
-        // Claim the retention marker before changing the durable pipeline or awaiting persistence. The
-        // backlog is still reachable through pcmByJob during that await, and optional local work must
-        // remain deferred until drainLegacyBacklog() releases it.
-        this.retainedPcmConsumerIds.add(job.jobId)
-        ownsRetainedPcm = true
-        job.pipeline = undefined
-        job.chunkSec = IMPORT_CHUNK_SECONDS
-        await this.persist(job)
-        if (!this.attemptAccepts(attempt)) return
-        drainBufferedPcm = true
-      }
-
-      // The legacy overflow path temporarily owns the entire buffered recording while draining it. Keep
-      // admission closed until that helper's stack has unwound; recovered legacy jobs share the same guard
-      // so cancellation cannot overlap even their bounded current slab with the next decoder.
-      if (!ownsRetainedPcm) {
-        this.retainedPcmConsumerIds.add(job.jobId)
-        ownsRetainedPcm = true
-      }
-      if (drainBufferedPcm && !(await this.drainLegacyBacklog(job, attempt))) return
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return
-      job.state = 'transcribing'
-      await this.persist(job)
-      if (!this.attemptAccepts(attempt)) return
-      if (!(await this.legacyTranscribeSlab(job, seq, samples, attempt))) return
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return
-      job.state = 'decoding'
-      await this.persist(job)
-    } catch (error) {
-      if (terminal(job.state)) return
-      if (ImportRetention.isImportRetentionRefusal(error)) await this.holdForPolicy(job, 'policy')
-      else await this.fail(job, message(error))
-      throw error
-    } finally {
-      if (ownsRetainedPcm) this.retainedPcmConsumerIds.delete(job.jobId)
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) await this.releaseAdmissionSlot(job.jobId, attempt)
-    }
+    await acceptImportDecodedChunk(this.decodedAudioHost(), jobId, seq, totalChunks, samples)
   }
 
-  /** Drain the whole-recording backlog in its own stack so it is unreachable before admission releases. */
-  private async drainLegacyBacklog(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
-    const backlog = this.takePcm(job.jobId)
-    let backlogSeq = 0
-    for (const slab of backlog) {
-      if (!(await this.legacyTranscribeSlab(job, backlogSeq++, slab, attempt))) return false
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return false
-    }
-    return true
-  }
-
-  /** One legacy fixed-slab transcription step: ASR the slab, append the line, advance the slab cursor. */
-  private async legacyTranscribeSlab(
-    job: ImportJob,
-    seq: number,
-    samples: Float32Array,
-    attempt: SpeakerAttemptState | undefined
-  ): Promise<boolean> {
-    if (seq < job.cursor) return true
-    let text: string
-    try {
-      text = await this.transcribeWithRetry(
-        samples,
-        undefined,
-        () => this.retentionPolicy.allowed() && this.attemptAccepts(attempt)
-      )
-    } catch (error) {
-      if (error === ATTEMPT_STOPPED) return false
-      throw error
-    }
-    if (terminal(job.state) || !this.retentionPolicy.allowed() || !this.attemptAccepts(attempt)) return false
-    if (text.trim()) {
-      job.lines.push({ speaker: 'unknown', text: text.trim(), t: job.sourceMtimeMs + seq * CHUNK_MS })
-    }
-    job.cursor = seq + 1
-    // Slabs before seq are fixed-length; the last slab may be partial. Assignment (not accumulation)
-    // makes retries idempotent and also covers the bounded-memory legacy overflow path.
-    job.durationMs = seq * CHUNK_MS + Math.round((samples.length * 1000) / SAMPLE_RATE)
-    await this.persist(job)
-    if (await this.stopIfPolicyHeld(job)) return false
-    return this.attemptAccepts(attempt)
-  }
-
-  private pcmOf(jobId: string): { slabs: Float32Array[]; samples: number } {
-    let buf = this.pcmByJob.get(jobId)
-    if (!buf) {
-      buf = { slabs: [], samples: 0 }
-      this.pcmByJob.set(jobId, buf)
-    }
-    return buf
+  private pcmOf(jobId: string): ImportPcmBuffer {
+    return importPcmOf(this.pcmByJob, jobId)
   }
 
   /** Hand back and clear the buffered PCM for one vad-v2 job. */
   private takePcm(jobId: string): Float32Array[] {
-    const buf = this.pcmByJob.get(jobId)
-    this.pcmByJob.delete(jobId)
-    if (!buf) return []
-    const slabs = buf.slabs
-    // A caller may still hold the small buffer metadata object. Detach the large slab array from it so
-    // only the dedicated consumer stack owns the recording from this point onward.
-    buf.slabs = []
-    buf.samples = 0
-    return slabs
+    return takeImportPcm(this.pcmByJob, jobId)
+  }
+
+  private decodedAudioHost(): ImportDecodedAudioHost {
+    return {
+      jobs: this.jobs,
+      pcmByJob: this.pcmByJob,
+      retainedPcmConsumerIds: this.retainedPcmConsumerIds,
+      getAttempt: (jobId) => this.speakerAttempts.get(jobId),
+      attemptAccepts: (attempt) => this.attemptAccepts(attempt as SpeakerAttemptState | undefined),
+      isTerminal: terminal,
+      retentionAllowed: () => this.retentionPolicy.allowed(),
+      transcribeWithRetry: (samples, opts, stillCurrent) => this.transcribeWithRetry(samples, opts, stillCurrent),
+      isAttemptStopped: (error) => error === ATTEMPT_STOPPED,
+      fail: (job, error) => this.fail(job, error),
+      persist: (job, attempt) => this.persist(job, attempt as SpeakerAttemptState | undefined),
+      holdForPolicy: (job, reason) => this.holdForPolicy(job, reason),
+      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt as SpeakerAttemptState | undefined),
+      releaseAdmissionSlot: (jobId, attempt) =>
+        this.releaseAdmissionSlot(jobId, attempt as SpeakerAttemptState | undefined)
+    }
   }
 
   /** The decoder process/window is gone. Admission stays held while this job still owns decoded PCM. */
@@ -682,7 +581,21 @@ export class ImportJobManager {
       if (job.pipeline === 'vad-v2') job.totalChunks = 0
       this.decodeSlotIds.add(jobId)
       this.activeJobIds.add(jobId)
-      const attempt = this.createAttempt(job)
+      let attempt: SpeakerAttemptState
+      try {
+        attempt = this.createAttempt(job)
+      } catch {
+        this.decodeSlotIds.delete(jobId)
+        this.activeJobIds.delete(jobId)
+        await this.holdForPolicy(job, 'policy')
+        continue
+      }
+      if (!this.attemptAccepts(attempt)) {
+        this.decodeSlotIds.delete(jobId)
+        this.activeJobIds.delete(jobId)
+        await this.holdForPolicy(job, 'policy')
+        continue
+      }
       job.state = 'decoding'
       await this.persist(job)
       if (await this.stopIfPolicyHeld(job)) continue
@@ -754,6 +667,13 @@ export class ImportJobManager {
       finalized: false,
       disposed: false
     }
+    const explicitResume = this.explicitResumeJobs.delete(job.jobId)
+    if (this.deps.captureAttemptAuthority) {
+      attempt.authority = this.deps.captureAttemptAuthority(copy(job), identity, explicitResume)
+    } else if (this.deps.persistenceState?.() === 'configured') {
+      attempt.accepting = false
+      attempt.tailAllowed = false
+    }
     this.speakerAttempts.set(job.jobId, attempt)
     return attempt
   }
@@ -769,7 +689,17 @@ export class ImportJobManager {
   }
 
   private attemptAccepts(attempt: SpeakerAttemptState | undefined): boolean {
-    return !!attempt && attempt.accepting && this.speakerAttempts.get(attempt.identity.jobId) === attempt
+    if (!attempt || !attempt.accepting || this.speakerAttempts.get(attempt.identity.jobId) !== attempt) return false
+    try {
+      if (attempt.authority) attempt.authority.assertCurrent()
+      else if (this.deps.persistenceState?.() === 'configured') return false
+      return true
+    } catch {
+      attempt.accepting = false
+      attempt.tailAllowed = false
+      attempt.authority?.retire()
+      return false
+    }
   }
 
   private isCurrentDecodeAttempt(job: ImportJob, attempt: SpeakerAttemptState): boolean {
@@ -867,6 +797,12 @@ export class ImportJobManager {
     if (this.deps.isImportAuthorized && !this.deps.isImportAuthorized()) throw new Error('Not signed in.')
   }
 
+  private assertPersistenceConfigured(): void {
+    if (this.deps.persistenceState && this.deps.persistenceState() !== 'configured') {
+      throw new ImportCheckpointUnavailableError('UNCONFIGURED')
+    }
+  }
+
   private async releaseHold(job: ImportJob): Promise<void> {
     await this.retention.release(job, this.deps.store)
   }
@@ -903,8 +839,10 @@ export class ImportJobManager {
       copy,
       assertAllowed: async () => {
         this.assertImportAuthorized()
+        this.assertPersistenceConfigured()
         await this.refreshRetentionStatus()
         this.assertImportAuthorized()
+        this.assertPersistenceConfigured()
         this.retentionPolicy.assertAllowed()
       },
       validateSource: (job) => this.deps.validateSource?.(job),

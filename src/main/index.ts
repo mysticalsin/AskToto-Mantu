@@ -814,6 +814,7 @@ import {
   asrModelProtocolSpeechPackOptions
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
+import { resolveImportPersistencePolicy } from './import-persistence-policy'
 import { ImportRetentionAuthorityUnavailableError, ImportRetentionBlockedError } from './import-retention-policy'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
@@ -1434,6 +1435,10 @@ const assertImportWriteAllowed = importJobAuthority.assertRetentionAllowed
 const assertImportAdmissionCurrent = importJobAuthority.assertAdmissionCurrent
 const currentImportCapabilityState = importJobAuthority.currentCapabilityState
 const refreshImportCapabilityState = importJobAuthority.refreshCapabilityState
+// This build has no reviewed production checkpoint budgets, legacy-owner association, or protected
+// checkpoint repository bootstrap. Keep old checkpoint payloads held and content-free until injected.
+const importPersistenceConfiguration = resolveImportPersistencePolicy(undefined)
+const currentImportPersistenceState = () => importPersistenceConfiguration.status
 const assertImportAdmissionAllowed = importJobAuthority.assertAdmissionAllowed
 const captureImportAsrAdmission = importJobAuthority.captureAsrAdmission
 const prepareImportReplacement = (settings?: Settings) => importJobAuthority.prepareReplacement(settings)
@@ -1929,6 +1934,7 @@ function initializeImportJobs(): void {
     ),
     retentionStatus: currentImportRetentionState,
     refreshRetentionStatus: refreshImportRetentionState,
+    persistenceState: currentImportPersistenceState,
     isImportAuthorized: requireAuth,
     validateSource: validateImportJobSource,
     onDecodeAdmission: async (job, memory, stillCurrent) => {
@@ -9183,10 +9189,12 @@ function registerIpc(): void {
     requireAuth,
     getImportJobs,
     refreshImportAuthority: refreshImportSettings,
+    captureImportOperation: importJobAuthority.captureOperation,
     assertImportAdmissionAllowed,
     assertImportAdmissionCurrent,
     currentImportRetentionState,
     currentImportCapabilityState,
+    currentImportPersistenceState,
     importJobView
   })
 

@@ -234,9 +234,11 @@ export class ImportJobRetentionCoordinator {
       if (loaded) job = host.copy(loaded)
     }
     if (!job) throw new Error('The saved import is unavailable.')
-    if (held) {
+    if (!job.file) {
       await host.validateSource(host.copy(job))
       await host.assertAllowed()
+    }
+    if (held) {
       host.jobs.set(jobId, job)
       this.durableJobs.set(jobId, host.copy(job))
     }

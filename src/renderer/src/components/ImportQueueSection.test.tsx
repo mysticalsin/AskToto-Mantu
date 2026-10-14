@@ -14,12 +14,16 @@ const heldJob: ImportJobView = {
   updatedAt: 0
 }
 
-function render(policyState: 'allowed' | 'summary-only' | 'unavailable'): string {
+function render(
+  policyState: 'allowed' | 'summary-only' | 'unavailable',
+  persistenceState: 'configured' | 'unconfigured' | 'invalid' = 'configured'
+): string {
   return renderToStaticMarkup(
     <ImportQueueSection
       jobs={[heldJob]}
       policyState={policyState}
       capabilityState="available"
+      persistenceState={persistenceState}
       policyHeldJobIds={['held-job']}
       inventoryOverflow={false}
       policyHoldOverflow={false}
@@ -63,6 +67,7 @@ describe('summary-only import retention UI', () => {
         jobs={[heldJob]}
         policyState="allowed"
         capabilityState="cloud-only-unsupported"
+        persistenceState="configured"
         policyHeldJobIds={[]}
         inventoryOverflow={false}
         policyHoldOverflow={false}
@@ -78,5 +83,21 @@ describe('summary-only import retention UI', () => {
     expect(html).toContain('configured cloud-only speech route')
     expect(html).not.toContain('summary-only policy')
     expect(html).toMatch(/<button[^>]*disabled=""/)
+  })
+
+  it('keeps checkpointed imports held when bounded persistence is unconfigured', () => {
+    const html = render('allowed', 'unconfigured')
+    expect(html).toContain('bounded checkpoint recovery is not configured')
+    expect(html).toContain('Saved import')
+    expect(html).toMatch(/<button[^>]*disabled=""/)
+    expect(html).not.toContain('summary-only policy')
+  })
+
+  it('reports invalid checkpoint configuration without describing a retention-policy refusal', () => {
+    const html = render('allowed', 'invalid')
+    expect(html).toContain('configuration could not be validated')
+    expect(html).toContain('Saved import')
+    expect(html).toMatch(/<button[^>]*disabled=""/)
+    expect(html).not.toContain('summary-only policy')
   })
 })

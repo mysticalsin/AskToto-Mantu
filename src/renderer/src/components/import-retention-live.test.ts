@@ -23,7 +23,7 @@ const heldJob = {
 }
 window.toto = {
   importJobsList: async () => ({
-    jobs: [], policyBlocked: policyState !== 'allowed', policyState, capabilityState,
+    jobs: [], policyBlocked: policyState !== 'allowed', policyState, capabilityState, persistenceState: 'configured',
     heldJobIds: ['held-job'], policyHeldJobIds: ['held-job'],
     inventoryOverflow: false, policyHoldOverflow: false
   }),
@@ -36,6 +36,7 @@ function Probe() {
   const queue = useImportQueue(refreshList)
   return createElement(ImportQueueSection, {
     jobs: [heldJob], policyState: queue.policyState, capabilityState: queue.capabilityState,
+    persistenceState: queue.persistenceState,
     policyHeldJobIds: queue.policyHeldJobIds,
     inventoryOverflow: queue.inventoryOverflow, policyHoldOverflow: queue.policyHoldOverflow,
     error: queue.error, assets: queue.assets, dragOver: queue.dragOver,

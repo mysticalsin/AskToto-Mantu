@@ -665,6 +665,7 @@ describe('exact import attempt integration', () => {
       currentImportSettings: () => settings,
       refreshImportSettings: async () => settings,
       currentImportRetentionState: () => 'allowed',
+      currentImportPersistenceState: () => 'configured',
       refreshImportRetentionState: async () => 'allowed',
       refreshImportCapabilityState: async () => 'available',
       assertImportAdmissionAllowed: async () => settings,

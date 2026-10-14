@@ -109,6 +109,7 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
     currentImportSettings: () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
     refreshImportSettings: async () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
     currentImportRetentionState: () => 'allowed',
+    currentImportPersistenceState: () => 'configured',
     refreshImportRetentionState: async () => 'allowed',
     refreshImportCapabilityState: async () => 'available',
     assertImportAdmissionAllowed: async () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet' }),

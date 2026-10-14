@@ -24,7 +24,7 @@ import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
 import { ImportActionButton, ImportQueueSection } from './ImportQueueSection'
 import { UpcomingSection } from './UpcomingSection'
-import { importBlockNotice, useImportQueue } from './useImportQueue'
+import { useImportQueue } from './useImportQueue'
 import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from './history/RowStatusChip'
 import { openOnRow, type RowHydration } from './history/hydration'
 import { DegradedBanner } from './history/DegradedBanner'
@@ -861,6 +861,7 @@ export function RecallView({
     jobs: importJobs,
     policyState: importPolicyState,
     capabilityState: importCapabilityState,
+    persistenceState: importPersistenceState,
     actionsBlocked: importActionsBlocked,
     policyHeldJobIds: policyHeldImportIds,
     inventoryOverflow: importInventoryOverflow,
@@ -1034,18 +1035,16 @@ export function RecallView({
         </div>
         <ImportActionButton
           onClick={() => void importAudio()}
-          disabled={importActionsBlocked}
-          title={
-            importActionsBlocked
-              ? importBlockNotice(importPolicyState, importCapabilityState)
-              : 'Import one or more recordings. They keep processing in the background while you navigate.'
-          }
+          policyState={importPolicyState}
+          capabilityState={importCapabilityState}
+          persistenceState={importPersistenceState}
         />
       </div>
       <ImportQueueSection
         jobs={importJobs}
         policyState={importPolicyState}
         capabilityState={importCapabilityState}
+        persistenceState={importPersistenceState}
         policyHeldJobIds={policyHeldImportIds}
         inventoryOverflow={importInventoryOverflow}
         policyHoldOverflow={policyHoldOverflow}

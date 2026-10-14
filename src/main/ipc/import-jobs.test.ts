@@ -30,7 +30,9 @@ function setup({
   assertImportAdmissionAllowed = () => {},
   assertImportAdmissionCurrent = () => {},
   currentImportRetentionState = () => 'allowed' as const,
+  currentImportPersistenceState = () => 'configured' as const,
   refreshImportAuthority = async () => {},
+  captureImportOperation,
   assertMainWindow = vi.fn(),
   managerStart,
   managerStartMany,
@@ -41,7 +43,9 @@ function setup({
   assertImportAdmissionAllowed?: () => void
   assertImportAdmissionCurrent?: () => void
   currentImportRetentionState?: () => 'allowed' | 'summary-only' | 'unavailable'
+  currentImportPersistenceState?: () => 'configured' | 'unconfigured' | 'invalid'
   refreshImportAuthority?: () => Promise<void>
+  captureImportOperation?: () => Promise<{ assertCurrent(): void; refreshSameScope(): Promise<void> }>
   assertMainWindow?: (event: IpcMainInvokeEvent) => void
   managerStart?: () => Promise<ImportJob>
   managerStartMany?: () => Promise<ImportJob[]>
@@ -86,10 +90,21 @@ function setup({
     requireAuth: auth ?? (() => requireAuth),
     getImportJobs,
     refreshImportAuthority,
+    captureImportOperation: captureImportOperation ?? (async () => {
+      await refreshImportAuthority()
+      const isAuthenticated = auth ?? (() => requireAuth)
+      return {
+        assertCurrent: () => {
+          if (!isAuthenticated()) throw new Error('The original import authority is no longer current.')
+        },
+        refreshSameScope: refreshImportAuthority
+      }
+    }),
     assertImportAdmissionAllowed,
     assertImportAdmissionCurrent,
     currentImportRetentionState,
     currentImportCapabilityState: () => 'available',
+    currentImportPersistenceState,
     consumeAudioToken: consumePickedAudio,
     importJobView: (value) => ({
       jobId: value.jobId,
@@ -308,6 +323,7 @@ describe('import jobs IPC adapter', () => {
       policyBlocked: true,
       policyState: 'unavailable',
       capabilityState: 'unavailable',
+      persistenceState: 'unconfigured',
       heldJobIds: [],
       policyHeldJobIds: [],
       inventoryOverflow: false,
@@ -337,6 +353,24 @@ describe('import jobs IPC adapter', () => {
     expect(vi.mocked(execSync)).not.toHaveBeenCalled()
   })
 
+  it('refuses a single start before consuming its one-shot audio token when persistence is unconfigured', async () => {
+    const context = setup({ currentImportPersistenceState: () => 'unconfigured' })
+    await expect(context.invoke(IPC.importAudioStart, { token: 'a'.repeat(24) })).rejects.toThrow(
+      'Saved import recovery is not configured.'
+    )
+    expect(context.consumePickedAudio).not.toHaveBeenCalled()
+    expect(context.manager.start).not.toHaveBeenCalled()
+  })
+
+  it('refuses a batch before consuming any prefix of its one-shot audio tokens', async () => {
+    const context = setup({ currentImportPersistenceState: () => 'unconfigured' })
+    await expect(
+      context.invoke(IPC.importAudioStartBatch, { tokens: ['a'.repeat(24), 'b'.repeat(24)] })
+    ).rejects.toThrow('Saved import recovery is not configured.')
+    expect(context.consumePickedAudio).not.toHaveBeenCalled()
+    expect(context.manager.startMany).not.toHaveBeenCalled()
+  })
+
   it('does not return job metadata if authentication is revoked while the snapshot is loading', async () => {
     let release!: (value: unknown) => void
     let authenticated = true
@@ -361,11 +395,44 @@ describe('import jobs IPC adapter', () => {
       policyBlocked: true,
       policyState: 'unavailable',
       capabilityState: 'unavailable',
+      persistenceState: 'unconfigured',
       heldJobIds: [],
       policyHeldJobIds: [],
       inventoryOverflow: false,
       policyHoldOverflow: false
     })
+  })
+
+  it('does not publish an old snapshot after an allowed authority scope changes and returns to A', async () => {
+    let release!: (value: unknown) => void
+    let semanticEpoch = 1
+    const snapshot = new Promise<unknown>((resolve) => {
+      release = resolve
+    })
+    const context = setup({
+      managerSnapshot: () => snapshot,
+      captureImportOperation: async () => {
+        const captured = semanticEpoch
+        const assertCurrent = () => {
+          if (semanticEpoch !== captured) throw new Error('The original import authority is no longer current.')
+        }
+        return { assertCurrent, refreshSameScope: async () => assertCurrent() }
+      }
+    })
+    const result = context.invoke(IPC.importJobsList)
+    semanticEpoch = 2
+    semanticEpoch = 3 // Authority is currently allowed again, but this result belongs to epoch 1.
+    release({
+      jobs: [job],
+      policyBlocked: false,
+      policyState: 'allowed',
+      heldJobIds: ['job-1'],
+      policyHeldJobIds: [],
+      inventoryOverflow: false,
+      policyHoldOverflow: false
+    })
+
+    await expect(result).resolves.toMatchObject({ jobs: [], policyState: 'unavailable' })
   })
 
   it('closes a snapshot when the refreshed authority becomes summary-only after inventory', async () => {
@@ -435,6 +502,26 @@ describe('import jobs IPC adapter', () => {
       jobs: [{ jobId: 'job-1', title: 'Audio' }],
       policyState: 'allowed',
       capabilityState: 'available'
+    })
+  })
+
+  it('returns content-free held identities but no job views until persistence is configured', async () => {
+    const context = setup({
+      currentImportPersistenceState: () => 'unconfigured',
+      managerSnapshot: async () => ({
+        jobs: [job],
+        policyBlocked: false,
+        policyState: 'allowed',
+        heldJobIds: ['held-job'],
+        policyHeldJobIds: [],
+        inventoryOverflow: false,
+        policyHoldOverflow: false
+      })
+    })
+    await expect(context.invoke(IPC.importJobsList)).resolves.toMatchObject({
+      jobs: [],
+      persistenceState: 'unconfigured',
+      heldJobIds: ['held-job']
     })
   })
 })

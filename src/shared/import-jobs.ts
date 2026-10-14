@@ -13,6 +13,7 @@ export type ImportJobState =
 
 export type ImportPolicyState = 'allowed' | 'summary-only' | 'unavailable'
 export type ImportCapabilityState = 'available' | 'cloud-only-unsupported' | 'unavailable'
+export type ImportPersistenceState = 'configured' | 'unconfigured' | 'invalid'
 
 /** Sanitised job state exposed to the overlay. Source paths remain main-process-only. */
 export interface ImportJobView {
@@ -39,6 +40,8 @@ export interface ImportJobsSnapshot {
   policyState: ImportPolicyState
   /** Whether this installation has an approved import transcription route. */
   capabilityState: ImportCapabilityState
+  /** Whether the bounded legacy checkpoint policy and trusted origin bootstrap are installed. */
+  persistenceState: ImportPersistenceState
   heldJobIds: string[]
   policyHeldJobIds: string[]
   inventoryOverflow: boolean

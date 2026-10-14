@@ -63,8 +63,25 @@ describe('import job authority boundary', () => {
     // A retry performs another fresh authority read after its previous rename attempt was held.
     currentSettings = settings(true)
     epoch += 1
-    await expect(prepareRename()).rejects.toThrow(/summary-only policy prevents import/)
+    await expect(prepareRename()).rejects.toThrow(/policy could not be verified/)
     expect(originalAttemptGuard).toThrow(/policy could not be verified/)
+  })
+
+  it('reports a fresh summary-only policy refusal without treating it as stale authority', async () => {
+    let current: SettingsObservation | null = null
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 0,
+      readAuthority: async () => {
+        const fresh = snapshot(settings(true), 1)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current
+    })
+    const settingsSnapshot = await authority.refreshSettings()
+    const prepareRename = authority.prepareReplacement(settingsSnapshot)
+    await expect(prepareRename()).rejects.toThrow(/summary-only policy prevents import/)
   })
 
   it('refuses a prepared write if its root or encryption scope changes during temporary I/O', async () => {

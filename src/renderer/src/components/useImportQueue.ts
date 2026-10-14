@@ -4,14 +4,25 @@ import type {
   ImportCapabilityState,
   ImportJobView,
   ImportPolicyState,
+  ImportPersistenceState,
   ImportAudioPickResult
 } from '@shared/ipc'
 import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
 
-export function importBlockNotice(policy: ImportPolicyState, capability: ImportCapabilityState): string {
+export function importBlockNotice(
+  policy: ImportPolicyState,
+  capability: ImportCapabilityState,
+  persistence: ImportPersistenceState
+): string {
   if (policy === 'unavailable') return 'Import is paused because current organization settings could not be verified.'
   if (policy === 'summary-only') {
     return 'Recording import requires retaining a full transcript. Your organization’s summary-only policy prevents import. Your original recording is unchanged.'
+  }
+  if (persistence === 'unconfigured') {
+    return 'Saved imports are paused because bounded checkpoint recovery is not configured. Existing checkpoint and recording files are unchanged.'
+  }
+  if (persistence === 'invalid') {
+    return 'Saved imports are paused because checkpoint recovery configuration could not be validated. Existing checkpoint and recording files are unchanged.'
   }
   if (capability === 'cloud-only-unsupported') {
     return 'Recording import is unavailable because this installation does not support its configured cloud-only speech route.'
@@ -23,8 +34,9 @@ export function useImportQueue(refreshList: () => void) {
   const [jobs, setJobs] = useState<ImportJobView[]>([])
   const [policyState, setPolicyState] = useState<ImportPolicyState>('unavailable')
   const [capabilityState, setCapabilityState] = useState<ImportCapabilityState>('unavailable')
+  const [persistenceState, setPersistenceState] = useState<ImportPersistenceState>('unconfigured')
   const policyBlocked = policyState !== 'allowed'
-  const actionsBlocked = policyBlocked || capabilityState !== 'available'
+  const actionsBlocked = policyBlocked || capabilityState !== 'available' || persistenceState !== 'configured'
   const [policyHeldJobIds, setPolicyHeldJobIds] = useState<string[]>([])
   const [inventoryOverflow, setInventoryOverflow] = useState(false)
   const [policyHoldOverflow, setPolicyHoldOverflow] = useState(false)
@@ -61,6 +73,7 @@ export function useImportQueue(refreshList: () => void) {
           ])
           setPolicyState(snapshot.policyState)
           setCapabilityState(snapshot.capabilityState)
+          setPersistenceState(snapshot.persistenceState)
           setPolicyHeldJobIds(snapshot.policyHeldJobIds)
           setInventoryOverflow(snapshot.inventoryOverflow)
           setPolicyHoldOverflow(snapshot.policyHoldOverflow)
@@ -70,7 +83,7 @@ export function useImportQueue(refreshList: () => void) {
     }
     refreshSnapshot()
     const unsub = window.toto.onImportAudioProgress(({ job }) => {
-      if (stale || policyBlocked) return
+      if (stale || actionsBlocked) return
       upsertJob(job)
       if (job.state === 'done') refreshList()
     })
@@ -84,12 +97,12 @@ export function useImportQueue(refreshList: () => void) {
       unsubAssets()
       unsubSettings()
     }
-  }, [policyBlocked, refreshList, upsertJob])
+  }, [actionsBlocked, refreshList, upsertJob])
 
   const startPickedImports = useCallback(
     async (picked: ImportAudioPickResult): Promise<void> => {
       if (actionsBlocked) {
-        setError(importBlockNotice(policyState, capabilityState))
+        setError(importBlockNotice(policyState, capabilityState, persistenceState))
         return
       }
       const files = pickedFiles(picked)
@@ -106,13 +119,13 @@ export function useImportQueue(refreshList: () => void) {
         setError(caught instanceof Error ? caught.message : 'Could not start the imports.')
       }
     },
-    [actionsBlocked, policyState, capabilityState, upsertJob]
+    [actionsBlocked, policyState, capabilityState, persistenceState, upsertJob]
   )
 
   const importAudio = useCallback(async (): Promise<void> => {
     setError(null)
     if (actionsBlocked) {
-      setError(importBlockNotice(policyState, capabilityState))
+      setError(importBlockNotice(policyState, capabilityState, persistenceState))
       return
     }
     let picked: ImportAudioPickResult
@@ -124,7 +137,7 @@ export function useImportQueue(refreshList: () => void) {
     }
     if (picked.cancelled) return
     await startPickedImports(picked)
-  }, [actionsBlocked, policyState, capabilityState, startPickedImports])
+  }, [actionsBlocked, policyState, capabilityState, persistenceState, startPickedImports])
 
   const onDragOver = useCallback((event: DragEvent): void => {
     if (![...event.dataTransfer.types].includes('Files')) return
@@ -143,7 +156,7 @@ export function useImportQueue(refreshList: () => void) {
       event.preventDefault()
       setDragOver(false)
       if (actionsBlocked) {
-        setError(importBlockNotice(policyState, capabilityState))
+        setError(importBlockNotice(policyState, capabilityState, persistenceState))
         return
       }
       const files = [...event.dataTransfer.files].filter(isImportDropFile)
@@ -158,7 +171,7 @@ export function useImportQueue(refreshList: () => void) {
         setError(caught instanceof Error ? caught.message : 'Could not import the dropped recordings.')
       }
     },
-    [actionsBlocked, policyState, capabilityState, startPickedImports]
+    [actionsBlocked, policyState, capabilityState, persistenceState, startPickedImports]
   )
 
   const cancel = useCallback((jobId: string): void => {
@@ -193,6 +206,7 @@ export function useImportQueue(refreshList: () => void) {
     policyBlocked,
     policyState,
     capabilityState,
+    persistenceState,
     actionsBlocked,
     policyHeldJobIds,
     inventoryOverflow,
