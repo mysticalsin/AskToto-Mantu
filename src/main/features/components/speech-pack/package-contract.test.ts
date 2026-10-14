@@ -21,8 +21,13 @@ async function fixture(profile: 'full' | 'lean' = 'lean'): Promise<string> {
       path: 'speech-pack-profile.json',
       bytes: profileBytes.byteLength,
       sha256: createHash('sha256').update(profileBytes).digest('hex')
-    }
-  ]
+    },
+    ...['cloudflare-embed/.gitkeep', 'license-lease/.gitkeep', 'operator/.gitkeep'].map((path) => ({
+      path,
+      bytes: 0,
+      sha256: createHash('sha256').update(Buffer.alloc(0)).digest('hex')
+    }))
+  ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
   const payload = {
     schema: 1 as const,
     profile,
@@ -59,6 +64,63 @@ describe('readPackageRuntimeContract', () => {
     ).resolves.toMatchObject({ status: 'legacy-full', profile: 'full' })
   })
 
+  it('preserves an established full package with its valid profile marker and no inventory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-package-contract-'))
+    roots.push(root)
+    await writeFile(join(root, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'full' }) + '\n')
+    await expect(
+      readPackageRuntimeContract({
+        resourcesRoot: root,
+        compiledProfile: 'full',
+        appVersion: '2.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        electronVersion: '43.6.0'
+      })
+    ).resolves.toMatchObject({ status: 'legacy-full', profile: 'full', inventory: null })
+  })
+
+  it('accepts the actual lean staged inventory shape, including zero-byte .gitkeep entries', async () => {
+    const root = await fixture()
+    await expect(
+      readPackageRuntimeContract({
+        resourcesRoot: root,
+        compiledProfile: 'lean',
+        appVersion: '2.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        electronVersion: '43.6.0'
+      })
+    ).resolves.toMatchObject({ status: 'verified', profile: 'lean' })
+  })
+
+  it('does not use full compatibility for a lean build or a mismatched full marker', async () => {
+    const leanRoot = await mkdtemp(join(tmpdir(), 'metis-package-contract-'))
+    roots.push(leanRoot)
+    await writeFile(join(leanRoot, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }) + '\n')
+    await expect(
+      readPackageRuntimeContract({
+        resourcesRoot: leanRoot,
+        compiledProfile: 'lean',
+        appVersion: '2.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        electronVersion: '43.6.0'
+      })
+    ).resolves.toMatchObject({ status: 'invalid', reason: 'inventory-missing' })
+
+    await expect(
+      readPackageRuntimeContract({
+        resourcesRoot: leanRoot,
+        compiledProfile: 'full',
+        appVersion: '2.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        electronVersion: '43.6.0'
+      })
+    ).resolves.toMatchObject({ status: 'invalid', reason: 'profile-mismatch' })
+  })
+
   it('requires a matching profile and inventory for lean packages', async () => {
     const root = await mkdtemp(join(tmpdir(), 'metis-package-contract-'))
     roots.push(root)
@@ -80,8 +142,8 @@ describe('readPackageRuntimeContract', () => {
       resourcesRoot: root,
       compiledProfile: 'lean' as const,
       appVersion: '2.1.0',
-      platform: 'darwin',
-      arch: 'arm64',
+      platform: 'darwin' as const,
+      arch: 'arm64' as const,
       electronVersion: '43.6.0'
     }
     await expect(readPackageRuntimeContract(options)).resolves.toMatchObject({ status: 'verified', profile: 'lean' })
