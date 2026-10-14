@@ -172,6 +172,12 @@ function descendantProcesses(table, mainPid) {
 
 const processIdentity = (entry) => `${entry.pid}:${entry.startedMs}`
 
+export function mergeOwnedProcessBaselines(launchOwned = [], ownedAtQuit = []) {
+  const ownershipByIdentity = new Map()
+  for (const entry of [...launchOwned, ...ownedAtQuit]) ownershipByIdentity.set(processIdentity(entry), entry)
+  return [...ownershipByIdentity.values()]
+}
+
 export function shutdownVerdict({
   censusValid,
   censusCaptured,
@@ -179,6 +185,7 @@ export function shutdownVerdict({
   naturalExit,
   exitCode,
   signalCode,
+  survivorCountAfterGrace,
   survivorCount,
   transportsReleased
 }) {
@@ -193,6 +200,7 @@ export function shutdownVerdict({
     naturalExit &&
     exitCode === 0 &&
     signalCode === null &&
+    survivorCountAfterGrace === 0 &&
     survivorCount === 0 &&
     transportsReleased
   return { clean, teardown }
@@ -392,6 +400,7 @@ async function stopCandidate(instance, platform) {
   let naturalExit = false
   let quitAcknowledged = false
   let survivors = []
+  let survivorCountAfterGrace = null
   let processCensusComplete = false
   let transportsReleased = false
   try {
@@ -414,7 +423,7 @@ async function stopCandidate(instance, platform) {
       /* Final process census below decides whether teardown can be acknowledged. */
     }
   } finally {
-    const ownershipBaseline = ownedAtQuit.length ? ownedAtQuit : instance.launchOwned ?? []
+    const ownershipBaseline = mergeOwnedProcessBaselines(instance.launchOwned ?? [], ownedAtQuit)
     try {
       const table = listProcesses(platform)
       survivors = findSurvivors(ownershipBaseline, table, { installRoot, platform })
@@ -424,6 +433,7 @@ async function stopCandidate(instance, platform) {
         await new Promise((resolveSleep) => setTimeout(resolveSleep, 500))
         survivors = findSurvivors(ownershipBaseline, listProcesses(platform), { installRoot, platform })
       }
+      survivorCountAfterGrace = survivors.length
       if (survivors.length) {
         // The entries are derived from this exact child or the installed app's own root; never kill by name.
         for (const entry of survivors) {
@@ -454,6 +464,7 @@ async function stopCandidate(instance, platform) {
     naturalExit,
     exitCode: child.exitCode,
     signalCode: child.signalCode,
+    survivorCountAfterGrace,
     survivorCount: processCensusComplete ? survivors.length : 1,
     transportsReleased
   })
