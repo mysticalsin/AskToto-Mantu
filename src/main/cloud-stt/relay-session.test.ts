@@ -132,7 +132,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'workers-ai-nova3', modelId: '@cf/deepgram/nova-3', language: 'en' }
+      expectedSelection: { routeId: 'workers-ai-nova3', modelId: '@cf/deepgram/nova-3', language: 'en' },
+      expectedCapability
     })
     expect(started).toEqual({ ok: false, code: 'SCHEMA' })
     expect(MockRelaySocket.instances).toHaveLength(0)
@@ -142,6 +143,18 @@ describe('RelaySpeechSession', () => {
     MockRelaySocket.instances = []
     const started = await RelaySpeechSession.create({
       client: makeClient(undefined, ['microphone'], { configVersion: 'fixture-config-a-v2' }),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
+    })
+    expect(started).toEqual({ ok: false, code: 'SCHEMA' })
+    expect(MockRelaySocket.instances).toHaveLength(0)
+  })
+
+  it('cancels a create allocation before opening when the speech policy version changed', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(undefined, ['microphone'], { policyVersion: 'fixture-policy-a-v2' }),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
       expectedCapability
@@ -160,6 +173,7 @@ describe('RelaySpeechSession', () => {
       }),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability,
       isCurrent: () => current,
       onAllocated: (id) => {
         allocatedSessionId = id
@@ -175,7 +189,8 @@ describe('RelaySpeechSession', () => {
     const starting = RelaySpeechSession.create({
       client: makeClient(undefined, ['microphone', 'system']),
       createRequest: createRequestForTracks(['microphone', 'system']),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(MockRelaySocket.instances).toHaveLength(2)
@@ -192,7 +207,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client,
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -223,7 +239,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -238,7 +255,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -256,7 +274,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -273,7 +292,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -313,7 +333,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -329,6 +350,7 @@ describe('RelaySpeechSession', () => {
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability,
       onTranscript: () => {
         throw new Error('synthetic consumer failure')
       }
@@ -372,7 +394,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -387,7 +410,8 @@ describe('RelaySpeechSession', () => {
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -417,6 +441,7 @@ describe('RelaySpeechSession', () => {
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability,
       initialFrontiers: {
         microphone: { sequence: 1, sampleOffset: Number.MAX_SAFE_INTEGER - 1_000 }
       }
@@ -442,6 +467,7 @@ describe('RelaySpeechSession', () => {
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability,
       isCurrent: () => current
     })
     expect(started.ok).toBe(true)

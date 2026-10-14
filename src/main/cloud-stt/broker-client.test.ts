@@ -73,9 +73,15 @@ describe('speech broker client', () => {
 
   it('requires bounded route configuration and policy versions in a ready capability', async () => {
     const ready = fixture.capability.readyResponse as Record<string, unknown>
+    const responses: Record<string, unknown>[] = []
     for (const field of ['configVersion', 'policyVersion']) {
       const response = { ...ready }
       delete response[field]
+      responses.push(response)
+    }
+    responses.push({ ...ready, configVersion: 'invalid version' }, { ...ready, policyVersion: '' })
+
+    for (const response of responses) {
       const client = new SpeechBrokerClient({
         ...settings,
         fetchImpl: vi.fn(
