@@ -222,6 +222,10 @@ describe('authenticated speech session broker boundary', () => {
       ok: boolean
       sessionId: string
       captureGeneration: number
+      routeId: string
+      model: string
+      configVersion: string
+      policyVersion: string
       limits: {
         maxStreamMs: number
         audioDeadlineAt: number
@@ -233,6 +237,12 @@ describe('authenticated speech session broker boundary', () => {
     }
     expect(body.ok).toBe(true)
     expect(body.captureGeneration).toBe(7)
+    expect(body).toMatchObject({
+      routeId: TOKEN.routeId,
+      model: TOKEN.modelId,
+      configVersion: TOKEN.configVersion,
+      policyVersion: 'policy-1'
+    })
     expect(body.limits).toMatchObject({
       maxStreamMs: 1_000,
       drainWindowMs: 1_000,

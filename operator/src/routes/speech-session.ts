@@ -160,6 +160,7 @@ export async function handleSpeechSessionCreate(input: {
     routeId: policy.routeId,
     model: policy.modelId,
     configVersion: policy.configVersion,
+    policyVersion: policy.policyVersion,
     language,
     captureGeneration: parsed.request.captureGeneration,
     grantExpiresAt: allocation.grantExpiresAt,
