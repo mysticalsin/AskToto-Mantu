@@ -1,4 +1,5 @@
 import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +14,7 @@ function policyFiles(): { directory: string; userPath: string; adminPath: string
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
@@ -66,6 +68,17 @@ describe('readManagedSpeechProviders', () => {
       writeFileSync(userPath, content)
       expect(await readManagedSpeechProviders(userPath, adminPath, () => null)).toEqual({ state: 'invalid' })
     }
+  })
+
+  it('fails closed if a configured user policy disappears between inspection and open', async () => {
+    const { userPath, adminPath } = policyFiles()
+    writeFileSync(userPath, JSON.stringify({ allowedProviders: ['deepgram-nova3'] }))
+    const open = vi
+      .spyOn(fsPromises, 'open')
+      .mockRejectedValue(Object.assign(new Error('synthetic disappearance'), { code: 'ENOENT' }))
+
+    expect(await readManagedSpeechProviders(userPath, adminPath, () => null)).toEqual({ state: 'invalid' })
+    expect(open).toHaveBeenCalledWith(userPath, expect.any(Number))
   })
 
   it('rejects symlinks, nonregular files, and files larger than the fixed byte cap', async () => {
