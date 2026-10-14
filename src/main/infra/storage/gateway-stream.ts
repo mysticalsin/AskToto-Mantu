@@ -28,7 +28,9 @@ export interface StorageOpenedRead {
   stats: StorageReadStats
 }
 export interface StreamOptions {
+  /** Explicit finite source ceiling; the gateway supplies no limit default. */
   maxBytes: number
+  /** Explicit finite chunk ceiling; the gateway supplies no chunk default. */
   maxChunkBytes: number
   signal?: AbortSignal
 }
