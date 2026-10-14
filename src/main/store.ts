@@ -39,12 +39,23 @@ import {
   decryptSecret,
   encryptSecret,
   prepareFileKeyForWrite,
+  providerEnvironmentVariable,
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
-import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import {
+  adminManagedConfigPath,
+  readManagedPolicyAuthorityFile,
+  type ManagedPolicyAuthorityRead,
+  readTrustedAdminManaged
+} from './win-security'
 import { AdminManagedCache, type AdminPolicyIdentity } from './admin-managed-cache'
-import { publishSettingsSnapshot } from './settings-observation'
+import {
+  getPublishedSettingsObservation,
+  getSettingsObservationEpoch,
+  publishSettingsSnapshot,
+  type SettingsPolicyAuthoritySnapshot
+} from './settings-observation'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -55,49 +66,65 @@ import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
-import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
+import type { LocalSpeechPackPolicy } from '@shared/model-policy'
 import { assertBrokerSpeechSettingsPatch, BrokerSpeechSettingsLoadSchema } from '@shared/broker-speech-settings'
+import {
+  FreshLeanSpeechAuthority,
+  isSettingsSetupComplete,
+  ManagedPolicyAuthority,
+  validSettingsKeysOnly
+} from './fresh-lean-speech-defaults'
+import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
+import { isProfileRecoveryFileName } from './profile-recovery-files'
 
 const dir = () => app.getPath('userData')
+const freshLeanSpeechAuthority = new FreshLeanSpeechAuthority()
+const speechAuthorityIdentities = freshLeanSpeechAuthority.identityReaders(getSettings)
+const managedPolicyAuthority = new ManagedPolicyAuthority()
 function adminPolicyIdentity(): AdminPolicyIdentity {
   const path = adminManagedConfigPath()
   try {
     const stat = statSync(path)
+    adminPolicyPathState = 'present'
     return { path, mtime: stat.mtimeMs, dev: stat.dev, ino: stat.ino }
-  } catch {
+  } catch (error) {
+    adminPolicyPathState = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unknown'
     return { path, mtime: 0, dev: 0, ino: 0 }
   }
 }
-const adminCache = new AdminManagedCache({ readIdentity: adminPolicyIdentity, readTrusted: readTrustedAdminManaged })
-const adminManagedContent = (): string | null => adminCache.read()
+let adminPolicyPathState: 'absent' | 'present' | 'unknown' = 'unknown'
+let freshAdminRead: ManagedPolicyAuthorityRead | null = null
+let freshUserManagedRead: ManagedPolicyAuthorityRead | null = null
+const adminCache = new AdminManagedCache({
+  readIdentity: adminPolicyIdentity,
+  readTrusted: () => {
+    if (freshAdminRead)
+      return freshAdminRead.status === 'present' ? Buffer.from(freshAdminRead.bytes).toString('utf8') : null
+    return readTrustedAdminManaged()
+  }
+})
+const adminManagedContent = (): string | null => {
+  if (freshAdminRead?.status === 'invalid') {
+    managedPolicyAuthority.setUnreadable('admin')
+    return null
+  }
+  return managedPolicyAuthority.readAdminContent(
+    () => adminCache.read(),
+    () => adminPolicyPathState
+  )
+}
 export function resetAdminManagedCache(): void {
   adminCache.reset()
+  managedPolicyAuthority.setAdminReadable(true)
+  adminPolicyPathState = 'unknown'
 }
 export const resetAdminManagedCacheForTests = resetAdminManagedCache
 const settingsPath = () => join(dir(), 'settings.json')
 const keyPath = (provider: ProviderId) => join(dir(), `key-${provider}.bin`)
 
-const PROFILE_RECOVERY_FIXED_FILES = new Set([
-  'secret-key.bin',
-  'secret-key.bin.migrate.tmp',
-  'settings.json',
-  'settings.json.tmp',
-  'auth-session.bin',
-  'auth-configured.flag',
-  'msal-cache.bin',
-  'google-session.bin',
-  // MQA-260: the one-shot seed marker for the installer-embedded Cloudflare key. Its job is to stop a
-  // later launch silently overwriting a key the USER chose (embedded-cloudflare-key.ts:18-20) — that job
-  // is about a live profile, and it does not survive into a rebuilt one.
-  //
-  // "Create new local profile & retry" runs when secret-key.bin cannot be unwrapped, which means every
-  // key-<provider>.bin is already undecryptable. Archiving them destroys nothing that still worked. But
-  // leaving the marker behind carried the OLD profile's "already seeded" verdict into the new one, so
-  // the repair produced a profile with no Cloudflare key and no way to ever get one — on a build that
-  // ships an embedded key, that turns the repair button into a downgrade to the 12s on-device path.
-  // Clearing it lets the fresh profile seed exactly as a first install does.
-  '.cloudflare-key-seeded'
-])
+/** Package facts and pre-initialization absence are bound once before the first settings read. */
+export const configureFreshLeanSpeechDefaults = (compiledProfile: 'full' | 'lean', contract: PackageRuntimeContract) =>
+  freshLeanSpeechAuthority.configure(compiledProfile, contract, dir())
 
 function encryptedProfileFiles(): string[] {
   const d = dir()
@@ -105,32 +132,9 @@ function encryptedProfileFiles(): string[] {
   return readdirSync(d, { withFileTypes: true })
     .filter((entry) => {
       if (!entry.isFile()) return false
-      return PROFILE_RECOVERY_FIXED_FILES.has(entry.name) || /^key-.+\.bin(?:\.tmp)?$/.test(entry.name)
+      return isProfileRecoveryFileName(entry.name)
     })
     .map((entry) => entry.name)
-}
-
-const ENV_VAR: Record<ProviderId, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  nvidia: 'NVIDIA_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  qwen: 'DASHSCOPE_API_KEY',
-  minimax: 'MINIMAX_API_KEY',
-  kimi: 'KIMI_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  groq: 'GROQ_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  grok: 'XAI_API_KEY',
-  dust: 'DUST_API_KEY',
-  'claude-cli': '',
-  'codex-cli': '',
-  gemini: 'GEMINI_API_KEY',
-  // The shared secret the operator's Worker checks, NOT a Cloudflare account token — that one never
-  // leaves the operator's infrastructure (it is a Wrangler secret on the Worker itself).
-  cloudflare: 'METIS_PROXY_KEY',
-  local: '', // keyless — Métis Local's per-session sidecar key lives only in local-runtime.ts memory
-  custom: 'ASKTOTO_CUSTOM_API_KEY'
 }
 
 function ensureDir(): void {
@@ -141,97 +145,38 @@ function ensureDir(): void {
 type Shape = Record<string, { safeParse: (v: unknown) => { success: boolean; data?: unknown } }>
 const shape = (): Shape => BaseSettingsSchema.shape as unknown as Shape
 
-/** Keep only the individually-valid keys of an arbitrary object against the settings schema. */
-function validKeysOnly(obj: Record<string, unknown>): Record<string, unknown> {
-  const s = shape()
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(obj)) {
-    if (!s[k] || v === undefined) continue
-    const r = s[k].safeParse(v)
-    if (r.success) out[k] = r.data
+function readPolicyFile<T>(path: string, source: 'user' | 'admin', fallback: T, parse: (raw: string) => T): T {
+  if (source === 'user' && freshUserManagedRead) {
+    if (freshUserManagedRead.status === 'absent') return fallback
+    if (freshUserManagedRead.status !== 'present') {
+      managedPolicyAuthority.setUnreadable(source)
+      return fallback
+    }
+    return parse(Buffer.from(freshUserManagedRead.bytes).toString('utf8'))
   }
-  return out
-}
-
-function parseManagedContent(raw: string): Record<string, unknown> {
   try {
-    const obj = JSON.parse(raw)
-    const clean: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(obj)) if (!k.startsWith('_')) clean[k] = v
-    return validKeysOnly(clean) // drop malformed keys so a typo can't brick the app
-  } catch {
-    return {}
-  }
-}
-
-function readManagedFrom(p: string): Record<string, unknown> {
-  try {
-    return parseManagedContent(readFileSync(p, 'utf8'))
-  } catch {
-    return {}
-  }
-}
-
-function parseLockedContent(raw: string): string[] {
-  try {
-    const obj = JSON.parse(raw)
-    // Canonical key is `locked`; `lockedKeys` is accepted too — the enterprise doc (docs/asktoto-
-    // architecture.md) previously told IT admins to use `lockedKeys`, and an admin config written
-    // against that name must still lock fields instead of silently locking nothing.
-    const raw2 = obj.locked ?? obj.lockedKeys
-    const arr: unknown[] = Array.isArray(raw2) ? raw2 : []
-    return [...new Set(arr.filter((k): k is string => typeof k === 'string'))]
-  } catch {
-    return []
-  }
-}
-
-function readLockedFrom(p: string): string[] {
-  try {
-    return parseLockedContent(readFileSync(p, 'utf8'))
-  } catch {
-    return []
+    return parse(readFileSync(path, 'utf8'))
+  } catch (error) {
+    managedPolicyAuthority.noteReadFailure(source, error)
+    return fallback
   }
 }
 
 /** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
-function parseAllowedContent(raw: string): string[] | null {
-  try {
-    const obj = JSON.parse(raw)
-    const list = obj?.allowedProviders
-    // Empty array is deny-all; only absent/non-array means no restriction.
-    if (!Array.isArray(list)) return null
-    return [...new Set(list.filter((x): x is string => typeof x === 'string'))]
-  } catch {
-    return null
-  }
-}
-
-function readRawPolicyFrom(p: string): string | null {
-  try {
-    return readFileSync(p, 'utf8')
-  } catch {
-    return null
-  }
-}
-
-function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null {
-  try {
-    const value = JSON.parse(raw)?.localSpeechPack
-    if (value === undefined) return null
-    const parsed = LocalSpeechPackPolicySchema.safeParse(value)
-    return parsed.success ? parsed.data : null
-  } catch {
-    return null
-  }
-}
+const readManagedFrom = (path: string): Record<string, unknown> =>
+  readPolicyFile(path, 'user', {}, (raw) => managedPolicyAuthority.parseManaged(raw, 'user', validSettingsKeysOnly))
+const readLockedFrom = (path: string): string[] =>
+  readPolicyFile(path, 'user', [], (raw) => managedPolicyAuthority.parseLocked(raw, 'user'))
+const readRawPolicyFrom = (path: string, source: 'user' | 'admin' = 'user'): string | null =>
+  readPolicyFile(path, source, null, (raw) => raw)
 
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
+  managedPolicyAuthority.reset()
   const admin = adminManagedContent()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...(admin ? parseManagedContent(admin) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
+    ...(admin ? managedPolicyAuthority.parseManaged(admin, 'admin', validSettingsKeysOnly) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
   }
 }
 
@@ -239,7 +184,7 @@ export function validatedManaged(): Record<string, unknown> {
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
   const admin = adminManagedContent()
-  const machine = admin ? parseLockedContent(admin) : []
+  const machine = admin ? managedPolicyAuthority.parseLocked(admin, 'admin') : []
   return [...new Set([...user, ...machine])]
 }
 
@@ -266,19 +211,25 @@ export function getEgressAllowlist(): string[] | null {
 export function getAllowedProviders(): string[] | null {
   const admin = adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
-  return (admin ? parseAllowedContent(admin) : null) ?? (user ? parseAllowedContent(user) : null)
+  return (
+    (admin ? managedPolicyAuthority.parseAllowed(admin, 'admin') : null) ??
+    (user ? managedPolicyAuthority.parseAllowed(user, 'user') : null)
+  )
 }
 
 export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
   const admin = adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
-  return (admin ? parseLocalSpeechPackContent(admin) : null) ?? (user ? parseLocalSpeechPackContent(user) : null)
+  return (
+    (admin ? managedPolicyAuthority.parseLocalSpeechPack(admin, 'admin') : null) ??
+    (user ? managedPolicyAuthority.parseLocalSpeechPack(user, 'user') : null)
+  )
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
  *  no-op (the env still resolves), so the UI shows a 'set via environment variable' chip instead. */
 export function getEnvKeyProviders(): string[] {
-  const ids: string[] = PROVIDER_IDS.filter((p) => !!process.env[ENV_VAR[p]])
+  const ids: string[] = PROVIDER_IDS.filter((p) => !!process.env[providerEnvironmentVariable(p)])
   if ((process.env.SONIOX_API_KEY || '').trim()) ids.push('soniox')
   return ids
 }
@@ -527,6 +478,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  readable: boolean
   userPath: string
   userMtime: number
   managedMtime: number
@@ -554,28 +506,48 @@ export function resetAsrHardwarePreferenceForTests(): void {
   _freshAsrEngine = null
 }
 
-function setupIsComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
-  const userDone = 'onboardingDone' in user ? shape().onboardingDone.safeParse(user.onboardingDone) : null
-  const managedDone = 'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
-  return (
-    (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
-    (typeof user.onboardingDoneAt === 'number' && Number.isFinite(user.onboardingDoneAt) && user.onboardingDoneAt > 0)
-  )
-}
-
 /** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
  *  that the cache key includes the settings path (see `userPath` below), but kept because existing suites
  *  call it in beforeEach and an explicit reset is a harmless belt-and-braces. Production never swaps
  *  userData. */
 export function resetSettingsCacheForTests(): void {
   _settingsCache = null
+  freshLeanSpeechAuthority.reset()
+  managedPolicyAuthority.reset()
 }
 
+export const getSpeechPackSelectionIdentity = speechAuthorityIdentities.selection
+export const getSpeechPackPolicyIdentity = speechAuthorityIdentities.policy
+export const getLocalModelProvisioningIdentity = speechAuthorityIdentities.localModel
+
 /** Resolve real current settings and revalidate machine trust at an explicit authority boundary. */
-export function readSettingsAtAuthorityBoundary(): Settings {
-  _settingsCache = null
-  adminCache.reset()
-  return getSettings()
+/** Serialize temporary verified-file overrides so concurrent admissions cannot cross-contaminate reads. */
+export function readSettingsAtAuthorityBoundary(): Promise<SettingsPolicyAuthoritySnapshot> {
+  return freshLeanSpeechAuthority.readSettingsAuthorityBoundary({
+    readFiles: async () => {
+      const [user, admin] = await Promise.all([
+        readManagedPolicyAuthorityFile(join(dir(), 'managed-config.json')),
+        readManagedPolicyAuthorityFile(adminManagedConfigPath(), undefined, true)
+      ])
+      return { user, admin }
+    },
+    setReads: (user, admin) => {
+      freshUserManagedRead = user
+      freshAdminRead = admin
+    },
+    resetCaches: () => {
+      _settingsCache = null
+      adminCache.reset()
+    },
+    readSettings: getSettings,
+    readPolicy: () => ({
+      allowedProviders: getAllowedProviders(),
+      localSpeechPack: getAdminLocalSpeechPackPolicy(),
+      lockedKeys: getLockedKeys()
+    }),
+    readable: () => getPublishedSettingsObservation()?.readable === true,
+    epoch: getSettingsObservationEpoch
+  })
 }
 
 function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
@@ -601,7 +573,7 @@ export function getSettings(): Settings {
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime
   ) {
-    publishSettingsSnapshot(_settingsCache.value, true)
+    publishSettingsSnapshot(_settingsCache.value, _settingsCache.readable)
     return _settingsCache.value
   }
 
@@ -660,7 +632,7 @@ export function getSettings(): Settings {
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
   const effectiveBrokerSpeech = BrokerSpeechSettingsLoadSchema.parse({ ...base, ...raw }.brokerSpeech)
   const storedAsr = 'asrEngine' in raw && shape().asrEngine.safeParse(raw.asrEngine).success
-  const completedSetup = setupIsComplete(raw, managed)
+  const completedSetup = isSettingsSetupComplete(raw, managed)
   // A readable fresh/incomplete sparse profile gets the one-time hardware preference. Completed sparse
   // profiles retain the former Parakeet default, and explicit/managed/locked choices remain authoritative.
   if (
@@ -693,7 +665,7 @@ export function getSettings(): Settings {
     // blocks answering until an https customBaseUrl actually exists. Only fall back to full defaults when
     // the merged settings don't even validate field-by-field — a genuinely stale/hand-edited
     // settings.json — so getSettings can still never throw/brick the app.
-    const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
+    const merged: Record<string, unknown> = { ...base, ...validSettingsKeysOnly(raw) }
     // Only reset `provider` when the provider value itself doesn't validate against the schema's
     // enum — never merely because customBaseUrl is empty/not-yet-https. A user who just picked
     // Custom (customBaseUrl: '') has a perfectly valid provider choice; clobbering it here reverts
@@ -710,9 +682,27 @@ export function getSettings(): Settings {
       : SettingsSchema.parse({ ...DEFAULT_SETTINGS, brokerSpeech: effectiveBrokerSpeech })
   }
 
+  value = freshLeanSpeechAuthority.project(
+    value,
+    stored,
+    raw,
+    lockedKeys,
+    managedPolicyAuthority.readable,
+    managedPolicyAuthority
+  )
+  const readable = stored !== null && managedPolicyAuthority.readable
+  freshLeanSpeechAuthority.observeStorePolicy(
+    value,
+    managed,
+    lockedKeys,
+    getAdminLocalSpeechPackPolicy,
+    getAllowedProviders,
+    managedPolicyAuthority.readable
+  )
+
   // Only memoise a result derived from a settings.json we could actually read — see `stored` above.
-  if (stored !== null) _settingsCache = { value, ...m }
-  publishSettingsSnapshot(value, stored !== null)
+  if (stored !== null) _settingsCache = { value, readable, ...m }
+  publishSettingsSnapshot(value, readable)
   return value
 }
 
@@ -754,7 +744,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
   }
   // Validate the incoming patch (drop malformed keys), then persist ONLY user overrides (sparse)
   // so managed-config stays a live default layer.
-  const clean = validKeysOnly((patch ?? {}) as Record<string, unknown>)
+  const clean = validSettingsKeysOnly((patch ?? {}) as Record<string, unknown>)
   const locked = getLockedKeys()
   const allowed: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(clean)) {
@@ -783,8 +773,17 @@ export function setSettings(patch: Partial<Settings>): Settings {
   if (Object.hasOwn(prev, 'brokerSpeech')) prev.brokerSpeech = BrokerSpeechSettingsLoadSchema.parse(prev.brokerSpeech)
   const next = { ...prev, ...allowed }
   const managed = validatedManaged()
+  freshLeanSpeechAuthority.preserveProjectedRoute(
+    next,
+    prev,
+    allowed,
+    [...managedPolicyAuthority.managedKeys],
+    locked,
+    managedPolicyAuthority.readable,
+    getSettings
+  )
   const previousAsr = 'asrEngine' in prev && shape().asrEngine.safeParse(prev.asrEngine).success
-  const previousCompleted = setupIsComplete(prev, managed)
+  const previousCompleted = isSettingsSetupComplete(prev, managed)
   // Completing a genuinely fresh unmanaged setup is the sole persistence point for the derived choice.
   // Without it, a high-RAM profile would show Whisper during setup and fall back to legacy Parakeet as
   // soon as onboardingDone landed. Never persist a managed/locked default: policy must remain live.
@@ -1125,7 +1124,7 @@ export function dustSelectedAgentVision(sId: string | undefined): boolean {
 
 export function getApiKey(provider: ProviderId): string {
   // Env-var keys bypass the cache — they're already an O(1) lookup and must stay live.
-  const env = process.env[ENV_VAR[provider]]
+  const env = process.env[providerEnvironmentVariable(provider)]
   if (env) return env
 
   if (_apiKeyCache.has(provider)) return _apiKeyCache.get(provider)!

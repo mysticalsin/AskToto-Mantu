@@ -55,17 +55,11 @@ describe('store local-keystore migration', () => {
 
   it('preserves an existing encrypted profile without probing Keychain when the local keystore is forced', async () => {
     const originalKey = randomBytes(32)
-    writeFileSync(
-      join(userData, 'secret-key.bin'),
-      Buffer.from(`wrapped:${originalKey.toString('base64')}`, 'utf8'),
-      { mode: 0o600 }
-    )
+    writeFileSync(join(userData, 'secret-key.bin'), Buffer.from(`wrapped:${originalKey.toString('base64')}`, 'utf8'), {
+      mode: 0o600
+    })
     const settings = encryptExistingSettings(originalKey, { provider: 'openai', temperature: 0.42 })
-    writeFileSync(
-      join(userData, 'settings.json'),
-      settings,
-      { mode: 0o600 }
-    )
+    writeFileSync(join(userData, 'settings.json'), settings, { mode: 0o600 })
 
     const { setSettings } = await import('./store')
     expect(() => setSettings({ recordingConsent: true })).toThrow(
@@ -105,11 +99,13 @@ describe('store local-keystore migration', () => {
     const settings = encryptExistingSettings(originalKey, { provider: 'openai' })
     writeFileSync(join(userData, 'settings.json'), settings, { mode: 0o600 })
     writeFileSync(join(userData, 'key-openai.bin'), Buffer.from('encrypted-provider-key'), { mode: 0o600 })
+    writeFileSync(join(userData, '.cloudflare-key-seeded'), '', { mode: 0o600 })
 
     const { archiveEncryptedProfile, setSettings } = await import('./store')
     const archive = archiveEncryptedProfile()
 
     expect(archive.files).toEqual(expect.arrayContaining(['secret-key.bin', 'settings.json', 'key-openai.bin']))
+    expect(archive.files).toContain('.cloudflare-key-seeded')
     expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
     expect(existsSync(join(userData, 'settings.json'))).toBe(false)
     expect(readFileSync(join(archive.backupDir, 'secret-key.bin'))).toEqual(wrappedKey)

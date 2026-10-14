@@ -48,6 +48,17 @@ async function whisperFloorReady(options: AsrMetadataReadinessOptions, root: str
   return metadataFilesPresent(options.whisperFloorFiles.map((name) => join(dir, name)))
 }
 
+/** Cheap selected-engine Whisper readiness; metadata presence is not model integrity evidence. */
+export async function whisperMetadataStatusReady(options: AsrMetadataReadinessOptions): Promise<boolean> {
+  if (options.profile.profile === null) return false
+  if (options.profile.profile === 'lean') {
+    return options.selectedEngine === 'whisper' ? options.resolveLeanComponent('whisper') : false
+  }
+  if (options.packaged) return whisperFloorReady(options, options.bundledModelsRoot)
+  if (await whisperFloorReady(options, options.bundledModelsRoot)) return true
+  return whisperFloorReady(options, options.userDataModelsRoot)
+}
+
 /** Cheap status-only metadata checks. Operational model gates keep their content validation separately. */
 export async function parakeetMetadataStatusReady(options: AsrMetadataReadinessOptions): Promise<boolean> {
   if (options.profile.profile === null) return false

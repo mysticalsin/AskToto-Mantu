@@ -54,6 +54,7 @@ import {
   evaluateAclTrust,
   isAdminManagedTrusted,
   readAclForTest,
+  readManagedPolicyAuthorityFile,
   readTrustedAdminManaged,
   readTrustedAdminManagedBytes,
   trustedAdminManagedPath,
@@ -446,6 +447,16 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
     expect(readTrustedAdminManaged(file)).toBe(first)
     // Four privileged reads — the shape of a single settings:set turn — one powershell.exe.
     expect(probes.count).toBe(1)
+  }, 20_000)
+
+  it('forces a new descriptor-bound ACL probe at an explicit authority boundary', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now())
+    const first = readTrustedAdminManaged(file)
+    const fresh = await readManagedPolicyAuthorityFile(file, undefined, true)
+    expect(fresh.status).toBe('present')
+    if (fresh.status === 'present') expect(Buffer.from(fresh.bytes).toString('utf8')).toBe(first)
+    expect(probes.count).toBe(2)
   }, 20_000)
 
   it('re-probes after a delete-and-replace even with mtime and size forged to match', () => {

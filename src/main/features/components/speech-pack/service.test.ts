@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createSpeechPackEngine, type SpeechPackEngine, type SpeechPackState } from './engine'
+import {
+  createSpeechPackEngine,
+  type SpeechPackEngine,
+  type SpeechPackEngineOptions,
+  type SpeechPackState
+} from './engine'
 import {
   SPEECH_PACK_COMPONENTS,
   WHISPER_BASE_Q8,
@@ -26,6 +31,11 @@ vi.mock('electron', () => ({
 function fakeEngine(): {
   engine: SpeechPackEngine
   update: (id: SpeechPackComponentId, state: SpeechPackState, freshlyVerified?: boolean) => void
+  enqueue: ReturnType<
+    typeof vi.fn<
+      (ids: readonly SpeechPackComponentId[], selected?: SpeechPackComponentId, transaction?: symbol) => void
+    >
+  >
 } {
   const states = new Map(
     SPEECH_PACK_COMPONENTS.map((component) => [component.id, { status: 'not-installed' } as SpeechPackState])
@@ -45,9 +55,11 @@ function fakeEngine(): {
     states.set(id, state)
     for (const listener of listeners) listener({ id, state, freshlyVerified })
   }
-  const enqueue = vi.fn((ids: readonly SpeechPackComponentId[], _selected?: SpeechPackComponentId) => {
-    for (const id of ids) update(id, { status: 'queued' })
-  })
+  const enqueue = vi.fn(
+    (ids: readonly SpeechPackComponentId[], _selected?: SpeechPackComponentId, _transaction?: symbol) => {
+      for (const id of ids) update(id, { status: 'queued' })
+    }
+  )
   const repair = vi.fn((id: SpeechPackComponentId) => update(id, { status: 'queued' }))
   const engine: SpeechPackEngine = {
     initialise: async () => undefined,
@@ -63,7 +75,7 @@ function fakeEngine(): {
     cancel: vi.fn((id) => update(id, { status: 'error', kind: 'cancelled' })),
     whenIdle: async () => undefined
   }
-  return { engine, update }
+  return { engine, update, enqueue }
 }
 
 function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]> = {}) {
@@ -120,6 +132,31 @@ describe('explicit speech-pack service boundary', () => {
     expect(service.hasEngine()).toBe(false)
   })
 
+  it('uses asynchronous runtime/model metadata and fails closed when the selected engine changes mid-read', async () => {
+    let selectionIdentity = 'selection:0'
+    const { service } = setup({
+      selectionIdentity: () => selectionIdentity,
+      engineRuntimeReady: async () => true,
+      engineModelReady: async () => {
+        selectionIdentity = 'selection:1'
+        return true
+      }
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.engineReadiness.state).toBe('unavailable')
+  })
+
+  it('reports a missing runtime separately and does not claim model readiness', async () => {
+    const engineModelReady = vi.fn(async () => true)
+    const { service } = setup({
+      engineRuntimeReady: async () => false,
+      engineModelReady
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.engineReadiness.state).toBe('runtime-needed')
+    expect(engineModelReady).not.toHaveBeenCalled()
+  })
+
   it('does not present a model-only lean pack as a ready engine or an installable plan', async () => {
     const leanContract = {
       status: 'verified' as const,
@@ -165,7 +202,7 @@ describe('explicit speech-pack service boundary', () => {
     const result = await service.installWithPlan({ planId: preview.plan.planId, action: 'install' })
     expect(result).toEqual({ ok: true })
     expect(createEngine).toHaveBeenCalledTimes(1)
-    expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id)
+    expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id, expect.any(Symbol))
     expect((await service.snapshot()).progress?.componentId).toBe(WHISPER_BASE_Q8.id)
   })
 
@@ -452,6 +489,178 @@ describe('explicit speech-pack service boundary', () => {
       service.captureActivityChanged(true)
     }, 'busy')
     await run((service) => service.shutdown(), 'busy')
+  })
+
+  it('invalidates a reviewed plan after policy authority changes away and back', async () => {
+    let policyIdentity = 'speech-proof:4:scope-a:revision-1'
+    const { service, createEngine } = setup({ policyIdentity: () => policyIdentity })
+    const preview = await service.planPreview({
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install',
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    })
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error('expected a current install plan')
+
+    policyIdentity = 'speech-proof:5:scope-b:revision-2'
+    service.policyChanged()
+    policyIdentity = 'speech-proof:6:scope-a:revision-1'
+    service.policyChanged()
+
+    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: false,
+      reason: 'plan-expired'
+    })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('keeps same-transaction prior-pack rollback authority after policy revocation, but never during capture', async () => {
+    let policyIdentity = 'speech-proof:4:scope-a:revision-1'
+    let capture = false
+    let engineOptions: SpeechPackEngineOptions | null = null
+    const fake = fakeEngine()
+    const createEngine = (options: SpeechPackEngineOptions): SpeechPackEngine => {
+      engineOptions = options
+      return { ...fake.engine, cancel: vi.fn() }
+    }
+    const { service } = setup({
+      policyIdentity: () => policyIdentity,
+      captureActive: () => capture,
+      createEngine: createEngine as never
+    })
+    expect(await install(service)).toMatchObject({ ok: true })
+    const admittedOptions = engineOptions as unknown as SpeechPackEngineOptions
+    const marker = { version: '1', manifestIdentity: 'a'.repeat(64) }
+    const transaction = fake.enqueue.mock.calls[0][2]
+    expect(transaction).toEqual(expect.any(Symbol))
+    if (!transaction) throw new Error('expected engine transaction token')
+
+    policyIdentity = 'speech-proof:5:scope-b:revision-2'
+    service.policyChanged()
+    await expect(admittedOptions.authorizeActivation?.(WHISPER_BASE_Q8.id)).resolves.toBe(false)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, transaction)).resolves.toBe(true)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, transaction)).toBe(true)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, Symbol('stale'))).resolves.toBe(false)
+    admittedOptions.onTransactionSettled?.(WHISPER_BASE_Q8.id, transaction)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, transaction)).resolves.toBe(false)
+
+    fake.update(WHISPER_BASE_Q8.id, { status: 'error', kind: 'http' })
+    policyIdentity = 'speech-proof:7:scope-a:revision-3'
+    service.policyChanged()
+    expect(await install(service)).toMatchObject({ ok: true })
+    const nextTransaction = fake.enqueue.mock.calls[1][2]
+    expect(nextTransaction).toEqual(expect.any(Symbol))
+    if (!nextTransaction) throw new Error('expected successor transaction token')
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker, transaction)).resolves.toBe(false)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, nextTransaction)).toBe(true)
+
+    capture = true
+    service.captureActivityChanged(true)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, nextTransaction)).toBe(false)
+    await service.shutdown()
+  })
+
+  it('keeps the real engine transaction busy until ready-listener cancel rollback settles', async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'speech-pack-service-rollback-'))
+    const bytes = Buffer.from('tiny pinned pack')
+    const file = { path: 'weights.bin', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    const component: SpeechPackComponent = {
+      ...WHISPER_BASE_Q8,
+      version: 'integration-test',
+      files: [file],
+      source: { kind: 'files', baseUrl: `https://example.test/resolve/${'a'.repeat(40)}` }
+    }
+    const fixtureWavPath = join(__dirname, '../../../../../resources/speech-pack-fixtures/en.wav')
+    let engine: SpeechPackEngine | null = null
+    const activeEngine = (): SpeechPackEngine | null => engine
+    let cancelResult: Promise<unknown> | null = null
+    let signalRollback!: () => void
+    const rollbackEntered = new Promise<void>((resolve) => {
+      signalRollback = resolve
+    })
+    let releaseRollback!: (allowed: boolean) => void
+    const heldRollback = new Promise<boolean>((resolve) => {
+      releaseRollback = resolve
+    })
+    const service = createSpeechPackService({
+      resourcesRoot: '/missing-resources',
+      packaged: false,
+      rootDir,
+      selectedEngine: () => 'whisper',
+      selectionIdentity: () => 'engine:1:whisper',
+      policyAllowsTransfer: () => true,
+      policyIdentity: () => 'policy:1:unmanaged',
+      refreshAuthority: () => true,
+      refreshRollbackAuthority: async () => {
+        signalRollback()
+        return heldRollback
+      },
+      rollbackAuthorityCurrent: () => true,
+      captureActive: () => false,
+      captureIdentity: () => 'capture:0',
+      featureEnabled: () => true,
+      fixtureWavPath,
+      components: [component],
+      packageRuntimeContract: async () => ({ status: 'development', profile: 'development', inventory: null }),
+      engineRuntimeReady: () => true,
+      engineModelReady: () => true,
+      createEngine: (options) => {
+        engine = createSpeechPackEngine({
+          ...options,
+          emitIntervalMs: 0,
+          freeBytes: () => Number.MAX_SAFE_INTEGER,
+          fetch: async () =>
+            new Response(bytes, {
+              headers: { 'content-length': String(bytes.length), etag: '"pinned"' }
+            }),
+          selfTest: async () => 'fixture decoded'
+        })
+        return engine
+      }
+    })
+    service.subscribe((progress) => {
+      if (progress.state === 'ready' && cancelResult === null) {
+        cancelResult = service.action({
+          componentId: component.id,
+          manifestIdentity: componentManifestIdentity(component),
+          action: 'cancel'
+        })
+      }
+    })
+    try {
+      const preview = await service.planPreview({
+        componentId: component.id,
+        action: 'install',
+        manifestIdentity: componentManifestIdentity(component)
+      })
+      expect(preview.ok).toBe(true)
+      if (!preview.ok) throw new Error('expected an install plan')
+      await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toMatchObject({
+        ok: true
+      })
+      const runningEngine = activeEngine()
+      if (!runningEngine) throw new Error('expected the production engine adapter')
+      await rollbackEntered
+      const successor = await service.planPreview({
+        componentId: component.id,
+        manifestIdentity: componentManifestIdentity(component),
+        action: 'repair'
+      })
+      expect(successor.ok).toBe(true)
+      if (!successor.ok) throw new Error('expected a repair plan while rollback is held')
+      await expect(service.installWithPlan({ planId: successor.plan.planId, action: 'repair' })).resolves.toMatchObject(
+        { ok: false, reason: 'busy' }
+      )
+      releaseRollback(true)
+      await runningEngine.whenIdle()
+      await expect(cancelResult).resolves.toMatchObject({ ok: true })
+      expect(existsSync(join(rootDir, component.id, component.version))).toBe(false)
+      expect(existsSync(join(rootDir, component.id, 'active.json'))).toBe(false)
+    } finally {
+      releaseRollback(true)
+      await service.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
   })
 
   it('does not admit a transfer after shutdown has started', async () => {

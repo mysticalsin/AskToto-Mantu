@@ -244,7 +244,6 @@ describe('boot wiring in index.ts (M2-0518)', () => {
     'verifyCliSessions',
     'importEmbeddedCloudflareKey',
     'reconcileLaunchAtLogin',
-    'provisionLocalModel',
     'sweepStaleTempFiles',
     'recoverOrphanDrafts',
     'runRetentionSweep',

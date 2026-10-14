@@ -15,6 +15,7 @@ function input(
     speechRouteExplicit: false,
     managedKeys: [],
     lockedKeys: [],
+    authorityReadable: true,
     ...overrides
   }
 }
@@ -40,6 +41,7 @@ describe('fresh lean broker default projection', () => {
     ['unverified package', { verifiedPackageProfile: null }],
     ['mismatched package marker', { verifiedPackageProfile: 'full' as const }],
     ['existing profile', { freshProfile: false }],
+    ['unreadable authority policy', { authorityReadable: false }],
     ['explicit speech route', { speechRouteExplicit: true }]
   ])('preserves settings for %s', (_name, context) => {
     const source = input(context)
