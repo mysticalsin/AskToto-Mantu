@@ -68,8 +68,7 @@ export class CommandConfirmation extends CommandControl {
 
   onWindowBlurred(isCurrentWindow: boolean, onCurrentBlur: () => void): void {
     if (!isCurrentWindow) return
-    this.revokeForLifecycleEvent('window_blurred')
-    onCurrentBlur()
+    this.runAfterLifecycleRevocation('window_blurred', onCurrentBlur)
   }
 
   onWindowHidden(isCurrentWindow: boolean): void {
@@ -80,10 +79,23 @@ export class CommandConfirmation extends CommandControl {
     reason: string,
     listener: (...args: TArgs) => TResult
   ): (...args: TArgs) => TResult {
-    return (...args) => {
+    return (...args) => this.runAfterLifecycleRevocation(reason, () => listener(...args))
+  }
+
+  private runAfterLifecycleRevocation<TResult>(reason: string, listener: () => TResult): TResult {
+    let revocationFailed = false
+    let revocationError: unknown
+    let result: TResult
+    try {
       this.revokeForLifecycleEvent(reason)
-      return listener(...args)
+    } catch (error) {
+      revocationFailed = true
+      revocationError = error
+    } finally {
+      result = listener()
     }
+    if (revocationFailed) throw revocationError
+    return result
   }
 
   private registerLifecycleRevocationHooks(powerMonitor: CommandPowerMonitor, logger: CommandConfirmationLogger): void {
