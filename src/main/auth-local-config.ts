@@ -63,7 +63,9 @@ export function createAuthLocalConfigState(deps: {
         const record = JSON.parse(deps.readText(lkgPath()))
         const clientId = String(record?.clientId || '').trim()
         const tenantId = String(record?.tenantId || '').trim()
-        const allowedDomain = String(record?.allowedDomain || '').trim().replace(/^@/, '')
+        const allowedDomain = String(record?.allowedDomain || '')
+          .trim()
+          .replace(/^@/, '')
         if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
       } catch {
         /* absent, unreadable or malformed */

@@ -1,7 +1,12 @@
 import { app, safeStorage } from 'electron'
 import type { ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
-import { KeychainKeyRecoveryError, MacKeychainUnlockRequiredError, decryptSecret, requireMacKeychainUnlock } from './secrets'
+import {
+  KeychainKeyRecoveryError,
+  MacKeychainUnlockRequiredError,
+  decryptSecret,
+  requireMacKeychainUnlock
+} from './secrets'
 
 const AES_KEY_MARKER = Buffer.from('ATKAES1\n')
 

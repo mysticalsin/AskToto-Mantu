@@ -67,7 +67,8 @@ export function createMacProfileBootCoordinator(getBootWork: () => BootWorkGate 
   let released = false
   let releaseWindow: BrowserWindow | null = null
 
-  const isUnlockRequired = (): boolean => app.isPackaged && process.platform === 'darwin' && !isMacKeychainUnlockAuthorized()
+  const isUnlockRequired = (): boolean =>
+    app.isPackaged && process.platform === 'darwin' && !isMacKeychainUnlockAuthorized()
   const releaseIfReady = (): void => {
     if (!releaseRequested || released || isUnlockRequired()) return
     released = true

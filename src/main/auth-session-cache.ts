@@ -31,7 +31,11 @@ export function readAuthSession<T>(options: {
         /* not AES-GCM format; legacy safeStorage may still succeed */
       }
     }
-    if (json === null && (options.packagedMac || !options.useFileBackend()) && (options.packagedMac || options.safeStorageAvailable())) {
+    if (
+      json === null &&
+      (options.packagedMac || !options.useFileBackend()) &&
+      (options.packagedMac || options.safeStorageAvailable())
+    ) {
       try {
         json = options.decryptSafeStorage(buf)
       } catch {

@@ -190,7 +190,9 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(unlockIpc).toContain('error instanceof KeychainKeyRecoveryError')
     expect(unlockIpc).toContain('new MacKeychainUnlockRequiredError()')
     expect(unlockIpc).toContain('void hasKeysMap()\n      void getDustRefreshToken()')
-    expect(unlockIpc).toContain('resetMacKeychainUnlockAuthorization()\n      resetCredentialReadCachesAfterProfileUnlock()')
+    expect(unlockIpc).toContain(
+      'resetMacKeychainUnlockAuthorization()\n      resetCredentialReadCachesAfterProfileUnlock()'
+    )
     expect(state).toContain('isMacKeychainUnlockMessage')
     expect(unlockHook).toContain('setBootError(message)\n      throw error')
     expect(app).toContain('if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError))')

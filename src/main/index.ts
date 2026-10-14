@@ -5267,7 +5267,12 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
-  registerMacProfileUnlockIpc(assertMainWindow, publicSettingsWithSpeakerPolicy, () => win, macProfileBoot.unlockSucceeded)
+  registerMacProfileUnlockIpc(
+    assertMainWindow,
+    publicSettingsWithSpeakerPolicy,
+    () => win,
+    macProfileBoot.unlockSucceeded
+  )
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
     if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
@@ -9874,10 +9879,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
 
-      // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
-      // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately
-      // below — previously registered unguarded — run inside it too: a throw during any of those must not
-      // take out createTray/registerShortcuts/createWindow further down the boot sequence.
+      // Guard boot steps so failures, including display/permission/media registrations, cannot abort window startup.
       const runStep = (name: string, fn: () => void): void => {
         const run = (): void => {
           try {
@@ -10146,13 +10148,8 @@ if (!app.requestSingleInstanceLock()) {
       // Catch the case where encryption was already on (managed-config or a previous run) with a stale
       // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
       runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-      // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
-      // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
       runStep('registerShortcuts', registerShortcuts)
-      // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
-      // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
-      // (ahead of preprocess) but loadURL still raced first paint — that strand is the post-boot
-      // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
+      // Register IPC before createWindow/loadURL: first paint can race handler setup and leave a loading strip.
       runStep('registerIpc', registerIpc)
       clearBootWatchOnce('registerIpc')
       await yieldBeforeBootWindow() // M2-0422: window construction is its own task
@@ -10221,7 +10218,8 @@ if (!app.requestSingleInstanceLock()) {
             setBootPowerSaveBlock(false)
             clearBootWatchOnce('profile-unlock-deferred')
           })
-        ) return
+        )
+          return
         // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
         // launch that decrypts index.json. When the previous run died before boot completed, this launch
         // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped

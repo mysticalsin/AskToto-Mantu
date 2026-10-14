@@ -212,8 +212,14 @@ const authLocalConfig = createAuthLocalConfigState({
   writeText: (path, value) => writeFileSync(path, value, { mode: 0o600 }),
   remove: rmSync
 })
-const { writeStickyConfigured, clearStickyConfigured, isStickyConfigured, writeLkgConfig, readLkgConfig, clearLkgConfig } =
-  authLocalConfig
+const {
+  writeStickyConfigured,
+  clearStickyConfigured,
+  isStickyConfigured,
+  writeLkgConfig,
+  readLkgConfig,
+  clearLkgConfig
+} = authLocalConfig
 
 // ─── Last-known-good (LKG) sign-in config ─────────────────────────────────────
 //
