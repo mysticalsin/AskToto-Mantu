@@ -303,7 +303,6 @@ export async function recallRead(
 
   return {
     ok: true,
-    kind: 'meeting',
     title: fm.title || safeName.replace(/\.md$/, ''),
     mode: fm.mode || 'general',
     startedAt,

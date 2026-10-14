@@ -2053,7 +2053,7 @@ export interface RecallReadResult {
   ok: boolean
   error?: string
   /** `note` is returned only for a saved Q&A note; these fields are absent on meeting reads. */
-  kind?: 'meeting' | 'note'
+  kind?: 'note'
   title?: string
   mode?: string
   question?: string
