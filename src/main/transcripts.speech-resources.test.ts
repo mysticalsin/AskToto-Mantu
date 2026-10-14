@@ -129,7 +129,7 @@ describe('actual declared speech persistence resource measurements', () => {
       await saveDraftTranscript(settings, input)
       const draftSaveMs = performance.now() - draftStart
       const draftNames = readdirSync(folder).filter((name) =>
-        /^\.autosave-draft-\d{4}-\d{2}-\d{2}_\d{6}\.md$/.test(name)
+        /^\.autosave-draft-\d{4}-\d{2}-\d{2}_\d{6}-\d{3}\.md$/.test(name)
       )
       expect(draftNames).toHaveLength(1)
       const draftFile = join(folder, draftNames[0])
