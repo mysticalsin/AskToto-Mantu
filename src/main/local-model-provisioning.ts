@@ -2,10 +2,20 @@ import { localModelAllowedByPolicy, type ModelPolicyDocument } from '@shared/mod
 import type { Settings } from '@shared/ipc'
 import { speechPolicyIsConfigured } from './speech-policy-authority'
 
-type LocalProvisioningSettings = Pick<
+export type LocalProvisioningSettings = Pick<
   Settings,
   'localLlm' | 'enterpriseLive' | 'operatorUrl' | 'operatorIngestSecret' | 'operatorLicenseToken'
 >
+
+export type ExplicitLocalModelSettingsSnapshot = {
+  settings: LocalProvisioningSettings
+  readable: boolean
+  allowedProviders: readonly string[] | null
+  modelPolicy:
+    | { status: 'unconfigured' | 'unmanaged'; identity: string }
+    | { status: 'managed'; identity: string; policy: ModelPolicyDocument }
+    | { status: 'unverified'; identity: string }
+}
 
 /** Optional LLM provisioning policy. Transcription assets have a separate mandatory setup path. */
 export async function provisionLocalModel(
@@ -28,15 +38,7 @@ export async function provisionExplicitLocalModel(options: {
   runtimeAvailable: () => Promise<boolean>
   localModelIdentity: () => string
   currentModelPolicyIdentity: () => string
-  readSettings: () => Promise<{
-    settings: LocalProvisioningSettings
-    readable: boolean
-    allowedProviders: readonly string[] | null
-    modelPolicy:
-      | { status: 'unconfigured' | 'unmanaged'; identity: string }
-      | { status: 'managed'; identity: string; policy: ModelPolicyDocument }
-      | { status: 'unverified'; identity: string }
-  }>
+  readSettings: () => Promise<ExplicitLocalModelSettingsSnapshot>
   ensure: (modelId: string, authorized: () => Promise<boolean>, validateCurrent: () => boolean) => Promise<boolean>
   onReady: () => void
 }): Promise<boolean> {
@@ -91,48 +93,4 @@ export async function provisionExplicitLocalModel(options: {
     return false
   options.onReady()
   return true
-}
-
-export function registerExplicitLocalModelEnsure(options: {
-  ipcMain: Electron.IpcMain
-  channel: string
-  assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
-  runtimeAvailable: () => Promise<boolean>
-  captureActive: () => boolean
-  captureIdentity: () => string
-  localModelIdentity: () => string
-  currentModelPolicyIdentity: () => string
-  readSettings: () => Promise<{
-    settings: LocalProvisioningSettings
-    readable: boolean
-    allowedProviders: readonly string[] | null
-    modelPolicy:
-      | { status: 'unconfigured' | 'unmanaged'; identity: string }
-      | { status: 'managed'; identity: string; policy: ModelPolicyDocument }
-      | { status: 'unverified'; identity: string }
-  }>
-  ensure: (modelId: string, authorized: () => Promise<boolean>, validateCurrent: () => boolean) => Promise<boolean>
-  onReady: () => void
-  onFailure: (error: unknown) => void
-}): void {
-  options.ipcMain.handle(options.channel, async (event) => {
-    options.assertMainWindow(event)
-    try {
-      return {
-        ok: await provisionExplicitLocalModel({
-          runtimeAvailable: options.runtimeAvailable,
-          captureActive: options.captureActive,
-          captureIdentity: options.captureIdentity,
-          localModelIdentity: options.localModelIdentity,
-          currentModelPolicyIdentity: options.currentModelPolicyIdentity,
-          readSettings: options.readSettings,
-          ensure: options.ensure,
-          onReady: options.onReady
-        })
-      }
-    } catch (error) {
-      options.onFailure(error)
-      return { ok: false }
-    }
-  })
 }

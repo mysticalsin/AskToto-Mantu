@@ -1,8 +1,9 @@
 import { app } from 'electron'
-import { IPC } from '@shared/ipc'
 import { METIS_PACKAGE_PROFILE } from '@shared/package-profile'
 import { effectiveLocalSpeechPackPolicy, type LocalSpeechPackPolicy } from '@shared/model-policy'
 import { getPublishedSettingsObservation } from './settings-observation'
+import { registerHighTierAsrModelFetch } from './ipc/asr-model-download'
+import { registerExplicitLocalModelEnsure } from './ipc/local-model-provisioning'
 import {
   configureFreshLeanSpeechDefaults,
   getAdminLocalSpeechPackPolicy,
@@ -12,8 +13,6 @@ import {
   readSettingsAtAuthorityBoundary
 } from './store'
 import { asrModelMetadataReadyForEngine } from './asr-bundled-ensure'
-import { registerExplicitLocalModelEnsure } from './local-model-provisioning'
-import { registerHighTierAsrModelFetch } from './asr-model-download'
 import { getSpeechPolicyAuthorityStatus } from './model-policy-client'
 import { speechPolicyIsConfigured } from './speech-policy-authority'
 import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
@@ -55,7 +54,6 @@ export function registerOptionalModelProvisioningIpc(options: {
   }
   registerExplicitLocalModelEnsure({
     ipcMain: options.ipcMain,
-    channel: IPC.localModelsEnsure,
     assertMainWindow: options.assertMainWindow,
     runtimeAvailable: packageRuntimeAvailable,
     captureActive: options.captureActive,
@@ -69,7 +67,6 @@ export function registerOptionalModelProvisioningIpc(options: {
   })
   registerHighTierAsrModelFetch({
     ipcMain: options.ipcMain,
-    channel: IPC.asrModelFetch,
     assertMainWindow: options.assertMainWindow,
     authenticated: options.requireAuth,
     runtimeAvailable: packageRuntimeAvailable,

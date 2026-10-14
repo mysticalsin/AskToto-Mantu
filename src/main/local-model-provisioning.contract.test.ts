@@ -11,8 +11,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { IPC } from '@shared/ipc'
+import { registerExplicitLocalModelEnsure } from './ipc/local-model-provisioning'
 
 const src = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -32,12 +34,39 @@ describe('MQA-186 — optional weights require an explicit request', () => {
     expect(boot).toContain('localModelDownloaded(cur.localLlm.modelId)')
   })
 
-  it('the explicit request is package and policy gated before provisioning', () => {
-    expect(src).toMatch(/ipcMain\.handle\(IPC\.localModelsEnsure/)
-    const handler = sliceBetween(src, 'ipcMain.handle(IPC.localModelsEnsure', '// MQA-247')
-    expect(handler).toMatch(/contract\.profile === 'lean'/)
-    expect(handler).toMatch(/getPublishedSettingsObservation\(\)\?\.readable !== true/)
-    expect(handler).toMatch(/provisionLocalModel\(admittedModel, allowed, ensureLocalModel, 'explicit'\)/)
+  it('registers the explicit ensure handler on its owned IPC channel', async () => {
+    expect(src).toMatch(/registerOptionalModelProvisioningIpc\(\{/)
+    const handlers = new Map<string, (event: Electron.IpcMainInvokeEvent) => Promise<unknown>>()
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (event: Electron.IpcMainInvokeEvent) => Promise<unknown>) => {
+        handlers.set(channel, handler)
+      })
+    }
+    const assertMainWindow = vi.fn()
+    const ensure = vi.fn(async () => true)
+    const readSettings = vi.fn(async () => {
+      throw new Error('settings must not be read before runtime admission')
+    })
+    registerExplicitLocalModelEnsure({
+      ipcMain,
+      assertMainWindow,
+      runtimeAvailable: async () => false,
+      captureActive: () => false,
+      captureIdentity: () => 'capture:0',
+      localModelIdentity: () => 'model:0',
+      currentModelPolicyIdentity: () => 'policy:0',
+      readSettings,
+      ensure,
+      onReady: vi.fn(),
+      onFailure: vi.fn()
+    })
+    expect(ipcMain.handle).toHaveBeenCalledExactlyOnceWith(IPC.localModelsEnsure, expect.any(Function))
+    const handler = handlers.get(IPC.localModelsEnsure)
+    if (!handler) throw new Error('explicit model ensure handler was not registered')
+    await expect(handler({} as Electron.IpcMainInvokeEvent)).resolves.toEqual({ ok: false })
+    expect(assertMainWindow).toHaveBeenCalledOnce()
+    expect(readSettings).not.toHaveBeenCalled()
+    expect(ensure).not.toHaveBeenCalled()
   })
 
   it('changing Local AI settings never starts a download', () => {
