@@ -17,6 +17,8 @@ export const CLOUD_SPEECH_FULL_FRAME_BYTES = 3_200
 export const CLOUD_SPEECH_MAX_PENDING_FRAMES = 20
 export const CLOUD_SPEECH_MAX_PENDING_BYTES = 64 * 1024
 export const CLOUD_SPEECH_MAX_PENDING_AUDIO_MS = 2_000
+export const CLOUD_SPEECH_MAX_PRELOAD_FRAME_INVOKES = 2
+export const CLOUD_SPEECH_MAX_EVENT_SUBSCRIPTIONS = 2
 export const CLOUD_SPEECH_MAX_EVENT_TEXT = 8_192
 export const CLOUD_SPEECH_MAX_WORDS = 256
 export const CLOUD_SPEECH_MAX_LANGUAGES = 8
@@ -85,6 +87,7 @@ export const CloudSpeechCapabilitySchema = z
       : null
     if (value.ready && (!selectedKey || value.refusal !== null || !keys.includes(selectedKey)))
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['ready'] })
+    if (!value.ready && value.refusal === null) context.addIssue({ code: z.ZodIssueCode.custom, path: ['refusal'] })
     if (value.refusal !== null && value.ready) context.addIssue({ code: z.ZodIssueCode.custom, path: ['refusal'] })
   })
 export type CloudSpeechCapability = z.infer<typeof CloudSpeechCapabilitySchema>
@@ -167,6 +170,8 @@ export const CloudSpeechFinishRequestSchema = CaptureIdentitySchema.extend({
   .strict()
   .superRefine((request, context) => {
     if (new Set(request.tracks.map((item) => item.track)).size !== request.tracks.length)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+    if (request.tracks.some((item) => item.finalSequence === 0 && item.finalSampleOffset !== 0))
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
   })
 export type CloudSpeechFinishRequest = z.infer<typeof CloudSpeechFinishRequestSchema>
@@ -260,6 +265,10 @@ const TrackClosureSchema = z
     reason: ClosureReasonSchema
   })
   .strict()
+  .superRefine((track, context) => {
+    if (track.tail === 'complete' && !track.closeConfirmed)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['closeConfirmed'] })
+  })
 
 export const CloudSpeechFinishResultSchema = z.union([
   FailureSchema,
@@ -276,8 +285,12 @@ export const CloudSpeechFinishResultSchema = z.union([
     .superRefine((result, context) => {
       if (new Set(result.tracks.map((track) => track.stream.track)).size !== result.tracks.length)
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+      if (result.tracks.some((track) => track.stream.generation !== result.captureGeneration))
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
       if (result.complete && result.tracks.some((track) => !track.closeConfirmed || track.tail !== 'complete'))
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['complete'] })
+      if (result.complete !== (result.reason === 'normal'))
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'] })
     })
 ])
 export type CloudSpeechFinishResult = z.infer<typeof CloudSpeechFinishResultSchema>
@@ -295,6 +308,26 @@ export const CloudSpeechCancelResultSchema = z.union([
 ])
 export type CloudSpeechCancelResult = z.infer<typeof CloudSpeechCancelResultSchema>
 
+const StatusTrackSchema = z
+  .object({
+    stream: SpeechStreamRefSchema,
+    phase: z.enum(['connecting', 'open', 'closing', 'closed']),
+    lastSequence: OffsetSchema,
+    closeConfirmed: z.boolean(),
+    tail: z.enum(['complete', 'incomplete']).nullable()
+  })
+  .strict()
+  .superRefine((track, context) => {
+    if (track.tail === 'complete' && !track.closeConfirmed)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['closeConfirmed'] })
+    if (track.phase !== 'closed' && track.closeConfirmed)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['phase'] })
+    if (track.phase === 'closed' && !track.closeConfirmed)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['closeConfirmed'] })
+    if (track.phase !== 'closed' && track.tail !== null)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['tail'] })
+  })
+
 export const CloudSpeechStatusResultSchema = z.union([
   FailureSchema,
   z
@@ -303,9 +336,26 @@ export const CloudSpeechStatusResultSchema = z.union([
       captureId: CaptureIdSchema,
       captureGeneration: CounterSchema,
       state: z.enum(['active', 'closing', 'closed', 'unknown']),
-      tracks: z.array(TrackClosureSchema).max(2)
+      tracks: z.array(StatusTrackSchema).max(2)
     })
     .strict()
+    .superRefine((result, context) => {
+      if (new Set(result.tracks.map((track) => track.stream.track)).size !== result.tracks.length)
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+      if (result.tracks.some((track) => track.stream.generation !== result.captureGeneration))
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+      if (result.state !== 'unknown' && result.tracks.length === 0)
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+      if (result.state === 'closed' && result.tracks.some((track) => !track.closeConfirmed || track.phase !== 'closed'))
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+      if (
+        result.state === 'active' &&
+        result.tracks.some((track) => track.phase === 'closing' || track.phase === 'closed')
+      )
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+      if (result.state === 'closing' && result.tracks.every((track) => track.phase === 'closed'))
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+    })
 ])
 export type CloudSpeechStatusResult = z.infer<typeof CloudSpeechStatusResultSchema>
 
@@ -372,6 +422,8 @@ const TerminalEventSchema = z
   .superRefine((event, context) => {
     if (event.stream.generation !== event.captureGeneration)
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['stream', 'generation'] })
+    if (event.tail === 'complete' && !event.closeConfirmed)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['closeConfirmed'] })
   })
 
 export const CloudSpeechEventSchema = z.union([SegmentEventSchema, TerminalEventSchema])

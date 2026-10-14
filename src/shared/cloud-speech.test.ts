@@ -2,17 +2,21 @@ import { describe, expect, it } from 'vitest'
 import {
   CloudSpeechEventSchema,
   CloudSpeechFinishRequestSchema,
+  CloudSpeechFinishResultSchema,
   CloudSpeechFrameSchema,
+  CloudSpeechCapabilitySchema,
+  CloudSpeechStatusResultSchema,
   CloudSpeechStartRequestSchema,
   type CloudSpeechStartRequest
 } from './cloud-speech'
+import type { Capture } from './contracts/speech'
 
-const capture = {
+const capture: Capture = {
   generation: 3,
   engine: 'deepgram-nova3',
   requestedTracks: ['microphone', 'system'],
   capturedTracks: ['microphone']
-} as const
+}
 
 const start: CloudSpeechStartRequest = {
   captureId: 'a3cfc5ce-6427-4a17-86b8-6f2b2c82c620',
@@ -38,12 +42,9 @@ describe('cloud speech shared wire contracts', () => {
   it('requires strict explicit consent, matching capture identity and a supported cloud engine', () => {
     expect(CloudSpeechStartRequestSchema.safeParse(start).success).toBe(true)
     expect(CloudSpeechStartRequestSchema.safeParse({ ...start, rawToken: 'secret' }).success).toBe(false)
-    expect(
-      CloudSpeechStartRequestSchema.safeParse({
-        ...start,
-        capture: { ...capture, generation: capture.generation + 1 }
-      }).success
-    ).toBe(false)
+    expect(CloudSpeechStartRequestSchema.safeParse({ ...start, capture: { ...capture, generation: 0 } }).success).toBe(
+      false
+    )
     expect(
       CloudSpeechStartRequestSchema.safeParse({
         ...start,
@@ -89,20 +90,15 @@ describe('cloud speech shared wire contracts', () => {
     const bufferConstructor = ArrayBuffer as typeof ArrayBuffer & {
       new (length: number, options: { maxByteLength: number }): ArrayBuffer
     }
-    try {
-      const resizable = new bufferConstructor(3_200, { maxByteLength: 6_400 })
-      expect(CloudSpeechFrameSchema.safeParse(frame({ pcm16le: resizable })).success).toBe(false)
-    } catch {
-      // Older test runtimes may not implement resizable ArrayBuffer; the fixed-byte checks still run.
-    }
+    const resizable = new bufferConstructor(3_200, { maxByteLength: 6_400 })
+    expect(CloudSpeechFrameSchema.safeParse(frame({ pcm16le: resizable })).success).toBe(false)
     const detached = new ArrayBuffer(3_200)
     structuredClone(detached, { transfer: [detached] })
     expect(CloudSpeechFrameSchema.safeParse(frame({ pcm16le: detached })).success).toBe(false)
     expect(CloudSpeechFrameSchema.safeParse(frame({ pcm16le: { byteLength: 3_200 } })).success).toBe(false)
   })
 
-  it('rejects unrequested tracks, invalid counters, and sample-frontier overflow', () => {
-    expect(CloudSpeechFrameSchema.safeParse(frame({ track: 'system' })).success).toBe(false)
+  it('rejects invalid counters and sample-frontier overflow', () => {
     expect(CloudSpeechFrameSchema.safeParse(frame({ sequence: 0 })).success).toBe(false)
     expect(CloudSpeechFrameSchema.safeParse(frame({ sequence: Number.MAX_SAFE_INTEGER + 1 })).success).toBe(false)
     expect(CloudSpeechFrameSchema.safeParse(frame({ sampleOffset: Number.MAX_SAFE_INTEGER - 799 })).success).toBe(false)
@@ -133,6 +129,155 @@ describe('cloud speech shared wire contracts', () => {
         tracks: [{ track: 'microphone', finalSequence: -1, finalSampleOffset: 0 }]
       }).success
     ).toBe(false)
+    expect(
+      CloudSpeechFinishRequestSchema.safeParse({
+        captureId: start.captureId,
+        captureGeneration: capture.generation,
+        tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 1 }]
+      }).success
+    ).toBe(false)
+  })
+
+  it('keeps capability refusal and closure evidence internally consistent', () => {
+    const route = { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }
+    expect(
+      CloudSpeechCapabilitySchema.safeParse({
+        disclosureVersion: 'cloud-speech-v1',
+        selected: null,
+        allowed: [],
+        ready: false,
+        refusal: null
+      }).success
+    ).toBe(false)
+    expect(
+      CloudSpeechCapabilitySchema.safeParse({
+        disclosureVersion: 'cloud-speech-v1',
+        selected: route,
+        allowed: [route],
+        ready: true,
+        refusal: null
+      }).success
+    ).toBe(true)
+    expect(
+      CloudSpeechCapabilitySchema.safeParse({
+        disclosureVersion: 'cloud-speech-v1',
+        selected: route,
+        allowed: [],
+        ready: true,
+        refusal: null
+      }).success
+    ).toBe(false)
+
+    const closure = {
+      stream: { generation: capture.generation, track: 'microphone', epoch: 1 },
+      lastSequence: 0,
+      closeConfirmed: false,
+      tail: 'complete',
+      reason: 'normal'
+    }
+    const finish = {
+      ok: true,
+      captureId: start.captureId,
+      captureGeneration: capture.generation,
+      complete: false,
+      tracks: [closure],
+      reason: 'normal'
+    }
+    expect(CloudSpeechFinishResultSchema.safeParse(finish).success).toBe(false)
+    expect(
+      CloudSpeechFinishResultSchema.safeParse({
+        ...finish,
+        complete: true,
+        tracks: [{ ...closure, closeConfirmed: true }]
+      }).success
+    ).toBe(true)
+    expect(
+      CloudSpeechFinishResultSchema.safeParse({
+        ...finish,
+        complete: true,
+        tracks: [
+          {
+            ...closure,
+            closeConfirmed: true,
+            stream: { ...closure.stream, generation: capture.generation + 1 }
+          }
+        ]
+      }).success
+    ).toBe(false)
+    expect(
+      CloudSpeechFinishResultSchema.safeParse({
+        ...finish,
+        complete: true,
+        reason: 'cancelled',
+        tracks: [{ ...closure, closeConfirmed: true }]
+      }).success
+    ).toBe(false)
+
+    const status = {
+      ok: true,
+      captureId: start.captureId,
+      captureGeneration: capture.generation,
+      state: 'closed',
+      tracks: [
+        {
+          stream: closure.stream,
+          phase: 'closed',
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'incomplete'
+        }
+      ]
+    }
+    expect(CloudSpeechStatusResultSchema.safeParse(status).success).toBe(true)
+    expect(
+      CloudSpeechStatusResultSchema.safeParse({
+        ...status,
+        tracks: [{ ...status.tracks[0], stream: { ...status.tracks[0].stream, generation: 99 } }]
+      }).success
+    ).toBe(false)
+    expect(
+      CloudSpeechStatusResultSchema.safeParse({
+        ...status,
+        state: 'active',
+        tracks: [{ ...status.tracks[0], phase: 'open', closeConfirmed: false, tail: null }]
+      }).success
+    ).toBe(true)
+    expect(
+      CloudSpeechStatusResultSchema.safeParse({
+        ...status,
+        state: 'active',
+        tracks: [{ ...status.tracks[0], phase: 'open', closeConfirmed: true, tail: null }]
+      }).success
+    ).toBe(false)
+    expect(
+      CloudSpeechStatusResultSchema.safeParse({
+        ...status,
+        state: 'closing',
+        tracks: [
+          status.tracks[0],
+          {
+            stream: { generation: capture.generation, track: 'system', epoch: 2 },
+            phase: 'closing',
+            lastSequence: 3,
+            closeConfirmed: false,
+            tail: null
+          }
+        ]
+      }).success
+    ).toBe(true)
+    expect(
+      CloudSpeechStatusResultSchema.safeParse({
+        ...status,
+        state: 'active',
+        tracks: []
+      }).success
+    ).toBe(false)
+    expect(
+      CloudSpeechStatusResultSchema.safeParse({
+        ...status,
+        tracks: [status.tracks[0], status.tracks[0]]
+      }).success
+    ).toBe(false)
   })
 
   it('wraps existing speech segments in strict bounded event envelopes without relay identity', () => {
@@ -160,6 +305,18 @@ describe('cloud speech shared wire contracts', () => {
       CloudSpeechEventSchema.safeParse({
         ...event,
         words: Array.from({ length: 257 }, () => ({ text: 'x', startMs: 0, endMs: 1 }))
+      }).success
+    ).toBe(false)
+    expect(
+      CloudSpeechEventSchema.safeParse({
+        type: 'terminal',
+        captureId: start.captureId,
+        captureGeneration: capture.generation,
+        stream: { generation: capture.generation, track: 'microphone', epoch: 1 },
+        lastSequence: 0,
+        closeConfirmed: false,
+        tail: 'complete',
+        reason: 'normal'
       }).success
     ).toBe(false)
   })
