@@ -47,6 +47,34 @@ function fakeSocket() {
   } as unknown as WebSocket & { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }
 }
 
+function eventSocket() {
+  const listeners = new Map<string, Set<(event: Record<string, unknown>) => void>>()
+  const socket = {
+    send: vi.fn(),
+    close: vi.fn(),
+    addEventListener: vi.fn((type: string, listener: (event: Record<string, unknown>) => void) => {
+      const registered = listeners.get(type) ?? new Set()
+      registered.add(listener)
+      listeners.set(type, registered)
+    }),
+    removeEventListener: vi.fn()
+  }
+  return {
+    socket: socket as unknown as WebSocket & { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> },
+    dispatch(type: string, event: Record<string, unknown>) {
+      for (const listener of listeners.get(type) ?? []) listener(event)
+    }
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 describe('speech session Durable Object internal boundary', () => {
   it('rejects unsigned and stale internal commands before any upstream call', async () => {
     const upstream = vi.fn(async () => new Response(null, { status: 101 }))
@@ -258,6 +286,115 @@ describe('speech session Durable Object internal boundary', () => {
     )
     expect(client.close).toHaveBeenCalled()
     expect(upstream.close).toHaveBeenCalled()
+  })
+
+  it('drains admitted provider completion before a late transport error after clean close', async () => {
+    const now = Date.now()
+    const common = {
+      streamId: 'stream-close-error-order',
+      sessionId: 'session-close-error-order',
+      routeEvidenceId: 'evidence-1',
+      captureGeneration: 1,
+      streamEpoch: 1,
+      track: 'microphone' as const,
+      deadlineAt: now + 30_000,
+      authorizedUntil: now + 10_000,
+      budget: createSpeechStreamBudget(now, now + 30_000),
+      finishQueued: false,
+      finishRequested: false,
+      finishRequestedAt: null,
+      audioDrained: false,
+      providerCompleteAt: null,
+      stopRequested: false,
+      stopReason: null,
+      stopDeadlineAt: null,
+      closeControlSent: false,
+      upstreamCloseRequested: false,
+      closeConfirmed: false,
+      lastSequence: 0,
+      segmentStartMs: -1,
+      segmentIndex: 0,
+      segmentRevision: 0,
+      segmentStates: new Map()
+    }
+    const clientSocket = eventSocket()
+    const upstreamSocket = eventSocket()
+    const finalWriteEntered = deferred<void>()
+    const releaseFinalWrite = deferred<void>()
+    const counterWrites: Array<{ query: string; values: unknown[] }> = []
+    const batchWrites: Array<Array<{ query: string; values: unknown[] }>> = []
+    const db = {
+      prepare(query: string) {
+        return {
+          bind(...values: unknown[]) {
+            return {
+              query,
+              values,
+              async run() {
+                counterWrites.push({ query, values })
+                if (query.includes('output_bytes = ?')) {
+                  finalWriteEntered.resolve()
+                  await releaseFinalWrite.promise
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+            }
+          }
+        }
+      },
+      async batch(statements: Array<{ query: string; values: unknown[] }>) {
+        batchWrites.push(statements)
+        return [
+          { success: true, meta: { changes: 1 } },
+          { success: true, meta: { changes: 1 } },
+          { success: true, meta: { changes: 1 } }
+        ]
+      }
+    }
+    const object = new SpeechSessionDurableObject(state() as never, { DB: db } as never)
+    const internals = bindTestStream(object, common, clientSocket.socket, upstreamSocket.socket)
+    const privateObject = object as unknown as { streamTails: Map<string, Promise<void>> }
+
+    await object.webSocketMessage(clientSocket.socket, '{"type":"finish"}')
+    expect(common.finishRequested).toBe(true)
+    expect(upstreamSocket.socket.send).toHaveBeenCalledWith('{"type":"CloseStream"}')
+
+    upstreamSocket.dispatch('message', {
+      data: JSON.stringify({
+        type: 'Results',
+        start: 0,
+        duration: 0.2,
+        is_final: true,
+        channel: { alternatives: [{ transcript: 'final result' }] }
+      })
+    })
+    await finalWriteEntered.promise
+
+    // These callbacks occur in one turn while the final result's D1 counter write is pending.
+    upstreamSocket.dispatch('message', { data: JSON.stringify({ type: 'Metadata' }) })
+    upstreamSocket.dispatch('close', { code: 1000, reason: '', wasClean: true })
+    upstreamSocket.dispatch('error', {})
+    releaseFinalWrite.resolve()
+
+    const tail = privateObject.streamTails.get(common.streamId)
+    if (tail) await tail
+
+    const messages = clientSocket.socket.send.mock.calls.map(([value]) => JSON.parse(String(value)))
+    expect(messages.map((message) => message.type)).toEqual(['transcript', 'terminal'])
+    expect(messages[0]).toMatchObject({ sequence: 1, revision: 1, final: true, text: 'final result' })
+    expect(messages[1]).toMatchObject({
+      lastSequence: 1,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    })
+    expect(counterWrites.some(({ query }) => query.includes('provider_complete_at = COALESCE'))).toBe(true)
+    expect(batchWrites).toHaveLength(1)
+    expect(batchWrites[0][0]?.values[1]).toBe('normal')
+    expect(batchWrites[0][0]?.values[7]).toBe('complete')
+    expect(batchWrites[0][0]?.values[9]).toEqual(expect.any(Number))
+    expect(internals.attachment(upstreamSocket.socket)?.stopRequested).toBe(false)
+    expect(internals.attachment(upstreamSocket.socket)?.closeConfirmed).toBe(true)
   })
 
   it('stops queued audio after cancellation and bounds repeated stop controls when the provider stalls', async () => {
