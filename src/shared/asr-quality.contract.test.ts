@@ -7,10 +7,9 @@ import { LANGUAGE_NAMES } from './lang-id'
 const root = process.cwd()
 const read = (rel: string): string => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 const settingsSource = (): string =>
-  [
-    'src/renderer/src/features/settings/AiSection.tsx',
-    'src/renderer/src/features/settings/AudioTab.tsx'
-  ].map(read).join('\n')
+  ['src/renderer/src/features/settings/AiSection.tsx', 'src/renderer/src/features/settings/AudioTab.tsx']
+    .map(read)
+    .join('\n')
 
 describe('ASR quality ship — stored preference and truthful runtime reporting', () => {
   it('schema + DEFAULT_SETTINGS + listen/App fallbacks all default asrQuality to best', () => {
@@ -42,7 +41,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
     expect(read('src/renderer/src/App.tsx')).toMatch(/asrWebgpuFallbackAt/)
     const settings = settingsSource()
     expect(settings).toMatch(/A recent live session used Whisper base instead of the requested large model\./)
-    expect(settings).toMatch(/Packaged builds use Whisper base for live transcription\./)
+    expect(settings).toMatch(/Packaged builds use Whisper\s+base for live transcription\./)
     expect(settings).toMatch(/The optional larger\s+download changes imported recordings only\./)
     expect(settings).not.toMatch(/Download the high-accuracy model/)
   })
