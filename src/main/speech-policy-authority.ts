@@ -47,6 +47,15 @@ type PolicyHighWater = {
 
 export type SpeechPolicyAcceptResult = 'accepted' | 'unmanaged' | 'lower-version' | 'conflict' | 'capacity'
 
+export type SpeechPolicyProofEvent =
+  | {
+      kind: 'revoked'
+      reason: 'explicit-invalidation' | 'http-denied' | 'invalid-response' | 'signed-unmanaged' | 'policy-conflict'
+    }
+  | { kind: 'changed'; reason: 'policy-changed' }
+
+export type SpeechPolicyProofListener = (event: SpeechPolicyProofEvent) => void
+
 export function normalizeSpeechPolicyOrigin(raw: string): string | null {
   try {
     const url = new URL(raw)
@@ -119,6 +128,11 @@ export class SpeechPolicyAuthority {
   private readonly highWater = new Map<string, PolicyHighWater>()
   private activeScopeKey: string | null = null
   private identityEpoch = 0
+  private proofListener: SpeechPolicyProofListener | null = null
+
+  setProofListener(listener: SpeechPolicyProofListener | null): void {
+    this.proofListener = listener
+  }
 
   observeIdentity(identity: SpeechPolicyIdentity | null): number {
     const next = identity?.scopeKey ?? null
@@ -143,8 +157,26 @@ export class SpeechPolicyAuthority {
     return identity !== null && captured.scopeKey === identity.scopeKey && captured.epoch === epoch
   }
 
-  invalidate(identity: SpeechPolicyIdentity | null): void {
-    if (identity) this.snapshots.delete(identity.scopeKey)
+  invalidate(
+    identity: SpeechPolicyIdentity | null,
+    reason: Exclude<SpeechPolicyProofEvent, { kind: 'changed' }>['reason'] = 'invalid-response'
+  ): boolean {
+    if (!identity) return false
+    const isActive = identity.scopeKey === this.activeScopeKey
+    if (isActive) this.identityEpoch++
+    const revoked = this.snapshots.delete(identity.scopeKey)
+    if (isActive && revoked) this.emit({ kind: 'revoked', reason })
+    return revoked
+  }
+
+  /** Hard settings/MDM revocation. Keep per-scope high-water tombstones while invalidating every
+   *  in-memory proof and every refresh already captured under the old authority epoch. */
+  invalidateAll(): boolean {
+    this.identityEpoch++
+    const revoked = this.snapshots.size > 0
+    this.snapshots.clear()
+    if (revoked) this.emit({ kind: 'revoked', reason: 'explicit-invalidation' })
+    return revoked
   }
 
   acceptManaged(
@@ -154,11 +186,18 @@ export class SpeechPolicyAuthority {
     revision: string
   ): SpeechPolicyAcceptResult {
     if (!Number.isSafeInteger(policy.version) || !Number.isFinite(verifiedAt)) {
-      this.snapshots.delete(identity.scopeKey)
+      this.invalidate(identity, 'invalid-response')
       return 'conflict'
     }
+    const previous = this.snapshots.get(identity.scopeKey)
     const result = this.compareAndRecord(identity.scopeKey, policy.version, revision, 'managed')
-    if (result !== 'accepted') return result
+    if (result !== 'accepted') {
+      if (result === 'conflict' && this.activeScopeKey === identity.scopeKey) {
+        this.identityEpoch++
+        if (previous) this.emit({ kind: 'revoked', reason: 'policy-conflict' })
+      }
+      return result
+    }
     this.snapshots.set(identity.scopeKey, {
       origin: identity.origin,
       credentialDigest: identity.credentialDigest,
@@ -167,6 +206,10 @@ export class SpeechPolicyAuthority {
       revision,
       policy: clonePolicy(policy)
     })
+    if (previous && previous.revision !== revision && this.activeScopeKey === identity.scopeKey) {
+      this.identityEpoch++
+      this.emit({ kind: 'changed', reason: 'policy-changed' })
+    }
     return 'accepted'
   }
 
@@ -174,11 +217,17 @@ export class SpeechPolicyAuthority {
     // A verified signed-null response explicitly says this identity is unmanaged. Even a stale
     // version must revoke the currently usable snapshot; retain the high-water mark so stale
     // managed documents cannot restore authority afterward.
-    this.snapshots.delete(identity.scopeKey)
+    const isActive = this.activeScopeKey === identity.scopeKey
+    const revoked = this.snapshots.delete(identity.scopeKey)
+    if (isActive) this.identityEpoch++
     if (!Number.isSafeInteger(version) || version < 0) {
+      if (isActive && revoked) this.emit({ kind: 'revoked', reason: 'invalid-response' })
       return 'conflict'
     }
     const result = this.compareAndRecord(identity.scopeKey, version, revision, 'unmanaged')
+    if (isActive && revoked) {
+      this.emit({ kind: 'revoked', reason: result === 'conflict' ? 'policy-conflict' : 'signed-unmanaged' })
+    }
     return result === 'accepted' ? 'unmanaged' : result
   }
 
@@ -209,6 +258,7 @@ export class SpeechPolicyAuthority {
     this.highWater.clear()
     this.activeScopeKey = null
     this.identityEpoch = 0
+    this.proofListener = null
   }
 
   private compareAndRecord(
@@ -229,5 +279,13 @@ export class SpeechPolicyAuthority {
     }
     this.highWater.set(scopeKey, { version, revision, kind })
     return 'accepted'
+  }
+
+  private emit(event: SpeechPolicyProofEvent): void {
+    try {
+      this.proofListener?.(event)
+    } catch {
+      // Runtime retirement is a one-way notification and cannot make policy acceptance fail.
+    }
   }
 }

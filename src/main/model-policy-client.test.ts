@@ -23,6 +23,7 @@ import {
 import {
   getActiveModelPolicy,
   getVerifiedSpeechPolicySnapshot,
+  invalidateSpeechPolicyProof,
   narrowAllowedForCapability,
   refreshModelPolicy,
   refreshModelPolicyChecked,
@@ -32,7 +33,8 @@ import {
   setModelPolicyDirForTests,
   setModelPolicyFetchForTests,
   setSpeechPolicyClockForTests,
-  setSpeechPolicyIdentityReader
+  setSpeechPolicyIdentityReader,
+  setSpeechPolicyProofRevocationListener
 } from './model-policy-client'
 
 const SETTINGS = { operatorUrl: 'https://operator.test', operatorIngestSecret: 'shared-secret' }
@@ -362,8 +364,137 @@ describe('verified speech policy authority', () => {
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
   })
 
+  it('does not notify runtime revocation for transport failure or an identical proof refresh', async () => {
+    useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    const firstVerifiedAt = getVerifiedSpeechPolicySnapshot()?.verifiedAt
+    expect(firstVerifiedAt).toEqual(expect.any(Number))
+
+    setSpeechPolicyClockForTests(() => firstVerifiedAt! + 10)
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()?.verifiedAt).toBe(firstVerifiedAt! + 10)
+    expect(events).toEqual([])
+
+    setModelPolicyFetchForTests(async () => {
+      throw new Error('temporary network failure')
+    })
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+    expect(events).toEqual([])
+  })
+
+  it('notifies an idle owner on same-version explicit denial and on a real policy revision change', async () => {
+    useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(events).toEqual([])
+
+    const changed = { ...doc, version: NOW + 1, updatedAt: NOW + 1, updatedBy: 'changed-owner' }
+    setModelPolicyFetchForTests(async () =>
+      jsonResponse({ ok: true, policy: changed, signature: sign(SPEECH_TOKEN, changed) })
+    )
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(events).toEqual([{ kind: 'changed', reason: 'policy-changed' }])
+    expect(getVerifiedSpeechPolicySnapshot()?.policy.updatedBy).toBe('changed-owner')
+
+    setModelPolicyFetchForTests(async () => new Response('denied', { status: 401 }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(getActiveModelPolicy(SPEECH_SETTINGS)?.version).toBe(NOW + 1)
+    expect(events).toEqual([
+      { kind: 'changed', reason: 'policy-changed' },
+      { kind: 'revoked', reason: 'http-denied' }
+    ])
+  })
+
+  it('does not allow a held success to restore a proof after same-scope HTTP denial', async () => {
+    useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+
+    let resolveHeld!: (response: Response) => void
+    const heldResponse = new Promise<Response>((resolve) => {
+      resolveHeld = resolve
+    })
+    setModelPolicyFetchForTests(async () => heldResponse)
+    const heldRefresh = refreshModelPolicyChecked(SPEECH_SETTINGS)
+
+    setModelPolicyFetchForTests(async () => new Response('denied', { status: 403 }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'http-denied' }])
+
+    resolveHeld(jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await heldRefresh
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'http-denied' }])
+  })
+
+  it('hard-revokes A across A-to-B-to-A settings reuse and rejects a held pre-revocation fetch', async () => {
+    let live = { settings: SPEECH_SETTINGS, durableDeviceId: MACHINE_ID as string | null }
+    setSpeechPolicyIdentityReader(() => live)
+    let now = LICENSE_NOW
+    setSpeechPolicyClockForTests(() => now)
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+
+    let resolveHeld!: (response: Response) => void
+    const heldResponse = new Promise<Response>((resolve) => {
+      resolveHeld = resolve
+    })
+    setModelPolicyFetchForTests(async () => heldResponse)
+    now += 10
+    const heldRefresh = refreshModelPolicyChecked(SPEECH_SETTINGS)
+
+    const tokenNow = Math.floor(LICENSE_NOW / 1000)
+    const otherToken = `METIS-OP-1.1123456789abcdef.${tokenNow - 60}.${tokenNow + 3600}.BBBBBBBBBBBBBBBBBBBB`
+    const otherSettings = { operatorUrl: 'https://operator.test', operatorLicenseToken: otherToken }
+    live = { settings: otherSettings, durableDeviceId: MACHINE_ID }
+    invalidateSpeechPolicyProof()
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(getActiveModelPolicy(SPEECH_SETTINGS)?.version).toBe(NOW)
+    expect(events).toEqual([{ kind: 'revoked', reason: 'explicit-invalidation' }])
+
+    live = { settings: SPEECH_SETTINGS, durableDeviceId: MACHINE_ID }
+    now += 10
+    const lower = { ...doc, version: NOW - 1, updatedAt: NOW - 1 }
+    setModelPolicyFetchForTests(async () =>
+      jsonResponse({ ok: true, policy: lower, signature: sign(SPEECH_TOKEN, lower) })
+    )
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    const newVerifiedAt = getVerifiedSpeechPolicySnapshot()?.verifiedAt
+    expect(newVerifiedAt).toBe(now)
+
+    now += 10
+    resolveHeld(jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await heldRefresh
+    expect(getVerifiedSpeechPolicySnapshot()?.verifiedAt).toBe(newVerifiedAt)
+    expect(events).toEqual([{ kind: 'revoked', reason: 'explicit-invalidation' }])
+  })
+
   it('clears speech authority on a signed unmanaged response', async () => {
     useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
     const doc = policy()
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
@@ -371,16 +502,20 @@ describe('verified speech policy authority', () => {
     setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW + 1, SPEECH_TOKEN)))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'signed-unmanaged' }])
   })
 
   it('does not extend authority after malformed or unsigned policy responses', async () => {
     useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
     const doc = policy()
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: { version: 1 } }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'invalid-response' }])
 
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
@@ -388,6 +523,10 @@ describe('verified speech policy authority', () => {
     setModelPolicyFetchForTests(async () => jsonResponse(null))
     await expect(refreshModelPolicyChecked(SPEECH_SETTINGS)).resolves.toMatchObject({ ok: false })
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([
+      { kind: 'revoked', reason: 'invalid-response' },
+      { kind: 'revoked', reason: 'invalid-response' }
+    ])
   })
 
   it.each([401, 403])('clears speech authority after an explicit HTTP %s rejection', async (status) => {
@@ -430,6 +569,8 @@ describe('verified speech policy authority', () => {
 
   it('rejects contradictory same-version policy content and retains a monotonic version high-water mark', async () => {
     useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
     const current = policy()
     setModelPolicyFetchForTests(async () =>
       jsonResponse({ ok: true, policy: current, signature: sign(SPEECH_TOKEN, current) })
@@ -450,6 +591,7 @@ describe('verified speech policy authority', () => {
     )
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'policy-conflict' }])
   })
 
   it('does not let an older in-flight response overwrite a newly observed identity policy', async () => {

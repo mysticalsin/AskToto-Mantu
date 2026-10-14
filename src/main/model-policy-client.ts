@@ -38,10 +38,12 @@ import {
   type SpeechPolicyIdentity,
   type SpeechPolicyIdentityReader,
   type SpeechPolicyIdentitySettings,
+  type SpeechPolicyProofListener,
   type VerifiedSpeechPolicy
 } from './speech-policy-authority'
 
 export type { VerifiedSpeechPolicy } from './speech-policy-authority'
+export type { SpeechPolicyProofEvent, SpeechPolicyProofListener } from './speech-policy-authority'
 
 const CACHE_FILE = 'model-policy-cache.json'
 const MAX_MODEL_POLICY_RESPONSE_BYTES = 64 * 1024
@@ -94,6 +96,18 @@ export function setSpeechPolicyIdentityReader(reader: SpeechPolicyIdentityReader
   } else {
     speechPolicyAuthority.observeIdentity(null)
   }
+}
+
+/** Register the main-only, one-way runtime retirement signal for revoked or semantically changed
+ *  verified speech policy proof. The listener must not call this module's invalidation hook. */
+export function setSpeechPolicyProofRevocationListener(listener: SpeechPolicyProofListener | null): void {
+  speechPolicyAuthority.setProofListener(listener)
+}
+
+/** Hard settings/MDM invalidation. This only clears in-memory speech proof snapshots and advances
+ *  pending refresh epochs; legacy policy state, disk cache, and per-scope version high-water remain. */
+export function invalidateSpeechPolicyProof(): void {
+  speechPolicyAuthority.invalidateAll()
 }
 
 function policyDir(): string {
@@ -263,8 +277,11 @@ function speechCaptureIsCurrent(capture: SpeechPolicyRefreshCapture | null): boo
   return speechPolicyAuthority.isCurrent(capture, current)
 }
 
-function invalidateSpeechCapture(capture: SpeechPolicyRefreshCapture | null): void {
-  if (capture) speechPolicyAuthority.invalidate(capture.identity)
+function invalidateSpeechCapture(
+  capture: SpeechPolicyRefreshCapture | null,
+  reason: 'http-denied' | 'invalid-response' = 'invalid-response'
+): void {
+  if (capture && speechCaptureIsCurrent(capture)) speechPolicyAuthority.invalidate(capture.identity, reason)
 }
 
 function currentLegacyPolicyScope(fallback: ModelPolicyClientSettings): string | null {
@@ -342,7 +359,7 @@ async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings, sou
     return false
   }
   if (res.status === 401 || res.status === 403) {
-    invalidateSpeechCapture(speechCapture)
+    invalidateSpeechCapture(speechCapture, 'http-denied')
     if (res.body) void res.body.cancel().catch(() => undefined)
     mainLog.warn(`[model-policy] fetch failed: ${res.status}`)
     return false
@@ -362,7 +379,8 @@ async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings, sou
   })
   if (!inspected.ok || !res.ok) {
     mainLog.warn(`[model-policy] fetch failed: ${res.status}`)
-    if (res.ok || res.status === 401 || res.status === 403) invalidateSpeechCapture(speechCapture)
+    if (res.ok) invalidateSpeechCapture(speechCapture, 'invalid-response')
+    else if (res.status === 401 || res.status === 403) invalidateSpeechCapture(speechCapture, 'http-denied')
     return false
   }
   let json: unknown
