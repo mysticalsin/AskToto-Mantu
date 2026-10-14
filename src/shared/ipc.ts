@@ -262,6 +262,9 @@ export const IPC = {
   // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
   asrAssetsStatus: 'asr:assets-status',
   asrAssetsEnsure: 'asr:assets-ensure',
+  speechPackState: 'speech-pack:state',
+  speechPackAction: 'speech-pack:action',
+  speechPackProgress: 'speech-pack:progress',
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
   localModelsList: 'localModels:list',
