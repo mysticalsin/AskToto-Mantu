@@ -219,8 +219,20 @@ async function requestHost(
         if (releaseGate) throw new Error('Speaker embedding host is releasing.')
         generation = current?.state === 'active' ? current : null
         if (!generation) {
-          generation = spawnGeneration(lease, modelPath)
-          transferred = true
+          const physicalAdmission = await lease?.preparePhysicalAdmission()
+          try {
+            physicalAdmission?.assertCurrentSync()
+            if (ownerEpoch[owner] !== admittedEpoch) throw new Error('Speaker embedding processing was cancelled.')
+            if (releaseGate) throw new Error('Speaker embedding host is releasing.')
+            if (!current || current.state !== 'active') {
+              generation = spawnGeneration(lease, modelPath)
+              transferred = true
+            } else {
+              generation = current
+            }
+          } finally {
+            await physicalAdmission?.dispose()
+          }
         }
       }
     } finally {

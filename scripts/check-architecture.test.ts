@@ -7,7 +7,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
-  writeFileSync,
+  writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +17,7 @@ import {
   countDependencyViolations,
   countSourceFile,
   formatBaseline,
-  lowerBaseline,
+  lowerBaseline
 } from './check-architecture.mjs'
 
 type Counts = Record<string, Record<string, number>>
@@ -36,7 +36,7 @@ const RULE_IDS = [
   'FF-10',
   'FF-11',
   'FF-14',
-  'FF-15',
+  'FF-15'
 ]
 
 function sortedViolationLines(stdout: string): string[] {
@@ -57,7 +57,7 @@ function runDependencyCruiser(fixtureRoot: string, outputType: 'json' | 'default
   try {
     return {
       code: 0,
-      out: execFileSync(process.execPath, args, { cwd: fixtureRoot, encoding: 'utf8' }),
+      out: execFileSync(process.execPath, args, { cwd: fixtureRoot, encoding: 'utf8' })
     }
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string }
@@ -90,8 +90,8 @@ function runArchitectureCli(fixtureRoot: string): { code: number; out: string } 
       code: 0,
       out: execFileSync(process.execPath, [join(fixtureRoot, 'scripts', 'check-architecture.mjs')], {
         cwd: fixtureRoot,
-        encoding: 'utf8',
-      }),
+        encoding: 'utf8'
+      })
     }
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string }
@@ -102,73 +102,78 @@ function runArchitectureCli(fixtureRoot: string): { code: number; out: string } 
 function createLayeringFixture(): { root: string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'metis-architecture-')))
   const nodeModules = join(root, 'node_modules')
-  symlinkSync(
-    join(__dirname, '..', 'node_modules'),
-    nodeModules,
-    process.platform === 'win32' ? 'junction' : 'dir',
-  )
+  symlinkSync(join(__dirname, '..', 'node_modules'), nodeModules, process.platform === 'win32' ? 'junction' : 'dir')
 
   copyFileSync(join(__dirname, '..', '.dependency-cruiser.cjs'), join(root, '.dependency-cruiser.cjs'))
-  writeFixtureFile(root, 'tsconfig.web.json', JSON.stringify({
-    compilerOptions: {
-      baseUrl: '.',
-      module: 'ESNext',
-      moduleResolution: 'Bundler',
-      paths: {
-        '@/*': ['src/*'],
-        '@shared/*': ['src/shared/*'],
+  writeFixtureFile(
+    root,
+    'tsconfig.web.json',
+    JSON.stringify(
+      {
+        compilerOptions: {
+          baseUrl: '.',
+          module: 'ESNext',
+          moduleResolution: 'Bundler',
+          paths: {
+            '@/*': ['src/*'],
+            '@shared/*': ['src/shared/*']
+          },
+          skipLibCheck: true,
+          strict: true,
+          target: 'ES2022'
+        },
+        include: ['src/**/*.ts', 'src/**/*.tsx']
       },
-      skipLibCheck: true,
-      strict: true,
-      target: 'ES2022',
-    },
-    include: ['src/**/*.ts', 'src/**/*.tsx'],
-  }, null, 2))
+      null,
+      2
+    )
+  )
 
-  writeFixtureFile(root, 'src/main/index.ts', [
-    "import './infra/x'",
-    "import './features/a/use-b'",
-    "import '../shared/contracts/schema'",
-    "import '../cycle/a'",
-    "import '@shared/alias-target'",
-    "import '@/alias-root'",
-    'export const entry = true',
-  ].join('\n'))
+  writeFixtureFile(
+    root,
+    'src/main/index.ts',
+    [
+      "import './infra/x'",
+      "import './features/a/use-b'",
+      "import '../shared/contracts/schema'",
+      "import '../cycle/a'",
+      "import '@shared/alias-target'",
+      "import '@/alias-root'",
+      'export const entry = true'
+    ].join('\n')
+  )
   writeFixtureFile(root, 'src/main/service.ts', 'export const service = true\n')
-  writeFixtureFile(root, 'src/renderer/src/main.tsx', [
-    "import '../../main/service'",
-    'export const rendererEntry = true',
-  ].join('\n'))
-  writeFixtureFile(root, 'src/renderer/src/cross.test.ts', [
-    "import '../../main/service'",
-    'export const rendererTest = true',
-  ].join('\n'))
-  writeFixtureFile(root, 'src/main/infra/x.ts', [
-    "import '../features/a/index'",
-    'export const infra = true',
-  ].join('\n'))
+  writeFixtureFile(
+    root,
+    'src/renderer/src/main.tsx',
+    ["import '../../main/service'", 'export const rendererEntry = true'].join('\n')
+  )
+  writeFixtureFile(
+    root,
+    'src/renderer/src/cross.test.ts',
+    ["import '../../main/service'", 'export const rendererTest = true'].join('\n')
+  )
+  writeFixtureFile(
+    root,
+    'src/main/infra/x.ts',
+    ["import '../features/a/index'", 'export const infra = true'].join('\n')
+  )
   writeFixtureFile(root, 'src/main/features/a/index.ts', 'export const featureA = true\n')
-  writeFixtureFile(root, 'src/main/features/a/use-b.ts', [
-    "import '../b/internal'",
-    "import '../b/index'",
-    'export const useB = true',
-  ].join('\n'))
+  writeFixtureFile(
+    root,
+    'src/main/features/a/use-b.ts',
+    ["import '../b/internal'", "import '../b/index'", 'export const useB = true'].join('\n')
+  )
   writeFixtureFile(root, 'src/main/features/b/index.ts', 'export const featureB = true\n')
   writeFixtureFile(root, 'src/main/features/b/internal.ts', 'export const internalB = true\n')
-  writeFixtureFile(root, 'src/shared/contracts/schema.ts', [
-    "import { z } from 'zod'",
-    "import '../util'",
-    'export const schema = z.object({ ok: z.boolean() })',
-  ].join('\n'))
+  writeFixtureFile(
+    root,
+    'src/shared/contracts/schema.ts',
+    ["import { z } from 'zod'", "import '../util'", 'export const schema = z.object({ ok: z.boolean() })'].join('\n')
+  )
   writeFixtureFile(root, 'src/shared/util.ts', 'export const util = true\n')
-  writeFixtureFile(root, 'src/cycle/a.ts', [
-    "import './b'",
-    'export const cycleA = true',
-  ].join('\n'))
-  writeFixtureFile(root, 'src/cycle/b.ts', [
-    "import './a'",
-    'export const cycleB = true',
-  ].join('\n'))
+  writeFixtureFile(root, 'src/cycle/a.ts', ["import './b'", 'export const cycleA = true'].join('\n'))
+  writeFixtureFile(root, 'src/cycle/b.ts', ["import './a'", 'export const cycleB = true'].join('\n'))
   writeFixtureFile(root, 'src/dead.ts', 'export const dead = true\n')
   // Test-only helper no entry point reaches: FF-03 must not count it (dead.ts above is still counted).
   writeFixtureFile(root, 'src/main/test-helpers/settle.ts', 'export const settle = true\n')
@@ -183,46 +188,47 @@ function createArchitectureFixture(): { root: string } {
   const fixture = createLayeringFixture()
   mkdirSync(join(fixture.root, 'intelligence', 'src'), { recursive: true })
   mkdirSync(join(fixture.root, 'scripts'), { recursive: true })
-  copyFileSync(
-    join(__dirname, 'check-architecture.mjs'),
-    join(fixture.root, 'scripts', 'check-architecture.mjs'),
-  )
-  writeFixtureFile(fixture.root, 'src/new-cycle/a.ts', [
-    "import './b'",
-    'export const newCycleA = true',
-  ].join('\n'))
+  copyFileSync(join(__dirname, 'check-architecture.mjs'), join(fixture.root, 'scripts', 'check-architecture.mjs'))
+  writeFixtureFile(fixture.root, 'src/new-cycle/a.ts', ["import './b'", 'export const newCycleA = true'].join('\n'))
   writeFixtureFile(fixture.root, 'src/new-cycle/b.ts', 'export const newCycleB = true\n')
-  writeFixtureFile(fixture.root, 'src/main/index.ts', [
-    "import './infra/x'",
-    "import './features/a/use-b'",
-    "import '../shared/contracts/schema'",
-    "import '../cycle/a'",
-    "import '../new-cycle/a'",
-    "import './long'",
-    "import './fs'",
-    "import '@shared/alias-target'",
-    "import '@/alias-root'",
-    'export const entry = true',
-  ].join('\n'))
-  writeFixtureFile(fixture.root, 'src/main/long.ts', `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`)
-  writeFixtureFile(fixture.root, 'src/main/fs.ts', [
-    "import { readFileSync } from 'node:fs'",
-    "readFileSync('a')",
-  ].join('\n'))
+  writeFixtureFile(
+    fixture.root,
+    'src/main/index.ts',
+    [
+      "import './infra/x'",
+      "import './features/a/use-b'",
+      "import '../shared/contracts/schema'",
+      "import '../cycle/a'",
+      "import '../new-cycle/a'",
+      "import './long'",
+      "import './fs'",
+      "import '@shared/alias-target'",
+      "import '@/alias-root'",
+      'export const entry = true'
+    ].join('\n')
+  )
+  writeFixtureFile(
+    fixture.root,
+    'src/main/long.ts',
+    `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`
+  )
+  writeFixtureFile(
+    fixture.root,
+    'src/main/fs.ts',
+    ["import { readFileSync } from 'node:fs'", "readFileSync('a')"].join('\n')
+  )
   return fixture
 }
 
 function removeLayeringErrors(root: string): void {
   writeFixtureFile(root, 'src/renderer/src/main.tsx', 'export const rendererEntry = true\n')
   writeFixtureFile(root, 'src/main/infra/x.ts', 'export const infra = true\n')
-  writeFixtureFile(root, 'src/main/features/a/use-b.ts', [
-    "import '../b/index'",
-    'export const useB = true',
-  ].join('\n'))
-  writeFixtureFile(root, 'src/shared/contracts/schema.ts', [
-    "import { z } from 'zod'",
-    'export const schema = z.object({ ok: z.boolean() })',
-  ].join('\n'))
+  writeFixtureFile(root, 'src/main/features/a/use-b.ts', ["import '../b/index'", 'export const useB = true'].join('\n'))
+  writeFixtureFile(
+    root,
+    'src/shared/contracts/schema.ts',
+    ["import { z } from 'zod'", 'export const schema = z.object({ ok: z.boolean() })'].join('\n')
+  )
 }
 
 describe('architecture ratchet pure functions', () => {
@@ -232,59 +238,57 @@ describe('architecture ratchet pure functions', () => {
   })
 
   it('reports a current count above baseline as a regression', () => {
-    expect(compareCounts(
-      { 'FF-04': { 'src/main/a.ts': 801 } },
-      { 'FF-04': { 'src/main/a.ts': 802 } },
-    )).toEqual({
+    expect(compareCounts({ 'FF-04': { 'src/main/a.ts': 801 } }, { 'FF-04': { 'src/main/a.ts': 802 } })).toEqual({
       regressions: [{ rule: 'FF-04', file: 'src/main/a.ts', baseline: 801, current: 802 }],
-      stale: [],
+      stale: []
     })
   })
 
   it('reports a file present only in current as a regression from zero', () => {
-    expect(compareCounts(
-      { 'FF-04': {} },
-      { 'FF-04': { 'src/main/new.ts': 801 } },
-    )).toEqual({
+    expect(compareCounts({ 'FF-04': {} }, { 'FF-04': { 'src/main/new.ts': 801 } })).toEqual({
       regressions: [{ rule: 'FF-04', file: 'src/main/new.ts', baseline: 0, current: 801 }],
-      stale: [],
+      stale: []
     })
   })
 
   it('reports lower and absent current counts as stale', () => {
-    expect(compareCounts(
-      { 'FF-04': { 'src/main/a.ts': 801, 'src/main/deleted.ts': 900 } },
-      { 'FF-04': { 'src/main/a.ts': 800 } },
-    )).toEqual({
+    expect(
+      compareCounts(
+        { 'FF-04': { 'src/main/a.ts': 801, 'src/main/deleted.ts': 900 } },
+        { 'FF-04': { 'src/main/a.ts': 800 } }
+      )
+    ).toEqual({
       regressions: [],
       stale: [
         { rule: 'FF-04', file: 'src/main/a.ts', baseline: 801, current: 800 },
-        { rule: 'FF-04', file: 'src/main/deleted.ts', baseline: 900, current: 0 },
-      ],
+        { rule: 'FF-04', file: 'src/main/deleted.ts', baseline: 900, current: 0 }
+      ]
     })
   })
 
   it('lowers only stale baseline entries, preserves regressions, drops zeroes, and never invents new files', () => {
-    expect(lowerBaseline(
-      {
-        'FF-04': {
-          'src/main/a.ts': 801,
-          'src/main/deleted.ts': 900,
-          'src/main/regressed.ts': 1,
+    expect(
+      lowerBaseline(
+        {
+          'FF-04': {
+            'src/main/a.ts': 801,
+            'src/main/deleted.ts': 900,
+            'src/main/regressed.ts': 1
+          }
         },
-      },
-      {
-        'FF-04': {
-          'src/main/a.ts': 800,
-          'src/main/regressed.ts': 2,
-          'src/main/new.ts': 1,
-        },
-      },
-    )).toEqual({
+        {
+          'FF-04': {
+            'src/main/a.ts': 800,
+            'src/main/regressed.ts': 2,
+            'src/main/new.ts': 1
+          }
+        }
+      )
+    ).toEqual({
       'FF-04': {
         'src/main/a.ts': 800,
-        'src/main/regressed.ts': 1,
-      },
+        'src/main/regressed.ts': 1
+      }
     })
   })
 
@@ -294,58 +298,64 @@ describe('architecture ratchet pure functions', () => {
         'src/main/z.ts': 2,
         'src/main/a.ts': 1,
         'src/main/zero.ts': 0,
-        'src/main/float.ts': 1.5,
+        'src/main/float.ts': 1.5
       },
       'FF-99': { 'src/main/unknown.ts': 1 },
       'FF-04': {
         'src/main/string.ts': '1' as unknown as number,
-        'src/main/long.ts': 801,
-      },
+        'src/main/long.ts': 801
+      }
     })
-    expect(canonical).toBe(`${JSON.stringify({
-      'FF-01': {},
-      'FF-02': {},
-      'FF-03': {},
-      'FF-04': {
-        'src/main/long.ts': 801,
-      },
-      'FF-05a': {
-        'src/main/a.ts': 1,
-        'src/main/z.ts': 2,
-      },
-      'FF-05b': {},
-      'FF-06': {},
-      'FF-07': {},
-      'FF-09': {},
-      'FF-10': {},
-      'FF-11': {},
-      'FF-14': {},
-      'FF-15': {},
-    }, null, 2)}\n`)
+    expect(canonical).toBe(
+      `${JSON.stringify(
+        {
+          'FF-01': {},
+          'FF-02': {},
+          'FF-03': {},
+          'FF-04': {
+            'src/main/long.ts': 801
+          },
+          'FF-05a': {
+            'src/main/a.ts': 1,
+            'src/main/z.ts': 2
+          },
+          'FF-05b': {},
+          'FF-06': {},
+          'FF-07': {},
+          'FF-09': {},
+          'FF-10': {},
+          'FF-11': {},
+          'FF-14': {},
+          'FF-15': {}
+        },
+        null,
+        2
+      )}\n`
+    )
     expect(Object.keys(JSON.parse(canonical) as Counts)).toEqual(RULE_IDS)
     expect(formatBaseline(JSON.parse(canonical) as Counts)).toBe(canonical)
   })
 
   it('maps dependency-cruiser rule names to fitness ids, sums by file, and rejects unknown prefixes', () => {
-    expect(countDependencyViolations([
-      { rule: { name: 'ff01-renderer-imports-main-or-preload' }, from: 'src/renderer/src/main.tsx' },
-      { rule: { name: 'ff01-renderer-imports-main-or-preload-in-tests' }, from: 'src/renderer/src/main.tsx' },
-      { rule: { name: 'ff02-import-cycle' }, from: 'src/cycle/a.ts' },
-      { rule: { name: 'ff03-unreachable-from-entry-points' }, from: 'src/dead.ts' },
-    ])).toEqual({
+    expect(
+      countDependencyViolations([
+        { rule: { name: 'ff01-renderer-imports-main-or-preload' }, from: 'src/renderer/src/main.tsx' },
+        { rule: { name: 'ff01-renderer-imports-main-or-preload-in-tests' }, from: 'src/renderer/src/main.tsx' },
+        { rule: { name: 'ff02-import-cycle' }, from: 'src/cycle/a.ts' },
+        { rule: { name: 'ff03-unreachable-from-entry-points' }, from: 'src/dead.ts' }
+      ])
+    ).toEqual({
       'FF-01': { 'src/renderer/src/main.tsx': 2 },
       'FF-02': { 'src/cycle/a.ts': 1 },
-      'FF-03': { 'src/dead.ts': 1 },
+      'FF-03': { 'src/dead.ts': 1 }
     })
-    expect(() => countDependencyViolations([
-      { rule: { name: 'layering-renderer-imports-main' }, from: 'src/renderer/src/main.tsx' },
-    ])).toThrow()
-    expect(() => countDependencyViolations([
-      { rule: { name: 'ff08-some-rule' }, from: 'src/main/a.ts' },
-    ])).toThrow()
-    expect(() => countDependencyViolations([
-      { rule: { name: 'FF01-example' }, from: 'src/main/a.ts' },
-    ])).toThrow()
+    expect(() =>
+      countDependencyViolations([
+        { rule: { name: 'layering-renderer-imports-main' }, from: 'src/renderer/src/main.tsx' }
+      ])
+    ).toThrow()
+    expect(() => countDependencyViolations([{ rule: { name: 'ff08-some-rule' }, from: 'src/main/a.ts' }])).toThrow()
+    expect(() => countDependencyViolations([{ rule: { name: 'FF01-example' }, from: 'src/main/a.ts' }])).toThrow()
   })
 })
 
@@ -366,47 +376,88 @@ describe('architecture source detectors', () => {
 
   describe('FF-05a synchronous fs calls', () => {
     it('counts fs-bound sync calls only in production src/main files', () => {
-      expect(countSourceFile('src/main/fs.ts', [
-        "import { readFileSync } from 'node:fs'",
-        "import { readFileSync as rf } from 'fs'",
-        "import * as fs from 'node:fs'",
-        "const { mkdirSync } = require('node:fs')",
-        "import { execFileSync } from 'node:child_process'",
-        'function writeRunStateSync() {}',
-        'readFileSync("a")',
-        'rf("b")',
-        'fs.writeFileSync("c", "d")',
-        'mkdirSync("e")',
-        'writeRunStateSync()',
-        'execFileSync("node")',
-      ].join('\n'))).toEqual({ 'FF-05a': 4, 'FF-10': 1 })
-      expect(countSourceFile('src/main/async.ts', [
-        "import { readFile } from 'node:fs'",
-        "import type { readFileSync } from 'node:fs'",
-        'readFile("a", () => {})',
-        'readFileSync("b")',
-      ].join('\n'))).toEqual({})
-      expect(countSourceFile('src/shared/fs.ts', [
-        "import { readFileSync } from 'node:fs'",
-        'readFileSync("a")',
-      ].join('\n'))).toEqual({})
+      expect(
+        countSourceFile(
+          'src/main/fs.ts',
+          [
+            "import { readFileSync } from 'node:fs'",
+            "import { readFileSync as rf } from 'fs'",
+            "import * as fs from 'node:fs'",
+            "const { mkdirSync } = require('node:fs')",
+            "import { execFileSync } from 'node:child_process'",
+            'function writeRunStateSync() {}',
+            'readFileSync("a")',
+            'rf("b")',
+            'fs.writeFileSync("c", "d")',
+            'mkdirSync("e")',
+            'writeRunStateSync()',
+            'execFileSync("node")'
+          ].join('\n')
+        )
+      ).toEqual({ 'FF-05a': 4, 'FF-10': 1 })
+      expect(
+        countSourceFile(
+          'src/main/async.ts',
+          [
+            "import { readFile } from 'node:fs'",
+            "import type { readFileSync } from 'node:fs'",
+            'readFile("a", () => {})',
+            'readFileSync("b")'
+          ].join('\n')
+        )
+      ).toEqual({})
+      expect(
+        countSourceFile('src/shared/fs.ts', ["import { readFileSync } from 'node:fs'", 'readFileSync("a")'].join('\n'))
+      ).toEqual({})
+    })
+
+    it('counts bounded Dir methods only on const handles returned by fs opendir', () => {
+      expect(
+        countSourceFile(
+          'src/main/dir.ts',
+          [
+            "import { opendirSync } from 'node:fs'",
+            'const owned = opendirSync(".")',
+            'owned.readSync() // counted',
+            'owned.closeSync() // counted',
+            'const lookalike = { readSync() {}, closeSync() {} }',
+            'lookalike.readSync() // not fs',
+            'lookalike.closeSync() // not fs',
+            '{ const owned = { readSync() {}, closeSync() {} }; owned.readSync(); owned.closeSync() }'
+          ].join('\n')
+        )
+      ).toEqual({ 'FF-05a': 2 })
+      expect(
+        countSourceFile(
+          'src/main/dir-async.ts',
+          [
+            "import { opendir } from 'node:fs/promises'",
+            'async function scan() { const handle = await opendir("."); handle.readSync(); handle.closeSync() }'
+          ].join('\n')
+        )
+      ).toEqual({ 'FF-05a': 2 })
     })
   })
 
   describe('collectFsBindings gaps', () => {
     it('recognizes default imports, promises aliases, and typed require bindings', () => {
-      expect(countSourceFile('src/main/fs-default.ts', [
-        "import fs from 'node:fs'",
-        "fs.readFileSync('a')",
-      ].join('\n'))).toEqual({ 'FF-05a': 1 })
-      expect(countSourceFile('scripts/check.promises.test.ts', [
-        "import { promises as fsp } from 'node:fs'",
-        "fsp.readFile('src/main/index.ts', 'utf8', () => {})",
-      ].join('\n'))).toEqual({ 'FF-07': 1 })
-      expect(countSourceFile('src/main/fs-as.ts', [
-        "const fs = require('node:fs') as typeof import('node:fs')",
-        "fs.readFileSync('a')",
-      ].join('\n'))).toEqual({ 'FF-05a': 1 })
+      expect(
+        countSourceFile('src/main/fs-default.ts', ["import fs from 'node:fs'", "fs.readFileSync('a')"].join('\n'))
+      ).toEqual({ 'FF-05a': 1 })
+      expect(
+        countSourceFile(
+          'scripts/check.promises.test.ts',
+          ["import { promises as fsp } from 'node:fs'", "fsp.readFile('src/main/index.ts', 'utf8', () => {})"].join(
+            '\n'
+          )
+        )
+      ).toEqual({ 'FF-07': 1 })
+      expect(
+        countSourceFile(
+          'src/main/fs-as.ts',
+          ["const fs = require('node:fs') as typeof import('node:fs')", "fs.readFileSync('a')"].join('\n')
+        )
+      ).toEqual({ 'FF-05a': 1 })
     })
   })
 
@@ -420,7 +471,7 @@ describe('architecture source detectors', () => {
         'readFileSync("a")',
         'readFile("b", () => {})',
         'stat("c")',
-        'fs.promises.stat("d")',
+        'fs.promises.stat("d")'
       ].join('\n')
       expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 1, 'FF-05b': 4 })
       expect(countSourceFile('src/main/other.ts', text)).toEqual({ 'FF-05a': 1 })
@@ -434,20 +485,22 @@ describe('architecture source detectors', () => {
         'globalThis.alert',
         "self['prompt']",
         'const { confirm } = window',
-        'alert("x")',
+        'alert("x")'
       ].join('\n')
       expect(countSourceFile('src/renderer/src/App.tsx', text)).toEqual({ 'FF-06': 5 })
       expect(countSourceFile('intelligence/src/App.tsx', text)).toEqual({ 'FF-06': 5 })
-      expect(countSourceFile('src/renderer/src/multi-dialog.tsx', 'const { confirm, alert } = window\n')).toEqual({ 'FF-06': 2 })
-      expect(countSourceFile('src/renderer/src/shadow.tsx', [
-        'const confirm = () => true',
-        'confirm()',
-      ].join('\n'))).toEqual({})
-      expect(countSourceFile('src/renderer/src/param.tsx', [
-        'function run(alert: () => void) {',
-        '  alert()',
-        '}',
-      ].join('\n'))).toEqual({})
+      expect(countSourceFile('src/renderer/src/multi-dialog.tsx', 'const { confirm, alert } = window\n')).toEqual({
+        'FF-06': 2
+      })
+      expect(
+        countSourceFile('src/renderer/src/shadow.tsx', ['const confirm = () => true', 'confirm()'].join('\n'))
+      ).toEqual({})
+      expect(
+        countSourceFile(
+          'src/renderer/src/param.tsx',
+          ['function run(alert: () => void) {', '  alert()', '}'].join('\n')
+        )
+      ).toEqual({})
       expect(countSourceFile('src/main/x.ts', text)).toEqual({})
       expect(countSourceFile('src/renderer/src/App.test.tsx', text)).toEqual({})
     })
@@ -455,37 +508,58 @@ describe('architecture source detectors', () => {
 
   describe('FF-07 test files reading source paths', () => {
     it('counts source-looking path literals only in test files with qualifying fs read bindings', () => {
-      expect(countSourceFile('src/main/x.contract.test.ts', [
-        "import { readFileSync } from 'node:fs'",
-        "import { join } from 'node:path'",
-        "const SRC = join(__dirname, '../renderer/src/App.tsx')",
-        "readFileSync(join(__dirname, 'index.ts'), 'utf8')",
-        "readFileSync(SRC, 'utf8')",
-      ].join('\n'))).toEqual({ 'FF-07': 2 })
-      expect(countSourceFile('scripts/check.test.ts', [
-        "import * as fs from 'node:fs'",
-        "fs.readFileSync(`src/main/index.ts`, 'utf8')",
-        "fs.readFile('src/renderer/src/App.tsx', 'utf8', () => {})",
-      ].join('\n'))).toEqual({ 'FF-07': 2 })
-      expect(countSourceFile('scripts/check.test.ts', [
-        "import { readFileSync } from 'node:fs'",
-        "const dir = 'src/renderer/src'",
-        "readFileSync(`${dir}/App.tsx`, 'utf8')",
-      ].join('\n'))).toEqual({ 'FF-07': 1 })
-      expect(countSourceFile('scripts/check.test.ts', [
-        "import { readFileSync } from 'node:fs'",
-        "readFileSync('__fixtures__/a.ts', 'utf8')",
-        "readFileSync('types.d.ts', 'utf8')",
-        "const prose = 'the index.ts file'",
-      ].join('\n'))).toEqual({})
-      expect(countSourceFile('scripts/check.test.ts', [
-        "const source = 'index.ts'",
-        'void source',
-      ].join('\n'))).toEqual({})
-      expect(countSourceFile('src/main/x.ts', [
-        "import { readFile } from 'node:fs'",
-        "readFile('index.ts', 'utf8', () => {})",
-      ].join('\n'))).toEqual({})
+      expect(
+        countSourceFile(
+          'src/main/x.contract.test.ts',
+          [
+            "import { readFileSync } from 'node:fs'",
+            "import { join } from 'node:path'",
+            "const SRC = join(__dirname, '../renderer/src/App.tsx')",
+            "readFileSync(join(__dirname, 'index.ts'), 'utf8')",
+            "readFileSync(SRC, 'utf8')"
+          ].join('\n')
+        )
+      ).toEqual({ 'FF-07': 2 })
+      expect(
+        countSourceFile(
+          'scripts/check.test.ts',
+          [
+            "import * as fs from 'node:fs'",
+            "fs.readFileSync(`src/main/index.ts`, 'utf8')",
+            "fs.readFile('src/renderer/src/App.tsx', 'utf8', () => {})"
+          ].join('\n')
+        )
+      ).toEqual({ 'FF-07': 2 })
+      expect(
+        countSourceFile(
+          'scripts/check.test.ts',
+          [
+            "import { readFileSync } from 'node:fs'",
+            "const dir = 'src/renderer/src'",
+            "readFileSync(`${dir}/App.tsx`, 'utf8')"
+          ].join('\n')
+        )
+      ).toEqual({ 'FF-07': 1 })
+      expect(
+        countSourceFile(
+          'scripts/check.test.ts',
+          [
+            "import { readFileSync } from 'node:fs'",
+            "readFileSync('__fixtures__/a.ts', 'utf8')",
+            "readFileSync('types.d.ts', 'utf8')",
+            "const prose = 'the index.ts file'"
+          ].join('\n')
+        )
+      ).toEqual({})
+      expect(countSourceFile('scripts/check.test.ts', ["const source = 'index.ts'", 'void source'].join('\n'))).toEqual(
+        {}
+      )
+      expect(
+        countSourceFile(
+          'src/main/x.ts',
+          ["import { readFile } from 'node:fs'", "readFile('index.ts', 'utf8', () => {})"].join('\n')
+        )
+      ).toEqual({})
     })
   })
 
@@ -497,7 +571,7 @@ describe('architecture source detectors', () => {
         'electron.ipcMain.handleOnce("c", fn)',
         'ipcMain.once("d", fn)',
         'ipcMain.addListener("e", fn)',
-        'ipcRenderer.on("f", fn)',
+        'ipcRenderer.on("f", fn)'
       ].join('\n')
       expect(countSourceFile('src/main/register.ts', text)).toEqual({ 'FF-09': 5 })
       expect(countSourceFile('src/main/ipc/register.ts', text)).toEqual({})
@@ -511,11 +585,15 @@ describe('architecture source detectors', () => {
         "import type { ChildProcess } from 'node:child_process'",
         "const cp = require('child_process')",
         'utilityProcess.fork(p)',
-        'electron.utilityProcess.fork(p)',
+        'electron.utilityProcess.fork(p)'
       ].join('\n')
       expect(countSourceFile('src/main/spawn.ts', text)).toEqual({ 'FF-10': 4 })
-      expect(countSourceFile('src/main/types.ts', "import type { ChildProcess } from 'node:child_process'\n")).toEqual({})
-      expect(countSourceFile('src/main/spawn-inline-type.ts', "import { type ChildProcess } from 'node:child_process'\n")).toEqual({})
+      expect(countSourceFile('src/main/types.ts', "import type { ChildProcess } from 'node:child_process'\n")).toEqual(
+        {}
+      )
+      expect(
+        countSourceFile('src/main/spawn-inline-type.ts', "import { type ChildProcess } from 'node:child_process'\n")
+      ).toEqual({})
       expect(countSourceFile('src/main/infra/process/spawn.ts', text)).toEqual({})
     })
 
@@ -527,10 +605,7 @@ describe('architecture source detectors', () => {
 
   describe('FF-11 BrowserWindow construction outside src/main/windows', () => {
     it('counts BrowserWindow construction outside the windows directory only', () => {
-      const text = [
-        'new BrowserWindow({})',
-        'new electron.BrowserWindow({})',
-      ].join('\n')
+      const text = ['new BrowserWindow({})', 'new electron.BrowserWindow({})'].join('\n')
       expect(countSourceFile('src/main/create-window.ts', text)).toEqual({ 'FF-11': 2 })
       expect(countSourceFile('src/main/windows/create-window.ts', text)).toEqual({})
     })
@@ -543,7 +618,7 @@ describe('architecture source detectors', () => {
         'const b = text.replace(/^---\\r?\\n[\\s\\S]*?\\r?\\n---\\n?/, "")',
         'const c = /^(?:---)/',
         'const d = /^## Full transcript/m',
-        'const e = "^---\\n"',
+        'const e = "^---\\n"'
       ].join('\n')
       // Extension appended so the FF-07 detector does not count these fixture names as source paths.
       const ext = '.' + 'ts'
@@ -568,24 +643,22 @@ describe('architecture source detectors', () => {
         '  tick() {',
         '    setTimeout(() => this.tick(), 5)',
         '  }',
-        '}',
+        '}'
       ].join('\n')
       expect(countSourceFile('src/main/timers.ts', text)).toEqual({ 'FF-14': 4 })
       expect(countSourceFile('src/main/timers-member.ts', 'globalThis.setInterval(f, 1)\n')).toEqual({ 'FF-14': 1 })
-      expect(countSourceFile('src/main/timers-field.ts', [
-        'class A {',
-        '  poll = () => {',
-        '    setTimeout(() => this.poll(), 5)',
-        '  }',
-        '}',
-      ].join('\n'))).toEqual({ 'FF-14': 1 })
-      expect(countSourceFile('src/main/timers-false-positive.ts', [
-        'class A {',
-        '  tick() {',
-        '    setTimeout(() => obj.tick(), 5)',
-        '  }',
-        '}',
-      ].join('\n'))).toEqual({})
+      expect(
+        countSourceFile(
+          'src/main/timers-field.ts',
+          ['class A {', '  poll = () => {', '    setTimeout(() => this.poll(), 5)', '  }', '}'].join('\n')
+        )
+      ).toEqual({ 'FF-14': 1 })
+      expect(
+        countSourceFile(
+          'src/main/timers-false-positive.ts',
+          ['class A {', '  tick() {', '    setTimeout(() => obj.tick(), 5)', '  }', '}'].join('\n')
+        )
+      ).toEqual({})
       expect(countSourceFile('src/main/oneshot.ts', 'setTimeout(done, 5)\n')).toEqual({})
       expect(countSourceFile('src/main/infra/scheduler/timers.ts', text)).toEqual({})
       expect(countSourceFile('src/renderer/src/timers.ts', text)).toEqual({})
@@ -606,7 +679,7 @@ describe('architecture layering dependency-cruiser gate', () => {
         'ff01-renderer-imports-main-or-preload error src/renderer/src/main.tsx',
         'ff01-renderer-imports-main-or-preload-in-tests warn src/renderer/src/cross.test.ts',
         'ff02-import-cycle warn src/cycle/a.ts',
-        'ff03-unreachable-from-entry-points warn src/dead.ts',
+        'ff03-unreachable-from-entry-points warn src/dead.ts'
       ])
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
@@ -669,7 +742,7 @@ describe('architecture ratchet CLI', () => {
       writeFixtureFile(
         fixture.root,
         'src/main/new-long.ts',
-        `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`,
+        `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`
       )
 
       const result = runArchitectureCli(fixture.root)
@@ -686,10 +759,7 @@ describe('architecture ratchet CLI', () => {
       const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
       writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', formatBaseline(seed))
 
-      writeFixtureFile(fixture.root, 'src/new-cycle/b.ts', [
-        "import './a'",
-        'export const newCycleB = true',
-      ].join('\n'))
+      writeFixtureFile(fixture.root, 'src/new-cycle/b.ts', ["import './a'", 'export const newCycleB = true'].join('\n'))
 
       const result = runArchitectureCli(fixture.root)
       expect(result.code, result.out).toBe(1)
@@ -729,7 +799,7 @@ describe('architecture ratchet CLI', () => {
       const reordered = {
         'FF-02': seed['FF-02'],
         'FF-01': seed['FF-01'],
-        ...Object.fromEntries(RULE_IDS.slice(2).map((rule) => [rule, seed[rule]])),
+        ...Object.fromEntries(RULE_IDS.slice(2).map((rule) => [rule, seed[rule]]))
       }
       writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', `${JSON.stringify(reordered, null, 2)}\n`)
 

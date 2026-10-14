@@ -188,10 +188,20 @@ async function createHost(): Promise<UtilityProcess> {
       await runtimeLease?.verifyCurrentBytes()
       if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
       if (admissionVersion !== importTierAdmissionVersion) continue
-      const child = forkHost(tierAdmission, approvedModelsPath, runtimeLease, () => {
-        leaseTransferred = true
-      })
-      return child
+      const physicalAdmission = await runtimeLease?.preparePhysicalAdmission()
+      try {
+        if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+        if (admissionVersion !== importTierAdmissionVersion) continue
+        physicalAdmission?.assertCurrentSync()
+        if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+        if (admissionVersion !== importTierAdmissionVersion) continue
+        const child = forkHost(tierAdmission, approvedModelsPath, runtimeLease, () => {
+          leaseTransferred = true
+        })
+        return child
+      } finally {
+        await physicalAdmission?.dispose()
+      }
     } finally {
       if (!leaseTransferred) await runtimeLease?.release()
     }

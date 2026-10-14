@@ -256,7 +256,19 @@ async function activeGeneration(
         }
         continue
       }
-      return spawnGeneration(prepared.files, prepared.lease)
+      const physicalAdmission = await prepared.lease?.preparePhysicalAdmission()
+      try {
+        physicalAdmission?.assertCurrentSync()
+        assertCurrentOperation(revision)
+        if (releaseGate || blockedRelease) {
+          await physicalAdmission?.dispose()
+          await releasePreparedLease()
+          continue
+        }
+        return spawnGeneration(prepared.files, prepared.lease)
+      } finally {
+        await physicalAdmission?.dispose()
+      }
     } catch (error) {
       await releasePreparedLease()
       throw error

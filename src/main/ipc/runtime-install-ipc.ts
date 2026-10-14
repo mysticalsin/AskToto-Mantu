@@ -30,7 +30,7 @@ export function registerRuntimeInstallIpc(options: {
   readonly assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
   readonly assertAuthorityCurrent: RuntimeInstallCallerContext['assertAuthorityCurrent']
   readonly plans: RuntimeInstallPlanBook
-}): { cleanup(): void } {
+}): { cleanup(): Promise<void> } {
   const owners = new WeakMap<Electron.WebContents, { identity: string; navigation: number; subscribed: boolean }>()
   const caller = (event: Electron.IpcMainInvokeEvent): RuntimeInstallCallerContext => {
     options.assertMainWindow(event)
@@ -109,14 +109,16 @@ export function registerRuntimeInstallIpc(options: {
     }
   })
 
-  let cleaned = false
+  let cleanupSettlement: Promise<void> | null = null
   return {
-    cleanup(): void {
-      if (cleaned) return
-      cleaned = true
-      options.plans.clear()
-      options.ipcMain.removeHandler(IPC.runtimeInstallPlanPreview)
-      options.ipcMain.removeHandler(IPC.runtimeInstallWithPlan)
+    cleanup(): Promise<void> {
+      if (cleanupSettlement) return cleanupSettlement
+      cleanupSettlement = (async () => {
+        await options.plans.clear()
+        options.ipcMain.removeHandler(IPC.runtimeInstallPlanPreview)
+        options.ipcMain.removeHandler(IPC.runtimeInstallWithPlan)
+      })()
+      return cleanupSettlement
     }
   }
 }

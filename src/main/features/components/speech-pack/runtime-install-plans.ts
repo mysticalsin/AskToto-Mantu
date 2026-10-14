@@ -113,7 +113,11 @@ export function createRuntimeInstallPlanBook(options: {
   ) => Promise<unknown>
 }) {
   const plans = new Map<string, PlanRecord>()
-  const active = new Map<string, { controller: AbortController; callerIdentity: string }>()
+  const active = new Map<
+    string,
+    { controller: AbortController; callerIdentity: string; settled: Promise<void>; settle: () => void }
+  >()
+  let clearSettlement: Promise<void> | null = null
   const now = options.now ?? Date.now
   const token = options.token ?? (() => randomBytes(32).toString('hex'))
 
@@ -166,6 +170,7 @@ export function createRuntimeInstallPlanBook(options: {
       feature: RuntimeFeatureId,
       caller: RuntimeInstallCallerContext
     ): Promise<RuntimeInstallPlanPreview | null> {
+      if (clearSettlement) throw new Error('RUNTIME_INSTALL_SERVICE_CLOSED')
       caller.assertCurrent()
       const authority = await currentAuthority(feature)
       caller.assertCurrent()
@@ -232,6 +237,7 @@ export function createRuntimeInstallPlanBook(options: {
       readonly action: 'install' | 'cancel'
       readonly caller: RuntimeInstallCallerContext
     }): Promise<unknown | { readonly cancelled: true }> {
+      if (clearSettlement) throw new Error('RUNTIME_INSTALL_SERVICE_CLOSED')
       if (!/^[0-9a-f]{64}$/.test(input.planId)) throw new Error('RUNTIME_INSTALL_PLAN_INVALID')
       input.caller.assertCurrent()
       if (input.action === 'cancel') {
@@ -249,39 +255,60 @@ export function createRuntimeInstallPlanBook(options: {
       plans.delete(input.planId)
       if (now() >= plan.expiresAt) throw new Error('RUNTIME_INSTALL_PLAN_EXPIRED')
       const controller = new AbortController()
-      active.set(input.planId, { controller, callerIdentity: input.caller.identity })
+      let settle!: () => void
+      const settled = new Promise<void>((resolve) => {
+        settle = resolve
+      })
+      active.set(input.planId, { controller, callerIdentity: input.caller.identity, settled, settle })
       const signal = controller.signal
       try {
         await assertPlanCurrent(plan, input.caller)
         if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
-        return await options.run(
-          Object.freeze({
-            planId: plan.preview.planId,
-            feature: plan.preview.feature,
-            selectedModelId: plan.preview.selectedModelId,
-            target: plan.target,
-            catalogIdentity: plan.catalogIdentity,
-            artifactIds: plan.artifactIds
-          }),
-          signal,
-          async () => {
-            if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
-            await assertPlanCurrent(plan, input.caller)
-          },
-          () => {
-            if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
-            assertPlanCurrentSync(plan, input.caller)
+        try {
+          return await options.run(
+            Object.freeze({
+              planId: plan.preview.planId,
+              feature: plan.preview.feature,
+              selectedModelId: plan.preview.selectedModelId,
+              target: plan.target,
+              catalogIdentity: plan.catalogIdentity,
+              artifactIds: plan.artifactIds
+            }),
+            signal,
+            async () => {
+              if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
+              await assertPlanCurrent(plan, input.caller)
+            },
+            () => {
+              if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
+              assertPlanCurrentSync(plan, input.caller)
+            }
+          )
+        } catch (error) {
+          if (error && typeof error === 'object' && 'settled' in error) {
+            const retained = (error as { settled?: unknown }).settled
+            if (retained instanceof Promise) await retained
           }
-        )
+          throw error
+        }
       } finally {
-        if (active.get(input.planId)?.controller === controller) active.delete(input.planId)
+        const entry = active.get(input.planId)
+        if (entry?.controller === controller) active.delete(input.planId)
+        settle()
       }
     },
 
-    clear(): void {
+    clear(): Promise<void> {
+      if (clearSettlement) return clearSettlement
+      let resolveClear!: () => void
+      clearSettlement = new Promise<void>((resolve) => {
+        resolveClear = resolve
+      })
       plans.clear()
-      for (const entry of active.values()) entry.controller.abort(new Error('RUNTIME_INSTALL_CANCELLED'))
-      active.clear()
+      const pending = [...active.values()]
+      for (const entry of pending) entry.controller.abort(new Error('RUNTIME_INSTALL_CANCELLED'))
+      void Promise.all(pending.map((entry) => entry.settled)).then(resolveClear)
+      return clearSettlement
     }
   })
 }

@@ -1,12 +1,37 @@
 import { randomBytes, createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
-import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm, statfs } from 'node:fs/promises'
-import { join, relative, resolve, sep } from 'node:path'
+import { lstat, mkdir, open, realpath, statfs } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { DEFAULT_TIMING, downloadVerified } from './download'
 import { verifyWithCatalogIdentity, type RuntimeCatalogRow, type RuntimeInventoryV1 } from './runtime-provenance'
+import { assertRuntimeFileClosure } from './runtime-provenance'
 import { hashPinnedArchive } from './runtime-archive'
 import { extractRuntimeTarGzip } from './runtime-tar'
-import { assertRuntimeFileClosure } from './runtime-provenance'
+import {
+  createRuntimePointerSnapshotGuards,
+  sameFileOwnerAfterRename,
+  sameFileVersion
+} from './runtime-pointer-snapshot'
+import { verifyStagedPayloads } from './runtime-staged-verifier'
+import {
+  directoryIdentity,
+  ensureOwnedDirectory,
+  fileVersion,
+  freezeTree,
+  makeParents,
+  readPinnedFile,
+  sameDirectoryIdentity,
+  SAFE_FLAGS,
+  syncDirectory,
+  writeBytesAtomic,
+  writeExclusive
+} from './runtime-install-files'
+import {
+  removeRuntimeFileAfterAdmission,
+  retainRuntimeTreeIfOwnershipIsUnproven,
+  renameRuntimeDirectorySyncAfterAdmission,
+  renameRuntimeFileAfterAdmission
+} from '../../../infra/storage/runtime-owned-files'
 import {
   calculateRuntimeInstallRequirements,
   resolveRuntimeArtifactIds,
@@ -16,58 +41,8 @@ import type { OptionalRuntimeTarget } from './runtime-components'
 import type { RuntimeFeatureId, RuntimeModelId } from './runtime-lease'
 
 const MAX_METADATA_BYTES = 20 * 1024 * 1024
-const SAFE_FLAGS = constants.O_NOFOLLOW | constants.O_NONBLOCK
-
 function sha256(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex')
-}
-
-function sameFileVersion(a: BigIntStats | null, b: BigIntStats | null): boolean {
-  return a === null || b === null
-    ? a === b
-    : a.dev === b.dev &&
-        a.ino === b.ino &&
-        a.mode === b.mode &&
-        a.nlink === b.nlink &&
-        a.uid === b.uid &&
-        a.gid === b.gid &&
-        a.rdev === b.rdev &&
-        a.size === b.size &&
-        a.blocks === b.blocks &&
-        a.mtimeNs === b.mtimeNs &&
-        a.ctimeNs === b.ctimeNs &&
-        a.birthtimeNs === b.birthtimeNs
-}
-
-async function fileVersion(path: string): Promise<BigIntStats | null> {
-  try {
-    const value = await lstat(path, { bigint: true })
-    if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1n) {
-      throw new Error('RUNTIME_INSTALL_POINTER_INVALID')
-    }
-    return value
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
-}
-
-type DirectoryIdentity = Pick<BigIntStats, 'dev' | 'ino' | 'birthtimeNs'>
-
-async function directoryIdentity(path: string): Promise<DirectoryIdentity> {
-  const value = await lstat(path, { bigint: true })
-  if (!value.isDirectory() || value.isSymbolicLink()) throw new Error('RUNTIME_INSTALL_DIRECTORY_INVALID')
-  return { dev: value.dev, ino: value.ino, birthtimeNs: value.birthtimeNs }
-}
-
-function sameDirectoryIdentity(expected: DirectoryIdentity, actual: BigIntStats): boolean {
-  return (
-    actual.isDirectory() &&
-    !actual.isSymbolicLink() &&
-    expected.dev === actual.dev &&
-    expected.ino === actual.ino &&
-    expected.birthtimeNs === actual.birthtimeNs
-  )
 }
 
 function canonicalJson(value: unknown): string {
@@ -92,231 +67,7 @@ function generationIdentity(input: {
   return sha256(canonicalJson({ schemaVersion: 1, ...input, artifactIds: [...input.artifactIds].sort() }))
 }
 
-async function ensureOwnedDirectory(path: string): Promise<string> {
-  try {
-    await mkdir(path, { recursive: true })
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-  }
-  const stat = await lstat(path)
-  const canonical = await realpath(path)
-  if (!stat.isDirectory() || stat.isSymbolicLink() || canonical !== resolve(path)) {
-    throw new Error('RUNTIME_INSTALL_DIRECTORY_INVALID')
-  }
-  return canonical
-}
-
-async function readPinnedFile(path: string, max: number): Promise<Buffer> {
-  if (process.platform !== 'win32' && (!constants.O_NOFOLLOW || !constants.O_NONBLOCK)) {
-    throw new Error('RUNTIME_SAFE_FILE_OPEN_UNAVAILABLE')
-  }
-  const handle = await open(path, constants.O_RDONLY | SAFE_FLAGS)
-  try {
-    const before = await handle.stat({ bigint: true })
-    const named = await lstat(path, { bigint: true })
-    const sameVersion = (a: BigIntStats, b: BigIntStats): boolean =>
-      a.dev === b.dev &&
-      a.ino === b.ino &&
-      a.mode === b.mode &&
-      a.nlink === b.nlink &&
-      a.uid === b.uid &&
-      a.gid === b.gid &&
-      a.rdev === b.rdev &&
-      a.size === b.size &&
-      a.blocks === b.blocks &&
-      a.mtimeNs === b.mtimeNs &&
-      a.ctimeNs === b.ctimeNs &&
-      a.birthtimeNs === b.birthtimeNs
-    if (
-      !before.isFile() ||
-      before.nlink !== 1n ||
-      before.size < 1n ||
-      before.size > BigInt(max) ||
-      !named.isFile() ||
-      named.nlink !== 1n ||
-      !sameVersion(before, named)
-    ) {
-      throw new Error('RUNTIME_INSTALL_FILE_INVALID')
-    }
-    const chunks: Buffer[] = []
-    let total = 0
-    let position = 0
-    while (total <= max) {
-      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, max + 1 - total))
-      const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position)
-      if (bytesRead === 0) break
-      chunks.push(chunk.subarray(0, bytesRead))
-      total += bytesRead
-      position += bytesRead
-    }
-    if (total > max) throw new Error('RUNTIME_INSTALL_FILE_TOO_LARGE')
-    const bytes = Buffer.concat(chunks, total)
-    const after = await handle.stat({ bigint: true })
-    const namedAfter = await lstat(path, { bigint: true })
-    if (BigInt(bytes.byteLength) !== before.size || !sameVersion(before, after) || !sameVersion(before, namedAfter)) {
-      throw new Error('RUNTIME_INSTALL_FILE_CHANGED')
-    }
-    return bytes
-  } finally {
-    await handle.close().catch(() => undefined)
-  }
-}
-
-async function makeParents(root: string, relPath: string): Promise<string> {
-  let current = root
-  const pieces = relPath.split('/')
-  for (const piece of pieces.slice(0, -1)) {
-    current = join(current, piece)
-    await ensureOwnedDirectory(current)
-  }
-  const rootPath = await realpath(root)
-  const rel = relative(rootPath, resolve(current))
-  if (rel === '..' || rel.startsWith(`..${sep}`) || resolve(current) !== realpathSyncFree(rootPath, rel)) {
-    throw new Error('RUNTIME_INSTALL_PATH_ESCAPE')
-  }
-  return join(current, pieces.at(-1) as string)
-}
-
-function realpathSyncFree(root: string, rel: string): string {
-  return rel ? resolve(root, rel) : root
-}
-
-async function writeExclusive(path: string, data: Uint8Array, mode: number): Promise<void> {
-  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | SAFE_FLAGS, mode)
-  try {
-    await handle.writeFile(data)
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-}
-
-async function writeBytesAtomic(
-  path: string,
-  bytes: Uint8Array,
-  beforeRename: () => Promise<void | (() => void)> | void | (() => void)
-): Promise<void> {
-  const temp = `${path}.${randomBytes(16).toString('hex')}.tmp`
-  await writeExclusive(temp, bytes, 0o600)
-  try {
-    const finalGuard = await beforeRename()
-    if (typeof finalGuard === 'function') finalGuard()
-    await rename(temp, path)
-  } catch (error) {
-    await rm(temp, { force: true }).catch(() => undefined)
-    throw error
-  }
-}
-
-async function removeOwnedTree(root: string, path: string, expectedRoot: DirectoryIdentity): Promise<void> {
-  const canonicalRoot = await realpath(root)
-  const canonical = await realpath(path)
-  const rel = relative(canonicalRoot, canonical)
-  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(path) !== canonical) {
-    throw new Error('RUNTIME_INSTALL_CLEANUP_ESCAPE')
-  }
-  const makeWritable = async (directory: string, expected: DirectoryIdentity): Promise<void> => {
-    if (!sameDirectoryIdentity(expected, await lstat(directory, { bigint: true }))) {
-      throw new Error('RUNTIME_INSTALL_CLEANUP_OWNER_CHANGED')
-    }
-    await chmod(directory, 0o700)
-    for (const name of await readdir(directory)) {
-      const child = join(directory, name)
-      const item = await lstat(child, { bigint: true })
-      if (item.isSymbolicLink()) throw new Error('RUNTIME_INSTALL_LINK_REJECTED')
-      if (item.isDirectory()) {
-        await makeWritable(child, { dev: item.dev, ino: item.ino, birthtimeNs: item.birthtimeNs })
-      } else if (item.isFile() && item.nlink === 1n) {
-        const current = await lstat(child, { bigint: true })
-        if (!sameFileVersion(item, current)) throw new Error('RUNTIME_INSTALL_CLEANUP_OWNER_CHANGED')
-        await chmod(child, 0o600)
-      } else throw new Error('RUNTIME_INSTALL_SPECIAL_FILE')
-    }
-  }
-  await makeWritable(canonical, expectedRoot)
-  if (!sameDirectoryIdentity(expectedRoot, await lstat(canonical, { bigint: true }))) {
-    throw new Error('RUNTIME_INSTALL_CLEANUP_OWNER_CHANGED')
-  }
-  await rm(canonical, { recursive: true, force: true })
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY)
-  try {
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-}
-
-async function freezeTree(root: string, check: () => Promise<void>): Promise<void> {
-  const visit = async (directory: string): Promise<void> => {
-    for (const name of await readdir(directory)) {
-      await check()
-      const path = join(directory, name)
-      const item = await lstat(path)
-      if (item.isSymbolicLink()) throw new Error('RUNTIME_INSTALL_LINK_REJECTED')
-      if (item.isDirectory()) {
-        await visit(path)
-        await chmod(path, 0o500)
-        await check()
-      } else if (item.isFile() && item.nlink === 1) {
-        await chmod(path, (item.mode & 0o111) !== 0 ? 0o500 : 0o400)
-        await check()
-      } else throw new Error('RUNTIME_INSTALL_SPECIAL_FILE')
-    }
-  }
-  await visit(root)
-  await check()
-  await chmod(root, 0o500)
-  await check()
-}
-
-export async function verifyStagedPayloads(
-  stage: string,
-  inventories: readonly RuntimeInventoryV1[],
-  check: () => Promise<void>
-): Promise<void> {
-  for (const inventory of inventories) {
-    const root = join(stage, 'artifacts', inventory.artifactId)
-    const expected = new Map(inventory.files.map((file) => [file.path, file]))
-    const directories = new Set<string>()
-    for (const path of expected.keys()) {
-      const pieces = path.split('/')
-      for (let index = 1; index < pieces.length; index++) directories.add(pieces.slice(0, index).join('/'))
-    }
-    const found = new Set<string>()
-    const folded = new Set<string>()
-    const visit = async (directory: string, prefix: string): Promise<void> => {
-      for (const name of await readdir(directory)) {
-        await check()
-        const path = prefix ? `${prefix}/${name}` : name
-        const full = join(directory, name)
-        const stat = await lstat(full)
-        if (stat.isSymbolicLink()) throw new Error('RUNTIME_STAGED_LINK_REJECTED')
-        if (stat.isDirectory()) {
-          if (!directories.has(path)) throw new Error('RUNTIME_STAGED_EXTRA_DIRECTORY')
-          await visit(full, path)
-          continue
-        }
-        const pin = expected.get(path)
-        const key = path.toLowerCase()
-        if (!stat.isFile() || stat.nlink !== 1 || !pin || folded.has(key)) {
-          throw new Error('RUNTIME_STAGED_FILE_CLOSURE_MISMATCH')
-        }
-        folded.add(key)
-        found.add(path)
-        if (stat.size !== pin.bytes || ((stat.mode & 0o111) !== 0) !== pin.executable) {
-          throw new Error('RUNTIME_STAGED_FILE_PIN_MISMATCH')
-        }
-        const digest = pin.bytes === 0 ? sha256(Buffer.alloc(0)) : await hashPinnedArchive(full, pin.bytes)
-        if (digest !== pin.sha256) throw new Error('RUNTIME_STAGED_FILE_PIN_MISMATCH')
-      }
-    }
-    await visit(root, '')
-    if (found.size !== expected.size) throw new Error('RUNTIME_STAGED_FILE_CLOSURE_MISMATCH')
-  }
-}
+export { verifyStagedPayloads }
 
 function rowsFor(rowIds: readonly string[], rows: readonly RuntimeCatalogRow[]): RuntimeCatalogRow[] {
   const selected = rowIds.map((id) => rows.find((row) => row.artifactId === id))
@@ -354,6 +105,7 @@ export interface RuntimeInstallSelfTest {
     readonly inventories: readonly RuntimeInventoryV1[]
     readonly signal: AbortSignal
     readonly assertCurrent: () => Promise<void>
+    readonly assertCurrentSync: () => void
   }): Promise<void>
 }
 
@@ -424,8 +176,10 @@ export function createRuntimeInstaller(options: {
     }
     await check()
     const generationsRoot = await ensureOwnedDirectory(join(storeRoot, 'generations'))
+    const generationsRootIdentity = await directoryIdentity(generationsRoot)
     await check()
     const stagingRoot = await ensureOwnedDirectory(join(storeRoot, 'staging'))
+    const stagingRootIdentity = await directoryIdentity(stagingRoot)
     await check()
     const activeRoot = await ensureOwnedDirectory(join(storeRoot, 'active'))
     const activeRootIdentity = await directoryIdentity(activeRoot)
@@ -445,11 +199,15 @@ export function createRuntimeInstaller(options: {
     await check()
     const inventories: RuntimeInventoryV1[] = []
     let complete = false
+    let cleanupRetained = false
+    let installResult: { generationIdentity: string; installedBytes: number } | null = null
     let retainStaging = false
     const retainedExecution: { settlement: Promise<void> | null } = { settlement: null }
     let retainPublishedGeneration = false
     let publishedGeneration: string | null = null
     let temporaryPointer: string | null = null
+    let temporaryPointerVersion: BigIntStats | null = null
+    let publishedPointerOwnerVersion: BigIntStats | null = null
     const priorPointerPath = join(activeRoot, `${input.feature}.json`)
     let priorPointer: Buffer | null = null
     let priorPointerVersion: BigIntStats | null = null
@@ -472,6 +230,13 @@ export function createRuntimeInstaller(options: {
         throw new Error('RUNTIME_INSTALL_ACTIVE_ROOT_CHANGED')
       }
     }
+    const { assertActiveRootOwnedSync } = createRuntimePointerSnapshotGuards({
+      storeRoot,
+      activeRoot,
+      storeRootIdentity,
+      activeRootIdentity,
+      sameFileVersion
+    })
     try {
       const trustRoot = await readPinnedFile(
         join(resourcesRoot, catalogSnapshot.catalog.trustRoot.path),
@@ -597,7 +362,12 @@ export function createRuntimeInstaller(options: {
       await check()
       const targetGeneration = join(generationsRoot, generation)
       await freezeTree(stage, check)
-      await verifyStagedPayloads(stage, inventories, check)
+      const initialStageAdmission = await verifyStagedPayloads(stage, inventories, check)
+      try {
+        initialStageAdmission.assertCurrentSync()
+      } finally {
+        await initialStageAdmission.dispose()
+      }
       try {
         await options.selfTest({
           feature: input.feature,
@@ -608,7 +378,8 @@ export function createRuntimeInstaller(options: {
           stagedRoot: stage,
           inventories: Object.freeze(inventories),
           signal: input.signal,
-          assertCurrent: check
+          assertCurrent: check,
+          assertCurrentSync: input.assertCurrentSync
         })
       } catch (error) {
         if (error && typeof error === 'object' && 'retainStaging' in error && error.retainStaging === true) {
@@ -650,26 +421,70 @@ export function createRuntimeInstaller(options: {
         throw new Error('RUNTIME_GENERATION_ALREADY_EXISTS')
       }
       await check()
-      input.assertCurrentSync()
-      await rename(stage, targetGeneration)
+      const moveAdmission = await verifyStagedPayloads(stage, inventories, check, {
+        roots: [{ path: generationsRoot, identity: generationsRootIdentity }],
+        absentPaths: [targetGeneration]
+      })
+      try {
+        renameRuntimeDirectorySyncAfterAdmission({
+          admission: moveAdmission,
+          source: stage,
+          destination: targetGeneration,
+          assertCallerCurrentSync: input.assertCurrentSync
+        })
+      } finally {
+        await moveAdmission.dispose()
+      }
       publishedGeneration = targetGeneration
       await syncDirectory(generationsRoot)
       await check()
       temporaryPointer = `${priorPointerPath}.${randomBytes(16).toString('hex')}.tmp`
-      await writeExclusive(temporaryPointer, finalPointer, 0o600)
+      temporaryPointerVersion = await writeExclusive(temporaryPointer, finalPointer, 0o600)
       await check()
       if (!sameFileVersion(priorPointerVersion, await fileVersion(priorPointerPath))) {
         throw new Error('RUNTIME_INSTALL_POINTER_CHANGED')
       }
-      // This is the final awaited operation before publication. Recheck transaction authority
-      // after metadata I/O so cancellation or policy revocation cannot race the pointer rename.
       await assertActiveRootOwned()
-      input.assertCurrentSync()
-      await rename(temporaryPointer, priorPointerPath)
+      if (!sameFileVersion(priorPointerVersion, await fileVersion(priorPointerPath))) {
+        throw new Error('RUNTIME_INSTALL_POINTER_CHANGED')
+      }
+      const [tempVersionBeforePublish, tempBytesBeforePublish] = await Promise.all([
+        fileVersion(temporaryPointer),
+        readPinnedFile(temporaryPointer, finalPointer.byteLength)
+      ])
+      if (
+        !sameFileVersion(temporaryPointerVersion, tempVersionBeforePublish) ||
+        !tempBytesBeforePublish.equals(finalPointer)
+      ) {
+        throw new Error('RUNTIME_INSTALL_TEMP_OWNER_CHANGED')
+      }
+      publishedPointerOwnerVersion = temporaryPointerVersion
+      await renameRuntimeFileAfterAdmission({
+        source: temporaryPointer,
+        destination: priorPointerPath,
+        sourceVersion: temporaryPointerVersion,
+        sourceBytes: finalPointer,
+        destinationVersion: priorPointerVersion,
+        destinationBytes: priorPointer,
+        awaitAdmission: async () => {
+          await assertActiveRootOwned()
+        },
+        assertDestinationSync: assertActiveRootOwnedSync,
+        assertCallerCurrentSync: input.assertCurrentSync
+      })
       temporaryPointer = null
+      temporaryPointerVersion = null
       try {
-        finalPointerVersion = await fileVersion(priorPointerPath)
-        if (!finalPointerVersion) throw new Error('RUNTIME_INSTALL_POINTER_PUBLISH_FAILED')
+        const publishedVersion = await fileVersion(priorPointerPath)
+        if (!publishedVersion) throw new Error('RUNTIME_INSTALL_POINTER_PUBLISH_FAILED')
+        const publishedBytes = await readPinnedFile(priorPointerPath, finalPointer.byteLength)
+        if (
+          !sameFileOwnerAfterRename(publishedPointerOwnerVersion, publishedVersion) ||
+          !publishedBytes.equals(finalPointer)
+        ) {
+          throw new Error('RUNTIME_INSTALL_POINTER_PUBLISH_FAILED')
+        }
+        finalPointerVersion = publishedVersion
         await syncDirectory(activeRoot)
         await check()
       } catch (error) {
@@ -685,9 +500,13 @@ export function createRuntimeInstaller(options: {
           }
         }
         let pointerVersion = await fileVersion(priorPointerPath)
-        if (current?.equals(finalPointer) && finalPointerVersion === null) {
-          // Recover the transaction's published inode after a transient metadata failure. The
-          // exact bytes and app-owned active directory must both still match before rollback.
+        if (
+          current?.equals(finalPointer) &&
+          finalPointerVersion === null &&
+          sameFileOwnerAfterRename(publishedPointerOwnerVersion, pointerVersion)
+        ) {
+          // Only recover metadata for the inode captured from our own pointer temporary.
+          // Equal bytes in another inode are not evidence of our publication.
           finalPointerVersion = pointerVersion
         }
         if (current?.equals(finalPointer) && sameFileVersion(finalPointerVersion, pointerVersion)) {
@@ -698,31 +517,56 @@ export function createRuntimeInstaller(options: {
             if (!bytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, pointerVersion)) {
               throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
             }
-            return () => {
-              if (!bytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, pointerVersion)) {
-                throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
-              }
-            }
+            await assertActiveRootOwned()
+            return assertActiveRootOwnedSync
           }
           if (priorPointer) {
-            await writeBytesAtomic(priorPointerPath, priorPointer, assertPublishedPointerStillOwned)
+            await writeBytesAtomic(
+              priorPointerPath,
+              priorPointer,
+              assertPublishedPointerStillOwned,
+              pointerVersion,
+              finalPointer
+            )
           } else {
             const rollbackPath = `${priorPointerPath}.${randomBytes(16).toString('hex')}.rollback`
-            const finalGuard = await assertPublishedPointerStillOwned()
-            finalGuard()
-            await rename(priorPointerPath, rollbackPath)
+            if (!pointerVersion) throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+            await renameRuntimeFileAfterAdmission({
+              source: priorPointerPath,
+              destination: rollbackPath,
+              sourceVersion: pointerVersion,
+              sourceBytes: finalPointer,
+              destinationVersion: null,
+              destinationBytes: null,
+              awaitAdmission: assertPublishedPointerStillOwned,
+              assertDestinationSync: assertActiveRootOwnedSync,
+              assertCallerCurrentSync: input.assertCurrentSync
+            })
             retainPublishedGeneration = true
             const movedBytes = await readPinnedFile(rollbackPath, 64 * 1024)
             const movedVersion = await fileVersion(rollbackPath)
-            if (!movedBytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, movedVersion)) {
-              if ((await fileVersion(priorPointerPath)) === null) {
-                await assertActiveRootOwned()
-                await rename(rollbackPath, priorPointerPath)
-              } else retainPublishedGeneration = true
+            if (!movedBytes.equals(finalPointer) || !sameFileOwnerAfterRename(finalPointerVersion, movedVersion)) {
+              retainPublishedGeneration = true
               throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
             }
+            finalPointerVersion = movedVersion
             await assertActiveRootOwned()
-            await rm(rollbackPath, { force: true })
+            const [removeVersion, removeBytes] = await Promise.all([
+              fileVersion(rollbackPath),
+              readPinnedFile(rollbackPath, 64 * 1024)
+            ])
+            if (!sameFileVersion(finalPointerVersion, removeVersion) || !removeBytes.equals(finalPointer)) {
+              throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+            }
+            if (!finalPointerVersion) throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+            assertActiveRootOwnedSync()
+            await removeRuntimeFileAfterAdmission(
+              rollbackPath,
+              finalPointerVersion,
+              finalPointer,
+              assertActiveRootOwnedSync
+            )
+            await syncDirectory(activeRoot)
             retainPublishedGeneration = false
           }
           await syncDirectory(activeRoot)
@@ -732,15 +576,29 @@ export function createRuntimeInstaller(options: {
         throw error
       }
       complete = true
-      return { generationIdentity: generation, installedBytes: requirements.installedBytes }
+      installResult = { generationIdentity: generation, installedBytes: requirements.installedBytes }
     } finally {
       if (!complete) {
-        if (temporaryPointer) await rm(temporaryPointer, { force: true }).catch(() => undefined)
-        if (!retainStaging) await removeOwnedTree(stagingRoot, stage, stageIdentity).catch(() => undefined)
-        else if (retainedExecution.settlement) {
-          void retainedExecution.settlement
-            .then(() => removeOwnedTree(stagingRoot, stage, stageIdentity))
-            .catch(() => undefined)
+        if (temporaryPointer && temporaryPointerVersion) {
+          if (finalPointerBytes) {
+            await removeRuntimeFileAfterAdmission(temporaryPointer, temporaryPointerVersion, finalPointerBytes)
+          }
+        }
+        if (!retainStaging) {
+          cleanupRetained = await retainRuntimeTreeIfOwnershipIsUnproven({
+            root: stagingRoot,
+            rootExpected: stagingRootIdentity,
+            path: stage,
+            expected: stageIdentity
+          })
+        } else if (retainedExecution.settlement) {
+          await retainedExecution.settlement
+          cleanupRetained = await retainRuntimeTreeIfOwnershipIsUnproven({
+            root: stagingRoot,
+            rootExpected: stagingRootIdentity,
+            path: stage,
+            expected: stageIdentity
+          })
         }
         if (publishedGeneration && !retainPublishedGeneration && finalPointerBytes) {
           try {
@@ -752,11 +610,23 @@ export function createRuntimeInstaller(options: {
               retainPublishedGeneration = true
             }
           }
-          if (!retainPublishedGeneration)
-            await removeOwnedTree(generationsRoot, publishedGeneration, stageIdentity).catch(() => undefined)
+          if (
+            !retainPublishedGeneration &&
+            (await retainRuntimeTreeIfOwnershipIsUnproven({
+              root: generationsRoot,
+              rootExpected: generationsRootIdentity,
+              path: publishedGeneration,
+              expected: stageIdentity
+            }))
+          ) {
+            cleanupRetained = true
+          }
         }
       }
     }
+    if (cleanupRetained) throw new Error('RUNTIME_INSTALL_CLEANUP_RETAINED')
+    if (!installResult) throw new Error('RUNTIME_INSTALL_RESULT_UNAVAILABLE')
+    return installResult
   }
   return Object.freeze({
     async install(input: RuntimeInstallTransactionInput) {

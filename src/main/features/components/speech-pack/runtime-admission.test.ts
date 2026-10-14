@@ -19,6 +19,7 @@ vi.mock('./runtime-components', () => ({ runtimeTargetFor: () => ({ packageProfi
 vi.mock('./runtime-lease', () => ({ acquireFeatureRuntime: state.acquire }))
 
 import { acquirePackageRuntimeLease, configureRuntimeAdmissionAuthority } from './runtime-admission'
+import { invalidateRuntimeExecutionAuthority } from './runtime-execution-authority'
 
 describe('optional runtime execution admission', () => {
   beforeEach(() => {
@@ -49,6 +50,32 @@ describe('optional runtime execution admission', () => {
 
     await expect(acquirePackageRuntimeLease('offline-asr')).rejects.toThrow(/authority was revoked/i)
     expect(state.acquire).toHaveBeenCalledOnce()
+    expect(lease.release).toHaveBeenCalledOnce()
+  })
+
+  it('does not let a held provider acquisition adopt authority restored after request revocation', async () => {
+    let enterAcquisition!: () => void
+    let resolveAcquisition!: (lease: { release: () => Promise<void> }) => void
+    const entered = new Promise<void>((resolve) => {
+      enterAcquisition = resolve
+    })
+    const acquired = new Promise<{ release: () => Promise<void> }>((resolve) => {
+      resolveAcquisition = resolve
+    })
+    const lease = { release: vi.fn(async () => undefined) }
+    state.acquire.mockImplementation(async () => {
+      enterAcquisition()
+      return acquired
+    })
+    configureRuntimeAdmissionAuthority(async () => true)
+
+    const request = acquirePackageRuntimeLease('offline-asr')
+    await entered
+    invalidateRuntimeExecutionAuthority()
+    configureRuntimeAdmissionAuthority(async () => true)
+    resolveAcquisition(lease)
+
+    await expect(request).rejects.toThrow(/authority was revoked/i)
     expect(lease.release).toHaveBeenCalledOnce()
   })
 

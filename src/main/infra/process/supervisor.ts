@@ -19,6 +19,7 @@ interface SupervisedState {
   usable: boolean
   // Set once we ask the sidecar to stop, so the wrapper's exit is ours and never triggers the direct fallback.
   stopping: boolean
+  fallbackStarted: boolean
   fallbackRecorded?: Promise<void>
 }
 
@@ -30,6 +31,10 @@ const supervisedPlatforms = new WeakMap<ChildProcess, NodeJS.Platform>()
 const supervisedProcessState = new WeakMap<ChildProcess, SupervisedState>()
 type UnsupervisedReason = 'wrapper-spawn-failed' | 'wrapper-setup-failed'
 export interface SupervisedSpawnHooks {
+  readonly prepareUnsupervisedFallback?: () => Promise<{
+    assertCurrentSync(): void
+    dispose(): Promise<void>
+  }>
   readonly onUnsupervisedFallbackSpawned?: (child: ChildProcess) => Promise<void> | void
 }
 
@@ -167,24 +172,34 @@ function fallbackCapableSupervisedChild(
     current: wrapper,
     supervised: true,
     usable: false,
-    stopping: false
+    stopping: false,
+    fallbackStarted: false
   }
   supervisedProcessState.set(proxy.child, state)
   const fallbackToDirect = (reason: UnsupervisedReason, error?: string): void => {
+    if (state.fallbackStarted) return
+    state.fallbackStarted = true
     audit('sidecar.unsupervised', {
       name,
       reason,
       ...(error ? { error } : {})
     })
-    try {
-      const direct = spawn(command, [...args], options)
-      state.current = direct
-      state.supervised = false
-      state.fallbackRecorded = Promise.resolve(hooks.onUnsupervisedFallbackSpawned?.(direct))
-      proxy.attach(direct, state)
-    } catch (fallbackError) {
-      proxy.emitError(fallbackError)
-    }
+    const fallback = (async (): Promise<void> => {
+      const admission = await hooks.prepareUnsupervisedFallback?.()
+      try {
+        if (state.stopping) return
+        admission?.assertCurrentSync()
+        const direct = spawn(command, [...args], options)
+        state.current = direct
+        state.supervised = false
+        proxy.attach(direct, state)
+        await hooks.onUnsupervisedFallbackSpawned?.(direct)
+      } finally {
+        await admission?.dispose()
+      }
+    })()
+    state.fallbackRecorded = fallback
+    void fallback.catch((fallbackError) => proxy.emitError(fallbackError))
   }
   proxy.attach(wrapper, state, {
     onError: (error) => {

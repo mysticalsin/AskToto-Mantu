@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
-import { lstat, open, readdir, realpath } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { lstat, open, opendir, realpath } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import type { OptionalRuntimeTarget } from './runtime-components'
 import {
   assertRuntimeFileClosure,
@@ -18,14 +18,24 @@ import type {
   RuntimeModelId as LeaseModelId,
   VerifiedRuntimeGeneration
 } from './runtime-lease'
-import { hashPinnedArchive } from './runtime-archive'
 import { extractRuntimeTarGzip } from './runtime-tar'
+import {
+  assertEvidenceClosure,
+  assertExactDirectories,
+  assertInstalledClosure,
+  readNamesBounded
+} from './runtime-generation-closure'
+import {
+  prepareRuntimePhysicalAdmission,
+  type RuntimePhysicalAdmission
+} from '../../../infra/storage/runtime-owned-files'
 
 const MAX_POINTER_BYTES = 64 * 1024
 const MAX_CATALOG_BYTES = 16 * 1024
 const MAX_METADATA_BYTES = 20 * 1024 * 1024
 const MAX_TRUST_ROOT_BYTES = 2 * 1024 * 1024
 const MAX_PLAN_BYTES = 100_000_000_000
+const MAX_PHYSICAL_RECORDS = 4096
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0
 const NONBLOCK = constants.O_NONBLOCK ?? 0
 const MODEL_IDS: readonly LeaseModelId[] = [
@@ -244,121 +254,6 @@ async function assertOwnedDirectory(root: string): Promise<string> {
   return canonical
 }
 
-async function assertFileRoot(root: string, relPath: string): Promise<string> {
-  let current = root
-  const parts = relPath.split('/')
-  for (let index = 0; index < parts.length; index++) {
-    current = join(current, parts[index])
-    const item = await lstat(current)
-    if (
-      item.isSymbolicLink() ||
-      (index === parts.length - 1 ? !item.isFile() || item.nlink !== 1 : !item.isDirectory())
-    ) {
-      throw new Error('RUNTIME_GENERATION_FILE_SHAPE_INVALID')
-    }
-  }
-  const canonical = await realpath(current)
-  const expected = resolve(root, ...parts)
-  const rel = relative(root, canonical)
-  if (canonical !== expected || !rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error('RUNTIME_GENERATION_FILE_ESCAPE')
-  }
-  return canonical
-}
-
-async function assertEvidenceClosure(evidenceRoot: string): Promise<void> {
-  const expected = ['bundle.json', 'inventory.json', 'payload.tar.gz']
-  const actual = (await readdir(evidenceRoot)).sort()
-  if (canonicalJson(actual) !== canonicalJson(expected)) throw new Error('RUNTIME_EVIDENCE_CLOSURE_MISMATCH')
-  for (const name of expected) {
-    const stat = await lstat(join(evidenceRoot, name), { bigint: true })
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) {
-      throw new Error('RUNTIME_EVIDENCE_FILE_INVALID')
-    }
-  }
-}
-
-async function assertExactDirectories(root: string, names: readonly string[]): Promise<void> {
-  const actual = (await readdir(root)).sort()
-  const expected = [...names].sort()
-  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
-    throw new Error('RUNTIME_GENERATION_DIRECTORY_CLOSURE_MISMATCH')
-  }
-}
-
-async function assertInstalledClosure(
-  root: string,
-  inventory: RuntimeInventoryV1,
-  signal?: AbortSignal
-): Promise<Map<string, BigIntStats>> {
-  const expected = new Map(inventory.files.map((file) => [file.path, file]))
-  const expectedDirectories = new Set<string>()
-  for (const path of expected.keys()) {
-    const parts = path.split('/')
-    for (let depth = 1; depth < parts.length; depth++) expectedDirectories.add(parts.slice(0, depth).join('/'))
-  }
-  const found = new Map<string, string>()
-  const folded = new Set<string>()
-  const visit = async (dir: string, prefix: string): Promise<void> => {
-    for (const name of await readdir(dir)) {
-      if (signal?.aborted) throw signal.reason ?? new Error('RUNTIME_VERIFY_CANCELLED')
-      const rel = prefix ? `${prefix}/${name}` : name
-      const path = join(dir, name)
-      const stat = await lstat(path)
-      if (stat.isSymbolicLink()) throw new Error('RUNTIME_GENERATION_LINK_REJECTED')
-      if (stat.isDirectory()) {
-        if (!expectedDirectories.has(rel)) throw new Error('RUNTIME_GENERATION_EXTRA_DIRECTORY')
-        await visit(path, rel)
-      } else if (stat.isFile() && stat.nlink === 1) {
-        const key = rel.toLowerCase()
-        if (!expected.has(rel) || folded.has(key)) throw new Error('RUNTIME_GENERATION_EXTRA_FILE')
-        folded.add(key)
-        found.set(rel, path)
-      } else throw new Error('RUNTIME_GENERATION_SPECIAL_FILE')
-    }
-  }
-  await visit(root, '')
-  if (found.size !== expected.size) throw new Error('RUNTIME_GENERATION_FILE_CLOSURE_MISMATCH')
-  const versions = new Map<string, BigIntStats>()
-  for (const [rel, pin] of expected) {
-    if (signal?.aborted) throw signal.reason ?? new Error('RUNTIME_VERIFY_CANCELLED')
-    const path = await assertFileRoot(root, rel)
-    const fileStat = await lstat(path, { bigint: true })
-    if (
-      path !== found.get(rel) ||
-      fileStat.size !== BigInt(pin.bytes) ||
-      ((fileStat.mode & 0o111n) !== 0n) !== pin.executable
-    ) {
-      throw new Error('RUNTIME_GENERATION_FILE_PIN_MISMATCH')
-    }
-    if (pin.bytes > 0 && (await hashPinnedArchive(path, pin.bytes)) !== pin.sha256) {
-      throw new Error('RUNTIME_GENERATION_FILE_PIN_MISMATCH')
-    }
-    if (pin.bytes === 0 && sha256(Buffer.alloc(0)) !== pin.sha256) {
-      throw new Error('RUNTIME_GENERATION_FILE_PIN_MISMATCH')
-    }
-    const afterHash = await lstat(path, { bigint: true })
-    if (
-      afterHash.dev !== fileStat.dev ||
-      afterHash.ino !== fileStat.ino ||
-      afterHash.mode !== fileStat.mode ||
-      afterHash.nlink !== fileStat.nlink ||
-      afterHash.uid !== fileStat.uid ||
-      afterHash.gid !== fileStat.gid ||
-      afterHash.rdev !== fileStat.rdev ||
-      afterHash.size !== fileStat.size ||
-      afterHash.blocks !== fileStat.blocks ||
-      afterHash.mtimeNs !== fileStat.mtimeNs ||
-      afterHash.ctimeNs !== fileStat.ctimeNs ||
-      afterHash.birthtimeNs !== fileStat.birthtimeNs
-    ) {
-      throw new Error('RUNTIME_GENERATION_FILE_CHANGED')
-    }
-    versions.set(path, afterHash)
-  }
-  return versions
-}
-
 function requiredClosure(
   feature: RuntimeFeatureId,
   selectedModelId?: LeaseModelId
@@ -521,7 +416,7 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         const generationRoot = await assertOwnedDirectory(join(storeRoot, 'generations', pointer.generationIdentity))
         let total = pointerBytes.byteLength
         const visit = async (directory: string): Promise<void> => {
-          for (const name of await readdir(directory)) {
+          for (const name of await readNamesBounded(directory, MAX_PHYSICAL_RECORDS)) {
             const path = join(directory, name)
             const item = await lstat(path, { bigint: true })
             if (item.isSymbolicLink()) throw new Error('RUNTIME_GENERATION_LINK_REJECTED')
@@ -696,7 +591,7 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         (await assertOwnedDirectory(join(storeRoot, 'generations', pointer.generationIdentity))) !== generationRoot
       )
         return null
-      const verifyCurrentBytes = async (): Promise<void> => {
+      const preparePhysicalAdmission = async (): Promise<RuntimePhysicalAdmission> => {
         if (
           (await assertOwnedDirectory(join(storeRoot, 'active'))) !== activeRoot ||
           (await assertOwnedDirectory(join(storeRoot, 'generations', pointer.generationIdentity))) !== generationRoot ||
@@ -709,34 +604,72 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         await assertExactDirectories(evidenceParent, pointer.artifactIds)
         const currentPointer = await readBoundedRegular(join(activeRoot, `${feature}.json`), MAX_POINTER_BYTES)
         if (!currentPointer.equals(pointerBytes)) throw new Error('RUNTIME_ACTIVE_POINTER_CHANGED')
-        const verifiedVersions: Array<Map<string, BigIntStats>> = []
-        for (const closure of physicalClosures) {
-          verifiedVersions.push(await assertInstalledClosure(closure.root, closure.inventory))
-          await assertEvidenceClosure(closure.evidenceRoot)
+        const nodes: Array<{ path: string; version: BigIntStats }> = []
+        const directories = new Map<string, { version: BigIntStats; children: readonly string[] }>()
+        const generationVersion = await lstat(generationRoot, { bigint: true })
+        const generationChildren = (await readNamesBounded(generationRoot, 2)).sort()
+        if (
+          generationChildren.length !== 2 ||
+          generationChildren[0] !== 'artifacts' ||
+          generationChildren[1] !== 'evidence'
+        ) {
+          throw new Error('RUNTIME_GENERATION_DIRECTORY_CLOSURE_MISMATCH')
         }
-        // Recheck the physical versions after every metadata/pointer await. Launch callers perform
-        // this as their final async admission step, so changed earlier members cannot hide behind a
-        // later pointer read or a hash of another member.
-        for (const versions of verifiedVersions) {
-          for (const [path, verified] of versions) {
-            const current = await lstat(path, { bigint: true })
-            if (
-              current.dev !== verified.dev ||
-              current.ino !== verified.ino ||
-              current.mode !== verified.mode ||
-              current.nlink !== verified.nlink ||
-              current.uid !== verified.uid ||
-              current.gid !== verified.gid ||
-              current.rdev !== verified.rdev ||
-              current.size !== verified.size ||
-              current.blocks !== verified.blocks ||
-              current.mtimeNs !== verified.mtimeNs ||
-              current.ctimeNs !== verified.ctimeNs ||
-              current.birthtimeNs !== verified.birthtimeNs
-            ) {
-              throw new Error('RUNTIME_GENERATION_FILE_CHANGED')
-            }
+        directories.set(generationRoot, { version: generationVersion, children: generationChildren })
+        for (const closure of physicalClosures) {
+          const verified = await assertInstalledClosure(closure.root, closure.inventory)
+          nodes.push(...[...verified.files].map(([path, version]) => ({ path, version })))
+          for (const [path, snapshot] of verified.directories) directories.set(path, snapshot)
+          await assertEvidenceClosure(closure.evidenceRoot)
+          const evidenceVersion = await lstat(closure.evidenceRoot, { bigint: true })
+          const evidenceNames = (await readNamesBounded(closure.evidenceRoot, 3)).sort()
+          directories.set(closure.evidenceRoot, { version: evidenceVersion, children: evidenceNames })
+          for (const name of evidenceNames) {
+            const path = join(closure.evidenceRoot, name)
+            nodes.push({ path, version: await lstat(path, { bigint: true }) })
           }
+        }
+        const pointerPath = join(activeRoot, `${feature}.json`)
+        const currentPointerAfter = await readBoundedRegular(pointerPath, MAX_POINTER_BYTES)
+        if (!currentPointerAfter.equals(pointerBytes)) throw new Error('RUNTIME_ACTIVE_POINTER_CHANGED')
+        const pointerVersion = await lstat(pointerPath, { bigint: true })
+        const rootPaths = new Set([
+          storeRoot,
+          activeRoot,
+          generationRoot,
+          artifactParent,
+          evidenceParent,
+          ...physicalClosures.flatMap((closure) => [closure.root, closure.evidenceRoot])
+        ])
+        const roots = []
+        for (const path of rootPaths) {
+          const version = await lstat(path, { bigint: true })
+          if (!version.isDirectory() || version.isSymbolicLink()) throw new Error('RUNTIME_GENERATION_ROOT_CHANGED')
+          roots.push({ path, identity: version })
+        }
+        const artifactParentVersion = await lstat(artifactParent, { bigint: true })
+        const evidenceParentVersion = await lstat(evidenceParent, { bigint: true })
+        directories.set(artifactParent, {
+          version: artifactParentVersion,
+          children: [...pointer.artifactIds]
+        })
+        directories.set(evidenceParent, {
+          version: evidenceParentVersion,
+          children: [...pointer.artifactIds]
+        })
+        return prepareRuntimePhysicalAdmission({
+          roots,
+          nodes,
+          pointers: [{ path: pointerPath, version: pointerVersion, bytes: pointerBytes }],
+          directories: [...directories].map(([path, snapshot]) => ({ path, ...snapshot }))
+        })
+      }
+      const verifyCurrentBytes = async (): Promise<void> => {
+        const admission = await preparePhysicalAdmission()
+        try {
+          admission.assertCurrentSync()
+        } finally {
+          await admission.dispose()
         }
       }
       references.set(pointer.generationIdentity, (references.get(pointer.generationIdentity) ?? 0) + 1)
@@ -747,6 +680,7 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         target: Object.freeze({ ...target }),
         rootDir: generationRoot,
         verifyCurrentBytes,
+        preparePhysicalAdmission,
         entries: Object.freeze(entries),
         models: Object.freeze(models),
         nativeLibraryDirs: Object.freeze([...nativeDirectories]),

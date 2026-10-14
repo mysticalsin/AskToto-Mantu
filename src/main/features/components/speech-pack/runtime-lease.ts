@@ -7,13 +7,14 @@
  */
 import { createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
-import { execFile } from 'node:child_process'
 import { lstat, open, stat } from 'node:fs/promises'
 import { delimiter, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { app } from 'electron'
 import type { OptionalRuntimeTarget } from './runtime-components'
 import { readBoundedAppAsarMember } from './runtime-app-asar'
 import { assertRuntimeExecutionAuthority, runtimeExecutionAuthorityRevision } from './runtime-execution-authority'
+import { runWindowsOsRootsHelper } from '../../../infra/process/windows-os-roots-helper'
+import type { RuntimePhysicalAdmission } from '../../../infra/storage/runtime-owned-files'
 
 export type RuntimeFeatureId = 'offline-asr' | 'speaker-embedding' | 'local-llm'
 export type RuntimeEntryRole =
@@ -57,6 +58,7 @@ export interface VerifiedRuntimeGeneration {
   readonly rendererPins: Readonly<Record<string, { readonly bytes: number; readonly sha256: string }>>
   /** Revalidates the complete physical inventory immediately before native or renderer execution. */
   readonly verifyCurrentBytes: () => Promise<void>
+  readonly preparePhysicalAdmission: () => Promise<RuntimePhysicalAdmission>
   /** Provider owns the store reference and releases it only after the last shared lease exits. */
   readonly release: () => void | Promise<void>
 }
@@ -77,6 +79,7 @@ export interface RuntimeFeatureLease {
   readonly catalogIdentity: string
   readonly target: OptionalRuntimeTarget
   verifyCurrentBytes(): Promise<void>
+  preparePhysicalAdmission(): Promise<RuntimePhysicalAdmission>
   loaderDirectories(): readonly string[]
   entry(role: RuntimeEntryRole): string
   model(id: RuntimeModelId): string
@@ -182,28 +185,8 @@ export async function initializeRuntimeHostEnvironment(): Promise<void> {
     ) {
       throw new Error('WINDOWS_OS_ROOT_HELPER_PIN_MISMATCH')
     }
-    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>(
-      (resolvePromise, reject) => {
-        execFile(
-          helperPath,
-          ['--json'],
-          {
-            encoding: 'utf8',
-            maxBuffer: 2048,
-            timeout: 3000,
-            windowsHide: true,
-            env: { PATH: '' }
-          },
-          (error, stdout, stderr) => {
-            if (error) {
-              reject(new Error('WINDOWS_OS_ROOT_HELPER_FAILED'))
-              return
-            }
-            resolvePromise({ status: 0, stdout, stderr })
-          }
-        )
-      }
-    )
+    const stdout = await runWindowsOsRootsHelper(helperPath)
+    const result = { status: 0, stdout, stderr: '' }
     const roots = parseWindowsSystemRootsResponse(result)
     for (const path of [roots.windowsRoot, roots.systemRoot]) {
       const directory = await stat(path)
@@ -431,6 +414,7 @@ function validateGeneration(
     !isAbsolute(generation.rootDir) ||
     typeof generation.release !== 'function' ||
     typeof generation.verifyCurrentBytes !== 'function' ||
+    typeof generation.preparePhysicalAdmission !== 'function' ||
     !generation.entries ||
     !generation.models ||
     !Array.isArray(generation.nativeLibraryDirs) ||
@@ -593,17 +577,39 @@ export async function createRuntimeFeatureLeaseForVerifiedGeneration(
     if (!model) throw new Error('Optional runtime model is not part of this lease.')
     return absoluteOwnedPath(generation.rootDir, model.root)
   }
+  const preparePhysicalAdmission = async (): Promise<RuntimePhysicalAdmission> => {
+    if (released) throw new Error('Optional runtime lease has been released.')
+    await assertRuntimeExecutionAuthority(feature, selectedModelId)
+    const admission = await generation.preparePhysicalAdmission()
+    if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+      await admission.dispose()
+      throw new Error('Optional runtime execution authority was revoked.')
+    }
+    return Object.freeze({
+      assertCurrentSync: () => {
+        if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+          throw new Error('Optional runtime execution authority was revoked.')
+        }
+        admission.assertCurrentSync()
+        if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+          throw new Error('Optional runtime execution authority was revoked.')
+        }
+      },
+      dispose: () => admission.dispose()
+    })
+  }
   const lease: RuntimeFeatureLease = Object.freeze({
     feature,
     generationIdentity: generation.generationIdentity,
     catalogIdentity: generation.catalogIdentity,
     target: Object.freeze({ ...generation.target }),
+    preparePhysicalAdmission,
     verifyCurrentBytes: async () => {
-      if (released) throw new Error('Optional runtime lease has been released.')
-      await assertRuntimeExecutionAuthority(feature, selectedModelId)
-      await generation.verifyCurrentBytes()
-      if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
-        throw new Error('Optional runtime execution authority was revoked.')
+      const admission = await preparePhysicalAdmission()
+      try {
+        admission.assertCurrentSync()
+      } finally {
+        await admission.dispose()
       }
     },
     loaderDirectories: () => {
@@ -673,13 +679,16 @@ export async function acquireFeatureRuntime(
   selectedModelId?: RuntimeModelId,
   signal?: AbortSignal
 ): Promise<RuntimeFeatureLease> {
+  const authorityRevision = runtimeExecutionAuthorityRevision()
   if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
   if (!configuredProvider) throw new Error('Optional runtimes are not configured for this package.')
   const acquiredGeneration = await configuredProvider.acquire({ feature, target, selectedModelId, signal })
   if (!acquiredGeneration) throw new Error('The required offline runtime is not installed or is not trusted.')
   let generation = acquiredGeneration
-  const authorityRevision = runtimeExecutionAuthorityRevision()
   try {
+    if (runtimeExecutionAuthorityRevision() !== authorityRevision) {
+      throw new Error('Optional runtime execution authority was revoked.')
+    }
     generation = snapshotGeneration(acquiredGeneration)
     validateGeneration(feature, generation, target, selectedModelId)
     if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
@@ -706,17 +715,39 @@ export async function acquireFeatureRuntime(
     if (!model) throw new Error('Optional runtime model is not part of this lease.')
     return absoluteOwnedPath(generation.rootDir, model.root)
   }
+  const preparePhysicalAdmission = async (): Promise<RuntimePhysicalAdmission> => {
+    if (released) throw new Error('Optional runtime lease has been released.')
+    await assertRuntimeExecutionAuthority(feature, selectedModelId)
+    const admission = await generation.preparePhysicalAdmission()
+    if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+      await admission.dispose()
+      throw new Error('Optional runtime execution authority was revoked.')
+    }
+    return Object.freeze({
+      assertCurrentSync: () => {
+        if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+          throw new Error('Optional runtime execution authority was revoked.')
+        }
+        admission.assertCurrentSync()
+        if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+          throw new Error('Optional runtime execution authority was revoked.')
+        }
+      },
+      dispose: () => admission.dispose()
+    })
+  }
   const lease: RuntimeFeatureLease = Object.freeze({
     feature,
     generationIdentity: generation.generationIdentity,
     catalogIdentity: generation.catalogIdentity,
     target: Object.freeze({ ...generation.target }),
+    preparePhysicalAdmission,
     verifyCurrentBytes: async () => {
-      if (released) throw new Error('Optional runtime lease has been released.')
-      await assertRuntimeExecutionAuthority(feature, selectedModelId)
-      await generation.verifyCurrentBytes()
-      if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
-        throw new Error('Optional runtime execution authority was revoked.')
+      const admission = await preparePhysicalAdmission()
+      try {
+        admission.assertCurrentSync()
+      } finally {
+        await admission.dispose()
       }
     },
     loaderDirectories: () => {

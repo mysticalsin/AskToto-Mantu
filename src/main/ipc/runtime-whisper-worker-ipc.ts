@@ -62,6 +62,7 @@ export function registerRuntimeWhisperWorkerIpc(options: {
   readonly createHost: (input: {
     lease: RuntimeFeatureLease
     assertCurrent: () => Promise<void>
+    assertCurrentSync: () => void
     assertAudioCurrent: () => Promise<void>
   }) => Promise<RuntimeWhisperHost>
 }): { cleanup(): Promise<void>; revokeAll(): Promise<void> } {
@@ -198,7 +199,12 @@ export function registerRuntimeWhisperWorkerIpc(options: {
         if (snapshot(authority) !== authorityIdentity) throw new Error('RUNTIME_WORKER_AUTHORITY_CHANGED')
       }
       await assertCurrent()
-      host = await options.createHost({ lease, assertCurrent, assertAudioCurrent })
+      host = await options.createHost({
+        lease,
+        assertCurrent,
+        assertCurrentSync: context.assertCurrent,
+        assertAudioCurrent
+      })
       retainHostUntilSettled(context.owner, requestId, host)
       lease = null // the host owns the lease until its observed renderer-process exit
       await assertCurrent()

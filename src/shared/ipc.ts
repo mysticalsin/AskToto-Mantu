@@ -75,6 +75,8 @@ const _providerIdParity: [_ProviderIdEnum] extends [ProviderId]
   : never = true
 void _providerIdParity
 
+import { SPEECH_RUNTIME_IPC } from './speech-runtime-ipc'
+
 /** Single source of truth for every IPC channel name. */
 export const IPC = {
   settingsGet: 'settings:get',
@@ -265,14 +267,7 @@ export const IPC = {
   asrAssetsStatus: 'asr:assets-status',
   asrAssetsEnsure: 'asr:assets-ensure',
   speechPackState: 'speech-pack:state',
-  speechPackAction: 'speech-pack:action',
-  speechPackPlanPreview: 'speech-pack:plan-preview',
-  speechPackInstallWithPlan: 'speech-pack:install-with-plan',
-  runtimeInstallPlanPreview: 'runtime:install-plan-preview',
-  runtimeInstallWithPlan: 'runtime:install-with-plan',
-  runtimeWhisperWorkerOpen: 'runtime:whisper-worker-open',
-  runtimeWhisperWorkerClose: 'runtime:whisper-worker-close',
-  speechPackProgress: 'speech-pack:progress',
+  ...SPEECH_RUNTIME_IPC,
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
   localModelsList: 'localModels:list',

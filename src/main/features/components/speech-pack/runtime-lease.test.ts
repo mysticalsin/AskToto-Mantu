@@ -129,6 +129,10 @@ describe('Windows optional-host system loader roots', () => {
       nativeLibraryDirs: ['native'],
       rendererFiles,
       rendererPins,
+      preparePhysicalAdmission: async () => {
+        await generation.verifyCurrentBytes()
+        return { assertCurrentSync: () => undefined, dispose: async () => undefined }
+      },
       verifyCurrentBytes: async () => {
         verificationCount += 1
         if (holdVerification) {

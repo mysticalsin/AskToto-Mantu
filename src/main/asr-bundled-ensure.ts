@@ -6,17 +6,8 @@
  * not yet been provisioned.
  */
 import { app, net } from 'electron'
-import {
-  closeSync,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  renameSync,
-  rmSync,
-  statSync
-} from 'node:fs'
+import { createWriteStream, openSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
+import { mkdir, open, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pipeline } from 'node:stream/promises'
@@ -218,31 +209,25 @@ export function userDataAsrRoot(): string {
   return join(app.getPath('userData'), 'asr-models')
 }
 
-function fileLooksLikeHtml(path: string): boolean {
-  let fd = -1
+async function fileLooksLikeHtml(path: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
-    fd = openSync(path, 'r')
+    handle = await open(path, 'r')
     const buf = Buffer.alloc(512)
-    const n = readSync(fd, buf, 0, 512, 0)
-    return looksLikeHtmlBytes(buf.subarray(0, n))
+    const { bytesRead } = await handle.read(buf, 0, buf.byteLength, 0)
+    return looksLikeHtmlBytes(buf.subarray(0, bytesRead))
   } catch {
     return false
   } finally {
-    if (fd >= 0) {
-      try {
-        closeSync(fd)
-      } catch {
-        /* ignore */
-      }
-    }
+    await handle?.close().catch(() => undefined)
   }
 }
 
-export function filePresent(path: string): boolean {
+export async function filePresent(path: string): Promise<boolean> {
   try {
-    if (!existsSync(path) || statSync(path).size <= 0) return false
+    if ((await stat(path)).size <= 0) return false
     // Access login HTML written as .onnx / .js / .json is not a bundle.
-    return !fileLooksLikeHtml(path)
+    return !(await fileLooksLikeHtml(path))
   } catch {
     return false
   }
@@ -257,7 +242,10 @@ async function parakeetFilesReadyForProfile(
     return (
       selectedAsrEngine() === 'parakeet' && (await resolveSelectedSpeechPack('parakeet')).readiness?.status === 'ready'
     )
-  return PARAKEET_REQUIRED_FILES.every((name) => filePresent(join(dir, name)))
+  for (const name of PARAKEET_REQUIRED_FILES) {
+    if (!(await filePresent(join(dir, name)))) return false
+  }
+  return true
 }
 
 export async function parakeetFilesReady(dir: string): Promise<boolean> {
@@ -274,7 +262,10 @@ async function whisperFloorReadyForProfile(
       selectedAsrEngine() === 'whisper' && (await resolveSelectedSpeechPack('whisper')).readiness?.status === 'ready'
     )
   const dir = join(modelsRoot, ...WHISPER_FLOOR_ID.split('/'))
-  return WHISPER_FLOOR_REQUIRED_FILES.every((name) => filePresent(join(dir, name)))
+  for (const name of WHISPER_FLOOR_REQUIRED_FILES) {
+    if (!(await filePresent(join(dir, name)))) return false
+  }
+  return true
 }
 
 export async function whisperFloorReady(modelsRoot: string): Promise<boolean> {
@@ -461,9 +452,9 @@ function publish(next: AsrAssetsProgress, onProgress?: AsrProgressReporter): voi
 }
 
 async function downloadTo(url: string, dest: string, onChunk?: (n: number, total: number) => void): Promise<void> {
-  mkdirSync(dirname(dest), { recursive: true })
+  await mkdir(dirname(dest), { recursive: true })
   const partial = `${dest}.partial`
-  rmSync(partial, { force: true })
+  await rm(partial, { force: true })
 
   const ctrl = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -518,7 +509,7 @@ async function downloadTo(url: string, dest: string, onChunk?: (n: number, total
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
-    rmSync(partial, { force: true })
+    await rm(partial, { force: true })
     throw err
   } finally {
     clearTimeout(timer)
@@ -528,7 +519,7 @@ async function downloadTo(url: string, dest: string, onChunk?: (n: number, total
 const EXTRACTION_TIMEOUT_MS = 10 * 60_000
 
 async function extractTarBz2(archive: string, destDir: string): Promise<void> {
-  mkdirSync(destDir, { recursive: true })
+  await mkdir(destDir, { recursive: true })
   if (process.platform === 'win32') {
     await extractParakeetArchiveWindows(archive, destDir)
     return
@@ -545,7 +536,7 @@ async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promis
     return
   }
 
-  mkdirSync(userDataAsrRoot(), { recursive: true })
+  await mkdir(userDataAsrRoot(), { recursive: true })
   const archive = join(userDataAsrRoot(), `${PARAKEET_MODEL_NAME}.tar.bz2`)
   const stagingRoot = join(userDataAsrRoot(), `.${PARAKEET_MODEL_NAME}.extracting`)
   const stagedModelDir = join(stagingRoot, PARAKEET_MODEL_NAME)
@@ -555,7 +546,7 @@ async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promis
     publish({ status: 'downloading', progress: frac, label: 'Getting transcription files…' }, onProgress)
   })
   publish({ status: 'downloading', progress: 0.92, label: 'Preparing transcription files…' }, onProgress)
-  rmSync(stagingRoot, { recursive: true, force: true })
+  await rm(stagingRoot, { recursive: true, force: true })
   try {
     await extractTarBz2(archive, stagingRoot)
     if (!(await parakeetFilesReady(stagedModelDir))) throw new Error(ASR_ASSETS_MISSING)
@@ -563,9 +554,9 @@ async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promis
     // predicate as the live engine. A stalled/corrupt archive can never become a half-ready model.
     rmSync(destDir, { recursive: true, force: true })
     renameSync(stagedModelDir, destDir)
-    rmSync(archive, { force: true })
+    await rm(archive, { force: true })
   } finally {
-    rmSync(stagingRoot, { recursive: true, force: true })
+    await rm(stagingRoot, { recursive: true, force: true })
   }
   if (!(await parakeetFilesReady(destDir))) throw new Error(ASR_ASSETS_MISSING)
 }
@@ -580,12 +571,12 @@ async function fetchWhisperFloorToUserData(onProgress?: AsrProgressReporter): Pr
   }
 
   const destDir = join(destRoot, ...WHISPER_FLOOR_ID.split('/'))
-  mkdirSync(destDir, { recursive: true })
+  await mkdir(destDir, { recursive: true })
   let done = 0
   const total = WHISPER_FLOOR_REQUIRED_FILES.length
   for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
     const dest = join(destDir, rel)
-    if (filePresent(dest)) {
+    if (await filePresent(dest)) {
       done += 1
       publish({ status: 'downloading', progress: done / total, label: 'Getting transcription files…' }, onProgress)
       continue

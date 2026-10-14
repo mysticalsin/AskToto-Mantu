@@ -243,8 +243,8 @@ export function registerRuntimeConsumers(options: {
   })
   const consumers = {
     installService,
-    installCleanup: () => {
-      installCleanup()
+    installCleanup: async () => {
+      await installCleanup()
       stopAuthorityObservation()
       stopPolicyObservation()
     },
@@ -256,7 +256,19 @@ export function registerRuntimeConsumers(options: {
         options.packageContract.profile === 'lean'
           ? [parakeetRelease(), releaseSpeakerEmbedding('live'), releaseSpeakerEmbedding('import'), localRuntime.stop()]
           : []
-      await Promise.all([whisper.revokeAll(), ...nativeCleanup])
+      const results = await Promise.allSettled([whisper.revokeAll(), ...nativeCleanup])
+      const whisperResult = results[0]
+      if (whisperResult?.status === 'rejected') {
+        const error = new Error('RUNTIME_SHUTDOWN_WHISPER_UNSETTLED')
+        ;(error as Error & { cause?: unknown }).cause = whisperResult.reason
+        throw error
+      }
+      const nativeFailure = results.slice(1).find((result) => result.status === 'rejected')
+      if (nativeFailure?.status === 'rejected') {
+        const error = new Error('RUNTIME_SHUTDOWN_NATIVE_UNSETTLED')
+        ;(error as Error & { cause?: unknown }).cause = nativeFailure.reason
+        throw error
+      }
     }
   }
   const current = getPublishedSettingsObservation()
@@ -293,22 +305,48 @@ export function registerRuntimeConsumerShutdown(
 ): void {
   let shuttingDown = false
   let shutdownComplete = false
+  const SHUTDOWN_SETTLEMENT_LIMIT_MS = 12_000
   app.on('before-quit', (event) => {
     const consumers = current()
     if (shutdownComplete || !consumers) return
     event.preventDefault()
     if (shuttingDown) return
     shuttingDown = true
-    consumers.installCleanup()
-    consumers.installService.clear()
-    void consumers.whisperCleanup().then(
-      () => {
+    const settlements = Promise.allSettled([consumers.installCleanup(), consumers.revokeAll()])
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const bounded = Promise.race([
+      settlements,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('RUNTIME_SHUTDOWN_SETTLEMENT_TIMEOUT')),
+          SHUTDOWN_SETTLEMENT_LIMIT_MS
+        )
+      })
+    ])
+    void bounded.then(
+      (results) => {
+        if (timeout) clearTimeout(timeout)
+        const failure = results.find((result) => result.status === 'rejected')
+        if (failure?.status === 'rejected') {
+          shuttingDown = false
+          if (failure.reason instanceof Error && failure.reason.message === 'RUNTIME_SHUTDOWN_WHISPER_UNSETTLED') {
+            warn('Optional Whisper worker exit was not confirmed; its lease and host remain retained.')
+          } else {
+            warn('Optional runtime child or installer settlement was not confirmed; its owner remains retained.')
+          }
+          return
+        }
         shutdownComplete = true
         app.quit()
       },
-      () => {
+      (error: unknown) => {
+        if (timeout) clearTimeout(timeout)
         shuttingDown = false
-        warn('Optional Whisper worker exit was not confirmed; its lease and host remain retained.')
+        if (error instanceof Error && error.message === 'RUNTIME_SHUTDOWN_WHISPER_UNSETTLED') {
+          warn('Optional Whisper worker exit was not confirmed; its lease and host remain retained.')
+        } else {
+          warn('Optional runtime child or installer settlement was not confirmed; its owner remains retained.')
+        }
       }
     )
   })
