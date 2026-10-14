@@ -69,6 +69,7 @@ export function priorPackRestoreStillCurrent(
 export async function rollbackSpeechPackActivation(options: {
   previousMarker: { marker: PriorReadyMarker } | null
   currentVersion: string
+  hadAside: boolean
   authorize: () => Promise<boolean>
   stillCurrent: () => boolean
   restoreMarker: () => Promise<boolean>
@@ -82,11 +83,15 @@ export async function rollbackSpeechPackActivation(options: {
   if (previous && previous.marker.version !== options.currentVersion) {
     if (!(await options.restoreMarker()) || !(await permitted())) return false
     if (!(await options.removeCurrent())) return false
-    await options.restoreAside()
-    return true
+    const restoredAside = await options.restoreAside()
+    return !options.hadAside || restoredAside
   }
   if (!(await options.removeCurrent())) return false
   const restored = await options.restoreAside()
   if (previous && restored) return (await permitted()) && options.restoreMarker()
+  if (options.hadAside && !restored) {
+    if ((await permitted()) && (await options.removeMarker())) return false
+    return false
+  }
   return (await permitted()) && options.removeMarker()
 }

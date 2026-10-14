@@ -25,7 +25,8 @@
  * State and events carry component ids, byte counts and error kinds only — no path, transcript, audio or
  * user text ever enters a state, an event or a log line.
  */
-import { lstat, mkdir, rename, rm } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { lstat, mkdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { adoptExtracted, createArchiveSink, type ExtractArchive } from './archive'
 import {
@@ -138,6 +139,7 @@ export interface SpeechPackEngine {
 
 /** The activation seam models process death, where JavaScript rollback code cannot run. */
 class SimulatedActivationProcessStop extends Error {}
+class SpeechPackRollbackIncomplete extends Error {}
 
 export function createSpeechPackEngine(options: SpeechPackEngineOptions): SpeechPackEngine {
   const components = options.components ?? SPEECH_PACK_COMPONENTS
@@ -152,7 +154,6 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const interval = options.emitIntervalMs ?? EMIT_INTERVAL_MS
   const { rootDir } = options
   const fixture = options.fixture ?? SELF_TEST_FIXTURE
-  let activationTempSequence = 0
 
   const assertAuthorized = (c: SpeechPackComponent, signal: AbortSignal): void =>
     assertSpeechPackTransferAuthorized(c.id, signal, options.authorizeTransfer)
@@ -236,6 +237,9 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     cleanupAfterVerifiedInitialize,
     cleanupStaging: cleanupOwnedStaging,
     deactivate,
+    removeOwnedWork,
+    captureOwnedExtract,
+    recordOwnedAside,
     capturePhysicalPathVersion,
     physicalPathVersionMatches,
     physicalOwnerMatches
@@ -354,6 +358,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     )
       throw new SpeechPackError('tamper', 'active directory ownership changed')
     const source = c.source
+    let extractedSnapshot: Awaited<ReturnType<typeof captureOwnedExtract>> = null
     const archiveDest = join(work, 'archive.download')
     const reusableDirs = (await exists(finalDir(c))) && (await dirVerified(c, finalDir(c))) ? [finalDir(c)] : []
     let missing: SpeechPackComponent['files'][number][] = []
@@ -453,6 +458,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
           },
           deps
         )
+        if (!(await installDirectoriesCurrent(c, directories)))
+          throw new SpeechPackError('tamper', 'pack directory ownership changed during transfer')
         done += file.bytes
         set(c.id, { status: 'downloading', bytesDone: done, bytesTotal })
       }
@@ -472,27 +479,38 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         },
         deps
       )
+      if (!(await installDirectoriesCurrent(c, directories)))
+        throw new SpeechPackError('tamper', 'pack directory ownership changed during transfer')
       set(c.id, { status: 'verifying' })
       const extractDir = join(work, 'extract')
-      await rm(extractDir, { recursive: true, force: true })
-      await mkdir(extractDir, { recursive: true })
+      if (await exists(extractDir)) throw new SpeechPackError('tamper', 'previous extraction work is not owned')
+      await mkdir(extractDir)
       await (options.extractArchive as ExtractArchive)(
         archiveDest,
         createArchiveSink(extractDir, source.extractCapBytes),
         signal
       )
+      if (!(await installDirectoriesCurrent(c, directories)))
+        throw new SpeechPackError('tamper', 'pack directory ownership changed during extraction')
+      extractedSnapshot = await captureOwnedExtract(extractDir, c)
+      if (!extractedSnapshot) throw new SpeechPackError('tamper', 'extracted work ownership changed')
       await adoptExtracted(extractDir, source.entryPrefix, c.files, staging, source.extractCapBytes)
+      if (!(await installDirectoriesCurrent(c, directories)))
+        throw new SpeechPackError('tamper', 'pack directory ownership changed during adoption')
     }
-    if (!(await physicalOwnerMatches(work, directories.work, 'directory')))
+    if (
+      !(await installDirectoriesCurrent(c, directories)) ||
+      !(await physicalOwnerMatches(work, directories.work, 'directory'))
+    )
       throw new SpeechPackError('tamper', 'pack work directory ownership changed')
-    await rm(work, { recursive: true, force: true })
+    if (!(await removeOwnedWork(c, directories, extractedSnapshot ?? undefined)))
+      throw new SpeechPackError('tamper', 'pack work contains an unowned path')
 
     set(c.id, { status: 'verifying' })
     for (const file of c.files) {
       const path = fileAt(staging, file.path)
       if (!(await filePathIsRegular(staging, file.path))) throw new SpeechPackError('tamper', 'staged path is unsafe')
       if ((await sizeOf(path)) !== file.bytes || (await sha256File(path)) !== file.sha256) {
-        await rm(path, { force: true })
         throw new SpeechPackError('tamper', 'staged file does not match its pin')
       }
     }
@@ -540,7 +558,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     if (decoded.trim() === '') throw new SpeechPackError('tamper', 'self-test decoded no text')
     await activationStep('self-tested')
     const dest = finalDir(c)
-    const aside = `${dest}.old-${Date.now()}-${++activationTempSequence}`
+    const aside = `${dest}.old-${Date.now()}-${randomUUID()}`
     const ownership: RollbackOwnership = {
       directories,
       staging: stagingVersion,
@@ -580,6 +598,14 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         )
           throw new SpeechPackError('tamper', 'previous pack ownership changed')
         await rename(dest, aside)
+        ownership.aside = {
+          path: aside,
+          version: destinationBefore,
+          verified,
+          postRenameVersionPending: true
+        }
+        recordOwnedAside(c, aside, destinationBefore)
+        await activationStep('old-moved-aside')
         const asideVersion = await capturePhysicalPathVersion(aside, 'directory')
         if (
           !asideVersion ||
@@ -589,8 +615,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
           (await exists(dest))
         )
           throw new SpeechPackError('tamper', 'previous pack move lost ownership')
-        ownership.aside = { path: aside, version: asideVersion, verified }
-        await activationStep('old-moved-aside')
+        ownership.aside.version = asideVersion
+        ownership.aside.postRenameVersionPending = false
         await assertActivationAuthorized(c, signal)
         if (
           !(await installDirectoriesCurrent(c, directories)) ||
@@ -609,6 +635,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       )
         throw new SpeechPackError('tamper', 'activation ownership changed')
       await rename(staging, dest)
+      ownership.promoted = { path: dest, version: stagingVersion, verified: true, postRenameVersionPending: true }
+      await activationStep('renamed')
       const promotedVersion = await capturePhysicalPathVersion(dest, 'directory')
       if (
         !promotedVersion ||
@@ -618,8 +646,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         !(await dirVerified(c, dest))
       )
         throw new SpeechPackError('tamper', 'promoted pack ownership changed')
-      ownership.promoted = { path: dest, version: promotedVersion, verified: true }
-      await activationStep('renamed')
+      ownership.promoted.version = promotedVersion
+      ownership.promoted.postRenameVersionPending = false
       await assertActivationAuthorized(c, signal)
       if (!(await rollbackOwnershipCurrent(c, ownership)))
         throw new SpeechPackError('tamper', 'activation ownership changed')
@@ -636,7 +664,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       if (signal.aborted && signal.reason === 'cancel') throw signal.reason
     } catch (error) {
       if (error instanceof SimulatedActivationProcessStop) throw error
-      if (ownership.aside || ownership.promoted) await deactivate(c, ownership, transaction)
+      if ((ownership.aside || ownership.promoted) && !(await deactivate(c, ownership, transaction)))
+        throw new SpeechPackRollbackIncomplete()
       throw error
     }
   }
@@ -652,11 +681,13 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       await cleanups.get(id)
       await install(c, controller.signal, forceRepair, transaction)
     } catch (err) {
-      if (controller.signal.aborted) {
+      if (err instanceof SpeechPackRollbackIncomplete) {
+        set(id, { status: 'error', kind: 'tamper' })
+      } else if (controller.signal.aborted) {
         if (controller.signal.reason === 'cancel') {
           const owners = cleanupOwners.get(id)
-          if (owners) await cleanupOwnedStaging(c, owners)
-          set(id, { status: 'error', kind: 'cancelled' })
+          const cleaned = !owners || (await cleanupOwnedStaging(c, owners))
+          set(id, cleaned ? { status: 'error', kind: 'cancelled' } : { status: 'error', kind: 'tamper' })
         } else {
           set(id, { status: 'paused' })
         }
@@ -719,7 +750,10 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         cleanups.set(
           id,
           cleanupOwners.get(id)
-            ? cleanupOwnedStaging(byId.get(id) as SpeechPackComponent, cleanupOwners.get(id) as InstallDirectoryOwners)
+            ? cleanupOwnedStaging(
+                byId.get(id) as SpeechPackComponent,
+                cleanupOwners.get(id) as InstallDirectoryOwners
+              ).then(() => undefined)
             : Promise.resolve()
         )
         set(id, { status: 'error', kind: 'cancelled' })

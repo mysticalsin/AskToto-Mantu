@@ -96,6 +96,13 @@ const make = (components: SpeechPackComponent[], over: Partial<SpeechPackEngineO
 
 const packMatches = (c: SpeechPackComponent, at: string): boolean =>
   c.files.every((f) => existsSync(join(at, f.path)) && sha256Hex(readFileSync(join(at, f.path))) === f.sha256)
+const writePinnedPack = (c: SpeechPackComponent, at: string): void => {
+  for (const file of c.files) {
+    const path = join(at, file.path)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, contents[file.path])
+  }
+}
 const marker = (id: SpeechPackComponentId): string => join(root, id, 'active.json')
 
 describe('speech-pack engine', () => {
@@ -547,7 +554,7 @@ describe('speech-pack engine', () => {
           releaseGate()
           await replacing.whenIdle()
 
-          expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+          expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'tamper' })
           expect(packMatches(c, preservedAside)).toBe(true)
           expect(packMatches(c, preservedPromoted)).toBe(true)
           if (target === 'marker') expect(readFileSync(marker(WHISPER))).toEqual(sentinel)
@@ -572,6 +579,128 @@ describe('speech-pack engine', () => {
         }
       })
     })
+  })
+
+  it('does not adopt or delete a byte-equal foreign aside during a later verified startup', async () => {
+    server = await serveFiles()
+    const c = whisper(server.base)
+    const first = make([c])
+    first.enqueue([WHISPER])
+    await first.whenIdle()
+    const foreignAside = join(root, WHISPER, '1.old-foreign')
+    mkdirSync(foreignAside)
+    writePinnedPack(c, foreignAside)
+
+    const next = make([c])
+    await next.initialise()
+
+    expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+    expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
+    expect(packMatches(c, foreignAside)).toBe(true)
+  })
+
+  it('refuses rollback deletion when a foreign descendant appears in the promoted pack', async () => {
+    server = await serveFiles()
+    const c = whisper(server.base)
+    const first = make([c])
+    first.enqueue([WHISPER])
+    await first.whenIdle()
+    rmSync(marker(WHISPER))
+    let entered = false
+    let releaseGate!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve
+    })
+    let replacing!: ReturnType<typeof make>
+    replacing = make([c], {
+      onActivationStep: async (step) => {
+        if (step !== 'ready-check') return
+        entered = true
+        await gate
+      }
+    })
+    replacing.enqueue([WHISPER])
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true))
+      replacing.cancel(WHISPER)
+      writeFileSync(join(root, WHISPER, '1', 'foreign'), 'keep promoted descendant')
+    } finally {
+      releaseGate()
+    }
+    await replacing.whenIdle()
+
+    expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'tamper' })
+    expect(readFileSync(join(root, WHISPER, '1', 'foreign'), 'utf8')).toBe('keep promoted descendant')
+    expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
+    expect(existsSync(marker(WHISPER))).toBe(true)
+  })
+
+  it('refuses cancellation cleanup when a foreign descendant appears in staging', async () => {
+    server = await serve((_req, res) => {
+      res.setHeader('etag', '"v1"')
+      res.setHeader('content-length', String(contents['a.bin'].length))
+      res.write(contents['a.bin'].subarray(0, 5_000))
+    })
+    const c = whisper(server.base)
+    const engine = make([c])
+    engine.enqueue([WHISPER])
+    await vi.waitFor(() => expect(server?.requests.length).toBe(1))
+    const stage = join(root, '.staging', WHISPER, '1')
+    await vi.waitFor(() => expect(existsSync(join(stage, 'a.bin.partial'))).toBe(true))
+    const foreign = join(stage, 'foreign')
+    writeFileSync(foreign, 'keep staging descendant')
+    engine.cancel(WHISPER)
+    await engine.whenIdle()
+
+    expect(engine.getState(WHISPER)).toEqual({ status: 'error', kind: 'tamper' })
+    expect(readFileSync(foreign, 'utf8')).toBe('keep staging descendant')
+    expect(existsSync(join(stage, 'a.bin.partial'))).toBe(true)
+  })
+
+  it.each([
+    'old-moved-aside',
+    'renamed'
+  ] as const)('records the moved object before post-rename checks at %s', async (step) => {
+    server = await serveFiles()
+    const c = whisper(server.base)
+    const first = make([c])
+    first.enqueue([WHISPER])
+    await first.whenIdle()
+    rmSync(marker(WHISPER))
+    let entered = false
+    let releaseGate!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve
+    })
+    const replacing = make([c], {
+      onActivationStep: async (at) => {
+        if (at !== step) return
+        entered = true
+        await gate
+      }
+    })
+    replacing.enqueue([WHISPER])
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true))
+      const movedRoot = `${root}.held-owned`
+      renameSync(root, movedRoot)
+      const sentinel = Buffer.from('keep replacement root')
+      mkdirSync(root)
+      writeFileSync(join(root, 'foreign'), sentinel)
+      releaseGate()
+    } finally {
+      releaseGate()
+    }
+    await replacing.whenIdle()
+
+    const movedComponent = join(`${root}.held-owned`, WHISPER)
+    const aside = readdirSync(movedComponent).find((name) => name.startsWith('1.old-'))
+    expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'tamper' })
+    expect(aside).toBeDefined()
+    expect(packMatches(c, join(movedComponent, aside as string))).toBe(true)
+    if (step === 'renamed') expect(packMatches(c, join(movedComponent, '1'))).toBe(true)
+    expect(readFileSync(join(root, 'foreign'))).toEqual(Buffer.from('keep replacement root'))
+    expect(existsSync(marker(WHISPER))).toBe(false)
   })
 
   describe('activation kill points', () => {
@@ -725,7 +854,7 @@ describe('speech-pack engine', () => {
       })
       replacing.repair(WHISPER)
       await replacing.whenIdle()
-      expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'tamper' })
       expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
       expect(activationRevoked).toBe(true)
       expect(asideDirs()).toHaveLength(1)
@@ -787,6 +916,7 @@ describe('speech-pack engine', () => {
             manifestIdentity: componentManifestIdentity(previous)
           })
         )
+
         const outsideBefore = readFileSync(join(dir, 'en.wav'))
 
         const next = make([{ ...previous, version: '2' }])
@@ -1008,6 +1138,25 @@ describe('speech-pack engine', () => {
       expect(engine.getState(PARAKEET)).toEqual({ status: 'ready' })
       expect(readdirSync(join(root, PARAKEET, '1'))).toEqual(['p.bin'])
       expect(existsSync(join(root, '.staging', PARAKEET, 'work'))).toBe(false)
+    })
+
+    it('refuses to recursively delete a foreign descendant in extraction work', async () => {
+      server = await serveArchive()
+      const foreign = join(root, '.staging', PARAKEET, 'work', 'foreign', 'keep.bin')
+      const component = archiveComponent(server.base)
+      const engine = make([component], {
+        extractArchive: async (_archive, sink) => {
+          await sink.addFile(`${prefix}/p.bin`, one(contents['p.bin']))
+          mkdirSync(dirname(foreign), { recursive: true })
+          writeFileSync(foreign, 'keep work descendant')
+        }
+      })
+      engine.enqueue([PARAKEET])
+      await engine.whenIdle()
+
+      expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'tamper' })
+      expect(readFileSync(foreign, 'utf8')).toBe('keep work descendant')
+      expect(existsSync(join(root, '.staging', PARAKEET, 'work'))).toBe(true)
     })
 
     it('verifies an existing same-size archive before the extractor can consume it', async () => {

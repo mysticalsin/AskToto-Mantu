@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
+import { isSafeEntryName } from './archive'
 import { SpeechPackError } from './errors'
 import { pathExists as exists } from './download'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
 import { componentManifestIdentity } from './resolver'
+import { createSpeechPackOwnedTreeCleanup, type TreeEntry } from './owned-tree-cleanup'
 import {
   authorizePriorPackRestore,
   priorPackRestoreStillCurrent,
@@ -28,6 +31,7 @@ import {
 } from './physical-ownership'
 
 const MAX_MARKER_BYTES = 4096
+const asideReceipts = new Map<string, Map<string, { componentId: string; path: string; owner: PhysicalOwner }>>()
 
 export interface InstallDirectoryOwners {
   root: PhysicalOwner
@@ -41,6 +45,7 @@ export interface RollbackDirectoryOwner {
   path: string
   version: PhysicalPathVersion
   verified: boolean
+  postRenameVersionPending?: boolean
 }
 
 export interface RollbackOwnership {
@@ -74,13 +79,23 @@ export interface SpeechPackActivationRollbackOptions {
 
 export function createSpeechPackActivationRollback(options: SpeechPackActivationRollbackOptions) {
   const { rootDir } = options
-  let tempSequence = 0
   const componentDir = (c: SpeechPackComponent): string => join(rootDir, c.id)
   const stagingDir = (c: SpeechPackComponent): string => join(rootDir, '.staging', c.id, c.version)
   const stagingBaseDir = (c: SpeechPackComponent): string => join(rootDir, '.staging', c.id)
   const workDir = (c: SpeechPackComponent): string => join(rootDir, '.staging', c.id, 'work')
   const finalDir = (c: SpeechPackComponent): string => join(rootDir, c.id, c.version)
   const markerPath = (c: SpeechPackComponent): string => join(rootDir, c.id, 'active.json')
+  const ownedTree = createSpeechPackOwnedTreeCleanup()
+  const { removeInspectedTree, packTreeAllowed, stagingTreeAllowed, treeEntryLimit } = ownedTree
+
+  const recordOwnedAside = (c: SpeechPackComponent, path: string, owner: PhysicalOwner): void => {
+    let receipts = asideReceipts.get(rootDir)
+    if (!receipts) {
+      receipts = new Map()
+      asideReceipts.set(rootDir, receipts)
+    }
+    receipts.set(`${c.id}\0${path}`, { componentId: c.id, path, owner })
+  }
 
   const captureInstallDirectories = async (c: SpeechPackComponent): Promise<Map<string, PhysicalOwner | null>> => {
     const paths = [rootDir, join(rootDir, '.staging'), stagingBaseDir(c), componentDir(c), stagingDir(c), workDir(c)]
@@ -261,7 +276,7 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
       version: c.version,
       manifestIdentity: componentManifestIdentity(c)
     }
-    const temp = `${markerPath(c)}.tmp-${++tempSequence}`
+    const temp = `${markerPath(c)}.tmp-${randomUUID()}`
     await writeFile(temp, JSON.stringify(marker), { flag: 'wx' })
     const tempVersion = await capturePhysicalPathVersion(temp, 'file')
     if (!tempVersion) throw new SpeechPackError('tamper', 'activation marker staging is unsafe')
@@ -290,10 +305,28 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     if (stageVersion && (stageVersion.dev !== ownership.staging.dev || stageVersion.ino !== ownership.staging.ino))
       return false
     if (ownership.aside) {
-      if (!(await physicalPathVersionMatches(ownership.aside.path, ownership.aside.version))) return false
+      if (ownership.aside.postRenameVersionPending) {
+        const current = await capturePhysicalPathVersion(ownership.aside.path, 'directory')
+        if (!current || current.dev !== ownership.aside.version.dev || current.ino !== ownership.aside.version.ino)
+          return false
+        ownership.aside.version = current
+        ownership.aside.postRenameVersionPending = false
+        recordOwnedAside(c, ownership.aside.path, current)
+      } else if (!(await physicalPathVersionMatches(ownership.aside.path, ownership.aside.version))) return false
       if (ownership.aside.verified && !(await options.dirVerified(c, ownership.aside.path))) return false
     }
     if (ownership.promoted) {
+      if (ownership.promoted.postRenameVersionPending) {
+        const current = await capturePhysicalPathVersion(ownership.promoted.path, 'directory')
+        if (
+          !current ||
+          current.dev !== ownership.promoted.version.dev ||
+          current.ino !== ownership.promoted.version.ino
+        )
+          return false
+        ownership.promoted.version = current
+        ownership.promoted.postRenameVersionPending = false
+      }
       if (
         !(await physicalPathVersionMatches(ownership.promoted.path, ownership.promoted.version)) ||
         !(await options.dirVerified(c, ownership.promoted.path)) ||
@@ -372,6 +405,7 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     if (!(await options.dirVerified(c, finalDir(c))) || !(await physicalPathVersionMatches(finalDir(c), restored)))
       return false
     ownership.aside = { path: finalDir(c), version: restored, verified: true }
+    asideReceipts.get(rootDir)?.delete(`${c.id}\0${aside.path}`)
     return true
   }
 
@@ -409,7 +443,7 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
       !(await markerFileMatches(c, ownership.promotedMarker))
     )
       return false
-    const temp = `${markerPath(c)}.restore-${++tempSequence}`
+    const temp = `${markerPath(c)}.restore-${randomUUID()}`
     try {
       await writeFile(temp, snapshot.bytes, { flag: 'wx' })
       const tempVersion = await capturePhysicalPathVersion(temp, 'file')
@@ -457,7 +491,12 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
       !(await physicalPathVersionMatches(promoted.path, promoted.version))
     )
       return false
-    await rm(promoted.path, { recursive: true, force: true })
+    if (
+      !(await removeInspectedTree(promoted.path, promoted.version, c.files.length * 2 + 1, (relative, kind) =>
+        packTreeAllowed(c, relative, kind)
+      ))
+    )
+      return false
     ownership.promoted = null
     return !(await exists(promoted.path))
   }
@@ -501,29 +540,34 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     transaction: symbol
   ): Promise<boolean> {
     if (!(await rollbackOwnershipCurrent(c, ownership))) return false
-    return rollbackSpeechPackActivation({
-      currentVersion: c.version,
-      previousMarker: ownership.previousMarker?.marker ? { marker: ownership.previousMarker.marker } : null,
-      authorize: () =>
-        authorizePriorPackRestore(
-          c.id,
-          ownership.previousMarker?.marker ?? null,
-          options.authorizeRollback,
-          options.authorizeRollbackCurrent,
-          transaction
-        ),
-      stillCurrent: () =>
-        priorPackRestoreStillCurrent(
-          c.id,
-          ownership.previousMarker?.marker ?? null,
-          options.authorizeRollbackCurrent,
-          transaction
-        ),
-      restoreMarker: () => restoreMarkerSnapshot(c, ownership, transaction),
-      removeCurrent: () => removePromotedDirectory(c, ownership, transaction),
-      restoreAside: () => restoreAside(c, ownership, transaction),
-      removeMarker: () => removeOwnedMarker(c, ownership, transaction)
-    })
+    try {
+      return await rollbackSpeechPackActivation({
+        currentVersion: c.version,
+        hadAside: ownership.aside !== null,
+        previousMarker: ownership.previousMarker?.marker ? { marker: ownership.previousMarker.marker } : null,
+        authorize: () =>
+          authorizePriorPackRestore(
+            c.id,
+            ownership.previousMarker?.marker ?? null,
+            options.authorizeRollback,
+            options.authorizeRollbackCurrent,
+            transaction
+          ),
+        stillCurrent: () =>
+          priorPackRestoreStillCurrent(
+            c.id,
+            ownership.previousMarker?.marker ?? null,
+            options.authorizeRollbackCurrent,
+            transaction
+          ),
+        restoreMarker: () => restoreMarkerSnapshot(c, ownership, transaction),
+        removeCurrent: () => removePromotedDirectory(c, ownership, transaction),
+        restoreAside: () => restoreAside(c, ownership, transaction),
+        removeMarker: () => removeOwnedMarker(c, ownership, transaction)
+      })
+    } catch {
+      return false
+    }
   }
 
   async function removeVerifiedAsides(
@@ -533,17 +577,28 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     activeVersion: PhysicalPathVersion,
     activeMarker: SpeechPackMarkerSnapshot
   ): Promise<void> {
-    let names: string[]
-    try {
-      names = await readdir(componentDir(c))
-    } catch {
-      return
-    }
-    for (const name of names) {
-      if (!name.startsWith(`${c.version}.old-`)) continue
-      const path = join(componentDir(c), name)
+    const receipts = asideReceipts.get(rootDir)
+    if (!receipts) return
+    for (const [key, receipt] of receipts) {
+      const path = receipt.path
+      if (
+        receipt.componentId !== c.id ||
+        dirname(path) !== componentDir(c) ||
+        !basename(path).startsWith(`${c.version}.old-`)
+      )
+        continue
       const version = await capturePhysicalPathVersion(path, 'directory')
-      if (!version || !(await options.dirVerified(c, path))) continue
+      if (!version && !(await exists(path))) {
+        receipts.delete(key)
+        continue
+      }
+      if (
+        !version ||
+        version.dev !== receipt.owner.dev ||
+        version.ino !== receipt.owner.ino ||
+        !(await options.dirVerified(c, path))
+      )
+        continue
       if (
         !(await physicalOwnerMatches(rootDir, rootOwner, 'directory')) ||
         !(await physicalOwnerMatches(componentDir(c), componentOwner, 'directory')) ||
@@ -556,7 +611,16 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
         !(await physicalPathVersionMatches(finalDir(c), activeVersion))
       )
         continue
-      await rm(path, { recursive: true, force: true })
+      try {
+        if (
+          await removeInspectedTree(path, version, c.files.length * 2 + 1, (relative, kind) =>
+            packTreeAllowed(c, relative, kind)
+          )
+        )
+          receipts.delete(key)
+      } catch {
+        // An incomplete cleanup leaves its receipt available for a later owned retry.
+      }
     }
   }
 
@@ -595,18 +659,57 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     )
   }
 
-  async function cleanupStaging(c: SpeechPackComponent, owners: InstallDirectoryOwners): Promise<void> {
+  async function cleanupStaging(c: SpeechPackComponent, owners: InstallDirectoryOwners): Promise<boolean> {
     const base = stagingBaseDir(c)
-    if (!(await installDirectoriesCurrent(c, owners))) return
-    let names: string[]
+    if (!(await installDirectoriesCurrent(c, owners))) return false
+    const version = await capturePhysicalPathVersion(base, 'directory')
+    if (!version || version.dev !== owners.stagingBase.dev || version.ino !== owners.stagingBase.ino) return false
+    let removed = false
     try {
-      names = await readdir(base)
+      removed = await removeInspectedTree(base, version, treeEntryLimit(c), (relative, kind) =>
+        stagingTreeAllowed(c, relative, kind)
+      )
     } catch {
-      return
+      return false
     }
-    if (names.some((name) => name !== c.version && name !== 'work')) return
-    if (!(await installDirectoriesCurrent(c, owners))) return
-    await rm(base, { recursive: true, force: true })
+    return removed && (await physicalOwnerMatches(rootDir, owners.root, 'directory'))
+  }
+
+  async function captureOwnedExtract(path: string, c: SpeechPackComponent): Promise<TreeEntry[] | null> {
+    return ownedTree.captureExtractTree(path, c)
+  }
+
+  async function removeOwnedWork(
+    c: SpeechPackComponent,
+    owners: InstallDirectoryOwners,
+    expectedExtract?: TreeEntry[]
+  ): Promise<boolean> {
+    const work = workDir(c)
+    if (!(await installDirectoriesCurrent(c, owners))) return false
+    const version = await capturePhysicalPathVersion(work, 'directory')
+    if (!version || version.dev !== owners.work.dev || version.ino !== owners.work.ino) return false
+    try {
+      const archivePrefix = c.source.kind === 'archive' ? c.source.entryPrefix : null
+      const movedExtractFiles = new Set(archivePrefix ? c.files.map((file) => `${archivePrefix}/${file.path}`) : [])
+      return await ownedTree.removeInspectedTree(
+        work,
+        version,
+        treeEntryLimit(c),
+        (relative, kind) => {
+          if (relative === '') return kind === 'directory'
+          if (relative === 'extract') return Boolean(expectedExtract) && kind === 'directory'
+          if (relative.startsWith('extract/')) return Boolean(expectedExtract) && isSafeEntryName(relative.slice(8))
+          return (
+            kind === 'file' &&
+            ['archive.download', 'archive.download.partial', 'archive.download.partial.json'].includes(relative)
+          )
+        },
+        expectedExtract,
+        movedExtractFiles
+      )
+    } catch {
+      return false
+    }
   }
 
   return {
@@ -622,6 +725,9 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     removeVerifiedAsides,
     cleanupAfterVerifiedInitialize,
     cleanupStaging,
+    removeOwnedWork,
+    captureOwnedExtract,
+    recordOwnedAside,
     deactivate,
     capturePhysicalOwner,
     capturePhysicalPathVersion,
