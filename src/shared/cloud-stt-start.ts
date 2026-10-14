@@ -13,3 +13,12 @@ export function cloudSttStartAcknowledgement(
   }
   return { ok: true, provider }
 }
+import { effectiveCloudSttProvider, enforceSttPolicy, type CloudSttProviderId } from './cloud-stt-provider'
+
+export function resolveCloudSttStartProvider(
+  policy: Parameters<typeof enforceSttPolicy>[0],
+  profile: unknown,
+  storedProvider: unknown
+): CloudSttProviderId {
+  return enforceSttPolicy(policy, effectiveCloudSttProvider(profile, storedProvider))
+}

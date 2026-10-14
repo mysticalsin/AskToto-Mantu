@@ -3,7 +3,9 @@ import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from './cl
 
 describe('cloud speech start acknowledgement', () => {
   it('resolves the existing managed profile without enabling an unmanaged unconfigured session', () => {
-    expect(resolveCloudSttStartProvider(null, { managed: true, inferenceMode: 'cloud-only' }, 'unconfigured')).toBe('cloudflare-nova3')
+    expect(resolveCloudSttStartProvider(null, { managed: true, inferenceMode: 'cloud-only' }, 'unconfigured')).toBe(
+      'cloudflare-nova3'
+    )
     expect(resolveCloudSttStartProvider(null, {}, 'unconfigured')).toBe('unconfigured')
     expect(resolveCloudSttStartProvider(null, {}, 'soniox')).toBe('soniox')
   })

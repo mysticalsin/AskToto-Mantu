@@ -50,7 +50,11 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
   })
 
   it('import-recap.ts, brain/ingest.ts and intelligence-pass-route.ts all resolve the recap capability', () => {
-    for (const path of ['src/main/import-recap.ts', 'src/main/brain/ingest.ts', 'src/main/brain/intelligence-pass-route.ts']) {
+    for (const path of [
+      'src/main/import-recap.ts',
+      'src/main/brain/ingest.ts',
+      'src/main/brain/intelligence-pass-route.ts'
+    ]) {
       const text = src(path)
       expect(text, path).toContain("'recap'")
       expect(text, path).toMatch(/narrowAllowedForCapability|resolveManagedModel/)
@@ -59,11 +63,15 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
 
   it('the cloud STT session start narrows the provider through the stt policy entry', () => {
     const text = src(MAIN_INDEX)
-    expect(text).toMatch(/resolveCloudSttStartProvider\(\s*getActiveModelPolicy\(settings\),\s*profile,\s*settings\.cloudSttProvider\s*\)/)
+    expect(text).toMatch(
+      /resolveCloudSttStartProvider\(\s*getActiveModelPolicy\(settings\),\s*profile,\s*settings\.cloudSttProvider\s*\)/
+    )
   })
 
   it('the on-device readiness gate is installed from the localModel policy entry', () => {
-    expect(src(MAIN_INDEX)).toContain('setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))')
+    expect(src(MAIN_INDEX)).toContain(
+      'setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))'
+    )
     const routing = src('src/main/llm/local-routing.ts')
     expect(routing).toContain('if (!localModelGate(s.localLlm.modelId)) return false')
   })
@@ -133,7 +141,9 @@ function functionName(node: ts.FunctionLikeDeclaration, sf: ts.SourceFile): stri
 }
 
 function functionBody(node: ts.FunctionLikeDeclaration, text: string): string {
-  return node.body ? text.slice(node.body.getFullStart(), node.body.getEnd()) : text.slice(node.getFullStart(), node.getEnd())
+  return node.body
+    ? text.slice(node.body.getFullStart(), node.body.getEnd())
+    : text.slice(node.getFullStart(), node.getEnd())
 }
 
 function enclosingFunctionChain(text: string, index: number): EnclosingFunction[] {
@@ -166,7 +176,14 @@ function enclosingFunctionChain(text: string, index: number): EnclosingFunction[
 /** Innermost function-like source that contains `index`, plus its best stable name. */
 function enclosingFunction(text: string, index: number): EnclosingFunction {
   const chain = enclosingFunctionChain(text, index)
-  return chain[0] ?? { name: '<module>', body: text, node: sourceFileFor(text) as unknown as ts.FunctionLikeDeclaration, ancestors: [] }
+  return (
+    chain[0] ?? {
+      name: '<module>',
+      body: text,
+      node: sourceFileFor(text) as unknown as ts.FunctionLikeDeclaration,
+      ancestors: []
+    }
+  )
 }
 
 function namedFunction(text: string, name: string): string {
@@ -177,7 +194,10 @@ function namedFunction(text: string, name: string): string {
   const visit = (node: ts.Node): void => {
     if (body) return
     if (
-      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) &&
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isMethodDeclaration(node)) &&
       functionName(node, sf) === name
     ) {
       body = functionBody(node, text)
@@ -232,9 +252,9 @@ function modelArgumentText(site: CreateStreamSite): string {
   const sf = sourceFileFor(site.text)
   const model = arg.properties.find(
     (prop): prop is ts.PropertyAssignment | ts.ShorthandPropertyAssignment =>
-      ((ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) &&
-        ts.isIdentifier(prop.name) &&
-        prop.name.text === 'model')
+      (ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) &&
+      ts.isIdentifier(prop.name) &&
+      prop.name.text === 'model'
   )
   if (!model) return ''
   return ts.isShorthandPropertyAssignment(model) ? model.name.text : model.initializer.getText(sf)
