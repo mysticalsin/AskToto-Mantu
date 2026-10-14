@@ -1,4 +1,8 @@
-import { projectOperatorIngestMetadata, sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
+import {
+  projectOperatorIngestMetadata,
+  sanitizeOperatorHostname,
+  sanitizeOperatorSsoEmail
+} from '../../src/shared/operator'
 import { normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionType } from '../../src/shared/question-type'
 import {
   clearSessionCookie,
@@ -11,7 +15,6 @@ import {
   resolveAdminIdentity,
   mintSessionToken,
   sessionCookieHeader,
-  SESSION_REMINT_AFTER_MS,
   unauthorized,
   type AccessCtx
 } from './access'
@@ -96,7 +99,17 @@ function questionTypeFromBody(body: Record<string, unknown>): QuestionType {
 function projectHeartbeatBody(raw: Record<string, unknown>): Record<string, unknown> {
   const seat = projectOperatorIngestMetadata({ ...raw, event: 'ask', id: 'heartbeat', questionType: 'unknown' }) ?? {}
   const projected: Record<string, unknown> = {}
-  for (const key of ['seatHash', 'os', 'appVersion', 'hostname', 'ssoEmail', 'license', 'licenseLast4', 'licenseId', 'lastIndexAt']) {
+  for (const key of [
+    'seatHash',
+    'os',
+    'appVersion',
+    'hostname',
+    'ssoEmail',
+    'license',
+    'licenseLast4',
+    'licenseId',
+    'lastIndexAt'
+  ]) {
     if (seat[key] !== undefined) projected[key] = seat[key]
   }
   for (const key of ['queued', 'dropped']) {
@@ -133,7 +146,12 @@ function csrfRefused(): Response {
   return json({ ok: false, error: 'cross-site request refused', code: 'csrf' }, 403)
 }
 
-export async function handleRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  ctx: AccessCtx,
+  opts: HandleOpts = {}
+): Promise<Response> {
   const startedAt = Date.now()
   const res = await routeRequest(request, env, ctx, opts)
   logRequest(request, res, startedAt)
@@ -287,7 +305,12 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
   ) {
     const bodyText = request.method === 'GET' ? '' :
       url.pathname === '/v1/ask' || url.pathname === '/v1/use' ? await readUseBody(request) : await request.text()
-    if (bodyText === null) return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
+    if (bodyText === null) {
+      return json(
+        { ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' },
+        413
+      )
+    }
     const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
@@ -311,7 +334,15 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     }
     if (url.pathname === '/v1/ask') {
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
-      return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
+      return handleAsk(
+        store,
+        env,
+        hmac.deviceId,
+        bodyText,
+        now,
+        opts.providerFetch ?? opts.cfFetch ?? fetch,
+        request.signal
+      )
     }
     return ingest(store, hmac.deviceId, bodyText, now, geo, hmac.license)
   }
@@ -319,11 +350,9 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
   return json({ ok: false, error: 'not found' }, 404)
 }
 
-/** Mints (or reconstructs) the session cookie for an authenticated admin response. A session that came
- *  from a fresh Access identity (no `sessionIat`) always gets a new cookie; an existing session is only
- *  re-minted, and `Set-Cookie` re-sent, once it has been alive longer than `SESSION_REMINT_AFTER_MS` -
- *  otherwise the browser keeps the cookie it already has and this just recomputes the same token bytes
- *  for the `/session` JSON body and the `X-Metis-Session` header. */
+/** Mints a session only from a freshly verified Access identity. An existing app session retains its
+ *  original `iat` and cookie deadline; reflecting it into `/session` and `X-Metis-Session` never renews
+ *  its absolute lifetime. */
 async function withSession(
   res: Response,
   env: Env,
@@ -333,11 +362,11 @@ async function withSession(
 ): Promise<Response> {
   const secret = await deriveSessionSecret(env)
   if (!secret) return res
-  const shouldRemint = ident.sessionIat === undefined || now - ident.sessionIat > SESSION_REMINT_AFTER_MS
-  const iat = shouldRemint ? now : ident.sessionIat!
+  const shouldMint = ident.sessionIat === undefined
+  const iat = shouldMint ? now : ident.sessionIat!
   const token = await mintSessionToken(ident.email, iat, secret)
   const headers = new Headers(res.headers)
-  if (shouldRemint) headers.append('Set-Cookie', sessionCookieHeader(token, now))
+  if (shouldMint) headers.append('Set-Cookie', sessionCookieHeader(token, now))
   headers.set('X-Metis-Session', token)
   if (pathname === '/session') {
     headers.set('content-type', 'application/json; charset=utf-8')
@@ -620,7 +649,12 @@ async function upsertCrmEvent(
   return 'written'
 }
 
-async function ingestCrmList(store: OperatorStore, deviceId: string, body: Record<string, unknown>, now: number): Promise<void> {
+async function ingestCrmList(
+  store: OperatorStore,
+  deviceId: string,
+  body: Record<string, unknown>,
+  now: number
+): Promise<void> {
   if (!Array.isArray(body.crm)) return
   for (const item of body.crm.slice(0, 40)) {
     if (!item || typeof item !== 'object') continue
