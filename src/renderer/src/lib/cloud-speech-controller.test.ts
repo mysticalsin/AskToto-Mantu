@@ -100,7 +100,12 @@ class FakePort {
   private listeners = new Set<(event: MessageEvent) => void>()
   readonly sent: unknown[] = []
   closed = false
+  startFailure?: Error
   onPost?: (message: unknown) => void
+
+  get listenerCount(): number {
+    return this.listeners.size
+  }
 
   addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
     this.listeners.add(listener)
@@ -110,7 +115,9 @@ class FakePort {
     this.listeners.delete(listener)
   }
 
-  start(): void {}
+  start(): void {
+    if (this.startFailure) throw this.startFailure
+  }
 
   postMessage(message: unknown): void {
     this.sent.push(message)
@@ -191,6 +198,21 @@ describe('cloud speech capture controller', () => {
     await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('INVALID_REQUEST'))
     expect(frame).not.toHaveBeenCalled()
     expect(port.sent).toEqual([])
+    instance.dispose()
+  })
+
+  it('releases the exact port and listener when attaching the worklet port fails', async () => {
+    const onFailure = vi.fn()
+    const { instance } = controller({ onFailure })
+    await instance.start()
+    const port = new FakePort()
+    port.startFailure = new Error('private port detail')
+
+    expect(instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(false)
+    expect(port.listenerCount).toBe(0)
+    expect(port.closed).toBe(true)
+    expect(onFailure).toHaveBeenCalledTimes(1)
+    expect(onFailure).toHaveBeenCalledWith('TRANSPORT')
     instance.dispose()
   })
 
@@ -596,6 +618,52 @@ describe('cloud speech capture controller', () => {
     const result = await stopping
     expect(result).toMatchObject({ ok: true, complete: false, reason: 'incomplete' })
     instance.dispose()
+  })
+
+  it('does not report complete when disposed while the final event callback is still draining', async () => {
+    const apply = deferred<void>()
+    const applyStarted = deferred<void>()
+    const { instance, events, finish } = controller({
+      applyEvent: () => {
+        applyStarted.resolve()
+        return apply.promise
+      }
+    })
+    await instance.start()
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    for (const listener of events)
+      listener({
+        type: 'terminal',
+        captureId,
+        captureGeneration,
+        stream,
+        lastSequence: 0,
+        closeConfirmed: true,
+        tail: 'complete',
+        reason: 'normal'
+      })
+    await applyStarted.promise
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type === 'seal-and-flush' && command.requestId)
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+    }
+    finish.mockResolvedValue({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [{ stream, lastSequence: 0, closeConfirmed: true, tail: 'complete', reason: 'normal' }]
+    })
+    const stopping = instance.stop()
+    await vi.waitFor(() => expect(finish).toHaveBeenCalledTimes(1))
+    instance.dispose()
+    apply.resolve()
+
+    expect(await stopping).toMatchObject({ ok: false, code: 'CLOSED' })
   })
 
   it('bounds queued result application while an earlier application is stalled', async () => {

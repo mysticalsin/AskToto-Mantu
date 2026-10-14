@@ -32,10 +32,9 @@ import {
 import {
   cloudSpeechFailure as failure,
   cloudSpeechIdentityMatches as identityMatches,
-  createCloudSpeechResultTracker
+  createCloudSpeechResultTracker,
+  MAX_PENDING_RESULT_APPLICATIONS
 } from './cloud-speech-results'
-
-type CloudSpeechTrack = Track
 
 export interface CloudSpeechControllerBridge {
   cloudSpeechCapability(): Promise<unknown>
@@ -62,7 +61,7 @@ export interface CloudSpeechControllerOptions {
 
 export interface CloudSpeechController {
   start(): Promise<CloudSpeechStartResult>
-  attachTrack(track: CloudSpeechTrack, port: MessagePort, originSampleOffset: number): boolean
+  attachTrack(track: Track, port: MessagePort, originSampleOffset: number): boolean
   stop(): Promise<CloudSpeechFinishResult>
   cancel(): Promise<CloudSpeechCancelResult>
   dispose(): void
@@ -75,7 +74,7 @@ type QueuedFrame = {
 }
 
 type TrackInput = {
-  track: CloudSpeechTrack
+  track: Track
   port: MessagePort
   listener: (event: MessageEvent) => void
   originSampleOffset: number
@@ -94,8 +93,7 @@ type TrackInput = {
 }
 
 const DEFAULT_DEADLINE_MS = 12_000
-const MAX_PENDING_RESULT_APPLICATIONS = 64
-const tracksInOrder: readonly CloudSpeechTrack[] = ['microphone', 'system']
+const tracksInOrder: readonly Track[] = ['microphone', 'system']
 function createDeferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -115,7 +113,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       : DEFAULT_DEADLINE_MS
   const requestParse = CloudSpeechStartRequestSchema.safeParse(options.request)
   const request = requestParse.success ? requestParse.data : options.request
-  const inputs = new Map<CloudSpeechTrack, TrackInput>()
+  const inputs = new Map<Track, TrackInput>()
   const resultTracker = createCloudSpeechResultTracker(request)
   const applyWaiters = new Set<() => void>()
 
@@ -586,7 +584,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     return startPromise
   }
 
-  const attachTrack = (track: CloudSpeechTrack, port: MessagePort, originSampleOffset: number): boolean => {
+  const attachTrack = (track: Track, port: MessagePort, originSampleOffset: number): boolean => {
     if (
       !started ||
       stopped ||
@@ -621,6 +619,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       port.start()
       return true
     } catch {
+      detachInput(input, true)
       inputs.delete(track)
       invalidate('TRANSPORT')
       return false
@@ -747,6 +746,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         if (currentCallbacks === eventApplyTail) break
       }
       if (failureCode) return failure(failureCode, request)
+      if (disposed || stopped) return failure(failureCode ?? 'CLOSED', request)
       if (finishResult.complete && resultTracker.hasUnfinalizedRevisions()) {
         finishResult = { ...finishResult, complete: false, reason: 'incomplete' }
       }

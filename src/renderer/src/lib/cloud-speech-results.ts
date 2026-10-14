@@ -8,6 +8,8 @@ import {
 } from '@shared/cloud-speech'
 import type { SpeechStreamRef, Track } from '@shared/contracts/speech'
 
+export const MAX_PENDING_RESULT_APPLICATIONS = 64
+
 type RevisionState = { revision: number; final: boolean }
 
 export function cloudSpeechFailure(
