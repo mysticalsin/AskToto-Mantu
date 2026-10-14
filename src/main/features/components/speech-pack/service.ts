@@ -462,15 +462,15 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     const policyIdentity = currentPolicyIdentity()
     const selectionIdentity = currentSelectionIdentity()
     const captureIdentity = currentCaptureIdentity()
+    const requestIsCurrent = (): boolean =>
+      revision === authorityRevision &&
+      !closing &&
+      options.selectedEngine() === selectedEngine &&
+      currentPolicyIdentity() === policyIdentity &&
+      currentSelectionIdentity() === selectionIdentity &&
+      currentCaptureIdentity() === captureIdentity
     const refreshed = await refreshAuthority()
-    if (
-      revision !== authorityRevision ||
-      closing ||
-      options.selectedEngine() !== selectedEngine ||
-      currentPolicyIdentity() !== policyIdentity ||
-      currentSelectionIdentity() !== selectionIdentity ||
-      currentCaptureIdentity() !== captureIdentity
-    ) {
+    if (!requestIsCurrent()) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
     }
     if (!refreshed) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
@@ -484,15 +484,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (selectionIdentity === null || captureIdentity === null)
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
     const packageContract = await currentPackageContract()
-    if (
-      revision !== authorityRevision ||
-      closing ||
-      !featureEnabled() ||
-      selectedId(options.selectedEngine()) !== component.id ||
-      currentPolicyIdentity() !== policyIdentity ||
-      currentSelectionIdentity() !== selectionIdentity ||
-      currentCaptureIdentity() !== captureIdentity
-    ) {
+    if (!requestIsCurrent() || !featureEnabled()) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
     }
     if (packageContract.status === 'invalid') {
