@@ -71,12 +71,23 @@ jobs:
           node scripts/qa/agent-browser-smoke.mjs
           --port 9222
           --driver ${{ matrix.driver }}
-          --report "${{ runner.temp }}/agent-browser-report.json"
+          --quit-trace
+          --report "${{ runner.temp }}/agent-browser-report-${{ matrix.driver }}.json"
+      # Same runner, built app bytes, isolated-profile workflow and Node 24 harness as the CLI row. This
+      # control keeps the existing CLI row intact and changes only the attached automation transport.
+      - name: macOS Playwright CDP quit control on the same built bytes
+        if: always() && runner.os == 'macOS'
+        run: >-
+          node scripts/qa/agent-browser-smoke.mjs
+          --port 9222
+          --driver playwright-cdp
+          --quit-trace
+          --report "${{ runner.temp }}/agent-browser-report-playwright-cdp.json"
       - name: Upload content-free smoke report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agent-browser-smoke-${{ matrix.os }}-${{ matrix.runtime }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/agent-browser-report.json
+          path: ${{ runner.temp }}/agent-browser-report-*.json
           if-no-files-found: ignore
           retention-days: 7

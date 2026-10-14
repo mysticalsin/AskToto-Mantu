@@ -5,6 +5,7 @@ import { createSpeechBootstrapState, type SpeechSettingsObservation } from './sp
 import { createSpeechDesktopRuntime, type SpeechDesktopRuntimeOptions } from './speech-desktop-runtime'
 import type { ManagedSpeechPolicyRead } from './managed-speech-providers'
 import type { SettingsObservation } from './settings-observation'
+import type { QuitTrace } from './lifecycle/quit-trace'
 
 type BoundaryMetadata = {
   durableDeviceId: string | null
@@ -26,6 +27,7 @@ export type SpeechDesktopBootstrapOptions = Omit<SpeechDesktopRuntimeOptions, 'r
   observeAuthenticationSettings: (observation: SettingsObservation, policyPathsRevision: string) => void
   observeAuthenticationRevocations: (listener: () => void) => () => void
   releaseAuthentication: () => void
+  quitTrace?: QuitTrace
 }
 
 /** Registers the real desktop runtime while keeping repeated authority checks on memory snapshots. */
@@ -132,6 +134,8 @@ export function startSpeechDesktopBootstrap(options: SpeechDesktopBootstrapOptio
   }
   const dispose = async (): Promise<void> => {
     if (disposed) return
+    options.quitTrace?.mark('SPEECH_DISPOSE_START')
+    options.quitTrace?.mark(runtime?.registration.ownerCount() ? 'SPEECH_OWNERS_PRESENT' : 'SPEECH_OWNERS_NONE')
     disposed = true
     unsubscribe()
     unsubscribeAuthentication()
