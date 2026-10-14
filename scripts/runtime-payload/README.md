@@ -38,7 +38,7 @@ app's trust policy: the catalog remains empty until the reviewed snapshot and
 actual promoted immutable runtime assets are incorporated.
 
 `create-attestation-fixture.mjs` exercises the same packer with a synthetic,
-explicitly non-runtime fixture. On a protected publisher-branch push, a second
+explicitly non-runtime fixture. On a dedicated publisher-branch push, a second
 job downloads only its archive and inventory, hashes those bytes, and asks the
 pinned GitHub provenance action to attest those two subjects. That job does not
 check out or execute repository or artifact contents. The retained bundle is
@@ -50,3 +50,14 @@ allow-list, runtime candidate, or promotion authorization.
 Candidate archive construction and native inference remain separate evidence.
 The publisher does not mark an artifact production-ready merely because it was
 built or attested.
+
+`runtime-llama-candidate.yml` is a native CPU inference checkpoint for the
+already-pinned llama.cpp server and Qwen 0.8B text model on macOS arm64, macOS
+x64, and Windows x64. It records actual Electron runtime ABI facts from the
+locked Electron executable and tests local inference before packing the runtime
+files. This checkpoint intentionally says `modelIncludedInArchive: false` and
+`licenseCoverageComplete: false`: it is not the full offline LLM feature
+closure, has not reviewed every native dependency's license, does not qualify
+Metal or vision inference, and cannot populate the production catalog. The
+attestation covers the exact runtime archive and inventory; it is a candidate
+provenance artifact, not authorization to promote or install it.

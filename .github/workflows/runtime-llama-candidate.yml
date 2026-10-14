@@ -1,0 +1,193 @@
+name: Runtime llama native candidates
+run-name: Runtime llama native candidates (${{ github.sha }})
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/runtime-llama-candidate.yml
+      - package.json
+      - package-lock.json
+      - resources/runtime-schema/**
+      - resources/local-llm/**
+      - scripts/fetch-llama-server.mjs
+      - scripts/fetch-local-model.mjs
+      - scripts/local-model-assets.mjs
+      - scripts/runtime-payload/**
+      - src/main/llm/local-models.ts
+  push:
+    branches:
+      - m2/M2-0475-runtime-artifact-publisher
+    paths:
+      - .github/workflows/runtime-llama-candidate.yml
+      - package.json
+      - package-lock.json
+      - resources/runtime-schema/**
+      - resources/local-llm/**
+      - scripts/fetch-llama-server.mjs
+      - scripts/fetch-local-model.mjs
+      - scripts/local-model-assets.mjs
+      - scripts/runtime-payload/**
+      - src/main/llm/local-models.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-llama-candidate-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  native-llama-inference:
+    name: Native llama inference (${{ matrix.target }})
+    if: github.repository == 'mysticalsin/AskToto-Mantu'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15-xlarge
+            platform: darwin
+            arch: arm64
+            llama-target: mac
+          - target: darwin-x64
+            runner: macos-15
+            platform: darwin
+            arch: x64
+            llama-target: mac
+          - target: win32-x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+            llama-target: win
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Verify native target and install exact lock without lifecycle scripts
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.platform')" = "$EXPECTED_PLATFORM"
+          test "$(node -p 'process.arch')" = "$EXPECTED_ARCH"
+          npm ci --ignore-scripts --no-audit --no-fund
+          echo "RUNTIME_NPM_VERSION=$(npm --version)" >> "$GITHUB_ENV"
+      - name: Install the locked Electron runtime for exact ABI facts
+        run: node node_modules/electron/install.js
+      - name: Fetch pinned llama runtime and Qwen inference model
+        run: |
+          set -euo pipefail
+          node scripts/fetch-llama-server.mjs '${{ matrix.llama-target }}'
+          node scripts/fetch-local-model.mjs
+          node scripts/check-local-model.mjs
+      - name: Run native CPU inference and create the closed candidate inventory
+        env:
+          RUNTIME_EXPECTED_PLATFORM: ${{ matrix.platform }}
+          RUNTIME_EXPECTED_ARCH: ${{ matrix.arch }}
+          RUNTIME_CANDIDATE_OUTPUT: ${{ runner.temp }}/runtime-llama-${{ matrix.target }}
+        run: node scripts/runtime-payload/create-llama-runtime-candidate.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runtime-llama-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-llama-${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  attest-native-llama-candidates:
+    name: Attest native llama archive and inventory subjects
+    needs: native-llama-inference
+    if: >-
+      github.repository == 'mysticalsin/AskToto-Mantu' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/m2/M2-0475-runtime-artifact-publisher'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact same-run candidate outputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: runtime-llama-*-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-llama-candidates
+          merge-multiple: false
+      - name: Verify exact candidate names, target summaries, and subject digests
+        env:
+          CANDIDATE_ROOT: ${{ runner.temp }}/runtime-llama-candidates
+        run: |
+          set -euo pipefail
+          for target in darwin-arm64 darwin-x64 win32-x64; do
+            dir="$CANDIDATE_ROOT/runtime-llama-$target-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT"
+            test "$(find "$dir" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "candidate.json runtime-inference.json runtime.llama-server-$target.inventory.json runtime.llama-server-$target.tar.gz "
+            test "$(jq -r '.target.platform + "-" + .target.arch' "$dir/candidate.json")" = "$target"
+            test "$(jq -r '.inferencePassed' "$dir/runtime-inference.json")" = true
+            test "$(jq -r '.cpuOnly' "$dir/runtime-inference.json")" = true
+            test "$(jq -r '.modelIncludedInArchive' "$dir/runtime-inference.json")" = false
+            test "$(jq -r '.licenseCoverageComplete' "$dir/runtime-inference.json")" = false
+            archive="runtime.llama-server-$target.tar.gz"
+            inventory="runtime.llama-server-$target.inventory.json"
+            test "$(jq -r '.archive.path' "$dir/candidate.json")" = "$archive"
+            test "$(jq -r '.inventory.path' "$dir/candidate.json")" = "$inventory"
+            test "$(sha256sum "$dir/$archive" | cut -d' ' -f1)" = "$(jq -r '.archive.sha256' "$dir/candidate.json")"
+            test "$(sha256sum "$dir/$inventory" | cut -d' ' -f1)" = "$(jq -r '.inventory.sha256' "$dir/candidate.json")"
+          done
+      - id: provenance_darwin_arm64
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-darwin-arm64-${{ github.sha }}-${{ github.run_attempt }}/runtime.llama-server-darwin-arm64.tar.gz
+            ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-darwin-arm64-${{ github.sha }}-${{ github.run_attempt }}/runtime.llama-server-darwin-arm64.inventory.json
+          push-to-registry: false
+          show-summary: false
+      - id: provenance_darwin_x64
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-darwin-x64-${{ github.sha }}-${{ github.run_attempt }}/runtime.llama-server-darwin-x64.tar.gz
+            ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-darwin-x64-${{ github.sha }}-${{ github.run_attempt }}/runtime.llama-server-darwin-x64.inventory.json
+          push-to-registry: false
+          show-summary: false
+      - id: provenance_win32_x64
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-win32-x64-${{ github.sha }}-${{ github.run_attempt }}/runtime.llama-server-win32-x64.tar.gz
+            ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-win32-x64-${{ github.sha }}-${{ github.run_attempt }}/runtime.llama-server-win32-x64.inventory.json
+          push-to-registry: false
+          show-summary: false
+      - name: Retain the exact bundle beside each candidate
+        env:
+          BUNDLE_ARM64: ${{ steps.provenance_darwin_arm64.outputs.bundle-path }}
+          BUNDLE_X64: ${{ steps.provenance_darwin_x64.outputs.bundle-path }}
+          BUNDLE_WIN: ${{ steps.provenance_win32_x64.outputs.bundle-path }}
+          CANDIDATE_ROOT: ${{ runner.temp }}/runtime-llama-candidates
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE_ARM64"
+          test -s "$BUNDLE_X64"
+          test -s "$BUNDLE_WIN"
+          cp -- "$BUNDLE_ARM64" "$CANDIDATE_ROOT/runtime-llama-darwin-arm64-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT/runtime.llama-server-darwin-arm64.sigstore.bundle.json"
+          cp -- "$BUNDLE_X64" "$CANDIDATE_ROOT/runtime-llama-darwin-x64-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT/runtime.llama-server-darwin-x64.sigstore.bundle.json"
+          cp -- "$BUNDLE_WIN" "$CANDIDATE_ROOT/runtime-llama-win32-x64-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT/runtime.llama-server-win32-x64.sigstore.bundle.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runtime-attested-llama-candidates-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-llama-candidates/runtime-llama-*-${{ github.sha }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
