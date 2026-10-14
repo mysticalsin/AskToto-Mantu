@@ -206,6 +206,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   const revisions = new Map<string, RevisionState>()
   const seenEventSequences = new Map<string, number>()
   const appliedEventSequences = new Map<string, number>()
+  const expectedEventFrontiers = new Map<string, number>()
   const terminalStreams = new Set<string>()
   const applyWaiters = new Set<() => void>()
 
@@ -337,7 +338,11 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     const key = streamKey(stream)
     if (terminalStreams.has(key)) return null
     const previousSequence = seenEventSequences.get(key) ?? 0
-    if (event.sequence !== previousSequence + 1) return null
+    if (
+      event.sequence !== previousSequence + 1 ||
+      (expectedEventFrontiers.has(key) && event.sequence > (expectedEventFrontiers.get(key) ?? 0))
+    )
+      return null
     const revisionKey = `${request.captureId}:${request.capture.generation}:${stream.track}:${stream.epoch}:${event.segment.index}`
     const previousRevision = revisions.get(revisionKey)
     if (
@@ -859,6 +864,10 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         invalidate('STALE')
         return failure('STALE', request)
       }
+      expectedEventFrontiers.clear()
+      for (const trackResult of finishResult.tracks) {
+        expectedEventFrontiers.set(streamKey(trackResult.stream), trackResult.lastSequence)
+      }
       if (finishResult.complete && [...revisions.values()].some((revision) => !revision.final)) {
         finishResult = { ...finishResult, complete: false, reason: 'incomplete' }
       }
@@ -866,6 +875,16 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         invalidate('TIMEOUT')
         return failure('TIMEOUT', request)
       }
+      while (!failureCode) {
+        const currentCallbacks = eventApplyTail
+        const appliedCallbacks = await bounded(currentCallbacks, deadline, null)
+        if (appliedCallbacks === null) {
+          invalidate('TIMEOUT')
+          return failure('TIMEOUT', request)
+        }
+        if (currentCallbacks === eventApplyTail) break
+      }
+      if (failureCode) return failure(failureCode, request)
       stopped = true
       stopCompleted = true
       unsubscribeEvents?.()
