@@ -7,6 +7,7 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { mainLog } from './logger'
+import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
 import {
   ASR_ASSETS_MISSING,
   PARAKEET_MODEL_NAME,
@@ -267,12 +268,18 @@ async function requestHost(
 
 /** True when all model files are present and are real weights, not an HTML error page. */
 export async function parakeetModelReady(): Promise<boolean> {
+  try {
+    await assertLegacyRuntimeClosure('asr')
+  } catch {
+    return false
+  }
   return parakeetModelMetadataReady()
 }
 
 /** Probe native addon availability in the helper without constructing model weights. */
 export async function parakeetAddonError(): Promise<string | null> {
   try {
+    await assertLegacyRuntimeClosure('asr')
     await requestHost({ type: 'probe' })
     return null
   } catch (error) {
@@ -282,6 +289,7 @@ export async function parakeetAddonError(): Promise<string | null> {
 
 /** Ensure model assets and prewarm genuine weights in the isolated helper. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
+  await assertLegacyRuntimeClosure('asr')
   const revision = operationRevision
   const initialDir = await modelDir()
   assertCurrentOperation(revision)
@@ -310,6 +318,7 @@ export async function ensureParakeetModel(onProgress?: (pct: number) => void): P
 
 /** Transcribe one mono 16kHz Float32 PCM window. Empty text means genuine silence. */
 export async function parakeetTranscribe(samples: Float32Array): Promise<string> {
+  await assertLegacyRuntimeClosure('asr')
   if (!(samples instanceof Float32Array)) throw new Error('Parakeet PCM must be Float32 samples.')
   if (samples.length > MAX_SAMPLES) throw new Error('Parakeet PCM is too large.')
   for (const sample of samples) {

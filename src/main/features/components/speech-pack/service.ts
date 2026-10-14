@@ -2,11 +2,16 @@ import { randomUUID } from 'node:crypto'
 import {
   SpeechPackActionRequestSchema,
   SpeechPackActionResultSchema,
+  SpeechPackInstallWithPlanRequestSchema,
+  SpeechPackPlanPreviewRequestSchema,
+  SpeechPackPlanPreviewResultSchema,
   SpeechPackProgressSchema,
   SpeechPackSnapshotSchema,
   type SpeechPackActionRequest,
   type SpeechPackActionResult,
   type SpeechPackComponentSnapshot,
+  type SpeechPackInstallWithPlanRequest,
+  type SpeechPackPlanPreviewResult,
   type SpeechPackProgress,
   type SpeechPackSnapshot
 } from '@shared/speech-pack'
@@ -24,24 +29,50 @@ import {
   type SpeechPackComponent,
   type SpeechPackComponentId
 } from './manifest'
-import { readSpeechPackProfile } from './profile'
 import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 import { runSpeechPackSelfTest } from './self-test'
+import type { PackageRuntimeContract } from './package-contract'
+import { resolveOptionalRuntimeReadiness, runtimeIdsForEngine, runtimeIdsForLocalLlm } from './runtime-components'
 
 export interface SpeechPackServiceOptions {
   resourcesRoot: string
   packaged: boolean
   rootDir: string
   selectedEngine: () => 'whisper' | 'parakeet' | 'apple'
+  /** Stable opaque identity of the selected engine setting, including away-and-back transitions. */
+  selectionIdentity?: () => string
   policyAllowsTransfer: () => boolean
+  /** Stable opaque identity for the effective policy; changes invalidate a reviewed plan. */
+  policyIdentity?: () => string
   /** Live authoritative capture state; a throwing getter fails closed. */
   captureActive?: () => boolean
+  /** Stable capture epoch identity, including a capture that starts and ends between status polls. */
+  captureIdentity?: () => string
   featureEnabled?: () => boolean
   fixtureWavPath: string
   createEngine?: (options: Parameters<typeof createSpeechPackEngine>[0]) => SpeechPackEngine
   components?: readonly SpeechPackComponent[]
+  /** Loaded once at the explicit app startup boundary; immutable for this app process. */
+  packageRuntimeContract?: () => Promise<PackageRuntimeContract>
+  /** Full/development packages keep the established bundled runtime path; lean needs an activated runtime pack. */
+  engineRuntimeReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean
+  /** Existing packaged model readiness, separate from a userData speech-pack activation. */
+  engineModelReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean
   shutdownTimeoutMs?: number
 }
+
+interface InstallPlanRecord {
+  plan: Extract<SpeechPackPlanPreviewResult, { ok: true }>['plan']
+  authorityRevision: number
+  selectedEngine: 'whisper' | 'parakeet' | 'apple'
+  packageStatus: PackageRuntimeContract['status']
+  policyIdentity: string
+  selectionIdentity: string
+  captureIdentity: string
+  expiresAt: number
+}
+
+const INSTALL_PLAN_TTL_MS = 10 * 60 * 1000
 
 function selectedId(engine: 'whisper' | 'parakeet' | 'apple'): SpeechPackComponentId | null {
   return engine === 'whisper' ? WHISPER_BASE_Q8.id : engine === 'parakeet' ? PARAKEET_TDT_V3_INT8.id : null
@@ -72,13 +103,56 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   let unsubscribe: (() => void) | null = null
   let currentProgress: SpeechPackProgress | null = null
   const activity = new Set<SpeechPackComponentId>()
+  const activeAuthority = new Map<
+    SpeechPackComponentId,
+    { policyIdentity: string; selectionIdentity: string; captureIdentity: string }
+  >()
   const pendingAdmissions = new Map<SpeechPackComponentId, symbol>()
   let authorityRevision = 0
   let captureActive = false
   let closing = false
+  let observedSelection: 'whisper' | 'parakeet' | 'apple' = options.selectedEngine()
+
+  const policyAllows = (): boolean => {
+    try {
+      return options.policyAllowsTransfer() === true
+    } catch {
+      return false
+    }
+  }
   const listeners = new Set<(progress: SpeechPackProgress) => void>()
   const repairVerified = new Set<SpeechPackComponentId>()
   const resumeScope = randomUUID()
+  const installPlans = new Map<string, InstallPlanRecord>()
+  let packageContractPromise: Promise<PackageRuntimeContract> | null = null
+
+  const currentPolicyIdentity = (): string | null => {
+    try {
+      const identity = options.policyIdentity?.() ?? (policyAllows() ? 'allowed' : 'blocked')
+      return typeof identity === 'string' && identity.length > 0 && identity.length <= 256 ? identity : null
+    } catch {
+      return null
+    }
+  }
+
+  const currentSelectionIdentity = (): string | null => {
+    try {
+      const identity = options.selectionIdentity?.() ?? options.selectedEngine()
+      return typeof identity === 'string' && identity.length > 0 && identity.length <= 256 ? identity : null
+    } catch {
+      return null
+    }
+  }
+
+  const currentCaptureIdentity = (): string | null => {
+    try {
+      const identity = options.captureIdentity?.() ?? (isCaptureActive() ? null : 'inactive')
+      return typeof identity === 'string' && identity.length > 0 && identity.length <= 256 ? identity : null
+    } catch {
+      return null
+    }
+  }
+  let observedSelectionIdentity = currentSelectionIdentity()
 
   const isCaptureActive = (): boolean => {
     if (captureActive) return true
@@ -98,11 +172,19 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       selfTest: runSpeechPackSelfTest,
       components,
       resumeScope,
-      authorizeTransfer: (id) =>
-        activity.has(id) &&
-        options.policyAllowsTransfer() &&
-        !isCaptureActive() &&
-        selectedId(options.selectedEngine()) === id
+      authorizeTransfer: (id) => {
+        const authority = activeAuthority.get(id)
+        return Boolean(
+          authority &&
+            activity.has(id) &&
+            policyAllows() &&
+            currentPolicyIdentity() === authority.policyIdentity &&
+            !isCaptureActive() &&
+            currentCaptureIdentity() === authority.captureIdentity &&
+            selectedId(options.selectedEngine()) === id &&
+            currentSelectionIdentity() === authority.selectionIdentity
+        )
+      }
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
@@ -132,14 +214,17 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (state.status === 'error' || state.status === 'paused') {
         repairVerified.delete(id)
       }
-      if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') activity.delete(id)
+      if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') {
+        activity.delete(id)
+        activeAuthority.delete(id)
+      }
     })
     return engine
   }
 
   const snapshot = async (): Promise<SpeechPackSnapshot> => {
-    const profileRead = await readSpeechPackProfile(options.resourcesRoot, options.packaged)
-    const profile = profileRead.profile
+    const packageContract = await currentPackageContract()
+    const profile = packageContract.profile
     const rows = await Promise.all(
       components.map(async (component): Promise<SpeechPackComponentSnapshot> => {
         const resolved = await resolveSpeechPack(options.rootDir, component)
@@ -165,15 +250,304 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     // Read selection only after metadata I/O so a slow result cannot pair old engine state with new progress.
     const selectedEngine = options.selectedEngine()
     const selectedComponent = selectedId(selectedEngine)
+    const selectedRow = selectedComponent ? rows.find((row) => row.componentId === selectedComponent) : undefined
+    const runtimeComponentIds = runtimeIdsForEngine(selectedEngine)
+    const runtimeComponentId = runtimeComponentIds[0]
+    const runtimeReadiness = runtimeComponentId
+      ? resolveOptionalRuntimeReadiness(runtimeComponentId, packageContract)
+      : 'ready'
+    let engineState:
+      | 'ready'
+      | 'model-needed'
+      | 'runtime-needed'
+      | 'not-configured'
+      | 'incompatible'
+      | 'repair-needed'
+      | 'unavailable'
+    if (selectedEngine === 'apple') {
+      engineState = process.platform === 'darwin' ? 'ready' : 'unavailable'
+    } else if (packageContract.status === 'invalid') {
+      engineState = 'incompatible'
+    } else if (runtimeReadiness === 'incompatible') {
+      engineState = 'incompatible'
+    } else if (runtimeReadiness === 'not-configured') {
+      engineState = 'not-configured'
+    } else if (options.engineRuntimeReady?.(selectedEngine) === false) {
+      engineState = 'runtime-needed'
+    } else if (options.engineModelReady) {
+      try {
+        engineState = options.engineModelReady(selectedEngine) ? 'ready' : 'model-needed'
+      } catch {
+        engineState = 'model-needed'
+      }
+    } else if (selectedRow?.state === 'repair-needed') {
+      engineState = 'repair-needed'
+    } else if (selectedRow?.state === 'ready') {
+      engineState = 'ready'
+    } else {
+      engineState = 'model-needed'
+    }
     return SpeechPackSnapshotSchema.parse({
       featureEnabled: featureEnabled(),
       profile,
-      profileError: profileRead.profile === null ? profileRead.error : null,
+      profileError: packageContract.status === 'invalid' ? 'invalid-profile' : null,
       selectedEngine,
       selectedComponent,
+      packageProfile: {
+        status: packageContract.status,
+        profile,
+        identity: packageContract.status === 'verified' ? packageContract.inventory.identity : null,
+        platform: packageContract.status === 'verified' ? packageContract.inventory.platform : null,
+        arch: packageContract.status === 'verified' ? packageContract.inventory.arch : null,
+        reason: packageContract.status === 'invalid' ? packageContract.reason : null
+      },
+      engineReadiness: {
+        engine: selectedEngine,
+        state: engineState,
+        modelComponentId: selectedComponent,
+        runtimeComponentIds
+      },
+      optionalRuntimeReadiness: {
+        speakerEmbedding: resolveOptionalRuntimeReadiness('runtime.speaker-embedding', packageContract),
+        localLlm: resolveOptionalRuntimeReadiness(runtimeIdsForLocalLlm()[0], packageContract)
+      },
       components: rows,
       progress: currentProgress
     })
+  }
+
+  async function currentPackageContract(): Promise<PackageRuntimeContract> {
+    if (packageContractPromise === null) {
+      packageContractPromise = (async (): Promise<PackageRuntimeContract> => {
+        if (options.packageRuntimeContract) return options.packageRuntimeContract()
+        if (!options.packaged) return { status: 'development', profile: 'development', inventory: null }
+        return {
+          status: 'invalid',
+          reason: 'inventory-invalid',
+          profile: null,
+          inventory: null
+        }
+      })().catch(
+        (): PackageRuntimeContract => ({
+          status: 'invalid',
+          reason: 'inventory-invalid',
+          profile: null,
+          inventory: null
+        })
+      )
+    }
+    return packageContractPromise
+  }
+
+  const planPreview = async (value: unknown): Promise<SpeechPackPlanPreviewResult> => {
+    const parsed = SpeechPackPlanPreviewRequestSchema.safeParse(value)
+    if (!parsed.success) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'invalid-request' })
+    const request = parsed.data
+    const component = byId.get(request.componentId)
+    if (!component) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'invalid-request' })
+    if (componentManifestIdentity(component) !== request.manifestIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-manifest' })
+    if (sourceHost(component) === null)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
+    if (closing) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    if (!featureEnabled()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'disabled' })
+    const initiallySelectedEngine = options.selectedEngine()
+    if (selectedId(initiallySelectedEngine) !== component.id) {
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-selected' })
+    }
+    if (!policyAllows()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    const policyIdentity = currentPolicyIdentity()
+    if (policyIdentity === null) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    const selectionIdentity = currentSelectionIdentity()
+    const captureIdentity = currentCaptureIdentity()
+    if (selectionIdentity === null || captureIdentity === null)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    const revision = authorityRevision
+    const selectedEngine = initiallySelectedEngine
+    const packageContract = await currentPackageContract()
+    if (
+      revision !== authorityRevision ||
+      closing ||
+      !featureEnabled() ||
+      selectedId(options.selectedEngine()) !== component.id ||
+      currentPolicyIdentity() !== policyIdentity ||
+      currentSelectionIdentity() !== selectionIdentity ||
+      currentCaptureIdentity() !== captureIdentity
+    ) {
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    }
+    if (packageContract.status === 'invalid') {
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'profile-invalid' })
+    }
+    if (packageContract.status === 'verified' && packageContract.profile === 'lean') {
+      // A model pack by itself cannot make an engine usable; its reviewed runtime artifact is unavailable.
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
+    }
+    if (!policyAllows() || currentPolicyIdentity() !== policyIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive() || currentCaptureIdentity() !== captureIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    const readiness = await resolveSpeechPack(options.rootDir, component)
+    if (
+      revision !== authorityRevision ||
+      selectedId(options.selectedEngine()) !== component.id ||
+      currentSelectionIdentity() !== selectionIdentity ||
+      currentCaptureIdentity() !== captureIdentity
+    ) {
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    }
+    if (!policyAllows() || currentPolicyIdentity() !== policyIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive() || currentCaptureIdentity() !== captureIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    if (request.action === 'install' && readiness.status === 'ready') {
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'unavailable' })
+    }
+    const planId = randomUUID()
+    const profile = packageContract.profile
+    const profileIdentity = packageContract.status === 'verified' ? packageContract.inventory.identity : null
+    const bytes = componentBytes(component)
+    const plan = SpeechPackPlanPreviewResultSchema.parse({
+      ok: true,
+      plan: {
+        planId,
+        action: request.action,
+        feature: 'asr',
+        selectedComponent: component.id,
+        missingComponents: [
+          {
+            componentId: component.id,
+            manifestIdentity: request.manifestIdentity,
+            downloadBytes: componentDownloadBytes(component),
+            storageBytes: bytes,
+            // A runtime transfer plan cannot be shown until the artifact's license has been reviewed.
+            license: null,
+            sourceHost: sourceHost(component)
+          }
+        ],
+        totalDownloadBytes: componentDownloadBytes(component),
+        totalStorageBytes: bytes,
+        profile,
+        profileIdentity
+      }
+    })
+    const parsedPlan = (plan as Extract<SpeechPackPlanPreviewResult, { ok: true }>).plan
+    installPlans.set(planId, {
+      plan: parsedPlan,
+      authorityRevision,
+      selectedEngine,
+      packageStatus: packageContract.status,
+      policyIdentity,
+      selectionIdentity,
+      captureIdentity,
+      expiresAt: Date.now() + INSTALL_PLAN_TTL_MS
+    })
+    for (const [id, item] of installPlans) if (item.expiresAt <= Date.now()) installPlans.delete(id)
+    while (installPlans.size > 32) installPlans.delete(installPlans.keys().next().value as string)
+    return plan
+  }
+
+  const installWithPlan = async (value: SpeechPackInstallWithPlanRequest): Promise<SpeechPackActionResult> => {
+    const parsed = SpeechPackInstallWithPlanRequestSchema.safeParse(value)
+    if (!parsed.success) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'invalid-request' })
+    const request: SpeechPackInstallWithPlanRequest = parsed.data
+    const record = installPlans.get(request.planId)
+    // Plans are single-use even if a later authorization check denies execution.
+    installPlans.delete(request.planId)
+    if (!record || record.expiresAt <= Date.now())
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'plan-expired' })
+    if (record.authorityRevision !== authorityRevision || request.action !== record.plan.action)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })
+    const component = byId.get(record.plan.selectedComponent)
+    if (!component || componentManifestIdentity(component) !== record.plan.missingComponents[0]?.manifestIdentity)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-manifest' })
+    if (sourceHost(component) === null)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'not-configured' })
+    if (selectedId(options.selectedEngine()) !== component.id || options.selectedEngine() !== record.selectedEngine)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'not-selected' })
+    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (
+      isCaptureActive() ||
+      currentCaptureIdentity() !== record.captureIdentity ||
+      currentSelectionIdentity() !== record.selectionIdentity
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    const packageContract = await currentPackageContract()
+    if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })
+    if (packageContract.status === 'invalid' || packageContract.status !== record.packageStatus) {
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'profile-invalid' })
+    }
+    const profileIdentity = packageContract.status === 'verified' ? packageContract.inventory.identity : null
+    if (
+      packageContract.profile !== record.plan.profile ||
+      profileIdentity !== record.plan.profileIdentity ||
+      (packageContract.status === 'verified' && packageContract.profile === 'lean')
+    ) {
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    }
+    if (
+      selectedId(options.selectedEngine()) !== component.id ||
+      record.authorityRevision !== authorityRevision ||
+      currentSelectionIdentity() !== record.selectionIdentity ||
+      currentCaptureIdentity() !== record.captureIdentity
+    ) {
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    }
+    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (
+      isCaptureActive() ||
+      currentCaptureIdentity() !== record.captureIdentity ||
+      currentSelectionIdentity() !== record.selectionIdentity
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    // Consent expires if the model state changes before transfer admission.
+    const readiness = await resolveSpeechPack(options.rootDir, component)
+    if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })
+    if (
+      record.authorityRevision !== authorityRevision ||
+      selectedId(options.selectedEngine()) !== component.id ||
+      currentSelectionIdentity() !== record.selectionIdentity ||
+      currentCaptureIdentity() !== record.captureIdentity
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    if (request.action === 'install' && readiness.status === 'ready')
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    if (pendingAdmissions.has(component.id) || activity.has(component.id)) {
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    }
+    const instance = getEngine()
+    const state = instance.getState(component.id)
+    if (
+      state.status === 'queued' ||
+      state.status === 'downloading' ||
+      state.status === 'verifying' ||
+      state.status === 'self-testing'
+    ) {
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    }
+    activity.add(component.id)
+    activeAuthority.set(component.id, {
+      policyIdentity: record.policyIdentity,
+      selectionIdentity: record.selectionIdentity,
+      captureIdentity: record.captureIdentity
+    })
+    currentProgress = {
+      componentId: component.id,
+      manifestIdentity: record.plan.missingComponents[0].manifestIdentity,
+      bytesDone: 0,
+      bytesTotal: componentDownloadBytes(component),
+      state: 'queued'
+    }
+    if (request.action === 'repair') instance.repair(component.id)
+    else instance.enqueue([component.id], component.id)
+    return SpeechPackActionResultSchema.parse({ ok: true })
   }
 
   const action = async (value: unknown): Promise<SpeechPackActionResult> => {
@@ -187,7 +561,6 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (componentManifestIdentity(component) !== request.manifestIdentity)
       return result({ ok: false, reason: 'stale-manifest' })
     if (sourceHost(component) === null) return result({ ok: false, reason: 'not-configured' })
-    const currentEngine = options.selectedEngine()
     if (request.action === 'pause' || request.action === 'cancel') {
       authorityRevision += 1
       pendingAdmissions.delete(component.id)
@@ -195,75 +568,46 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (request.action === 'pause') engine.pause(component.id)
       else engine.cancel(component.id)
       activity.delete(component.id)
+      activeAuthority.delete(component.id)
       return result({ ok: true })
     }
-    if (closing) return result({ ok: false, reason: 'busy' })
-    if (!featureEnabled()) return result({ ok: false, reason: 'disabled' })
-    if (pendingAdmissions.has(component.id) || activity.has(component.id)) return result({ ok: false, reason: 'busy' })
-    if (selectedId(currentEngine) !== component.id) return result({ ok: false, reason: 'not-selected' })
-    if (!options.policyAllowsTransfer()) return result({ ok: false, reason: 'policy-blocked' })
-    if (isCaptureActive()) return result({ ok: false, reason: 'busy' })
-    const revision = authorityRevision
-    const admissionToken = Symbol('speech-pack-admission')
-    pendingAdmissions.set(component.id, admissionToken)
-    let profileRead: Awaited<ReturnType<typeof readSpeechPackProfile>>
-    try {
-      profileRead = await readSpeechPackProfile(options.resourcesRoot, options.packaged)
-    } catch {
-      if (pendingAdmissions.get(component.id) === admissionToken) pendingAdmissions.delete(component.id)
-      return result({ ok: false, reason: 'profile-invalid' })
-    }
-    if (pendingAdmissions.get(component.id) === admissionToken) pendingAdmissions.delete(component.id)
-    if (revision !== authorityRevision || closing || !featureEnabled()) return result({ ok: false, reason: 'busy' })
-    if (profileRead.profile === null) return result({ ok: false, reason: 'profile-invalid' })
-    if (selectedId(options.selectedEngine()) !== component.id) return result({ ok: false, reason: 'not-selected' })
-    if (!options.policyAllowsTransfer()) return result({ ok: false, reason: 'policy-blocked' })
-    if (isCaptureActive()) return result({ ok: false, reason: 'busy' })
-    const instance = getEngine()
-    const state = instance.getState(component.id)
-    if (
-      state.status === 'queued' ||
-      state.status === 'downloading' ||
-      state.status === 'verifying' ||
-      state.status === 'self-testing'
-    ) {
-      return result({ ok: false, reason: 'busy' })
-    }
-    activity.add(component.id)
-    currentProgress = {
-      componentId: component.id,
-      manifestIdentity: request.manifestIdentity,
-      bytesDone: 0,
-      bytesTotal: componentDownloadBytes(component),
-      state: 'queued'
-    }
-    if (request.action === 'repair') instance.repair(component.id)
-    else instance.enqueue([component.id], component.id)
-    return result({ ok: true })
+    return result({ ok: false, reason: 'unavailable' })
   }
 
   return {
     snapshot,
     action,
+    planPreview,
+    installWithPlan,
     subscribe(listener: (progress: SpeechPackProgress) => void): () => void {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
     policyChanged(): void {
-      if (options.policyAllowsTransfer()) return
+      if (policyAllows() && featureEnabled()) return
       authorityRevision += 1
+      installPlans.clear()
       for (const id of activity) engine?.cancel(id)
       activity.clear()
+      activeAuthority.clear()
     },
     selectionChanged(): void {
+      const nextEngine = options.selectedEngine()
+      const nextIdentity = currentSelectionIdentity()
+      if (nextEngine === observedSelection && nextIdentity === observedSelectionIdentity) return
+      observedSelection = nextEngine
+      observedSelectionIdentity = nextIdentity
       authorityRevision += 1
-      const selected = selectedId(options.selectedEngine())
-      for (const id of activity) {
-        if (id !== selected) engine?.cancel(id)
-      }
+      installPlans.clear()
+      for (const id of activity) engine?.cancel(id)
+      activity.clear()
+      activeAuthority.clear()
     },
     captureActivityChanged(active: boolean): void {
-      if (captureActive !== active) authorityRevision += 1
+      if (captureActive !== active) {
+        authorityRevision += 1
+        installPlans.clear()
+      }
       captureActive = active
       if (!active) return
       for (const id of activity) engine?.pause(id)
@@ -271,9 +615,11 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     async shutdown(): Promise<void> {
       closing = true
       authorityRevision += 1
+      installPlans.clear()
       pendingAdmissions.clear()
       if (engine) for (const component of components) engine.cancel(component.id)
       activity.clear()
+      activeAuthority.clear()
       if (engine) {
         let timeout: ReturnType<typeof setTimeout> | undefined
         await Promise.race([
@@ -300,6 +646,10 @@ export type {
   SpeechPackActionRequest,
   SpeechPackActionResult,
   SpeechPackComponentSnapshot,
+  SpeechPackInstallWithPlanRequest,
+  SpeechPackInstallWithPlanResult,
+  SpeechPackPlanPreviewRequest,
+  SpeechPackPlanPreviewResult,
   SpeechPackProgress,
   SpeechPackSnapshot
 } from '@shared/speech-pack'

@@ -3,6 +3,12 @@ import { z } from 'zod'
 const byteCount = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const identity = z.string().regex(/^[0-9a-f]{64}$/)
 export const SpeechPackComponentIdSchema = z.enum(['asr.whisper-base-q8', 'asr.parakeet-tdt-0.6b-v3-int8'])
+export const SpeechRuntimeComponentIdSchema = z.enum([
+  'runtime.asr-whisper-worker',
+  'runtime.asr-sherpa-onnx',
+  'runtime.speaker-embedding',
+  'runtime.llama-server'
+])
 export const SpeechPackActionReasonSchema = z.enum([
   'invalid-request',
   'disabled',
@@ -12,6 +18,8 @@ export const SpeechPackActionReasonSchema = z.enum([
   'policy-blocked',
   'busy',
   'not-configured',
+  'plan-expired',
+  'stale-plan',
   'unavailable'
 ])
 export const SpeechPackActionRequestSchema = z
@@ -86,6 +94,36 @@ export const SpeechPackSnapshotSchema = z
     profileError: z.literal('invalid-profile').nullable(),
     selectedEngine: z.enum(['whisper', 'parakeet', 'apple']),
     selectedComponent: SpeechPackComponentIdSchema.nullable(),
+    packageProfile: z
+      .object({
+        status: z.enum(['verified', 'legacy-full', 'development', 'invalid']),
+        profile: z.enum(['full', 'lean', 'development']).nullable(),
+        identity: identity.nullable(),
+        platform: z.enum(['darwin', 'win32']).nullable(),
+        arch: z.enum(['arm64', 'x64', 'universal']).nullable(),
+        reason: z.enum([
+          'profile-invalid',
+          'profile-mismatch',
+          'inventory-invalid',
+          'target-mismatch',
+          'inventory-missing'
+        ]).nullable()
+      })
+      .strict(),
+    engineReadiness: z
+      .object({
+        engine: z.enum(['whisper', 'parakeet', 'apple']),
+        state: z.enum(['ready', 'model-needed', 'runtime-needed', 'not-configured', 'incompatible', 'repair-needed', 'unavailable']),
+        modelComponentId: SpeechPackComponentIdSchema.nullable(),
+        runtimeComponentIds: z.array(SpeechRuntimeComponentIdSchema).max(4)
+      })
+      .strict(),
+    optionalRuntimeReadiness: z
+      .object({
+        speakerEmbedding: z.enum(['ready', 'not-configured', 'incompatible']),
+        localLlm: z.enum(['ready', 'not-configured', 'incompatible'])
+      })
+      .strict(),
     components: z.array(SpeechPackComponentSnapshotSchema).max(2),
     progress: SpeechPackProgressSchema.nullable()
   })
@@ -105,6 +143,10 @@ export const SpeechPackSnapshotSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['components'], message: 'Duplicate component' })
     if (value.selectedComponent && !value.components.some((row) => row.componentId === value.selectedComponent))
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['components'], message: 'Missing selected component' })
+    if (value.engineReadiness.engine !== value.selectedEngine)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['engineReadiness'], message: 'Readiness engine mismatch' })
+    if (value.engineReadiness.modelComponentId !== expected)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['engineReadiness', 'modelComponentId'], message: 'Readiness component mismatch' })
     if (
       value.progress &&
       !value.components.some(
@@ -115,6 +157,50 @@ export const SpeechPackSnapshotSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['progress'], message: 'Unknown progress identity' })
   })
 
+const planComponent = z
+  .object({
+    componentId: SpeechPackComponentIdSchema,
+    manifestIdentity: identity,
+    downloadBytes: byteCount.positive(),
+    storageBytes: byteCount.positive(),
+    license: z.string().min(1).max(120).nullable(),
+    sourceHost: sourceHost
+  })
+  .strict()
+
+export const SpeechPackPlanPreviewRequestSchema = z
+  .object({
+    componentId: SpeechPackComponentIdSchema,
+    manifestIdentity: identity,
+    action: z.enum(['install', 'repair']).default('install')
+  })
+  .strict()
+export const SpeechPackPlanPreviewResultSchema = z.discriminatedUnion('ok', [
+  z
+    .object({
+      ok: z.literal(true),
+      plan: z
+        .object({
+          planId: z.string().uuid(),
+          action: z.enum(['install', 'repair']),
+          feature: z.literal('asr'),
+          selectedComponent: SpeechPackComponentIdSchema,
+          missingComponents: z.array(planComponent).min(1).max(2),
+          totalDownloadBytes: byteCount.positive(),
+          totalStorageBytes: byteCount.positive(),
+          profile: z.enum(['full', 'lean', 'development']),
+          profileIdentity: identity.nullable()
+        })
+        .strict()
+    })
+    .strict(),
+  z.object({ ok: z.literal(false), reason: SpeechPackActionReasonSchema }).strict()
+])
+export const SpeechPackInstallWithPlanRequestSchema = z
+  .object({ planId: z.string().uuid(), action: z.enum(['install', 'repair']) })
+  .strict()
+export const SpeechPackInstallWithPlanResultSchema = SpeechPackActionResultSchema
+
 export type SpeechPackComponentId = z.infer<typeof SpeechPackComponentIdSchema>
 export type SpeechPackActionReason = z.infer<typeof SpeechPackActionReasonSchema>
 export type SpeechPackActionRequest = z.infer<typeof SpeechPackActionRequestSchema>
@@ -122,3 +208,7 @@ export type SpeechPackActionResult = z.infer<typeof SpeechPackActionResultSchema
 export type SpeechPackProgress = z.infer<typeof SpeechPackProgressSchema>
 export type SpeechPackComponentSnapshot = z.infer<typeof SpeechPackComponentSnapshotSchema>
 export type SpeechPackSnapshot = z.infer<typeof SpeechPackSnapshotSchema>
+export type SpeechPackPlanPreviewRequest = z.infer<typeof SpeechPackPlanPreviewRequestSchema>
+export type SpeechPackPlanPreviewResult = z.infer<typeof SpeechPackPlanPreviewResultSchema>
+export type SpeechPackInstallWithPlanRequest = z.infer<typeof SpeechPackInstallWithPlanRequestSchema>
+export type SpeechPackInstallWithPlanResult = z.infer<typeof SpeechPackInstallWithPlanResultSchema>

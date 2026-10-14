@@ -266,6 +266,8 @@ export const IPC = {
   asrAssetsEnsure: 'asr:assets-ensure',
   speechPackState: 'speech-pack:state',
   speechPackAction: 'speech-pack:action',
+  speechPackPlanPreview: 'speech-pack:plan-preview',
+  speechPackInstallWithPlan: 'speech-pack:install-with-plan',
   speechPackProgress: 'speech-pack:progress',
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.

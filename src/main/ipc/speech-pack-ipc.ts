@@ -11,7 +11,12 @@ export function registerSpeechPackIpc(options: {
   sendProgress: Parameters<SpeechPackService['subscribe']>[0]
   service: SpeechPackService
 }): () => void {
-  const channels = [IPC.speechPackState, IPC.speechPackAction] as const
+  const channels = [
+    IPC.speechPackState,
+    IPC.speechPackAction,
+    IPC.speechPackPlanPreview,
+    IPC.speechPackInstallWithPlan
+  ] as const
   for (const channel of channels) {
     try {
       options.ipcMain.removeHandler(channel)
@@ -29,6 +34,14 @@ export function registerSpeechPackIpc(options: {
     options.ipcMain.handle(IPC.speechPackAction, (event, request) => {
       options.assertMainWindow(event)
       return options.service.action(request)
+    })
+    options.ipcMain.handle(IPC.speechPackPlanPreview, (event, request) => {
+      options.assertMainWindow(event)
+      return options.service.planPreview(request)
+    })
+    options.ipcMain.handle(IPC.speechPackInstallWithPlan, (event, request) => {
+      options.assertMainWindow(event)
+      return options.service.installWithPlan(request)
     })
     unsubscribe = options.service.subscribe(options.sendProgress)
   } catch (error) {

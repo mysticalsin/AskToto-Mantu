@@ -21,6 +21,7 @@
     "fetch:local-model": "node scripts/fetch-local-model.mjs",
     "check:local-model": "node scripts/check-local-model.mjs",
     "check:runtime-assets": "node scripts/check-runtime-assets.mjs",
+    "check:lean-package": "node scripts/check-lean-package.mjs",
     "check:packaged-runtime": "node scripts/check-packaged-runtime.mjs",
     "check:update-metadata": "node scripts/check-update-metadata.mjs",
     "check:built-offline": "node scripts/check-built-offline.mjs",
