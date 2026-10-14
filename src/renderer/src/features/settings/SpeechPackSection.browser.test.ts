@@ -363,7 +363,9 @@ describe('SpeechPackSection browser behavior', () => {
     await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     expect(await inspect()).toMatchObject({ statusCalls: 2, listenerCount: 1, unsubscribeCalls: 1, actionRequests: [] })
     await page.getByRole('button', { name: 'Review install' }).click()
-    await page.getByText('2 MB download · 3 MB storage').waitFor({ state: 'visible' })
+    const reviewedPlan = page.getByText('Review this optional install').locator('..')
+    await reviewedPlan.waitFor({ state: 'visible' })
+    expect((await reviewedPlan.textContent())?.replace(/\s+/g, ' ').trim()).toContain('2 MB download · 3 MB storage')
     expect((await inspect()).planRequests).toEqual([
       { componentId: PARAKEET, action: 'install', manifestIdentity: PARAKEET_ID }
     ])

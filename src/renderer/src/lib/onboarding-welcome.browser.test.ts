@@ -198,7 +198,7 @@ describe('Act 1 welcome rendered behavior', () => {
     await page.evaluate(() => window.__onboardingWelcome.startVideo())
     await page.locator('video').waitFor({ state: 'attached' })
     const video = page.locator('video')
-    expect(await video.getAttribute('muted')).not.toBeNull()
+    expect(await video.evaluate((element) => element.muted)).toBe(true)
     expect(await video.getAttribute('loop')).not.toBeNull()
     expect(await video.getAttribute('autoplay')).not.toBeNull()
     expect(await video.getAttribute('preload')).toBe('auto')
