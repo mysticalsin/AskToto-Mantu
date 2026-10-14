@@ -1,0 +1,8 @@
+--- a/package/dist/classes/HttpsProxyAgent.js
++++ b/package/dist/classes/HttpsProxyAgent.js
+@@ -28,6 +28,7 @@
+             const secureSocket = tls_1.default.connect({
+                 ...configuration.tls,
++                host: configuration.host,
+                 socket,
+             });

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    { "id": "missing-official-archive", "mutation": "missing-official-archive", "expectedRefusal": "official source tarball SHA-256 mismatch" },
+    { "id": "tampered-official-archive", "mutation": "tampered-official-archive", "expectedRefusal": "official source tarball SHA-256 mismatch" },
+    { "id": "wrong-manifest-postimage", "mutation": "wrong-manifest-postimage", "expectedRefusal": "manifest provenance differs" },
+    { "id": "altered-patch-file", "mutation": "altered-patch-file", "expectedRefusal": "plain patch file identity mismatch" },
+    { "id": "extra-member", "mutation": "extra-member", "expectedRefusal": "derivative member set differs from official source" },
+    { "id": "duplicate-member", "mutation": "duplicate-member", "expectedRefusal": "duplicate member pathname" },
+    { "id": "traversal-member", "mutation": "traversal-member", "expectedRefusal": "unsafe member pathname" },
+    { "id": "symlink-member", "mutation": "symlink-member", "expectedRefusal": "non-regular or oversized member" },
+    { "id": "modified-extra-member", "mutation": "modified-extra-member", "expectedRefusal": "derivative must change exactly the approved module" },
+    { "id": "wrong-patch-postimage", "mutation": "wrong-patch-postimage", "expectedRefusal": "derivative contains an unknown preimage or extra modification" },
+    { "id": "oversized-compressed-archive", "mutation": "oversized-compressed-archive", "expectedRefusal": "archive exceeds byte limit" },
+    { "id": "excessive-raw-expansion", "mutation": "excessive-raw-expansion", "expectedRefusal": "archive expands beyond raw tar byte limit" },
+    { "id": "excessive-member-count", "mutation": "excessive-member-count", "expectedRefusal": "unexpected member count" }
+  ],
+  "positiveCases": [
+    { "id": "known-positive-derivative", "mutation": "known-positive-derivative", "expectedAcceptance": "known positive derivative accepted" }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "global-agent",
+    "version": "4.1.3",
+    "license": "BSD-3-Clause",
+    "sourceTarball": "https://registry.npmjs.org/global-agent/-/global-agent-4.1.3.tgz",
+    "sourceTarballSha256": "478ca4fff13292091adabb7f8ef985bf952f809cbf53ee5f9828ebd49b47a0a8",
+    "sourceIntegrity": "sha512-KUJEViiuFT3I97t+GYMikLPJS2Lfo/S2F+DQuBWzuzaMPnvt5yyZePzArx36fBzpGTxZjIpDbXLeySLgh+k76g==",
+    "npmShasum": "318a8a132fcf76c74adb27de2e1466d7e9241125",
+    "metadataSignatureKeyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "metadataSignature": "MEUCIAssZwQYrLOuHxlCfoeGrlbpGqEEa9rSpIYzijjzpjTrAiEA04IRImRoNLW7NPwjCEIDOq3YhdTcIj/WKtGtpsqBO/g=",
+    "fileCount": 47,
+    "unpackedSize": 87313,
+    "licensePath": "package/LICENSE",
+    "licenseSha256": "2aabdab5d0ce03a7314def8222988c2da4ba593ae82ae312439e5e306001dbae"
+  },
+  "patch": {
+    "path": "package/dist/classes/HttpsProxyAgent.js",
+    "sha256": "02ce4e40facf58980e2cdfd698d4be31af8008b40f109220542821a821394734",
+    "preimageSha256": "81d726b90298b0025023a4a2f254a14d5ab6ac8ba45cb80396231f30712e1f47",
+    "preimageBytes": 2442,
+    "postimageSha256": "2548c955fc8fc40615a6722af6627b6d563a1dd586791d4f486feb9b4bfafaa0",
+    "postimageBytes": 2484,
+    "change": "add host: configuration.host to tls.connect options while preserving the existing TLS configuration and CONNECT socket"
+  }
+}

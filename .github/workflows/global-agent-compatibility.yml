@@ -1,10 +1,19 @@
 name: global-agent parent compatibility
 
 on:
+  workflow_dispatch:
+    inputs:
+      source_approved:
+        description: Root has independently approved the exact source files for derivative production
+        type: boolean
+        required: true
+        default: false
   push:
     paths:
       - '.github/workflows/global-agent-compatibility.yml'
       - 'scripts/qa/global-agent-consumers.test.mjs'
+      - 'scripts/security/global-agent-derivative.py'
+      - 'vendor/global-agent/**'
       - 'package.json'
       - 'package-lock.json'
   pull_request:
@@ -12,9 +21,10 @@ on:
     paths:
       - '.github/workflows/global-agent-compatibility.yml'
       - 'scripts/qa/global-agent-consumers.test.mjs'
+      - 'scripts/security/global-agent-derivative.py'
+      - 'vendor/global-agent/**'
       - 'package.json'
       - 'package-lock.json'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -67,3 +77,46 @@ jobs:
           TEST_EXIT_CODE: ${{ steps.compatibility-tests.outputs.exit-code }}
         run: |
           node -e 'const fs = require("node:fs"); const report = fs.readFileSync("global-agent-compatibility.tap", "utf8"); const expected = ["# tests 8", "# pass 8", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"]; for (const line of expected) { if (!report.split(/\r?\n/).includes(line)) throw new Error(`missing exact TAP summary: ${line}`); } if (process.env.TEST_EXIT_CODE !== "0") throw new Error(`compatibility test process failed: ${process.env.TEST_EXIT_CODE || "no exit status"}`);'
+
+  derivative-source:
+    name: Verify bounded derivative source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.6.0
+        with:
+          python-version: 3.12.8
+      - name: Verify official archive and fail-closed negative fixtures
+        run: |
+          python3 scripts/security/global-agent-derivative.py verify-source
+          python3 scripts/security/global-agent-derivative.py self-test
+
+  derivative-producer:
+    name: Produce approved derivative archive in GitHub Actions
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.source_approved == true)
+    needs: derivative-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.6.0
+        with:
+          python-version: 3.12.8
+      - name: Build and independently verify deterministic derivative
+        run: |
+          python3 scripts/security/global-agent-derivative.py build
+          python3 scripts/security/global-agent-derivative.py verify-derivative
+      - name: Upload derivative archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: global-agent-4.1.3-metis-ip-host-${{ github.run_id }}-${{ github.run_attempt }}
+          path: vendor/global-agent/4.1.3-metis-ip-host.tgz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Emit bounded indexed base64 parts and whole-file digests
+        run: python3 scripts/security/global-agent-derivative.py emit-base64
