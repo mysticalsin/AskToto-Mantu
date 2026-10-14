@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto'
 import {
   constants as fsConstants,
   closeSync,
-  createReadStream,
   existsSync,
   fstatSync,
   lstatSync,
@@ -34,7 +33,8 @@ import {
   canonicalPrivateTemporaryRoot,
   captureElectronFactoryTemplate,
   ensureLeanPackageCoreDirectories,
-  removeElectronDefaultAppTemplate
+  removeElectronDefaultAppTemplate,
+  retainedElectronArchiveSource
 } from './lib/lean-package-stage.mjs'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -174,21 +174,7 @@ async function prepareVerifiedFactoryTemplate(context, temporaryRoot) {
     const privateArchiveStatAfterCopy = fstatSync(privateArchiveFd, { bigint: true })
     const privateArchivePathAfterCopy = lstatSync(privateArchivePath, { bigint: true })
     const archiveSize = Number(privateArchiveStat.size)
-    const archive = await zipReader.Open.custom({
-      stream(offset, length) {
-        if (!Number.isSafeInteger(offset) || offset < 0 || offset >= archiveSize) {
-          throw new Error('Pinned Electron archive reader requested an invalid offset')
-        }
-        const end = length === undefined ? archiveSize - 1 : offset + length - 1
-        if (!Number.isSafeInteger(end) || end < offset || end >= archiveSize) {
-          throw new Error('Pinned Electron archive reader requested an invalid range')
-        }
-        return createReadStream(null, { fd: privateArchiveFd, autoClose: false, start: offset, end })
-      },
-      async size() {
-        return archiveSize
-      }
-    })
+    const archive = await zipReader.Open.custom(retainedElectronArchiveSource(privateArchiveFd, archiveSize))
     const member = electronFactoryArchiveMemberPath(platform)
     const entry = archive.files.find((file) => file.path === member)
     if (!entry || entry.type !== 'File' || !Number.isSafeInteger(entry.uncompressedSize)) {

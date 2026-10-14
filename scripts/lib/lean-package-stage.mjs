@@ -1,4 +1,5 @@
-import { constants } from 'node:fs'
+import { constants, readSync } from 'node:fs'
+import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, open, rm } from 'node:fs/promises'
 import { lstatSync, realpathSync, unlinkSync } from 'node:fs'
@@ -268,4 +269,39 @@ export async function removeElectronDefaultAppTemplate(resourcesRoot, templateOr
       [packaged?.handle.close(), ownsTemplateHandle ? template?.handle.close() : undefined].filter(Boolean)
     )
   }
+}
+
+/** Unzipper may destroy its stream; only the archive owner may close this retained descriptor. */
+export function retainedElectronArchiveSource(fd, byteLength) {
+  if (!Number.isSafeInteger(fd) || fd < 0 || !Number.isSafeInteger(byteLength) || byteLength <= 0) {
+    throw new Error('Pinned Electron archive descriptor or byte length is invalid')
+  }
+  return Object.freeze({
+    async size() {
+      return byteLength
+    },
+    stream(offset, length = byteLength - offset) {
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        offset > byteLength ||
+        !Number.isSafeInteger(length) ||
+        length < 0 ||
+        length > byteLength - offset
+      )
+        throw new Error('Pinned Electron archive reader requested an invalid range')
+      function* chunks() {
+        let position = offset
+        const end = offset + length
+        while (position < end) {
+          const chunk = Buffer.allocUnsafe(Math.min(65_536, end - position))
+          const count = readSync(fd, chunk, 0, chunk.length, position)
+          if (count === 0) throw new Error('Pinned Electron archive changed during extraction')
+          position += count
+          yield chunk.subarray(0, count)
+        }
+      }
+      return Readable.from(chunks(), { objectMode: false, highWaterMark: 65_536 })
+    }
+  })
 }
