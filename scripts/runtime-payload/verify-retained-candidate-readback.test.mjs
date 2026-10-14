@@ -221,8 +221,10 @@ function nativeInventory() {
 
 test('accepts synthetic pinned native closure and rejects substituted upstream or notice pins', () => {
   const valid = nativeInventory()
+  const expectedLicense = { ...valid.files[0] }
+  const expectedRows = [expectedLicense, null]
   assert.equal(validNativeReceipts(valid, NATIVE_TARGETS[0]), true)
-  assert.equal(validFileRows(valid.files, [null, { ...valid.files[1] }], true), true)
+  assert.equal(validFileRows(valid.files, expectedRows, true), true)
 
   const wrongUpstream = nativeInventory()
   wrongUpstream.upstream[0].digest.value = 'a'.repeat(64)
@@ -231,5 +233,5 @@ test('accepts synthetic pinned native closure and rejects substituted upstream o
   const wrongNotice = nativeInventory()
   wrongNotice.files[0].sha256 = 'b'.repeat(64)
   assert.equal(validNativeReceipts(wrongNotice, NATIVE_TARGETS[0]), false)
-  assert.equal(validFileRows(wrongNotice.files, [null, { ...wrongNotice.files[1] }], true), false)
+  assert.equal(validFileRows(wrongNotice.files, expectedRows, true), false)
 })
