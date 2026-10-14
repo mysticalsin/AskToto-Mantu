@@ -1,7 +1,7 @@
 import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
-type RootIdentity = { path: string; dev: number; ino: number; nlink: number }
+type RootIdentity = { path: string; dev: number; ino: number }
 
 /** Resolves admitted root aliases to one physical directory and refuses replacement or final links. */
 export function createIncrementalMeetingJournalRoot(rootInput: string, isCurrent: () => boolean) {
@@ -32,20 +32,14 @@ export function createIncrementalMeetingJournalRoot(rootInput: string, isCurrent
         !canonicalEntry.isDirectory() ||
         requestedBefore.dev !== requestedAfter.dev ||
         requestedBefore.ino !== requestedAfter.ino ||
-        requestedBefore.nlink !== requestedAfter.nlink ||
         requestedAfter.dev !== canonicalEntry.dev ||
-        requestedAfter.ino !== canonicalEntry.ino ||
-        requestedAfter.nlink !== canonicalEntry.nlink
+        requestedAfter.ino !== canonicalEntry.ino
       )
         return undefined
-      const next = { path, dev: canonicalEntry.dev, ino: canonicalEntry.ino, nlink: canonicalEntry.nlink }
-      if (
-        identity &&
-        (identity.path !== next.path ||
-          identity.dev !== next.dev ||
-          identity.ino !== next.ino ||
-          identity.nlink !== next.nlink)
-      )
+      // Directory link counts describe changing contents on some filesystems, not the root owner.
+      // Retain its canonical path and physical identity; regular-file single-link guards stay separate.
+      const next = { path, dev: canonicalEntry.dev, ino: canonicalEntry.ino }
+      if (identity && (identity.path !== next.path || identity.dev !== next.dev || identity.ino !== next.ino))
         return undefined
       identity ??= next
       return path
