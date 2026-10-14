@@ -760,8 +760,8 @@ export function useListen(
     publishCaptureState(epoch)
     return true
   }
-  function updateCaptureEngine(epoch: number, engine: string): boolean {
-    const result = captureStateRef.current.setEngine(epoch, engine)
+  function updateCaptureEngine(epoch: number, engine: string, cloudProvider?: unknown): boolean {
+    const result = captureStateRef.current.setEngine(epoch, engine, cloudProvider)
     if (!result.ok && result.reason === 'invalid-state') captureStateFailureRef.current?.(epoch)
     return result.ok
   }
@@ -2306,6 +2306,14 @@ export function useListen(
                 })
                 return
               }
+              if (!listenSpeechEngine('cloud', started.provider)) {
+                failAdmittedCapture('Cloud speech provider was not acknowledged.', {
+                  forceCloudStop: true,
+                  cloudCaptureId
+                })
+                return
+              }
+              if (!updateCaptureEngine(myEpoch, 'cloud', started.provider)) return
               readyRef.current = true
               setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
               if (readyRef.current) pump() // drain windows captured while WS connected
