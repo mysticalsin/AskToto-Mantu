@@ -182,7 +182,8 @@ describe('CommandControl', () => {
 
     // Entitlement/foreground state can change while the proposal is displayed.
     allowed = false
-    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({ ok: false, reason: 'policy_denied' })
+    const result = await controller.confirm({ ...proposal, webContentsId: 11 })
+    expect(result).toEqual({ ok: false, reason: 'policy_denied' })
     expect(execute).not.toHaveBeenCalled()
   })
 
@@ -190,7 +191,9 @@ describe('CommandControl', () => {
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const }))
     const controller = new CommandControl({
       execute,
-      policyAllows: () => { throw new Error('policy unavailable') }
+      policyAllows: () => {
+        throw new Error('policy unavailable')
+      }
     })
     const proposal = controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
 

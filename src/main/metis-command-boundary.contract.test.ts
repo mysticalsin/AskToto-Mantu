@@ -74,7 +74,9 @@ describe('Cap2 command authority boundary', () => {
       'setSessionClearedHandler(revokePrivilegedSurface)'
     )
     expect(session).toContain("commandControl.revokeForLifecycleEvent('auth_session_cleared')")
-    expect(main).toContain("powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))")
+    expect(main).toContain(
+      "powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))"
+    )
     expect(main).toContain(
       "powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))"
     )
