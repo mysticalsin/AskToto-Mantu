@@ -921,11 +921,24 @@ export async function requestOwnedAppQuit(child, requestQuit, timeoutMs) {
   return { request, exit: 'zero', cleanShutdown: true }
 }
 
-/** Keep automation transports alive through the owned quit request and exit observation. */
-export async function quitOwnedAppBeforeAutomationClose(child, requestQuit, closeAutomation, timeoutMs) {
+/** Keep automation transports alive through the owned quit request and exit observation.
+ * @param {DirectLaunchChild | null} child
+ * @param {() => Promise<unknown> | unknown} requestQuit
+ * @param {() => Promise<unknown> | unknown} closeAutomation
+ * @param {number} timeoutMs
+ * @param {((result: { request: string, exit: string, cleanShutdown: boolean }) => void) | null} [onQuitObservation]
+ */
+export async function quitOwnedAppBeforeAutomationClose(
+  child,
+  requestQuit,
+  closeAutomation,
+  timeoutMs,
+  onQuitObservation = null
+) {
   let result = { request: 'not-attempted', exit: 'not-waited', cleanShutdown: false }
   try {
     result = await requestOwnedAppQuit(child, requestQuit, timeoutMs)
+    if (typeof onQuitObservation === 'function') onQuitObservation(result)
   } finally {
     await closeAutomation()
   }

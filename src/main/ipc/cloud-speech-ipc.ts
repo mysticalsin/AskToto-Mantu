@@ -55,6 +55,7 @@ export type { CloudSpeechMainAuthority, CloudSpeechIpcOptions } from './cloud-sp
 export type CloudSpeechIpcRegistration = {
   closeInput: () => void
   invalidateCurrent: () => void
+  ownerCount: () => number
   shutdown: (timeoutMs?: number) => Promise<void>
   dispose: () => Promise<void>
 }
@@ -666,5 +667,5 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       }
     }
   }
-  return { closeInput, invalidateCurrent, shutdown, dispose }
+  return { closeInput, invalidateCurrent, ownerCount: () => state.owners.size, shutdown, dispose }
 }

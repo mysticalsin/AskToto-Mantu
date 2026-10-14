@@ -19,6 +19,7 @@ import {
   quitOwnedAppBeforeAutomationClose,
   strictLaunchEnvironment
 } from './lib/app-driver.mjs'
+import { attachQuitTraceStdout, createQuitTraceCollector } from './lib/quit-trace.mjs'
 import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -54,7 +55,8 @@ function parseOptions(args) {
     driver,
     packageDir: resolve(packageDir),
     report: report ? resolve(report) : null,
-    keepOpen: args.includes('--keep-open')
+    keepOpen: args.includes('--keep-open'),
+    quitTrace: args.includes('--quit-trace')
   }
 }
 
@@ -66,7 +68,10 @@ function parseOptions(args) {
 export function selectSmokeDriver(platform, requested = null) {
   const expected = platform === 'darwin' ? 'agent-browser-cli' : platform === 'win32' ? 'playwright-cdp' : null
   if (!expected) throw new Error('unsupported-host')
-  if (requested !== null && requested !== expected) throw new Error('smoke-driver-platform-mismatch')
+  if (requested !== null && requested !== expected && !(platform === 'darwin' && requested === 'playwright-cdp')) {
+    throw new Error('smoke-driver-platform-mismatch')
+  }
+  if (requested === 'playwright-cdp') return 'playwright-cdp'
   return expected
 }
 
@@ -541,7 +546,7 @@ export function loopbackDebuggerWebSocket(value, port) {
   return url.href
 }
 
-export function electronLaunchArgs(port, appPath) {
+export function electronLaunchArgs(port, appPath, quitTrace = false) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65_535) {
     throw new Error('invalid-port')
   }
@@ -549,7 +554,12 @@ export function electronLaunchArgs(port, appPath) {
   // Electron treats the first positional argument as the app path. Keep Chromium switches ahead
   // of it so both Windows and macOS parse the debugging options as Electron switches. An absolute
   // target also avoids current-directory interpretation differences across hosted runners.
-  return [`--remote-debugging-address=${LOOPBACK_HOST}`, `--remote-debugging-port=${port}`, appPath]
+  return [
+    `--remote-debugging-address=${LOOPBACK_HOST}`,
+    `--remote-debugging-port=${port}`,
+    ...(quitTrace ? ['--metis-qa-quit-trace'] : []),
+    appPath
+  ]
 }
 
 async function waitForCdpEndpoint({ port, child, launchFailed, timeoutMs }) {
@@ -717,10 +727,12 @@ async function main() {
     agentBrowserCleanupEvidence: null,
     startupDiagnostic: null,
     startupEvidence: null,
+    quitTrace: null,
     failure: null
   }
 
   let appChild = null
+  const quitTraceCollector = createQuitTraceCollector(options.quitTrace)
   let appOutput = { stdout: '', stderr: '' }
   let ownedBrowser = null
   let appPage = null
@@ -751,13 +763,14 @@ async function main() {
     report.preexistingOwnedProcessCount = existing.length
     if (existing.length > 0) throw new Error('worktree-app-already-running')
 
-    appChild = spawn(executable, electronLaunchArgs(options.port, ROOT), {
+    appChild = spawn(executable, electronLaunchArgs(options.port, ROOT, options.quitTrace), {
       cwd: ROOT,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       detached: process.platform !== 'win32'
     })
+    attachQuitTraceStdout(quitTraceCollector, appChild.stdout)
     appChild.stdout?.on('data', (chunk) => {
       appOutput.stdout = appendBounded(appOutput.stdout, chunk)
     })
@@ -898,7 +911,10 @@ async function main() {
             }
           }
         },
-        CHILD_STOP_TIMEOUT_MS
+        CHILD_STOP_TIMEOUT_MS,
+        () => {
+          if (options.quitTrace) report.quitTrace = quitTraceCollector.snapshot()
+        }
       )
       report.quitOutcome = { request: quitOutcome.request, exit: quitOutcome.exit }
       report.cleanShutdown = quitOutcome.cleanShutdown
@@ -911,6 +927,10 @@ async function main() {
     if (report.result === 'PASS' && agentBrowserCloseFailure) {
       report.result = 'FAIL'
       report.failure = `agent-browser-close-${agentBrowserCloseFailure}`
+    }
+    if (report.result === 'PASS' && options.quitTrace && report.quitTrace?.valid !== true) {
+      report.result = 'FAIL'
+      report.failure = 'quit-trace-invalid'
     }
     if (
       report.result === 'PASS' &&

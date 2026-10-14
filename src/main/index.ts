@@ -565,6 +565,8 @@ import { createScreenPreprocess, type ScreenPreprocess } from './screen-preproce
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
+import { createQuitTrace, observeQuitWindow } from './lifecycle/quit-trace'
+import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -2779,6 +2781,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
   // always-on-top, unreferenced.
   if (win && !win.isDestroyed()) return
+  if (quitTrace.quitRequested) quitTrace.mark('WINDOW_CREATE_DURING_QUIT')
   if (!emittedAppStarted) {
     observability = startRunObservability({
       userData: app.getPath('userData'),
@@ -2883,6 +2886,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     },
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
+  observeQuitWindow(win, quitTrace)
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, {
     transparent: chrome.transparent,
     windowVariant: BOOT_WINDOW_VARIANT
@@ -4183,6 +4187,7 @@ const revealController = createRevealController({
 })
 
 function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
+  if (quitTrace.quitRequested) quitTrace.mark('WINDOW_REVEAL_DURING_QUIT')
   reveals.trace(reason, () => {
     revealController.reveal(reason, options)
   })
@@ -4851,6 +4856,11 @@ const shortcutActions: Record<string, () => void> = {
 // itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
+// Only the hosted, unpackaged QA smoke passes this fixed switch. The observer writes closed enum tokens only.
+const quitTrace = createQuitTrace(!app.isPackaged && app.commandLine.hasSwitch('metis-qa-quit-trace'), (line) => {
+  process.stdout.write(`${line}\n`)
+})
+
 // Every child process this app spawns that the OS does not end with it, in teardown order: the producers of
 // local-model work (screen pre-analysis, which owns the foreground watcher, import decodes, and the ASR/
 // speaker-embedding utilityProcess hosts they use) before the runtimes they feed. The packaged smoke
@@ -4870,7 +4880,14 @@ const stopAllSidecars = createStopAll(
 )
 
 const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
-  stopAll: stopAllSidecars,
+  stopAll: () => {
+    quitTrace.mark('WILL_QUIT_STOPALL_ENTER')
+    try {
+      stopAllSidecars()
+    } finally {
+      quitTrace.mark('WILL_QUIT_STOPALL_EXIT')
+    }
+  },
   closeBootWatch: () => {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
@@ -5341,6 +5358,7 @@ function registerIpc(): void {
     grants: speechCaptureGrants,
     platform: process.platform,
     enabled: () => true,
+    quitTrace,
     ...speechDesktopBoundaryOptions()
   })
   // --- Settings & permissions ---
@@ -9600,11 +9618,13 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, (e) => {
     assertMainWindow(e)
+    quitTrace.mark('IPC_QUIT_RECEIVED')
+    quitTrace.requestQuit()
     // App.tsx's quitApp() already `await`s flushLiveMeeting() (a best-effort saveTranscript) before
     // invoking this — the meeting is already on disk by the time we get here, so the before-quit
     // handler below must not add its own redundant flush-and-wait on top of an already-safe quit.
     quitFlushDone = true
-    app.quit()
+    quitTrace.call('IPC', () => app.quit())
   })
   // A fresh Screen Recording grant only takes effect for a NEW launch (macOS applies TCC changes to the
   // next process, not the already-running one) — this is the one-click recovery for that dead end, wired
@@ -10000,7 +10020,8 @@ if (!app.requestSingleInstanceLock()) {
           assertMainWindow,
           sendProgress: (progress) => {
             if (win && !win.isDestroyed()) win.webContents.send(IPC.speechPackProgress, progress)
-          }
+          },
+          quitTrace
         })
       })
       runStep('asrAssetsIpc', () => {
@@ -10264,6 +10285,7 @@ if (!app.requestSingleInstanceLock()) {
       }, 15_000)
 
       app.on('activate', () => {
+        if (quitTrace.quitRequested) quitTrace.mark('APP_ACTIVATE_DURING_QUIT')
         reveal('activate', { focus: true })
         // Bar dock click still opens Settings. Hide/Island launch must stay parked
         // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
@@ -10285,89 +10307,25 @@ if (!app.requestSingleInstanceLock()) {
     })
 }
 
-app.on('window-all-closed', () => {
-  // Overlay app: stay alive in tray; quit only via tray/menu.
+installAppQuitLifecycle(app, {
+  speechPackDesktop: () => speechPackDesktop,
+  quitTrace,
+  isQuitFlushDone: () => quitFlushDone,
+  markQuitFlushDone: () => {
+    quitFlushDone = true
+  },
+  meetingFlushPending: () => !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed(),
+  window: () => win,
+  hotkeyChannel: IPC.hotkey,
+  speechDesktop: () => speechDesktop,
+  invalidateCloudSttOwner,
+  setBootPowerSaveBlock,
+  endBootWatch,
+  globalShortcut,
+  notifTimer: () => notifTimer,
+  backgroundTimers,
+  observability: () => observability,
+  uptime: () => process.uptime(),
+  wrapLifecycleListener: (name, listener) => commandControl.wrapLifecycleListener(name, listener),
+  warn: (message, error) => mainLog.warn(message, error)
 })
-
-// Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
-// tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
-// React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
-// up to 60s of a meeting or the entire thing for a sub-60s one. The in-app Settings "Quit" button is
-// already safe — App.tsx's quitApp() awaits flushLiveMeeting() before calling window.toto.quit(), which
-// marks quitFlushDone above and lets this handler no-op. For every other quit path, give the renderer one
-// bounded chance to save: recordingPowerSaveBlockerId is non-null for exactly the duration of an active
-// meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
-// main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
-// (App.tsx's reset()) — no new IPC channel needed.
-app.on('before-quit', (e) => {
-  speechPackDesktop?.beforeQuit(
-    e,
-    () => app.quit(),
-    !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed()
-  )
-})
-
-app.on('before-quit', (e) => {
-  if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
-  e.preventDefault()
-  quitFlushDone = true
-  try {
-    win.webContents.send(IPC.hotkey, 'reset')
-  } catch {
-    /* window may already be gone */
-  }
-  setTimeout(() => app.quit(), 2000)
-})
-
-let speechShutdownDone = false
-app.on('before-quit', (event) => {
-  if (event.defaultPrevented || speechShutdownDone || !speechDesktop) return
-  event.preventDefault()
-  speechShutdownDone = true
-  void speechDesktop.dispose().finally(() => app.quit())
-})
-
-app.on(
-  'will-quit',
-  commandControl.wrapLifecycleListener('app_quit', () => {
-    // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
-    invalidateCloudSttOwner()
-    // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
-    // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
-    // Own try, like every other step below: a failure here must never skip the sidecar kill.
-    try {
-      setBootPowerSaveBlock(false)
-      endBootWatch(app.getPath('userData'))
-    } catch (e) {
-      mainLog.warn('[will-quit] endBootWatch failed', e)
-    }
-    // will-quit may fire before readiness (startup abort or automation close); globalShortcut cannot be used then.
-    // Unregister only after readiness; cleanup steps handle errors independently, after owned sidecars stop.
-    // installExitPaths in lifecycle/exit-paths.ts registers the listener that stops owned sidecars first.
-    if (app.isReady()) {
-      try {
-        globalShortcut.unregisterAll()
-      } catch (e) {
-        mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
-      }
-    }
-    if (notifTimer) clearInterval(notifTimer)
-    // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
-    // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
-    for (const t of backgroundTimers) {
-      try {
-        clearInterval(t)
-      } catch {
-        /* already cleared */
-      }
-    }
-    backgroundTimers.length = 0
-    // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
-    // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
-    try {
-      observability?.shutdownClean(process.uptime())
-    } catch (e) {
-      mainLog.warn('[will-quit] observability.shutdownClean failed', e)
-    }
-  })
-)

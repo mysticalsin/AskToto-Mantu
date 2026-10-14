@@ -27,6 +27,7 @@ describe('selectSmokeDriver', () => {
   it('uses Agent Browser CLI on macOS and Playwright CDP on Windows', () => {
     expect(selectSmokeDriver('darwin')).toBe('agent-browser-cli')
     expect(selectSmokeDriver('win32')).toBe('playwright-cdp')
+    expect(selectSmokeDriver('darwin', 'playwright-cdp')).toBe('playwright-cdp')
   })
 
   it('does not silently select a driver for an unsupported host', () => {
@@ -66,6 +67,12 @@ describe('electronLaunchArgs', () => {
       '--remote-debugging-address=127.0.0.1',
       '--remote-debugging-port=9222',
       'C:\\worktree'
+    ])
+    expect(electronLaunchArgs(9222, '/worktree', true)).toEqual([
+      '--remote-debugging-address=127.0.0.1',
+      '--remote-debugging-port=9222',
+      '--metis-qa-quit-trace',
+      '/worktree'
     ])
   })
 })
