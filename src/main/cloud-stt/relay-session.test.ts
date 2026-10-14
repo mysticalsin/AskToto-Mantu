@@ -28,6 +28,8 @@ class MockRelaySocket extends EventEmitter {
   sent: unknown[] = []
   onFinish?: () => void
   holdBinarySend = false
+  failFinishSend = false
+  terminated = false
 
   constructor(url: string, options: unknown, onFinish?: () => void) {
     super()
@@ -47,6 +49,10 @@ class MockRelaySocket extends EventEmitter {
   send(data: unknown, _options: unknown, callback?: (error?: Error) => void): void {
     this.sent.push(data)
     if (data instanceof Uint8Array && this.holdBinarySend) return
+    if (data === '{"type":"finish"}' && this.failFinishSend) {
+      callback?.(new Error('synthetic finish send failure'))
+      return
+    }
     if (data === '{"type":"finish"}') this.onFinish?.()
     callback?.()
   }
@@ -58,10 +64,11 @@ class MockRelaySocket extends EventEmitter {
   }
 
   terminate(): void {
+    this.terminated = true
     this.close()
   }
 
-  emitTerminal(): void {
+  emitTerminal(lastSequence = 0): void {
     this.emit(
       'message',
       Buffer.from(
@@ -72,7 +79,7 @@ class MockRelaySocket extends EventEmitter {
           captureGeneration: 7,
           track: 'microphone',
           streamEpoch: 11,
-          lastSequence: 0,
+          lastSequence,
           closeConfirmed: true,
           tail: 'complete',
           reason: 'normal'
@@ -120,13 +127,18 @@ describe('RelaySpeechSession', () => {
 
   it('cancels an allocation that no longer belongs to the active capture owner', async () => {
     MockRelaySocket.instances = []
+    let allocatedSessionId: string | null = null
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
-      isCurrent: () => false
+      isCurrent: () => false,
+      onAllocated: (id) => {
+        allocatedSessionId = id
+      }
     })
     expect(started).toEqual({ ok: false, code: 'CANCELLED' })
+    expect(allocatedSessionId).toBe(sessionId)
     expect(MockRelaySocket.instances).toHaveLength(0)
   })
 
@@ -140,6 +152,13 @@ describe('RelaySpeechSession', () => {
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
+    expect(started.value.identity.limits).toMatchObject({
+      maxStreamMs: 60_000,
+      drainWindowMs: 5_000,
+      maxInputBytesPerTrack: 1_920_000,
+      maxClientFrameBytes: 3_200,
+      maxOutputBytesPerTrack: 1_048_576
+    })
     expect(
       started.value.pushFrame('microphone', { sequence: 1, sampleOffset: 0, pcm16le: new Uint8Array(3_200) })
     ).toEqual({
@@ -188,19 +207,90 @@ describe('RelaySpeechSession', () => {
     expect(stopped).toMatchObject({ complete: false, reason: 'incomplete' })
   })
 
-  it('rebases cumulative capture frontiers onto a fresh relay stream without replay', async () => {
+  it('serializes renewals from one predecessor and preserves the exact frontier', async () => {
     MockRelaySocket.instances = []
     const started = await RelaySpeechSession.create({
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
-      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
-      initialFrontiers: { microphone: { sequence: 9, sampleOffset: 12_800 } }
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const request = singleTrackCreateRequest()
+    const first = started.value.renew(request)
+    const second = started.value.renew(request)
+    expect(second).toBe(first)
+    expect(await first).toEqual({ ok: false, code: 'SCHEMA' })
+    expect(MockRelaySocket.instances).toHaveLength(1)
+  })
+
+  it('keeps close confirmation but reports an incomplete tail when a segment never becomes final', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const socket = MockRelaySocket.instances[0]
+    socket.onFinish = () =>
+      queueMicrotask(() => {
+        socket.emit(
+          'message',
+          Buffer.from(
+            JSON.stringify({
+              type: 'transcript',
+              protocolVersion: 1,
+              sessionId,
+              captureGeneration: 7,
+              track: 'microphone',
+              streamEpoch: 11,
+              sequence: 1,
+              segmentIndex: 1,
+              revision: 1,
+              text: 'interim',
+              startMs: 0,
+              endMs: 100,
+              final: false
+            })
+          ),
+          false
+        )
+        socket.emitTerminal(1)
+      })
+    const stopped = await started.value.finish(500)
+    expect(stopped.complete).toBe(false)
+    expect(stopped.tracks[0]).toMatchObject({ closeConfirmed: true, tail: 'incomplete', lastSequence: 1 })
+  })
+
+  it('terminates locally when the finish marker send fails and retains cancellation inventory', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    MockRelaySocket.instances[0].failFinishSend = true
+    const stopped = await started.value.finish(500)
+    expect(stopped).toMatchObject({ complete: false, tracks: [{ tail: 'incomplete' }] })
+    expect(MockRelaySocket.instances[0].terminated).toBe(true)
+  })
+
+  it('accepts a nonzero first capture origin and rejects replay after transport rebasing', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
     expect(
       started.value.pushFrame('microphone', {
-        sequence: 9,
+        sequence: 1,
         sampleOffset: 12_800,
         pcm16le: new Uint8Array(3_200)
       })
@@ -216,5 +306,26 @@ describe('RelaySpeechSession', () => {
     expect(stopped.complete).toBe(true)
     expect(MockRelaySocket.instances[0].sent[0]).toBeInstanceOf(Uint8Array)
     expect(MockRelaySocket.instances[0].sent[1]).toBe('{"type":"finish"}')
+  })
+
+  it('stops admission immediately when its owner predicate becomes stale', async () => {
+    MockRelaySocket.instances = []
+    let current = true
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      isCurrent: () => current
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    current = false
+    expect(
+      started.value.pushFrame('microphone', { sequence: 1, sampleOffset: 2_400, pcm16le: new Uint8Array(3_200) })
+    ).toEqual({ ok: false, code: 'CLOSED' })
+    await started.value.cancel()
+    const stopped = await started.value.finish()
+    expect(stopped).toMatchObject({ complete: false, tracks: [{ closeConfirmed: false, tail: 'incomplete' }] })
+    expect(MockRelaySocket.instances[0].sent).toHaveLength(0)
   })
 })

@@ -3,6 +3,7 @@ import { z } from 'zod'
 export const RELAY_RESULT_MAX_TEXT = 8_192
 export const RELAY_RESULT_MAX_WORDS = 256
 export const RELAY_RESULT_MAX_LANGUAGES = 8
+export const RELAY_RESULT_MAX_SEGMENTS = 4_096
 
 const TrackSchema = z.enum(['microphone', 'system'])
 const LanguageSchema = z
@@ -105,11 +106,16 @@ export class RelayResultSequence {
   constructor(
     private readonly expected: RelayIdentity,
     private readonly maxStreamMs: number,
-    private readonly maxOutputBytes = 1024 * 1024
+    private readonly maxOutputBytes = 1024 * 1024,
+    private readonly maxSegments = RELAY_RESULT_MAX_SEGMENTS
   ) {}
 
   get sequence(): number {
     return this.lastSequence
+  }
+
+  get hasUnfinalizedSegments(): boolean {
+    return [...this.segments.values()].some((segment) => !segment.final)
   }
 
   accept(value: unknown): RelayResultAcceptance {
@@ -136,6 +142,8 @@ export class RelayResultSequence {
           return { ok: false, code: 'REVISION' }
       } else if (event.revision !== 1 || event.segmentIndex !== this.segments.size + 1) {
         return { ok: false, code: 'REVISION' }
+      } else if (this.segments.size >= this.maxSegments) {
+        return { ok: false, code: 'OUTPUT_LIMIT' }
       }
       if (!this.accountEvent(event)) return { ok: false, code: 'OUTPUT_LIMIT' }
       this.segments.set(event.segmentIndex, {

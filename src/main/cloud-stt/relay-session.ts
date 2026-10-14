@@ -43,7 +43,8 @@ export type RelaySpeechSessionOptions = {
     policyVersion: string
     epochs: Partial<Record<SpeechTrack, number>>
   }
-  initialFrontiers?: Partial<Record<SpeechTrack, { sequence: number; sampleOffset: number }>>
+  onAllocated?: (sessionId: string) => void
+  initialFrontiers?: Partial<Record<SpeechTrack, { sequence: number; sampleOffset?: number }>>
   isCurrent?: () => boolean
   onTranscript?: (event: RelayTranscript, context: { timeBase: 'stream'; firstCaptureSampleOffset: number }) => void
 }
@@ -59,7 +60,7 @@ type TrackRuntime = {
   admittedBytes: number
   firstCaptureSampleOffset: number | null
   captureNextSequence: number
-  captureNextSampleOffset: number
+  captureNextSampleOffset: number | null
   streamNextSequence: number
   streamNextSampleOffset: number
   terminal: RelayTerminal | null
@@ -72,6 +73,9 @@ type TrackRuntime = {
 
 const MAX_CLOUD_FRAME_BYTES = 3_200
 const MAX_FINISH_WAIT_MS = 5_000
+const MAX_STREAM_MS = 60_000
+const MAX_INPUT_BYTES = 1_920_000
+const MAX_OUTPUT_BYTES = 1024 * 1024
 const FINISH_MESSAGE = '{"type":"finish"}'
 type DeadlineResult<T> = { done: true; value: T } | { done: false }
 
@@ -114,8 +118,11 @@ export class RelaySpeechSession {
   private readonly tracks = new Map<SpeechTrack, TrackRuntime>()
   private finishing = false
   private cancelled = false
+  private startupComplete = false
+  private startupFailed = false
   private finishPromise: Promise<RelaySessionFinish> | null = null
   private cancelPromise: Promise<void> | null = null
+  private renewPromise: Promise<RelaySessionStartResult> | null = null
 
   private constructor(
     private readonly client: SpeechBrokerClient,
@@ -135,29 +142,38 @@ export class RelaySpeechSession {
     private readonly tracksOrder: SpeechTrack[],
     private readonly initialFrontiers: RelaySpeechSessionOptions['initialFrontiers'],
     private readonly isCurrent: () => boolean,
+    private readonly onAllocated: RelaySpeechSessionOptions['onAllocated'],
     private readonly onTranscript?: RelaySpeechSessionOptions['onTranscript']
   ) {}
 
   static async create(options: RelaySpeechSessionOptions): Promise<RelaySessionStartResult> {
-    for (const track of options.createRequest.tracks) {
-      const frontier = options.initialFrontiers?.[track]
-      if (
-        frontier &&
-        (!Number.isSafeInteger(frontier.sequence) ||
-          frontier.sequence < 1 ||
-          !Number.isSafeInteger(frontier.sampleOffset) ||
-          frontier.sampleOffset < 0)
-      )
-        return { ok: false, code: 'SCHEMA' }
-    }
-    const created = await options.client.createSession(options.createRequest)
-    if (!created.ok) return created
     const isCurrent = (): boolean => {
       try {
         return options.isCurrent?.() ?? true
       } catch {
         return false
       }
+    }
+    if (!isCurrent()) return { ok: false, code: 'CANCELLED' }
+    for (const track of options.createRequest.tracks) {
+      const frontier = options.initialFrontiers?.[track]
+      if (
+        frontier &&
+        (!Number.isSafeInteger(frontier.sequence) ||
+          frontier.sequence < 1 ||
+          (frontier.sequence !== 1 && frontier.sampleOffset === undefined) ||
+          (frontier.sampleOffset !== undefined &&
+            (!Number.isSafeInteger(frontier.sampleOffset) || frontier.sampleOffset < 0)))
+      )
+        return { ok: false, code: 'SCHEMA' }
+    }
+    const created = await options.client.createSession(options.createRequest)
+    if (!created.ok) return created
+    try {
+      options.onAllocated?.(created.value.sessionId)
+    } catch {
+      await options.client.cancel(created.value.sessionId, 1_000)
+      return { ok: false, code: 'TRACK_OPEN' }
     }
     if (!isCurrent()) {
       await options.client.cancel(created.value.sessionId, 1_000)
@@ -177,16 +193,28 @@ export class RelaySpeechSession {
       await options.client.cancel(created.value.sessionId, 1_000)
       return { ok: false, code: 'SCHEMA' }
     }
+    const now = Date.now()
+    if (
+      now >= created.value.grantExpiresAt ||
+      now >= created.value.leaseExpiresAt ||
+      now >= created.value.limits.audioDeadlineAt ||
+      created.value.limits.maxStreamMs < 100 ||
+      created.value.limits.maxInputBytesPerTrack < MAX_CLOUD_FRAME_BYTES ||
+      created.value.limits.maxClientFrameBytes < MAX_CLOUD_FRAME_BYTES
+    ) {
+      await options.client.cancel(created.value.sessionId, 1_000)
+      return { ok: false, code: 'SCHEMA' }
+    }
     const session = new RelaySpeechSession(
       options.client,
       created.value.sessionId,
       created.value.captureGeneration,
-      created.value.limits.maxStreamMs,
+      Math.min(created.value.limits.maxStreamMs, MAX_STREAM_MS),
       created.value.limits.audioDeadlineAt,
-      created.value.limits.maxInputBytesPerTrack,
-      created.value.limits.maxClientFrameBytes,
-      created.value.limits.maxOutputBytesPerTrack,
-      created.value.limits.drainWindowMs,
+      Math.min(created.value.limits.maxInputBytesPerTrack, MAX_INPUT_BYTES),
+      Math.min(created.value.limits.maxClientFrameBytes, MAX_CLOUD_FRAME_BYTES),
+      Math.min(created.value.limits.maxOutputBytesPerTrack, MAX_OUTPUT_BYTES),
+      Math.min(created.value.limits.drainWindowMs, MAX_FINISH_WAIT_MS),
       created.value.routeId,
       created.value.model,
       created.value.language,
@@ -195,32 +223,46 @@ export class RelaySpeechSession {
       [...options.createRequest.tracks],
       options.initialFrontiers,
       isCurrent,
+      options.onAllocated,
       options.onTranscript
     )
     for (const grant of created.value.grants) {
-      if (!isCurrent()) {
+      if (!isCurrent() || session.startupFailed) {
         await session.cancel()
-        return { ok: false, code: 'CANCELLED' }
+        return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
       }
-      const opened = await options.client.openTrack(created.value, grant.track)
+      let runtime: TrackRuntime | null = null
+      const opened = await options.client.openTrack(created.value, grant.track, (socket) => {
+        if (!isCurrent()) throw new Error('stale owner')
+        runtime = session.makeTrackRuntime(grant.track, grant.streamEpoch, socket)
+        session.tracks.set(grant.track, runtime)
+        session.attachTrack(runtime)
+      })
+      const activeRuntime = runtime as TrackRuntime | null
       if (!opened.ok) {
         await session.cancel()
         return { ok: false, code: 'TRACK_OPEN' }
       }
-      if (opened.value.readyState !== WebSocket.OPEN) {
-        opened.value.terminate()
+      if (
+        !activeRuntime ||
+        opened.value.readyState !== WebSocket.OPEN ||
+        activeRuntime.stopped ||
+        session.startupFailed
+      ) {
         await session.cancel()
-        return { ok: false, code: 'TRACK_OPEN' }
+        return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
       }
-      if (!isCurrent()) {
-        opened.value.terminate()
-        await session.cancel()
-        return { ok: false, code: 'CANCELLED' }
-      }
-      const runtime = session.makeTrackRuntime(grant.track, grant.streamEpoch, opened.value)
-      session.tracks.set(grant.track, runtime)
-      session.attachTrack(runtime)
     }
+    if (
+      !isCurrent() ||
+      session.startupFailed ||
+      session.tracks.size !== options.createRequest.tracks.length ||
+      [...session.tracks.values()].some((runtime) => runtime.stopped || runtime.socket.readyState !== WebSocket.OPEN)
+    ) {
+      await session.cancel()
+      return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
+    }
+    session.startupComplete = true
     return { ok: true, value: session }
   }
 
@@ -263,20 +305,26 @@ export class RelaySpeechSession {
   }
 
   /** Allocate a fresh relay epoch only after the current one is fully closed; accepted PCM is never replayed. */
-  async renew(createRequest: SpeechCreateRequest): Promise<RelaySessionStartResult> {
-    const previous = await this.finish()
-    if (!previous.complete || this.cancelled) return { ok: false, code: 'CANCELLED' }
+  renew(createRequest: SpeechCreateRequest): Promise<RelaySessionStartResult> {
+    if (this.renewPromise) return this.renewPromise
     if (
       createRequest.captureGeneration !== this.captureGeneration ||
       createRequest.tracks.length !== this.tracksOrder.length ||
       createRequest.tracks.some((track, index) => track !== this.tracksOrder[index])
     )
-      return { ok: false, code: 'SCHEMA' }
-    const initialFrontiers: Partial<Record<SpeechTrack, { sequence: number; sampleOffset: number }>> = {}
+      return Promise.resolve({ ok: false, code: 'SCHEMA' })
+    this.renewPromise = this.renewOnce(createRequest)
+    return this.renewPromise
+  }
+
+  private async renewOnce(createRequest: SpeechCreateRequest): Promise<RelaySessionStartResult> {
+    const previous = await this.finish()
+    if (!previous.complete || this.cancelled) return { ok: false, code: 'CANCELLED' }
+    const initialFrontiers: Partial<Record<SpeechTrack, { sequence: number; sampleOffset?: number }>> = {}
     for (const [track, runtime] of this.tracks) {
       initialFrontiers[track] = {
         sequence: runtime.captureNextSequence,
-        sampleOffset: runtime.captureNextSampleOffset
+        ...(runtime.captureNextSampleOffset === null ? {} : { sampleOffset: runtime.captureNextSampleOffset })
       }
     }
     const next = await RelaySpeechSession.create({
@@ -290,6 +338,7 @@ export class RelaySpeechSession {
       },
       initialFrontiers,
       isCurrent: this.isCurrent,
+      onAllocated: this.onAllocated,
       onTranscript: this.onTranscript
     })
     if (!next.ok) return next
@@ -320,12 +369,17 @@ export class RelaySpeechSession {
   ): { ok: true } | { ok: false; code: RelayQueueFailureCode | 'LEASE_DRAINING' } {
     const runtime = this.tracks.get(track)
     if (!runtime || this.finishing || this.cancelled || runtime.stopped) return { ok: false, code: 'CLOSED' }
+    if (!this.isCurrent()) {
+      void this.cancel()
+      return { ok: false, code: 'CLOSED' }
+    }
     if (Date.now() >= this.audioDeadlineAt) return { ok: false, code: 'LEASE_DRAINING' }
     if (
       !Number.isSafeInteger(frame.sequence) ||
       !Number.isSafeInteger(frame.sampleOffset) ||
+      frame.sampleOffset < 0 ||
       frame.sequence !== runtime.captureNextSequence ||
-      frame.sampleOffset !== runtime.captureNextSampleOffset
+      (runtime.captureNextSampleOffset !== null && frame.sampleOffset !== runtime.captureNextSampleOffset)
     )
       return { ok: false, code: 'ORDER' }
     if (
@@ -356,7 +410,7 @@ export class RelaySpeechSession {
     runtime.admittedBytes += frame.pcm16le.byteLength
     if (runtime.firstCaptureSampleOffset === null) runtime.firstCaptureSampleOffset = frame.sampleOffset
     runtime.captureNextSequence += 1
-    runtime.captureNextSampleOffset += frame.pcm16le.byteLength / 2
+    runtime.captureNextSampleOffset = frame.sampleOffset + frame.pcm16le.byteLength / 2
     runtime.streamNextSequence += 1
     runtime.streamNextSampleOffset += frame.pcm16le.byteLength / 2
     void this.drain(runtime)
@@ -366,6 +420,14 @@ export class RelaySpeechSession {
   finish(timeoutMs = MAX_FINISH_WAIT_MS): Promise<RelaySessionFinish> {
     if (this.finishPromise) return this.finishPromise
     this.finishing = true
+    if (!this.isCurrent()) {
+      this.finishPromise = this.cancel().then(() => ({
+        complete: false,
+        tracks: [...this.tracks.values()].map((runtime) => this.currentClosure(runtime)),
+        reason: 'cancelled'
+      }))
+      return this.finishPromise
+    }
     const boundedTimeout = Math.max(1, Math.min(timeoutMs, this.drainWindowMs, MAX_FINISH_WAIT_MS))
     this.finishPromise = this.finishAll(Date.now() + boundedTimeout)
     return this.finishPromise
@@ -416,7 +478,7 @@ export class RelaySpeechSession {
       admittedBytes: 0,
       firstCaptureSampleOffset: null,
       captureNextSequence: this.initialFrontiers?.[track]?.sequence ?? 1,
-      captureNextSampleOffset: this.initialFrontiers?.[track]?.sampleOffset ?? 0,
+      captureNextSampleOffset: this.initialFrontiers?.[track]?.sampleOffset ?? null,
       streamNextSequence: 1,
       streamNextSampleOffset: 0,
       terminal: null,
@@ -426,6 +488,18 @@ export class RelaySpeechSession {
       failureReason: null,
       stopped: false
     }
+  }
+
+  private currentClosure(runtime: TrackRuntime): RelayTrackClosure {
+    if (runtime.terminal) {
+      const closure = closureFromTerminal(runtime.track, runtime.streamEpoch, runtime.terminal)
+      if (closure.tail === 'complete' && runtime.results.hasUnfinalizedSegments) {
+        closure.tail = 'incomplete'
+        closure.reason = 'unknown'
+      }
+      return closure
+    }
+    return incompleteClosure(runtime.track, runtime.streamEpoch, runtime.results.sequence)
   }
 
   private attachTrack(runtime: TrackRuntime): void {
@@ -449,6 +523,10 @@ export class RelaySpeechSession {
         return
       }
       if (accepted.event.type === 'transcript') {
+        if (!this.isCurrent()) {
+          void this.cancel()
+          return
+        }
         try {
           this.onTranscript?.(accepted.event, {
             timeBase: 'stream',
@@ -458,30 +536,44 @@ export class RelaySpeechSession {
           /* transcript consumer failure does not change relay ownership or leak provider data */
         }
       } else if (accepted.event.type === 'terminal') {
+        if (!this.startupComplete) {
+          this.startupFailed = true
+          this.failTrack(runtime, 'unknown')
+          return
+        }
         runtime.terminal = accepted.event
         runtime.stopped = true
-        runtime.resolveClosure(closureFromTerminal(runtime.track, runtime.streamEpoch, accepted.event))
+        const terminalClosure = closureFromTerminal(runtime.track, runtime.streamEpoch, accepted.event)
+        if (accepted.event.tail === 'complete' && runtime.results.hasUnfinalizedSegments) {
+          terminalClosure.tail = 'incomplete'
+          terminalClosure.reason = 'unknown'
+        }
+        runtime.resolveClosure(terminalClosure)
         try {
           runtime.socket.close()
         } catch {
           /* closure is already confirmed by the relay event */
         }
       } else {
-        runtime.failureReason = 'upstream-error'
+        this.failTrack(runtime, 'upstream-error')
       }
     })
     runtime.socket.once('close', () => {
-      if (runtime.terminal) return
+      if (runtime.terminal || runtime.stopped) return
+      if (!this.startupComplete) this.startupFailed = true
       runtime.stopped = true
       runtime.resolveClosure(incompleteClosure(runtime.track, runtime.streamEpoch, runtime.results.sequence))
+      void this.cancel()
     })
     runtime.socket.once('error', () => {
       if (runtime.terminal) return
       runtime.failureReason = 'unknown'
+      this.failTrack(runtime, 'unknown')
     })
   }
 
   private failTrack(runtime: TrackRuntime, reason: RelayTerminal['reason']): void {
+    if (!this.startupComplete) this.startupFailed = true
     runtime.failureReason = reason
     runtime.stopped = true
     runtime.queue.close()
@@ -496,6 +588,10 @@ export class RelaySpeechSession {
 
   private drain(runtime: TrackRuntime): Promise<void> {
     const result = runtime.queue.drain((pcm, _sequence) => {
+      if (!this.isCurrent()) {
+        runtime.failureReason = 'revoked'
+        throw new Error('capture owner is stale')
+      }
       if (Date.now() >= this.audioDeadlineAt) {
         runtime.failureReason = 'lease-expired'
         throw new Error('audio deadline reached')
@@ -530,6 +626,10 @@ export class RelaySpeechSession {
   private async finishOneTrack(runtime: TrackRuntime, deadlineAt: number): Promise<RelayTrackClosure> {
     runtime.queue.seal()
     const draining = runtime.queue.drain((pcm) => {
+      if (!this.isCurrent()) {
+        runtime.failureReason = 'revoked'
+        throw new Error('capture owner is stale')
+      }
       if (Date.now() >= this.audioDeadlineAt) {
         runtime.failureReason = 'lease-expired'
         throw new Error('audio deadline reached')
@@ -553,6 +653,7 @@ export class RelaySpeechSession {
       runtime.resolveClosure(incomplete)
       return incomplete
     }
+    if (!this.isCurrent()) return this.stopAtDeadline(runtime)
     const sendingFinish = new Promise<boolean>((resolve) => {
       try {
         runtime.socket.send(FINISH_MESSAGE, { binary: false }, (error?: Error) => resolve(!error))
@@ -565,10 +666,7 @@ export class RelaySpeechSession {
     const finishSent = finishResult.value
     if (!finishSent) {
       runtime.failureReason = 'unknown'
-      const incomplete = incompleteClosure(runtime.track, runtime.streamEpoch, runtime.results.sequence)
-      runtime.resolveClosure(incomplete)
-      void this.client.cancel(this.sessionId, 1_000)
-      return incomplete
+      return this.stopAtDeadline(runtime)
     }
     const closureResult = await this.untilDeadline(runtime.closure, deadlineAt)
     const observed = closureResult.done ? closureResult.value : await this.stopAtDeadline(runtime)
@@ -584,13 +682,14 @@ export class RelaySpeechSession {
         (item) => item.track === runtime.track && item.streamEpoch === runtime.streamEpoch
       )
       if (row?.closeConfirmed && row.lastSequence === runtime.results.sequence) {
+        const tail = runtime.results.hasUnfinalizedSegments ? 'incomplete' : (row.tail ?? 'incomplete')
         return {
           track: runtime.track,
           streamEpoch: runtime.streamEpoch,
           closeConfirmed: true,
-          tail: row.tail ?? 'incomplete',
+          tail,
           lastSequence: row.lastSequence,
-          reason: row.tail === 'complete' ? 'normal' : (runtime.failureReason ?? 'unknown')
+          reason: tail === 'complete' ? 'normal' : (runtime.failureReason ?? 'unknown')
         }
       }
     }
@@ -633,7 +732,12 @@ export class RelaySpeechSession {
   }
 
   private async finishAll(deadlineAt: number): Promise<RelaySessionFinish> {
-    if (this.cancelled) return { complete: false, tracks: [], reason: 'cancelled' }
+    if (this.cancelled)
+      return {
+        complete: false,
+        tracks: [...this.tracks.values()].map((runtime) => this.currentClosure(runtime)),
+        reason: 'cancelled'
+      }
     const tracks = await Promise.all([...this.tracks.values()].map((runtime) => this.finishTrack(runtime, deadlineAt)))
     const complete = tracks.length > 0 && tracks.every((track) => track.closeConfirmed && track.tail === 'complete')
     return { complete, tracks, reason: complete ? 'normal' : this.cancelled ? 'cancelled' : 'incomplete' }

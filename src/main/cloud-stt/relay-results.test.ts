@@ -71,4 +71,14 @@ describe('RelayResultSequence', () => {
     const results = new RelayResultSequence(expected, 60_000, 100)
     expect(results.accept(partial)).toMatchObject({ ok: false, code: 'OUTPUT_LIMIT' })
   })
+
+  it('caps the number of tracked segments independently of byte accounting', () => {
+    const partial = fixture.events.partial as Record<string, unknown>
+    const results = new RelayResultSequence(expected, 60_000, 1024 * 1024, 1)
+    expect(results.accept(partial)).toMatchObject({ ok: true })
+    expect(results.accept({ ...partial, sequence: 2, segmentIndex: 2 })).toMatchObject({
+      ok: false,
+      code: 'OUTPUT_LIMIT'
+    })
+  })
 })

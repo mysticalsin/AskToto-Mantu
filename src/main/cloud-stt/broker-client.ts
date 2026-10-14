@@ -311,7 +311,11 @@ export class SpeechBrokerClient {
     return { ok: true, value: parsed.data }
   }
 
-  async openTrack(session: CreatedSpeechSession, track: SpeechTrack): Promise<BrokerResult<WebSocket>> {
+  async openTrack(
+    session: CreatedSpeechSession,
+    track: SpeechTrack,
+    onSocketOpen?: (socket: WebSocket) => void
+  ): Promise<BrokerResult<WebSocket>> {
     const grant = session.grants.find((item) => item.track === track)
     if (!grant || !this.isActiveConfigured()) return { ok: false, code: 'CONFIG' }
     const grantDigest = createHash('sha256').update(grant.token, 'utf8').digest('hex')
@@ -362,6 +366,17 @@ export class SpeechBrokerClient {
       const onOpen = (): void => {
         opened = true
         socket.removeListener('open', onOpen)
+        try {
+          onSocketOpen?.(socket)
+        } catch {
+          try {
+            socket.terminate()
+          } catch {
+            /* failed handoff cannot retain an open grant */
+          }
+          resolve({ ok: false, code: 'WS_CONNECT' })
+          return
+        }
         resolve({ ok: true, value: socket })
       }
       socket.on('error', safeErrorSink)

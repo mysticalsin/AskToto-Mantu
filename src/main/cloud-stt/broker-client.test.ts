@@ -125,8 +125,13 @@ describe('speech broker client', () => {
     if (!created.ok) return
     expect(created.value.sessionId).toBe(sessionId)
 
-    const opened = await client.openTrack(created.value, 'microphone')
+    let listenersInstalledBeforeOpenResolved = false
+    const opened = await client.openTrack(created.value, 'microphone', (socket) => {
+      listenersInstalledBeforeOpenResolved = socket.listenerCount('error') > 0
+      socket.on('message', () => undefined)
+    })
     expect(opened.ok).toBe(true)
+    expect(listenersInstalledBeforeOpenResolved).toBe(true)
     const socket = MockWebSocket.instances.at(-1)!
     const url = new URL(socket.url)
     const options = socket.options as { headers: Record<string, string>; followRedirects: boolean; maxPayload: number }
