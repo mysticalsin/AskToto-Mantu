@@ -317,6 +317,7 @@ let legacyListeningActive = false
 function setLegacyListeningActive(on: boolean): void {
   if (legacyListeningActive === on) return
   legacyListeningActive = on
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 let liveSpeakerStartedAtHighWater = 0
@@ -786,12 +787,17 @@ import {
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
+import { startSpeechPackDesktop } from './speech-pack-bootstrap'
+import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
+import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
   asrAssetsStatusSnapshot,
   importAsrAssetsReady,
-  userDataAsrRoot
+  userDataAsrRoot,
+  userDataSpeechPackRoot,
+  asrModelProtocolSpeechPackOptions
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
@@ -1159,6 +1165,7 @@ let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
   if (cloudSttIpcOwner === owner) return
   cloudSttIpcOwner = owner
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
@@ -1184,16 +1191,19 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
+let speechPackDesktop: ReturnType<typeof startSpeechPackDesktop> | null = null
 
 function setListeningActive(on: boolean): void {
   if (listeningActive === on) return
   listeningActive = on
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
 function setAudioArmed(on: boolean): void {
   if (audioArmed === on) return
   audioArmed = on
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
@@ -5246,6 +5256,7 @@ let lastAppliedManagedSnapshot: string | null = null
 let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
 
 function notifySettingsChanged(): void {
+  speechPackDesktop?.refresh()
   if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
 }
 
@@ -7213,21 +7224,14 @@ function registerIpc(): void {
   // --- Parakeet ASR engine ---
   // Parakeet (on-device, isolated utility process). Whisper stays the renderer default; these only run when the user
   // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
-  ipcMain.handle(IPC.parakeetStatus, async (e) => {
-    assertMainWindow(e)
-    // addonError surfaces WHY the engine isn't ready (native addon missing for this platform/build) as
-    // distinct from "bundled model assets missing" — Settings reads this to show an actionable message.
-    return { ready: parakeetModelReady(), addonError: await parakeetAddonError() }
-  })
-  ipcMain.handle(IPC.parakeetEnsure, async (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false }
-    try {
-      await ensureParakeetModel((pct) => win?.webContents.send(IPC.parakeetProgress, { pct }))
-      return { ok: parakeetModelReady() }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
+  registerParakeetAssetsIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    modelReady: parakeetModelReady,
+    addonError: parakeetAddonError,
+    ensureModel: ensureParakeetModel,
+    publishProgress: (progress) => win?.webContents.send(IPC.parakeetProgress, progress)
   })
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -10021,60 +10025,48 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
+      const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
+      runStep('speechPackIpc', () => {
+        speechPackDesktop = startSpeechPackDesktop({
+          resourcesRoot: resourcesRoot,
+          packaged: app.isPackaged,
+          rootDir: userDataSpeechPackRoot(),
+          fixtureWavPath: join(resourcesRoot, 'speech-pack-fixtures', 'en.wav'),
+          selectedEngine: () => getSettings().asrEngine,
+          policyAllowsTransfer: () =>
+            resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
+          captureActive: captureActiveForWindowRestart,
+          ipcMain,
+          assertMainWindow,
+          sendProgress: (progress) => {
+            if (win && !win.isDestroyed()) win.webContents.send(IPC.speechPackProgress, progress)
+          }
+        })
+      })
       runStep('asrAssetsIpc', () => {
-        const REPO_ROOT = join(__dirname, '..', '..')
-        const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
-        let asrBundledCache: boolean | null = null
-        let readAsrBundledStatus = (): boolean => false
-        const asrBundledReady = (): boolean => {
-          if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
-          return asrBundledCache
-        }
-        bootWork.run('primeAsrBundledStatus', () => {
-          asrBundledReady()
+        const asrAssetsIpc = registerAsrAssetsIpc({
+          ipcMain,
+          isRecentlyRetiredOverlaySender,
+          assertMainWindow,
+          readBundledStatus: async () => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(resourcesRoot)),
+          getStatus: asrAssetsStatusSnapshot,
+          ensureAllowed: () =>
+            resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
+          ensureAssets: ensureImportAsrAssets,
+          getProgress: asrAssetsProgress,
+          publishProgress: publishAsrAssetsProgress,
+          warn: (message, detail) => mainLog.warn(message, detail)
         })
-        readAsrBundledStatus = (): boolean => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE))
-        const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
-          try {
-            ipcMain.removeHandler(channel)
-          } catch {
-            /* first registration */
-          }
-          ipcMain.handle(channel, listener as never)
-        }
-        safeHandle(IPC.asrBundled, (e) => {
-          if (isRecentlyRetiredOverlaySender(e)) return true
-          assertMainWindow(e)
-          return asrBundledReady()
-        })
-        safeHandle(IPC.asrAssetsStatus, (e) => {
-          assertMainWindow(e)
-          return asrAssetsStatusSnapshot()
-        })
-        safeHandle(IPC.asrAssetsEnsure, async (e) => {
-          assertMainWindow(e)
-          if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked')
-            return asrAssetsStatusSnapshot()
-          try {
-            await ensureImportAsrAssets((pct) => {
-              publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-            })
-          } catch (err) {
-            mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
-            publishAsrAssetsProgress()
-          }
-          return asrAssetsStatusSnapshot()
-        })
+        bootWork.run('primeAsrBundledStatus', () => asrAssetsIpc.primeBundledStatus())
       })
 
       runStep('asrModelProtocol', () => {
-        const REPO_ROOT = join(__dirname, '..', '..')
-        const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
         protocol.handle(
           'asr-model',
           createAsrModelProtocolHandler({
-            resourcesRoot: RES_BASE,
+            resourcesRoot: resourcesRoot,
             userModelsRoot: app.isPackaged ? undefined : userDataAsrRoot(),
+            resolveSpeechPackModels: asrModelProtocolSpeechPackOptions,
             readLocal: (url) => net.fetch(url)
           })
         )
@@ -10344,6 +10336,14 @@ app.on('window-all-closed', () => {
 // meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
 // main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
 // (App.tsx's reset()) — no new IPC channel needed.
+app.on('before-quit', (e) => {
+  speechPackDesktop?.beforeQuit(
+    e,
+    () => app.quit(),
+    !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed()
+  )
+})
+
 app.on('before-quit', (e) => {
   if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
   e.preventDefault()

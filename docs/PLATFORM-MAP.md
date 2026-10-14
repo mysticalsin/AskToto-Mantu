@@ -79,6 +79,14 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 - Windows-only bug → `electron-builder.win.yml`, `src/main/win-security.ts`, win branches in `src/main/**`.
 - macOS(Electron)-only bug → `electron-builder.yml` mac section, `native/mac-helper/**`, darwin branches.
 - Cross-platform Electron bug → `src/main/**`, `src/renderer/**`, `src/shared/**`.
+- Optional speech models → `src/main/features/components/index.ts` (public service API),
+  `src/main/features/components/speech-pack/**` (pinned transfer, activation and readiness),
+  `src/main/infra/process/speech-pack-host.ts` (owned utility process), and
+  `src/main/speech-pack-bootstrap.ts` (desktop lifecycle). The package-owned
+  `build/speech-pack-profile.json` keeps the shipping full profile until a lean package is qualified.
+- ASR asset IPC → `src/main/ipc/asr-assets-ipc.ts`, `src/main/ipc/parakeet-assets-ipc.ts`, and
+  `src/main/ipc/speech-pack-ipc.ts`; ASR status wire types live in `src/shared/asr-assets.ts` and are
+  re-exported by `src/shared/ipc.ts`. Metadata-only probes use `src/main/asr-metadata-readiness.ts`.
 - Settings panel bug → section code in `src/renderer/src/features/settings/**`, shared primitives in
   `src/renderer/src/ui/**`, and the compatibility export at `src/renderer/src/components/Settings.tsx`.
 - Native macOS app → `native-app/App/**` (UI) or `native-app/MetisKit/**` (logic).

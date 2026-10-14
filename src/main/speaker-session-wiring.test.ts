@@ -14,11 +14,7 @@ vi.mock('./logger', () => ({
 import { LiveMeetingStartedAtSchema } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { createListeningStateHandler } from './listening-state-ipc'
-import {
-  createSpeakerId,
-  type SpeakerEnrollmentSnapshot,
-  type SpeakerId
-} from './speaker-id'
+import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
@@ -43,9 +39,7 @@ function runSource(sourceText: string, globals: Record<string, unknown>): any {
 }
 
 function actualFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
-  const declaration = indexSource.statements.find(
-    node => ts.isFunctionDeclaration(node) && node.name?.text === name
-  )
+  const declaration = indexSource.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)
   expect(declaration, `Actual source function ${name} was not found`).toBeDefined()
   if (!declaration) return () => undefined
   return runSource(`${declaration.getText(indexSource)}\nglobalThis.result = ${name};`, globals)
@@ -60,7 +54,8 @@ function actualIpcHandler(channel: string, globals: Record<string, unknown>): (.
       node.expression.expression.getText(indexSource) === 'ipcMain' &&
       node.expression.name.text === 'handle' &&
       node.arguments[0]?.getText(indexSource) === `IPC.${channel}`
-    ) callback = node.arguments[1]
+    )
+      callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
   visit(indexSource)
@@ -78,7 +73,8 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
       node.expression.expression.getText(indexSource) === 'win.webContents' &&
       node.expression.name.text === 'on' &&
       node.arguments[0]?.getText(indexSource) === "'render-process-gone'"
-    ) callback = node.arguments[1]
+    )
+      callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
   visit(indexSource)
@@ -112,6 +108,7 @@ function sessionApi(options: {
   id: SpeakerId
   enabled?: () => boolean
   now?: () => number
+  onPackRefresh?: () => void
   backfill?: (file: string, snapshot?: SpeakerEnrollmentSnapshot) => Promise<unknown>
 }): SessionApi {
   const start = indexText.indexOf('// --- Speaker session ownership (Task 7-P2b) ---')
@@ -120,7 +117,8 @@ function sessionApi(options: {
   expect(end, 'Speaker session ownership region end was not found').toBeGreaterThan(start)
   if (start < 0 || end <= start) throw new Error('Speaker session ownership implementation is absent')
   const region = indexText.slice(start, end)
-  return runSource(`${region}\nglobalThis.result = {
+  return runSource(
+    `${region}\nglobalThis.result = {
     acceptLiveSpeakerTransition,
     captureLiveSpeakerKey,
     recordLiveSpeakerSave,
@@ -132,15 +130,22 @@ function sessionApi(options: {
     captureImportSpeakerKey,
     finalizeImportSpeakers,
     disposeImportSpeakers
-  };`, {
-    createSpeakerId: () => options.id,
-    getSettings: () => ({ speakerId: { enabled: options.enabled?.() ?? true } }),
-    LiveMeetingStartedAtSchema,
-    Date: class extends Date { static now(): number { return options.now?.() ?? Date.now() } },
-    backfillSpeakerNames: options.backfill ?? (async () => ({ ok: true, named: 0 })),
-    mainLog: { warn: vi.fn(), error: vi.fn() },
-    rebuildTrayMenu: vi.fn()
-  })
+  };`,
+    {
+      createSpeakerId: () => options.id,
+      getSettings: () => ({ speakerId: { enabled: options.enabled?.() ?? true } }),
+      LiveMeetingStartedAtSchema,
+      Date: class extends Date {
+        static now(): number {
+          return options.now?.() ?? Date.now()
+        }
+      },
+      backfillSpeakerNames: options.backfill ?? (async () => ({ ok: true, named: 0 })),
+      mainLog: { warn: vi.fn(), error: vi.fn() },
+      rebuildTrayMenu: vi.fn(),
+      speechPackDesktop: { refresh: options.onPackRefresh ?? vi.fn() }
+    }
+  )
 }
 
 function embeddingFor(axis: number): Float32Array {
@@ -155,11 +160,13 @@ function windowFor(axis: number): Float32Array {
 }
 
 let dir: string
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'speaker-session-wiring-')) })
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'speaker-session-wiring-'))
+})
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 function realSpeakerId(
-  compute: (samples: Float32Array) => Promise<Float32Array | null> = async samples =>
+  compute: (samples: Float32Array) => Promise<Float32Array | null> = async (samples) =>
     samples.length ? embeddingFor(Math.round(samples[0])) : null
 ): SpeakerId {
   return createSpeakerId({
@@ -286,14 +293,17 @@ describe('authoritative live speaker identity', () => {
   })
 
   it('keeps legacy capture compatible without letting legacy state control a keyed meeting', () => {
-    const api = sessionApi({ id: realSpeakerId() })
+    const refresh = vi.fn()
+    const api = sessionApi({ id: realSpeakerId(), onPackRefresh: refresh })
     expect(api.acceptLiveSpeakerTransition({ on: true })).toBe(true)
     expect(api.captureLiveSpeakerKey(undefined)).toBeNull()
     expect(api.acceptLiveSpeakerTransition({ on: false })).toBe(true)
+    expect(refresh).toHaveBeenCalledTimes(2)
     expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 300 })).toBe(true)
     expect(api.acceptLiveSpeakerTransition({ on: false })).toBe(false)
     expect(api.acceptLiveSpeakerTransition({ on: true })).toBe(false)
     expect(api.captureLiveSpeakerKey(300)).toBe('live:300')
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 
   it('retains capture ownership but revokes every speaker continuation when privacy turns off', async () => {
@@ -314,45 +324,54 @@ describe('authoritative live speaker identity', () => {
 })
 
 describe('live feed identity routing', () => {
-  it.each(['parakeetFeed', 'appleSpeechFeed'] as const)(
-    '%s captures A before ASR await so delayed A work cannot seed B',
-    async channel => {
-      const id = realSpeakerId()
-      const api = sessionApi({ id })
-      api.acceptLiveSpeakerTransition({ on: true, startedAt: 100 })
-      let resolveA!: (text: string) => void
-      const transcribe = vi.fn((samples: Float32Array) => samples[0] === 0
-        ? new Promise<string>(resolve => { resolveA = resolve })
-        : Promise.resolve('meeting B'))
-      const handler = feedHandler(channel, api, transcribe)
+  it.each([
+    'parakeetFeed',
+    'appleSpeechFeed'
+  ] as const)('%s captures A before ASR await so delayed A work cannot seed B', async (channel) => {
+    const id = realSpeakerId()
+    const api = sessionApi({ id })
+    api.acceptLiveSpeakerTransition({ on: true, startedAt: 100 })
+    let resolveA!: (text: string) => void
+    const transcribe = vi.fn((samples: Float32Array) =>
+      samples[0] === 0
+        ? new Promise<string>((resolve) => {
+            resolveA = resolve
+          })
+        : Promise.resolve('meeting B')
+    )
+    const handler = feedHandler(channel, api, transcribe)
 
-      const pendingA = handler({}, { samples: windowFor(0), speaker: 'them', startedAt: 100 })
-      await Promise.resolve()
-      api.acceptLiveSpeakerTransition({ on: true, startedAt: 200 })
-      resolveA('meeting A')
+    const pendingA = handler({}, { samples: windowFor(0), speaker: 'them', startedAt: 100 })
+    await Promise.resolve()
+    api.acceptLiveSpeakerTransition({ on: true, startedAt: 200 })
+    resolveA('meeting A')
 
-      await expect(pendingA).resolves.toMatchObject({ text: 'meeting A' })
-      await expect(handler({}, { samples: windowFor(1), speaker: 'them', startedAt: 200 }))
-        .resolves.toEqual({ text: 'meeting B', name: 'Speaker 1' })
+    await expect(pendingA).resolves.toMatchObject({ text: 'meeting A' })
+    await expect(handler({}, { samples: windowFor(1), speaker: 'them', startedAt: 200 })).resolves.toEqual({
+      text: 'meeting B',
+      name: 'Speaker 1'
+    })
+  })
+
+  it.each([
+    'parakeetFeed',
+    'appleSpeechFeed'
+  ] as const)('%s preserves ASR text and performs no speaker work for stale, missing, or malformed identity', async (channel) => {
+    const id = realSpeakerId()
+    const api = sessionApi({ id })
+    api.acceptLiveSpeakerTransition({ on: true, startedAt: 200 })
+    const handler = feedHandler(channel, api)
+
+    for (const startedAt of [100, undefined, 0, '200']) {
+      await expect(handler({}, { samples: windowFor(0), speaker: 'them', startedAt })).resolves.toEqual({
+        text: 'transcribed'
+      })
     }
-  )
-
-  it.each(['parakeetFeed', 'appleSpeechFeed'] as const)(
-    '%s preserves ASR text and performs no speaker work for stale, missing, or malformed identity',
-    async channel => {
-      const id = realSpeakerId()
-      const api = sessionApi({ id })
-      api.acceptLiveSpeakerTransition({ on: true, startedAt: 200 })
-      const handler = feedHandler(channel, api)
-
-      for (const startedAt of [100, undefined, 0, '200']) {
-        await expect(handler({}, { samples: windowFor(0), speaker: 'them', startedAt }))
-          .resolves.toEqual({ text: 'transcribed' })
-      }
-      await expect(handler({}, { samples: windowFor(1), speaker: 'them', startedAt: 200 }))
-        .resolves.toEqual({ text: 'transcribed', name: 'Speaker 1' })
-    }
-  )
+    await expect(handler({}, { samples: windowFor(1), speaker: 'them', startedAt: 200 })).resolves.toEqual({
+      text: 'transcribed',
+      name: 'Speaker 1'
+    })
+  })
 
   it('speakerEmbed preserves its empty shape and cannot observe or echo-drop without exact identity', async () => {
     const id = realSpeakerId()
@@ -364,11 +383,15 @@ describe('live feed identity routing', () => {
       await expect(handler({}, { samples: windowFor(2), speaker: 'you' })).resolves.toEqual({})
     }
     await expect(handler({}, { samples: windowFor(2), speaker: 'them', startedAt: 100 })).resolves.toEqual({})
-    await expect(handler({}, { samples: windowFor(2), speaker: 'them', startedAt: 200 }))
-      .resolves.toEqual({ name: 'Speaker 1' })
+    await expect(handler({}, { samples: windowFor(2), speaker: 'them', startedAt: 200 })).resolves.toEqual({
+      name: 'Speaker 1'
+    })
   })
 
-  it.each(['false', 'throw'] as const)('speaker admission %s keeps ASR text and never falls back to legacy state', async mode => {
+  it.each([
+    'false',
+    'throw'
+  ] as const)('speaker admission %s keeps ASR text and never falls back to legacy state', async (mode) => {
     const fake = {
       createSession: vi.fn(() => {
         if (mode === 'throw') throw new Error('capacity unavailable')
@@ -385,8 +408,9 @@ describe('live feed identity routing', () => {
     expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 500 })).toBe(true)
 
     const handler = feedHandler('parakeetFeed', api)
-    await expect(handler({}, { samples: windowFor(0), speaker: 'them', startedAt: 500 }))
-      .resolves.toEqual({ text: 'transcribed' })
+    await expect(handler({}, { samples: windowFor(0), speaker: 'them', startedAt: 500 })).resolves.toEqual({
+      text: 'transcribed'
+    })
     expect(fake.labelSessionWindow).not.toHaveBeenCalled()
     expect(fake.labelWindow).not.toHaveBeenCalled()
     expect(fake.resetSession).not.toHaveBeenCalled()
@@ -426,8 +450,7 @@ describe('bounded close and successful-save receipt join', () => {
     expect(api.recordLiveSpeakerSave(700, '/meetings/a.md')).toBe(true)
     await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(1))
     expect(api.captureLiveSpeakerKey(800)).toBe('live:800')
-    await expect(api.labelThemAudio(windowFor(4), 'live:800', 'live'))
-      .resolves.toMatchObject({ name: 'Speaker 1' })
+    await expect(api.labelThemAudio(windowFor(4), 'live:800', 'live')).resolves.toMatchObject({ name: 'Speaker 1' })
   })
 
   it('lazily expires only closed unsaved receipts after 30 minutes and frees exact capacity', async () => {
@@ -495,8 +518,7 @@ describe('bounded close and successful-save receipt join', () => {
 
     expect(api.captureLiveSpeakerKey(900)).toBeNull()
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 901 })
-    await expect(api.labelThemAudio(windowFor(5), 'live:901', 'live'))
-      .resolves.toMatchObject({ name: 'Speaker 1' })
+    await expect(api.labelThemAudio(windowFor(5), 'live:901', 'live')).resolves.toMatchObject({ name: 'Speaker 1' })
   })
 
   it('deletes a joined receipt before a snapshot failure and disposes the exact state', async () => {
@@ -572,7 +594,10 @@ describe('snapshot-only enrollment after durable name write', () => {
     const backfill = backfillWith(wrapped, {
       speakerIdInstance: wrapped,
       getSpeakerId: () => wrapped,
-      updateMeetingTranscript: async () => { order.push('write'); return { ok: true } }
+      updateMeetingTranscript: async () => {
+        order.push('write')
+        return { ok: true }
+      }
     })
 
     await expect(backfill('meeting.md', token)).resolves.toEqual({ ok: true, named: 1 })
@@ -614,7 +639,11 @@ describe('exact import attempt integration', () => {
     actualFunction('initializeImportJobs', {
       importJobs: null,
       wireIntelligenceIndexWork: noop,
-      ImportJobManager: class { constructor(deps: Record<string, any>) { captured = deps } },
+      ImportJobManager: class {
+        constructor(deps: Record<string, any>) {
+          captured = deps
+        }
+      },
       EncryptedImportJobStore: class {},
       getSettings: () => ({ asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
       resetImportLanguageFollow: noop,
@@ -663,17 +692,18 @@ describe('exact import attempt integration', () => {
     const attempt2 = Object.freeze({ jobId: 'job-a', attemptId: 2 })
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 1300 })
     expect(api.beginImportSpeakers(attempt1)).toBe(true)
-    await expect(api.labelThemAudio(windowFor(0), 'live:1300', 'live'))
-      .resolves.toMatchObject({ name: 'Speaker 1' })
-    await expect(api.labelThemAudio(windowFor(1), api.captureImportSpeakerKey(attempt1), 'import'))
-      .resolves.toMatchObject({ name: 'Speaker 1' })
+    await expect(api.labelThemAudio(windowFor(0), 'live:1300', 'live')).resolves.toMatchObject({ name: 'Speaker 1' })
+    await expect(
+      api.labelThemAudio(windowFor(1), api.captureImportSpeakerKey(attempt1), 'import')
+    ).resolves.toMatchObject({ name: 'Speaker 1' })
 
     api.disposeImportSpeakers(attempt1)
     expect(api.beginImportSpeakers(attempt2)).toBe(true)
     // Manager cleanup is exact-once, but a duplicated late callback must still be harmless.
     api.disposeImportSpeakers(attempt1)
-    await expect(api.labelThemAudio(windowFor(2), api.captureImportSpeakerKey(attempt2), 'import'))
-      .resolves.toMatchObject({ name: 'Speaker 1' })
+    await expect(
+      api.labelThemAudio(windowFor(2), api.captureImportSpeakerKey(attempt2), 'import')
+    ).resolves.toMatchObject({ name: 'Speaker 1' })
     expect(api.finalizeImportSpeakers(attempt1)).toBeNull()
     expect(api.finalizeImportSpeakers(attempt2)).toEqual(new Map([['Speaker 1', 'Speaker 1']]))
   })

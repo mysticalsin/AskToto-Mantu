@@ -23,7 +23,7 @@ import { asrModelRoot, isHighTierAsrModelReady } from './asr-model-download'
 import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './asr-bundled-ensure'
 
 /** resources/models — or userData/asr-models when the floor was fetched after install. */
-function modelsDir(): string {
+function modelsDir(): Promise<string> {
   return resolveWhisperModelsRoot()
 }
 
@@ -157,11 +157,14 @@ async function createHost(): Promise<UtilityProcess> {
     const tierAdmission = await admitHostTierAtStart()
     await waitForStoppedHost()
     if (host) return host
-    // A newer import admission or idle release won while the model digest was being checked. Re-read the
-    // policy rather than creating a helper from a stale grant.
-    if (admissionVersion !== importTierAdmissionVersion) continue
     if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
-    return forkHost(tierAdmission)
+    // Re-resolve the profile and activated path after the old-host exit barrier. A path checked before
+    // that wait is stale authority if selection/profile changes while the old helper is stopping.
+    if (admissionVersion !== importTierAdmissionVersion) continue
+    const approvedModelsPath = await modelsDir()
+    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+    if (admissionVersion !== importTierAdmissionVersion) continue
+    return forkHost(tierAdmission, approvedModelsPath)
   }
 }
 
@@ -174,7 +177,7 @@ function ensureHost(): Promise<UtilityProcess> {
   return hostStarting
 }
 
-function forkHost(tierAdmission: HostTierAdmission): UtilityProcess {
+function forkHost(tierAdmission: HostTierAdmission, approvedModelsPath: string): UtilityProcess {
   const child = utilityProcess.fork(join(__dirname, 'whisper-asr-host.js'), [], {
     serviceName: 'metis-whisper-import',
     stdio: 'pipe'
@@ -192,7 +195,9 @@ function forkHost(tierAdmission: HostTierAdmission): UtilityProcess {
       // path already has this contract for its own engine swap (settings.asrLastFallbackAt, surfaced in
       // Settings until dismissed); imports had nothing, so a recording transcribed by the weakest model
       // looked identical to one transcribed by the best. Same after-the-fact note, never a live banner.
-      mainLog.info(`[whisper-host] transcription tier: ${m.tier ?? 'unknown'}${m.degraded ? ' (compact tier used)' : ''}`)
+      mainLog.info(
+        `[whisper-host] transcription tier: ${m.tier ?? 'unknown'}${m.degraded ? ' (compact tier used)' : ''}`
+      )
       if (m.degraded) {
         try {
           if (getSettings().asrImportTierFallbackAt == null) setSettings({ asrImportTierFallbackAt: Date.now() })
@@ -227,7 +232,7 @@ function forkHost(tierAdmission: HostTierAdmission): UtilityProcess {
   try {
     child.postMessage({
       type: 'init',
-      modelsPath: modelsDir(),
+      modelsPath: approvedModelsPath,
       allowHighMemoryTier: tierAdmission.allowHighMemoryTier,
       ...(tierAdmission.fetchedModelsPath ? { fetchedModelsPath: tierAdmission.fetchedModelsPath } : {})
     })
@@ -489,7 +494,11 @@ export function finalizeDecodedText(rawText: string): string {
  * discarding an in-progress follow. `probe`, when the caller supplies one, is given one shot at pinning
  * the recording's language before window 1 decodes (see probeLanguage above).
  */
-export async function whisperImportTranscribe(samples: Float32Array, language: string, probe?: LanguageProbe): Promise<string> {
+export async function whisperImportTranscribe(
+  samples: Float32Array,
+  language: string,
+  probe?: LanguageProbe
+): Promise<string> {
   await ensureWhisperFloorAssets()
   applyInitLanguage(language)
   await probeLanguage(samples, probe)
