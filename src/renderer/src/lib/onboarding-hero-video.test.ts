@@ -130,7 +130,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   })
 
   it('does not ship a Bloom or Axon landing page, and CSP pins only that media host', () => {
-    expect(experience).not.toMatch(/Bloom|Axon|Marcus Aurelio|Y Combinator|YC/i)
+    expect(experience).not.toMatch(/Bloom|Axon|Marcus Aurelio|Y Combinator|\bYC\b/i)
     expect(css).not.toMatch(/Bloom|Axon/i)
     const policy = html.slice(html.indexOf('content="default-src'))
     const media = policy.slice(policy.indexOf('media-src'), policy.indexOf('connect-src'))

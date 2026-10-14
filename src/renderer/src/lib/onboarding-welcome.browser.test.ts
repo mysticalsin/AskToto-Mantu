@@ -35,6 +35,14 @@ function Harness() {
 HTMLMediaElement.prototype.load = function () { loadCalls++ }
 HTMLMediaElement.prototype.play = function () { playCalls++; return Promise.resolve() }
 HTMLMediaElement.prototype.pause = function () { pauseCalls++ }
+const nativeSetAttribute = Element.prototype.setAttribute
+Element.prototype.setAttribute = function (name, value) {
+  if (this instanceof HTMLMediaElement && name === 'src') {
+    nativeSetAttribute.call(this, 'data-test-src', value)
+    return
+  }
+  nativeSetAttribute.call(this, name, value)
+}
 
 window.__onboardingWelcome = {
   mount() {
@@ -85,7 +93,7 @@ async function bundleHarness(): Promise<string> {
           if (id === '\0onboarding-test-video')
             return `export default 'file:///Applications/Metis.app/Contents/Resources/app.asar/out/renderer/assets/onboarding-hero-lady-planet.mp4'`
           if (id === '\0onboarding-test-poster')
-            return `export default 'file:///Applications/Metis.app/Contents/Resources/app.asar/out/renderer/assets/onboarding-hero-poster.jpg'`
+            return `export default 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='`
           if (id === HARNESS_ID) return HARNESS
           return null
         }
@@ -138,7 +146,9 @@ describe('Act 1 welcome rendered behavior', () => {
 
   beforeEach(async () => {
     page = await browser.newPage()
-    await page.setContent('<!doctype html><html><head></head><body><div id="root"></div></body></html>')
+    await page.setContent(
+      '<!doctype html><html><head></head><body><div id="act1-boot-chrome"></div><div id="root"></div></body></html>'
+    )
     await page.addScriptTag({ content: bundle })
   })
 
@@ -166,6 +176,7 @@ describe('Act 1 welcome rendered behavior', () => {
     expect(await page.locator('.onboard-stage').getAttribute('class')).toContain('onboard-stage--portal-open')
     expect(await page.locator('#begin-count').textContent()).toBe('1')
     expect(await page.evaluate(() => window.__act1BootNextQueued)).toBe(false)
+    expect(await page.locator('#act1-boot-chrome').count()).toBe(0)
     expect(await page.locator('.hero-mark img').evaluate((image) => getComputedStyle(image).width)).toBe('96px')
     expect(await page.locator('.hero-wordmark').getAttribute('aria-label')).toBe('Métis')
     expect(await page.locator('.hero-wordmark').textContent()).toBe('Métis')
@@ -173,6 +184,8 @@ describe('Act 1 welcome rendered behavior', () => {
 
     await page.getByRole('button', { name: 'Next' }).click()
     expect(await page.locator('#begin-count').textContent()).toBe('2')
+    await page.evaluate(() => window.dispatchEvent(new Event('act1-boot-next')))
+    expect(await page.locator('#begin-count').textContent()).toBe('3')
     const hero = await page.locator('.hero-welcome').innerHTML()
     expect(hero).toContain('Metis Maintainers')
     expect(hero).toContain('Métis')
@@ -188,7 +201,7 @@ describe('Act 1 welcome rendered behavior', () => {
     expect(await video.getAttribute('autoplay')).not.toBeNull()
     expect(await video.getAttribute('preload')).toBe('auto')
     expect(await video.getAttribute('poster')).toBe(await page.locator('.onboard-hero-poster').getAttribute('src'))
-    expect(await video.getAttribute('src')).toContain('app.asar.unpacked')
+    expect(await video.getAttribute('data-test-src')).toContain('app.asar.unpacked')
     expect(await page.locator('link[data-onboarding-hero-preload]').getAttribute('as')).toBe('video')
     expect((await page.evaluate(() => window.__onboardingWelcome.counts())).loadCalls).toBe(1)
     expect((await page.evaluate(() => window.__onboardingWelcome.counts())).playCalls).toBe(1)

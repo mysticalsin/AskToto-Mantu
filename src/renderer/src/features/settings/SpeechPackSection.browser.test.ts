@@ -360,7 +360,7 @@ describe('SpeechPackSection browser behavior', () => {
     expect((await inspect()).actionRequests).toEqual([])
 
     await page.evaluate((next) => window.__speechPack.update(next, 'parakeet'), snapshot({ engine: 'parakeet' }))
-    await page.getByText('Parakeet · Not downloaded').waitFor({ state: 'visible' })
+    await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     expect(await inspect()).toMatchObject({ statusCalls: 2, listenerCount: 1, unsubscribeCalls: 1, actionRequests: [] })
     await page.getByRole('button', { name: 'Review install' }).click()
     await page.getByText('2 MB download · 3 MB storage').waitFor({ state: 'visible' })
@@ -414,6 +414,8 @@ describe('SpeechPackSection browser behavior', () => {
       { componentId: WHISPER, action: 'repair', manifestIdentity: WHISPER_ID }
     ])
 
+    await page.evaluate((next) => window.__speechPack.update(next, 'parakeet'), snapshot({ engine: 'parakeet' }))
+    await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     await page.evaluate(
       (next) => window.__speechPack.update(next, 'whisper'),
       snapshot({ whisperState: 'ready', readiness: 'not-configured' })
@@ -444,7 +446,7 @@ describe('SpeechPackSection browser behavior', () => {
     await page.waitForFunction(() => window.__speechPack.inspect().pendingStatusCount === 1)
 
     await page.evaluate(() => window.__speechPack.resolveStatus())
-    await page.getByText('Parakeet · Not downloaded').waitFor({ state: 'visible' })
+    await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     expect(await page.getByRole('button', { name: 'Repair selected components' }).count()).toBe(0)
   })
 

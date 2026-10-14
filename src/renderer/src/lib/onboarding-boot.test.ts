@@ -114,7 +114,6 @@ describe('FITO-185-I App boot gate (source contract)', () => {
 describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
   const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
   const bootJs = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
-  const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
   const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
 
   it('no-JS shell is poster + Métis wordmark + Next (never waits on video)', () => {
@@ -135,12 +134,6 @@ describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
     expect(bootJs).toMatch(/__act1BootNextQueued/)
     expect(bootJs).toMatch(/act1-boot-next/)
     expect(bootJs).not.toMatch(/\.mp4/)
-  })
-
-  it('React consumes queued Next and hides the no-JS chrome', () => {
-    expect(experience).toMatch(/act1-boot-chrome/)
-    expect(experience).toMatch(/act1-boot-next/)
-    expect(experience).toMatch(/__act1BootNextQueued/)
   })
 
   it('exclusive BrowserWindow shows immediately with Act1 shell (FITO-185-Z)', () => {
