@@ -4,7 +4,7 @@ import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
 import { ImportRetentionBlockedError } from './import-retention-policy'
 import { StaleImportJobWriteError } from './import-job-retention-coordinator'
-import type { ImportJob, ImportJobManagerDeps, ImportSpeakerAttempt } from './import-jobs'
+import type { ImportJob, ImportJobManagerDeps, ImportSpeakerAttempt } from './import-job-types'
 
 const SAMPLE_RATE = 16_000
 const LANGUAGE_VOTE_PROBES = 5

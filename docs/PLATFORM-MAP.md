@@ -110,6 +110,17 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 - ASR asset IPC → `src/main/ipc/asr-assets-ipc.ts`, `src/main/ipc/parakeet-assets-ipc.ts`, and
   `src/main/ipc/speech-pack-ipc.ts`; ASR status wire types live in `src/shared/asr-assets.ts` and are
   re-exported by `src/shared/ipc.ts`. Metadata-only probes use `src/main/asr-metadata-readiness.ts`.
+- Saved meetings → `src/main/transcripts.ts` owns writes/encryption and draft lifecycle;
+  `src/main/features/meetings/transcript-format.ts` owns the pure display projection;
+  `src/main/features/meetings/meeting-document.ts` owns frontmatter and recap-section boundaries;
+  `src/main/recall.ts` owns typed History reads and edits.
+  Exact final speech provenance is owned by `features/meetings/speech-provenance.ts`
+  (finite injected budgets and framed association), `meeting-speech.ts` (main-owned
+  configuration/public projection), and `meeting-save-document.ts` (pure saved document).
+  The legacy parser remains in `features/meetings/legacy-transcript.ts`; public history,
+  export and brain inputs project private records out while internal edits and Open retain them.
+  Brain field display gates live in `brain/publish-provenance.ts`, called by `brain/publish.ts`.
+
 - Settings panel bug → section code in `src/renderer/src/features/settings/**`, shared primitives in
   `src/renderer/src/ui/**`, and the compatibility export at `src/renderer/src/components/Settings.tsx`.
 - Native macOS app → `native-app/App/**` (UI) or `native-app/MetisKit/**` (logic).

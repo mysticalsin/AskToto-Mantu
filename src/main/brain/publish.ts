@@ -1,24 +1,46 @@
+import {
+  renderNonNumeric,
+  renderNumeric,
+  factRow,
+  plainFactRow,
+  changelogEntries,
+  formatNumber,
+  type ChangeRow
+} from './publish-provenance'
+import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from '../features/meetings/meeting-speech'
 import { app } from 'electron'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, unlinkSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import {
-  RENDERABLE_PROVENANCE_STATES,
   type PersonEntity,
   type AccountEntity,
   type DealEntity,
   type MeetingExtraction,
   type MeetingRef,
-  type ProvenantField,
-  type ProvenanceState,
-  type Confidence,
   type EntityKind,
   type LedgerCommitment
 } from '@shared/brain'
 import { hasMeetingFlag, parse, readMeetingFields } from '../features/meetings/meeting-document'
-import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
-import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
+import {
+  resolveMeetingsFolder,
+  decodeSavedMeetingAsync,
+  readSavedFile,
+  writeSaved,
+  parseRecapMarkdown
+} from '../transcripts'
+import {
+  listEntities,
+  readPerson,
+  readAccount,
+  readDeal,
+  readIndex,
+  readMeetingExtraction,
+  listMeetingExtractions,
+  slugify
+} from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
+import { storageAt } from '../infra/storage/meetings-storage'
 
 /**
  * Task MI-5 — the Dust-readable markdown mirror. Renders the CRM-corrected brain (entities +
@@ -102,15 +124,6 @@ function buildFrontmatter(fields: Array<[string, string]>): string {
 }
 
 const AI_NOTICE = '> AI-generated summary — verify before relying.\n'
-
-// ── Locale-independent number formatting (determinism: Number.toLocaleString() depends on the ─────────
-// runtime's default locale, which can differ between machines/CI and would break byte-identical output).
-function formatNumber(n: number): string {
-  const sign = n < 0 ? '-' : ''
-  const [intPart, frac] = Math.abs(n).toFixed(2).replace(/\.00$/, '').split('.')
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return sign + grouped + (frac ? `.${frac}` : '')
-}
 
 // ── Confidential meetings ─────────────────────────────────────────────────────────────────────────────
 
@@ -233,17 +246,18 @@ function addConfidentialTeamMeetings(s: Settings, out: Set<string>): void {
  *  full readdir + synchronous read+decrypt of EVERY saved meeting, so letting publishAll/publishForExtraction
  *  re-scan per page turns one toggle into O(pages × meetings) blocking main-process reads. They read it once
  *  and thread the result through `knownConfidential`. */
-export function readConfidentialMeetings(s: Settings): Set<string> {
+export async function readConfidentialMeetings(s: Settings): Promise<Set<string>> {
   const folder = resolveMeetingsFolder(s)
   const out = new Set<string>()
+  const maxBytes = getMeetingSpeechReadLimitBytes()
   for (const f of listSavedMeetingFiles(s)) {
-    let md: string
-    try {
-      md = readSavedFile(join(folder, f))
-    } catch {
+    const raw = await storageAt(folder).read(f, { ...(maxBytes ? { maxBytes } : {}) })
+    if (raw.status !== 'ok') {
       out.add(f)
       continue
     }
+    const decoded = await decodeSavedMeetingAsync(raw.bytes, false, join(folder, f))
+    const md = decoded.ok ? decoded.text : ''
     if (!md || readFrontmatterFlag(md, 'confidential')) out.add(f)
   }
   addConfidentialTeamMeetings(s, out)
@@ -251,91 +265,6 @@ export function readConfidentialMeetings(s: Settings): Set<string> {
 }
 
 // ── Render gate ────────────────────────────────────────────────────────────────────────────────────────
-
-function passesSoftGate(state: ProvenanceState, confidence: Confidence): boolean {
-  return RENDERABLE_PROVENANCE_STATES.has(state) || (state === 'extracted' && confidence === 'EXTRACTED')
-}
-
-interface RenderInfo<T> {
-  renders: boolean
-  value?: T
-  sourceFile?: string
-  date?: string
-}
-
-const NOT_CONFIDENTIAL = (sf: string, confidential: Set<string>): boolean => !sf || !confidential.has(sf)
-
-/** Non-numeric provenant fields (role/org/sector/stage/win_likelihood_band/velocity): renders when the
- *  live value passes the soft gate (verified/pinned/edited, OR extracted+EXTRACTED). When the live
- *  value's own source meeting is confidential, falls back to the newest non-confidential entry in
- *  `superseded` — filtering the provenance chain at RENDER time only, per the MI-5 brief; the brain
- *  store itself is never mutated. A superseded entry carries no `state` (see SupersededEntry in
- *  store.ts), so it is always treated as machine-extracted tier, gated by its own recorded confidence. */
-function renderNonNumeric<T>(field: ProvenantField<T> | undefined, confidential: Set<string>): RenderInfo<T> {
-  if (!field) return { renders: false }
-  if (NOT_CONFIDENTIAL(field.source_file, confidential)) {
-    return { renders: passesSoftGate(field.state, field.confidence), value: field.value, sourceFile: field.source_file, date: field.date }
-  }
-  for (const e of field.superseded) {
-    if (!NOT_CONFIDENTIAL(e.source_file, confidential)) continue
-    return { renders: passesSoftGate('extracted', e.confidence ?? 'INFERRED'), value: e.value, sourceFile: e.source_file, date: e.date }
-  }
-  return { renders: false }
-}
-
-/** Numeric provenant fields (deal amount/close_date) — the STRICT MI-4 gate: renders ONLY when
- *  state ∈ {verified, pinned, edited}, never merely EXTRACTED confidence. When the live value's source
- *  meeting is confidential, this NEVER falls back into `superseded` — a superseded entry carries no
- *  `state` at all (see SupersededEntry), so there is no way to know a historical sighting was ever
- *  independently verified; guessing would be exactly the silent-unverified-number leak this gate exists
- *  to prevent. A confidential-sourced current number renders "not established" instead. */
-function renderNumeric<T>(field: ProvenantField<T> | undefined, confidential: Set<string>): RenderInfo<T> {
-  if (!field) return { renders: false }
-  if (!NOT_CONFIDENTIAL(field.source_file, confidential)) return { renders: false }
-  return { renders: RENDERABLE_PROVENANCE_STATES.has(field.state), value: field.value, sourceFile: field.source_file, date: field.date }
-}
-
-function citeSource(sourceFile?: string, date?: string): string {
-  if (!sourceFile) return date ? `edited by you (${date})` : 'edited by you'
-  const slug = meetingSlug(sourceFile)
-  return `[${sourceFile}${date ? `, ${date}` : ''}](../meetings/${slug}.md)`
-}
-
-function factRow<T>(label: string, info: RenderInfo<T>, format: (v: T) => string): string {
-  if (!info.renders || info.value === undefined || info.value === null) {
-    return `| ${label} | not established | — |`
-  }
-  return `| ${label} | ${format(info.value)} | ${citeSource(info.sourceFile, info.date)} |`
-}
-
-function plainFactRow(label: string, value: string): string {
-  return `| ${label} | ${value} | — |`
-}
-
-// ── Changelog (superseded history, capped 10, confidential entries excluded) ───────────────────────────
-
-interface ChangeRow {
-  date: string
-  text: string
-}
-
-function changelogEntries(
-  fields: Array<{ label: string; field: ProvenantField<unknown> | undefined; format: (v: unknown) => string }>,
-  confidential: Set<string>
-): ChangeRow[] {
-  const rows: ChangeRow[] = []
-  for (const { label, field, format } of fields) {
-    if (!field) continue
-    for (const e of field.superseded) {
-      if (!NOT_CONFIDENTIAL(e.source_file, confidential)) continue
-      const src = e.source_file ? ` [${e.source_file}]` : ''
-      rows.push({ date: e.date, text: `${label} was ${format(e.value)}${src}` })
-    }
-  }
-  return rows
-    .sort((a, b) => (a.date === b.date ? a.text.localeCompare(b.text) : a.date > b.date ? -1 : 1))
-    .slice(0, 10)
-}
 
 // ── Timeline / commitments (confidential meetings excluded) ────────────────────────────────────────────
 
@@ -352,13 +281,24 @@ function openCommitmentRows(commitments: LedgerCommitment[], confidential: Set<s
 }
 
 function newestDate(meetings: MeetingRef[], confidential: Set<string>): string {
-  const dates = meetings.filter((m) => !confidential.has(m.file)).map((m) => m.date).filter(Boolean).sort()
+  const dates = meetings
+    .filter((m) => !confidential.has(m.file))
+    .map((m) => m.date)
+    .filter(Boolean)
+    .sort()
   return dates[dates.length - 1] ?? ''
 }
 
 // ── Shared page assembly ───────────────────────────────────────────────────────────────────────────────
 
-function pageHeader(kind: EntityKind, id: string, title: string, aliases: string[], tags: string[], updated: string): string {
+function pageHeader(
+  kind: EntityKind,
+  id: string,
+  title: string,
+  aliases: string[],
+  tags: string[],
+  updated: string
+): string {
   const fm = buildFrontmatter([
     ['type', yamlStr(`brain-${kind}`)],
     ['title', yamlStr(title)],
@@ -374,7 +314,9 @@ function pageHeader(kind: EntityKind, id: string, title: string, aliases: string
 
 function timelineSection(rows: MeetingRef[]): string {
   if (rows.length === 0) return '## Timeline\n\nNo meetings on record.\n'
-  const lines = rows.map((m) => `- [${m.title || m.file}](../meetings/${meetingSlug(m.file)}.md)${m.date ? ` — ${m.date}` : ''}`)
+  const lines = rows.map(
+    (m) => `- [${m.title || m.file}](../meetings/${meetingSlug(m.file)}.md)${m.date ? ` — ${m.date}` : ''}`
+  )
   return `## Timeline\n\n${lines.join('\n')}\n`
 }
 
@@ -523,18 +465,27 @@ export async function publishEntity(
 ): Promise<void> {
   if (!s.publishBrainPages || !id) return
   ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
   let md: string | null = null
   let meetings: MeetingRef[] = []
   if (kind === 'person') {
     const p = readPerson(s, id)
-    if (p) { meetings = p.meetings; md = renderPersonPage(p, confidential) }
+    if (p) {
+      meetings = p.meetings
+      md = renderPersonPage(p, confidential)
+    }
   } else if (kind === 'account') {
     const a = readAccount(s, id)
-    if (a) { meetings = a.meetings; md = renderAccountPage(a, confidential) }
+    if (a) {
+      meetings = a.meetings
+      md = renderAccountPage(a, confidential)
+    }
   } else {
     const d = readDeal(s, id)
-    if (d) { meetings = d.meetings; md = renderDealPage(d, confidential) }
+    if (d) {
+      meetings = d.meetings
+      md = renderDealPage(d, confidential)
+    }
   }
   // QA #11: an entity whose EVERY meeting is confidential must get NO page. The rendered body is already
   // fully redacted (timeline/fact/changelog rows all gate on `confidential`), but the page HEADER still
@@ -612,7 +563,7 @@ export async function publishMeetingCard(
   const base = basename(meetingFile)
   if (!base.endsWith('.md')) return
   ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
   if (confidential.has(base)) {
     await removeMeetingCard(s, base)
     return
@@ -625,7 +576,12 @@ export async function publishMeetingCard(
   }
   let raw: string
   try {
-    raw = readSavedFile(path)
+    const maxBytes = getMeetingSpeechReadLimitBytes()
+    const read = await storageAt(folder).read(base, { ...(maxBytes ? { maxBytes } : {}) })
+    if (read.status !== 'ok') return
+    const decoded = await decodeSavedMeetingAsync(read.bytes, false, path)
+    if (!decoded.ok) return
+    raw = await publicMeetingTextAsync(decoded.text)
   } catch {
     return
   }
@@ -656,7 +612,10 @@ export async function publishMeetingCard(
   }
   const accountLink =
     extraction?.account && extraction.account.name.trim()
-      ? mdLink(extraction.account.name, `../accounts/${resolveEntitySlug(aliasMap, 'account', extraction.account.name)}.md`)
+      ? mdLink(
+          extraction.account.name,
+          `../accounts/${resolveEntitySlug(aliasMap, 'account', extraction.account.name)}.md`
+        )
       : ''
   let dealLink = ''
   if (extraction?.deal && (extraction.deal.name || accountLink)) {
@@ -679,7 +638,9 @@ export async function publishMeetingCard(
     ['generated_by', yamlStr(`asktoto/${appVersion()}`)]
   ]
 
-  const decisions = parsed.decisions.length ? parsed.decisions.map((d) => `- ${capQuote(d)}`).join('\n') : 'None recorded.'
+  const decisions = parsed.decisions.length
+    ? parsed.decisions.map((d) => `- ${capQuote(d)}`).join('\n')
+    : 'None recorded.'
   const actionItems = parsed.actionItems.length
     ? parsed.actionItems.map((a) => `- ${capQuote(a.text)}${a.owner ? ` (${a.owner})` : ''}`).join('\n')
     : 'None recorded.'
@@ -808,15 +769,17 @@ function topByActivity<T extends { id?: string; name: string; meetings: MeetingR
   confidential: Set<string>,
   limit: number
 ): T[] {
-  return [...entities]
-    // QA #11: never list an entity whose every meeting is confidential — it has no page (see
-    // publishEntity) and listing it here would leak its name/identity through the index. (A zero-meeting
-    // entity carries no confidential provenance, so it is still listed, matching publishEntity.)
-    .filter((e) => e.meetings.length === 0 || e.meetings.some((m) => !confidential.has(m.file)))
-    .map((e) => ({ e, date: newestDate(e.meetings, confidential) }))
-    .sort((a, b) => (a.date === b.date ? a.e.name.localeCompare(b.e.name) : a.date > b.date ? -1 : 1))
-    .slice(0, limit)
-    .map((x) => x.e)
+  return (
+    [...entities]
+      // QA #11: never list an entity whose every meeting is confidential — it has no page (see
+      // publishEntity) and listing it here would leak its name/identity through the index. (A zero-meeting
+      // entity carries no confidential provenance, so it is still listed, matching publishEntity.)
+      .filter((e) => e.meetings.length === 0 || e.meetings.some((m) => !confidential.has(m.file)))
+      .map((e) => ({ e, date: newestDate(e.meetings, confidential) }))
+      .sort((a, b) => (a.date === b.date ? a.e.name.localeCompare(b.e.name) : a.date > b.date ? -1 : 1))
+      .slice(0, limit)
+      .map((x) => x.e)
+  )
 }
 
 function readAllMeetingRefs(s: Settings): MeetingRef[] {
@@ -835,11 +798,17 @@ function readAllMeetingRefs(s: Settings): MeetingRef[] {
 export async function publishIndexes(s: Settings, knownConfidential?: Set<string>): Promise<void> {
   if (!s.publishBrainPages) return
   ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
 
-  const accounts = listEntities(s, 'account').map((id) => readAccount(s, id)).filter((a): a is AccountEntity => !!a)
-  const people = listEntities(s, 'person').map((id) => readPerson(s, id)).filter((p): p is PersonEntity => !!p)
-  const deals = listEntities(s, 'deal').map((id) => readDeal(s, id)).filter((d): d is DealEntity => !!d)
+  const accounts = listEntities(s, 'account')
+    .map((id) => readAccount(s, id))
+    .filter((a): a is AccountEntity => !!a)
+  const people = listEntities(s, 'person')
+    .map((id) => readPerson(s, id))
+    .filter((p): p is PersonEntity => !!p)
+  const deals = listEntities(s, 'deal')
+    .map((id) => readDeal(s, id))
+    .filter((d): d is DealEntity => !!d)
 
   const recentMeetings = timelineRows(readAllMeetingRefs(s), confidential).slice(0, 20)
   const topAccounts = topByActivity(accounts, confidential, 10)
@@ -870,11 +839,22 @@ export async function publishIndexes(s: Settings, knownConfidential?: Set<string
     '',
     section(
       'Recent meetings',
-      recentMeetings.map((m) => `- [${m.title || m.file}](meetings/${meetingSlug(m.file)}.md)${m.date ? ` — ${m.date}` : ''}`)
+      recentMeetings.map(
+        (m) => `- [${m.title || m.file}](meetings/${meetingSlug(m.file)}.md)${m.date ? ` — ${m.date}` : ''}`
+      )
     ),
-    section('Accounts', topAccounts.map((a) => `- [${a.name}](accounts/${a.id || slugify(a.name)}.md)`)),
-    section('People', topPeople.map((p) => `- [${p.name}](people/${p.id || slugify(p.name)}.md)`)),
-    section('Deals', topDeals.map((d) => `- [${d.name}](deals/${d.id || slugify(d.name)}.md)`)),
+    section(
+      'Accounts',
+      topAccounts.map((a) => `- [${a.name}](accounts/${a.id || slugify(a.name)}.md)`)
+    ),
+    section(
+      'People',
+      topPeople.map((p) => `- [${p.name}](people/${p.id || slugify(p.name)}.md)`)
+    ),
+    section(
+      'Deals',
+      topDeals.map((d) => `- [${d.name}](deals/${d.id || slugify(d.name)}.md)`)
+    ),
     '## How to query',
     '',
     'Ask about an account, person, or deal by name — its page lists current facts (each sourced or marked',
@@ -908,7 +888,7 @@ export async function publishForExtraction(
   if (!s.publishBrainPages) return
   // One scan for the whole merge: this runs on EVERY ingested meeting (live and backfill), so re-reading
   // the confidential flags per page would re-decrypt the entire meetings folder ~5-10x per meeting.
-  const confidential = readConfidentialMeetings(s)
+  const confidential = await readConfidentialMeetings(s)
   const accountSlug = x.account && x.account.name.trim() ? resolveEntitySlug(aliasMap, 'account', x.account.name) : null
   if (accountSlug) await publishEntity(s, 'account', accountSlug, confidential)
   for (const p of x.people) {
@@ -933,7 +913,7 @@ export async function publishAll(s: Settings): Promise<void> {
   ensureWikiDirs(s)
   // One scan for the whole regeneration: a full-corpus rescan per page is O(pages × meetings) synchronous
   // read+decrypts on the main process, which is what froze the app for minutes on one Confidential toggle.
-  const confidential = readConfidentialMeetings(s)
+  const confidential = await readConfidentialMeetings(s)
   // Same "once for the whole regeneration" rule for the alias map (QA MQA-152): it is the other
   // full-corpus read+decrypt a card needs, and no page written below mutates an entity, so one map
   // serves every card.

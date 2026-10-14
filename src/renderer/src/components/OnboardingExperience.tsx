@@ -653,7 +653,7 @@ function ActReady({
           {asrProgress != null && asrProgress > 0 && asrProgress < 1 && (
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
               <div
-                className="h-full rounded-full bg-[#9A2BF0]"
+                className="h-full rounded-full bg-[var(--color-accent-2)]"
                 style={{ width: `${Math.round(asrProgress * 100)}%` }}
               />
             </div>
@@ -1485,7 +1485,7 @@ export function OnboardingExperience({
                       {(r.key === 'local' || r.key === 'asr') && r.progress != null && (
                         <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                           <div
-                            className="h-full rounded-full bg-[#9A2BF0]"
+                            className="h-full rounded-full bg-[var(--color-accent-2)]"
                             style={{ width: `${Math.round(r.progress * 100)}%` }}
                           />
                         </div>
@@ -1602,8 +1602,8 @@ export function OnboardingExperience({
                       )}
                       {r.key === 'ai' && r.state === 'action' && (
                         <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                          Transcription works without an AI connection. Activate your Métis licence in Settings →
-                          Identity for automatic summaries and answers, or connect your own provider in Settings → AI.
+                          Transcription works without an AI connection. Activate Métis Identity in Settings → Identity
+                          for automatic summaries and answers, or connect your own AI provider in Settings → AI.
                         </p>
                       )}
                       {r.key === 'ai' && r.state === 'ready' && (

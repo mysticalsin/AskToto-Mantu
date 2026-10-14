@@ -133,7 +133,10 @@ async function detectPython(): Promise<string | null> {
       try {
         const gbin = await probe()
         if (gbin && existsSync(gbin)) {
-          const she = readFileSync(gbin, 'utf8').split('\n')[0].replace(/^#!\s*/, '').trim()
+          const she = readFileSync(gbin, 'utf8')
+            .split('\n')[0]
+            .replace(/^#!\s*/, '')
+            .trim()
           if (she && /^[\w./-]+$/.test(she) && (await canImport(she))) return (cachedPython = she)
         }
       } catch {
@@ -148,9 +151,7 @@ async function detectPython(): Promise<string | null> {
   try {
     const listed = await exec('uv', ['tool', 'list', '--show-paths', '--offline', '--no-config'], execOpts({}))
     const toolDir = listed.stdout.match(/^graphifyy\s+\S+\s+\((.+)\)\s*$/m)?.[1]
-    const py = toolDir
-      ? join(toolDir, IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'python.exe' : 'python')
-      : ''
+    const py = toolDir ? join(toolDir, IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'python.exe' : 'python') : ''
     if (py && existsSync(py) && (await canImport(py))) return (cachedPython = py)
   } catch {
     /* fall through */
@@ -278,9 +279,9 @@ export function graphifySourceDir(s: Settings): string {
  *  (source = raw folder) and any meeting is flagged confidential, a build would extract that confidential
  *  content into the Dust-readable knowledge graph. Refuse until the user turns publishing on (which builds
  *  from the confidential-free mirror instead). (QA #10) */
-function confidentialGraphRefusal(s: Settings): string | null {
+async function confidentialGraphRefusal(s: Settings): Promise<string | null> {
   if (s.publishBrainPages) return null // source is the wiki mirror, which already excludes confidential
-  if (readConfidentialMeetings(s).size === 0) return null
+  if ((await readConfidentialMeetings(s)).size === 0) return null
   return 'Some meetings are marked confidential, but the knowledge graph is built from your meetings folder, which still includes them. Turn on "Publish meeting intelligence" in Settings so the graph is built from the confidential-free published mirror instead.'
 }
 
@@ -296,7 +297,7 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
     return graphifyStatus()
   }
   // Confidentiality fail-closed: never feed a confidential meeting into the graph (QA #10).
-  const confidentialRefusal = confidentialGraphRefusal(getSettings())
+  const confidentialRefusal = await confidentialGraphRefusal(getSettings())
   if (confidentialRefusal) {
     lastError = confidentialRefusal
     return graphifyStatus()
@@ -322,7 +323,13 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
       const modelArg =
         picked.backend === 'claude-cli' ? 'opus' : picked.backend === 'claude' ? 'claude-opus-4-8' : undefined
       const args = [
-        'build', '--input', notes, '--out', outDir(), '--backend', picked.backend,
+        'build',
+        '--input',
+        notes,
+        '--out',
+        outDir(),
+        '--backend',
+        picked.backend,
         ...(modelArg ? ['--model', modelArg] : [])
       ]
       if (incremental) args.push('--incremental')
@@ -352,13 +359,13 @@ let rebuildTimer: NodeJS.Timeout | null = null
 const REBUILD_DEBOUNCE_MS = 20_000
 
 /** Called after a note/meeting is saved. Coalesces a burst of saves into one incremental rebuild. */
-export function scheduleRebuild(): void {
+export async function scheduleRebuild(): Promise<void> {
   const s = getSettings()
   if (!s.graphifyEnabled || !s.graphifyAutoRebuild) return
   // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
   // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
   if (graphifyRefusalReason(s)) return
-  if (confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
+  if (await confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
   if (rebuildTimer) clearTimeout(rebuildTimer)
   const fire = (): void => {
     rebuildTimer = null
@@ -393,10 +400,7 @@ interface GLink {
  *
  * Pure over a parsed graph so it's unit-testable without Electron; `relatedNotes` wraps it with file IO.
  */
-export function computeRelated(
-  g: { nodes: GNode[]; links: GLink[] },
-  noteFile: string
-): GraphRelated {
+export function computeRelated(g: { nodes: GNode[]; links: GLink[] }, noteFile: string): GraphRelated {
   const base = basename(noteFile)
   const byId = new Map(g.nodes.map((n) => [n.id, n]))
   const sf = (n?: GNode): string => (n?.source_file ? basename(n.source_file) : '')
@@ -446,7 +450,10 @@ export function computeRelated(
 
   return {
     ok: true,
-    topics: [...topicIds].map((id) => byId.get(id)?.label).filter((x): x is string => !!x).slice(0, 12),
+    topics: [...topicIds]
+      .map((id) => byId.get(id)?.label)
+      .filter((x): x is string => !!x)
+      .slice(0, 12),
     notes: [...related.entries()]
       .map(([file, r]) => ({ file, title: r.title, via: [...r.via].slice(0, 3) }))
       .slice(0, 12)

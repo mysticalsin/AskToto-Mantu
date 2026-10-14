@@ -65,7 +65,8 @@ function errnoError(code?: string): NodeJS.ErrnoException {
 function memoryFs(files: Record<string, string>): TestFs {
   const entries = new Map<string, { content: string; mtimeMs: number; ctimeMs: number }>()
   const keyOf = (name: string): string => (isAbsolute(name) ? name : join(ROOT, name))
-  for (const [name, content] of Object.entries(files)) entries.set(keyOf(name), { content, mtimeMs: 1_000, ctimeMs: 1_000 })
+  for (const [name, content] of Object.entries(files))
+    entries.set(keyOf(name), { content, mtimeMs: 1_000, ctimeMs: 1_000 })
   const symlinks = new Set<string>()
 
   const calls: string[] = []
@@ -156,7 +157,11 @@ function fakeDetector() {
     const result = new Map<string, ContentPresence>()
     for (const file of files) {
       const name = basename(file.path)
-      const presence: ContentPresence = name.startsWith('cloud') ? 'dataless' : name.startsWith('odd') ? 'unknown' : 'local'
+      const presence: ContentPresence = name.startsWith('cloud')
+        ? 'dataless'
+        : name.startsWith('odd')
+          ? 'unknown'
+          : 'local'
       result.set(file.path, presence)
     }
     return result
@@ -212,7 +217,9 @@ describe('admission cap (G1)', () => {
     [1, 1]
   ]
 
-  it.each(table)('runs at most poolSize - 2 meetings-root fs calls at once, and at least one (pool %i, cap %i)', async (poolSize, cap) => {
+  it.each(
+    table
+  )('runs at most poolSize - 2 meetings-root fs calls at once, and at least one (pool %i, cap %i)', async (poolSize, cap) => {
     const names = Array.from({ length: cap + 1 }, (_, i) => `f${i}.md`)
     const fs = memoryFs(Object.fromEntries(names.map((name) => [name, 'x'])))
     const detector = fakeDetector()
@@ -331,7 +338,7 @@ describe('abort (G4-G6)', () => {
     await expect(readB).resolves.toMatchObject({ status: 'ok' })
   })
 
-  it('an already-aborted signal answers \'aborted\' with no fs call and no probe', async () => {
+  it("an already-aborted signal answers 'aborted' with no fs call and no probe", async () => {
     const fs = memoryFs({ 'a.md': 'A' })
     const detector = fakeDetector()
     const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
@@ -428,7 +435,10 @@ describe('classify-before-read (D1-D6)', () => {
     const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
 
     expect((await gateway.classify(['pipe.md'])).get('pipe.md')).toMatchObject({ isRegular: false })
-    await expect(gateway.read('pipe.md', { hydrate: true })).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
+    await expect(gateway.read('pipe.md', { hydrate: true })).resolves.toEqual({
+      status: 'unavailable',
+      code: 'NOT_REGULAR'
+    })
     expect(detector.classify).not.toHaveBeenCalled()
     expect(memory.calls.some((call) => call.startsWith('readFile'))).toBe(false)
   })
@@ -457,7 +467,10 @@ describe('classify-before-read (D1-D6)', () => {
     await vi.advanceTimersByTimeAsync(HYDRATE_DEADLINE_MS)
 
     await expect(opening).resolves.toEqual({ status: 'timeout' })
-    expect(progress.map((p) => [p.state, p.status])).toEqual([['hydrating', undefined], ['failed', 'timeout']])
+    expect(progress.map((p) => [p.state, p.status])).toEqual([
+      ['hydrating', undefined],
+      ['failed', 'timeout']
+    ])
     let settled = false
     void progress[1]?.settled?.then(() => (settled = true))
     await flush()
@@ -475,8 +488,14 @@ describe('classify-before-read (D1-D6)', () => {
     const progress: Array<{ state: string; status?: string; settled?: Promise<void> }> = []
     fs.fail('readFile', 'cloud.md', 'EIO')
 
-    await expect(gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })).resolves.toEqual({ status: 'unavailable', code: 'EIO' })
-    expect(progress.map((p) => [p.state, p.status])).toEqual([['hydrating', undefined], ['failed', 'unavailable']])
+    await expect(gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })).resolves.toEqual({
+      status: 'unavailable',
+      code: 'EIO'
+    })
+    expect(progress.map((p) => [p.state, p.status])).toEqual([
+      ['hydrating', undefined],
+      ['failed', 'unavailable']
+    ])
     await expect(progress[1]?.settled).resolves.toBeUndefined()
   })
 
@@ -484,7 +503,8 @@ describe('classify-before-read (D1-D6)', () => {
     const fs = memoryFs({ 'cloud.md': 'CC' })
     let local = false
     const detector: DatalessDetector = {
-      classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, local ? 'local' : 'dataless'])),
+      classify: async (files) =>
+        new Map(files.map((file): [string, ContentPresence] => [file.path, local ? 'local' : 'dataless']))
     }
     const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
 
@@ -553,32 +573,32 @@ describe('classify-before-read (D1-D6)', () => {
     expect(fs.calls).not.toContain('readFile a.md')
   })
 
-  it.each(['throws synchronously', 'rejects'] as const)(
-    'a detector whose classify %s on its first call leaves that read unknown and unread, and probes again for the next read',
-    async (mode) => {
-      const fs = memoryFs({ 'a.md': 'A', 'b.md': 'B' })
-      let calls = 0
-      const classify = vi.fn((files: readonly FileVersion[]): Promise<Map<string, ContentPresence>> => {
-        calls += 1
-        if (calls === 1) {
-          if (mode === 'throws synchronously') throw new Error('probe crashed')
-          return Promise.reject(new Error('probe crashed'))
-        }
-        return Promise.resolve(new Map(files.map((file): [string, ContentPresence] => [file.path, 'local'])))
-      })
-      const gateway = createStorageGateway({ root: () => ROOT, detector: { classify }, fs, poolSize: 4 })
+  it.each([
+    'throws synchronously',
+    'rejects'
+  ] as const)('a detector whose classify %s on its first call leaves that read unknown and unread, and probes again for the next read', async (mode) => {
+    const fs = memoryFs({ 'a.md': 'A', 'b.md': 'B' })
+    let calls = 0
+    const classify = vi.fn((files: readonly FileVersion[]): Promise<Map<string, ContentPresence>> => {
+      calls += 1
+      if (calls === 1) {
+        if (mode === 'throws synchronously') throw new Error('probe crashed')
+        return Promise.reject(new Error('probe crashed'))
+      }
+      return Promise.resolve(new Map(files.map((file): [string, ContentPresence] => [file.path, 'local'])))
+    })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: { classify }, fs, poolSize: 4 })
 
-      const first = await gateway.read('a.md')
-      expect(first).toEqual({ status: 'unknown', version: { mtimeMs: 1_000, ctimeMs: 1_000, size: 1 } })
-      expect(fs.calls).not.toContain('readFile a.md')
+    const first = await gateway.read('a.md')
+    expect(first).toEqual({ status: 'unknown', version: { mtimeMs: 1_000, ctimeMs: 1_000, size: 1 } })
+    expect(fs.calls).not.toContain('readFile a.md')
 
-      // Proves `probing` did not stay stuck true after the first probe failed: the second file still
-      // gets its own probe, and that probe succeeds.
-      const second = await gateway.read('b.md')
-      expect(second).toMatchObject({ status: 'ok' })
-      expect(classify).toHaveBeenCalledTimes(2)
-    }
-  )
+    // Proves `probing` did not stay stuck true after the first probe failed: the second file still
+    // gets its own probe, and that probe succeeds.
+    const second = await gateway.read('b.md')
+    expect(second).toMatchObject({ status: 'ok' })
+    expect(classify).toHaveBeenCalledTimes(2)
+  })
 })
 
 // ---------------------------------------------------------------------------------------------------
@@ -719,13 +739,23 @@ describe('failure memory (F2-F3)', () => {
 
   it('missing, degraded, aborted and ok are never remembered', async () => {
     const missingFs = memoryFs({})
-    const missingGateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs: missingFs, poolSize: 4 })
+    const missingGateway = createStorageGateway({
+      root: () => ROOT,
+      detector: fakeDetector(),
+      fs: missingFs,
+      poolSize: 4
+    })
     await expect(missingGateway.read('gone.md')).resolves.toEqual({ status: 'missing' })
     await expect(missingGateway.read('gone.md')).resolves.toEqual({ status: 'missing' })
     expect(missingFs.calls.filter((call) => call === 'stat gone.md')).toHaveLength(2)
 
     const degradedFs = memoryFs({ 'a.md': 'A', 'b.md': 'B' })
-    const degradedGateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs: degradedFs, poolSize: 3 }) // cap 1
+    const degradedGateway = createStorageGateway({
+      root: () => ROOT,
+      detector: fakeDetector(),
+      fs: degradedFs,
+      poolSize: 3
+    }) // cap 1
     const heldA = degradedFs.hold('readFile', 'a.md')
     void degradedGateway.read('a.md')
     await flush()
@@ -737,10 +767,17 @@ describe('failure memory (F2-F3)', () => {
     await expect(degradedGateway.read('b.md')).resolves.toMatchObject({ status: 'ok' })
 
     const abortedFs = memoryFs({ 'a.md': 'A' })
-    const abortedGateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs: abortedFs, poolSize: 4 })
+    const abortedGateway = createStorageGateway({
+      root: () => ROOT,
+      detector: fakeDetector(),
+      fs: abortedFs,
+      poolSize: 4
+    })
     const abortedController = new AbortController()
     abortedController.abort()
-    await expect(abortedGateway.read('a.md', { signal: abortedController.signal })).resolves.toEqual({ status: 'aborted' })
+    await expect(abortedGateway.read('a.md', { signal: abortedController.signal })).resolves.toEqual({
+      status: 'aborted'
+    })
     await expect(abortedGateway.read('a.md')).resolves.toMatchObject({ status: 'ok' })
 
     const okFs = memoryFs({ 'a.md': 'A' })
@@ -1000,5 +1037,23 @@ describe.skipIf(process.platform === 'win32')('kernel-blocking pool protection (
 
     expect(result).toMatchObject({ status: 'dataless' })
     expect(releaseFifo(fifo)).toBe(false) // nobody was ever waiting to open it
+  })
+
+  it('enforces a purpose-specific byte cap before and during a real file read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-bounded-read-'))
+    try {
+      writeFileSync(join(root, 'meeting.md'), '12345')
+      const gateway = createStorageGateway({ root: () => root, detector: localDetector() })
+      expect(await gateway.read('meeting.md', { maxBytes: 4 })).toMatchObject({
+        status: 'unavailable',
+        code: 'SIZE_LIMIT'
+      })
+      expect(await gateway.read('meeting.md', { maxBytes: 5 })).toMatchObject({
+        status: 'ok',
+        bytes: Buffer.from('12345')
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

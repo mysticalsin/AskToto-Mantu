@@ -607,11 +607,11 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
           seenModels.add(model.id)
           models[model.id] = {
             root: `artifacts/${artifactId}/${model.root}`,
-            members: [...model.members]
+            members: model.members.map((member) => member.slice(model.root.length + 1))
           }
           if (feature === 'offline-asr' && model.id === 'asr.whisper-base-q8') {
             for (const member of model.members) {
-              const inventoryPath = `${model.root}/${member}`
+              const inventoryPath = member
               const urlPath = `artifacts/${artifactId}/${inventoryPath}`
               const pin = inventory.files.find((file) => file.path === inventoryPath)
               if (!pin) throw new Error('RUNTIME_RENDERER_FILE_MISSING')

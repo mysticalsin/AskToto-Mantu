@@ -5,6 +5,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { inventoryCoreFiles, packageInventoryIdentity, validatePackageInventory } from './lib/package-inventory.mjs'
 import { copyContainedTree } from './lib/contained-tree-copy.mjs'
+import { removeKnownLeanPackagePlaceholders } from './lib/lean-package-stage.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PROFILE = process.env.METIS_PACKAGE_PROFILE ?? 'full'
@@ -93,6 +94,7 @@ if (platform === 'darwin') {
 } else {
   await copyTree('resources/vcredist', 'vcredist')
 }
+await removeKnownLeanPackagePlaceholders(resourcesRoot)
 
 const packageProfilePath = join(resourcesRoot, 'speech-pack-profile.json')
 await writeFile(packageProfilePath, '{"schema":1,"profile":"lean"}\n', { flag: 'wx', mode: 0o644 })

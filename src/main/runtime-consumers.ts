@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { getActiveModelPolicy, getSpeechPolicyAuthorityStatus } from './model-policy-client'
+import { getPublishedSettingsObservation, getSettingsObservationEpoch } from './settings-observation'
 import {
   getLocalModelProvisioningIdentity,
   getSpeechPackPolicyIdentity,
@@ -19,6 +20,7 @@ import {
 } from './features/components/speech-pack/runtime-lease'
 import { createRuntimeGenerationProvider } from './features/components/speech-pack/runtime-generation-provider'
 import { createRuntimeInstallService } from './features/components/speech-pack/runtime-install-service'
+import type { RuntimeInstallAuthoritySnapshot } from './features/components/speech-pack/runtime-install-plans'
 import { runRuntimeCandidateSelfTest } from './features/components/speech-pack/runtime-candidate-self-test'
 import { runtimeTargetFor } from './features/components/speech-pack/runtime-components'
 import { createRuntimeWhisperHost } from './features/components/speech-pack/runtime-worker-host'
@@ -26,7 +28,7 @@ import { registerRuntimeInstallIpc } from './ipc/runtime-install-ipc'
 import { registerRuntimeWhisperWorkerIpc } from './ipc/runtime-whisper-worker-ipc'
 
 export function registerRuntimeConsumers(options: {
-  readonly app: Pick<Electron.App, 'getPath' | 'getVersion'>
+  readonly app: Pick<Electron.App, 'getPath' | 'getVersion' | 'on' | 'quit'>
   readonly ipcMain: Electron.IpcMain
   readonly assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
   readonly resourcesRoot: string
@@ -38,6 +40,7 @@ export function registerRuntimeConsumers(options: {
   readonly captureRevision: () => number
   readonly requireAuth: () => boolean
   readonly runBootWork: (name: string, work: () => Promise<unknown>) => void
+  readonly warn: (message: string) => void
 }) {
   const { app } = options
   const storeRoot = join(app.getPath('userData'), 'optional-runtimes')
@@ -94,6 +97,7 @@ export function registerRuntimeConsumers(options: {
       policyIdentity,
       selectionIdentity: createHash('sha256').update(selection).digest('hex'),
       captureIdentity: `capture:${options.captureRevision()}`,
+      authorityEpoch: authority.epoch,
       captureActive: options.captureActive(),
       transferAllowed: allowed,
       selectedModelId
@@ -110,6 +114,56 @@ export function registerRuntimeConsumers(options: {
   const installCleanup = registerRuntimeInstallIpc({
     ipcMain: options.ipcMain,
     assertMainWindow: options.assertMainWindow,
+    assertAuthorityCurrent: (expected: RuntimeInstallAuthoritySnapshot, feature) => {
+      const observation = getPublishedSettingsObservation()
+      if (
+        !observation?.readable ||
+        observation.epoch !== expected.authorityEpoch ||
+        getSettingsObservationEpoch() !== expected.authorityEpoch ||
+        !options.requireAuth() ||
+        options.captureActive() ||
+        `capture:${options.captureRevision()}` !== expected.captureIdentity ||
+        options.packageContract.status !== 'verified' ||
+        options.packageContract.profile !== 'lean'
+      ) {
+        throw new Error('RUNTIME_INSTALL_PLAN_STALE')
+      }
+      const settings = observation.settings
+      const selectedModelId =
+        feature === 'offline-asr'
+          ? settings.asrEngine === 'parakeet'
+            ? 'asr.parakeet-tdt-0.6b-v3-int8'
+            : settings.asrEngine === 'whisper'
+              ? 'asr.whisper-base-q8'
+              : null
+          : feature === 'speaker-embedding'
+            ? 'speaker.embedding'
+            : settings.localLlm.modelId === 'qwen3.5-0.8b' || settings.localLlm.modelId === 'qwen3.5-4b'
+              ? settings.localLlm.modelId
+              : null
+      const allowed =
+        feature === 'offline-asr'
+          ? selectedModelId !== null
+          : feature === 'speaker-embedding'
+            ? settings.speakerId.enabled === true
+            : selectedModelId !== null && localModelAllowedByPolicy(getActiveModelPolicy(settings), selectedModelId)
+      const selection = feature === 'local-llm' ? getLocalModelProvisioningIdentity() : getSpeechPackSelectionIdentity()
+      const policy = getSpeechPolicyAuthorityStatus(settings)
+      const packageIdentity = `${options.packageContract.profile}:${options.packageContract.inventory.identity}`
+      if (
+        !allowed ||
+        !expected.allowedFeatures.includes(feature) ||
+        expected.selectedModelId !== selectedModelId ||
+        expected.profileIdentity !== createHash('sha256').update(packageIdentity).digest('hex') ||
+        expected.selectionIdentity !== createHash('sha256').update(selection).digest('hex') ||
+        expected.policyIdentity !==
+          createHash('sha256')
+            .update(`${policy.identity}:${getSpeechPackPolicyIdentity()}:${expected.authorityEpoch}`)
+            .digest('hex')
+      ) {
+        throw new Error('RUNTIME_INSTALL_PLAN_STALE')
+      }
+    },
     plans: installService
   }).cleanup
   const whisper = registerRuntimeWhisperWorkerIpc({
@@ -151,13 +205,20 @@ export function registerRuntimeConsumers(options: {
     },
     createHost: createRuntimeWhisperHost
   })
-  return { installService, installCleanup, whisperCleanup: whisper.cleanup, revokeWhisper: whisper.revokeAll }
+  const consumers = {
+    installService,
+    installCleanup,
+    whisperCleanup: whisper.cleanup,
+    revokeWhisper: whisper.revokeAll
+  }
+  registerRuntimeConsumerShutdown(app, () => consumers, options.warn)
+  return consumers
 }
 
 type RuntimeConsumerLifetime = ReturnType<typeof registerRuntimeConsumers>
 
 export function registerRuntimeConsumerShutdown(
-  app: Electron.App,
+  app: Pick<Electron.App, 'on' | 'quit'>,
   current: () => RuntimeConsumerLifetime | null,
   warn: (message: string) => void
 ): void {
@@ -182,4 +243,18 @@ export function registerRuntimeConsumerShutdown(
       }
     )
   })
+}
+
+export function registerSpeechRuntimeSchemes(protocol: Pick<Electron.Protocol, 'registerSchemesAsPrivileged'>): void {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: 'asr-model',
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
+    },
+    {
+      // The UI's default Session never receives this handler; the private host Session remains CSP-bound.
+      scheme: 'metis-runtime',
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
+    }
+  ])
 }

@@ -141,10 +141,11 @@ async function writeExclusive(path: string, data: Uint8Array, mode: number): Pro
   }
 }
 
-async function writeBytesAtomic(path: string, bytes: Uint8Array): Promise<void> {
+async function writeBytesAtomic(path: string, bytes: Uint8Array, beforeRename: () => void): Promise<void> {
   const temp = `${path}.${randomBytes(16).toString('hex')}.tmp`
   await writeExclusive(temp, bytes, 0o600)
   try {
+    beforeRename()
     await rename(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
@@ -221,6 +222,8 @@ export interface RuntimeInstallTransactionInput {
   readonly signal: AbortSignal
   /** The plan book binds this to fresh authority, selected model, target and catalog identity. */
   readonly assertCurrent: () => Promise<void>
+  /** Synchronous live owner/authority token check for atomic publication boundaries. */
+  readonly assertCurrentSync: () => void
 }
 
 export interface RuntimeInstallSelfTest {
@@ -256,7 +259,10 @@ export function createRuntimeInstaller(options: {
   ): Promise<{ generationIdentity: string; installedBytes: number }> => {
     const check = async (): Promise<void> => {
       if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
+      input.assertCurrentSync()
       await input.assertCurrent()
+      if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
+      input.assertCurrentSync()
     }
     await check()
     const catalogSnapshot = await options.provider.catalogSnapshot()
@@ -358,6 +364,10 @@ export function createRuntimeInstaller(options: {
               signal: input.signal,
               trustedRoot: stage,
               authorize: () => !input.signal.aborted,
+              authorizeSync: () => {
+                if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
+                input.assertCurrentSync()
+              },
               authorizeAsync: check,
               resumeScope: randomBytes(16).toString('hex'),
               onProgress: () => undefined
@@ -486,6 +496,7 @@ export function createRuntimeInstaller(options: {
         throw new Error('RUNTIME_GENERATION_ALREADY_EXISTS')
       }
       await check()
+      input.assertCurrentSync()
       await rename(stage, targetGeneration)
       publishedGeneration = targetGeneration
       await syncDirectory(generationsRoot)
@@ -493,6 +504,7 @@ export function createRuntimeInstaller(options: {
       temporaryPointer = `${priorPointerPath}.${randomBytes(16).toString('hex')}.tmp`
       await writeExclusive(temporaryPointer, finalPointer, 0o600)
       await check()
+      input.assertCurrentSync()
       await rename(temporaryPointer, priorPointerPath)
       temporaryPointer = null
       try {
@@ -510,8 +522,12 @@ export function createRuntimeInstaller(options: {
           }
         }
         if (current?.equals(finalPointer)) {
-          if (priorPointer) await writeBytesAtomic(priorPointerPath, priorPointer)
-          else await rm(priorPointerPath, { force: true })
+          await check()
+          if (priorPointer) await writeBytesAtomic(priorPointerPath, priorPointer, input.assertCurrentSync)
+          else {
+            input.assertCurrentSync()
+            await rm(priorPointerPath, { force: true })
+          }
           await syncDirectory(activeRoot)
         } else if (!(priorPointer ? current?.equals(priorPointer) : current === null)) {
           retainPublishedGeneration = true

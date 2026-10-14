@@ -29,7 +29,8 @@
  *   - Only ENOENT and ENOTDIR are 'missing'. 'unavailable', 'timeout' and 'degraded' say nothing about
  *     whether a file exists; callers must never treat them as a deletion.
  */
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
@@ -103,6 +104,8 @@ export interface ReadOptions extends RequestOptions {
   hydrate?: boolean
   /** Called (never throwing into the gateway) as a `hydrate` read starts and ends, ok or not. */
   onProgress?: (progress: HydrationProgress) => void
+  /** Physical byte ceiling for consumers with a trusted decoded-document budget. */
+  maxBytes?: number
 }
 
 export interface StorageGateway {
@@ -121,6 +124,8 @@ export interface StorageGateway {
 export interface StorageFs {
   readdir(path: string): Promise<string[]>
   readFile(path: string): Promise<Buffer>
+  /** Reads at most maxBytes + 1 bytes; callers use the extra byte to detect concurrent file growth. */
+  readFileBounded?(path: string, maxBytes: number): Promise<Buffer>
   realpath(path: string): Promise<string>
   stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number; isFile?: () => boolean }>
   /** Unlike `stat`, never follows the final path component: the only way to tell a plain file apart
@@ -172,6 +177,48 @@ export function reservedPoolCapacity(poolSize = threadpoolSize(process.env.UV_TH
 /** An admission that keeps RESERVED_POOL_THREADS of a `poolSize`-thread pool free. */
 export function poolAdmission(poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)): Admission {
   return createAdmission(reservedPoolCapacity(poolSize))
+}
+
+async function readFileBounded(path: string, maxBytes: number): Promise<Buffer> {
+  const flags =
+    constants.O_RDONLY | (process.platform === 'win32' ? 0 : (constants.O_NOFOLLOW ?? 0)) | (constants.O_NONBLOCK ?? 0)
+  const handle = await open(path, flags)
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    const opened = await handle.stat()
+    const entry = await lstat(path)
+    const current = await stat(path)
+    if (
+      !opened.isFile() ||
+      entry.isSymbolicLink() ||
+      opened.dev !== current.dev ||
+      opened.ino !== current.ino ||
+      opened.size > maxBytes
+    ) {
+      const error = new Error(
+        'Bounded read requires an unchanged regular file within its maximum size.'
+      ) as NodeJS.ErrnoException
+      error.code = opened.size > maxBytes ? 'EFBIG' : 'EINVAL'
+      throw error
+    }
+    while (total <= maxBytes) {
+      const remaining = maxBytes + 1 - total
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, remaining))
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
+      if (bytesRead === 0) break
+      total += bytesRead
+      if (total > maxBytes) {
+        const error = new Error('Bounded read exceeded its maximum size.') as NodeJS.ErrnoException
+        error.code = 'EFBIG'
+        throw error
+      }
+      chunks.push(buffer.subarray(0, bytesRead))
+    }
+    return Buffer.concat(chunks, total)
+  } finally {
+    await handle.close()
+  }
 }
 
 function outsideRoot(): StorageFailure {
@@ -235,7 +282,11 @@ function openRequest(deadlineMs: number, caller: AbortSignal | undefined): Reque
 }
 
 /** `pending` (which never rejects), unless the request ends first; the work runs on either way. */
-function untilEnded<T>(pending: Promise<T>, request: Request, phase: 'waiting' | 'running'): Promise<T | StorageFailure> {
+function untilEnded<T>(
+  pending: Promise<T>,
+  request: Request,
+  phase: 'waiting' | 'running'
+): Promise<T | StorageFailure> {
   if (request.signal.aborted) return Promise.resolve(request.ended(phase))
   return new Promise((resolve) => {
     function end(): void {
@@ -282,7 +333,14 @@ function createPresenceQueue(detector: DatalessDetector): PresenceOf {
 export function createStorageGateway({
   root,
   detector = createDatalessDetector(),
-  fs = { readdir, readFile, realpath, stat, lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })) },
+  fs = {
+    readdir,
+    readFile,
+    readFileBounded,
+    realpath,
+    stat,
+    lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() }))
+  },
   poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE),
   admission = poolAdmission(poolSize)
 }: StorageGatewayOptions): StorageGateway {
@@ -322,7 +380,10 @@ export function createStorageGateway({
     const stats = await call('metadata', request, () => fs.stat(path))
     if (stats.status !== 'ok') return stats
     const { mtimeMs, ctimeMs, size, isFile } = stats.value
-    return { status: 'ok', value: { file: { path, mtimeMs, ctimeMs, size }, regular: isFile ? isFile.call(stats.value) : true } }
+    return {
+      status: 'ok',
+      value: { file: { path, mtimeMs, ctimeMs, size }, regular: isFile ? isFile.call(stats.value) : true }
+    }
   }
 
   /** Whether `path` names a symlink itself. Unreadable (settled failure) counts as a symlink: a caller
@@ -336,13 +397,21 @@ export function createStorageGateway({
    *  probe runs on, and the detector caches its answer for the next call. A version this process wrote
    *  itself (local-writes.ts) is still probed and the probe's answer wins, but where the probe cannot tell
    *  ('unknown') it is local, and a batch of only such versions waits LOCAL_WRITE_PROBE_WAIT_MS at most. */
-  async function presenceWithin(files: readonly FileVersion[], request: Request): Promise<Map<string, ContentPresence>> {
+  async function presenceWithin(
+    files: readonly FileVersion[],
+    request: Request
+  ): Promise<Map<string, ContentPresence>> {
     const ours = files.filter(isLocalWrite)
     let timer: ReturnType<typeof setTimeout> | undefined
     const probed = presenceOf(files)
     const pending =
       ours.length > 0 && ours.length === files.length
-        ? Promise.race([probed, new Promise<Map<string, ContentPresence>>((resolve) => (timer = setTimeout(() => resolve(new Map()), LOCAL_WRITE_PROBE_WAIT_MS)))])
+        ? Promise.race([
+            probed,
+            new Promise<Map<string, ContentPresence>>(
+              (resolve) => (timer = setTimeout(() => resolve(new Map()), LOCAL_WRITE_PROBE_WAIT_MS))
+            )
+          ])
         : probed
     const verdicts = await untilEnded(pending, request, 'waiting')
     clearTimeout(timer)
@@ -368,13 +437,18 @@ export function createStorageGateway({
     return leavesBase(relative(realBase.value, real.value)) ? outsideRoot() : real
   }
 
-  function readKey(real: string, version: ContentVersion): string {
-    return [real, version.mtimeMs, version.ctimeMs, version.size].join('\0')
+  function readKey(real: string, version: ContentVersion, maxBytes?: number): string {
+    return [real, version.mtimeMs, version.ctimeMs, version.size, maxBytes ?? 'unbounded'].join('\0')
   }
 
   /** Reads `real` once per version, however many callers ask while that read runs. */
-  async function readShared(real: string, version: ContentVersion, request: Request): Promise<Settled<Buffer>> {
-    const key = readKey(real, version)
+  async function readShared(
+    real: string,
+    version: ContentVersion,
+    request: Request,
+    maxBytes?: number
+  ): Promise<Settled<Buffer>> {
+    const key = readKey(real, version, maxBytes)
     const running = reads.get(key)
     if (running) return untilEnded(running, request, 'running')
     const refused = await admit('content', request)
@@ -384,37 +458,57 @@ export function createStorageGateway({
       admission.release()
       return untilEnded(started, request, 'running')
     }
-    const reading = settle(admission.run(() => fs.readFile(real))).finally(() => reads.delete(key))
+    if (maxBytes !== undefined && !fs.readFileBounded) {
+      admission.release()
+      return { status: 'unavailable', code: 'BOUNDED_READ_UNAVAILABLE' }
+    }
+    const reading = settle(
+      admission.run(() => (maxBytes === undefined ? fs.readFile(real) : fs.readFileBounded!(real, maxBytes)))
+    ).finally(() => reads.delete(key))
     reads.set(key, reading)
     return untilEnded(reading, request, 'running')
   }
 
-  async function readLocal(base: string, path: string, request: Request, { hydrate, onProgress }: ReadOptions): Promise<LocalRead> {
+  async function readLocal(
+    base: string,
+    path: string,
+    request: Request,
+    { hydrate, onProgress, maxBytes }: ReadOptions
+  ): Promise<LocalRead> {
     const stated = await statFile(path, request)
     if (stated.status !== 'ok') return { result: stated, rememberUnavailable: stated.status === 'unavailable' }
+    if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0))
+      return { result: { status: 'unavailable', code: 'INVALID_SIZE_LIMIT' }, rememberUnavailable: false }
+    if (maxBytes !== undefined && stated.value.file.size > maxBytes)
+      return { result: { status: 'unavailable', code: 'SIZE_LIMIT' }, rememberUnavailable: false }
     // Only an explicit hydrate read refuses a FIFO, socket or device: it skips the detector, so nothing
     // else stands between it and an open that no peer may ever answer. A plain read keeps the
     // detector-first order (the K0-K2 tests and ST-1's FIFO row rely on it). Callers that must never open
     // a non-regular file classify first and refuse it before they read.
-    if (hydrate && !stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
+    if (hydrate && !stated.value.regular)
+      return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
     const version = versionOf(stated.value.file)
     if (!hydrate) {
       const presence = (await presenceWithin([stated.value.file], request)).get(path)
       if (request.signal.aborted) return { result: request.ended('waiting'), rememberUnavailable: false }
-      if (presence !== 'local') return { result: { status: presence ?? 'unknown', version }, rememberUnavailable: false }
+      if (presence !== 'local')
+        return { result: { status: presence ?? 'unknown', version }, rememberUnavailable: false }
     }
     const real = await resolveInside(base, path, request)
     if (real.status !== 'ok') return { result: real, rememberUnavailable: false }
     if (hydrate) reportProgress(onProgress, { state: 'hydrating' })
-    const bytes = await readShared(real.value, version, request)
+    const bytes = await readShared(real.value, version, request, maxBytes)
     if (hydrate && bytes.status === 'ok') reportProgress(onProgress, { state: 'done', bytes: bytes.value.length })
     if (hydrate && bytes.status !== 'ok') {
       // A read still running past its deadline is in `reads` until its fs call settles.
-      const running = reads.get(readKey(real.value, version))
+      const running = reads.get(readKey(real.value, version, maxBytes))
       const settled = running ? running.then(() => undefined) : Promise.resolve()
       reportProgress(onProgress, { state: 'failed', status: bytes.status, settled })
     }
-    return { result: bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes, rememberUnavailable: false }
+    return {
+      result: bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes,
+      rememberUnavailable: false
+    }
   }
 
   function remember(path: string, result: Unread): void {
@@ -464,7 +558,10 @@ export function createStorageGateway({
             if (file.status !== 'ok') return [rel, file]
             const verdict = presence.get(file.value.file.path)
             const status = verdict === 'local' ? 'ok' : (verdict ?? 'unknown')
-            return [rel, { status, version: versionOf(file.value.file), isSymlink: link, isRegular: file.value.regular }]
+            return [
+              rel,
+              { status, version: versionOf(file.value.file), isSymlink: link, isRegular: file.value.regular }
+            ]
           })
         )
       } finally {
@@ -487,7 +584,12 @@ export function createStorageGateway({
         // An explicit open answers for itself: its timeout says nothing about a later listing. Its success
         // does: the bytes are now here, so a remembered 'dataless' must stop answering for this file.
         if (hydrate && result.status === 'ok') failures.delete(path)
-        if (!hydrate && result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
+        if (
+          !hydrate &&
+          result.status !== 'ok' &&
+          (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))
+        )
+          remember(path, result)
         return result
       } finally {
         request.close()

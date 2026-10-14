@@ -57,6 +57,8 @@ export interface DownloadRequest {
   signal: AbortSignal
   /** Rechecked before reads and writes so a revoked local policy stops the transfer promptly. */
   authorize?: () => boolean
+  /** Synchronous authority fence immediately before the atomic publication rename. */
+  authorizeSync?: () => void
   /** Awaitable settings/policy/capture boundary rechecked around each network and file await. */
   authorizeAsync?: () => Promise<void>
   /** A service-process nonce; partial bytes from a prior process cannot resume silently. */
@@ -689,6 +691,7 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
         await req.authorizeAsync?.()
         if (req.signal.aborted) throw req.signal.reason
         if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+        req.authorizeSync?.()
         await rename(partial, req.dest)
         req.onProgress(req.bytes)
         return

@@ -1,6 +1,6 @@
 /** Strict verification of a promoted optional-runtime catalog row and its Sigstore/SLSA bundle. */
 import { createHash } from 'node:crypto'
-import { bundleFromJSON } from '@sigstore/bundle'
+import { bundleFromJSON, type Bundle } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
 import { parseRuntimeInventory } from './runtime-inventory'
@@ -325,7 +325,7 @@ function validModelRows(rows: readonly unknown[], allowed: readonly string[]): b
           typeof member !== 'string' ||
           !safePath(member) ||
           members.has(member.toLowerCase()) ||
-          !safePath(`${model.root}/${member}`)
+          !member.startsWith(`${model.root}/`)
         )
           return false
         members.add(member.toLowerCase())
@@ -589,9 +589,11 @@ function expectedSignerUri(row: RuntimeCatalogRow): string {
 function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): void {
   const signerRecord = record(signer)
   const identity = signerRecord && record(signerRecord.identity)
+  const extensions = identity && record(identity.extensions)
   if (
     !identity ||
-    identity.issuer !== row.signer.issuer ||
+    !extensions ||
+    extensions.issuer !== row.signer.issuer ||
     identity.subjectAlternativeName !== expectedSignerUri(row) ||
     !Array.isArray(identity.oids)
   ) {
@@ -707,19 +709,20 @@ export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): 
     row
   )
   const bundleJson = boundedUtf8Json(bundleBytes, MAX_BUNDLE_BYTES, 'RUNTIME_BUNDLE_INVALID')
-  let bundle: unknown
+  let bundle: Bundle
   try {
-    bundle = (bundleFromJSON as (value: unknown) => unknown)(bundleJson)
+    bundle = bundleFromJSON(bundleJson)
   } catch {
     throw new Error('RUNTIME_BUNDLE_INVALID')
   }
-  const dsse = record(bundle)
-  const envelope = dsse && record(dsse.dsseEnvelope)
+  const content = record(bundle.content)
+  const envelope = content?.$case === 'dsseEnvelope' ? record(content.dsseEnvelope) : null
+  const payload = envelope?.payload
   if (
     !envelope ||
-    typeof envelope.payload !== 'string' ||
-    envelope.payload.length > MAX_BUNDLE_BYTES * 2 ||
-    !/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.payload)
+    !(payload instanceof Uint8Array) ||
+    payload.byteLength === 0 ||
+    payload.byteLength > MAX_BUNDLE_BYTES
   ) {
     throw new Error('RUNTIME_ATTESTATION_FORMAT_UNSUPPORTED')
   }
@@ -729,7 +732,7 @@ export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): 
   const verifier = new Verifier(trustMaterial, { tlogThreshold: 1, ctlogThreshold: 1, timestampThreshold: 1 })
   let authenticatedSigner: unknown
   try {
-    const entity = toSignedEntity(bundle as Parameters<typeof toSignedEntity>[0])
+    const entity = toSignedEntity(bundle)
     authenticatedSigner = await verifier.verify(entity)
   } catch {
     throw new Error('RUNTIME_SIGNATURE_OR_TRANSPARENCY_INVALID')
@@ -737,9 +740,6 @@ export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): 
   assertAuthenticatedIdentity(authenticatedSigner, row)
   let statement: unknown
   try {
-    const payload = Buffer.from(envelope.payload, 'base64')
-    if (payload.toString('base64') !== envelope.payload) throw new Error('payload encoding')
-    if (payload.length === 0 || payload.length > MAX_BUNDLE_BYTES) throw new Error('payload size')
     statement = boundedUtf8Json(payload, MAX_BUNDLE_BYTES, 'RUNTIME_ATTESTATION_FORMAT_UNSUPPORTED')
   } catch {
     throw new Error('RUNTIME_ATTESTATION_FORMAT_UNSUPPORTED')

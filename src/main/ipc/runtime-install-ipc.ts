@@ -28,6 +28,7 @@ function reasonFor(error: unknown): z.infer<typeof ErrorReason> {
 export function registerRuntimeInstallIpc(options: {
   readonly ipcMain: RuntimeInstallIpcMain
   readonly assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
+  readonly assertAuthorityCurrent: RuntimeInstallCallerContext['assertAuthorityCurrent']
   readonly plans: RuntimeInstallPlanBook
 }): { cleanup(): void } {
   const owners = new WeakMap<Electron.WebContents, { identity: string; navigation: number; subscribed: boolean }>()
@@ -69,7 +70,7 @@ export function registerRuntimeInstallIpc(options: {
       }
     }
     assertCurrent()
-    return Object.freeze({ identity, assertCurrent })
+    return Object.freeze({ identity, assertCurrent, assertAuthorityCurrent: options.assertAuthorityCurrent })
   }
 
   options.ipcMain.handle(IPC.runtimeInstallPlanPreview, async (event, input: unknown) => {

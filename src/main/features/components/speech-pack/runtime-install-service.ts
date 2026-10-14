@@ -20,7 +20,7 @@ export function createRuntimeInstallService(options: {
     readAuthority: options.readAuthority,
     readTarget: options.readTarget,
     readPreviousActiveBytes: (feature) => options.provider.previousActiveBytes(feature),
-    run: (plan, signal, assertCurrent) =>
+    run: (plan, signal, assertCurrent, assertCurrentSync) =>
       installer.install({
         feature: plan.feature,
         selectedModelId: plan.selectedModelId,
@@ -28,7 +28,8 @@ export function createRuntimeInstallService(options: {
         artifactIds: plan.artifactIds,
         catalogIdentity: plan.catalogIdentity,
         signal,
-        assertCurrent
+        assertCurrent,
+        assertCurrentSync
       })
   })
 }

@@ -76,11 +76,11 @@ function verifiedGeneration(input: Parameters<RuntimeInstallSelfTest>[0]): Verif
       if (!modelIds.includes(model.id as RuntimeModelId)) continue
       models[model.id as RuntimeModelId] = {
         root: `artifacts/${inventory.artifactId}/${model.root}`,
-        members: model.members
+        members: model.members.map((member) => member.slice(model.root.length + 1))
       }
       if (model.id === 'asr.whisper-base-q8') {
         for (const member of model.members) {
-          const inventoryPath = `${model.root}/${member}`
+          const inventoryPath = member
           const path = `artifacts/${inventory.artifactId}/${inventoryPath}`
           const pin = inventory.files.find((file) => file.path === inventoryPath)
           if (!pin) throw new Error('RUNTIME_SELF_TEST_MODEL_PIN_MISSING')

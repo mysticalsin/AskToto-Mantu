@@ -14,6 +14,7 @@ export interface RuntimeInstallAuthoritySnapshot {
   readonly policyIdentity: string
   readonly selectionIdentity: string
   readonly captureIdentity: string
+  readonly authorityEpoch: number
   readonly captureActive: boolean
   readonly transferAllowed: boolean
   readonly selectedModelId: RuntimeModelId | null
@@ -31,6 +32,7 @@ export interface RuntimeInstallAuthorizedPlan {
 export interface RuntimeInstallCallerContext {
   readonly identity: string
   readonly assertCurrent: () => void
+  readonly assertAuthorityCurrent: (authority: RuntimeInstallAuthoritySnapshot, feature: RuntimeFeatureId) => void
 }
 
 interface PlanRecord {
@@ -51,6 +53,7 @@ function identitySnapshot(value: RuntimeInstallAuthoritySnapshot): string {
     policyIdentity: value.policyIdentity,
     selectionIdentity: value.selectionIdentity,
     captureIdentity: value.captureIdentity,
+    authorityEpoch: value.authorityEpoch,
     captureActive: value.captureActive,
     transferAllowed: value.transferAllowed,
     selectedModelId: value.selectedModelId
@@ -75,6 +78,8 @@ function validAuthority(value: RuntimeInstallAuthoritySnapshot, feature: Runtime
       typeof value.captureIdentity === 'string' &&
       value.captureIdentity.length > 0 &&
       value.captureIdentity.length <= 256 &&
+      Number.isSafeInteger(value.authorityEpoch) &&
+      value.authorityEpoch >= 0 &&
       value.captureActive === false &&
       value.transferAllowed === true &&
       (value.selectedModelId === null ||
@@ -103,7 +108,8 @@ export function createRuntimeInstallPlanBook(options: {
   readonly run: (
     plan: RuntimeInstallAuthorizedPlan,
     signal: AbortSignal,
-    assertCurrent: () => Promise<void>
+    assertCurrent: () => Promise<void>,
+    assertCurrentSync: () => void
   ) => Promise<unknown>
 }) {
   const plans = new Map<string, PlanRecord>()
@@ -146,6 +152,13 @@ export function createRuntimeInstallPlanBook(options: {
     ) {
       throw new Error('RUNTIME_INSTALL_PLAN_STALE')
     }
+  }
+
+  const assertPlanCurrentSync = (plan: PlanRecord, caller: RuntimeInstallCallerContext): void => {
+    caller.assertCurrent()
+    if (caller.identity !== plan.callerIdentity) throw new Error('RUNTIME_INSTALL_CALLER_CHANGED')
+    if (now() >= plan.expiresAt) throw new Error('RUNTIME_INSTALL_PLAN_EXPIRED')
+    caller.assertAuthorityCurrent(plan.authority, plan.preview.feature)
   }
 
   return Object.freeze({
@@ -254,6 +267,10 @@ export function createRuntimeInstallPlanBook(options: {
           async () => {
             if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
             await assertPlanCurrent(plan, input.caller)
+          },
+          () => {
+            if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_INSTALL_CANCELLED')
+            assertPlanCurrentSync(plan, input.caller)
           }
         )
       } finally {

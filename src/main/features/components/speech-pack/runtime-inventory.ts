@@ -283,14 +283,19 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
       const foldedMember = typeof member === 'string' ? member.toLowerCase() : ''
       if (
         !safePath(member) ||
+        !member.startsWith(`${model.root}/`) ||
         localMembers.has(foldedMember) ||
         modelMembers.has(foldedMember) ||
-        !exact.has(`${model.root}/${member}`)
+        !exact.has(member)
       ) {
         throw new Error('RUNTIME_MODEL_INVENTORY_INVALID')
       }
       localMembers.add(foldedMember)
       modelMembers.add(foldedMember)
+    }
+    const closure = [...exact.keys()].filter((path) => path.startsWith(`${model.root}/`))
+    if (closure.length !== localMembers.size || closure.some((path) => !localMembers.has(path.toLowerCase()))) {
+      throw new Error('RUNTIME_MODEL_INVENTORY_INVALID')
     }
   }
   const directories = record(inventory.directories)

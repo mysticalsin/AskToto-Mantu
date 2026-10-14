@@ -69,6 +69,33 @@ describe('downloadVerified', () => {
     expect(existsSync(join(dir, 'model.bin.partial'))).toBe(false)
   })
 
+  it('does not publish a verified partial when authority changes at the final rename fence', async () => {
+    server = await serve(rangeHandler(body))
+    let authorized = true
+    const removeFile: typeof rmAsync = async (path, options) => {
+      if (String(path).endsWith('.partial.json')) authorized = false
+      await rmAsync(path, options)
+    }
+    const err = await failure(
+      downloadVerified(
+        {
+          ...request(`${server.base}/pin/model.bin`),
+          authorize: () => authorized,
+          authorizeAsync: async () => {
+            if (!authorized) throw new SpeechPackError('policy', 'authority changed')
+          },
+          authorizeSync: () => {
+            if (!authorized) throw new SpeechPackError('policy', 'authority changed')
+          }
+        },
+        deps({ removeFile })
+      )
+    )
+    expect(err.kind).toBe('policy')
+    expect(existsSync(join(dir, 'model.bin'))).toBe(false)
+    expect(readFileSync(join(dir, 'model.bin.partial'))).toEqual(body)
+  })
+
   it('rejects linked parents and partial leaves before fetching or changing outside content', async () => {
     const outside = join(dir, 'outside')
     const owned = join(dir, 'owned')
