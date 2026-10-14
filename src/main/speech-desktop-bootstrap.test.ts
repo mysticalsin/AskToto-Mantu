@@ -5,6 +5,7 @@ import type { SpeechPolicyIdentityReader } from './speech-policy-authority'
 import { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
 import { startSpeechDesktopBootstrap } from './speech-desktop-bootstrap'
 import type { SettingsObservation } from './settings-observation'
+import type { ManagedSpeechPolicyRead } from './managed-speech-providers'
 
 const desktop = vi.hoisted(() => ({ options: null as SpeechDesktopRuntimeOptions | null, invalidate: vi.fn() }))
 vi.mock('./speech-desktop-runtime', () => ({
@@ -30,7 +31,7 @@ function fixture() {
   }
   const metadata = vi.fn(async () => ({
     durableDeviceId: 'synthetic-persisted-device',
-    managedPolicy: { state: 'absent' as const },
+    managedPolicy: { state: 'absent' } as ManagedSpeechPolicyRead,
     screenDiagnosisState: 'granted'
   }))
   const readSettings = vi.fn(() => {
@@ -70,25 +71,69 @@ function fixture() {
     observeAuthenticationSettings: vi.fn(),
     observeAuthenticationRevocations: (next) => {
       revokeAuthentication = next
-      return () => { revokeAuthentication = null }
+      return () => {
+        revokeAuthentication = null
+      }
     },
     releaseAuthentication: vi.fn()
   })
-  return { bootstrap, metadata, readSettings, authentication, verifiedPolicy, revokeAuthentication: () => revokeAuthentication?.(), publish, settings: () => settings, identity: () => identityReader?.() }
+  return {
+    bootstrap,
+    metadata,
+    readSettings,
+    authentication,
+    verifiedPolicy,
+    revokeAuthentication: () => revokeAuthentication?.(),
+    publish,
+    settings: () => settings,
+    identity: () => identityReader?.()
+  }
 }
 
 describe('actual speech bootstrap composition', () => {
+  it('closes a discarded forced read when an unrelated edit races a newly denied managed policy', async () => {
+    const f = fixture()
+    try {
+      await f.bootstrap.prime
+      expect(desktop.options?.readState().metadataReady).toBe(true)
+      let started!: () => void
+      const metadataStarted = new Promise<void>((resolve) => { started = resolve })
+      let release!: (value: Awaited<ReturnType<typeof f.metadata>>) => void
+      const denied = { durableDeviceId: 'synthetic-persisted-device', managedPolicy: { state: 'invalid' as const }, screenDiagnosisState: 'granted' }
+      f.metadata.mockResolvedValue(denied)
+      f.metadata.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; started() }))
+      const preparation = desktop.options!.prepareAuthority!({} as never)
+      await metadataStarted
+      f.publish({ ...f.settings(), overlayOpacity: 0.6 })
+      release(denied)
+      await preparation
+      expect(desktop.options?.readState().metadataReady).toBe(false)
+      expect(desktop.options?.readState().managedProviders).toEqual({ state: 'invalid' })
+      expect(f.verifiedPolicy).not.toHaveBeenCalled()
+      expect(f.identity()?.durableDeviceId).toBeNull()
+    } finally {
+      await f.bootstrap.dispose()
+    }
+  })
   it('prepares fresh authentication and metadata before signed policy at real IPC boundaries', async () => {
     const f = fixture()
     try {
       await f.bootstrap.prime
       const order: string[] = []
-      f.authentication.mockImplementationOnce(async () => { order.push('authentication') })
+      f.authentication.mockImplementationOnce(async () => {
+        order.push('authentication')
+      })
       f.metadata.mockImplementationOnce(async () => {
         order.push('metadata')
-        return { durableDeviceId: 'synthetic-persisted-device', managedPolicy: { state: 'absent' }, screenDiagnosisState: 'granted' }
+        return {
+          durableDeviceId: 'synthetic-persisted-device',
+          managedPolicy: { state: 'absent' },
+          screenDiagnosisState: 'granted'
+        }
       })
-      f.verifiedPolicy.mockImplementationOnce(async () => { order.push('signed-policy') })
+      f.verifiedPolicy.mockImplementationOnce(async () => {
+        order.push('signed-policy')
+      })
       await desktop.options?.prepareAuthority?.({} as never)
       expect(order).toEqual(['authentication', 'metadata', 'signed-policy'])
       const boundaryReads = f.authentication.mock.calls.length
@@ -134,13 +179,19 @@ describe('actual speech bootstrap composition', () => {
     try {
       await f.bootstrap.prime
       const gate: { release?: (value: Awaited<ReturnType<typeof f.metadata>>) => void } = {}
+      let started!: () => void
+      const metadataStarted = new Promise<void>((resolve) => {
+        started = resolve
+      })
       f.metadata.mockImplementationOnce(
         () =>
           new Promise((resolve) => {
             gate.release = resolve
+            started()
           })
       )
       const refresh = f.bootstrap.refresh('synthetic-held-boundary')
+      await metadataStarted
       const original = f.settings()
       f.publish({ ...original, operatorLicenseToken: 'synthetic-credential-change' })
       f.publish(original)
@@ -154,7 +205,8 @@ describe('actual speech bootstrap composition', () => {
       })
       await refresh
       expect(desktop.invalidate).toHaveBeenCalled()
-      expect(desktop.options?.readState().durableDeviceId).toBe('synthetic-persisted-device')
+      expect(desktop.options?.readState().durableDeviceId).toBeNull()
+      expect(desktop.options?.readState().metadataReady).toBe(false)
       expect(desktop.options?.readState().durableDeviceId).not.toBe('synthetic-retired-device')
     } finally {
       await f.bootstrap.dispose()
