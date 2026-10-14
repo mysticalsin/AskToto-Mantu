@@ -1,7 +1,19 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { HIGH_TIER_ASR_MODEL, asrModelBytes, asrModelFileUrl } from './asr-model-manifest'
+
+const asrIpcFixture = vi.hoisted(() => ({ userData: '', fetch: vi.fn() }))
+vi.mock('electron', () => ({
+  app: { getPath: () => asrIpcFixture.userData },
+  net: { fetch: asrIpcFixture.fetch }
+}))
+vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
+
+import { net } from 'electron'
+import { IPC } from '@shared/ipc'
+import { registerHighTierAsrModelFetch } from './ipc/asr-model-download'
 
 /**
  * MQA-247 — the high-accuracy transcription model's pin.
@@ -73,12 +85,22 @@ describe('MQA-247 — the high-tier ASR manifest', () => {
 describe('MQA-247 — the fetch is reachable and explicit', () => {
   const REPO = join(__dirname, '..', '..')
   const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8')
-  const readSettings = (): string =>
-    read('src/renderer/src/features/settings/AiSection.tsx')
+  const readSettings = (): string => read('src/renderer/src/features/settings/AiSection.tsx')
 
   it('is exposed end to end: channel, handler, preload, UI', () => {
     expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)
-    expect(read('src/main/index.ts')).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
+    expect(read('src/main/index.ts')).toMatch(/registerOptionalModelProvisioningIpc\(\{/)
+    expect(read('src/main/index.ts')).toMatch(/auditAsrTransfer:\s*\(\)\s*=>\s*auditLog\('asr\.model\.fetch_requested'/)
+    const bootstrap = read('src/main/speech-pack-bootstrap.ts')
+    expect(bootstrap).toMatch(/import \{ registerHighTierAsrModelFetch \} from '\.\/ipc\/asr-model-download'/)
+    expect(bootstrap).toMatch(/registerHighTierAsrModelFetch\(\{/)
+    expect(bootstrap).toMatch(/authenticated:\s*options\.requireAuth/)
+    expect(bootstrap).toMatch(/runtimeAvailable:\s*packageRuntimeAvailable/)
+    expect(bootstrap).toMatch(/authorityReadable:\s*async \(\) =>/)
+    const adapter = read('src/main/ipc/asr-model-download.ts')
+    expect(adapter).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
+    expect(adapter).toMatch(/options\.assertMainWindow\(event\)/)
+    expect(adapter).toMatch(/authenticated:\s*options\.authenticated\(\)/)
     expect(read('src/preload/index.ts')).toMatch(/asrModelFetch: \(\)/)
     expect(read('src/renderer/src/features/settings/AudioTab.tsx')).toMatch(
       /<AsrModelRow engine=\{settings\.asrEngine\} \/>/
@@ -102,9 +124,102 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
 
   it('the fetch and removal are authenticated and audited like every other state change', () => {
     const main = read('src/main/index.ts')
-    const block = main.slice(main.indexOf('IPC.asrModelFetch'), main.indexOf('IPC.asrModelRemove') + 400)
-    expect(block).toMatch(/requireAuth\(\)/)
-    expect(block).toMatch(/auditLog\('asr\.model\.fetch_requested'/)
-    expect(block).toMatch(/auditLog\('asr\.model\.removed'/)
+    const block = main.slice(
+      main.indexOf('registerOptionalModelProvisioningIpc({'),
+      main.indexOf('ipcMain.handle(IPC.asrModelRemove')
+    )
+    expect(block).toMatch(/requireAuth,/)
+    expect(block).toMatch(/auditAsrTransfer:\s*\(\)\s*=>\s*auditLog\('asr\.model\.fetch_requested'/)
+    const bootstrap = read('src/main/speech-pack-bootstrap.ts')
+    expect(bootstrap).toMatch(/authenticated:\s*options\.requireAuth/)
+    const removal = main.slice(main.indexOf('ipcMain.handle(IPC.asrModelRemove'))
+    expect(removal).toMatch(/requireAuth\(\)/)
+    expect(removal).toMatch(/auditLog\('asr\.model\.removed'/)
+  })
+
+  it('admits only an authenticated main-window request with available runtime and readable authority', async () => {
+    const userData = mkdtempSync(join(tmpdir(), 'metis-asr-ipc-'))
+    asrIpcFixture.userData = userData
+    const handlers = new Map<string, (event: Electron.IpcMainInvokeEvent) => Promise<unknown>>()
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (event: Electron.IpcMainInvokeEvent) => Promise<unknown>) => {
+        handlers.set(channel, handler)
+      })
+    }
+    const event = {} as Electron.IpcMainInvokeEvent
+    const assertMainWindow = vi.fn((_event: Electron.IpcMainInvokeEvent) => {})
+    const onTransfer = vi.fn()
+    const authenticated = vi.fn(() => true)
+    const runtimeAvailable = vi.fn(async () => true)
+    const authorityReadable = vi.fn(() => true)
+    const handlerFor = () => {
+      registerHighTierAsrModelFetch({
+        ipcMain,
+        assertMainWindow,
+        authenticated,
+        runtimeAvailable,
+        authorityReadable,
+        onTransfer
+      })
+      const handler = handlers.get(IPC.asrModelFetch)
+      if (!handler) throw new Error('ASR model fetch handler was not registered')
+      return handler
+    }
+
+    try {
+      assertMainWindow.mockImplementation(() => {
+        throw new Error('IPC denied: sender is not the main window')
+      })
+      await expect(handlerFor()(event)).rejects.toThrow('IPC denied: sender is not the main window')
+      expect(authenticated).not.toHaveBeenCalled()
+      expect(onTransfer).not.toHaveBeenCalled()
+      expect(net.fetch).not.toHaveBeenCalled()
+      assertMainWindow.mockImplementation(() => {})
+
+      const denied = [
+        {
+          name: 'unauthenticated',
+          prepare: () => authenticated.mockReturnValue(false)
+        },
+        {
+          name: 'runtime unavailable',
+          prepare: () => {
+            authenticated.mockReturnValue(true)
+            runtimeAvailable.mockResolvedValue(false)
+          }
+        },
+        {
+          name: 'unreadable authority',
+          prepare: () => {
+            authenticated.mockReturnValue(true)
+            runtimeAvailable.mockResolvedValue(true)
+            authorityReadable.mockReturnValue(false)
+          }
+        }
+      ] as const
+
+      for (const fixture of denied) {
+        fixture.prepare()
+        await expect(handlerFor()(event), fixture.name).resolves.toEqual({ ok: false })
+        expect(onTransfer, fixture.name).not.toHaveBeenCalled()
+        expect(net.fetch, fixture.name).not.toHaveBeenCalled()
+      }
+
+      authenticated.mockReturnValue(true)
+      runtimeAvailable.mockResolvedValue(true)
+      authorityReadable.mockReturnValue(true)
+      asrIpcFixture.fetch.mockResolvedValue(new Response(null, { status: 503 }))
+      await expect(handlerFor()(event)).resolves.toEqual({ ok: false })
+      expect(assertMainWindow).toHaveBeenCalledTimes(5)
+      expect(onTransfer).toHaveBeenCalledOnce()
+      expect(net.fetch).toHaveBeenCalledOnce()
+      expect(net.fetch).toHaveBeenCalledWith(asrModelFileUrl(HIGH_TIER_ASR_MODEL, HIGH_TIER_ASR_MODEL.files[0]), {
+        signal: expect.any(AbortSignal)
+      })
+    } finally {
+      asrIpcFixture.fetch.mockReset()
+      asrIpcFixture.userData = ''
+      rmSync(userData, { recursive: true, force: true })
+    }
   })
 })

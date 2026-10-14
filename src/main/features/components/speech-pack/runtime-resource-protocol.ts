@@ -156,6 +156,7 @@ export function createRuntimeResourceProtocol(options: {
   let revokePromise: Promise<void> | null = null
   let pendingRequests = 0
   let requestWaiters: (() => void)[] = []
+  let pendingStreamAdmissions = 0
   const assertLive = async (): Promise<void> => {
     if (!active) throw new Error('RUNTIME_RESOURCE_REVOKED')
     await options.assertCurrent()
@@ -163,10 +164,8 @@ export function createRuntimeResourceProtocol(options: {
   }
 
   const handleRequest = async (request: Request): Promise<Response> => {
-    if (pendingRequests > MAX_PENDING_REQUESTS || streams.size > MAX_ACTIVE_STREAMS) {
-      return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
-    }
-    if (!active || (request.method !== 'GET' && request.method !== 'HEAD')) return new Response(null, { status: 404 })
+    if (!active) return new Response(null, { status: 404, headers: { 'Cache-Control': 'no-store' } })
+    if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 404 })
     const rawPath = /^metis-runtime:\/\/[^/]+(\/[^?#]*)/.exec(request.url)?.[1]
     if (
       !rawPath ||
@@ -219,6 +218,10 @@ export function createRuntimeResourceProtocol(options: {
         return new Response(null, { status: 404 })
       }
     }
+    if (streams.size + pendingStreamAdmissions >= MAX_ACTIVE_STREAMS) {
+      return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
+    }
+    pendingStreamAdmissions += 1
     const abort = new AbortController()
     let handle: Awaited<ReturnType<typeof open>> | null = null
     let verifiedVersion: string | null = null
@@ -301,6 +304,7 @@ export function createRuntimeResourceProtocol(options: {
       }
     }
     streams.add(live)
+    pendingStreamAdmissions -= 1
     const body = new ReadableStream<Uint8Array>({
       async start(stream) {
         beginOperation()
@@ -326,7 +330,10 @@ export function createRuntimeResourceProtocol(options: {
   }
 
   const handle = async (request: Request): Promise<Response> => {
-    if (!active || pendingRequests >= MAX_PENDING_REQUESTS || streams.size >= MAX_ACTIVE_STREAMS) {
+    if (!active) {
+      return new Response(null, { status: 404, headers: { 'Cache-Control': 'no-store' } })
+    }
+    if (pendingRequests >= MAX_PENDING_REQUESTS) {
       return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
     }
     pendingRequests += 1

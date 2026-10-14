@@ -426,7 +426,7 @@ describe('architecture source detectors', () => {
             '{ const owned = { readSync() {}, closeSync() {} }; owned.readSync(); owned.closeSync() }'
           ].join('\n')
         )
-      ).toEqual({ 'FF-05a': 2 })
+      ).toEqual({ 'FF-05a': 3 })
       expect(
         countSourceFile(
           'src/main/dir-async.ts',

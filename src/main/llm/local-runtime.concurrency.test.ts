@@ -81,6 +81,9 @@ type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
 
 beforeEach(() => {
+  // This file tests the direct child contract with EventEmitter streams; the real supervisor is
+  // separately covered by its own tests and defaults on for macOS runners.
+  vi.stubEnv('METIS_SUPERVISION', 'off')
   vi.clearAllMocks()
   spawnState.procs = []
   spawnState.calls = []
@@ -93,6 +96,7 @@ afterEach(async () => {
   for (const proc of spawnState.procs) if (proc.killed) proc.emit('exit', null, 'SIGKILL')
   await stopping
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 async function emitListening(procIndex: number, port: number): Promise<void> {

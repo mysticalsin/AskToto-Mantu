@@ -95,6 +95,14 @@ function assertCurrentOperation(revision: number): void {
   if (revision !== operationRevision) throw new Error('Parakeet processing was cancelled.')
 }
 
+function isActiveGeneration(generation: HostGeneration | null): generation is HostGeneration {
+  return generation?.state === 'active'
+}
+
+function currentBlockedReleaseError(): Error | null {
+  return blockedRelease?.error ?? null
+}
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
@@ -257,17 +265,62 @@ async function activeGeneration(
         continue
       }
       const physicalAdmission = await prepared.lease?.preparePhysicalAdmission()
+      let physicalAdmissionDisposed = false
+      const disposePhysicalAdmission = async (): Promise<void> => {
+        if (!physicalAdmission || physicalAdmissionDisposed) return
+        physicalAdmissionDisposed = true
+        await physicalAdmission.dispose()
+      }
       try {
+        // Physical preparation is asynchronous even for a no-op legacy lease. Another caller may
+        // have installed the shared child during that final wait, so reselect before forking.
+        const currentAfterPhysicalAdmission = (() => current)()
+        if (currentAfterPhysicalAdmission?.state === 'active') {
+          await disposePhysicalAdmission()
+          await releasePreparedLease()
+          assertCurrentOperation(revision)
+          const blockedAfterUnusedRelease = currentBlockedReleaseError()
+          if (blockedAfterUnusedRelease) throw blockedAfterUnusedRelease
+          if (releaseGate) continue
+          const currentAfterUnusedRelease = (() => current)()
+          if (
+            currentAfterUnusedRelease === currentAfterPhysicalAdmission &&
+            isActiveGeneration(currentAfterUnusedRelease)
+          ) {
+            return currentAfterUnusedRelease
+          }
+          continue
+        }
+        if (currentAfterPhysicalAdmission) {
+          await disposePhysicalAdmission()
+          await releasePreparedLease()
+          assertCurrentOperation(revision)
+          const blockedAfterUnusedRelease = currentBlockedReleaseError()
+          if (blockedAfterUnusedRelease) throw blockedAfterUnusedRelease
+          continue
+        }
         physicalAdmission?.assertCurrentSync()
         assertCurrentOperation(revision)
-        if (releaseGate || blockedRelease) {
-          await physicalAdmission?.dispose()
+        const blockedBeforeFork = currentBlockedReleaseError()
+        if (releaseGate || blockedBeforeFork) {
+          if (blockedBeforeFork) throw blockedBeforeFork
+          await disposePhysicalAdmission()
           await releasePreparedLease()
           continue
         }
-        return spawnGeneration(prepared.files, prepared.lease)
+        const generation = spawnGeneration(prepared.files, prepared.lease)
+        // From this point the child lifecycle owns the lease. If physical admission cleanup fails,
+        // terminate this exact child and retain its lease until Electron confirms the exit.
+        preparedLeaseOwned = false
+        try {
+          await disposePhysicalAdmission()
+        } catch (error) {
+          await terminateGeneration(generation, asError(error)).catch(() => undefined)
+          throw error
+        }
+        return generation
       } finally {
-        await physicalAdmission?.dispose()
+        await disposePhysicalAdmission()
       }
     } catch (error) {
       await releasePreparedLease()

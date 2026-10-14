@@ -10,6 +10,14 @@ import {
 import { configureRuntimeExecutionAuthority, invalidateRuntimeExecutionAuthority } from './runtime-execution-authority'
 import type { OptionalRuntimeTarget } from './runtime-components'
 
+let configuredGeneration: VerifiedRuntimeGeneration | undefined
+const stableProvider = {
+  acquire: async (): Promise<VerifiedRuntimeGeneration> => {
+    if (!configuredGeneration) throw new Error('Test runtime generation is not configured.')
+    return configuredGeneration
+  }
+}
+
 describe('Windows optional-host system loader roots', () => {
   it('accepts one syntactically valid absolute drive root and derives System32 beneath it', () => {
     expect(windowsSystemLoaderRoots('C:\\Windows')).toEqual(['C:\\Windows', 'C:\\Windows\\System32'])
@@ -142,7 +150,8 @@ describe('Windows optional-host system loader roots', () => {
       },
       release: async () => undefined
     }
-    configureRuntimeLeaseProvider({ acquire: async () => generation })
+    configuredGeneration = generation
+    configureRuntimeLeaseProvider(stableProvider)
     const lease = await acquireFeatureRuntime('offline-asr', target)
 
     entries['whisper-import-host'] = 'outside/attacker.js'
@@ -170,20 +179,91 @@ describe('Windows optional-host system loader roots', () => {
     expect(verificationCount).toBe(2)
     await lease.release()
     await expect(lease.verifyCurrentBytes()).rejects.toThrow('Optional runtime lease has been released.')
+  })
 
+  it('revokes a held authority admission against an independent complete generation', async () => {
+    const target: OptionalRuntimeTarget = {
+      packageProfileIdentity: 'a'.repeat(64),
+      packagePlatform: 'win32',
+      packageArch: 'x64',
+      runningPlatform: process.platform,
+      runningArch: process.arch,
+      appVersion: '1.0.0',
+      electronVersion: process.versions.electron,
+      nodeAbi: process.versions.modules,
+      napiVersion: process.versions.napi,
+      chromiumVersion: process.versions.chrome
+    }
+    const whisperMembers = [
+      'Xenova/whisper-base/config.json',
+      'Xenova/whisper-base/generation_config.json',
+      'Xenova/whisper-base/merges.txt',
+      'Xenova/whisper-base/normalizer.json',
+      'Xenova/whisper-base/onnx/decoder_model_merged_quantized.onnx',
+      'Xenova/whisper-base/onnx/encoder_model_quantized.onnx',
+      'Xenova/whisper-base/preprocessor_config.json',
+      'Xenova/whisper-base/special_tokens_map.json',
+      'Xenova/whisper-base/tokenizer.json',
+      'Xenova/whisper-base/tokenizer_config.json',
+      'Xenova/whisper-base/vocab.json'
+    ]
+    const rendererFiles: Record<string, string> = { 'worker/index.js': 'worker/index.js' }
+    const rendererPins: Record<string, { bytes: number; sha256: string }> = {
+      'worker/index.js': { bytes: 10, sha256: 'd'.repeat(64) }
+    }
+    for (const member of whisperMembers) {
+      const path = `models/whisper/${member}`
+      rendererFiles[path] = path
+      rendererPins[path] = { bytes: 10, sha256: 'e'.repeat(64) }
+    }
+    let verificationCount = 0
+    const generation: VerifiedRuntimeGeneration = {
+      generationIdentity: 'f'.repeat(64),
+      catalogIdentity: '9'.repeat(64),
+      target,
+      rootDir: resolve('/owned/authority-runtime-generation'),
+      entries: {
+        'parakeet-host': 'hosts/parakeet.exe',
+        'whisper-import-host': 'hosts/whisper.js',
+        'whisper-renderer-worker': 'worker/index.js'
+      },
+      models: {
+        'asr.parakeet-tdt-0.6b-v3-int8': {
+          root: 'models/parakeet',
+          members: ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt']
+        },
+        'asr.whisper-base-q8': { root: 'models/whisper', members: whisperMembers }
+      },
+      nativeLibraryDirs: ['native'],
+      rendererFiles,
+      rendererPins,
+      preparePhysicalAdmission: async () => ({ assertCurrentSync: () => undefined, dispose: async () => undefined }),
+      verifyCurrentBytes: async () => {
+        verificationCount += 1
+      },
+      release: async () => undefined
+    }
+    configuredGeneration = generation
+    configureRuntimeLeaseProvider(stableProvider)
     configureRuntimeExecutionAuthority(async () => true)
-    const authorityLease = await acquireFeatureRuntime('offline-asr', target)
+    const admittedLease = await acquireFeatureRuntime('offline-asr', target)
+    await admittedLease.verifyCurrentBytes()
+    expect(verificationCount).toBe(1)
+    await admittedLease.release()
+
     let releaseAuthority!: () => void
     configureRuntimeExecutionAuthority(
       () => new Promise<boolean>((resolveAuthority) => (releaseAuthority = () => resolveAuthority(true)))
     )
+    const authorityLease = await acquireFeatureRuntime('offline-asr', target)
     const heldAdmission = authorityLease.verifyCurrentBytes()
     for (let attempt = 0; attempt < 10 && !releaseAuthority; attempt++) await Promise.resolve()
     expect(releaseAuthority).toBeTypeOf('function')
     invalidateRuntimeExecutionAuthority()
     releaseAuthority()
     await expect(heldAdmission).rejects.toThrow(/authority was revoked/i)
-    expect(verificationCount).toBe(3)
+    expect(verificationCount).toBe(1)
     await authorityLease.release()
+    configureRuntimeExecutionAuthority(async () => true)
   })
 })

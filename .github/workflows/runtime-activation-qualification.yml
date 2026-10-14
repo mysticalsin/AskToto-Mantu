@@ -51,6 +51,8 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install the pinned Chromium browser for design assertions
+        run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - name: Run complete runtime activation fixture inventory
         run: >-
           node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=default --reporter=json --outputFile="$REPORT"

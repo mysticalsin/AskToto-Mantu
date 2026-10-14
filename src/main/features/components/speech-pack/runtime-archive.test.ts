@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { link, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -17,6 +17,20 @@ describe('runtime archive held-descriptor hashing', () => {
         createHash('sha256').update(bytes).digest('hex')
       )
       await expect(hashPinnedArchive(path, bytes.byteLength - 1)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a multiply linked regular archive before accepting its bytes on every host', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-runtime-hardlink-'))
+    try {
+      const path = join(root, 'payload.tar.gz')
+      const alias = join(root, 'second-name')
+      const bytes = Buffer.from('archive bytes')
+      await writeFile(path, bytes)
+      await link(path, alias)
+      await expect(hashPinnedArchive(path, bytes.byteLength)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

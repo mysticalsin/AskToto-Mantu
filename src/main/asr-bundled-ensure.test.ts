@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
+import { configurePackageRuntimeContractProvider } from './features/components/speech-pack/package-runtime-state'
 
 const paths = vi.hoisted(() => ({ resources: '', userData: '', isPackaged: false }))
 const modelOpenGuard = vi.hoisted(() => ({ active: false, syncCalls: 0, asyncCalls: 0 }))
@@ -60,6 +62,7 @@ import {
   importAsrAssetsReady,
   asrModelMetadataReadyForEngine,
   asrAssetsStatusSnapshot,
+  resolveSelectedSpeechPack,
   parakeetFilesReady,
   parakeetUserDir,
   setAsrEnsureTestHooks,
@@ -69,6 +72,36 @@ import {
 
 function withTestResources(hooks: Omit<AsrEnsureTestHooks, 'bundledResourceRoot'> = {}): AsrEnsureTestHooks {
   return { ...hooks, bundledResourceRoot: () => paths.resources }
+}
+
+let packageContract: PackageRuntimeContract = { status: 'development', profile: 'development', inventory: null }
+const packageRuntimeContractProvider = async (): Promise<PackageRuntimeContract> => packageContract
+
+function useLegacyFullContract(): void {
+  packageContract = { status: 'legacy-full', profile: 'full', inventory: null }
+}
+
+function useVerifiedLeanContract(): void {
+  // Synthetic package-contract fixture for the branch-selection unit tests; it is not qualification evidence.
+  packageContract = {
+    status: 'verified',
+    profile: 'lean',
+    inventory: {
+      schema: 1,
+      profile: 'lean',
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      appVersion: 'test',
+      electronVersion: process.versions.electron ?? 'test',
+      sourceCommit: 'a'.repeat(40),
+      coreFiles: [],
+      identity: 'b'.repeat(64)
+    }
+  }
+}
+
+function useInvalidPackageContract(): void {
+  packageContract = { status: 'invalid', reason: 'inventory-invalid', profile: null, inventory: null }
 }
 
 describe('asr-bundled-ensure', () => {
@@ -82,6 +115,8 @@ describe('asr-bundled-ensure', () => {
     Object.defineProperty(process, 'resourcesPath', { configurable: true, value: paths.resources })
     setAsrEnsureTestHooks(withTestResources())
     resetAsrEnsureStateForTests()
+    packageContract = { status: 'development', profile: 'development', inventory: null }
+    configurePackageRuntimeContractProvider(packageRuntimeContractProvider)
   })
 
   afterEach(() => {
@@ -129,6 +164,7 @@ describe('asr-bundled-ensure', () => {
 
   it('fails closed when an installed app is missing built-in ASR files, even if an old userData fallback exists', async () => {
     paths.isPackaged = true
+    useLegacyFullContract()
     const parakeet = join(paths.userData, 'asr-models', PARAKEET_MODEL_NAME)
     mkdirSync(parakeet, { recursive: true })
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'old-copy')
@@ -156,6 +192,7 @@ describe('asr-bundled-ensure', () => {
 
   it('keeps full as the legacy profile and requires an explicit lean pack without automatic downloads', async () => {
     paths.isPackaged = true
+    useLegacyFullContract()
     const fetchParakeet = vi.fn()
     const fetchWhisperFloor = vi.fn()
     setAsrEnsureTestHooks(withTestResources({ fetchParakeet, fetchWhisperFloor, selectedAsrEngine: () => 'whisper' }))
@@ -169,14 +206,15 @@ describe('asr-bundled-ensure', () => {
     expect(net.fetch).not.toHaveBeenCalled()
 
     writeFileSync(join(paths.resources, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }))
+    useVerifiedLeanContract()
     await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({
       ready: false,
       status: 'error',
       reason: 'lean-pack-not-installed'
     })
     await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
-    await expect(ensureImportAsrAssets()).rejects.toMatchObject({ code: 'ASR_SPEECH_PACK_NOT_READY' })
-    await expect(ensureWhisperFloorAssets()).rejects.toMatchObject({ code: 'ASR_SPEECH_PACK_NOT_READY' })
+    await expect(ensureImportAsrAssets()).rejects.toThrow(/runtime is not configured/i)
+    await expect(ensureWhisperFloorAssets()).rejects.toThrow(/runtime is not configured/i)
     expect(fetchParakeet).not.toHaveBeenCalled()
     expect(fetchWhisperFloor).not.toHaveBeenCalled()
     expect(net.fetch).not.toHaveBeenCalled()
@@ -184,6 +222,7 @@ describe('asr-bundled-ensure', () => {
 
   it('fails closed on an invalid packaged profile, including the protocol route', async () => {
     paths.isPackaged = true
+    useLegacyFullContract()
     writeFileSync(
       join(paths.resources, 'speech-pack-profile.json'),
       JSON.stringify({ schema: 1, profile: 'lean', extra: true })
@@ -195,8 +234,9 @@ describe('asr-bundled-ensure', () => {
     expect(net.fetch).not.toHaveBeenCalled()
   })
 
-  it('re-resolves the selected Whisper pack on each protocol admission after engine selection changes', async () => {
+  it('re-resolves selected Whisper metadata after engine selection changes', async () => {
     paths.isPackaged = true
+    useVerifiedLeanContract()
     writeFileSync(join(paths.resources, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }))
     let selected: 'whisper' | 'parakeet' | 'apple' = 'parakeet'
     setAsrEnsureTestHooks(withTestResources({ selectedAsrEngine: () => selected }))
@@ -209,11 +249,17 @@ describe('asr-bundled-ensure', () => {
     }
     const resolve = vi.spyOn(SpeechPackResolver, 'resolveSpeechPack').mockResolvedValue(readiness)
     try {
-      await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
+      await expect(resolveSelectedSpeechPack('whisper')).resolves.toEqual({
+        componentId: null,
+        readiness: null,
+        path: null
+      })
+      expect(resolve).not.toHaveBeenCalled()
       selected = 'whisper'
-      await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({
-        useOnlySpeechPackModels: true,
-        speechPackModelsRoot: join(paths.userData, 'speech-packs', WHISPER_BASE_Q8.id, WHISPER_BASE_Q8.version)
+      await expect(resolveSelectedSpeechPack('whisper')).resolves.toMatchObject({
+        componentId: WHISPER_BASE_Q8.id,
+        readiness: { status: 'ready' },
+        path: join(paths.userData, 'speech-packs', WHISPER_BASE_Q8.id, WHISPER_BASE_Q8.version)
       })
       expect(resolve).toHaveBeenCalledTimes(1)
     } finally {
@@ -221,8 +267,48 @@ describe('asr-bundled-ensure', () => {
     }
   })
 
+  it('keeps the legacy protocol closed for a synthetic verified lean contract despite a ready writable pack', async () => {
+    paths.isPackaged = true
+    useVerifiedLeanContract()
+    writeFileSync(join(paths.resources, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }))
+    let selected: 'whisper' | 'parakeet' | 'apple' = 'whisper'
+    setAsrEnsureTestHooks(withTestResources({ selectedAsrEngine: () => selected }))
+    const readiness: SpeechPackResolver.SpeechPackReadiness = {
+      status: 'ready',
+      componentId: WHISPER_BASE_Q8.id,
+      version: WHISPER_BASE_Q8.version,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8),
+      evidence: 'prior-activation-and-size-checked'
+    }
+    const resolve = vi.spyOn(SpeechPackResolver, 'resolveSpeechPack').mockResolvedValue(readiness)
+    try {
+      await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
+      expect(resolve).not.toHaveBeenCalled()
+      selected = 'parakeet'
+      await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
+      expect(resolve).not.toHaveBeenCalled()
+    } finally {
+      resolve.mockRestore()
+    }
+  })
+
+  it('keeps an installed app with an invalid runtime contract closed without transfer work', async () => {
+    paths.isPackaged = true
+    useInvalidPackageContract()
+    const fetchParakeet = vi.fn()
+    const fetchWhisperFloor = vi.fn()
+    setAsrEnsureTestHooks(withTestResources({ fetchParakeet, fetchWhisperFloor }))
+
+    await expect(ensureImportAsrAssets()).rejects.toThrow(/runtime is not configured/i)
+    await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
+    expect(fetchParakeet).not.toHaveBeenCalled()
+    expect(fetchWhisperFloor).not.toHaveBeenCalled()
+    expect(net.fetch).not.toHaveBeenCalled()
+  })
+
   it('does not report a packaged ASR bundle ready when a required runtime manifest file is missing', async () => {
     paths.isPackaged = true
+    useLegacyFullContract()
     const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
     mkdirSync(parakeet, { recursive: true })
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'bundled')
@@ -241,6 +327,7 @@ describe('asr-bundled-ensure', () => {
 
   it('reports a packaged ASR bundle ready only when Parakeet and the complete runtime manifest are present', async () => {
     paths.isPackaged = true
+    useLegacyFullContract()
     const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
     mkdirSync(parakeet, { recursive: true })
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'bundled')
@@ -382,6 +469,7 @@ describe('asr-bundled-ensure', () => {
 
   it('keeps bundled boot status to metadata checks without opening model files', async () => {
     paths.isPackaged = true
+    useLegacyFullContract()
     const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
     mkdirSync(parakeet, { recursive: true })
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'model')
@@ -408,6 +496,7 @@ describe('asr-bundled-ensure', () => {
     'whisper'
   ] as const)('selected %s readiness uses filesystem metadata without opening model files', async (engine) => {
     paths.isPackaged = true
+    useLegacyFullContract()
     const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
     mkdirSync(parakeet, { recursive: true })
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'model')

@@ -70,16 +70,27 @@ describe('downloadVerified', () => {
   })
 
   it('does not publish a verified partial when authority changes at the final rename fence', async () => {
-    server = await serve(rangeHandler(body))
+    const partial = join(dir, 'model.bin.partial')
+    const metadata = `${partial}.json`
+    writeFileSync(partial, body)
+    writeFileSync(metadata, JSON.stringify({ validator: '"fixture-v1"', scope: 'final-fence' }))
     let authorized = true
+    let fullPartialObservedAtFinalMetadataRemoval = false
     const removeFile: typeof rmAsync = async (path, options) => {
-      if (String(path).endsWith('.partial.json')) authorized = false
+      if (String(path) === metadata) {
+        fullPartialObservedAtFinalMetadataRemoval = existsSync(partial) && readFileSync(partial).equals(body)
+        authorized = false
+      }
       await rmAsync(path, options)
     }
+    const fetch = vi.fn(async () => {
+      throw new Error('complete pinned partial should not access the network')
+    }) as unknown as typeof globalThis.fetch
     const err = await failure(
       downloadVerified(
         {
-          ...request(`${server.base}/pin/model.bin`),
+          ...request(`https://huggingface.co/model/resolve/${'a'.repeat(40)}/model.bin`),
+          resumeScope: 'final-fence',
           authorize: () => authorized,
           authorizeAsync: async () => {
             if (!authorized) throw new SpeechPackError('policy', 'authority changed')
@@ -88,12 +99,68 @@ describe('downloadVerified', () => {
             if (!authorized) throw new SpeechPackError('policy', 'authority changed')
           }
         },
-        deps({ removeFile })
+        deps({ removeFile, fetch })
       )
     )
     expect(err.kind).toBe('policy')
+    expect(fullPartialObservedAtFinalMetadataRemoval).toBe(true)
+    expect(fetch).not.toHaveBeenCalled()
     expect(existsSync(join(dir, 'model.bin'))).toBe(false)
-    expect(readFileSync(join(dir, 'model.bin.partial'))).toEqual(body)
+    expect(readFileSync(partial)).toEqual(body)
+  })
+
+  it('catches a stale authority after held final async authorization at the synchronous publication fence', async () => {
+    const partial = join(dir, 'model.bin.partial')
+    const metadata = `${partial}.json`
+    writeFileSync(partial, body)
+    writeFileSync(metadata, JSON.stringify({ validator: '"fixture-v1"', scope: 'held-final-fence' }))
+    let metadataRemoved = false
+    let fullPartialObserved = false
+    let finalAuthorizationEntered!: () => void
+    const entered = new Promise<void>((resolve) => {
+      finalAuthorizationEntered = resolve
+    })
+    let releaseFinalAuthorization!: () => void
+    const heldAuthorization = new Promise<void>((resolve) => {
+      releaseFinalAuthorization = resolve
+    })
+    let physicalAuthorityCurrent = true
+    let held = false
+    const removeFile: typeof rmAsync = async (path, options) => {
+      await rmAsync(path, options)
+      if (String(path) === metadata) {
+        metadataRemoved = true
+        fullPartialObserved = existsSync(partial) && readFileSync(partial).equals(body)
+      }
+    }
+    const run = downloadVerified(
+      {
+        ...request(`https://huggingface.co/model/resolve/${'a'.repeat(40)}/model.bin`),
+        resumeScope: 'held-final-fence',
+        authorize: () => true,
+        authorizeAsync: async () => {
+          if (metadataRemoved && !held) {
+            held = true
+            finalAuthorizationEntered()
+            await heldAuthorization
+          }
+        },
+        authorizeSync: () => {
+          if (!physicalAuthorityCurrent) throw new SpeechPackError('policy', 'physical authority changed')
+        }
+      },
+      deps({ removeFile })
+    )
+    const rejected = failure(run)
+    await entered
+    expect(fullPartialObserved).toBe(true)
+    physicalAuthorityCurrent = false
+    releaseFinalAuthorization()
+    const err = await rejected
+    expect(err.kind).toBe('policy')
+    expect(metadataRemoved).toBe(true)
+    expect(existsSync(join(dir, 'model.bin'))).toBe(false)
+    expect(readFileSync(partial)).toEqual(body)
   })
 
   it('rejects linked parents and partial leaves before fetching or changing outside content', async () => {

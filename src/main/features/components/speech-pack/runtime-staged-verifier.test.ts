@@ -1,26 +1,43 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { RuntimeInventoryV1 } from './runtime-provenance'
 import { verifyStagedPayloads } from './runtime-staged-verifier'
 
 const roots: string[] = []
 
-async function stagedFixture(): Promise<{ stage: string; inventory: RuntimeInventoryV1; firstPath: string }> {
-  const stage = await mkdtemp(join(tmpdir(), 'runtime-staged-verifier-'))
-  roots.push(stage)
+async function stagedFixture(): Promise<{
+  stage: string
+  rawStage: string
+  artifactRoot: string
+  inventory: RuntimeInventoryV1
+  firstPath: string
+  secondPath: string
+}> {
+  const rawStage = await mkdtemp(join(tmpdir(), 'runtime-staged-verifier-'))
+  roots.push(rawStage)
+  const created = await lstat(rawStage, { bigint: true })
+  const stage = await realpath(rawStage)
+  const canonical = await stat(stage, { bigint: true })
+  if (created.dev !== canonical.dev || created.ino !== canonical.ino || created.birthtimeNs !== canonical.birthtimeNs) {
+    throw new Error('test-owned staged directory identity changed while canonicalizing')
+  }
   const root = join(stage, 'artifacts', 'runtime-native')
   await mkdir(root, { recursive: true })
   const first = Buffer.from('signed-first-entry')
   const second = Buffer.from('signed-later-entry')
   const firstPath = join(root, 'a-native.bin')
+  const secondPath = join(root, 'z-model.bin')
   await writeFile(firstPath, first, { mode: 0o600 })
-  await writeFile(join(root, 'z-model.bin'), second, { mode: 0o600 })
+  await writeFile(secondPath, second, { mode: 0o600 })
   return {
     stage,
+    rawStage,
+    artifactRoot: root,
     firstPath,
+    secondPath,
     inventory: {
       schemaVersion: 1,
       kind: 'runtime',
@@ -60,6 +77,7 @@ describe('staged runtime physical version closure', () => {
 
   it('accepts the unchanged complete staged closure', async () => {
     const fixture = await stagedFixture()
+    expect(await realpath(fixture.rawStage)).toBe(fixture.stage)
     const admission = await verifyStagedPayloads(fixture.stage, [fixture.inventory], async () => undefined)
     try {
       expect(admission).toBeDefined()
@@ -72,15 +90,48 @@ describe('staged runtime physical version closure', () => {
   it('rejects an extra staged member added during the final retained-version checks', async () => {
     const fixture = await stagedFixture()
     let checks = 0
+    const extra = join(fixture.artifactRoot, 'unsigned-extra.bin')
     await expect(
       verifyStagedPayloads(fixture.stage, [fixture.inventory], async () => {
         checks++
         if (checks === 5) {
-          await writeFile(join(fixture.stage, 'artifacts', 'runtime-native', 'unsigned-extra.bin'), 'extra', {
-            mode: 0o600
-          })
+          await writeFile(extra, 'extra', { mode: 0o600 })
         }
       })
+    ).rejects.toThrow('RUNTIME_PHYSICAL_NODE_CHANGED')
+    expect(checks).toBe(5)
+    expect(await readFile(fixture.firstPath)).toEqual(Buffer.from('signed-first-entry'))
+    expect(await readFile(fixture.secondPath)).toEqual(Buffer.from('signed-later-entry'))
+    expect(await readFile(extra)).toEqual(Buffer.from('extra'))
+  })
+
+  it('rejects an inserted directory member at the retained-membership check', async () => {
+    const fixture = await stagedFixture()
+    let checks = 0
+    const extra = join(fixture.artifactRoot, 'unsigned-extra.bin')
+    await expect(
+      verifyStagedPayloads(fixture.stage, [fixture.inventory], async () => {
+        checks += 1
+        // Two file checks and the stage-directory pass precede this first artifact-directory check.
+        if (checks === 4) await writeFile(extra, 'extra', { mode: 0o600 })
+      })
     ).rejects.toThrow('RUNTIME_STAGED_FILE_CLOSURE_MISMATCH')
+    expect(checks).toBe(4)
+    expect(await readFile(fixture.firstPath)).toEqual(Buffer.from('signed-first-entry'))
+    expect(await readFile(fixture.secondPath)).toEqual(Buffer.from('signed-later-entry'))
+  })
+
+  it('rejects a linked alias for the test-owned canonical staged root', async () => {
+    const fixture = await stagedFixture()
+    const aliasParent = `${fixture.rawStage}-parent-alias`
+    roots.push(aliasParent)
+    await symlink(dirname(fixture.stage), aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
+    const alias = join(aliasParent, basename(fixture.stage))
+    const admission = await verifyStagedPayloads(alias, [fixture.inventory], async () => undefined)
+    try {
+      expect(() => admission.assertCurrentSync()).toThrow('RUNTIME_INSTALL_ACTIVE_ROOT_CHANGED')
+    } finally {
+      await admission.dispose()
+    }
   })
 })

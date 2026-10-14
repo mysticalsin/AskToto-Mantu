@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { RuntimeFeatureLease } from './features/components/speech-pack/runtime-lease'
 
 class FakeChild extends EventEmitter {
   readonly postMessage = vi.fn()
@@ -9,7 +10,11 @@ class FakeChild extends EventEmitter {
 }
 
 const electron = vi.hoisted(() => ({ utilityProcess: { fork: vi.fn() } }))
-const runtimeAdmission = vi.hoisted(() => ({ acquire: vi.fn(async () => null as unknown) }))
+const runtimeAdmission = vi.hoisted(() => ({
+  acquire: vi.fn(
+    async (_feature: 'offline-asr' | 'speaker-embedding' | 'local-llm'): Promise<RuntimeFeatureLease | null> => null
+  )
+}))
 vi.mock('electron', () => electron)
 vi.mock('./logger', () => ({ mainLog: { warn: vi.fn(), error: vi.fn() } }))
 vi.mock('./features/components/speech-pack/runtime-admission', () => ({
@@ -22,6 +27,47 @@ vi.mock('./features/components/speech-pack/runtime-lease', async (importOriginal
 
 let child: FakeChild
 let api: typeof import('./speaker-embedding-client')
+
+type ReleaseMock = ReturnType<typeof vi.fn<() => Promise<void>>>
+type RuntimeLeaseOverrides = Omit<Partial<RuntimeFeatureLease>, 'release'> & {
+  release?: ReleaseMock
+}
+
+function runtimeLease(overrides: RuntimeLeaseOverrides = {}): RuntimeFeatureLease & {
+  release: ReleaseMock
+} {
+  const lease: RuntimeFeatureLease & { release: ReleaseMock } = {
+    feature: 'speaker-embedding',
+    generationIdentity: 'fixture-generation',
+    catalogIdentity: 'fixture-catalog',
+    target: {
+      packageProfileIdentity: null,
+      packagePlatform: null,
+      packageArch: null,
+      runningPlatform: process.platform,
+      runningArch: process.arch,
+      appVersion: 'test',
+      electronVersion: undefined,
+      nodeAbi: undefined,
+      napiVersion: undefined,
+      chromiumVersion: undefined
+    },
+    verifyCurrentBytes: async () => undefined,
+    preparePhysicalAdmission: async () => ({ assertCurrentSync: () => undefined, dispose: async () => undefined }),
+    loaderDirectories: () => [],
+    entry: vi.fn(() => '/owned/speaker-host'),
+    model: vi.fn(() => '/owned/model'),
+    modelFile: vi.fn(() => '/owned/speaker.onnx'),
+    rendererFile: vi.fn(() => '/owned/worker.js'),
+    rendererRolePath: vi.fn(() => '/owned/worker.js'),
+    rendererModelRoot: vi.fn(() => '/owned/model'),
+    rendererResource: vi.fn(() => ({ path: '/owned/worker.js', bytes: 1, sha256: 'a'.repeat(64) })),
+    rendererResources: () => new Map([['runtime/worker.js', '/owned/worker.js']]),
+    release: vi.fn(async () => undefined),
+    ...overrides
+  }
+  return lease
+}
 
 async function request(type = 'embed', target = child): Promise<Record<string, unknown>> {
   for (let i = 0; i < 20; i++) {
@@ -273,15 +319,13 @@ describe('speaker embedding utility client', () => {
   })
 
   it('does not post after owner cancellation while releasing an unused concurrent lease', async () => {
-    const deferred: Array<(lease: unknown) => void> = []
+    const deferred: Array<(lease: RuntimeFeatureLease | null) => void> = []
     runtimeAdmission.acquire.mockImplementation(() => new Promise((resolve) => deferred.push(resolve)))
-    const lease = (name: string, release: () => Promise<void>) => ({
-      generationIdentity: name,
-      entry: () => '/owned/speaker-host',
-      modelFile: () => '/owned/speaker.onnx',
-      loaderDirectories: () => [],
-      release: vi.fn(release)
-    })
+    const lease = (name: string, releaseImpl: () => Promise<void>) =>
+      runtimeLease({
+        generationIdentity: name,
+        release: vi.fn(releaseImpl)
+      })
     const firstLease = lease('first', async () => undefined)
     let finishUnusedRelease: () => void = () => {}
     const unusedLease = lease(
@@ -294,6 +338,8 @@ describe('speaker embedding utility client', () => {
 
     const first = api.computeSpeakerEmbedding('/model.onnx', new Float32Array([1]), 'live')
     const second = api.computeSpeakerEmbedding('/model.onnx', new Float32Array([2]), 'live')
+    const firstFailure = expect(first).rejects.toThrow(/cancelled/i)
+    const secondFailure = expect(second).rejects.toThrow(/cancelled/i)
     await Promise.resolve()
     expect(deferred).toHaveLength(2)
     deferred[0](firstLease)
@@ -302,13 +348,12 @@ describe('speaker embedding utility client', () => {
     for (let i = 0; i < 20 && unusedLease.release.mock.calls.length === 0; i++) await Promise.resolve()
     expect(unusedLease.release).toHaveBeenCalledOnce()
 
-    const firstFailure = expect(first).rejects.toThrow(/cancelled/i)
     const ending = api.releaseSpeakerEmbedding('live')
     child.emit('exit', 0)
     await ending
     finishUnusedRelease()
-    await expect(second).rejects.toThrow(/cancelled/i)
     await firstFailure
+    await secondFailure
 
     expect(firstLease.release).toHaveBeenCalledOnce()
     expect(unusedLease.release).toHaveBeenCalledOnce()
