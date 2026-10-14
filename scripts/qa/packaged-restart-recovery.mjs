@@ -94,7 +94,11 @@ export function packagedRecoveryReportProblems(report) {
   const problems = []
   const ids = new Set()
   for (const row of report.assertions) {
-    if (!exactKeys(row, ['id', 'status']) || !RECOVERY_ASSERTIONS.includes(row.id) || !ASSERTION_STATUSES.has(row.status)) {
+    if (
+      !exactKeys(row, ['id', 'status']) ||
+      !RECOVERY_ASSERTIONS.includes(row.id) ||
+      !ASSERTION_STATUSES.has(row.status)
+    ) {
       return ['report-schema-invalid']
     }
     if (ids.has(row.id)) return ['report-schema-invalid']
@@ -191,9 +195,8 @@ export function shutdownVerdict({
   transportsReleased
 }) {
   const childExited = (Number.isSafeInteger(exitCode) && exitCode >= 0) || typeof signalCode === 'string'
-  const teardown = censusCaptured && childExited && survivorCount === 0 && transportsReleased
-    ? 'ACKNOWLEDGED'
-    : 'UNACKNOWLEDGED'
+  const teardown =
+    censusCaptured && childExited && survivorCount === 0 && transportsReleased ? 'ACKNOWLEDGED' : 'UNACKNOWLEDGED'
   const clean =
     censusValid &&
     censusCaptured &&
@@ -318,7 +321,14 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
   }
   const { cdpPort, inspectPort } = await twoDifferentPorts()
   const env = strictLaunchEnvironment(process.env, profile, platform)
-  const launch = launchPackagedCdp({ executablePath: executable, env, cdpPort, inspectPort, platform, spawnProcess: spawn })
+  const launch = launchPackagedCdp({
+    executablePath: executable,
+    env,
+    cdpPort,
+    inspectPort,
+    platform,
+    spawnProcess: spawn
+  })
   const child = launch.child
   if (!Number.isSafeInteger(child?.pid) || child.pid <= 1 || packagedLaunchFailed(child, launch.latches)) {
     throw new Error('launch-failed')
@@ -359,7 +369,9 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
   } catch (error) {
     let stopped = child.exitCode != null || child.signalCode != null
     if (!stopped) {
-      const receipt = await stopOwnedChild(child, { platform, timeoutMs: 5_000 }).catch(() => ({ state: 'unacknowledged' }))
+      const receipt = await stopOwnedChild(child, { platform, timeoutMs: 5_000 }).catch(() => ({
+        state: 'unacknowledged'
+      }))
       stopped = receipt.state === 'acknowledged'
     }
     if (stopped) {
@@ -380,7 +392,9 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
         stopped = false
       }
     }
-    const transportsReleased = await releaseCandidateTransports({ browser, transportUncertain, lateReleases }).catch(() => false)
+    const transportsReleased = await releaseCandidateTransports({ browser, transportUncertain, lateReleases }).catch(
+      () => false
+    )
     if (!stopped || !transportsReleased) {
       const failure = new Error('shutdown-unacknowledged')
       failure.cleanupAcknowledged = false
@@ -397,7 +411,8 @@ async function stopCandidate(instance, platform) {
   const { child, installRoot } = instance
   let ownedAtQuit = []
   let censusValid = false
-  const censusCaptured = Array.isArray(instance.launchOwned) && instance.launchOwned.some((entry) => entry.pid === child.pid)
+  const censusCaptured =
+    Array.isArray(instance.launchOwned) && instance.launchOwned.some((entry) => entry.pid === child.pid)
   let naturalExit = false
   let quitAcknowledged = false
   let survivors = []
@@ -521,7 +536,10 @@ async function runFirstLaunch(instance, marker) {
           question,
           answer
         })
-        const meetingName = String(savedMeeting?.path ?? '').replaceAll('\\', '/').split('/').pop()
+        const meetingName = String(savedMeeting?.path ?? '')
+          .replaceAll('\\', '/')
+          .split('/')
+          .pop()
         const meetingRead = meetingName ? await window.toto.recallRead(meetingName) : null
         const ready = Boolean(
           savedMeeting?.path &&
@@ -548,40 +566,33 @@ async function runFirstLaunch(instance, marker) {
 async function runSecondLaunch(instance, expected, profile) {
   return boundedCall(
     () =>
-      instance.page.evaluate(async ({
-        meetingName,
-        noteName,
-        title,
-        noteTitle,
-        question,
-        answer,
-        marker,
-        placement,
-        layout
-      }) => {
-        const settings = await window.toto.getSettings()
-        const meetingRead = await window.toto.recallRead(meetingName)
-        const inHistory = (await window.toto.recallList()).some((meeting) => meeting.title === title)
-        const noteRead = await window.toto.recallRead(noteName)
-        return {
-          settingsReady:
-            settings.onboardingDone === true &&
-            settings.overlayPlacement === placement &&
-            settings.overlayLayout === layout &&
-            settings.autoHideOverlay === false,
-          meetingReady:
-            meetingRead?.ok === true &&
-            meetingRead.title === title &&
-            meetingRead.lines?.some((line) => line.text.includes(marker)),
-          historyReady: inHistory,
-          noteReadableReady:
-            noteRead?.ok === true &&
-            noteRead.kind === 'note' &&
-            noteRead.title === noteTitle &&
-            noteRead.question === question &&
-            noteRead.answer === answer
-        }
-      }, expected),
+      instance.page.evaluate(
+        async ({ meetingName, noteName, title, noteTitle, question, answer, marker, placement, layout }) => {
+          const settings = await window.toto.getSettings()
+          const meetingRead = await window.toto.recallRead(meetingName)
+          const inHistory = (await window.toto.recallList()).some((meeting) => meeting.title === title)
+          const noteRead = await window.toto.recallRead(noteName)
+          return {
+            settingsReady:
+              settings.onboardingDone === true &&
+              settings.overlayPlacement === placement &&
+              settings.overlayLayout === layout &&
+              settings.autoHideOverlay === false,
+            meetingReady:
+              meetingRead?.ok === true &&
+              meetingRead.title === title &&
+              meetingRead.lines?.some((line) => line.text.includes(marker)),
+            historyReady: inHistory,
+            noteReadableReady:
+              noteRead?.ok === true &&
+              noteRead.kind === 'note' &&
+              noteRead.title === noteTitle &&
+              noteRead.question === question &&
+              noteRead.answer === answer
+          }
+        },
+        expected
+      ),
     30_000,
     'restart-data-missing'
   ).then((result) => {
@@ -592,8 +603,13 @@ async function runSecondLaunch(instance, expected, profile) {
     if (!confined) throw new Error('profile-rejected')
     const noteStat = lstatSync(notePath)
     const meetingStat = lstatSync(meetingPath)
-    const noteExists = noteStat.isFile() && !noteStat.isSymbolicLink() && noteStat.nlink === 1 && hashFile(notePath) === noteHash
-    const meetingExists = meetingStat.isFile() && !meetingStat.isSymbolicLink() && meetingStat.nlink === 1 && hashFile(meetingPath) === meetingHash
+    const noteExists =
+      noteStat.isFile() && !noteStat.isSymbolicLink() && noteStat.nlink === 1 && hashFile(notePath) === noteHash
+    const meetingExists =
+      meetingStat.isFile() &&
+      !meetingStat.isSymbolicLink() &&
+      meetingStat.nlink === 1 &&
+      hashFile(meetingPath) === meetingHash
     return { ...result, noteBytesReady: noteExists, meetingBytesReady: meetingExists }
   })
 }
@@ -610,10 +626,19 @@ async function execute({ appArg, platform, out }) {
     const installed = installedExecutable(appArg, reportPlatform)
     const installRoot = reportPlatform === 'darwin' ? installed.appPath : dirname(installed.executable)
     profile = createProfile()
-    instance = await launchCandidate({ executable: installed.executable, platform: reportPlatform, profile, installRoot })
+    instance = await launchCandidate({
+      executable: installed.executable,
+      platform: reportPlatform,
+      profile,
+      installRoot
+    })
     const settingsProbe = await writeScenarioSettings(instance)
     const meetingsFolder = typeof settingsProbe.meetingsFolder === 'string' ? resolve(settingsProbe.meetingsFolder) : ''
-    if (!settingsProbe.ready || !meetingsFolder || !pathConfinedOrMissing(profile.root, meetingsFolder, reportPlatform)) {
+    if (
+      !settingsProbe.ready ||
+      !meetingsFolder ||
+      !pathConfinedOrMissing(profile.root, meetingsFolder, reportPlatform)
+    ) {
       throw new Error('profile-rejected')
     }
     assertions['isolated-profile'] = 'PASS'
@@ -642,7 +667,12 @@ async function execute({ appArg, platform, out }) {
       throw new Error(firstShutdown.teardown === 'ACKNOWLEDGED' ? 'shutdown-not-clean' : 'shutdown-unacknowledged')
     }
 
-    instance = await launchCandidate({ executable: installed.executable, platform: reportPlatform, profile, installRoot })
+    instance = await launchCandidate({
+      executable: installed.executable,
+      platform: reportPlatform,
+      profile,
+      installRoot
+    })
     const second = await runSecondLaunch(
       instance,
       {
