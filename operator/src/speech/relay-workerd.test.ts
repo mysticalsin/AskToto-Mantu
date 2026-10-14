@@ -11,6 +11,7 @@ import { sha256Hex } from '../crypto'
 
 // The existing repository bundle checker is the canonical deploy-equivalent esbuild path.
 import { bundleEntry } from '../../scripts/check-worker-bundle.mjs'
+import { parseStatements } from '../../scripts/migrate.mjs'
 
 interface RelayProtocolFixture {
   runtimeOnlySlots: {
@@ -220,13 +221,17 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
     })
   )
   const database = (await runtime.getD1Database('DB')) as unknown as {
-    exec(sql: string): Promise<unknown>
     prepare(query: string): {
+      run(): Promise<unknown>
       bind(...values: unknown[]): { run(): Promise<unknown> }
     }
   }
   const directory = dirname(fileURLToPath(import.meta.url))
-  await database.exec(readFileSync(join(directory, '../../schema.sql'), 'utf8'))
+  // D1 exec expects one complete statement per line; the real schema contains comments and multiline DDL.
+  // Apply every statement with the same parser/order as the production migration runner.
+  for (const statement of parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8'))) {
+    await database.prepare(statement).run()
+  }
   const store = d1Store(database as never)
   const now = Date.now()
   await store.putTier({
