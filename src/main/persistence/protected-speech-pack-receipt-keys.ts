@@ -330,6 +330,11 @@ export function createProtectedSpeechPackReceiptKeys(
       if (!matches(record, scope, root, backend)) throw new Error('SPEECH_PACK_KEY_ASSOCIATION_MISMATCH')
       if (Buffer.byteLength(plaintext, 'utf8') > effectivePlaintextLimit())
         throw new Error('SPEECH_PACK_KEY_PLAINTEXT_OVERSIZED')
+      await lease.admitAuthenticated(record.keyId, lease.bytes)
+      assertCurrent(scope, root)
+      await assertPhysicalCurrent(scope, root)
+      await lease.assertCurrent()
+      if (native.selectedBackend() !== backend) throw new Error('SPEECH_PACK_KEY_BACKEND_CHANGED')
       const result = new Uint8Array(32)
       result.set(key)
       return { key: result, keyId: record.keyId, kLocal: envelope.kLocal, backend }

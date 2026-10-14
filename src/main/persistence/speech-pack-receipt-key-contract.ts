@@ -22,6 +22,8 @@ export interface SpeechPackReceiptRegistryRoot {
 export interface ProtectedSpeechPackKeyAnchorLease {
   readonly bytes: Buffer
   assertCurrent(): Promise<void>
+  /** Promote the retained candidate only after the protected envelope and purpose binding authenticate. */
+  admitAuthenticated(keyId: string, authenticatedBytes: Uint8Array): Promise<void>
   dispose(): Promise<void>
 }
 
