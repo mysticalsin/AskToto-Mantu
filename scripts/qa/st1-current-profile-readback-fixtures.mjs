@@ -135,6 +135,7 @@ export function denseReadbackFixture() {
   report.timeline[5].lookupMs = 300
   report.timeline[6].settledAtMs = report.timeline[6].requestAtMs + 25_000
   report.timeline[6].histogramUpperBoundMs = report.timeline[6].settledAtMs
+  report.timeline[7].loopMaxSinceLastMs = 250
   report.timeline[8].loopMaxSinceLastMs = 250
   const stageNames = [
     'createTray.loadIcon',
