@@ -64,6 +64,27 @@ describe('bounded storage streams', () => {
     expect(chunks).toEqual([])
   })
 
+  it('keeps the admitted byte and chunk limits when the caller mutates its options', async () => {
+    const root = await localRoot()
+    await writeFile(join(root, 'note.md'), 'abcdefgh')
+    const gateway = createStorageGateway({ root: () => root, detector: localDetector() })
+    const options = { maxBytes: 8, maxChunkBytes: 2 }
+    const chunks: Uint8Array[] = []
+
+    const result = await gateway.stream(
+      'note.md',
+      async (chunk) => {
+        chunks.push(chunk)
+        options.maxBytes = 1
+        options.maxChunkBytes = 1
+      },
+      options
+    )
+
+    expect(result).toMatchObject({ status: 'ok', bytesRead: 8, chunksRead: 4 })
+    expect(chunks.map((chunk) => chunk.byteLength)).toEqual([2, 2, 2, 2])
+  })
+
   it('rejects symlink inputs and never sends their target bytes to the sink', async () => {
     const root = await localRoot()
     const target = join(root, 'target.md')
