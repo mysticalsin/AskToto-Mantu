@@ -188,6 +188,7 @@ import {
 } from '@shared/ask-routing'
 import {
   getActiveModelPolicy,
+  getSpeechPolicyAuthorityStatus,
   modelPolicyCapabilitiesForSettings,
   narrowAllowedForCapability,
   resolveLocalSpeechPackPolicy,
@@ -7531,10 +7532,11 @@ function registerIpc(): void {
     ipcMain,
     assertMainWindow,
     requireAuth,
-    ensureLocalModel: (modelId, authorized) => ensureLocalModel(modelId, authorized),
+    ensureLocalModel: (modelId, authorized, validateCurrent) => ensureLocalModel(modelId, authorized, validateCurrent),
     captureActive: captureActiveForWindowRestart,
     captureIdentity: () => `capture:${speechPackCaptureRevision}`,
     localModelIdentity: getLocalModelProvisioningIdentity,
+    currentModelPolicyIdentity: () => getSpeechPolicyAuthorityStatus(getSettings()).identity,
     refreshScreenPreprocess,
     logProvisioningFailure: (error) => mainLog.warn('[localModels:ensure] provisioning failed:', error),
     auditAsrTransfer: () => auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })

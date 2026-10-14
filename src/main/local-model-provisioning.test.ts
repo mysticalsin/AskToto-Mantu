@@ -23,22 +23,28 @@ function setup(
   overrides: {
     captureActive?: () => boolean
     status?: 'managed' | 'unmanaged' | 'unverified' | 'unconfigured'
+    configured?: boolean
     beforeEnsure?: () => void
   } = {}
 ) {
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
     localLlm: { ...DEFAULT_SETTINGS.localLlm, modelId },
-    operatorUrl: overrides.status === 'unconfigured' ? '' : 'https://operator.test',
+    operatorUrl: overrides.configured
+      ? 'https://operator.test'
+      : overrides.status === 'unconfigured'
+        ? ''
+        : 'https://operator.test',
     operatorIngestSecret: overrides.status === 'unconfigured' ? '' : 'configured',
     operatorLicenseToken: '',
     enterpriseLive: { ...DEFAULT_SETTINGS.enterpriseLive, managed: false, inferenceMode: 'legacy' }
   }
   let reads = 0
   let captureIdentity = 'capture:0'
-  const ensure = vi.fn(async (_id: string, authorize: () => Promise<boolean>) => {
+  let proofIdentity = 'proof:1:policy-a'
+  const ensure = vi.fn(async (_id: string, authorize: () => Promise<boolean>, validateCurrent: () => boolean) => {
     overrides.beforeEnsure?.()
-    return authorize()
+    return (await authorize()) && validateCurrent()
   })
   const onReady = vi.fn()
   const captureActive = overrides.captureActive ?? (() => false)
@@ -50,6 +56,7 @@ function setup(
       captureActive,
       captureIdentity: () => captureIdentity,
       localModelIdentity: () => 'local-model:0',
+      currentModelPolicyIdentity: () => proofIdentity,
       readSettings: async () => {
         reads++
         const status: NonNullable<typeof overrides.status> = overrides.status ?? 'managed'
@@ -59,7 +66,7 @@ function setup(
           allowedProviders: null,
           modelPolicy:
             status === 'managed'
-              ? { status, identity: 'proof:1:policy-a', policy: policy() }
+              ? { status, identity: proofIdentity, policy: policy() }
               : { status, identity: `proof:1:${status}` }
         }
       },
@@ -71,6 +78,9 @@ function setup(
     },
     changeCaptureIdentity(identity: string) {
       captureIdentity = identity
+    },
+    changeProofIdentity(identity: string) {
+      proofIdentity = identity
     }
   }
 }
@@ -105,9 +115,23 @@ describe('explicit local model authority', () => {
     expect(context.onReady).not.toHaveBeenCalled()
   })
 
+  it('rejects a signed policy change after the initial decision and before transfer', async () => {
+    let context: ReturnType<typeof setup>
+    context = setup({ beforeEnsure: () => context.changeProofIdentity('proof:2:policy-b') })
+    await expect(provisionExplicitLocalModel(context.options)).resolves.toBe(false)
+    expect(context.ensure).toHaveBeenCalledOnce()
+    expect(context.onReady).not.toHaveBeenCalled()
+  })
+
   it('allows legacy unmanaged settings only without configured enterprise policy', async () => {
     const context = setup({ status: 'unconfigured' })
     await expect(provisionExplicitLocalModel(context.options)).resolves.toBe(true)
     expect(context.ensure).toHaveBeenCalledOnce()
+  })
+
+  it('denies an unconfigured proof status when an Operator URL is present', async () => {
+    const context = setup({ status: 'unconfigured', configured: true })
+    await expect(provisionExplicitLocalModel(context.options)).resolves.toBe(false)
+    expect(context.ensure).not.toHaveBeenCalled()
   })
 })

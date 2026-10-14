@@ -31,6 +31,7 @@ import {
 } from './manifest'
 import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 import { runSpeechPackSelfTest } from './self-test'
+import type { PriorReadyMarker } from './activation-authority'
 import type { PackageRuntimeContract } from './package-contract'
 import { resolveOptionalRuntimeReadiness, runtimeIdsForEngine, runtimeIdsForLocalLlm } from './runtime-components'
 
@@ -48,6 +49,8 @@ export interface SpeechPackServiceOptions {
   refreshAuthority?: () => boolean | Promise<boolean>
   /** Fresh trust read for restoration-only renames after an interrupted/revoked activation. */
   refreshRollbackAuthority?: () => boolean | Promise<boolean>
+  /** Synchronous published identity/policy fence after the rollback trust read. */
+  rollbackAuthorityCurrent?: () => boolean
   /** Live authoritative capture state; a throwing getter fails closed. */
   captureActive?: () => boolean
   /** Stable capture epoch identity, including a capture that starts and ends between status polls. */
@@ -111,6 +114,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     SpeechPackComponentId,
     { policyIdentity: string; selectionIdentity: string; captureIdentity: string }
   >()
+  const rollbackAuthority = new Map<
+    SpeechPackComponentId,
+    { transaction: symbol; markerIdentity: string | null | undefined }
+  >()
   const pendingAdmissions = new Map<SpeechPackComponentId, symbol>()
   let authorityRevision = 0
   let captureActive = false
@@ -170,6 +177,13 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return false
     }
   }
+  const rollbackTicket = (id: SpeechPackComponentId, marker: PriorReadyMarker | null) => {
+    const authority = rollbackAuthority.get(id)
+    if (!authority || isCaptureActive()) return null
+    const identity = marker ? `${marker.version}:${marker.manifestIdentity}` : null
+    if (authority.markerIdentity === undefined) authority.markerIdentity = identity
+    return typeof authority.transaction === 'symbol' && authority.markerIdentity === identity ? authority : null
+  }
   let observedSelectionIdentity = currentSelectionIdentity()
   let observedPolicyIdentity = currentPolicyIdentity()
 
@@ -218,7 +232,13 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
             currentSelectionIdentity() === authority.selectionIdentity
         )
       },
-      authorizeRollback: refreshRollbackAuthority
+      authorizeRollback: async (id, marker) => {
+        const ticket = rollbackTicket(id, marker)
+        if (!ticket || !(await refreshRollbackAuthority())) return false
+        return rollbackAuthority.get(id) === ticket && rollbackTicket(id, marker) === ticket
+      },
+      authorizeRollbackCurrent: (id, marker) =>
+        rollbackTicket(id, marker) !== null && (options.rollbackAuthorityCurrent?.() ?? true)
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
@@ -251,6 +271,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') {
         activity.delete(id)
         activeAuthority.delete(id)
+        rollbackAuthority.delete(id)
       }
     })
     return engine
@@ -596,6 +617,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     }
     activity.add(component.id)
+    const transaction = Symbol('speech-pack-activation')
+    rollbackAuthority.set(component.id, { transaction, markerIdentity: undefined })
     activeAuthority.set(component.id, {
       policyIdentity: record.policyIdentity,
       selectionIdentity: record.selectionIdentity,
@@ -696,6 +719,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
         ])
         clearTimeout(timeout)
       }
+      rollbackAuthority.clear()
       unsubscribe?.()
       unsubscribe = null
       listeners.clear()

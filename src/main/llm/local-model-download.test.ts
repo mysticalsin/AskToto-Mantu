@@ -240,6 +240,26 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     expect(localModelDownloadState().status).toBe('idle')
   })
 
+  it('does not activate a completed partial when authority changes as the async check returns', async () => {
+    let valid = true
+    let checks = 0
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('model.gguf') ? responseOf([CHUNK_A, CHUNK_B], GGUF.length) : responseOf([MMPROJ], MMPROJ.length)
+      )
+    )
+    const authorized = vi.fn(async () => {
+      checks += 1
+      if (checks === 4) queueMicrotask(() => (valid = false))
+      return true
+    })
+    const paths = modelPaths('qwen3.5-0.8b')
+    await expect(ensureLocalModel('qwen3.5-0.8b', authorized, () => valid)).resolves.toBe(false)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(existsSync(paths.gguf)).toBe(false)
+    expect(existsSync(`${paths.gguf}.partial`)).toBe(false)
+  })
+
   it('MQA-185 — fetches the weights over Electron net.fetch so a corporate proxy can carry them', async () => {
     mockFetch.mockImplementation((url: string) =>
       Promise.resolve(

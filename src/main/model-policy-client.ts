@@ -33,6 +33,7 @@ import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { auditLog, mainLog } from './logger'
 import {
   resolveSpeechPolicyIdentity,
+  speechPolicyIsConfigured,
   sameSpeechPolicyIdentity,
   SpeechPolicyAuthority,
   type SpeechPolicyIdentity,
@@ -220,6 +221,8 @@ export function getSpeechPolicyAuthorityStatus(
 ): { status: 'unconfigured'; identity: string } | SpeechPolicyAuthorityStatus {
   if (!resolveOperatorCredential(settings)) {
     const epoch = speechPolicyAuthority.observeIdentity(null)
+    if (speechPolicyIsConfigured(settings))
+      return { status: 'unverified', identity: `speech-proof:${epoch}:configured-without-credential` }
     return { status: 'unconfigured', identity: `speech-proof:${epoch}:unconfigured` }
   }
   return speechPolicyAuthority.authorityStatus(liveSpeechPolicyIdentity(), speechPolicyClock())
@@ -434,7 +437,12 @@ async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings, sou
       const revision = createHash('sha256')
         .update(canonicalUnmanagedModelPolicyPayload(unmanaged.data.issuedAt), 'utf8')
         .digest('hex')
-      speechPolicyAuthority.acceptUnmanaged(speechCapture.identity, unmanaged.data.issuedAt, revision)
+      speechPolicyAuthority.acceptUnmanaged(
+        speechCapture.identity,
+        unmanaged.data.issuedAt,
+        revision,
+        speechPolicyClock()
+      )
     }
     return true
   }

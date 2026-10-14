@@ -488,11 +488,18 @@ describe('speech-pack engine', () => {
       const before = server.requests.length
       const next = make([c])
       await next.initialise()
-      expect(asideDirs()).toEqual([])
       if (step === 'old-moved-aside') {
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(packMatches(c, active)).toBe(false)
+        expect(asideDirs()).toHaveLength(1)
+      } else if (step === 'marker-written') {
         expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
         expect(packMatches(c, active)).toBe(true)
+      } else {
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
       }
+      // A complete but unmarked set is reusable only after this explicit install request re-verifies
+      // and self-tests it; startup never creates an activation receipt on the user's behalf.
       next.enqueue([WHISPER])
       await next.whenIdle()
       expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
@@ -524,10 +531,16 @@ describe('speech-pack engine', () => {
       }
       if (step !== 'marker-written') expect(existsSync(marker(WHISPER))).toBe(false)
 
-      // The next start recovers: a complete unmarked pack is adopted, an unfinished one is finished.
+      // Startup observes the disk without activating an unmarked pack; the explicit request below
+      // verifies and self-tests retained complete bytes without refetching them.
       const before = server.requests.length
       const next = make([c])
       await next.initialise()
+      if (step === 'marker-written') {
+        expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+      } else {
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+      }
       next.enqueue([WHISPER])
       await next.whenIdle()
       expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
@@ -535,6 +548,52 @@ describe('speech-pack engine', () => {
       expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).component).toBe(WHISPER)
       // Verified files are never fetched again.
       expect(server.requests.length).toBe(before)
+    })
+
+    it('rechecks fresh authority immediately before activation and preserves the previous marker', async () => {
+      server = await serveFiles()
+      const previous = whisper(server.base)
+      const first = make([previous])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      const previousMarker = readFileSync(marker(WHISPER))
+      const nextComponent = { ...previous, version: '2' }
+      let activationRevoked = false
+      const replacing = make([nextComponent], {
+        authorizeActivation: async () => !activationRevoked,
+        onActivationStep: (step) => {
+          if (step === 'self-tested') activationRevoked = true
+        }
+      })
+      replacing.enqueue([WHISPER])
+      await replacing.whenIdle()
+      expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+    })
+
+    it('keeps the prior marker and its exact backup when owned rollback is denied', async () => {
+      server = await serveFiles()
+      const previous = whisper(server.base)
+      const first = make([previous])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      const previousMarker = readFileSync(marker(WHISPER))
+      const nextComponent = { ...previous, version: '2' }
+      let activationRevoked = false
+      const replacing = make([nextComponent], {
+        authorizeActivation: async () => !activationRevoked,
+        authorizeRollback: async () => false,
+        onActivationStep: (step) => {
+          if (step === 'renamed') activationRevoked = true
+        }
+      })
+      replacing.enqueue([WHISPER])
+      await replacing.whenIdle()
+      expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(asideDirs()).toHaveLength(1)
+      expect(packMatches(previous, asideDirs()[0])).toBe(true)
     })
 
     describe('component version transitions', () => {

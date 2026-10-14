@@ -407,6 +407,9 @@ export class FreshLeanSpeechAuthority {
         localSpeechPack,
         allowedProviders,
         enterpriseLive: settings.enterpriseLive,
+        operatorConfigured: Boolean(
+          settings.operatorUrl?.trim() || settings.operatorIngestSecret?.trim() || settings.operatorLicenseToken?.trim()
+        ),
         localSpeechPackLocked: lockedKeys.includes('localSpeechPack'),
         readable
       }),

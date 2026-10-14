@@ -106,11 +106,13 @@ async function alreadyValid(path: string, spec: LocalModelFile): Promise<boolean
 async function fetchFollowingRedirects(
   url: string,
   signal: AbortSignal,
-  authorize?: () => Promise<boolean>
+  authorize?: () => Promise<boolean>,
+  validateCurrent?: () => boolean
 ): Promise<Response> {
   let current = url
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (authorize && !(await authorize())) throw new Error('local model authority changed before transfer')
+    if (validateCurrent && !validateCurrent()) throw new Error('local model authority changed before transfer')
     const res = await net.fetch(current, { signal })
     if (res.status < 300 || res.status >= 400) return res
     const loc = res.headers.get('location')
@@ -129,7 +131,8 @@ async function downloadOne(
   spec: LocalModelFile,
   dest: string,
   onChunk: (bytes: number) => void,
-  authorize?: () => Promise<boolean>
+  authorize?: () => Promise<boolean>,
+  validateCurrent?: () => boolean
 ): Promise<void> {
   mkdirSync(dirname(dest), { recursive: true })
   // Before the network is touched: a transfer that cannot fit must not start.
@@ -151,7 +154,7 @@ async function downloadOne(
   let output: ReturnType<typeof createWriteStream> | undefined
   let outputClosed: Promise<void> | undefined
   try {
-    const res = await fetchFollowingRedirects(spec.url, ctrl.signal, authorize)
+    const res = await fetchFollowingRedirects(spec.url, ctrl.signal, authorize, validateCurrent)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
 
     // Reject on the declared length before writing anything: a redirect to a login/error page or a
@@ -186,6 +189,7 @@ async function downloadOne(
               completed = true
               return
             }
+            if (validateCurrent && !validateCurrent()) throw new Error('local model authority changed during transfer')
             if (!value) continue
             if (receivedBytes + value.byteLength > spec.bytes) {
               const error = new Error(`${file}: response exceeded pinned ${spec.bytes} bytes`)
@@ -214,6 +218,7 @@ async function downloadOne(
     }
     // Only now is the file allowed to exist under its real name.
     if (authorize && !(await authorize())) throw new Error('local model authority changed before activation')
+    if (validateCurrent && !validateCurrent()) throw new Error('local model authority changed before activation')
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
@@ -233,7 +238,11 @@ async function downloadOne(
  * Resolves true when the model is ready. Never throws — callers treat false as "Local unavailable".
  * Concurrent callers share one download rather than racing for the same files.
  */
-export function ensureLocalModel(modelId: string, authorize?: () => Promise<boolean>): Promise<boolean> {
+export function ensureLocalModel(
+  modelId: string,
+  authorize?: () => Promise<boolean>,
+  validateCurrent?: () => boolean
+): Promise<boolean> {
   if (inFlight) return inFlight
   // Publish BEFORE the async work so the first localModels:list (Settings / onboarding, same tick as
   // boot) reads `downloading` instead of idle/`not-downloaded`. A missed first poll used to freeze
@@ -241,14 +250,18 @@ export function ensureLocalModel(modelId: string, authorize?: () => Promise<bool
   if (state.status !== 'downloading' || state.modelId !== modelId) {
     state = { modelId, status: 'downloading', progress: 0 }
   }
-  inFlight = run(modelId, authorize).finally(() => {
+  inFlight = run(modelId, authorize, validateCurrent).finally(() => {
     inFlight = null
   })
   return inFlight
 }
 
-async function run(modelId: string, authorize?: () => Promise<boolean>): Promise<boolean> {
-  if (authorize && !(await authorize())) {
+async function run(
+  modelId: string,
+  authorize?: () => Promise<boolean>,
+  validateCurrent?: () => boolean
+): Promise<boolean> {
+  if ((authorize && !(await authorize())) || (validateCurrent && !validateCurrent())) {
     state = IDLE
     return false
   }
@@ -310,7 +323,7 @@ async function run(modelId: string, authorize?: () => Promise<boolean>): Promise
     for (let attempt = 1; attempt <= MAX_ATTEMPTS && !ok; attempt++) {
       try {
         received = base
-        if (authorize && !(await authorize())) {
+        if ((authorize && !(await authorize())) || (validateCurrent && !validateCurrent())) {
           state = IDLE
           return false
         }
@@ -322,11 +335,12 @@ async function run(modelId: string, authorize?: () => Promise<boolean>): Promise
             received += n
             publish('downloading')
           },
-          authorize
+          authorize,
+          validateCurrent
         )
         ok = true
       } catch (err) {
-        if (authorize && !(await authorize())) {
+        if ((authorize && !(await authorize())) || (validateCurrent && !validateCurrent())) {
           state = IDLE
           return false
         }

@@ -13,8 +13,9 @@
  */
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { constants as fsConstants } from 'node:fs'
+import { copyFile, lstat, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
 import { isImmutableUrl } from './manifest'
@@ -73,6 +74,30 @@ export async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** Copy missing files from caller-verified pack directories into an explicit install's staging area. */
+export async function reuseVerifiedFiles(options: {
+  candidates: readonly string[]
+  destination: string
+  files: readonly { path: string }[]
+  authorize: () => boolean | Promise<boolean>
+  validateCurrent: () => boolean
+}): Promise<boolean> {
+  for (const candidate of options.candidates) {
+    for (const file of options.files) {
+      const target = join(options.destination, ...file.path.split('/'))
+      if (await pathExists(target)) continue
+      if (!(await options.authorize()) || !options.validateCurrent()) return false
+      await mkdir(dirname(target), { recursive: true })
+      try {
+        await copyFile(join(candidate, ...file.path.split('/')), target, fsConstants.COPYFILE_EXCL)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
+  }
+  return true
 }
 
 /** Find a parent whose filesystem can report available bytes for a not-yet-created staging path. */

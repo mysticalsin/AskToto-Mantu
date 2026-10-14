@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createSpeechPackEngine, type SpeechPackEngine, type SpeechPackState } from './engine'
+import {
+  createSpeechPackEngine,
+  type SpeechPackEngine,
+  type SpeechPackEngineOptions,
+  type SpeechPackState
+} from './engine'
 import {
   SPEECH_PACK_COMPONENTS,
   WHISPER_BASE_Q8,
@@ -500,6 +505,36 @@ describe('explicit speech-pack service boundary', () => {
       reason: 'plan-expired'
     })
     expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('keeps same-transaction prior-pack rollback authority after policy revocation, but never during capture', async () => {
+    let policyIdentity = 'speech-proof:4:scope-a:revision-1'
+    let capture = false
+    let engineOptions: SpeechPackEngineOptions | null = null
+    const fake = fakeEngine()
+    const createEngine = (options: SpeechPackEngineOptions): SpeechPackEngine => {
+      engineOptions = options
+      return { ...fake.engine, cancel: vi.fn() }
+    }
+    const { service } = setup({
+      policyIdentity: () => policyIdentity,
+      captureActive: () => capture,
+      createEngine: createEngine as never
+    })
+    expect(await install(service)).toMatchObject({ ok: true })
+    const admittedOptions = engineOptions as unknown as SpeechPackEngineOptions
+    const marker = { version: '1', manifestIdentity: 'a'.repeat(64) }
+
+    policyIdentity = 'speech-proof:5:scope-b:revision-2'
+    service.policyChanged()
+    await expect(admittedOptions.authorizeActivation?.(WHISPER_BASE_Q8.id)).resolves.toBe(false)
+    await expect(admittedOptions.authorizeRollback?.(WHISPER_BASE_Q8.id, marker)).resolves.toBe(true)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker)).toBe(true)
+
+    capture = true
+    service.captureActivityChanged(true)
+    expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker)).toBe(false)
+    await service.shutdown()
   })
 
   it('does not admit a transfer after shutdown has started', async () => {

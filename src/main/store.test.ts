@@ -24,10 +24,12 @@ import {
   configureFreshLeanSpeechDefaults,
   readSettingsAtAuthorityBoundary,
   getSpeechPackSelectionIdentity,
+  getSpeechPackPolicyIdentity,
   resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
 } from './store'
 import { decryptSecret } from './secrets'
+import * as winSecurity from './win-security'
 import {
   getPublishedSettingsObservation,
   observeSettingsSnapshot,
@@ -192,6 +194,21 @@ describe('store', () => {
     expect(getPublishedSettingsObservation()?.readable).toBe(false)
   })
 
+  it('keeps an invalid admin snapshot unreadable when its path is absent at the later legacy read', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    const reader = vi
+      .spyOn(winSecurity, 'readManagedPolicyAuthorityFile')
+      .mockImplementation(async (_path, _max, admin) => (admin ? { status: 'invalid' } : { status: 'absent' }))
+    try {
+      const authority = await readSettingsAtAuthorityBoundary()
+      expect(reader).toHaveBeenCalled()
+      expect(authority.readable).toBe(false)
+      expect(getPublishedSettingsObservation()?.readable).toBe(false)
+    } finally {
+      reader.mockRestore()
+    }
+  })
+
   it('treats a known profile marker directory as an existing profile', async () => {
     mkdirSync(join(userData, 'auth-session.bin'))
     await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
@@ -217,6 +234,16 @@ describe('store', () => {
     const returned = getSpeechPackSelectionIdentity()
     expect(changed).not.toBe(before)
     expect(returned).not.toBe(changed)
+  })
+
+  it('advances speech policy identity when Operator configuration is added and removed', () => {
+    const before = getSpeechPackPolicyIdentity()
+    setSettings({ operatorUrl: 'https://operator.example.test' })
+    const configured = getSpeechPackPolicyIdentity()
+    setSettings({ operatorUrl: '' })
+    const returned = getSpeechPackPolicyIdentity()
+    expect(configured).not.toBe(before)
+    expect(returned).not.toBe(configured)
   })
 
   beforeEach(() => {

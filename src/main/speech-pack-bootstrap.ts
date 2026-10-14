@@ -15,6 +15,7 @@ import { asrModelMetadataReadyForEngine } from './asr-bundled-ensure'
 import { registerExplicitLocalModelEnsure } from './local-model-provisioning'
 import { registerHighTierAsrModelFetch } from './asr-model-download'
 import { getSpeechPolicyAuthorityStatus } from './model-policy-client'
+import { speechPolicyIsConfigured } from './speech-policy-authority'
 import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
 import {
   configurePackageRuntimeContractProvider,
@@ -28,10 +29,15 @@ export function registerOptionalModelProvisioningIpc(options: {
   ipcMain: Electron.IpcMain
   assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
   requireAuth: () => boolean
-  ensureLocalModel: (modelId: string, authorized: () => Promise<boolean>) => Promise<boolean>
+  ensureLocalModel: (
+    modelId: string,
+    authorized: () => Promise<boolean>,
+    validateCurrent: () => boolean
+  ) => Promise<boolean>
   captureActive: () => boolean
   captureIdentity: () => string
   localModelIdentity: () => string
+  currentModelPolicyIdentity: () => string
   refreshScreenPreprocess: () => void
   logProvisioningFailure: (error: unknown) => void
   auditAsrTransfer: () => void
@@ -55,6 +61,7 @@ export function registerOptionalModelProvisioningIpc(options: {
     captureActive: options.captureActive,
     captureIdentity: options.captureIdentity,
     localModelIdentity: options.localModelIdentity,
+    currentModelPolicyIdentity: options.currentModelPolicyIdentity,
     readSettings,
     ensure: options.ensureLocalModel,
     onReady: options.refreshScreenPreprocess,
@@ -128,6 +135,13 @@ export function startSpeechPackDesktopFromMain(options: {
       )
     },
     refreshRollbackAuthority: async () => (await readSettingsAtAuthorityBoundary()).readable,
+    rollbackAuthorityCurrent: () => {
+      try {
+        return getPublishedSettingsObservation()?.readable === true
+      } catch {
+        return false
+      }
+    },
     engineRuntimeReady: () =>
       options.verifiedPackageContract.status !== 'invalid' && options.verifiedPackageContract.profile !== 'lean',
     engineModelReady: (engine) => asrModelMetadataReadyForEngine(engine, options.verifiedPackageContract.profile)
@@ -142,7 +156,8 @@ function resolveTrustedSpeechPackPolicy(
   if (authority.status === 'unverified') return 'blocked'
   if (
     authority.status === 'unconfigured' &&
-    (settings.enterpriseLive?.managed !== false ||
+    (speechPolicyIsConfigured(settings) ||
+      settings.enterpriseLive?.managed !== false ||
       settings.enterpriseLive.inferenceMode !== 'legacy' ||
       settings.enterpriseLive.summaryOnly !== false)
   )
@@ -161,6 +176,7 @@ export function startSpeechPackDesktop(options: {
   policyIdentity?: () => string
   refreshAuthority?: Parameters<typeof createSpeechPackService>[0]['refreshAuthority']
   refreshRollbackAuthority?: Parameters<typeof createSpeechPackService>[0]['refreshRollbackAuthority']
+  rollbackAuthorityCurrent?: Parameters<typeof createSpeechPackService>[0]['rollbackAuthorityCurrent']
   captureActive: () => boolean
   captureIdentity?: () => string
   packageRuntimeContract?: Parameters<typeof createSpeechPackService>[0]['packageRuntimeContract']

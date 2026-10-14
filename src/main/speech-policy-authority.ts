@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { OPERATOR_LICENSE_MAX, parseOperatorLicense } from '@shared/operator-license'
 import { resolveOperatorBaseUrl } from '@shared/operator'
 import type { ModelPolicyDocument } from '@shared/model-policy'
@@ -37,6 +38,14 @@ export interface VerifiedSpeechPolicy {
   verifiedAt: number
   revision: string
   policy: ModelPolicyDocument
+}
+
+type SignedUnmanagedProof = {
+  version: number
+  revision: string
+  verifiedAt: number
+  monotonicAt: number
+  epoch: number
 }
 
 export type SpeechPolicyAuthorityStatus =
@@ -117,6 +126,12 @@ export function resolveSpeechPolicyIdentity(
   return { origin, credentialDigest, deviceIdHash, scopeKey, licenseToken }
 }
 
+export function speechPolicyIsConfigured(settings: SpeechPolicyIdentitySettings): boolean {
+  return Boolean(
+    settings.operatorUrl?.trim() || settings.operatorIngestSecret?.trim() || settings.operatorLicenseToken?.trim()
+  )
+}
+
 export function sameSpeechPolicyIdentity(
   left: SpeechPolicyIdentity | null,
   right: SpeechPolicyIdentity | null
@@ -130,6 +145,7 @@ function clonePolicy(policy: ModelPolicyDocument): ModelPolicyDocument {
 
 export class SpeechPolicyAuthority {
   private readonly snapshots = new Map<string, VerifiedSpeechPolicy>()
+  private readonly unmanagedProofs = new Map<string, SignedUnmanagedProof>()
   private readonly highWater = new Map<string, PolicyHighWater>()
   private activeScopeKey: string | null = null
   private identityEpoch = 0
@@ -169,7 +185,9 @@ export class SpeechPolicyAuthority {
     if (!identity) return false
     const isActive = identity.scopeKey === this.activeScopeKey
     if (isActive) this.identityEpoch++
-    const revoked = this.snapshots.delete(identity.scopeKey)
+    const revokedSnapshot = this.snapshots.delete(identity.scopeKey)
+    const revokedUnmanaged = this.unmanagedProofs.delete(identity.scopeKey)
+    const revoked = revokedSnapshot || revokedUnmanaged
     if (isActive && revoked) this.emit({ kind: 'revoked', reason })
     return revoked
   }
@@ -178,8 +196,9 @@ export class SpeechPolicyAuthority {
    *  in-memory proof and every refresh already captured under the old authority epoch. */
   invalidateAll(): boolean {
     this.identityEpoch++
-    const revoked = this.snapshots.size > 0
+    const revoked = this.snapshots.size > 0 || this.unmanagedProofs.size > 0
     this.snapshots.clear()
+    this.unmanagedProofs.clear()
     if (revoked) this.emit({ kind: 'revoked', reason: 'explicit-invalidation' })
     return revoked
   }
@@ -211,6 +230,7 @@ export class SpeechPolicyAuthority {
       revision,
       policy: clonePolicy(policy)
     })
+    this.unmanagedProofs.delete(identity.scopeKey)
     if (previous && previous.revision !== revision && this.activeScopeKey === identity.scopeKey) {
       this.identityEpoch++
       this.emit({ kind: 'changed', reason: 'policy-changed' })
@@ -218,19 +238,44 @@ export class SpeechPolicyAuthority {
     return 'accepted'
   }
 
-  acceptUnmanaged(identity: SpeechPolicyIdentity, version: number, revision: string): SpeechPolicyAcceptResult {
+  acceptUnmanaged(
+    identity: SpeechPolicyIdentity,
+    version: number,
+    revision: string,
+    verifiedAt = Date.now(),
+    monotonicAt = performance.now()
+  ): SpeechPolicyAcceptResult {
     // A verified signed-null response explicitly says this identity is unmanaged. Even a stale
     // version must revoke the currently usable snapshot; retain the high-water mark so stale
     // managed documents cannot restore authority afterward.
     const isActive = this.activeScopeKey === identity.scopeKey
     const revoked = this.snapshots.delete(identity.scopeKey)
-    if (isActive) this.identityEpoch++
-    if (!Number.isSafeInteger(version) || version < 0) {
-      if (isActive && revoked) this.emit({ kind: 'revoked', reason: 'invalid-response' })
+    const previousProof = this.unmanagedProofs.get(identity.scopeKey)
+    this.unmanagedProofs.delete(identity.scopeKey)
+    const sameProof = previousProof?.version === version && previousProof.revision === revision
+    if (isActive && (revoked || (previousProof && !sameProof))) this.identityEpoch++
+    if (
+      !Number.isSafeInteger(version) ||
+      version < 0 ||
+      !Number.isFinite(verifiedAt) ||
+      !Number.isFinite(monotonicAt)
+    ) {
+      if (isActive && sameProof) this.identityEpoch++
+      if (isActive && (revoked || previousProof)) this.emit({ kind: 'revoked', reason: 'invalid-response' })
       return 'conflict'
     }
     const result = this.compareAndRecord(identity.scopeKey, version, revision, 'unmanaged')
-    if (isActive && revoked) {
+    const accepted = result === 'accepted' || result === 'unmanaged'
+    if (isActive && accepted) {
+      this.unmanagedProofs.set(identity.scopeKey, {
+        version,
+        revision,
+        verifiedAt,
+        monotonicAt,
+        epoch: this.identityEpoch
+      })
+    }
+    if (isActive && (revoked || (previousProof && !accepted))) {
       this.emit({ kind: 'revoked', reason: result === 'conflict' ? 'policy-conflict' : 'signed-unmanaged' })
     }
     return result === 'accepted' ? 'unmanaged' : result
@@ -258,7 +303,11 @@ export class SpeechPolicyAuthority {
     return { ...snapshot, policy: clonePolicy(snapshot.policy) }
   }
 
-  authorityStatus(identity: SpeechPolicyIdentity | null, now = Date.now()): SpeechPolicyAuthorityStatus {
+  authorityStatus(
+    identity: SpeechPolicyIdentity | null,
+    now = Date.now(),
+    monotonicNow = performance.now()
+  ): SpeechPolicyAuthorityStatus {
     const epoch = this.observeIdentity(identity)
     if (!identity) return { status: 'unverified', identity: `speech-proof:${epoch}:missing-identity` }
     const snapshot = this.get(identity, now)
@@ -270,20 +319,34 @@ export class SpeechPolicyAuthority {
       }
     }
     const receipt = this.highWater.get(identity.scopeKey)
-    if (receipt?.kind === 'unmanaged') {
+    const unmanaged = this.unmanagedProofs.get(identity.scopeKey)
+    if (unmanaged && unmanaged.epoch === epoch && !this.isUnmanagedFresh(unmanaged, now, monotonicNow)) {
+      this.unmanagedProofs.delete(identity.scopeKey)
+      if (this.activeScopeKey === identity.scopeKey) this.identityEpoch++
+    }
+    const currentEpoch = this.identityEpoch
+    const currentUnmanaged = this.unmanagedProofs.get(identity.scopeKey)
+    if (
+      receipt?.kind === 'unmanaged' &&
+      currentUnmanaged?.version === receipt.version &&
+      currentUnmanaged.revision === receipt.revision &&
+      currentUnmanaged.epoch === currentEpoch &&
+      this.isUnmanagedFresh(currentUnmanaged, now, monotonicNow)
+    ) {
       return {
         status: 'unmanaged',
-        identity: `speech-proof:${epoch}:${identity.scopeKey}:unmanaged:${receipt.version}:${receipt.revision}`
+        identity: `speech-proof:${currentEpoch}:${identity.scopeKey}:unmanaged:${currentUnmanaged.version}:${currentUnmanaged.revision}`
       }
     }
     return {
       status: 'unverified',
-      identity: `speech-proof:${epoch}:${identity.scopeKey}:${receipt?.kind ?? 'none'}:${receipt?.version ?? 0}:${receipt?.revision ?? 'none'}`
+      identity: `speech-proof:${currentEpoch}:${identity.scopeKey}:${receipt?.kind ?? 'none'}:${receipt?.version ?? 0}:${receipt?.revision ?? 'none'}`
     }
   }
 
   reset(): void {
     this.snapshots.clear()
+    this.unmanagedProofs.clear()
     this.highWater.clear()
     this.activeScopeKey = null
     this.identityEpoch = 0
@@ -308,6 +371,17 @@ export class SpeechPolicyAuthority {
     }
     this.highWater.set(scopeKey, { version, revision, kind })
     return 'accepted'
+  }
+
+  private isUnmanagedFresh(proof: SignedUnmanagedProof, now: number, monotonicNow: number): boolean {
+    return (
+      Number.isFinite(now) &&
+      now >= proof.verifiedAt &&
+      now - proof.verifiedAt <= VERIFIED_SPEECH_POLICY_MAX_AGE_MS &&
+      Number.isFinite(monotonicNow) &&
+      monotonicNow >= proof.monotonicAt &&
+      monotonicNow - proof.monotonicAt <= VERIFIED_SPEECH_POLICY_MAX_AGE_MS
+    )
   }
 
   private emit(event: SpeechPolicyProofEvent): void {

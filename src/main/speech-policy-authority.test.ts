@@ -3,6 +3,7 @@ import { emptyModelPolicyEntry, MODEL_POLICY_CAPABILITIES, type ModelPolicyDocum
 import {
   normalizeSpeechPolicyOrigin,
   resolveSpeechPolicyIdentity,
+  speechPolicyIsConfigured,
   SpeechPolicyAuthority
 } from './speech-policy-authority'
 
@@ -83,11 +84,50 @@ describe('speech policy scope high-water authority', () => {
     expect(returnedStatus.status).toBe('unverified')
     expect(returnedStatus.identity).not.toBe(firstStatus.identity)
 
-    expect(authority.acceptUnmanaged(first, NOW, 'signed-unmanaged-revision')).toBe('unmanaged')
-    expect(authority.authorityStatus(first, NOW)).toMatchObject({
+    authority.observeIdentity(first)
+    expect(authority.acceptUnmanaged(first, NOW, 'signed-unmanaged-revision', NOW, 100)).toBe('unmanaged')
+    expect(authority.authorityStatus(first, NOW, 100)).toMatchObject({
       status: 'unmanaged',
       identity: expect.stringContaining('signed-unmanaged-revision')
     })
+  })
+
+  it('requires a fresh epoch-bound unmanaged proof while retaining its high-water replay tombstone', () => {
+    const authority = new SpeechPolicyAuthority()
+    const currentIdentity = identity()
+    authority.observeIdentity(currentIdentity)
+    expect(authority.acceptUnmanaged(currentIdentity, NOW, 'unmanaged-1', NOW, 100)).toBe('unmanaged')
+    const initial = authority.authorityStatus(currentIdentity, NOW + 60_000, 60_100)
+    expect(initial.status).toBe('unmanaged')
+    expect(authority.authorityStatus(currentIdentity, NOW + 60_001, 60_101).status).toBe('unverified')
+
+    expect(authority.acceptUnmanaged(currentIdentity, NOW, 'unmanaged-1', NOW + 60_001, 60_101)).toBe('unmanaged')
+    const renewed = authority.authorityStatus(currentIdentity, NOW + 60_002, 60_102)
+    expect(renewed.status).toBe('unmanaged')
+    expect(renewed.identity).not.toBe(initial.identity)
+    authority.invalidateAll()
+    expect(authority.authorityStatus(currentIdentity, NOW + 60_002, 60_102).status).toBe('unverified')
+    expect(authority.acceptUnmanaged(currentIdentity, NOW - 1, 'stale-unmanaged', NOW + 60_003, 60_103)).toBe(
+      'lower-version'
+    )
+    expect(authority.authorityStatus(currentIdentity, NOW + 60_003, 60_103).status).toBe('unverified')
+  })
+
+  it('invalidates an unmanaged grant after identity-scope ABA', () => {
+    const authority = new SpeechPolicyAuthority()
+    const first = identity()
+    const second = identity('1123456789abcdef', 'device-02')
+    authority.observeIdentity(first)
+    expect(authority.acceptUnmanaged(first, NOW, 'unmanaged-1', NOW, 100)).toBe('unmanaged')
+    authority.observeIdentity(second)
+    authority.observeIdentity(first)
+    expect(authority.authorityStatus(first, NOW, 100).status).toBe('unverified')
+  })
+
+  it('treats an operator URL or credential as configured even before verified proof exists', () => {
+    expect(speechPolicyIsConfigured({ operatorUrl: 'https://operator.test' })).toBe(true)
+    expect(speechPolicyIsConfigured({ operatorIngestSecret: 'configured' })).toBe(true)
+    expect(speechPolicyIsConfigured({})).toBe(false)
   })
 
   it('does not renew freshness from lower versions or accept conflicting same-version content', () => {
@@ -113,7 +153,7 @@ describe('speech policy scope high-water authority', () => {
     const currentIdentity = identity()
     authority.observeIdentity(currentIdentity)
     expect(authority.acceptManaged(currentIdentity, policy(), NOW, 'managed-1')).toBe('accepted')
-    expect(authority.acceptUnmanaged(currentIdentity, NOW + 1, 'unmanaged-1')).toBe('unmanaged')
+    expect(authority.acceptUnmanaged(currentIdentity, NOW + 1, 'unmanaged-1', NOW + 1, 101)).toBe('unmanaged')
     expect(authority.get(currentIdentity, NOW + 1)).toBeNull()
     expect(authority.acceptManaged(currentIdentity, policy(NOW), NOW + 2, 'managed-1')).toBe('lower-version')
     expect(authority.acceptManaged(currentIdentity, policy(NOW + 2), NOW + 3, 'managed-2')).toBe('accepted')
@@ -126,7 +166,7 @@ describe('speech policy scope high-water authority', () => {
     authority.observeIdentity(currentIdentity)
     expect(authority.acceptManaged(currentIdentity, policy(NOW + 2), NOW, 'managed-2')).toBe('accepted')
 
-    expect(authority.acceptUnmanaged(currentIdentity, NOW + 1, 'unmanaged-1')).toBe('lower-version')
+    expect(authority.acceptUnmanaged(currentIdentity, NOW + 1, 'unmanaged-1', NOW + 1, 101)).toBe('lower-version')
     expect(authority.get(currentIdentity, NOW + 1)).toBeNull()
     expect(authority.acceptManaged(currentIdentity, policy(NOW + 1), NOW + 2, 'managed-1')).toBe('lower-version')
     expect(authority.acceptManaged(currentIdentity, policy(NOW + 3), NOW + 3, 'managed-3')).toBe('accepted')

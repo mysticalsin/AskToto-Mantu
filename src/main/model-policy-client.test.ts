@@ -93,7 +93,10 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-function useSpeechIdentity(settings = SPEECH_SETTINGS, durableDeviceId: string | null = MACHINE_ID): void {
+function useSpeechIdentity(
+  settings: { operatorUrl?: string; operatorIngestSecret?: string; operatorLicenseToken?: string } = SPEECH_SETTINGS,
+  durableDeviceId: string | null = MACHINE_ID
+): void {
   setSpeechPolicyIdentityReader(() => ({ settings, durableDeviceId }))
 }
 
@@ -107,6 +110,30 @@ describe('refreshModelPolicy / getActiveModelPolicy', () => {
     await refreshModelPolicyChecked(settings)
 
     expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unmanaged')
+  })
+
+  it('revokes signed-unmanaged authority on HTTP denial and hard MDM invalidation', async () => {
+    const settings = { ...SPEECH_SETTINGS, operatorIngestSecret: 'shared-secret' }
+    useSpeechIdentity(settings)
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW, SPEECH_TOKEN)))
+    await refreshModelPolicyChecked(settings)
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unmanaged')
+
+    setModelPolicyFetchForTests(async () => new Response('denied', { status: 403 }))
+    await refreshModelPolicyChecked(settings)
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unverified')
+
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW + 1, SPEECH_TOKEN)))
+    await refreshModelPolicyChecked(settings)
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unmanaged')
+    invalidateSpeechPolicyProof()
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unverified')
+  })
+
+  it('treats a configured Operator URL without credentials as unverified, not unmanaged', () => {
+    const settings = { operatorUrl: 'https://operator.test' }
+    useSpeechIdentity(settings)
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unverified')
   })
 
   it('starts unmanaged (null) before any fetch', () => {
