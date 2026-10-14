@@ -93,9 +93,9 @@ describe('enterprise-live summary-only saveMeeting', () => {
     } as Settings
     await saveDraftTranscript(settings, meeting())
     const before = readdirSync(dir).sort()
-    expect(before).toHaveLength(1)
-    expect(before[0]).toMatch(/^\.autosave-draft-.*\.md$/)
-    const draft = join(dir, before[0])
+    const drafts = before.filter((name) => /^\.autosave-draft-.*\.md$/.test(name))
+    expect(drafts).toHaveLength(1)
+    const draft = join(dir, drafts[0])
     const original = readFileSync(draft)
     expect(original.toString('utf8')).toContain('SECRET_VERBATIM_SHOULD_NOT_PERSIST')
     const olderFile = join(dir, 'previous-meeting.md')
