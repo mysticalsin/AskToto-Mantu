@@ -15,6 +15,14 @@
       "database_id": "8eb5a081-594c-407c-9470-6a5aa28b9f7c"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SPEECH_SESSION_DO", "class_name": "SpeechSessionDurableObject" }
+    ]
+  },
+  "migrations": [
+    { "tag": "speech-session-v1", "new_sqlite_classes": ["SpeechSessionDurableObject"] }
+  ],
   // Plan D5, B8: fonts, flags and connector logos (operator/public/{fonts,flags,logos}/, built
   // by operator/scripts/build-assets.mjs) served through Workers Static Assets. run_worker_first
   // keeps the Worker in front of every request, including these, so Access and the security
@@ -53,6 +61,11 @@
           "database_id": "REPLACE_AFTER_D1_CREATE"
         }
       ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "SPEECH_SESSION_DO", "class_name": "SpeechSessionDurableObject" }
+        ]
+      },
       "assets": {
         "directory": "./public",
         "binding": "ASSETS",

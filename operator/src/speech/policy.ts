@@ -23,7 +23,7 @@ export interface SpeechPolicyEvidence {
   audience: string
   privacy: 'VERIFIED' | 'UNVERIFIED'
   transportConsumer: 'REGISTERED' | 'UNAVAILABLE'
-  /** Set only by the CI synthetic fixture. Production has no consumer in this slice. */
+  /** Marks test-only evidence; production evidence comes from the D1 readiness resolver. */
   synthetic?: true
 }
 
@@ -72,7 +72,7 @@ function configuredRoute(
 /**
  * Resolves only explicit finite server configuration. Gateway configuration readback is not privacy
  * verification, so a separate exact route/config/deployment evidence provider is mandatory. This
- * broker-only slice has no production evidence provider or relay consumer and therefore refuses.
+ * callers supply exact route evidence only after the real resolver or an isolated test fixture.
  */
 export function resolveSpeechPolicy(env: SpeechPolicyEnv, evidence?: SpeechPolicyEvidence): SpeechPolicyResult {
   const tenantId = deploymentId(env.SPEECH_TENANT_ID)
@@ -101,7 +101,7 @@ export function resolveSpeechPolicy(env: SpeechPolicyEnv, evidence?: SpeechPolic
     !budgetMaxMs ||
     !maxSessionMs ||
     allowedLanguages.length === 0 ||
-    allowedLanguages.some((language) => !/^[a-z]{2}(?:-[A-Z]{2})?$/.test(language)) ||
+    allowedLanguages.some((language) => !/^(?:multi|[a-z]{2}(?:-[A-Z]{2})?)$/.test(language)) ||
     new Set(allowedLanguages).size !== allowedLanguages.length
   ) {
     return { ok: false, code: route ? 'POLICY_UNAVAILABLE' : 'ROUTE_NOT_READY' }
@@ -119,8 +119,7 @@ export function resolveSpeechPolicy(env: SpeechPolicyEnv, evidence?: SpeechPolic
   ) {
     return { ok: false, code: 'PRIVACY_UNVERIFIED' }
   }
-  if (evidence.transportConsumer !== 'REGISTERED' || evidence.synthetic !== true)
-    return { ok: false, code: 'TRANSPORT_UNAVAILABLE' }
+  if (evidence.transportConsumer !== 'REGISTERED') return { ok: false, code: 'TRANSPORT_UNAVAILABLE' }
   return {
     ok: true,
     policy: {

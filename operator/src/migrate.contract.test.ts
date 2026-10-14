@@ -240,3 +240,83 @@ describe('speech broker additive schema (M2-0107)', () => {
     }
   })
 })
+
+describe('speech relay durable lifecycle schema (M2-0108)', () => {
+  it('adds metadata-only relay streams and owner-reviewed route evidence to fresh and upgrade schemas', () => {
+    expect(schemaSql).toContain('consented_tracks_json TEXT NOT NULL')
+    for (const sql of [schemaSql, schemaAlterSql]) {
+      const statements = parseStatements(sql)
+      const streams = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_streams\b/i.test(statement))
+      const evidence = statements.find((statement) =>
+        /^CREATE TABLE IF NOT EXISTS speech_route_evidence\b/i.test(statement)
+      )
+      const epochs = statements.find((statement) =>
+        /^CREATE TABLE IF NOT EXISTS speech_capture_epochs\b/i.test(statement)
+      )
+      const sessions = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_sessions\b/i.test(statement))
+      expect(streams).toBeTruthy()
+      expect(evidence).toBeTruthy()
+      expect(epochs).toBeTruthy()
+      expect(
+        statements.some((statement) =>
+          /ALTER TABLE speech_sessions ADD COLUMN consented_tracks_json TEXT/.test(statement)
+        )
+      ).toBe(true)
+      for (const column of [
+        'session_id TEXT NOT NULL',
+        'grant_id TEXT NOT NULL',
+        'track TEXT NOT NULL',
+        'stream_epoch INTEGER NOT NULL',
+        'transport_attempted_at INTEGER',
+        'opened_at INTEGER',
+        'stop_requested_at INTEGER',
+        'close_confirmed_at INTEGER',
+        'settled_at INTEGER',
+        'input_bytes INTEGER NOT NULL',
+        'output_bytes INTEGER NOT NULL'
+      ])
+        expect(streams?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'finish_requested_at INTEGER',
+        'provider_complete_at INTEGER',
+        'last_sequence INTEGER NOT NULL',
+        'tail_status TEXT'
+      ])
+        expect(streams?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'capture_generation INTEGER NOT NULL',
+        'track TEXT NOT NULL',
+        'last_epoch INTEGER NOT NULL',
+        'expires_at INTEGER NOT NULL'
+      ])
+        expect(epochs?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'evidence_key TEXT NOT NULL UNIQUE',
+        'tenant_id TEXT NOT NULL',
+        'audience TEXT NOT NULL',
+        'deployment_id TEXT NOT NULL',
+        'account_id TEXT NOT NULL',
+        'gateway_id TEXT NOT NULL',
+        'route_id TEXT NOT NULL',
+        'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL',
+        'policy_version TEXT NOT NULL',
+        'implementation_revision TEXT NOT NULL',
+        'reviewer_email TEXT NOT NULL',
+        'evidence_refs_json TEXT NOT NULL',
+        'expires_at INTEGER NOT NULL',
+        'version INTEGER NOT NULL',
+        'revoked_at INTEGER'
+      ])
+        expect(evidence?.replace(/\s+/g, ' ')).toContain(column)
+      expect(streams).not.toMatch(/audio|transcript|content/i)
+      expect(evidence).not.toMatch(/token\s+TEXT|secret\s+TEXT/i)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_streams_active\b/i.test(statement))
+      ).toBe(true)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_evidence_lookup\b/i.test(statement))
+      ).toBe(true)
+    }
+  })
+})

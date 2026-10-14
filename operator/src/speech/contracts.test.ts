@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { parseSpeechSessionRequest, SpeechSessionRequestSchema } from './contracts'
+import {
+  encodeSpeechTrackDescriptor,
+  parseSpeechTrackDescriptor,
+  parseSpeechSessionRequest,
+  SpeechSessionRequestSchema
+} from './contracts'
 
 const valid = {
   operation: 'create-session',
@@ -62,5 +67,40 @@ describe('speech session request contract', () => {
         10_000
       )
     ).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
+  })
+})
+
+describe('speech track descriptor contract', () => {
+  const descriptor = {
+    operation: 'open-track',
+    sessionId: '53f6eb5d-442e-4479-8382-07f340488e43',
+    track: 'microphone',
+    captureGeneration: 7,
+    streamEpoch: 1,
+    grantDigest: 'a'.repeat(64)
+  } as const
+
+  it('round trips one canonical signed descriptor', () => {
+    const encoded = encodeSpeechTrackDescriptor(descriptor)
+    expect(parseSpeechTrackDescriptor(encoded)).toEqual(descriptor)
+  })
+
+  it.each([
+    { ...descriptor, operation: 'cancel-session' },
+    { ...descriptor, sessionId: 'not-a-uuid' },
+    { ...descriptor, track: 'other' },
+    { ...descriptor, captureGeneration: Number.MAX_SAFE_INTEGER + 1 },
+    { ...descriptor, streamEpoch: 0 },
+    { ...descriptor, grantDigest: 'provider-token' },
+    { ...descriptor, tenantId: 'client-selected' }
+  ])('rejects an invalid signed descriptor: %o', (value) => {
+    expect(() => encodeSpeechTrackDescriptor(value)).toThrow()
+  })
+
+  it('rejects non-canonical JSON and malformed descriptor headers', () => {
+    const encoded = encodeSpeechTrackDescriptor(descriptor)
+    expect(parseSpeechTrackDescriptor(` ${encoded}`)).toBeNull()
+    expect(parseSpeechTrackDescriptor(`${encoded} `)).toBeNull()
+    expect(parseSpeechTrackDescriptor('{"operation":"open-track","operation":"open-track"}')).toBeNull()
   })
 })

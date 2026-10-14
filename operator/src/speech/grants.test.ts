@@ -4,7 +4,16 @@ import type { D1DatabaseLike } from '../d1'
 import { parseStatements } from '../../scripts/migrate.mjs'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { allocateSpeechSession, cancelSpeechSession, redeemSpeechGrant } from './grants'
+import {
+  allocateSpeechSession,
+  cancelSpeechSession,
+  confirmSpeechStreamClosed,
+  consumeSpeechGrantForRelay,
+  expireSpeechSessions,
+  markSpeechTransportAttempted,
+  redeemSpeechGrant,
+  releaseSpeechStreamBeforeDial
+} from './grants'
 
 const batchTails = new WeakMap<DatabaseSync, Promise<void>>()
 
@@ -89,6 +98,7 @@ function brokerDb(): DatabaseSync {
     db.prepare(`INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, approval, license_jti)
       VALUES (?, 'hash', 'win32', 'test', 1, 1, 'approved', ?)`).run(device, jti)
   }
+  addEvidence(db)
   return db
 }
 
@@ -98,9 +108,15 @@ const binding = {
   licenseJti: 'license-a',
   deviceId: 'device-a',
   captureGeneration: 7,
-  routeId: 'workers-ai-nova3',
+  routeId: 'workers-ai-nova3' as const,
   model: '@cf/deepgram/nova-3',
   configVersion: 'v1',
+  policyVersion: 'policy-v1',
+  implementationRevision: 'revision-1',
+  routeEvidenceId: 'evidence-1',
+  evidenceExpiresAt: 900_000,
+  consentIssuedAt: 9_000,
+  consentExpiresAt: 900_000,
   language: 'en',
   tracks: ['microphone', 'system'] as const,
   now: 10_000,
@@ -114,18 +130,66 @@ const binding = {
   maxTracks: 2
 }
 
+const relayBinding = {
+  tenantId: binding.tenantId,
+  audience: binding.audience,
+  licenseJti: binding.licenseJti,
+  deviceId: binding.deviceId,
+  sessionId: '',
+  captureGeneration: binding.captureGeneration,
+  routeId: binding.routeId,
+  model: binding.model,
+  configVersion: binding.configVersion,
+  policyVersion: binding.policyVersion,
+  implementationRevision: binding.implementationRevision,
+  routeEvidenceId: binding.routeEvidenceId,
+  language: binding.language,
+  track: 'microphone' as const,
+  streamEpoch: 1,
+  now: binding.now
+}
+
+function addEvidence(db: DatabaseSync) {
+  db.prepare(`INSERT INTO speech_route_evidence (
+    id, evidence_key, tenant_id, audience, deployment_id, account_id, gateway_id, route_id, model_id,
+    config_version, policy_version, implementation_revision, reviewer_email, imported_by, evidence_refs_json,
+    expires_at, version, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'evidence-1',
+    'evidence-key',
+    binding.tenantId,
+    binding.audience,
+    'test',
+    'account',
+    'gateway',
+    binding.routeId,
+    binding.model,
+    binding.configVersion,
+    binding.policyVersion,
+    binding.implementationRevision,
+    'reviewer@example.invalid',
+    'owner@example.invalid',
+    '[]',
+    binding.evidenceExpiresAt,
+    1,
+    binding.now
+  )
+}
+
 describe('D1 speech grants', () => {
   it('installs on fresh schema and upgrades existing data without deleting it', () => {
     const db = new DatabaseSync(':memory:')
     try {
       const operatorRoot = join(__dirname, '..', '..')
       const freshStatements = parseStatements(readFileSync(join(operatorRoot, 'schema.sql'), 'utf8'))
-      for (const sql of freshStatements.filter((statement) => !/\bspeech_(?:sessions|grants)\b/i.test(statement)))
+      for (const sql of freshStatements.filter(
+        (statement: string) => !/\bspeech_(?:sessions|grants|streams|route_evidence|capture_epochs)\b/i.test(statement)
+      ))
         db.exec(sql)
       expect(
         db
           .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('speech_sessions', 'speech_grants')"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('speech_sessions', 'speech_grants', 'speech_streams', 'speech_route_evidence', 'speech_capture_epochs')"
           )
           .all()
       ).toHaveLength(0)
@@ -145,10 +209,10 @@ describe('D1 speech grants', () => {
       expect(
         db
           .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('speech_sessions', 'speech_grants') ORDER BY name"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('speech_sessions', 'speech_grants', 'speech_streams', 'speech_route_evidence', 'speech_capture_epochs') ORDER BY name"
           )
           .all()
-      ).toHaveLength(2)
+      ).toHaveLength(5)
     } finally {
       db.close()
     }
@@ -164,6 +228,201 @@ describe('D1 speech grants', () => {
       expect(allocation.grants.every((grant) => grant.token.length >= 40)).toBe(true)
       const rows = db.prepare('SELECT token_hash FROM speech_grants').all() as { token_hash: string }[]
       expect(rows.map((row) => row.token_hash)).not.toContain(allocation.grants[0].token)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('holds attempted concurrency through cancellation until confirmed close and settles once', async () => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const allocation = await allocateSpeechSession(d1, binding)
+      expect(allocation.ok).toBe(true)
+      if (!allocation.ok) return
+      const consume = await consumeSpeechGrantForRelay(d1, allocation.grants[0].token, {
+        ...relayBinding,
+        sessionId: allocation.sessionId,
+        track: allocation.grants[0].track
+      })
+      expect(consume.ok).toBe(true)
+      if (!consume.ok) return
+      expect(
+        db.prepare('SELECT transport_attempted_at FROM speech_streams WHERE id = ?').get(consume.streamId)
+      ).toMatchObject({ transport_attempted_at: null })
+      expect(
+        await markSpeechTransportAttempted(d1, consume.streamId, {
+          ...relayBinding,
+          sessionId: allocation.sessionId,
+          track: allocation.grants[0]!.track
+        })
+      ).toBe(true)
+      expect(await cancelSpeechSession(d1, allocation.sessionId, binding)).toMatchObject({
+        ok: true,
+        status: 'cancellation-requested'
+      })
+      expect(
+        db.prepare('SELECT status, reserved_ms, settled_ms FROM speech_sessions WHERE id = ?').get(allocation.sessionId)
+      ).toMatchObject({ status: 'active', reserved_ms: binding.maxReservedMs, settled_ms: 0 })
+      expect(await cancelSpeechSession(d1, allocation.sessionId, { ...binding, now: binding.now + 1 })).toMatchObject({
+        ok: true,
+        status: 'cancellation-requested'
+      })
+      expect(
+        db.prepare('SELECT reserved_ms, settled_ms FROM speech_sessions WHERE id = ?').get(allocation.sessionId)
+      ).toMatchObject({ reserved_ms: binding.maxReservedMs, settled_ms: 0 })
+      const blocked = await allocateSpeechSession(d1, { ...binding, deviceId: 'device-b', licenseJti: 'license-b' })
+      expect(blocked).toMatchObject({ ok: false, code: 'CONCURRENCY_LIMIT' })
+      const counters = { inputBytes: 100, inputMessages: 1, outputBytes: 20, outputMessages: 1 }
+      expect(await confirmSpeechStreamClosed(d1, consume.streamId, binding.now + 10, 'cancelled', counters)).toBe(true)
+      expect(await confirmSpeechStreamClosed(d1, consume.streamId, binding.now + 11, 'cancelled', counters)).toBe(true)
+      expect(
+        db.prepare('SELECT status, reserved_ms, settled_ms FROM speech_sessions WHERE id = ?').get(allocation.sessionId)
+      ).toMatchObject({ status: 'cancelled', reserved_ms: 0, settled_ms: binding.maxReservedMs })
+      expect(db.prepare('SELECT settled_at FROM speech_streams WHERE id = ?').get(consume.streamId)).toMatchObject({
+        settled_at: binding.now + 10
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps attempted usage settled when the other authorized track is released before dial', async () => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const allocation = await allocateSpeechSession(d1, { ...binding, budgetMaxMs: binding.maxReservedMs })
+      expect(allocation.ok).toBe(true)
+      if (!allocation.ok) return
+      const microphone = allocation.grants.find((grant) => grant.track === 'microphone')!
+      const system = allocation.grants.find((grant) => grant.track === 'system')!
+      const first = await consumeSpeechGrantForRelay(d1, microphone.token, {
+        ...relayBinding,
+        sessionId: allocation.sessionId,
+        track: microphone.track
+      })
+      const second = await consumeSpeechGrantForRelay(d1, system.token, {
+        ...relayBinding,
+        sessionId: allocation.sessionId,
+        track: system.track
+      })
+      expect(first.ok).toBe(true)
+      expect(second.ok).toBe(true)
+      if (!first.ok || !second.ok) return
+      expect(
+        await markSpeechTransportAttempted(d1, first.streamId, {
+          ...relayBinding,
+          sessionId: allocation.sessionId,
+          track: microphone.track
+        })
+      ).toBe(true)
+      expect(
+        await confirmSpeechStreamClosed(d1, first.streamId, binding.now + 1, 'normal', {
+          inputBytes: 10,
+          inputMessages: 1,
+          outputBytes: 4,
+          outputMessages: 1
+        })
+      ).toBe(true)
+      expect(await releaseSpeechStreamBeforeDial(d1, second.streamId, binding.now + 2)).toBe(true)
+      expect(
+        db.prepare('SELECT status, reserved_ms, settled_ms FROM speech_sessions WHERE id = ?').get(allocation.sessionId)
+      ).toMatchObject({ status: 'expired', reserved_ms: 0, settled_ms: binding.maxReservedMs })
+      const next = await allocateSpeechSession(d1, { ...binding, budgetMaxMs: binding.maxReservedMs })
+      expect(next).toMatchObject({ ok: false, code: 'BUDGET_LIMIT' })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('settles attempted usage when cancellation or expiry sees only an unattempted remaining track', async () => {
+    for (const terminal of ['cancel', 'expire'] as const) {
+      const db = brokerDb()
+      try {
+        const d1 = sqliteD1(db)
+        const allocation = await allocateSpeechSession(d1, { ...binding, budgetMaxMs: binding.maxReservedMs })
+        expect(allocation.ok).toBe(true)
+        if (!allocation.ok) continue
+        const firstGrant = allocation.grants[0]!
+        const secondGrant = allocation.grants[1]!
+        const first = await consumeSpeechGrantForRelay(d1, firstGrant.token, {
+          ...relayBinding,
+          sessionId: allocation.sessionId,
+          track: firstGrant.track
+        })
+        const second = await consumeSpeechGrantForRelay(d1, secondGrant.token, {
+          ...relayBinding,
+          sessionId: allocation.sessionId,
+          track: secondGrant.track
+        })
+        expect(first.ok).toBe(true)
+        expect(second.ok).toBe(true)
+        if (!first.ok || !second.ok) continue
+        expect(
+          await markSpeechTransportAttempted(d1, first.streamId, {
+            ...relayBinding,
+            sessionId: allocation.sessionId,
+            track: firstGrant.track
+          })
+        ).toBe(true)
+        expect(
+          await confirmSpeechStreamClosed(d1, first.streamId, binding.now + 1, 'normal', {
+            inputBytes: 10,
+            inputMessages: 1,
+            outputBytes: 4,
+            outputMessages: 1
+          })
+        ).toBe(true)
+        if (terminal === 'cancel') {
+          expect(await cancelSpeechSession(d1, allocation.sessionId, binding)).toMatchObject({
+            ok: true,
+            status: 'cancelled'
+          })
+        } else {
+          expect(
+            await expireSpeechSessions(d1, binding.now + binding.leaseMs + 1, binding.tenantId, binding.audience)
+          ).toMatchObject({ ok: true, expired: 1 })
+        }
+        expect(
+          db.prepare('SELECT reserved_ms, settled_ms FROM speech_sessions WHERE id = ?').get(allocation.sessionId)
+        ).toMatchObject({ reserved_ms: 0, settled_ms: binding.maxReservedMs })
+        const next = await allocateSpeechSession(d1, { ...binding, budgetMaxMs: binding.maxReservedMs })
+        expect(next).toMatchObject({ ok: false, code: 'BUDGET_LIMIT' })
+      } finally {
+        db.close()
+      }
+    }
+  })
+
+  it('does not let a different device mutate a victim stream during cancellation', async () => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const allocation = await allocateSpeechSession(d1, binding)
+      expect(allocation.ok).toBe(true)
+      if (!allocation.ok) return
+      const grant = allocation.grants[0]!
+      const stream = await consumeSpeechGrantForRelay(d1, grant.token, {
+        ...relayBinding,
+        sessionId: allocation.sessionId,
+        track: grant.track
+      })
+      expect(stream.ok).toBe(true)
+      if (!stream.ok) return
+      const before = db.prepare('SELECT stop_requested_at FROM speech_streams WHERE id = ?').get(stream.streamId)
+      expect(
+        await cancelSpeechSession(d1, allocation.sessionId, {
+          ...binding,
+          deviceId: 'device-b',
+          licenseJti: 'license-b'
+        })
+      ).toMatchObject({ ok: false, code: 'SESSION_NOT_FOUND' })
+      expect(db.prepare('SELECT stop_requested_at FROM speech_streams WHERE id = ?').get(stream.streamId)).toEqual(
+        before
+      )
+      expect(
+        db.prepare('SELECT stop_requested_at, status FROM speech_sessions WHERE id = ?').get(allocation.sessionId)
+      ).toMatchObject({ stop_requested_at: null, status: 'active' })
     } finally {
       db.close()
     }
@@ -221,7 +480,7 @@ describe('D1 speech grants', () => {
         { sessionId: crypto.randomUUID() },
         { track: 'system' },
         { captureGeneration: binding.captureGeneration + 1 },
-        { routeId: 'deepgram-via-gateway' },
+        { routeId: 'deepgram-via-gateway' as typeof context.routeId },
         { model: 'nova-3' },
         { configVersion: 'v2' },
         { language: 'fr' }
@@ -283,7 +542,6 @@ describe('D1 speech grants', () => {
       expect(
         await redeemSpeechGrant(d1, beforeLicenseExpiry.token, {
           ...binding,
-          licenseExpiresAt: 40_000,
           sessionId: capped.sessionId,
           track: beforeLicenseExpiry.track,
           now: 39_999
@@ -292,7 +550,6 @@ describe('D1 speech grants', () => {
       expect(
         await redeemSpeechGrant(d1, atLicenseExpiry.token, {
           ...binding,
-          licenseExpiresAt: 40_000,
           sessionId: capped.sessionId,
           track: atLicenseExpiry.track,
           now: 40_000

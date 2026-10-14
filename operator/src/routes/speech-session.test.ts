@@ -110,6 +110,30 @@ async function createFixture() {
       license_jti: issued.claims.jti
     })
   }
+  db.prepare(`INSERT INTO speech_route_evidence (
+    id, evidence_key, tenant_id, audience, deployment_id, account_id, gateway_id, route_id, model_id,
+    config_version, policy_version, implementation_revision, reviewer_email, imported_by, evidence_refs_json,
+    expires_at, version, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'synthetic-test-evidence',
+    'synthetic-test-key',
+    TENANT,
+    AUDIENCE,
+    'test',
+    'test-account',
+    'test-gateway',
+    TOKEN.routeId,
+    TOKEN.modelId,
+    TOKEN.configVersion,
+    'policy-1',
+    'synthetic-test-revision',
+    'reviewer@example.invalid',
+    'owner@example.invalid',
+    '[]',
+    NOW + 60_000,
+    1,
+    NOW
+  )
   return { db, d1, store, tokens }
 }
 
@@ -119,17 +143,19 @@ async function signedRequest(options: {
   secret?: string
   path?: string
   body?: unknown
+  method?: 'GET' | 'POST'
   nonce?: string
 }) {
   const device = options.device ?? DEVICE
   const token = options.token === undefined ? '' : options.token
   const nonce = options.nonce ?? crypto.randomUUID()
   const timestamp = String(NOW)
-  const bodyText = JSON.stringify(options.body ?? sessionBody())
+  const method = options.method ?? 'POST'
+  const bodyText = method === 'GET' ? '' : JSON.stringify(options.body ?? sessionBody())
   const signingSecret = options.secret ?? token ?? TEST_INGEST_SECRET
   const signature = await hmacHex(signingSecret, ingestCanonical(timestamp, nonce, device, await sha256Hex(bodyText)))
   return new Request(`https://operator.test${options.path ?? '/v1/speech/sessions'}`, {
-    method: 'POST',
+    method,
     headers: {
       'content-type': 'application/json',
       ...(token === null ? {} : { [OPERATOR_LICENSE_HEADER]: token }),
@@ -138,7 +164,7 @@ async function signedRequest(options: {
       [OPERATOR_HMAC_HEADERS.nonce]: nonce,
       [OPERATOR_HMAC_HEADERS.sig]: signature
     },
-    body: bodyText
+    ...(method === 'GET' ? {} : { body: bodyText })
   })
 }
 
@@ -195,10 +221,27 @@ describe('authenticated speech session broker boundary', () => {
     const body = (await response.json()) as {
       ok: boolean
       sessionId: string
-      grants: Array<{ track: string; token: string }>
+      captureGeneration: number
+      limits: {
+        maxStreamMs: number
+        audioDeadlineAt: number
+        drainWindowMs: number
+        maxInputBytesPerTrack: number
+        maxClientFrameBytes: number
+      }
+      grants: Array<{ track: string; streamEpoch: number; token: string }>
     }
     expect(body.ok).toBe(true)
+    expect(body.captureGeneration).toBe(7)
+    expect(body.limits).toMatchObject({
+      maxStreamMs: 1_000,
+      drainWindowMs: 1_000,
+      maxInputBytesPerTrack: 1_920_000,
+      maxClientFrameBytes: 65_536
+    })
+    expect(body.limits.audioDeadlineAt).toBe(NOW)
     expect(body.grants.map((grant) => grant.track)).toEqual(['microphone', 'system'])
+    expect(body.grants.every((grant) => Number.isSafeInteger(grant.streamEpoch) && grant.streamEpoch > 0)).toBe(true)
     expect(body.grants.every((grant) => grant.token.length === 43)).toBe(true)
     expect(providerFetch).not.toHaveBeenCalled()
     for (const grant of body.grants) {
@@ -206,6 +249,44 @@ describe('authenticated speech session broker boundary', () => {
         fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_grants WHERE token_hash = ?').get(grant.token)
       ).toMatchObject({ n: 0 })
     }
+    const renewedResponse = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN, providerFetch }
+    )
+    const renewed = (await renewedResponse.json()) as { grants: Array<{ track: string; streamEpoch: number }> }
+    expect(renewedResponse.status).toBe(200)
+    expect(renewed.grants.map(({ track, streamEpoch }) => ({ track, streamEpoch }))).toEqual([
+      { track: 'microphone', streamEpoch: 2 },
+      { track: 'system', streamEpoch: 2 }
+    ])
+  })
+
+  it('reports route readiness without allocating a session or grants', async () => {
+    const response = await handleRequest(
+      await signedRequest({
+        method: 'POST',
+        token: fixture.tokens.get(DEVICE),
+        path: '/v1/speech/capability',
+        body: { operation: 'speech-capability' }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      protocolVersion: 1,
+      selected: { routeId: TOKEN.routeId, modelId: TOKEN.modelId },
+      allowed: [{ routeId: TOKEN.routeId, modelId: TOKEN.modelId }],
+      ready: true,
+      routeId: TOKEN.routeId,
+      modelId: TOKEN.modelId
+    })
+    expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
+    expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_grants').get()).toMatchObject({ n: 0 })
   })
 
   it('rejects body/path cancellation mismatch and cross-device session cancellation', async () => {
@@ -241,6 +322,119 @@ describe('authenticated speech session broker boundary', () => {
       { ...baseEnv, DB: fixture.d1 },
       {},
       { store: fixture.store, now: NOW }
+    )
+    expect(otherDevice.status).toBe(404)
+    expect(await otherDevice.json()).toMatchObject({ code: 'SESSION_NOT_FOUND' })
+  })
+
+  it('returns only server-owned stream closure metadata from the authenticated status route', async () => {
+    const create = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
+    const created = (await create.json()) as {
+      sessionId: string
+      grants: Array<{ token: string; streamEpoch: number }>
+    }
+    const response = await handleRequest(
+      await signedRequest({
+        token: fixture.tokens.get(DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/status`,
+        body: { operation: 'session-status', sessionId: created.sessionId }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { sessionId: string; tracks: Array<Record<string, unknown>> }
+    expect(body.sessionId).toBe(created.sessionId)
+    expect(body.tracks).toEqual([
+      {
+        track: 'microphone',
+        streamEpoch: created.grants[0]?.streamEpoch,
+        phase: 'ready',
+        closeConfirmed: false,
+        tail: null,
+        lastSequence: 0
+      },
+      {
+        track: 'system',
+        streamEpoch: created.grants[1]?.streamEpoch,
+        phase: 'ready',
+        closeConfirmed: false,
+        tail: null,
+        lastSequence: 0
+      }
+    ])
+    expect(JSON.stringify(body)).not.toContain(created.grants[0]?.token)
+    expect(JSON.stringify(body)).not.toContain('transcript')
+    const mismatch = await handleRequest(
+      await signedRequest({
+        token: fixture.tokens.get(DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/status`,
+        body: { operation: 'session-status', sessionId: crypto.randomUUID() }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
+    expect(mismatch.status).toBe(400)
+  })
+
+  it('allows an originally bound revoked device to stop and inspect only its own prior session', async () => {
+    const create = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
+    const created = (await create.json()) as { sessionId: string }
+    fixture.db.prepare('UPDATE issued_licenses SET revoked = 1 WHERE jti = ?').run('aaaaaaaaaaaaaaaa')
+    fixture.db.prepare("UPDATE seats SET approval = 'revoked' WHERE device_id = ?").run(DEVICE)
+
+    const cancelled = await handleRequest(
+      await signedRequest({
+        token: fixture.tokens.get(DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/cancel`,
+        body: { operation: 'cancel-session', sessionId: created.sessionId }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW + 1_000 }
+    )
+    expect(cancelled.status).toBe(200)
+    expect(await cancelled.json()).toMatchObject({
+      sessionId: created.sessionId,
+      cancelled: true,
+      cancellationRequested: false
+    })
+
+    const status = await handleRequest(
+      await signedRequest({
+        token: fixture.tokens.get(DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/status`,
+        body: { operation: 'session-status', sessionId: created.sessionId }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW + 1_000 }
+    )
+    expect(status.status).toBe(200)
+    expect(await status.json()).toMatchObject({ sessionId: created.sessionId, status: 'cancelled' })
+
+    const otherDevice = await handleRequest(
+      await signedRequest({
+        device: OTHER_DEVICE,
+        token: fixture.tokens.get(OTHER_DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/status`,
+        body: { operation: 'session-status', sessionId: created.sessionId }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW + 1_000 }
     )
     expect(otherDevice.status).toBe(404)
     expect(await otherDevice.json()).toMatchObject({ code: 'SESSION_NOT_FOUND' })

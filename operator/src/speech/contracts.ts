@@ -1,8 +1,14 @@
 import { z } from 'zod'
-import { CaptureGenerationSchema, TrackSchema, type Track } from '../../../src/shared/contracts/speech'
+import {
+  CaptureGenerationSchema,
+  StreamEpochSchema,
+  TrackSchema,
+  type Track
+} from '../../../src/shared/contracts/speech'
 
 const SessionIdSchema = z.string().uuid()
 const TimestampSchema = z.number().int().positive()
+const GrantDigestSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const TrackListSchema = z
   .array(TrackSchema)
   .min(1)
@@ -29,7 +35,7 @@ export const SpeechSessionRequestSchema = z
     tracks: TrackListSchema,
     language: z
       .string()
-      .regex(/^[a-z]{2}(?:-[A-Z]{2})?$/)
+      .regex(/^(?:multi|[a-z]{2}(?:-[A-Z]{2})?)$/)
       .max(5)
       .optional(),
     consent: ConsentAttestationSchema
@@ -63,6 +69,33 @@ export const SpeechCancelRequestSchema = z
   })
   .strict()
 export type SpeechCancelRequest = z.infer<typeof SpeechCancelRequestSchema>
+
+export const SpeechTrackDescriptorSchema = z
+  .object({
+    operation: z.literal('open-track'),
+    sessionId: SessionIdSchema,
+    track: TrackSchema,
+    captureGeneration: CaptureGenerationSchema,
+    streamEpoch: StreamEpochSchema,
+    grantDigest: GrantDigestSchema
+  })
+  .strict()
+export type SpeechTrackDescriptor = z.infer<typeof SpeechTrackDescriptorSchema>
+
+export function encodeSpeechTrackDescriptor(value: unknown): string {
+  return JSON.stringify(SpeechTrackDescriptorSchema.parse(value))
+}
+
+/** A bounded descriptor header is the signed body for GET, whose HTTP body is deliberately empty. */
+export function parseSpeechTrackDescriptor(raw: string): SpeechTrackDescriptor | null {
+  if (!raw || raw.length > 2_048) return null
+  try {
+    const parsed = SpeechTrackDescriptorSchema.parse(JSON.parse(raw))
+    return JSON.stringify(parsed) === raw ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 export type SpeechSafeFailureCode =
   | 'INVALID_REQUEST'

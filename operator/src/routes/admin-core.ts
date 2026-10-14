@@ -68,7 +68,10 @@ export const EXPECTED_D1_TABLES = [
   'operator_settings',
   'model_policy',
   'speech_sessions',
-  'speech_grants'
+  'speech_grants',
+  'speech_streams',
+  'speech_route_evidence',
+  'speech_capture_epochs'
 ] as const
 
 const PLACEHOLDER_DIFF_RE = /^#\s*unified diff against .+\n#\s*edit, then approve\. push is a separate click\.$/i

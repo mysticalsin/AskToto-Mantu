@@ -10,11 +10,12 @@ import type { AccessCtx } from '../access'
 import type { D1DatabaseLike } from '../d1'
 import type { OperatorStore } from '../store'
 import type { SpeechPolicyEvidence } from '../speech/policy'
+import type { SpeechReadinessEnv } from '../speech/readiness'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from '../cloudflare'
 import { activeCloudflareAccount } from '../keys'
 import { looksLikeSecret } from '../redact'
 
-export interface Env {
+export interface Env extends SpeechReadinessEnv {
   DB?: D1DatabaseLike
   /** Workers Static Assets binding (plan D5, B8): fonts, flags and connector logos. */
   ASSETS?: { fetch(request: Request): Promise<Response> }
@@ -49,6 +50,18 @@ export interface Env {
   SPEECH_BUDGET_WINDOW_MS?: string
   SPEECH_BUDGET_MAX_MS?: string
   SPEECH_MAX_SESSION_MS?: string
+  SPEECH_DEPLOYMENT_ID?: string
+  SPEECH_GATEWAY_ID?: string
+  SPEECH_IMPLEMENTATION_REVISION?: string
+  SPEECH_GATEWAY_MANAGEMENT_TOKEN?: string
+  SPEECH_GATEWAY_RUN_TOKEN?: string
+  SPEECH_DEEPGRAM_API_KEY?: string
+  SPEECH_SESSION_DO?: SpeechSessionDurableObjectNamespace
+}
+
+export interface SpeechSessionDurableObjectNamespace {
+  idFromName(name: string): unknown
+  get(id: unknown): { fetch(request: Request): Promise<Response> }
 }
 
 export interface HandleOpts {
