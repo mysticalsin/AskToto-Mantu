@@ -958,6 +958,7 @@ describe('hosted startup TLS support-only lane', () => {
       {
         variant: 'mac-qa-identity',
         artifact: 'candidate-mac-qa-identity',
+        platform: 'mac',
         electron: '43.6.0',
         assets: [{ name: 'Metis-QA-1.9.7.zip', size: 42, sha256: MAC_SHA }]
       }
