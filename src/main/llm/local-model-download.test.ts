@@ -131,11 +131,11 @@ function bodyOf(chunks: Buffer[]): ReadableStream<Uint8Array> {
   })
 }
 
-function responseOf(chunks: Buffer[], total: number): unknown {
+function responseOf(chunks: Buffer[], total: number | null): unknown {
   return {
     ok: true,
     status: 200,
-    headers: new Headers({ 'content-length': String(total) }),
+    headers: total === null ? new Headers() : new Headers({ 'content-length': String(total) }),
     body: bodyOf(chunks)
   }
 }
@@ -161,9 +161,7 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
   it('MQA-185 — fetches the weights over Electron net.fetch so a corporate proxy can carry them', async () => {
     mockFetch.mockImplementation((url: string) =>
       Promise.resolve(
-        url.endsWith('model.gguf')
-          ? responseOf([CHUNK_A, CHUNK_B], GGUF.length)
-          : responseOf([MMPROJ], MMPROJ.length)
+        url.endsWith('model.gguf') ? responseOf([CHUNK_A, CHUNK_B], GGUF.length) : responseOf([MMPROJ], MMPROJ.length)
       )
     )
 
@@ -224,7 +222,10 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     const modelsSrc = readFileSync(join(REPO_ROOT, 'src', 'main', 'llm', 'local-models.ts'), 'utf8')
     expect(modelsSrc).toContain('statfsSync(dir)')
     const probe = modelsSrc.slice(modelsSrc.indexOf('export function volumeFreeBytes'))
-    const body = probe.slice(0, modelsSrc.indexOf('export function diskShortageFor') - modelsSrc.indexOf('export function volumeFreeBytes'))
+    const body = probe.slice(
+      0,
+      modelsSrc.indexOf('export function diskShortageFor') - modelsSrc.indexOf('export function volumeFreeBytes')
+    )
     expect(body).toContain('catch {')
     expect(body).toContain('return null')
     expect(modelsSrc).toMatch(/if \(freeBytes === null\) return/)
@@ -356,6 +357,74 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(true)
     expect(net.fetch).not.toHaveBeenCalled()
     expect(localModelDownloadState()).toMatchObject({ status: 'idle' })
+    expect(existsSync(`${paths.gguf}.partial`)).toBe(false)
+  })
+
+  it.each([
+    ['missing Content-Length', null],
+    ['matching Content-Length', MMPROJ.length]
+  ] as const)('stops an oversized %s stream at the pinned byte count and preserves the prior destination', async (_label, headerBytes) => {
+    const paths = modelPaths('qwen3.5-0.8b')
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(paths.gguf, GGUF)
+    const previousTarget = Buffer.from('previous mmproj artifact')
+    writeFileSync(paths.mmproj, previousTarget)
+
+    const consumedByAttempt: number[] = []
+    const cancelledAttempts: boolean[] = []
+    const responseBodies: ReadableStream<Uint8Array>[] = []
+    mockFetch.mockImplementation((url: string) => {
+      if (url.endsWith('model.gguf')) return Promise.resolve(responseOf([CHUNK_A, CHUNK_B], GGUF.length))
+      const attempt = consumedByAttempt.length
+      consumedByAttempt.push(0)
+      cancelledAttempts.push(false)
+      let chunkIndex = 0
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            const chunks = [Buffer.alloc(MMPROJ.length - 1, 1), Buffer.from('cd'), Buffer.from('ef')]
+            if (chunkIndex < chunks.length) {
+              consumedByAttempt[attempt] += 1
+              controller.enqueue(new Uint8Array(chunks[chunkIndex++]))
+            } else controller.close()
+          },
+          cancel() {
+            cancelledAttempts[attempt] = true
+          }
+        },
+        { highWaterMark: 0 }
+      )
+      responseBodies.push(body)
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: headerBytes === null ? new Headers() : new Headers({ 'content-length': String(headerBytes) }),
+        body
+      })
+    })
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(false)
+
+    // Local model downloads retry three times. Each response yields one fitting chunk and one
+    // over-limit chunk, then its reader is cancelled before a third chunk can be consumed.
+    expect(consumedByAttempt).toEqual([2, 2, 2])
+    expect(cancelledAttempts).toEqual([true, true, true])
+    expect(readFileSync(paths.gguf)).toEqual(GGUF)
+    expect(readFileSync(paths.mmproj)).toEqual(previousTarget)
+    expect(responseBodies.every((body) => !body.locked)).toBe(true)
+    expect(existsSync(`${paths.mmproj}.partial`)).toBe(false)
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('accepts an exact-size chunked response without Content-Length', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(url.endsWith('model.gguf') ? responseOf([CHUNK_A, CHUNK_B], null) : responseOf([MMPROJ], null))
+    )
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(true)
+    const paths = modelPaths('qwen3.5-0.8b')
+    expect(readFileSync(paths.gguf)).toEqual(GGUF)
+    expect(readFileSync(paths.mmproj)).toEqual(MMPROJ)
     expect(existsSync(`${paths.gguf}.partial`)).toBe(false)
   })
 })

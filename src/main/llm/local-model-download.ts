@@ -151,23 +151,42 @@ async function downloadOne(
     const header = res.headers.get('content-length')
     const declared = header === null ? Number.NaN : Number(header)
     if (Number.isFinite(declared) && declared !== spec.bytes) {
-      throw new Error(`${file}: server declared ${declared} bytes, expected ${spec.bytes}`)
+      const error = new Error(`${file}: server declared ${declared} bytes, expected ${spec.bytes}`)
+      ctrl.abort(error)
+      await res.body?.cancel(error).catch(() => {})
+      throw error
     }
     if (!res.body) throw new Error(`${file}: response carried no body`)
 
     // `getReader()` rather than async iteration: it is the one traversal API every ReadableStream
     // implementation exposes, and it is what cli-installer.ts's download already uses.
     const reader = res.body.getReader()
+    let receivedBytes = 0
+    let completed = false
     arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
     await pipeline(
       (async function* () {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) return
-          if (!value) continue
-          arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
-          onChunk(value.byteLength)
-          yield value
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) {
+              completed = true
+              return
+            }
+            if (!value) continue
+            if (receivedBytes + value.byteLength > spec.bytes) {
+              const error = new Error(`${file}: response exceeded pinned ${spec.bytes} bytes`)
+              ctrl.abort(error)
+              throw error
+            }
+            receivedBytes += value.byteLength
+            arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
+            onChunk(value.byteLength)
+            yield value
+          }
+        } finally {
+          if (!completed) await reader.cancel().catch(() => {})
+          reader.releaseLock()
         }
       })(),
       createWriteStream(partial)
@@ -262,9 +281,6 @@ async function run(modelId: string): Promise<boolean> {
   auditLog('local.model.download_start', { modelId, files: missing.map((f) => f.key) })
 
   for (const f of missing) {
-    // A stale file that failed verification must go before we refetch, so a crash between the two
-    // never leaves a bad file sitting where a later run would trust its presence.
-    rmSync(f.dest, { force: true })
     const base = received
     let lastErr: unknown
     let ok = false
