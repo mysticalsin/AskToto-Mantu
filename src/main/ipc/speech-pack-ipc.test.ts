@@ -4,14 +4,23 @@ import type { SpeechPackProgress } from '@shared/speech-pack'
 import type { SpeechPackService } from '../features/components'
 import { registerSpeechPackIpc } from './speech-pack-ipc'
 
-type IpcEvent = { sender: unknown }
+type IpcEvent = Electron.IpcMainInvokeEvent
 type Listener = (event: IpcEvent, request?: unknown) => unknown
+
+function eventFrom(sender: unknown): IpcEvent {
+  return { sender } as unknown as IpcEvent
+}
 
 function makeIpc() {
   const handlers = new Map<string, Listener>()
   const removeHandler = vi.fn((channel: string) => handlers.delete(channel))
   const handle = vi.fn((channel: string, listener: Listener) => handlers.set(channel, listener))
-  return { ipcMain: { handle, removeHandler }, handlers, handle, removeHandler }
+  return {
+    ipcMain: { handle, removeHandler } as unknown as Pick<Electron.IpcMain, 'handle' | 'removeHandler'>,
+    handlers,
+    handle,
+    removeHandler
+  }
 }
 
 describe('registerSpeechPackIpc', () => {
@@ -19,7 +28,7 @@ describe('registerSpeechPackIpc', () => {
 
   it('validates the sender before calling service methods and forwards the request', async () => {
     const { ipcMain, handlers } = makeIpc()
-    const trusted = { sender: {} }
+    const trusted = eventFrom({})
     const denied = new Error('denied')
     const assertMainWindow = vi.fn((event: IpcEvent) => {
       if (event !== trusted) throw denied
@@ -38,9 +47,9 @@ describe('registerSpeechPackIpc', () => {
 
     expect(snapshot).not.toHaveBeenCalled()
     expect(action).not.toHaveBeenCalled()
-    expect(() => handlers.get(IPC.speechPackState)?.({ sender: {} })).toThrow(denied)
+    expect(() => handlers.get(IPC.speechPackState)?.(eventFrom({}))).toThrow(denied)
     expect(snapshot).not.toHaveBeenCalled()
-    expect(() => handlers.get(IPC.speechPackAction)?.({ sender: {} }, { consent: true })).toThrow(denied)
+    expect(() => handlers.get(IPC.speechPackAction)?.(eventFrom({}), { consent: true })).toThrow(denied)
     expect(action).not.toHaveBeenCalled()
 
     await expect(handlers.get(IPC.speechPackState)?.(trusted)).resolves.toEqual({ status: 'ready' })

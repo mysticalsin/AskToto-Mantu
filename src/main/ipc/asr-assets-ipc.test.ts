@@ -2,14 +2,23 @@ import { describe, expect, it, vi } from 'vitest'
 import { IPC, type AsrAssetsStatus, type ImportAssetsProgress } from '@shared/ipc'
 import { registerAsrAssetsIpc } from './asr-assets-ipc'
 
-type IpcEvent = { sender: unknown }
+type IpcEvent = Electron.IpcMainInvokeEvent
 type Listener = (event: IpcEvent, request?: unknown) => unknown
+
+function eventFrom(sender: unknown): IpcEvent {
+  return { sender } as unknown as IpcEvent
+}
 
 function makeIpc() {
   const handlers = new Map<string, Listener>()
   const removeHandler = vi.fn((channel: string) => handlers.delete(channel))
   const handle = vi.fn((channel: string, listener: Listener) => handlers.set(channel, listener))
-  return { ipcMain: { handle, removeHandler }, handlers, handle, removeHandler }
+  return {
+    ipcMain: { handle, removeHandler } as unknown as Pick<Electron.IpcMain, 'handle' | 'removeHandler'>,
+    handlers,
+    handle,
+    removeHandler
+  }
 }
 
 function makeOptions() {
@@ -58,7 +67,7 @@ describe('registerAsrAssetsIpc', () => {
 
   it('returns the retired renderer default before the live-window assertion, only for bundled status', async () => {
     const { handlers, options } = makeOptions()
-    const retired = { sender: {} }
+    const retired = eventFrom({})
     options.isRecentlyRetiredOverlaySender.mockImplementation((event) => event === retired)
     options.assertMainWindow.mockImplementation(() => {
       throw new Error('active sender rejected')
@@ -79,7 +88,7 @@ describe('registerAsrAssetsIpc', () => {
 
   it('asserts active status requests before probing and probes bundled readiness on every request', async () => {
     const { handlers, options } = makeOptions()
-    const trusted = { sender: {} }
+    const trusted = eventFrom({})
     let ready = false
     options.readBundledStatus.mockImplementation(async () => {
       expect(options.assertMainWindow).toHaveBeenCalled()
@@ -98,7 +107,7 @@ describe('registerAsrAssetsIpc', () => {
 
   it('blocks ensure under policy without transfer, and reports progress plus final status when allowed', async () => {
     const { handlers, options, removeHandler } = makeOptions()
-    const trusted = { sender: {} }
+    const trusted = eventFrom({})
     const registered = registerAsrAssetsIpc(options)
 
     options.ensureAllowed.mockReturnValue(false)
@@ -125,7 +134,7 @@ describe('registerAsrAssetsIpc', () => {
 
   it('keeps an ensure failure inside the status response and resets progress', async () => {
     const { handlers, options } = makeOptions()
-    const trusted = { sender: {} }
+    const trusted = eventFrom({})
     const failure = new Error('offline')
     options.ensureAssets.mockRejectedValue(failure)
     const registered = registerAsrAssetsIpc(options)
