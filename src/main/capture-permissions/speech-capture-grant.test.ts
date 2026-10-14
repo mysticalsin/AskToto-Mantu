@@ -73,7 +73,20 @@ describe('SpeechCaptureGrantRegistry', () => {
     if (!pending) return
     registry.recordGrantCallbackResult(pending, owner, { callbackSucceeded: true, audioGranted: true })
     const finishOwner = {}
+    expect(registry.reserveFinishingOwner(owner, finishOwner)).toBe(false)
+    expect(
+      registry.authorizeCapturedTracks({
+        context: owner,
+        audioSource: 'system',
+        capturedTracks: ['system'],
+        platform: 'win32',
+        microphonePermission: 'unknown',
+        screenPermission: 'unknown'
+      }).ok
+    ).toBe(true)
     expect(registry.reserveFinishingOwner(owner, finishOwner)).toBe(true)
+    expect(registry.reserveFinishingOwner(owner, finishOwner)).toBe(true)
+    expect(registry.reserveFinishingOwner(owner, {})).toBe(false)
     registry.normalStop(owner)
     expect(registry.hasIssuedLoopbackGrant(owner)).toBe(false)
     expect(registry.canFinish(finishOwner)).toBe(true)
@@ -145,7 +158,7 @@ describe('SpeechCaptureGrantRegistry', () => {
         microphonePermission: 'unknown',
         screenPermission: 'denied'
       })
-    ).toEqual({ ok: false, code: 'PERMISSION_DENIED' })
+    ).toEqual({ ok: true, tracks: ['system'], missingRequested: [] })
     expect(
       registry.authorizeCapturedTracks({
         context: owner,
@@ -164,6 +177,17 @@ describe('SpeechCaptureGrantRegistry', () => {
     expect(pending).not.toBeNull()
     if (!pending) return
     registry.recordGrantCallbackResult(pending, owner, { callbackSucceeded: true, audioGranted: true })
+    expect(
+      registry.authorizeCapturedTracks({
+        context: owner,
+        audioSource: 'system',
+        capturedTracks: ['system'],
+        platform: 'darwin',
+        microphonePermission: 'unknown',
+        screenPermission: 'denied',
+        screenDiagnosis: 'denied'
+      })
+    ).toEqual({ ok: false, code: 'PERMISSION_DENIED' })
     expect(
       registry.authorizeCapturedTracks({
         context: owner,
