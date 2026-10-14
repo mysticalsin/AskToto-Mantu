@@ -32,15 +32,15 @@ $stderrLog = Join-Path $tempRoot 'metis-osroots-build-stderr.log'
 $command = @"
 @echo off
 call "$vcvars" >nul
-if errorlevel 1 exit /b 1
+if errorlevel 1 exit /b 11
 cl /nologo /O2 /W4 /WX /MT /DUNICODE /D_UNICODE /Fo:"$object" /Fe:"$output" "$source"
-if errorlevel 1 exit /b 1
+if errorlevel 1 exit /b 12
 dumpbin /headers "$output" | findstr /i /c:"8664 machine (x64)" >nul
-if errorlevel 1 exit /b 1
+if errorlevel 1 exit /b 13
 "$output" --json >nul
-if errorlevel 1 exit /b 1
+if errorlevel 1 exit /b 14
 "$output" unexpected-argument >nul
-if not errorlevel 1 exit /b 1
+if not errorlevel 1 exit /b 15
 exit /b 0
 "@
 Set-Content -LiteralPath $commandFile -Value $command -Encoding Ascii
@@ -116,7 +116,25 @@ $exitCode = if ($processExitTask.IsCompleted) { $build.ExitCode } else { 1 }
 $build.Dispose()
 if ($timedOut) { throw 'WIN_OSROOT_BUILD_TIMEOUT_60S' }
 if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $output -PathType Leaf)) {
-  throw 'WIN_OSROOT_BUILD_FAILED'
+  $failureStage = if (-not (Test-Path -LiteralPath $output -PathType Leaf) -and $exitCode -eq 0) { 'OUTPUT' } else {
+    switch ($exitCode) {
+      11 { 'VCVARS' }
+      12 { 'COMPILE' }
+      13 { 'ARCH' }
+      14 { 'POSITIVE' }
+      15 { 'NEGATIVE' }
+      default { 'PROCESS' }
+    }
+  }
+  $capturedOutput = $stdoutCapture.ToString() + "`n" + $stderrCapture.ToString()
+  $compilerCodes = [System.Collections.Generic.List[string]]::new()
+  foreach ($match in [regex]::Matches($capturedOutput, '(?im)\b(?:fatal\s+error|error|warning)\s+(C\d{4}|LNK\d{4})\b')) {
+    $compilerCode = $match.Groups[1].Value.ToUpperInvariant()
+    if (-not $compilerCodes.Contains($compilerCode)) { [void]$compilerCodes.Add($compilerCode) }
+    if ($compilerCodes.Count -ge 8) { break }
+  }
+  $codeSummary = if ($compilerCodes.Count -gt 0) { $compilerCodes -join '_' } else { 'NONE' }
+  throw "WIN_OSROOT_BUILD_FAILED_STAGE_${failureStage}_CODES_${codeSummary}"
 }
 
 $bytes = [System.IO.File]::ReadAllBytes($output)
