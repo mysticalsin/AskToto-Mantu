@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
   NATIVE_TARGETS,
   parseStrictJsonBytes,
   safeRelativePath,
+  sourceLockDigests,
   validFileRows,
   validModelInventory,
   validNativeReceipts,
@@ -234,4 +236,26 @@ test('accepts synthetic pinned native closure and rejects substituted upstream o
   wrongNotice.files[0].sha256 = 'b'.repeat(64)
   assert.equal(validNativeReceipts(wrongNotice, NATIVE_TARGETS[0]), false)
   assert.equal(validFileRows(wrongNotice.files, expectedRows, true), false)
+})
+
+test('compares exact CRLF projection only for canonical UTF-8 LF lock bytes', () => {
+  const encoder = new TextEncoder()
+  const lockText = '{"lockfileVersion":3,\n"packages":{"node_modules/example":{"version":"1.0.0"}}}\n'
+  const lfBytes = encoder.encode(lockText)
+  const lfSha256 = createHash('sha256').update(lfBytes).digest('hex')
+  const crlfSha256 = createHash('sha256')
+    .update(encoder.encode(lockText.replace(/\n/g, '\r\n')))
+    .digest('hex')
+  const digests = sourceLockDigests(lfBytes)
+  assert.deepEqual(digests, { canonicalLfSha256: lfSha256, exactCrlfProjectionSha256: crlfSha256 })
+  assert.notEqual(digests.canonicalLfSha256, digests.exactCrlfProjectionSha256)
+
+  const changedDependency = encoder.encode(lockText.replace('"1.0.0"', '"1.0.1"'))
+  const changedDigests = sourceLockDigests(changedDependency)
+  assert.notEqual(changedDigests.canonicalLfSha256, digests.canonicalLfSha256)
+  assert.notEqual(changedDigests.exactCrlfProjectionSha256, digests.exactCrlfProjectionSha256)
+
+  assert.equal(sourceLockDigests(encoder.encode(lockText.replace(/\n/g, '\r\n'))), null)
+  assert.equal(sourceLockDigests(Uint8Array.from([0x7b, 0xff, 0x0a])), null)
+  assert.equal(sourceLockDigests(encoder.encode('{"lockfileVersion":3}')), null)
 })

@@ -1,4 +1,8 @@
 // Closed contract for the exact retained publisher run; no filesystem or process effects.
+import { createHash } from 'node:crypto'
+
+const MAX_SOURCE_LOCK_BYTES = 20_000_000
+
 function record(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
 }
@@ -172,6 +176,24 @@ export function parseStrictJsonBytes(bytes, limits = {}) {
   reader.whitespace()
   if (reader.offset !== text.length) throw new SyntaxError('Trailing JSON data')
   return value
+}
+
+export function sourceLockDigests(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_SOURCE_LOCK_BYTES) return null
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return null
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return null
+  }
+  if (!bytes.includes(0x0a) || bytes.includes(0x0d)) return null
+  return {
+    canonicalLfSha256: createHash('sha256').update(bytes).digest('hex'),
+    exactCrlfProjectionSha256: createHash('sha256')
+      .update(new TextEncoder().encode(text.replace(/\n/g, '\r\n')))
+      .digest('hex')
+  }
 }
 
 export const SOURCE_SHA = '613d7886504f608766022fa740b1ed7297e17b16'

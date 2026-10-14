@@ -19,6 +19,7 @@ import {
   SOURCE_SHA,
   WORKFLOW_PATH,
   parseStrictJsonBytes,
+  sourceLockDigests,
   validBuilder,
   validFileRows,
   validModelInventory,
@@ -279,7 +280,8 @@ function verifyStatement(bundle, archiveName, archiveHash, inventoryName, invent
     fail('RUNTIME_READBACK_ATTESTATION_SUBJECT_MISMATCH')
 }
 
-async function verifyTarget(root, target, rootProto, lockSha256) {
+async function verifyTarget(root, target, rootProto, lockDigests) {
+  const lockSha256 = lockDigests.canonicalLfSha256
   const directory = `runtime-llama-${target.suffix}-${SOURCE_SHA}-${RUN_ATTEMPT}`
   const base = resolve(root, directory)
   await assertDirectory(root, 'RUNTIME_READBACK_ARTIFACT_LAYOUT_INVALID')
@@ -487,6 +489,11 @@ async function verifyTarget(root, target, rootProto, lockSha256) {
   ]
   const failedInventoryChecks = inventoryChecks.filter(([, passed]) => !passed).map(([name]) => name)
   if (failedInventoryChecks.length > 0) {
+    if (failedInventoryChecks.some((name) => name.startsWith('SOURCE_'))) {
+      process.stderr.write(
+        `RUNTIME_READBACK_SOURCE_LOCK_DIAGNOSTIC target=${target.suffix} canonicalLFMatch=${source?.lockSha256 === lockSha256} exactCRLFProjectionMatch=${source?.lockSha256 === lockDigests.exactCrlfProjectionSha256} projectionAvailable=${Boolean(lockDigests.exactCrlfProjectionSha256)}\n`
+      )
+    }
     process.stderr.write(
       `RUNTIME_READBACK_INVENTORY_DIAGNOSTIC target=${target.suffix} failed=${failedInventoryChecks.join(',')}\n`
     )
@@ -680,10 +687,12 @@ async function main() {
     'RUNTIME_READBACK_TRUST_RECEIPT_INVALID'
   )
   const rootProto = verifyRootPin(catalog, trustRootBytes, receiptBytes)
-  const packageLock = await hashStableFile(resolve('package-lock.json'), 20_000_000, 'RUNTIME_READBACK_LOCK_INVALID')
+  const packageLockBytes = await readStable(resolve('package-lock.json'), 20_000_000, 'RUNTIME_READBACK_LOCK_INVALID')
+  const packageLock = sourceLockDigests(packageLockBytes)
+  if (!packageLock) fail('RUNTIME_READBACK_LOCK_INVALID')
   const results = []
-  for (const target of NATIVE_TARGETS) results.push(await verifyTarget(root, target, rootProto, packageLock.sha256))
-  results.push(await verifyModel(root, rootProto, packageLock.sha256))
+  for (const target of NATIVE_TARGETS) results.push(await verifyTarget(root, target, rootProto, packageLock))
+  results.push(await verifyModel(root, rootProto, packageLock.canonicalLfSha256))
   const archiveBytes = results.reduce((total, result) => total + result.archiveBytes, 0)
   const inventoryBytes = results.reduce((total, result) => total + result.inventoryBytes, 0)
   const bundleBytes = results.reduce((total, result) => total + result.bundleBytes, 0)
