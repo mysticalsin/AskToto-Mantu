@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -7,13 +7,44 @@ import { tmpdir } from 'node:os'
 // tests at the bottom of this file assert HOW MANY actually happen. Count them at the one choke point
 // every probe goes through, passing the call straight on so the live Get-Acl cases stay real.
 const probes = vi.hoisted(() => ({ count: 0 }))
+const managedBytesRace = vi.hoisted(() => ({
+  afterOpen: null as ((path: string) => void) | null,
+  beforeRead: null as ((path: string) => void) | null,
+  aclOutput: null as string | null
+}))
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
   return {
     ...actual,
     execFileSync: (...args: unknown[]) => {
       probes.count++
+      if (managedBytesRace.aclOutput !== null) return managedBytesRace.aclOutput
       return (actual.execFileSync as (...a: unknown[]) => unknown)(...args)
+    }
+  }
+})
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const [filePath] = args
+      const handle = await actual.open(...args)
+      managedBytesRace.afterOpen?.(String(filePath))
+      const read = handle.read.bind(handle)
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'read')
+            return async (...readArgs: Parameters<typeof handle.read>) => {
+              const beforeRead = managedBytesRace.beforeRead
+              managedBytesRace.beforeRead = null
+              beforeRead?.(String(filePath))
+              return read(...readArgs)
+            }
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
     }
   }
 })
@@ -24,6 +55,7 @@ import {
   isAdminManagedTrusted,
   readAclForTest,
   readTrustedAdminManaged,
+  readTrustedAdminManagedBytes,
   trustedAdminManagedPath,
   WINDOWS_POWERSHELL,
   resetAclMemoForTests,
@@ -36,6 +68,11 @@ function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: p, configurable: true })
 }
 afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+afterEach(() => {
+  managedBytesRace.afterOpen = null
+  managedBytesRace.beforeRead = null
+  managedBytesRace.aclOutput = null
+})
 
 // The ACL verdict memo is a module singleton; clear it before every test so the probe-count assertions
 // in this file are order-independent (a prior test's still-valid memo would otherwise absorb the first
@@ -194,6 +231,105 @@ describe('readTrustedAdminManaged — content read tied to the trust decision', 
   it('win32: returns null for an absent file (no fd to open, no policy to honor)', () => {
     setPlatform('win32')
     expect(readTrustedAdminManaged('C:\\ProgramData\\Métis\\__does_not_exist__.json')).toBeNull()
+  })
+})
+
+describe('readTrustedAdminManagedBytes — bounded raw bytes from one trusted file identity', () => {
+  const tmpDir = join(tmpdir(), `wsec-readbytes-${process.pid}`)
+  const file = join(tmpDir, 'managed-config.json')
+  afterEach(() => {
+    try {
+      if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+  })
+
+  it('returns original invalid UTF-8 bytes instead of decoding and replacing them', async () => {
+    setPlatform('darwin')
+    mkdirSync(tmpDir, { recursive: true })
+    const invalidUtf8 = Buffer.from([0x7b, 0xff, 0x7d])
+    writeFileSync(file, invalidUtf8)
+
+    const bytes = await readTrustedAdminManagedBytes(file)
+    expect(bytes).toEqual(invalidUtf8)
+  })
+
+  it('refuses a path replaced after inspection, even when the held descriptor remains readable', async () => {
+    setPlatform('darwin')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, '{"allowedProviders":[]}')
+    const replacement = `${file}.replacement`
+    writeFileSync(replacement, '{"allowedProviders":[]}')
+    managedBytesRace.afterOpen = () => {
+      rmSync(file)
+      renameSync(replacement, file)
+    }
+
+    await expect(readTrustedAdminManagedBytes(file)).resolves.toBeNull()
+  })
+
+  it.each([
+    ['growth', (path: string) => writeFileSync(path, Buffer.alloc(1025, 0x20))],
+    ['shrink', (path: string) => writeFileSync(path, '{}')]
+  ])('refuses %s after the file identity snapshot', async (_label, mutate) => {
+    setPlatform('darwin')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, Buffer.alloc(1024, 0x20))
+    managedBytesRace.beforeRead = () => mutate(file)
+
+    await expect(readTrustedAdminManagedBytes(file, 1024)).resolves.toBeNull()
+  })
+
+  it('rejects an untrusted Windows ACL before returning any bytes', async () => {
+    setPlatform('win32')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, '{"allowedProviders":[]}')
+    managedBytesRace.aclOutput = JSON.stringify({ owner: ATTACKER, aces: [] })
+    probes.count = 0
+    resetAclMemoForTests()
+
+    await expect(readTrustedAdminManagedBytes(file)).resolves.toBeNull()
+    expect(probes.count).toBe(1)
+  })
+
+  it('does not renew a trusted legacy ACL memo after the file ACL changes', async () => {
+    setPlatform('win32')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, '{"allowedProviders":[]}')
+    managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] })
+    probes.count = 0
+    resetAclMemoForTests()
+
+    expect(isAdminManagedTrusted(file)).toBe(true)
+    expect(probes.count).toBe(1)
+
+    managedBytesRace.aclOutput = JSON.stringify({ owner: ATTACKER, aces: [] })
+    await expect(readTrustedAdminManagedBytes(file)).resolves.toBeNull()
+    expect(probes.count).toBe(2)
+
+    // The raw reader uses the fresh refusal without overwriting the existing legacy memo entry.
+    expect(isAdminManagedTrusted(file)).toBe(true)
+    expect(probes.count).toBe(2)
+  })
+
+  it('rejects nonregular paths and symlinks before opening them', async () => {
+    setPlatform('darwin')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, '{}')
+    const link = join(tmpDir, 'managed-link.json')
+    symlinkSync(file, link)
+
+    await expect(readTrustedAdminManagedBytes(tmpDir)).resolves.toBeNull()
+    await expect(readTrustedAdminManagedBytes(link)).resolves.toBeNull()
+  })
+
+  it('rejects an already oversized file before allocating from its size', async () => {
+    setPlatform('darwin')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, Buffer.alloc(1_048_577, 0x20))
+
+    await expect(readTrustedAdminManagedBytes(file)).resolves.toBeNull()
   })
 })
 
