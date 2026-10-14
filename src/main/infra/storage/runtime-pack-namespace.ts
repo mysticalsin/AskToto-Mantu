@@ -17,6 +17,7 @@ import {
   type RuntimePayloadWritePlan
 } from './runtime-payload-plan'
 import {
+  assertRuntimePackParentAuthorityForPlan,
   readIssuedRuntimePackParentAuthority,
   type RuntimePackParentAuthority,
   type RuntimePackParentRecord
@@ -458,6 +459,8 @@ export async function prepareRuntimeTreeParent(input: {
   const authorityRecord = input.parentAuthority
     ? readIssuedRuntimePackParentAuthority(input.parentAuthority, input.namespace, input.plan)
     : null
+  if (authorityRecord)
+    assertRuntimePackParentAuthorityForPlan(authorityRecord, namespace.bindingId, namespace.parent.binding, input.plan)
   const parentDirectories: ParentDirectoryState[] = []
   let snapshot = snapshotFor(namespace)
   let parentPath = namespace.path

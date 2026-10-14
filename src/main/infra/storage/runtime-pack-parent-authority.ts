@@ -1,11 +1,10 @@
 import type { RuntimePackNamespace } from './runtime-pack-namespace'
-import { describeRuntimePackNamespace } from './runtime-pack-namespace'
 import {
   runtimePayloadPlanIdentity,
   runtimePayloadPlanParentGraph,
   type RuntimePayloadWritePlan
 } from './runtime-payload-plan'
-import type { RuntimeStableOwner } from './runtime-purpose-root'
+import type { RuntimeProfileBinding, RuntimeStableOwner } from './runtime-purpose-root'
 
 const MAX_PARENT_RECORD_DIRECTORIES = 2
 const MAX_PARENT_RECORD_CHILDREN = 128
@@ -45,6 +44,12 @@ export interface RuntimePackParentAuthorityIssuer {
   retire(): void
 }
 
+export interface RuntimePackNamespaceAuthorityBinding {
+  readonly bindingId: string
+  readonly profileBinding: string
+  readonly principalBinding: string
+}
+
 interface IssuedAuthority {
   readonly namespace: RuntimePackNamespace
   readonly plan: RuntimePayloadWritePlan
@@ -58,11 +63,11 @@ const authorities = new WeakMap<object, IssuedAuthority>()
 /** Construct only inside the authenticated main registry verifier for a current namespace. */
 export function createRuntimePackParentAuthorityIssuer(input: {
   readonly namespace: RuntimePackNamespace
+  readonly binding: RuntimePackNamespaceAuthorityBinding
   readonly plan: RuntimePayloadWritePlan
   readonly assertCurrentSync: () => void
 }): RuntimePackParentAuthorityIssuer {
   input.assertCurrentSync()
-  const namespace = describeRuntimePackNamespace(input.namespace)
   const graph = runtimePayloadPlanParentGraph(input.plan)
   let retired = false
   const issued: IssuedAuthority[] = []
@@ -71,9 +76,9 @@ export function createRuntimePackParentAuthorityIssuer(input: {
       input.assertCurrentSync()
       if (retired || issued.length >= 16) throw new Error('RUNTIME_PACK_PARENT_ISSUER_RETIRED')
       const copied = validateRecord(record, {
-        rootBinding: namespace.bindingId,
-        profileBinding: namespace.profile.profileBinding,
-        principalBinding: namespace.profile.principalBinding,
+        rootBinding: input.binding.bindingId,
+        profileBinding: input.binding.profileBinding,
+        principalBinding: input.binding.principalBinding,
         planIdentity: runtimePayloadPlanIdentity(input.plan),
         lane: graph.lane,
         componentId: graph.componentId,
@@ -112,6 +117,44 @@ export function readIssuedRuntimePackParentAuthority(
   }
   state.assertCurrentSync()
   return state.record
+}
+
+export function assertRuntimePackParentAuthorityBinding(
+  record: RuntimePackParentRecord,
+  expected: Pick<
+    RuntimePackParentRecord,
+    'rootBinding' | 'profileBinding' | 'principalBinding' | 'planIdentity' | 'lane' | 'componentId' | 'componentVersion'
+  >
+): void {
+  if (
+    record.rootBinding !== expected.rootBinding ||
+    record.profileBinding !== expected.profileBinding ||
+    record.principalBinding !== expected.principalBinding ||
+    record.planIdentity !== expected.planIdentity ||
+    record.lane !== expected.lane ||
+    record.componentId !== expected.componentId ||
+    record.componentVersion !== expected.componentVersion
+  ) {
+    throw new Error('RUNTIME_TREE_PARENT_AUTHORITY_BINDING_INVALID')
+  }
+}
+
+export function assertRuntimePackParentAuthorityForPlan(
+  record: RuntimePackParentRecord,
+  rootBinding: string,
+  profile: RuntimeProfileBinding,
+  plan: RuntimePayloadWritePlan
+): void {
+  const graph = runtimePayloadPlanParentGraph(plan)
+  assertRuntimePackParentAuthorityBinding(record, {
+    rootBinding,
+    profileBinding: profile.profileBinding,
+    principalBinding: profile.principalBinding,
+    planIdentity: runtimePayloadPlanIdentity(plan),
+    lane: graph.lane,
+    componentId: graph.componentId,
+    componentVersion: graph.componentVersion
+  })
 }
 
 export function copyRuntimePackParentRecord(record: RuntimePackParentRecord): RuntimePackParentRecord {
