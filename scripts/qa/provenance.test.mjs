@@ -421,7 +421,10 @@ test('assemble refuses assets without the exact expected names, byte sizes and s
     const shortened = records.map((record, index) =>
       index === 0 ? { ...record, assets: record.assets.slice(1) } : record
     )
-    assert.throws(() => assembleProvenance(shortened, e), (error) => error.message.includes('assets'))
+    assert.throws(
+      () => assembleProvenance(shortened, e),
+      (error) => error.message.includes('assets')
+    )
 
     const wrongSize = records.map((record, index) =>
       index === 0
@@ -431,14 +434,20 @@ test('assemble refuses assets without the exact expected names, byte sizes and s
           }
         : record
     )
-    assert.throws(() => assembleProvenance(wrongSize, e), (error) => error.message.includes('byte size'))
+    assert.throws(
+      () => assembleProvenance(wrongSize, e),
+      (error) => error.message.includes('byte size')
+    )
 
     const wrongHash = records.map((record, index) =>
       index === 0
         ? { ...record, assets: [{ ...record.assets[0], sha256: 'not-a-sha256' }, ...record.assets.slice(1)] }
         : record
     )
-    assert.throws(() => assembleProvenance(wrongHash, e), (error) => error.message.includes('sha256'))
+    assert.throws(
+      () => assembleProvenance(wrongHash, e),
+      (error) => error.message.includes('sha256')
+    )
 
     const missingAttempt = { ...e }
     delete missingAttempt.GITHUB_RUN_ATTEMPT
@@ -825,8 +834,7 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
 
     const outDirWrongAttempt = join(root, 'promotion-wrong-attempt')
     const wrongAttempt = provenance.run.attempt + 1
-    const attemptMismatch =
-      `provenance attempt ${provenance.run.attempt} does not match the candidate attempt ${wrongAttempt}`
+    const attemptMismatch = `provenance attempt ${provenance.run.attempt} does not match the candidate attempt ${wrongAttempt}`
     await assert.rejects(
       prepareRelease({
         provenancePath,

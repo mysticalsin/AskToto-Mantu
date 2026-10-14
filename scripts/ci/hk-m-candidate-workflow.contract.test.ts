@@ -102,6 +102,7 @@ describe('hk-m-candidate.yml contract', () => {
           file,
           JSON.stringify({
             id: 4242,
+            run_attempt: 1,
             path: '.github/workflows/qa-candidate.yml',
             event: 'workflow_dispatch',
             head_branch: headBranch,
