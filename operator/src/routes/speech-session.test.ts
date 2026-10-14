@@ -139,11 +139,13 @@ describe('authenticated speech session broker boundary', () => {
   beforeEach(async () => { fixture = await createFixture() })
 
   it('rejects legacy fleet HMAC without allocating a session', async () => {
+    const hitRate = vi.spyOn(fixture.store, 'hitRate')
     const response = await handleRequest(await signedRequest({ token: null, secret: TEST_INGEST_SECRET }), baseEnv, {}, {
       store: fixture.store, now: NOW
     })
     expect(response.status).toBe(401)
     expect(await response.json()).toMatchObject({ ok: false, code: 'license-required' })
+    expect(hitRate).not.toHaveBeenCalled()
     expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
   })
 
@@ -192,6 +194,23 @@ describe('authenticated speech session broker boundary', () => {
     }), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
     expect(otherDevice.status).toBe(404)
     expect(await otherDevice.json()).toMatchObject({ code: 'SESSION_NOT_FOUND' })
+  })
+
+  it('keeps authenticated cancellation reachable after the create throttle is exhausted', async () => {
+    const create = await handleRequest(await signedRequest({ token: fixture.tokens.get(DEVICE) }), {
+      ...baseEnv, DB: fixture.d1
+    }, {}, { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN })
+    const created = await create.json() as { sessionId: string }
+    for (let i = 0; i < 12; i++) await fixture.store.hitRate(`speech:${DEVICE}`, NOW, 60_000, 10)
+    const hitRate = vi.spyOn(fixture.store, 'hitRate')
+    const response = await handleRequest(await signedRequest({
+      token: fixture.tokens.get(DEVICE),
+      path: `/v1/speech/sessions/${created.sessionId}/cancel`,
+      body: { operation: 'cancel-session', sessionId: created.sessionId }
+    }), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
+    expect(response.status).toBe(200)
+    expect(hitRate).not.toHaveBeenCalled()
+    expect(fixture.db.prepare('SELECT status FROM speech_sessions WHERE id = ?').get(created.sessionId)).toMatchObject({ status: 'cancelled' })
   })
 
   it('rejects stale consent and request replay without creating paid reservations', async () => {

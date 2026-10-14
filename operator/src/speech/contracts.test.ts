@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { SpeechSessionRequestSchema } from './contracts'
+import { parseSpeechSessionRequest, SpeechSessionRequestSchema } from './contracts'
 
 const valid = {
+  operation: 'create-session',
   captureGeneration: 3,
   tracks: ['microphone', 'system'],
   consent: {
@@ -15,7 +16,7 @@ const valid = {
 
 describe('speech session request contract', () => {
   it('accepts a bounded exact-track consent attestation', () => {
-    expect(SpeechSessionRequestSchema.safeParse(valid).success).toBe(true)
+    expect(parseSpeechSessionRequest(valid, 10_000)).toMatchObject({ ok: true })
   })
 
   it.each([
@@ -34,13 +35,17 @@ describe('speech session request contract', () => {
   })
 
   it('rejects expired, future, and overlong consent attestations', () => {
-    expect(SpeechSessionRequestSchema.safeParse({
+    expect(parseSpeechSessionRequest({
       ...valid,
-      consent: { ...valid.consent, issuedAt: 0, expiresAt: 900 }
-    }).success).toBe(false)
-    expect(SpeechSessionRequestSchema.safeParse({
+      consent: { ...valid.consent, issuedAt: 1_000, expiresAt: 9_999 }
+    }, 10_000)).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
+    expect(parseSpeechSessionRequest({
       ...valid,
-      consent: { ...valid.consent, issuedAt: 5_000, expiresAt: 4_000 }
-    }).success).toBe(false)
+      consent: { ...valid.consent, issuedAt: 10_001, expiresAt: 20_000 }
+    }, 10_000)).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
+    expect(parseSpeechSessionRequest({
+      ...valid,
+      consent: { ...valid.consent, issuedAt: 1_000, expiresAt: 121_001 }
+    }, 10_000)).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
   })
 })

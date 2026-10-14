@@ -43,9 +43,9 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
 
 function migratedDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
-  const root = join(__dirname, '..', '..')
-  db.exec(readFileSync(join(root, '..', 'schema.sql'), 'utf8'))
-  const alter = readFileSync(join(root, '..', 'schema-alter.sql'), 'utf8')
+  const operatorRoot = join(__dirname, '..', '..')
+  db.exec(readFileSync(join(operatorRoot, 'schema.sql'), 'utf8'))
+  const alter = readFileSync(join(operatorRoot, 'schema-alter.sql'), 'utf8')
   for (const sql of parseStatements(alter)) {
     try { db.exec(sql) } catch (error) {
       if (!/duplicate column name|already exists/i.test(String(error))) throw error
@@ -80,11 +80,11 @@ describe('D1 speech grants', () => {
   it('installs on fresh schema and upgrades existing data without deleting it', () => {
     const db = new DatabaseSync(':memory:')
     try {
-      const root = join(__dirname, '..', '..')
-      db.exec(readFileSync(join(root, '..', 'schema.sql'), 'utf8'))
+      const operatorRoot = join(__dirname, '..', '..')
+      db.exec(readFileSync(join(operatorRoot, 'schema.sql'), 'utf8'))
       db.prepare(`INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen)
         VALUES (?, ?, ?, ?, ?, ?)`).run('existing-device', 'existing-hash', 'win32', '1.9.7', 1, 2)
-      const alter = readFileSync(join(root, '..', 'schema-alter.sql'), 'utf8')
+      const alter = readFileSync(join(operatorRoot, 'schema-alter.sql'), 'utf8')
       for (const sql of parseStatements(alter)) {
         try { db.exec(sql) } catch (error) {
           if (!/duplicate column name|already exists/i.test(String(error))) throw error
@@ -134,20 +134,72 @@ describe('D1 speech grants', () => {
     } finally { db.close() }
   })
 
-  it('atomically redeems a token once and binds it to exact session and track', async () => {
+  it('rejects every mismatched grant binding without consuming the token, then redeems once', async () => {
     const db = brokerDb()
     try {
-      const allocation = await allocateSpeechSession(sqliteD1(db), binding)
+      const d1 = sqliteD1(db)
+      const allocation = await allocateSpeechSession(d1, binding)
       expect(allocation.ok).toBe(true)
       if (!allocation.ok) return
       const grant = allocation.grants[0]
       const context = { ...binding, sessionId: allocation.sessionId, track: grant.track }
+      const mismatches: Array<Partial<typeof context>> = [
+        { tenantId: 'tenant-b' },
+        { audience: 'operator-other' },
+        { licenseJti: 'license-b' },
+        { deviceId: 'device-b' },
+        { sessionId: crypto.randomUUID() },
+        { track: 'system' },
+        { captureGeneration: binding.captureGeneration + 1 },
+        { routeId: 'deepgram-via-gateway' },
+        { model: 'nova-3' },
+        { configVersion: 'v2' },
+        { language: 'fr' }
+      ]
+      for (const mismatch of mismatches) {
+        expect(await redeemSpeechGrant(d1, grant.token, { ...context, ...mismatch })).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
+      }
       const results = await Promise.all([
-        redeemSpeechGrant(sqliteD1(db), grant.token, context),
-        redeemSpeechGrant(sqliteD1(db), grant.token, context)
+        redeemSpeechGrant(d1, grant.token, context),
+        redeemSpeechGrant(d1, grant.token, context)
       ])
       expect(results.filter((result) => result.ok)).toHaveLength(1)
-      expect(await redeemSpeechGrant(sqliteD1(db), grant.token, { ...context, track: 'system' })).toMatchObject({ ok: false })
+    } finally { db.close() }
+  })
+
+  it.each([
+    ['revoked license', "UPDATE issued_licenses SET revoked = 1 WHERE jti = 'license-a'"],
+    ['revoked seat', "UPDATE seats SET approval = 'revoked' WHERE device_id = 'device-a'"],
+    ['rebound license', "UPDATE issued_licenses SET activated_device = 'device-b' WHERE jti = 'license-a'"],
+    ['missing entitlement', "UPDATE tiers SET entitlements_json = '[\"listen\"]' WHERE id = 'metis'"],
+    ['corrupt entitlements', "UPDATE tiers SET entitlements_json = '{broken' WHERE id = 'metis'"]
+  ])('refuses grant redemption after current authorization fails: %s', async (_name, mutation) => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const allocation = await allocateSpeechSession(d1, binding)
+      expect(allocation.ok).toBe(true)
+      if (!allocation.ok) return
+      db.exec(mutation)
+      expect(await redeemSpeechGrant(d1, allocation.grants[0].token, {
+        ...binding, sessionId: allocation.sessionId, track: allocation.grants[0].track
+      })).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
+    } finally { db.close() }
+  })
+
+  it.each([
+    ['missing batch results', []],
+    ['failed batch result', [{ success: false }]]
+  ])('fails closed on %s before a session is committed', async (_name, batchResult) => {
+    const db = brokerDb()
+    try {
+      const base = sqliteD1(db)
+      const unavailable: D1DatabaseLike = {
+        ...base,
+        async batch() { return batchResult }
+      }
+      expect(await allocateSpeechSession(unavailable, binding)).toMatchObject({ ok: false, code: 'DATABASE_UNAVAILABLE' })
+      expect(db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
     } finally { db.close() }
   })
 

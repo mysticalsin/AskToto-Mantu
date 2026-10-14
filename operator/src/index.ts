@@ -43,7 +43,7 @@ import { handleMcpGateway, mcpGatewayConnectionId } from './routes/mcp-gateway'
 import { parseAskPathTag } from './ask-meter'
 import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
 import { handleUse, readUseBody } from './use'
-import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
+import { OPERATOR_HMAC_HEADERS, OPERATOR_LICENSE_HEADER } from '../../src/shared/operator-hmac'
 import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
 
 export type { Env, HandleOpts } from './routes/admin-ctx'
@@ -76,7 +76,6 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
   if (pathname === '/v1/skills/manifest') return { key: 'manifest', max: RATE_LIMITS.manifest }
   if (pathname === '/v1/integrations') return { key: 'integrations', max: RATE_LIMITS.integrations }
   if (pathname === '/v1/model-policy') return { key: 'modelPolicy', max: RATE_LIMITS.modelPolicy }
-  if (pathname.startsWith('/v1/speech/sessions')) return { key: 'speech', max: 10 }
   return null
 }
 
@@ -317,6 +316,9 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     if ((speechCreate || speechCancelMatch) && !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
       return json({ ok: false, code: 'INVALID_REQUEST', error: 'Speech requests must use application/json.' }, 415)
     }
+    if ((speechCreate || speechCancelMatch) && request.headers.get(OPERATOR_LICENSE_HEADER) === null) {
+      return json({ ok: false, code: 'license-required', error: 'A per-device licence is required.' }, 401)
+    }
     const bodyText =
       request.method === 'GET'
         ? ''
@@ -331,11 +333,13 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     if (speechCreate || speechCancelMatch) {
-      if (await store.hitRate(`speech:${hmac.deviceId}`, now, RATE_WINDOW_MS, 10)) {
-        return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
-      }
       // A valid fleet HMAC proves a shared secret, not the licensed device principal this paid route needs.
       if (!hmac.license) return json({ ok: false, code: 'license-required', error: 'A per-device licence is required.' }, 401)
+      // This advisory issuance throttle runs only after the signed per-device licence was verified.
+      // Cancellation stays reachable so clients can release their own unused reservation.
+      if (speechCreate && await store.hitRate(`speech:${hmac.deviceId}`, now, RATE_WINDOW_MS, 10)) {
+        return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
+      }
       const speechDevice = { deviceId: hmac.deviceId, licenseJti: hmac.license.jti }
       if (speechCreate) {
         return handleSpeechSessionCreate({ store, env, opts, bodyText, now, device: speechDevice })
