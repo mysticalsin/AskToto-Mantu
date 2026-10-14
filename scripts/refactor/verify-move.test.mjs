@@ -412,7 +412,7 @@ test('git inventory passes unchanged inventories against the same base', (t) => 
 test('git inventory fails closed for disjoint or unreadable revisions', (t) => {
   const { root, common } = inventoryGitFixture(t)
   gitFixture(root, ['switch', '--orphan', 'disjoint'])
-  gitFixture(root, ['rm', '-rf', '.'])
+  gitFixture(root, ['rm', '-rf', '--ignore-unmatch', '.'])
   writeFixtureFile(root, 'src/other.test.ts', "test('unrelated root', () => {})\n")
   const disjointHead = commitFixture(root, 'unrelated history')
 
