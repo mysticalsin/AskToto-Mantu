@@ -1,9 +1,25 @@
 import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
-import * as fsPromises from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readManagedSpeechProviders } from './managed-speech-providers'
+
+const openRace = vi.hoisted(() => ({ failPath: '', attempts: 0 }))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: (...args: Parameters<typeof actual.open>) => {
+      const [path] = args
+      if (openRace.failPath === path) {
+        openRace.attempts += 1
+        return Promise.reject(Object.assign(new Error('synthetic disappearance'), { code: 'ENOENT' }))
+      }
+      return actual.open(...args)
+    }
+  }
+})
 
 const temporaryDirectories: string[] = []
 
@@ -14,6 +30,8 @@ function policyFiles(): { directory: string; userPath: string; adminPath: string
 }
 
 afterEach(() => {
+  openRace.failPath = ''
+  openRace.attempts = 0
   vi.restoreAllMocks()
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
@@ -73,12 +91,11 @@ describe('readManagedSpeechProviders', () => {
   it('fails closed if a configured user policy disappears between inspection and open', async () => {
     const { userPath, adminPath } = policyFiles()
     writeFileSync(userPath, JSON.stringify({ allowedProviders: ['deepgram-nova3'] }))
-    const open = vi
-      .spyOn(fsPromises, 'open')
-      .mockRejectedValue(Object.assign(new Error('synthetic disappearance'), { code: 'ENOENT' }))
+    openRace.failPath = userPath
+    openRace.attempts = 0
 
     expect(await readManagedSpeechProviders(userPath, adminPath, () => null)).toEqual({ state: 'invalid' })
-    expect(open).toHaveBeenCalledWith(userPath, expect.any(Number))
+    expect(openRace.attempts).toBe(1)
   })
 
   it('rejects symlinks, nonregular files, and files larger than the fixed byte cap', async () => {
