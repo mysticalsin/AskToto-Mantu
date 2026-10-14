@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/ipc'
+import { ImportJobManager, type ImportJob } from './import-jobs'
 import {
   IMPORT_RECAP_CACHE_KEY,
   IMPORT_RECAP_MAX_ATTEMPTS,
@@ -172,13 +173,66 @@ describe('runImportedRecap critical path', () => {
 })
 
 describe('import recap is not polish-first', () => {
-  it('import-jobs finalize recaps before any polish pass', () => {
-    const manager = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
-    const src = readFileSync(join(__dirname, 'import-job-pipelines.ts'), 'utf8')
-    const finalize = src.slice(src.indexOf('export async function finalizeImportJob'), src.indexOf('function terminal'))
-    expect(finalize.indexOf('generateRecap')).toBeGreaterThan(-1)
-    expect(finalize.indexOf('generateRecap')).toBeLessThan(finalize.indexOf('if (host.deps.polish)'))
-    expect(manager).toMatch(/return finalizeImportJob\(this\.pipelineHost\(\), job, attempt\)/)
+  it('import-jobs durably finalize recaps before any polish pass', async () => {
+    const events: string[] = []
+    const saved = new Map<string, ImportJob>()
+    let releaseRecap!: (value: string) => void
+    let recapStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      recapStarted = resolve
+    })
+    const recap = new Promise<string>((resolve) => {
+      releaseRecap = resolve
+    })
+    const polish = vi.fn(async (lines) => {
+      events.push('polish')
+      return lines
+    })
+    const manager = new ImportJobManager({
+      store: {
+        save: async (job) => {
+          saved.set(job.jobId, structuredClone(job))
+        },
+        list: async () => [...saved.values()],
+        remove: async (jobId) => {
+          saved.delete(jobId)
+        }
+      },
+      decode: () => {},
+      transcribe: async () => 'recognized speech',
+      saveMeeting: async () => {
+        events.push('save')
+        return 'saved-import.md'
+      },
+      generateRecap: async () => {
+        events.push('recap')
+        recapStarted()
+        return recap
+      },
+      updateRecap: async () => {
+        events.push('update-recap')
+      },
+      polish,
+      enqueueIngest: () => {
+        events.push('ingest')
+      },
+      freeMemoryBytes: () => 0,
+      now: () => 1_700_000_000_000,
+      newId: () => 'recap-order'
+    })
+    await manager.start({ path: '/safe/recording.wav', name: 'recording.wav', sizeBytes: 42, mtimeMs: 1 })
+    await manager.acceptDecodedChunk('recap-order', 0, 1, new Float32Array(16_000))
+    const finishing = manager.finishDecoding('recap-order')
+    await started
+    expect(events).toEqual(['save', 'recap'])
+    expect(polish).not.toHaveBeenCalled()
+    expect(manager.get('recap-order')?.state).toBe('recapping')
+    releaseRecap('## Overview\nApproved outcome.')
+    await finishing
+    expect(events).toEqual(['save', 'recap', 'update-recap', 'polish', 'ingest'])
+    expect(polish).toHaveBeenCalledOnce()
+    expect(manager.get('recap-order')?.state).toBe('done')
+    expect(saved.has('recap-order')).toBe(false)
   })
 
   it('index.ts does not wire polish on import jobs', () => {
