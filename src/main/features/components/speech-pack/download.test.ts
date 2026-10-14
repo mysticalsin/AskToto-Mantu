@@ -597,7 +597,7 @@ describe('reuseVerifiedFiles', () => {
     })
     expect(copied).toBe(true)
     expect(readFileSync(join(destination, 'weights.bin'))).toEqual(pinned)
-    expect(authorize).toHaveBeenCalledOnce()
+    expect(authorize).toHaveBeenCalledTimes(2)
   })
 
   it('rejects a changed or linked candidate without leaving copied data', async () => {
