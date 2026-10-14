@@ -2,133 +2,43 @@ import WebSocket from 'ws'
 import {
   SPEECH_BROKER_WS_MAX_PAYLOAD,
   SpeechBrokerClient,
-  type BrokerFailureCode,
   type CreatedSpeechSession,
   type SpeechBrokerOperation,
   type SpeechCreateRequest,
   type SpeechTrack
 } from './broker-client'
 import { BoundedRelayPcmQueue, type RelayPcmFrame, type RelayQueueFailureCode } from './relay-queue'
-import { RelayResultSequence, type RelayIdentity, type RelayTerminal, type RelayTranscript } from './relay-results'
+import { RelayResultSequence, type RelayIdentity, type RelayTerminal } from './relay-results'
+import type {
+  RelaySessionFailureCode,
+  RelaySessionFinish,
+  RelaySpeechSessionOptions,
+  RelayTrackClosure,
+  RelayTrackRuntime as TrackRuntime
+} from './relay-session-contracts'
+import {
+  closureFromTerminal,
+  FINISH_MESSAGE,
+  incompleteClosure,
+  MAX_CLOUD_FRAME_BYTES,
+  MAX_FINISH_WAIT_MS,
+  effectiveRelayLimits,
+  isValidInitialFrontier,
+  isSessionCurrent,
+  toUtf8Text,
+  type DeadlineResult
+} from './relay-session-protocol'
 
-export type RelayTrackClosure = {
-  track: SpeechTrack
-  streamEpoch: number
-  closeConfirmed: boolean
-  tail: 'complete' | 'incomplete'
-  lastSequence: number
-  reason: RelayTerminal['reason']
-}
+export type {
+  RelaySessionFailureCode,
+  RelaySessionFinish,
+  RelaySpeechSessionOptions,
+  RelayTrackClosure
+} from './relay-session-contracts'
 
-export type RelaySessionFinish = {
-  complete: boolean
-  tracks: RelayTrackClosure[]
-  reason: 'normal' | 'incomplete' | 'cancelled'
-}
-
-export type RelaySessionFailureCode =
-  | BrokerFailureCode
-  | 'TRACK_OPEN'
-  | 'CANCELLED'
-  | 'LEASE_DRAINING'
-  | 'CLOSURE_UNCONFIRMED'
 export type RelaySessionStartResult =
   | { ok: true; value: RelaySpeechSession }
   | { ok: false; code: RelaySessionFailureCode }
-
-export type RelaySpeechSessionOptions = {
-  client: SpeechBrokerClient
-  createRequest: SpeechCreateRequest
-  expectedSelection: {
-    routeId: CreatedSpeechSession['routeId']
-    modelId: CreatedSpeechSession['model']
-    language: string
-  }
-  expectedCapability: {
-    configVersion: string
-    policyVersion: string
-  }
-  operation?: SpeechBrokerOperation
-  expectedContinuation?: {
-    configVersion: string
-    policyVersion: string
-    epochs: Partial<Record<SpeechTrack, number>>
-  }
-  onAllocated?: (sessionId: string) => void
-  initialFrontiers?: Partial<Record<SpeechTrack, { sequence: number; sampleOffset?: number }>>
-  isCurrent?: () => boolean
-  onTranscript?: (
-    event: RelayTranscript,
-    context: { timeBase: 'stream'; firstCaptureSampleOffset: number; sessionId: string }
-  ) => void
-}
-
-type TrackRuntime = {
-  track: SpeechTrack
-  streamEpoch: number
-  socket: WebSocket
-  queue: BoundedRelayPcmQueue
-  results: RelayResultSequence
-  maxInputBytes: number
-  maxStreamInputBytes: number
-  admittedBytes: number
-  firstCaptureSampleOffset: number | null
-  captureNextSequence: number
-  captureNextSampleOffset: number | null
-  streamNextSequence: number
-  streamNextSampleOffset: number
-  terminal: RelayTerminal | null
-  closure: Promise<RelayTrackClosure>
-  resolveClosure: (value: RelayTrackClosure) => void
-  finishPromise: Promise<RelayTrackClosure> | null
-  failureReason: RelayTerminal['reason'] | null
-  deliveryFailed: boolean
-  terminalUnexpected: boolean
-  stopped: boolean
-}
-
-const MAX_CLOUD_FRAME_BYTES = 3_200
-const MAX_FINISH_WAIT_MS = 5_000
-const MAX_STREAM_MS = 60_000
-const MAX_INPUT_BYTES = 1_920_000
-const MAX_OUTPUT_BYTES = 1024 * 1024
-const FINISH_MESSAGE = '{"type":"finish"}'
-type DeadlineResult<T> = { done: true; value: T } | { done: false }
-
-function toUtf8Text(data: WebSocket.RawData): string | null {
-  try {
-    if (typeof data === 'string') return data
-    const decoder = new TextDecoder('utf-8', { fatal: true })
-    if (Buffer.isBuffer(data)) return decoder.decode(data)
-    if (Array.isArray(data)) return decoder.decode(Buffer.concat(data))
-    if (data instanceof ArrayBuffer) return decoder.decode(data)
-    return null
-  } catch {
-    return null
-  }
-}
-
-function closureFromTerminal(track: SpeechTrack, streamEpoch: number, terminal: RelayTerminal): RelayTrackClosure {
-  return {
-    track,
-    streamEpoch,
-    closeConfirmed: terminal.closeConfirmed,
-    tail: terminal.tail,
-    lastSequence: terminal.lastSequence,
-    reason: terminal.reason
-  }
-}
-
-function incompleteClosure(track: SpeechTrack, streamEpoch: number, lastSequence: number): RelayTrackClosure {
-  return {
-    track,
-    streamEpoch,
-    closeConfirmed: false,
-    tail: 'incomplete',
-    lastSequence,
-    reason: 'unknown'
-  }
-}
 
 /** Main-process session for one consent-scoped allocation and its exact active tracks. */
 export class RelaySpeechSession {
@@ -167,27 +77,12 @@ export class RelaySpeechSession {
   ) {}
 
   static async create(options: RelaySpeechSessionOptions): Promise<RelaySessionStartResult> {
-    const isCurrent = (): boolean => {
-      try {
-        return options.isCurrent?.() ?? true
-      } catch {
-        return false
-      }
-    }
+    const isCurrent = (): boolean => isSessionCurrent(options.isCurrent)
     if (!isCurrent()) return { ok: false, code: 'CANCELLED' }
     const operationFailure = options.client.operationFailure(options.operation)
     if (operationFailure) return { ok: false, code: operationFailure }
     for (const track of options.createRequest.tracks) {
-      const frontier = options.initialFrontiers?.[track]
-      if (
-        frontier &&
-        (!Number.isSafeInteger(frontier.sequence) ||
-          frontier.sequence < 1 ||
-          (frontier.sequence !== 1 && frontier.sampleOffset === undefined) ||
-          (frontier.sampleOffset !== undefined &&
-            (!Number.isSafeInteger(frontier.sampleOffset) || frontier.sampleOffset < 0)))
-      )
-        return { ok: false, code: 'SCHEMA' }
+      if (!isValidInitialFrontier(options.initialFrontiers?.[track])) return { ok: false, code: 'SCHEMA' }
     }
     const created = await options.client.createSession(options.createRequest, options.operation)
     if (!created.ok) return created
@@ -220,19 +115,8 @@ export class RelaySpeechSession {
       return { ok: false, code: 'SCHEMA' }
     }
     const now = Date.now()
-    const effectiveMaxStreamMs = Math.min(created.value.limits.maxStreamMs, MAX_STREAM_MS)
-    const effectiveAudioDeadlineAt = Math.min(
-      created.value.limits.audioDeadlineAt,
-      created.value.leaseExpiresAt,
-      allocationAt + effectiveMaxStreamMs
-    )
-    if (
-      now >= created.value.grantExpiresAt ||
-      now >= effectiveAudioDeadlineAt ||
-      created.value.limits.maxStreamMs < 100 ||
-      created.value.limits.maxInputBytesPerTrack < MAX_CLOUD_FRAME_BYTES ||
-      created.value.limits.maxClientFrameBytes < MAX_CLOUD_FRAME_BYTES
-    ) {
+    const limits = effectiveRelayLimits(created.value, allocationAt, now)
+    if (!limits) {
       await options.client.cancel(created.value.sessionId, 1_000)
       return { ok: false, code: 'SCHEMA' }
     }
@@ -240,12 +124,12 @@ export class RelaySpeechSession {
       options.client,
       created.value.sessionId,
       created.value.captureGeneration,
-      effectiveMaxStreamMs,
-      effectiveAudioDeadlineAt,
-      Math.min(created.value.limits.maxInputBytesPerTrack, MAX_INPUT_BYTES),
-      Math.min(created.value.limits.maxClientFrameBytes, MAX_CLOUD_FRAME_BYTES),
-      Math.min(created.value.limits.maxOutputBytesPerTrack, MAX_OUTPUT_BYTES),
-      Math.min(created.value.limits.drainWindowMs, MAX_FINISH_WAIT_MS),
+      limits.maxStreamMs,
+      limits.audioDeadlineAt,
+      limits.maxInputBytesPerTrack,
+      limits.maxClientFrameBytes,
+      limits.maxOutputBytesPerTrack,
+      limits.drainWindowMs,
       created.value.routeId,
       created.value.model,
       created.value.language,
