@@ -1059,6 +1059,7 @@ export function assessPackagedSmokeReport(report, platform) {
 }
 
 /** The exact-schema synthetic same-package restart report is a candidate package result, not upgrade evidence. */
+/** @param {string | undefined} platform */
 export function assessPackagedRecoveryReport(report, platform = undefined) {
   const problems = packagedRecoveryReportProblems(report)
   const expectedPlatform = platform === 'mac' ? 'darwin' : platform === 'win' ? 'win32' : undefined
@@ -1134,7 +1135,7 @@ export function scenarioCommand({
 
 /**
  * The provenance must be the candidate run's own: build_run_id and commit are taken from it.
- * @param {number | undefined} [candidateAttempt]
+ * @param {number | undefined} candidateAttempt
  */
 export function assertCandidateProvenance(provenance, candidateRun, candidateAttempt = undefined) {
   if (String(provenance?.run?.id) !== String(candidateRun)) {
@@ -1170,6 +1171,7 @@ export function assertCandidateProvenance(provenance, candidateRun, candidateAtt
  *   exitCode: number | null,
  *   detail: string,
  *   reportWritten: boolean,
+ *   reportData?: Record<string, unknown> | null,
  *   reportAssessment?: any
  * }} input
  */
