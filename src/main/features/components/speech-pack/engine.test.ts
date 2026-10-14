@@ -14,6 +14,7 @@ import {
 } from './engine'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
 import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-helpers/test-server.fixture'
+import { componentManifestIdentity } from './resolver'
 
 const WHISPER: SpeechPackComponentId = 'asr.whisper-base-q8'
 const PARAKEET: SpeechPackComponentId = 'asr.parakeet-tdt-0.6b-v3-int8'
@@ -101,7 +102,12 @@ describe('speech-pack engine', () => {
     expect(engine.getState(WHISPER)).toEqual({ status: 'ready' })
     expect(selfTest).toHaveBeenCalledTimes(1)
     expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
-    expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8'))).toEqual({ schema: 1, component: WHISPER, version: '1' })
+    expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8'))).toEqual({
+      schema: 2,
+      component: WHISPER,
+      version: '1',
+      manifestIdentity: componentManifestIdentity(c)
+    })
     expect(existsSync(join(root, '.staging', WHISPER, '1'))).toBe(false)
   })
 
@@ -499,7 +505,12 @@ describe('speech-pack engine', () => {
         const first = make([previous])
         first.enqueue([WHISPER])
         await first.whenIdle()
-        writeFileSync(marker(WHISPER), JSON.stringify({ schema: 1, component: WHISPER, version: '../en.wav' }))
+        writeFileSync(marker(WHISPER), JSON.stringify({
+          schema: 2,
+          component: WHISPER,
+          version: '../en.wav',
+          manifestIdentity: componentManifestIdentity(c)
+        }))
         const outsideBefore = readFileSync(join(dir, 'en.wav'))
 
         const next = make([{ ...previous, version: '2' }])
