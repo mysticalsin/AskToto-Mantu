@@ -95,7 +95,8 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-function emitListening(procIndex: number, port: number): void {
+async function emitListening(procIndex: number, port: number): Promise<void> {
+  await waitUntil(() => spawnState.procs[procIndex] !== undefined)
   spawnState.procs[procIndex].stdout.emit(
     'data',
     Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`)
@@ -189,7 +190,7 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     }
     finishAdmission(admission)
     await waitUntil(() => spawnState.calls.length === 1)
-    emitListening(0, 55129)
+    await emitListening(0, 55129)
     await started
     expect(spawnState.calls).toHaveLength(1)
     expect(admission.assertCurrentSync).toHaveBeenCalledOnce()
@@ -245,10 +246,11 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     const p1 = start(paths, 'mac')
     const p2 = start(paths, 'mac') // second caller arrives while state === 'starting'
 
+    await waitUntil(() => spawnState.calls.length >= 1)
     // Only ONE spawn for two concurrent callers targeting the same model — no duplicate process.
     expect(spawnState.calls.length).toBe(1)
 
-    emitListening(0, 55123) // the sidecar "prints" its listening line so pollHealth can begin
+    await emitListening(0, 55123) // the sidecar "prints" its listening line so pollHealth can begin
 
     let p1ResolvedAfterHealth = false
     let p2ResolvedAfterHealth = false
@@ -292,6 +294,7 @@ describe('quit cancellation — Windows fallback', () => {
         outcome = 'rejected'
       }
     )
+    await waitUntil(() => spawnState.calls.length >= 1)
     expect(spawnState.calls).toHaveLength(1)
     expect(spawnState.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
 
@@ -326,6 +329,7 @@ describe('quit cancellation — Windows fallback', () => {
     })().finally(() => {
       settled = true
     })
+    await waitUntil(() => spawnState.procs[0] !== undefined)
     const proc = spawnState.procs[0]!
     proc.kill = vi.fn(() => {
       proc.killed = true
@@ -354,7 +358,7 @@ describe('quit cancellation — Windows fallback', () => {
       runtimeBinary: '/managed/llama-server'
     }
     const startedOld = start(oldPaths, 'mac')
-    emitListening(0, 55920)
+    await emitListening(0, 55920)
     await startedOld
     const oldProc = spawnState.procs[0]!
     oldProc.kill = vi.fn(() => {
@@ -370,7 +374,7 @@ describe('quit cancellation — Windows fallback', () => {
     oldProc.emit('exit', null, 'SIGKILL')
     await stopping
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55921)
+    await emitListening(1, 55921)
     await nextStart
     expect(oldLease.release).toHaveBeenCalledOnce()
     expect(isRunning()).toBe(true)
@@ -396,7 +400,7 @@ describe('quit cancellation — Windows fallback', () => {
       runtimeBinary: '/managed/llama-server'
     }
     const startedOld = start(oldPaths, 'mac')
-    emitListening(0, 55930)
+    await emitListening(0, 55930)
     await startedOld
     const oldProc = spawnState.procs[0]!
     oldProc.kill = vi.fn(() => {
@@ -418,7 +422,7 @@ describe('quit cancellation — Windows fallback', () => {
     finishRelease()
     await stopping
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55931)
+    await emitListening(1, 55931)
     await nextStart
     expect(spawnState.calls).toHaveLength(2)
     expect(isRunning()).toBe(true)
@@ -438,6 +442,7 @@ describe('quit cancellation — Windows fallback', () => {
         outcomeA = 'rejected'
       }
     )
+    await waitUntil(() => spawnState.procs[0] !== undefined)
     const procA = spawnState.procs[0]
     // Hold A's OS exit notification so B proves it cannot launch while A still owns the model/process.
     procA.kill = vi.fn(() => {
@@ -451,11 +456,11 @@ describe('quit cancellation — Windows fallback', () => {
     procA.emit('exit', null, 'SIGKILL')
     await stopping
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55902)
+    await emitListening(1, 55902)
     await startB
     expect(baseURL()).toBe('http://127.0.0.1:55902/v1')
 
-    emitListening(0, 55901)
+    await emitListening(0, 55901)
     await waitUntil(() => outcomeA !== undefined)
 
     expect(outcomeA).toBe('rejected')
@@ -472,7 +477,7 @@ describe('F2 — model switch', () => {
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55201)
+    await emitListening(0, 55201)
     await p1
     expect(isRunning()).toBe(true)
     const procA = spawnState.procs[0]
@@ -480,7 +485,7 @@ describe('F2 — model switch', () => {
 
     const p2 = start(pathsB, 'mac')
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55202)
+    await emitListening(1, 55202)
     await p2
 
     expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
@@ -492,7 +497,7 @@ describe('F2 — model switch', () => {
   it('calling start() again with the SAME model while running is a no-op — no restart, no new spawn', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55301)
+    await emitListening(0, 55301)
     await p1
     const procA = spawnState.procs[0]
 
@@ -514,7 +519,7 @@ describe('F2 — model switch', () => {
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac') // still "starting" — health never resolves until released below
-    emitListening(0, 55401)
+    await emitListening(0, 55401)
 
     const p2 = start(pathsB, 'mac') // wants a DIFFERENT model while the first is still starting
 
@@ -529,7 +534,7 @@ describe('F2 — model switch', () => {
     // 'starting' (B); either is a valid interleaving. What must hold is the end state once p2 also settles.
 
     await waitUntil(() => spawnState.calls.length === 2) // B's switch-spawn happens once A settles
-    emitListening(1, 55402)
+    await emitListening(1, 55402)
     await p2
 
     expect(spawnState.calls[1].args).toContain('/m/b.gguf')
@@ -551,7 +556,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55601)
+    await emitListening(0, 55601)
     await p1
     const procA = spawnState.procs[0]
 
@@ -569,7 +574,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     endStream() // the in-flight request finishes (onDone/onError/abort)
 
     await waitUntil(() => spawnState.calls.length === 2) // NOW the deferred switch proceeds
-    emitListening(1, 55602)
+    await emitListening(1, 55602)
     await p2
 
     expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
@@ -587,7 +592,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
   it('a caller re-requesting the SAME (already-running) model while a stream is active resolves immediately — no deferral needed', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55701)
+    await emitListening(0, 55701)
     await p1
     const procA = spawnState.procs[0]
 
@@ -602,7 +607,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const activeLease = testLease('a'.repeat(64))
     const running = start({ ...pathsA, runtimeLease: activeLease.lease, runtimeBinary: '/managed/llama-server' }, 'mac')
-    emitListening(0, 55702)
+    await emitListening(0, 55702)
     await running
 
     let finishRelease!: () => void
@@ -629,13 +634,13 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55801)
+    await emitListening(0, 55801)
     await p1
     const procA = spawnState.procs[0]
 
     const p2 = start(pathsB, 'mac')
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55802)
+    await emitListening(1, 55802)
     await p2
 
     expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
@@ -649,7 +654,7 @@ describe('G1 — exit handler generation guard', () => {
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55501)
+    await emitListening(0, 55501)
     await p1
     const procA = spawnState.procs[0]
 
@@ -665,7 +670,7 @@ describe('G1 — exit handler generation guard', () => {
     procA.emit('exit', null, 'SIGKILL')
     await stopping
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55502)
+    await emitListening(1, 55502)
     await p2
     expect(isRunning()).toBe(true)
     expect(baseURL()).toBe('http://127.0.0.1:55502/v1')
