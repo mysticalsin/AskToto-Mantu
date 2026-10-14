@@ -204,7 +204,11 @@ describe('loopback acquisition keeps rendered system audio unprocessed', () => {
 
   it('uses a video-bound system stream on macOS and keeps mic echo cancellation enabled', async () => {
     const track = fakeTrack()
-    const stream = fakeStream(track)
+    track.applyConstraints.mockRejectedValueOnce(new Error('live constraints unsupported'))
+    const videoTrack = { ...fakeTrack(), kind: 'video' } as unknown as MediaStreamTrack & {
+      stop: ReturnType<typeof vi.fn>
+    }
+    const stream = fakeStream(track, videoTrack)
     const getDisplayMedia = vi.fn(async () => stream)
     const getUserMedia = vi.fn(async () => stream)
     vi.stubGlobal('navigator', {
@@ -214,7 +218,7 @@ describe('loopback acquisition keeps rendered system audio unprocessed', () => {
     vi.resetModules()
     const { acquireLoopback, acquireMic } = await import('./listen-audio-recovery')
 
-    await acquireLoopback()
+    await expect(acquireLoopback()).resolves.toBe(stream)
     await acquireMic('')
 
     expect(getDisplayMedia).toHaveBeenCalledTimes(1)
@@ -225,6 +229,8 @@ describe('loopback acquisition keeps rendered system audio unprocessed', () => {
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
     })
+    expect(track.stop).not.toHaveBeenCalled()
+    expect(videoTrack.stop).not.toHaveBeenCalled()
   })
 })
 
@@ -418,6 +424,44 @@ describe('device recovery uses current ownership and positive death evidence', (
     expect(recoveryTimes).toEqual([3000, 6000, 9000])
     expect(host.systemRecoverySucceeded).toHaveBeenCalledTimes(2)
     stopWatching()
+  })
+
+  it('resets retry backoff on a new session and immediately after a device change', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const attempts: number[] = []
+    let deviceChange: (() => void) | undefined
+    const host = recoveryHost({
+      isWindows: () => true,
+      recoverSystemNow: () => attempts.push(Date.now()),
+      deviceChangeTarget: () => ({
+        addEventListener: (_name: string, listener: EventListenerOrEventListenerObject) => {
+          deviceChange = listener as () => void
+        },
+        removeEventListener: vi.fn()
+      })
+    })
+    const { createListenAudioRecovery } = await import('./listen-audio-recovery')
+    const recovery = createListenAudioRecovery(() => host)
+    const stopPolling = recovery.watchSystemPermission()
+    const stopWatching = recovery.watchDeviceChanges()
+
+    await vi.advanceTimersByTimeAsync(7000)
+    expect(attempts).toEqual([3000, 6000])
+    recovery.resetSystemRetry() // new session clears the previous session's capped delay
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(attempts).toEqual([3000, 6000, 9000])
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(attempts).toEqual([3000, 6000, 9000, 12000])
+    deviceChange?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(attempts.at(-1)).toBe(12800) // the real device change resets pacing for an immediate attempt
+    await vi.advanceTimersByTimeAsync(2200)
+    expect(attempts.at(-1)).toBe(15000) // reset also makes the next watcher tick immediately eligible
+
+    stopWatching()
+    stopPolling()
   })
 
   it('fails a broker recovery closed without replacing its capture and exposes the fixed failure source', () => {
