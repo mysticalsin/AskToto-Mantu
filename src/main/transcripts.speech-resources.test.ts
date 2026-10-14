@@ -174,7 +174,7 @@ describe('actual declared speech persistence resource measurements', () => {
       expect(decodedDocument.ok).toBe(true)
       const internalDocument = decodedDocument.ok ? decodedDocument.text : ''
       const publicReopen = await readSavedMeeting(folder, basename(file))
-      expect(publicReopen).toContain('## Transcript')
+      expect(publicReopen).toContain('## Full transcript')
       const decryptReadMs = performance.now() - decryptStart
       const recallStart = performance.now()
       const recalled = await recallRead(basename(file))

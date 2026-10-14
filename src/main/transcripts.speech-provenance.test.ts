@@ -364,4 +364,21 @@ describe('actual saved final speech provenance', () => {
     expect(await searchMeetings(input.lines[0].speech!.captureId)).toEqual([])
     expect(readFileSync(file)).toEqual(before)
   })
+
+  it('retries a transient public projection refusal without caching an unavailable row', async () => {
+    const file = await saveMeeting(settings, meeting())
+    const before = readFileSync(file)
+    const project = vi.spyOn(service!, 'project').mockRejectedValueOnce(new Error('transient worker refusal'))
+    try {
+      const first = (await listMeetings()).find((row) => row.file === basename(file))
+      expect(first && 'unavailable' in first).toBe(true)
+
+      const restored = (await listMeetings()).find((row) => row.file === basename(file))
+      expect(restored?.title).toBe('Synthetic retained speech')
+      expect(restored && 'unavailable' in restored).toBe(false)
+      expect(readFileSync(file)).toEqual(before)
+    } finally {
+      project.mockRestore()
+    }
+  })
 })

@@ -102,7 +102,9 @@ export function rewriteStoredSpeechTranscriptAsync(text: string, lines: Transcri
 
 export function publicMeetingTextAsync(text: string): Promise<string> {
   if (!persistence && !text.includes('metis-speech-')) return Promise.resolve(text)
-  return requirePersistence().project(text)
+  return requirePersistence()
+    .project(text)
+    .catch(() => Promise.reject(new Error('Meeting text could not be projected safely.')))
 }
 
 export function encryptMeetingEnvelopeAsync(

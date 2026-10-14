@@ -232,7 +232,12 @@ async function readMeetingUncached(
       const stub = lockedStub(file)
       return stub ? { text: '', sum: stub } : null
     }
-    const text = await publicMeetingTextAsync(decoded.text)
+    let text: string
+    try {
+      text = await publicMeetingTextAsync(decoded.text)
+    } catch {
+      return UNREADABLE
+    }
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
       // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
