@@ -43,6 +43,26 @@ describe('bounded storage streams', () => {
     if (result.status === 'ok') expect(result.version.size).toBe(Buffer.byteLength(source))
   })
 
+  it('keeps source accounting when the sink transfers and detaches an owned chunk', async () => {
+    const root = await localRoot()
+    const source = 'detached chunks stay accounted'
+    await writeFile(join(root, 'note.md'), source)
+    const gateway = createStorageGateway({ root: () => root, detector: localDetector() })
+    let delivered = 0
+
+    const result = await gateway.stream(
+      'note.md',
+      async (chunk) => {
+        delivered += chunk.byteLength
+        structuredClone(chunk, { transfer: [chunk.buffer] })
+      },
+      { maxBytes: Buffer.byteLength(source), maxChunkBytes: 5 }
+    )
+
+    expect(result).toMatchObject({ status: 'ok', bytesRead: Buffer.byteLength(source) })
+    expect(delivered).toBe(Buffer.byteLength(source))
+  })
+
   it('does not emit content for a file above the admitted byte ceiling', async () => {
     const root = await localRoot()
     await writeFile(join(root, 'large.md'), '12345')
