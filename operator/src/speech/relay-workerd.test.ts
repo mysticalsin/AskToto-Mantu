@@ -333,24 +333,35 @@ async function signedRequest(input: {
   method: 'POST' | 'GET'
   body?: string
   additionalHeaders?: Record<string, string>
-}): Promise<Request> {
+}): Promise<{ url: string; init: { method: 'POST' | 'GET'; headers: Record<string, string>; body?: string } }> {
   const bodyText = input.body ?? ''
   const timestamp = String(input.now)
   const nonce = crypto.randomUUID()
   const signature = await hmacHex(input.license, ingestCanonical(timestamp, nonce, DEVICE, await sha256Hex(bodyText)))
-  return new Request(`https://operator.fixture${input.path}`, {
-    method: input.method,
-    headers: {
-      'content-type': 'application/json',
-      [OPERATOR_LICENSE_HEADER]: input.license,
-      [OPERATOR_HMAC_HEADERS.device]: DEVICE,
-      [OPERATOR_HMAC_HEADERS.ts]: timestamp,
-      [OPERATOR_HMAC_HEADERS.nonce]: nonce,
-      [OPERATOR_HMAC_HEADERS.sig]: signature,
-      ...input.additionalHeaders
-    },
-    ...(input.method === 'POST' ? { body: bodyText } : {})
-  })
+  return {
+    url: `https://operator.fixture${input.path}`,
+    init: {
+      method: input.method,
+      headers: {
+        'content-type': 'application/json',
+        [OPERATOR_LICENSE_HEADER]: input.license,
+        [OPERATOR_HMAC_HEADERS.device]: DEVICE,
+        [OPERATOR_HMAC_HEADERS.ts]: timestamp,
+        [OPERATOR_HMAC_HEADERS.nonce]: nonce,
+        [OPERATOR_HMAC_HEADERS.sig]: signature,
+        ...input.additionalHeaders
+      },
+      ...(input.method === 'POST' ? { body: bodyText } : {})
+    }
+  }
+}
+
+async function dispatchSignedRequest(
+  runtime: Miniflare,
+  input: Parameters<typeof signedRequest>[0]
+): Promise<Response> {
+  const signed = await signedRequest(input)
+  return runtime.dispatchFetch(signed.url, signed.init)
 }
 
 describe('speech relay on pinned hosted workerd', () => {
@@ -371,15 +382,13 @@ describe('speech relay on pinned hosted workerd', () => {
       })
 
       const capabilityBody = JSON.stringify(PROTOCOL_FIXTURE.capability.request)
-      const capability = await runtime.dispatchFetch(
-        (await signedRequest({
-          license,
-          now,
-          path: '/v1/speech/capability',
-          method: 'POST',
-          body: capabilityBody
-        })) as never
-      )
+      const capability = await dispatchSignedRequest(runtime, {
+        license,
+        now,
+        path: '/v1/speech/capability',
+        method: 'POST',
+        body: capabilityBody
+      })
       expect(capability.status).toBe(200)
       const capabilityResponse = (await capability.json()) as Record<string, unknown>
       expect(capabilityResponse).toMatchObject({
@@ -400,9 +409,13 @@ describe('speech relay on pinned hosted workerd', () => {
           expiresAt: now + 60_000
         }
       })
-      const createdResponse = await runtime.dispatchFetch(
-        (await signedRequest({ license, now, path: '/v1/speech/sessions', method: 'POST', body: createBody })) as never
-      )
+      const createdResponse = await dispatchSignedRequest(runtime, {
+        license,
+        now,
+        path: '/v1/speech/sessions',
+        method: 'POST',
+        body: createBody
+      })
       expect(createdResponse.status).toBe(200)
       const created = (await createdResponse.json()) as {
         protocolVersion: number
@@ -446,20 +459,18 @@ describe('speech relay on pinned hosted workerd', () => {
         streamEpoch: grant.streamEpoch,
         grantDigest
       })
-      const opened = await runtime.dispatchFetch(
-        (await signedRequest({
-          license,
-          now,
-          path: `/v1/speech/sessions/${created.sessionId}/tracks/microphone`,
-          method: 'GET',
-          body: descriptor,
-          additionalHeaders: {
-            upgrade: 'websocket',
-            'x-metis-speech-descriptor': descriptor,
-            'x-metis-speech-grant': grant.token
-          }
-        })) as never
-      )
+      const opened = await dispatchSignedRequest(runtime, {
+        license,
+        now,
+        path: `/v1/speech/sessions/${created.sessionId}/tracks/microphone`,
+        method: 'GET',
+        body: descriptor,
+        additionalHeaders: {
+          upgrade: 'websocket',
+          'x-metis-speech-descriptor': descriptor,
+          'x-metis-speech-grant': grant.token
+        }
+      })
       expect(opened.status).toBe(101)
       const socket = (opened as unknown as Response & { webSocket?: WorkerdWebSocket }).webSocket
       expect(socket).toBeDefined()
@@ -505,15 +516,13 @@ describe('speech relay on pinned hosted workerd', () => {
         observedGatewayAuthorization: `Bearer ${TEST_GATEWAY_TOKEN}`
       })
       const statusBody = JSON.stringify({ ...PROTOCOL_FIXTURE.status.request, sessionId: created.sessionId })
-      const status = await runtime.dispatchFetch(
-        (await signedRequest({
-          license,
-          now: Date.now(),
-          path: `/v1/speech/sessions/${created.sessionId}/status`,
-          method: 'POST',
-          body: statusBody
-        })) as never
-      )
+      const status = await dispatchSignedRequest(runtime, {
+        license,
+        now: Date.now(),
+        path: `/v1/speech/sessions/${created.sessionId}/status`,
+        method: 'POST',
+        body: statusBody
+      })
       expect(status.status).toBe(200)
       expect(await status.json()).toMatchObject({
         protocolVersion: 1,
@@ -542,15 +551,13 @@ describe('speech relay on pinned hosted workerd', () => {
           expiresAt: nextNow + 60_000
         }
       })
-      const nextResponse = await runtime.dispatchFetch(
-        (await signedRequest({
-          license,
-          now: nextNow,
-          path: '/v1/speech/sessions',
-          method: 'POST',
-          body: secondRequest
-        })) as never
-      )
+      const nextResponse = await dispatchSignedRequest(runtime, {
+        license,
+        now: nextNow,
+        path: '/v1/speech/sessions',
+        method: 'POST',
+        body: secondRequest
+      })
       expect(nextResponse.status).toBe(200)
       const nextSession = (await nextResponse.json()) as {
         sessionId: string
@@ -558,15 +565,13 @@ describe('speech relay on pinned hosted workerd', () => {
       }
       expect(nextSession.grants[0]?.streamEpoch).toBe(PROTOCOL_FIXTURE.epochProgression.sessions[1]?.streamEpoch)
       const cancelBody = JSON.stringify({ ...PROTOCOL_FIXTURE.cancel.request, sessionId: nextSession.sessionId })
-      const cancelled = await runtime.dispatchFetch(
-        (await signedRequest({
-          license,
-          now: Date.now(),
-          path: `/v1/speech/sessions/${nextSession.sessionId}/cancel`,
-          method: 'POST',
-          body: cancelBody
-        })) as never
-      )
+      const cancelled = await dispatchSignedRequest(runtime, {
+        license,
+        now: Date.now(),
+        path: `/v1/speech/sessions/${nextSession.sessionId}/cancel`,
+        method: 'POST',
+        body: cancelBody
+      })
       expect(cancelled.status).toBe(200)
       expect(await cancelled.json()).toMatchObject({
         protocolVersion: 1,
@@ -597,9 +602,13 @@ describe('speech relay on pinned hosted workerd', () => {
           expiresAt: now + 60_000
         }
       })
-      const createdResponse = await runtime.dispatchFetch(
-        (await signedRequest({ license, now, path: '/v1/speech/sessions', method: 'POST', body: createBody })) as never
-      )
+      const createdResponse = await dispatchSignedRequest(runtime, {
+        license,
+        now,
+        path: '/v1/speech/sessions',
+        method: 'POST',
+        body: createBody
+      })
       expect(createdResponse.status).toBe(200)
       const created = (await createdResponse.json()) as {
         sessionId: string
@@ -635,20 +644,18 @@ describe('speech relay on pinned hosted workerd', () => {
         streamEpoch: grant.streamEpoch,
         grantDigest
       })
-      const opened = await runtime.dispatchFetch(
-        (await signedRequest({
-          license,
-          now,
-          path: `/v1/speech/sessions/${created.sessionId}/tracks/microphone`,
-          method: 'GET',
-          body: descriptor,
-          additionalHeaders: {
-            upgrade: 'websocket',
-            'x-metis-speech-descriptor': descriptor,
-            'x-metis-speech-grant': grant.token
-          }
-        })) as never
-      )
+      const opened = await dispatchSignedRequest(runtime, {
+        license,
+        now,
+        path: `/v1/speech/sessions/${created.sessionId}/tracks/microphone`,
+        method: 'GET',
+        body: descriptor,
+        additionalHeaders: {
+          upgrade: 'websocket',
+          'x-metis-speech-descriptor': descriptor,
+          'x-metis-speech-grant': grant.token
+        }
+      })
       expect(opened.status).toBe(101)
       const socket = (opened as unknown as Response & { webSocket?: WorkerdWebSocket }).webSocket
       expect(socket).toBeDefined()
