@@ -669,7 +669,7 @@ import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
-import { CommandControl } from './command-control'
+import { CommandConfirmation } from './command-confirmation'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
 import {
@@ -1095,12 +1095,13 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
-const commandControl = new CommandControl({
+const commandControl = new CommandConfirmation({
   execute: executeDesktopAction,
-  audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata),
-  onState: (state) => {
-    if (win && !win.isDestroyed()) win.webContents.send(IPC.metisCommandState, state)
-  }
+  isAuthenticated: requireAuth,
+  hasListenEntitlement: () => operatorGate('listen').allowed,
+  getOwner: () => win,
+  isOnboardingExclusive: () => onboardingExclusiveLive() || islandResting,
+  audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata)
 })
 
 // Electron can dispatch an invoke that the retiring overlay queued just before a constructor-required
@@ -2903,9 +2904,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
-  win.on('blur', () => {
-    if (win === self) parkRightEdgeReaderOnBlur()
-  })
+  win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
+  win.on('hide', () => commandControl.onWindowHidden(win === self))
   win.on('closed', () => {
     clearCompletedOnboardingExitFallback(self)
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
@@ -4574,7 +4574,7 @@ function revokePrivilegedSurface(): void {
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   if (!requireAuth()) closeIntelligenceWindow()
 }
-setSessionClearedHandler(revokePrivilegedSurface)
+setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
 
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
 // to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
@@ -9629,7 +9629,7 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
-      initLogging() // route main-process logs to a rotated file before anything else can fail
+      commandControl.initialize(powerMonitor, initLogging, mainLog)
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
@@ -10392,47 +10392,47 @@ app.on('before-quit', (e) => {
   setTimeout(() => app.quit(), 2000)
 })
 
-app.on('will-quit', () => {
-  // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
-  invalidateCloudSttOwner()
-  // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
-  // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
-  // Own try, like every other step below: a failure here must never skip the sidecar kill.
-  try {
-    setBootPowerSaveBlock(false)
-    endBootWatch(app.getPath('userData'))
-  } catch (e) {
-    mainLog.warn('[will-quit] endBootWatch failed', e)
-  }
-  // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
-  // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
-  // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
-  // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
-  // Each cleanup step is independent (its own try), so one throw never skips the rest. Owned sidecars are
-  // already stopped: installExitPaths registered the first will-quit listener (lifecycle/exit-paths.ts).
-  if (app.isReady()) {
+app.on(
+  'will-quit',
+  commandControl.wrapLifecycleListener('app_quit', () => {
+    // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
+    invalidateCloudSttOwner()
+    // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
+    // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
+    // Own try, like every other step below: a failure here must never skip the sidecar kill.
     try {
-      globalShortcut.unregisterAll()
+      setBootPowerSaveBlock(false)
+      endBootWatch(app.getPath('userData'))
     } catch (e) {
-      mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
+      mainLog.warn('[will-quit] endBootWatch failed', e)
     }
-  }
-  if (notifTimer) clearInterval(notifTimer)
-  // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
-  // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
-  for (const t of backgroundTimers) {
+    // will-quit may fire before readiness (startup abort or automation close); globalShortcut cannot be used then.
+    // Unregister only after readiness; cleanup steps handle errors independently, after owned sidecars stop.
+    // installExitPaths in lifecycle/exit-paths.ts registers the listener that stops owned sidecars first.
+    if (app.isReady()) {
+      try {
+        globalShortcut.unregisterAll()
+      } catch (e) {
+        mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
+      }
+    }
+    if (notifTimer) clearInterval(notifTimer)
+    // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
+    // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
+    for (const t of backgroundTimers) {
+      try {
+        clearInterval(t)
+      } catch {
+        /* already cleared */
+      }
+    }
+    backgroundTimers.length = 0
+    // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
+    // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
     try {
-      clearInterval(t)
-    } catch {
-      /* already cleared */
+      observability?.shutdownClean(process.uptime())
+    } catch (e) {
+      mainLog.warn('[will-quit] observability.shutdownClean failed', e)
     }
-  }
-  backgroundTimers.length = 0
-  // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
-  // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
-  try {
-    observability?.shutdownClean(process.uptime())
-  } catch (e) {
-    mainLog.warn('[will-quit] observability.shutdownClean failed', e)
-  }
-})
+  })
+)
