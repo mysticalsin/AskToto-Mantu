@@ -13,8 +13,16 @@ class FakeChild extends EventEmitter {
 
 const electron = vi.hoisted(() => ({ utilityProcess: { fork: vi.fn() } }))
 const paths = vi.hoisted(() => ({ model: '' }))
+const runtime = vi.hoisted(() => ({ acquire: vi.fn(async () => null) }))
 
 vi.mock('electron', () => electron)
+vi.mock('./features/components/speech-pack/runtime-admission', () => ({
+  acquirePackageRuntimeLease: runtime.acquire
+}))
+vi.mock('./features/components/speech-pack/runtime-lease', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./features/components/speech-pack/runtime-lease')>()
+  return { ...original, runtimeHostEnvironment: vi.fn(() => ({})) }
+})
 vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 vi.mock('./asr-bundled-ensure', () => ({
   ASR_ASSETS_MISSING: 'assets missing',
@@ -33,6 +41,20 @@ const ResizableBuffer = ArrayBuffer as unknown as {
 let api: Api
 let child: FakeChild
 
+function runtimeLeases(): Array<{ release: ReturnType<typeof vi.fn> }> {
+  const leases: Array<{ release: ReturnType<typeof vi.fn> }> = []
+  runtime.acquire.mockImplementation(async () => {
+    const lease = {
+      entry: vi.fn(() => '/runtime/parakeet-asr-host.js'),
+      model: vi.fn(() => paths.model),
+      release: vi.fn(async () => undefined)
+    }
+    leases.push(lease)
+    return lease as never
+  })
+  return leases
+}
+
 async function waitForRequest(target: FakeChild, type: string): Promise<Record<string, unknown>> {
   for (let i = 0; i < 50; i++) {
     const found = target.postMessage.mock.calls.map(([m]) => m as Record<string, unknown>).find((m) => m.type === type)
@@ -50,6 +72,7 @@ beforeEach(async () => {
   }
   child = new FakeChild()
   electron.utilityProcess.fork.mockReset().mockReturnValue(child)
+  runtime.acquire.mockReset().mockResolvedValue(null)
   vi.resetModules()
   api = await import('./parakeet')
 })
@@ -217,6 +240,60 @@ describe('Parakeet utilityProcess client', () => {
     child.emit('message', { type: 'error', id: request.id, message: 'model construction failed' })
 
     await expect(warming).rejects.toThrow('model construction failed')
+  })
+
+  it('pins exact model files in native requests and keeps the generation lease until child exit', async () => {
+    const leases = runtimeLeases()
+    const warming = api.ensureParakeetModel()
+    const request = await waitForRequest(child, 'warmup')
+
+    expect(request.files).toEqual({
+      encoder: join(paths.model, 'encoder.int8.onnx'),
+      decoder: join(paths.model, 'decoder.int8.onnx'),
+      joiner: join(paths.model, 'joiner.int8.onnx'),
+      tokens: join(paths.model, 'tokens.txt')
+    })
+    expect(leases).toHaveLength(2)
+    child.emit('message', { type: 'result', id: request.id })
+    await warming
+    expect(leases[0].release).toHaveBeenCalledOnce()
+    expect(leases[1].release).not.toHaveBeenCalled()
+
+    let released = false
+    const release = api.parakeetRelease().then(() => {
+      released = true
+    })
+    await Promise.resolve()
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(leases[1].release).not.toHaveBeenCalled()
+    expect(released).toBe(false)
+
+    child.emit('exit', 0)
+    await release
+    expect(leases[1].release).toHaveBeenCalledOnce()
+  })
+
+  it('releases a lease acquired after cancellation without forking or posting native work', async () => {
+    let resolveLease!: (lease: unknown) => void
+    const leaseAcquiring = new Promise<unknown>((resolve) => {
+      resolveLease = resolve
+    })
+    runtime.acquire.mockImplementationOnce(() => leaseAcquiring as never)
+    const warming = api.ensureParakeetModel()
+    await vi.waitFor(() => expect(runtime.acquire).toHaveBeenCalledOnce())
+
+    await api.parakeetRelease()
+    const release = vi.fn(async () => undefined)
+    resolveLease({
+      entry: vi.fn(() => '/runtime/parakeet-asr-host.js'),
+      model: vi.fn(() => paths.model),
+      release
+    })
+
+    await expect(warming).rejects.toThrow(/cancelled/i)
+    expect(release).toHaveBeenCalledOnce()
+    expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    expect(child.postMessage).not.toHaveBeenCalled()
   })
 
   it('rejects all generation work on crash and old-child events cannot poison the restarted generation', async () => {

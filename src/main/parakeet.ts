@@ -289,6 +289,9 @@ async function requestHost(
     assertCurrentOperation(revision)
   }
   if (generation.pending.size >= MAX_PENDING_REQUESTS) throw new ParakeetBusyError()
+  if (revision !== operationRevision || generation.state !== 'active' || current !== generation) {
+    throw new Error('Parakeet processing was cancelled.')
+  }
   const id = `g${generation.number}:r${nextRequest++}`
   return new Promise<HostResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -300,8 +303,18 @@ async function requestHost(
       })
     }, DEFAULT_REQUEST_TIMEOUT_MS)
     generation.pending.set(id, { resolve, reject, timer })
+    if (revision !== operationRevision || generation.state !== 'active' || current !== generation) {
+      generation.pending.delete(id)
+      clearTimeout(timer)
+      reject(new Error('Parakeet processing was cancelled.'))
+      return
+    }
     try {
-      generation.child.postMessage({ ...requestForHost, id })
+      const hostRequest =
+        requestForHost.type === 'probe'
+          ? { ...requestForHost, id }
+          : { ...requestForHost, files: generation.modelFiles, id }
+      generation.child.postMessage(hostRequest)
     } catch (error) {
       generation.pending.delete(id)
       clearTimeout(timer)
@@ -343,9 +356,10 @@ export async function parakeetAddonError(): Promise<string | null> {
 
 /** Ensure model assets and prewarm genuine weights in the isolated helper. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
+  const revision = operationRevision
   const runtimeLease = await acquirePackageRuntimeLease('offline-asr')
   try {
-    const revision = operationRevision
+    assertCurrentOperation(revision)
     const initialDir = runtimeLease ? runtimeLease.model('asr.parakeet-tdt-0.6b-v3-int8') : await modelDir()
     assertCurrentOperation(revision)
     const initiallyReady = await parakeetFilesReady(initialDir)
