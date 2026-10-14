@@ -31,20 +31,30 @@ const snapshot = {
 describe('speech pack boundary', () => {
   it('requires an explicit action and the displayed immutable manifest identity', () => {
     for (const action of ['download', 'pause', 'cancel', 'retry', 'repair']) {
-      expect(SpeechPackActionRequestSchema.safeParse({ componentId, action, manifestIdentity: identity }).success).toBe(true)
+      expect(SpeechPackActionRequestSchema.safeParse({ componentId, action, manifestIdentity: identity }).success).toBe(
+        true
+      )
     }
     for (const value of [
       { componentId, action: 'download' },
       { componentId, action: 'download', manifestIdentity: 'latest' },
       { componentId, action: 'download', manifestIdentity: identity, url: 'https://example.com' },
       { componentId: 'unknown', action: 'download', manifestIdentity: identity }
-    ]) expect(SpeechPackActionRequestSchema.safeParse(value).success).toBe(false)
+    ])
+      expect(SpeechPackActionRequestSchema.safeParse(value).success).toBe(false)
   })
 
   it('accepts configured status and explicitly unavailable source/profile states', () => {
     expect(SpeechPackSnapshotSchema.safeParse(snapshot).success).toBe(true)
-    expect(SpeechPackSnapshotSchema.safeParse({ ...snapshot, profile: null, profileError: 'invalid-profile' }).success).toBe(true)
-    expect(SpeechPackSnapshotSchema.safeParse({ ...snapshot, components: [{ ...row, sourceHost: null, state: 'not-configured' }] }).success).toBe(true)
+    expect(
+      SpeechPackSnapshotSchema.safeParse({ ...snapshot, profile: null, profileError: 'invalid-profile' }).success
+    ).toBe(true)
+    expect(
+      SpeechPackSnapshotSchema.safeParse({
+        ...snapshot,
+        components: [{ ...row, sourceHost: null, state: 'not-configured' }]
+      }).success
+    ).toBe(true)
   })
 
   it('rejects duplicate components, wrong selected engine and contradictory profiles', () => {
@@ -58,7 +68,8 @@ describe('speech pack boundary', () => {
       { ...snapshot, components: [{ ...row, sourceHost: null }] },
       { ...snapshot, components: [{ ...row, state: 'ready' }] },
       { ...snapshot, privatePath: '/private/model' }
-    ]) expect(SpeechPackSnapshotSchema.safeParse(value).success).toBe(false)
+    ])
+      expect(SpeechPackSnapshotSchema.safeParse(value).success).toBe(false)
   })
 
   it('bounds transfer/disk counters without coercion or nonfinite values', () => {
@@ -68,15 +79,25 @@ describe('speech pack boundary', () => {
       expect(SpeechPackProgressSchema.safeParse({ ...progress, bytesDone }).success).toBe(false)
     }
     for (const freeBytes of [-1, Infinity, 1.1, '100']) {
-      expect(SpeechPackSnapshotSchema.safeParse({ ...snapshot, components: [{ ...row, freeBytes }] }).success).toBe(false)
+      expect(SpeechPackSnapshotSchema.safeParse({ ...snapshot, components: [{ ...row, freeBytes }] }).success).toBe(
+        false
+      )
     }
-    expect(SpeechPackSnapshotSchema.safeParse({ ...snapshot, progress: { ...progress, manifestIdentity: 'b'.repeat(64) } }).success).toBe(false)
+    expect(
+      SpeechPackSnapshotSchema.safeParse({ ...snapshot, progress: { ...progress, manifestIdentity: 'b'.repeat(64) } })
+        .success
+    ).toBe(false)
   })
 
   it('returns finite failures without leaking arbitrary native errors', () => {
     expect(SpeechPackActionResultSchema.safeParse({ ok: true }).success).toBe(true)
     expect(SpeechPackActionResultSchema.safeParse({ ok: false, reason: 'not-configured' }).success).toBe(true)
-    for (const value of [{ ok: false }, { ok: false, reason: 'native stack' }, { ok: true, reason: 'busy' }, { ok: false, reason: 'busy', error: '/private/path' }]) {
+    for (const value of [
+      { ok: false },
+      { ok: false, reason: 'native stack' },
+      { ok: true, reason: 'busy' },
+      { ok: false, reason: 'busy', error: '/private/path' }
+    ]) {
       expect(SpeechPackActionResultSchema.safeParse(value).success).toBe(false)
     }
   })
