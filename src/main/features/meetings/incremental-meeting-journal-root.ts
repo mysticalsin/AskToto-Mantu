@@ -4,7 +4,11 @@ import { resolve } from 'node:path'
 type RootIdentity = { path: string; dev: number; ino: number }
 
 /** Resolves admitted root aliases to one physical directory and refuses replacement or final links. */
-export function createIncrementalMeetingJournalRoot(rootInput: string, isCurrent: () => boolean) {
+export function createIncrementalMeetingJournalRoot(
+  rootInput: string,
+  isCurrent: () => boolean,
+  createIfMissing = true
+) {
   const requestedRoot = resolve(rootInput)
   let identity: RootIdentity | undefined
 
@@ -12,8 +16,10 @@ export function createIncrementalMeetingJournalRoot(rootInput: string, isCurrent
     try {
       if (!isCurrent()) return undefined
       if (!identity) {
-        await mkdir(requestedRoot, { recursive: true, mode: 0o700 })
-        if (!isCurrent()) return undefined
+        if (createIfMissing) {
+          await mkdir(requestedRoot, { recursive: true, mode: 0o700 })
+          if (!isCurrent()) return undefined
+        }
       }
       const requestedBefore = await lstat(requestedRoot)
       if (!isCurrent()) return undefined

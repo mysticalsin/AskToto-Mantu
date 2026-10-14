@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -6,6 +6,7 @@ import { app } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 import {
   PERSISTENCE_POLICY_DOMAIN,
+  classifyAdminPolicyDocument,
   evaluatePolicyHighWater,
   parseProfileCatalog,
   persistenceProfileDigest,
@@ -28,6 +29,19 @@ const runtime: RuntimeIdentity = {
 }
 
 describe('persistence resource policy contracts', () => {
+  it('distinguishes unrelated managed settings from malformed persistence policy attempts', () => {
+    expect(classifyAdminPolicyDocument({ requireAuth: true })).toEqual({ state: 'absent' })
+    expect(classifyAdminPolicyDocument({ persistenceResourcePolicy: null })).toEqual({ state: 'invalid' })
+    expect(
+      classifyAdminPolicyDocument({
+        purpose: 'persistence-resource-policy',
+        version: 1,
+        expiresAt: 'invalid'
+      })
+    ).toEqual({ state: 'invalid' })
+    expect(classifyAdminPolicyDocument({ purpose: 'other-policy', value: true })).toEqual({ state: 'absent' })
+  })
+
   it('accepts the immutable candidate catalog only when every derived ceiling is exact', () => {
     const parsed = parseProfileCatalog(catalogBytes)
     expect(parsed?.catalog.profiles[0]?.evidence).toBe('PROPOSED')
@@ -146,19 +160,21 @@ describe('persistence resource policy contracts', () => {
     )
     const keys: TrustedEd25519Keys = { byKeyId: { 'fleet-key-1': jwk.x! } }
     expect(verifySignedEnterpriseRestriction(envelope, keys)?.policy).toEqual(payload)
-    expect(
-      resolvePersistenceResourcePolicy({
-        catalogBytes,
-        sourceCommit: 'a'.repeat(40),
-        runtime,
-        mode: 'qualification',
-        signedPolicy: envelope,
-        policyKeys: keys,
-        enterpriseIssuer: 'fleet-admin',
-        enterpriseSubject: 'managed-profile',
-        now: 1_850_000_000_000
-      }).status
-    ).toBe('candidate')
+    const resolved = resolvePersistenceResourcePolicy({
+      catalogBytes,
+      sourceCommit: 'a'.repeat(40),
+      runtime,
+      mode: 'qualification',
+      signedPolicy: envelope,
+      policyKeys: keys,
+      enterpriseIssuer: 'fleet-admin',
+      enterpriseSubject: 'managed-profile',
+      now: 1_850_000_000_000
+    })
+    expect(resolved.status).toBe('candidate')
+    if (resolved.status === 'candidate') {
+      expect(resolved.profile.enterpriseWindow).toEqual({ notBefore: payload.notBefore, expiresAt: payload.expiresAt })
+    }
     expect(
       resolvePersistenceResourcePolicy({
         catalogBytes,
@@ -280,6 +296,10 @@ describe('persistence resource policy contracts', () => {
       const measuredCatalogBytes = Buffer.from(JSON.stringify(catalog))
       writeFileSync(resolve(resources, 'persistence-profiles.v1.json'), measuredCatalogBytes)
       writeFileSync(resolve(resources, 'persistence-qualification-standard.v1.json'), reportBytes)
+      vi.stubGlobal(
+        '__METIS_PERSISTENCE_CATALOG_SHA256__',
+        createHash('sha256').update(measuredCatalogBytes).digest('hex')
+      )
 
       const bundledReceipt = await readBundledPersistenceReceipt()
       expect(bundledReceipt).not.toBeNull()
@@ -304,15 +324,17 @@ describe('persistence resource policy contracts', () => {
       changedProfile.profiles[0]!.implementationSha256 = 'a'.repeat(64)
       writeFileSync(resolve(resources, 'persistence-profiles.v1.json'), JSON.stringify(changedProfile))
       const changedReceipt = await readBundledPersistenceReceipt()
+      expect(changedReceipt).toBeNull()
       expect(
         resolvePersistenceResourcePolicy({
-          bundledReceipt: changedReceipt!,
+          bundledReceipt: changedReceipt ?? undefined,
           sourceCommit: 'f'.repeat(40),
           runtime,
           mode: 'production'
         })
-      ).toEqual({ status: 'refused', code: 'QUALIFICATION_INVALID' })
+      ).toEqual({ status: 'refused', code: 'CATALOG_INVALID' })
     } finally {
+      vi.unstubAllGlobals()
       getAppPath.mockRestore()
       rmSync(directory, { recursive: true, force: true })
     }

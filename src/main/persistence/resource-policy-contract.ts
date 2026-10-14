@@ -42,6 +42,8 @@ export interface PersistenceProfile {
     exportOverlapBytes: number
     graphifyStageBytes: number
   }
+  /** Derived concurrency ceiling for descriptors held by admitted main-owned operations. */
+  maxHeldRoots: number
   derived: { physicalRecordBytes: number; canonicalTotalBytes: number; journalBytes: number; stagingBytes: number }
   qualification: { state: QualificationState; reportSha256: string | null }
 }
@@ -176,6 +178,7 @@ function validProfile(value: unknown): value is PersistenceProfile {
       'journal',
       'worker',
       'consumers',
+      'maxHeldRoots',
       'derived',
       'qualification'
     ])
@@ -231,6 +234,12 @@ function validProfile(value: unknown): value is PersistenceProfile {
     [value.derived, ['physicalRecordBytes', 'canonicalTotalBytes', 'journalBytes', 'stagingBytes']],
     [value.qualification, ['state', 'reportSha256']]
   ]
+  if (
+    !Number.isSafeInteger(value.maxHeldRoots) ||
+    (value.maxHeldRoots as number) < 1 ||
+    (value.maxHeldRoots as number) > 8
+  )
+    return false
   for (const [group, keys] of groups) if (!isRecord(group) || !exactKeys(group, keys)) return false
   for (const key of ['maxRecords', 'maxWords', 'maxFieldBytes', 'maxRecordBytes', 'maxPayloadBytes'])
     if (!positiveInt((value.speech as Record<string, unknown>)[key])) return false

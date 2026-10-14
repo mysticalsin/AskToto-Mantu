@@ -29,6 +29,7 @@ import {
   exactKeys,
   isRecord,
   parseProfileCatalog,
+  positiveInt,
   profileDigest,
   qualificationReportDigest,
   sha256,
@@ -39,6 +40,15 @@ export { parseProfileCatalog, persistenceProfileDigest, qualificationReportDiges
 
 export const PERSISTENCE_POLICY_DOMAIN = 'metis-persistence-policy/v1'
 export const MAX_SIGNED_POLICY_BYTES = 1_048_576
+declare const __METIS_PERSISTENCE_CATALOG_SHA256__: string
+
+function packagedCatalogDigest(): string {
+  try {
+    return /^[a-f0-9]{64}$/.test(__METIS_PERSISTENCE_CATALOG_SHA256__) ? __METIS_PERSISTENCE_CATALOG_SHA256__ : ''
+  } catch {
+    return ''
+  }
+}
 
 export interface RuntimeIdentity {
   platform: RuntimePlatform
@@ -139,6 +149,7 @@ export interface ResolvedPersistenceProfile extends Omit<PersistenceProfile, 'qu
   readonly allowedProviders: readonly string[] | null
   readonly publicationAllowed: boolean
   readonly retentionAllowed: boolean
+  readonly enterpriseWindow: Readonly<{ notBefore: number; expiresAt: number }> | null
 }
 
 export interface ResourcePolicyInput {
@@ -280,6 +291,20 @@ export function verifySignedEnterpriseRestriction(
   return { policy: value, payloadSha256: sha256(canonical(value)) }
 }
 
+export function classifyAdminPolicyDocument(value: unknown): {
+  state: 'present' | 'absent' | 'invalid'
+  policy?: EnterpriseRestriction
+  payloadSha256?: string
+} {
+  const nested =
+    isRecord(value) && Object.hasOwn(value, 'persistenceResourcePolicy') ? value.persistenceResourcePolicy : undefined
+  const attemptedStandalone = isRecord(value) && value.purpose === 'persistence-resource-policy'
+  if (nested === undefined && !attemptedStandalone) return { state: 'absent' }
+  const candidate = nested === undefined ? value : nested
+  if (!validRestriction(candidate)) return { state: 'invalid' }
+  return { state: 'present', policy: Object.freeze(candidate), payloadSha256: sha256(canonical(candidate)) }
+}
+
 export async function readAdminPolicyReceipt(): Promise<AdminPolicyReceipt> {
   // The existing admin-file reader verifies Windows owner/DACL trust. On POSIX that API relies on
   // callers using the fixed root-owned path but does not inspect ownership, modes, or ancestors.
@@ -293,10 +318,9 @@ export async function readAdminPolicyReceipt(): Promise<AdminPolicyReceipt> {
   if (result.status !== 'present') {
     contents = { state: result.status }
   } else {
-    const parsed = strictJson(result.bytes, MAX_SIGNED_POLICY_BYTES)
-    contents = validRestriction(parsed)
-      ? { state: 'present', policy: Object.freeze(parsed), payloadSha256: sha256(canonical(parsed)) }
-      : { state: 'invalid' }
+    // General managed settings may omit this dedicated policy. Once its purpose is claimed, malformed
+    // standalone or nested policy remains invalid and cannot downgrade to absence.
+    contents = classifyAdminPolicyDocument(strictJson(result.bytes, MAX_SIGNED_POLICY_BYTES))
   }
   const receipt = Object.freeze(Object.create(null)) as AdminPolicyReceipt
   adminReceiptContents.set(receipt, contents)
@@ -314,6 +338,7 @@ export async function readBundledPersistenceReceipt(): Promise<BundledPersistenc
     )
     if (catalog.status !== 'present') return null
     const catalogBytes = new Uint8Array(catalog.bytes)
+    if (sha256(catalogBytes) !== packagedCatalogDigest()) return null
     let reportBytes: Uint8Array | undefined
     try {
       const report = await readManagedPolicyAuthorityFile(
@@ -524,8 +549,11 @@ function freezeResolved(
     catalogSha256,
     allowedProviders: restriction ? Object.freeze([...restriction.providers]) : null,
     publicationAllowed: restriction?.publication ?? true,
-    retentionAllowed: restriction?.retention ?? true
-  })
+    retentionAllowed: restriction?.retention ?? true,
+    enterpriseWindow: restriction
+      ? Object.freeze({ notBefore: restriction.notBefore, expiresAt: restriction.expiresAt })
+      : null
+  }) as unknown as ResolvedPersistenceProfile
 }
 export function resolvePersistenceResourcePolicy(input: ResourcePolicyInput): ResourcePolicyResult {
   const bundled = input.bundledReceipt ? bundledReceiptContents.get(input.bundledReceipt) : undefined

@@ -50,6 +50,10 @@ export interface IncrementalMeetingJournalFileStorageOptions {
   maxPageRecords: number
   maxPageBytes: number
   isCurrent: () => boolean
+  /** Binds asynchronous root admission/publication to the original held root and optional writer FD. */
+  assertPhysicalCurrent?: () => Promise<void>
+  /** Read-only reopen must not create a missing core directory. */
+  createRootIfMissing?: boolean
   gateway: StorageGateway
 }
 
@@ -136,14 +140,30 @@ export function createIncrementalMeetingJournalFileStorage(
   const identityIndexName = (hash: string): string => `identity-${hash}.v1`
   const indexName = (revision: number): string => `index-${String(revision).padStart(12, '0')}.v1`
   const pathFor = (name: string): string => join(root, name)
-  const resolveCurrentRoot = createIncrementalMeetingJournalRoot(rootInputPath, baseCurrent)
+  const resolveCurrentRoot = createIncrementalMeetingJournalRoot(
+    rootInputPath,
+    baseCurrent,
+    options.createRootIfMissing ?? true
+  )
   async function canonicalMutationKey(): Promise<string | undefined> {
     if (!(await rootAligned())) return undefined
     return `${root}\0${meetingId}`
   }
   async function rootAligned(): Promise<boolean> {
+    try {
+      await options.assertPhysicalCurrent?.()
+    } catch {
+      return false
+    }
+    if (!baseCurrent()) return false
     const path = await resolveCurrentRoot()
     if (!path || !baseCurrent()) return false
+    try {
+      await options.assertPhysicalCurrent?.()
+    } catch {
+      return false
+    }
+    if (!baseCurrent()) return false
     // Read-only adapters also admit the canonical namespace; the helper retains its physical owner.
     root = path
     manifestPath = join(root, manifestName)
