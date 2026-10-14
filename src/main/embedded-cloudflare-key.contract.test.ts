@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const STORE = readFileSync(join(__dirname, 'store.ts'), 'utf8')
 const SEED = readFileSync(join(__dirname, 'embedded-cloudflare-key.ts'), 'utf8')
+const PROFILE_FILES = readFileSync(join(__dirname, 'profile-recovery-files.ts'), 'utf8')
 
 /**
  * MQA-260 — the profile-repair button produced a profile that could never hold the shipped key.
@@ -30,16 +31,16 @@ describe('MQA-260 — a rebuilt profile must be able to seed the embedded key ag
   it('clears the one-shot seed marker when the encrypted profile is archived', () => {
     const marker = "'.cloudflare-key-seeded'"
     expect(
-      STORE.includes(marker),
-      `${marker} must be in PROFILE_RECOVERY_FIXED_FILES, or a repaired profile inherits "already seeded" and can never hold the shipped key`
+      PROFILE_FILES.includes(marker) && STORE.includes('isProfileRecoveryFileName(entry.name)'),
+      `${marker} must be in the shared profile-recovery predicate used by archive and fresh-profile checks`
     ).toBe(true)
   })
 
-  it('keeps the marker inside PROFILE_RECOVERY_FIXED_FILES specifically', () => {
+  it('keeps the marker inside the profile-recovery fixed-name inventory', () => {
     // Guards against the string surviving only in a comment after a refactor.
-    const start = STORE.indexOf('const PROFILE_RECOVERY_FIXED_FILES')
+    const start = PROFILE_FILES.indexOf('const PROFILE_RECOVERY_FIXED_FILES')
     expect(start).toBeGreaterThan(-1)
-    const block = STORE.slice(start, STORE.indexOf('])', start))
+    const block = PROFILE_FILES.slice(start, PROFILE_FILES.indexOf('])', start))
     expect(block).toContain("'.cloudflare-key-seeded'")
   })
 

@@ -1,6 +1,12 @@
 import type { Settings } from '@shared/ipc'
+import type { LocalSpeechPackPolicy } from '@shared/model-policy'
 
 export type SettingsObservation = { settings: Settings; readable: boolean; epoch: number }
+export type SettingsPolicyAuthoritySnapshot = SettingsObservation & {
+  allowedProviders: string[] | null
+  localSpeechPack: LocalSpeechPackPolicy | null
+  lockedKeys: string[]
+}
 type Listener = (observation: SettingsObservation) => void
 let observer: Listener | null = null
 let current: Settings | null = null

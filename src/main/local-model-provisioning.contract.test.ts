@@ -1,8 +1,8 @@
 /**
  * local-model-provisioning.contract.test.ts — MQA-186.
  *
- * Optional weights are fetched automatically only after Local AI opt-in. Explicit Download/Retry
- * remains available, with managed policy and the downloader's RAM/disk/integrity gates enforced.
+ * Optional weights are fetched only after an explicit Download/Retry request. Local AI opt-in and
+ * startup are readiness-only; package/runtime and managed policy gates still precede any transfer.
  *
  * Source-contract, following App.local-gates.test.ts / screen-preprocess-wiring.contract.test.ts: there
  * is no harness that boots main/index.ts, but the wiring is structural and can be asserted directly. The
@@ -24,32 +24,29 @@ function sliceBetween(text: string, start: string, end: string): string {
   return text.slice(a, b)
 }
 
-describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a dead end', () => {
-  it('boot uses the opt-in provisioning gate without upgrading the selected model', () => {
+describe('MQA-186 — optional weights require an explicit request', () => {
+  it('boot never provisions weights or upgrades the selected model', () => {
     const boot = sliceBetween(src, 'app.whenReady().then(async () => {', 'app.setAppUserModelId')
-    expect(boot).toMatch(/provisionLocalModel\(getSettings\(\)\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
+    expect(boot).not.toMatch(/provisionLocalModel|ensureLocalModel\(/)
     expect(boot).not.toMatch(/bestModelForMachine|setSettings\(\{ localLlm/)
-    expect(boot).not.toMatch(/ensureLocalModel\([^)]*\.id\)/)
+    expect(boot).toContain('localModelDownloaded(cur.localLlm.modelId)')
   })
 
-  it('Settings/onboarding can re-arm the fetch without toggling Local AI', () => {
+  it('the explicit request is package and policy gated before provisioning', () => {
     expect(src).toMatch(/ipcMain\.handle\(IPC\.localModelsEnsure/)
-    expect(src).toMatch(/provisionLocalModel\(getSettings\(\)\.localLlm, allowed, ensureLocalModel, 'explicit'\)/)
+    const handler = sliceBetween(src, 'ipcMain.handle(IPC.localModelsEnsure', '// MQA-247')
+    expect(handler).toMatch(/contract\.profile === 'lean'/)
+    expect(handler).toMatch(/getPublishedSettingsObservation\(\)\?\.readable !== true/)
+    expect(handler).toMatch(/provisionLocalModel\(admittedModel, allowed, ensureLocalModel, 'explicit'\)/)
   })
 
-  it('turning Local AI on still re-arms the fetch as a second chance after a failed boot download', () => {
-    // Opted-in boot provisions on open; OFF→ON also provisions without requiring an app restart.
+  it('changing Local AI settings never starts a download', () => {
     const handler = sliceBetween(
       src,
       'const next = setSettingsWithSpeakerPolicy(p)',
       'ipcMain.handle(IPC.settingsRecoverProfile'
     )
-    expect(handler).toMatch(
-      /next\.localLlm\.enabled && \(!cur\.localLlm\.enabled \|\| cur\.localLlm\.modelId !== next\.localLlm\.modelId\)/
-    )
-    expect(handler).toMatch(/provisionLocalModel\(next\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
-    // Same MQA-178 reason as boot: the background screen reader's eligibility is only re-evaluated on a
-    // refresh, and this download lands long after the settings save returns.
+    expect(handler).not.toMatch(/provisionLocalModel|ensureLocalModel\(/)
     expect(handler).toMatch(/refreshScreenPreprocess\(\)/)
   })
 
