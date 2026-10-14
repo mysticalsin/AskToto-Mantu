@@ -29,10 +29,15 @@ export type RuntimeOwnedTreeEntry =
       readonly identity: RuntimeOwnedTreeIdentity
       readonly children: readonly string[]
     }
-  | { readonly path: string; readonly kind: 'file'; readonly identity: RuntimeOwnedTreeIdentity }
+  | {
+      readonly path: string
+      readonly kind: 'file'
+      readonly identity: RuntimeOwnedTreeIdentity
+      readonly sha256: string
+    }
 
 export interface RuntimeOwnedTreeManifest {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   readonly root: RuntimeOwnedTreeIdentity
   readonly rootParent: RuntimeOwnedTreeIdentity
   readonly entries: readonly RuntimeOwnedTreeEntry[]
@@ -40,7 +45,7 @@ export interface RuntimeOwnedTreeManifest {
 
 export interface RuntimeOwnedTreeRecordBinding {
   readonly purpose: 'metis-speech-pack-owner-key/v1'
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   readonly profileBinding: string
   readonly principalBinding: string
   readonly rootBinding: string
@@ -63,7 +68,7 @@ export interface RuntimeOwnedTreeRecordIssuer {
 export interface RuntimeOwnedTreeFileSink {
   write(chunk: Uint8Array): Promise<void>
   sync(): Promise<void>
-  close(): Promise<Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }>>
+  close(): Promise<Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }> & { readonly byteLength: number }>
 }
 
 export interface RuntimeOwnedTreeWriter {
@@ -104,7 +109,7 @@ export function createRuntimeOwnedTreeRecordIssuer(
 ): RuntimeOwnedTreeRecordIssuer {
   if (
     binding.purpose !== 'metis-speech-pack-owner-key/v1' ||
-    binding.schemaVersion !== 1 ||
+    binding.schemaVersion !== 2 ||
     !binding.profileBinding ||
     !binding.principalBinding ||
     !binding.rootBinding ||
@@ -192,7 +197,8 @@ export function ensureContained(rootPath: string, relativePath: string): string 
 
 export function makeRuntimeOwnedTreeManifest(
   rootPath: string,
-  snapshot: RuntimePhysicalSnapshotInput
+  snapshot: RuntimePhysicalSnapshotInput,
+  fileDigests: ReadonlyMap<string, string>
 ): RuntimeOwnedTreeManifest {
   const root = snapshot.nodes.find((node) => node.path === rootPath)?.version
   const rootParent = snapshot.nodes.find((node) => node.path === dirname(rootPath))?.version
@@ -212,11 +218,14 @@ export function makeRuntimeOwnedTreeManifest(
   }
   for (const node of snapshot.nodes) {
     if (!node.path.startsWith(`${rootPath}${sep}`) || node.version.isDirectory()) continue
+    const sha256 = fileDigests.get(node.path)
+    if (!sha256 || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('RUNTIME_TREE_DIGEST_MISSING')
     entries.push(
       Object.freeze({
         path: node.path.slice(rootLength).split(sep).join('/'),
         kind: 'file',
-        identity: identityRecord(node.version)
+        identity: identityRecord(node.version),
+        sha256
       })
     )
   }
@@ -231,7 +240,7 @@ export function makeRuntimeOwnedTreeManifest(
   )
   if (pathBytes > MAX_TREE_PATH_BYTES) throw new Error('RUNTIME_TREE_LIMIT')
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     root: identityRecord(root),
     rootParent: identityRecord(rootParent),
     entries: Object.freeze(entries)
@@ -241,7 +250,7 @@ export function makeRuntimeOwnedTreeManifest(
 function copyAndValidateManifest(manifest: RuntimeOwnedTreeManifest): RuntimeOwnedTreeManifest {
   if (
     !manifest ||
-    manifest.schemaVersion !== 1 ||
+    manifest.schemaVersion !== 2 ||
     !manifest.root ||
     !manifest.rootParent ||
     !Array.isArray(manifest.entries)
@@ -278,7 +287,12 @@ function copyAndValidateManifest(manifest: RuntimeOwnedTreeManifest): RuntimeOwn
         })
       )
     } else if (entry.kind === 'file') {
-      entries.push(Object.freeze({ path: entry.path, kind: 'file', identity: copyIdentity(entry.identity) }))
+      if (typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+        throw new Error('RUNTIME_TREE_RECORD_INVALID')
+      }
+      entries.push(
+        Object.freeze({ path: entry.path, kind: 'file', identity: copyIdentity(entry.identity), sha256: entry.sha256 })
+      )
     } else {
       throw new Error('RUNTIME_TREE_RECORD_INVALID')
     }
@@ -295,7 +309,7 @@ function copyAndValidateManifest(manifest: RuntimeOwnedTreeManifest): RuntimeOwn
     }
   }
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     root: copyIdentity(manifest.root),
     rootParent: copyIdentity(manifest.rootParent),
     entries: Object.freeze(entries)

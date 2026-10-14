@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  createRuntimeOwnedTreeRecordIssuer,
   disposeRuntimeOwnedTreeReceipt,
   prepareRuntimeOwnedTreeCreation,
   prepareRuntimeOwnedTreeReopen
 } from './runtime-owned-tree'
+import { createRuntimeOwnedTreeRecordIssuer } from './runtime-owned-tree-record'
 import type { RuntimePhysicalSnapshotInput } from './runtime-owned-files'
 
 const roots: string[] = []
 const binding = {
   purpose: 'metis-speech-pack-owner-key/v1' as const,
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   profileBinding: 'profile-a',
   principalBinding: 'principal-a',
   rootBinding: 'speech-pack-root-a'
@@ -39,7 +39,9 @@ describe('runtime owned tree capabilities', () => {
   it('seals exact created membership after bounded writes and receipt-backed file promotion', async () => {
     const value = await fixture()
     const writer = await prepareRuntimeOwnedTreeCreation({
-      ...value,
+      rootPath: value.root,
+      parentPath: value.parent,
+      parentSnapshot: value.parentSnapshot,
       assertCurrentSync: () => undefined
     })
     try {
@@ -48,7 +50,9 @@ describe('runtime owned tree capabilities', () => {
       const sink = await writer.createFile('model/model.partial', 32)
       await sink.write(Buffer.from('model-bytes'))
       await sink.sync()
-      await sink.close()
+      const closed = await sink.close()
+      expect(closed.sha256).toBe('357e5d6fafa34d27360fec24b4326d3534905e33c6acdee60198fb078b7b79e5')
+      expect(closed.byteLength).toBe(11)
       const promoted = await writer.renameFile('model/model.partial', 'model/model.gguf', () => undefined)
       expect(promoted.status).toBe('moved')
       const receipt = await writer.seal()
@@ -65,7 +69,9 @@ describe('runtime owned tree capabilities', () => {
   it('reopens only the authenticated exact member set and preserves foreign additions', async () => {
     const value = await fixture()
     const writer = await prepareRuntimeOwnedTreeCreation({
-      ...value,
+      rootPath: value.root,
+      parentPath: value.parent,
+      parentSnapshot: value.parentSnapshot,
       assertCurrentSync: () => undefined
     })
     const issuer = createRuntimeOwnedTreeRecordIssuer({ ...binding, rootPath: value.root })

@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises'
 import { sameRuntimeFileVersion } from './runtime-file-version'
 
 export const MAX_RUNTIME_EXCLUSIVE_FILE_BYTES = 100_000_000_000
-const MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES = 1024 * 1024
+export const MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES = 1024 * 1024
 
 export type RuntimeExclusiveFileReceipt =
   | { readonly status: 'created'; readonly path: string; readonly version: BigIntStats }

@@ -1,6 +1,8 @@
+import { createHash, type Hash } from 'node:crypto'
 import { type BigIntStats } from 'node:fs'
 import { lstat, opendir } from 'node:fs/promises'
 import { dirname, resolve, sep } from 'node:path'
+import { MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES } from './runtime-exclusive-file-sink'
 import {
   createRuntimeDirectoryAfterAdmission,
   createRuntimeExclusiveFileAfterAdmission,
@@ -33,7 +35,6 @@ import {
   type RuntimeOwnedTreeReceipt
 } from './runtime-owned-tree-record'
 import { registerRuntimeOwnedTreeReceipt, runtimeOwnedTreeReceipts } from './runtime-owned-tree-state'
-export { createRuntimeOwnedTreeRecordIssuer } from './runtime-owned-tree-record'
 export type {
   AuthenticatedRuntimeOwnedTreeRecord,
   RuntimeOwnedTreeAuthenticatedInput,
@@ -59,6 +60,7 @@ interface TreeFile {
   readonly path: string
   version: BigIntStats | null
   sink: RuntimeExclusiveFileSink | null
+  sha256: string | null
 }
 
 interface TreeWriterState {
@@ -276,34 +278,62 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         const file: TreeFile = {
           path,
           version: creation.receipt.status === 'created' ? creation.receipt.version : null,
-          sink: creation.sink
+          sink: creation.sink,
+          sha256: null
         }
         state.files.set(path, file)
         if (creation.parentVersion)
           updateDirectory(state, parentPath, creation.parentVersion, creation.parentChildren ?? [])
+        const hash: Hash = createHash('sha256')
+        let closePromise: Promise<
+          Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }> & { readonly byteLength: number }
+        > | null = null
         const wrapped: RuntimeOwnedTreeFileSink = Object.freeze({
           write(chunk: Uint8Array): Promise<void> {
             if (!state.accepting || state.disposed) return Promise.reject(new Error('RUNTIME_TREE_WRITER_CLOSED'))
-            return trackOperation(state, creation.sink.write(chunk))
+            if (chunk.byteLength > MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES)
+              return Promise.reject(new Error('RUNTIME_EXCLUSIVE_FILE_LIMIT'))
+            const ownedChunk = Buffer.from(chunk)
+            return trackOperation(
+              state,
+              creation.sink.write(ownedChunk).then(() => {
+                hash.update(ownedChunk)
+              })
+            )
           },
           sync(): Promise<void> {
             if (!state.accepting || state.disposed) return Promise.reject(new Error('RUNTIME_TREE_WRITER_CLOSED'))
             return trackOperation(state, creation.sink.sync())
           },
-          async close(): Promise<RuntimeOwnedTreeEntry & { readonly kind: 'file' }> {
-            const receipt = await trackOperation(state, creation.sink.close())
-            state.sinks.delete(wrapped)
-            if (receipt.status !== 'created') throw new Error('RUNTIME_TREE_FILE_UNCONFIRMED')
-            file.version = receipt.version
-            file.sink = null
-            return Object.freeze({
-              path: receipt.path
-                .slice(rootPath.length + 1)
-                .split(sep)
-                .join('/'),
-              kind: 'file',
-              identity: identityRecord(receipt.version)
-            })
+          close(): Promise<
+            Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }> & { readonly byteLength: number }
+          > {
+            if (closePromise) return closePromise
+            closePromise = trackOperation(
+              state,
+              (async () => {
+                const receipt = await creation.sink.close()
+                state.sinks.delete(wrapped)
+                if (receipt.status !== 'created') throw new Error('RUNTIME_TREE_FILE_UNCONFIRMED')
+                file.version = receipt.version
+                file.sink = null
+                const sha256 = hash.digest('hex')
+                file.sha256 = sha256
+                const byteLength = Number(receipt.version.size)
+                if (!Number.isSafeInteger(byteLength)) throw new Error('RUNTIME_TREE_FILE_SIZE_INVALID')
+                return Object.freeze({
+                  path: receipt.path
+                    .slice(rootPath.length + 1)
+                    .split(sep)
+                    .join('/'),
+                  kind: 'file',
+                  identity: identityRecord(receipt.version),
+                  sha256,
+                  byteLength
+                })
+              })()
+            )
+            return closePromise
           }
         })
         state.sinks.add(wrapped)
@@ -323,6 +353,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         const destinationParent = state.directories.get(dirname(destination))
         if (
           !file?.version ||
+          !file.sha256 ||
           file.sink ||
           !destinationParent ||
           state.files.has(destination) ||
@@ -394,14 +425,15 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           }
           replaceTrackedNode(state, source, destination, movedVersion)
           state.files.delete(source)
-          state.files.set(destination, { path: destination, version: movedVersion, sink: null })
+          state.files.set(destination, { path: destination, version: movedVersion, sink: null, sha256: file.sha256 })
           const entry = Object.freeze({
             path: destination
               .slice(rootPath.length + 1)
               .split(sep)
               .join('/'),
             kind: 'file' as const,
-            identity: identityRecord(movedVersion)
+            identity: identityRecord(movedVersion),
+            sha256: file.sha256
           })
           return { status: 'moved', entry }
         } catch {
@@ -544,6 +576,13 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
       }
       assertTreeReady(state)
       const snapshot = trackedSnapshot(state)
+      const fileDigests = new Map(
+        [...state.files.values()].map((file) => {
+          if (!file.sha256) throw new Error('RUNTIME_TREE_DIGEST_MISSING')
+          return [file.path, file.sha256] as const
+        })
+      )
+      const manifest = makeRuntimeOwnedTreeManifest(rootPath, snapshot, fileDigests)
       const physical = await prepareRuntimePhysicalAdmission(snapshot)
       try {
         input.assertCurrentSync()
@@ -551,7 +590,6 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         await physical.dispose()
         throw error
       }
-      const manifest = makeRuntimeOwnedTreeManifest(rootPath, snapshot)
       const receipt = Object.freeze({ manifest }) as RuntimeOwnedTreeReceipt
       registerRuntimeOwnedTreeReceipt(receipt, {
         rootPath,

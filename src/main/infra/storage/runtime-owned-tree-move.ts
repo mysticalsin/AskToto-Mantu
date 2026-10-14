@@ -1,6 +1,6 @@
 import type { BigIntStats } from 'node:fs'
 import { lstat, opendir } from 'node:fs/promises'
-import { dirname, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import {
   prepareRuntimePhysicalAdmission,
   renameRuntimeDirectorySyncAfterAdmission,
@@ -232,7 +232,12 @@ async function captureMovedTree(
     const roots = admitted.roots.filter((root) => root.path !== oldRoot && root.path !== newRoot)
     roots.push({ path: newRoot, identity: nodes.find((node) => node.path === newRoot)!.version })
     const snapshot: RuntimePhysicalSnapshotInput = { roots, nodes, directories }
-    return { snapshot, manifest: makeRuntimeOwnedTreeManifest(newRoot, snapshot) }
+    const fileDigests = new Map(
+      source.manifest.entries.flatMap((entry) =>
+        entry.kind === 'file' ? [[pathMap(join(oldRoot, entry.path)), entry.sha256] as const] : []
+      )
+    )
+    return { snapshot, manifest: makeRuntimeOwnedTreeManifest(newRoot, snapshot, fileDigests) }
   } catch {
     return null
   }
