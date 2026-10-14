@@ -85,6 +85,7 @@ describe('incremental meeting command contract', () => {
     const speech = {
       captureId: '98d9177d-95a1-49f2-8433-22ba7308dc08',
       captureGeneration: 7,
+      streamGeneration: 7,
       track: 'microphone',
       epoch: 11,
       segmentIndex: 4
@@ -132,6 +133,15 @@ describe('incremental meeting command contract', () => {
           ...cloudRecord,
           identity: { ...cloudRecord.identity, segmentIndex: 5 }
         }
+      })
+    ).toEqual({ ok: false, reason: 'INVALID_COMMAND' })
+    expect(
+      parseIncrementalMeetingCommand({
+        protocol: 1,
+        operation: 'append-record',
+        meetingId,
+        expectedRevision: 0,
+        record: { ...cloudRecord, identity: { ...cloudRecord.identity, streamGeneration: 8 } }
       })
     ).toEqual({ ok: false, reason: 'INVALID_COMMAND' })
   })

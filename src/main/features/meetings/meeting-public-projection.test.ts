@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ContentVersion, FileClass, StorageGateway, StorageStreamResult } from '../../infra/storage/gateway'
+
+const projectionControl = vi.hoisted(() => ({
+  override: undefined as ((text: string) => Promise<string>) | undefined
+}))
+
+vi.mock('./meeting-speech', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./meeting-speech')>()
+  return {
+    ...original,
+    publicMeetingTextAsync: (text: string) =>
+      projectionControl.override ? projectionControl.override(text) : original.publicMeetingTextAsync(text)
+  }
+})
+
 import {
   configureMeetingPublicProjectionReader,
   createMeetingPublicProjectionReader,
@@ -89,7 +103,10 @@ function reader(
 }
 
 describe('owned meeting public projection reader', () => {
-  afterEach(() => configureMeetingPublicProjectionReader(undefined))
+  afterEach(() => {
+    projectionControl.override = undefined
+    configureMeetingPublicProjectionReader(undefined)
+  })
 
   it('keeps the process singleton closed until root installs an authority reader', async () => {
     configureMeetingPublicProjectionReader(undefined)
@@ -206,5 +223,55 @@ describe('owned meeting public projection reader', () => {
       metadata: { confidentialDisposition: 'confidential', publicBytes: 0 }
     })
     expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('refuses after a held worker projection resolves following cancellation', async () => {
+    const service = reader()
+    const admitted = await service.admit(owner, [candidate])
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    let started!: () => void
+    let release!: (value: string) => void
+    const entered = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const held = new Promise<string>((resolve) => {
+      release = resolve
+    })
+    projectionControl.override = async () => {
+      started()
+      return held
+    }
+    const controller = new AbortController()
+    const sink = vi.fn()
+    const pending = service.project(owner, admitted.handles[0], sink, controller.signal)
+    await entered
+    controller.abort()
+    release('ordinary md')
+
+    expect(await pending).toEqual({ ok: false, reason: 'UNAVAILABLE' })
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the final sink aborts while applying the last public chunk', async () => {
+    const service = reader({ source: new TextEncoder().encode('last') })
+    const admitted = await service.admit(owner, [{ ...candidate, expectedVersion: { ...version, size: 4 } }])
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    const controller = new AbortController()
+    const chunks: Uint8Array[] = []
+
+    const result = await service.project(
+      owner,
+      admitted.handles[0],
+      (chunk) => {
+        chunks.push(chunk)
+        controller.abort()
+      },
+      controller.signal
+    )
+
+    expect(result).toEqual({ ok: false, reason: 'UNAVAILABLE' })
+    expect(chunks).toHaveLength(1)
   })
 })

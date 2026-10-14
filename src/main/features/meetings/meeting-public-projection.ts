@@ -339,6 +339,7 @@ export function createMeetingPublicProjectionReader(
       } finally {
         source.fill(0)
       }
+      if (signal?.aborted) return { ok: false, reason: 'UNAVAILABLE' }
       if (!current(ownerToken, authority)) return { ok: false, reason: 'STALE_OWNER' }
       if (Buffer.byteLength(decoded, 'utf8') > authority.limits.maxSourceBytes) return { ok: false, reason: 'LIMIT' }
       let publicText: string
@@ -347,13 +348,15 @@ export function createMeetingPublicProjectionReader(
       } catch {
         return { ok: false, reason: 'UNAVAILABLE' }
       }
+      if (signal?.aborted) return { ok: false, reason: 'UNAVAILABLE' }
       if (!current(ownerToken, authority)) return { ok: false, reason: 'STALE_OWNER' }
       const publicBytes = Buffer.byteLength(publicText, 'utf8')
       if (publicBytes > authority.limits.maxPublicBytes) return { ok: false, reason: 'LIMIT' }
       if (candidate.sourceKind === 'meeting' && !parseMeetingDocument(publicText))
         return { ok: false, reason: 'UNAVAILABLE' }
       const confidentialDisposition = hasMeetingFlag(publicText, 'confidential') ? 'confidential' : 'clear'
-      if (confidentialDisposition === 'confidential')
+      if (confidentialDisposition === 'confidential') {
+        if (signal?.aborted) return { ok: false, reason: 'UNAVAILABLE' }
         return {
           ok: true,
           metadata: {
@@ -365,6 +368,7 @@ export function createMeetingPublicProjectionReader(
             publicBytes: 0
           }
         }
+      }
       let output: Uint8Array
       try {
         output = new TextEncoder().encode(publicText)
@@ -381,10 +385,12 @@ export function createMeetingPublicProjectionReader(
           } catch {
             return { ok: false, reason: 'UNAVAILABLE' }
           }
+          if (signal?.aborted) return { ok: false, reason: 'UNAVAILABLE' }
         }
       } finally {
         output.fill(0)
       }
+      if (signal?.aborted) return { ok: false, reason: 'UNAVAILABLE' }
       if (!current(ownerToken, authority)) return { ok: false, reason: 'STALE_OWNER' }
       return {
         ok: true,

@@ -278,6 +278,15 @@ function settle<T>(pending: Promise<T>): Promise<Settled<T>> {
   return pending.then((value): Settled<T> => ({ status: 'ok', value }), failureOf)
 }
 
+/** Rechecks cancellation at the sink's queued invocation, after the read has settled. */
+export function invokeStorageSinkWhenActive(
+  sink: (chunk: Uint8Array, signal: AbortSignal) => void | Promise<void>,
+  chunk: Uint8Array,
+  signal: AbortSignal
+): Promise<void> {
+  return Promise.resolve().then(() => (signal.aborted ? undefined : sink(chunk, signal)))
+}
+
 function reportProgress(onProgress: ReadOptions['onProgress'], progress: HydrationProgress): void {
   try {
     onProgress?.(progress)
@@ -579,11 +588,7 @@ export function createStorageGateway({
     fs,
     contentDeadlineMs: CONTENT_DEADLINE_MS,
     untilSink: async (sink, chunk, request) =>
-      untilEnded(
-        settle(Promise.resolve().then(() => (request.signal.aborted ? undefined : sink(chunk, request.signal)))),
-        request,
-        'running'
-      )
+      untilEnded(settle(invokeStorageSinkWhenActive(sink, chunk, request.signal)), request, 'running')
   })
 
   return {

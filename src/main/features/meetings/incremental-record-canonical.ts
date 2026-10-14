@@ -33,6 +33,11 @@ function utf8(value: string): number {
   return Buffer.byteLength(value, 'utf8')
 }
 
+function displayClock(timestamp: number): string {
+  const date = new Date(timestamp)
+  return [date.getHours(), date.getMinutes(), date.getSeconds()].map((part) => String(part).padStart(2, '0')).join(':')
+}
+
 function json(value: unknown): string {
   const serialized = JSON.stringify(value)
   if (typeof serialized !== 'string') throw new Error(INVALID_RECORD)
@@ -109,8 +114,10 @@ export function canonicalizeIncrementalMeetingRecord(
     const wordCount = record.line.speech?.words?.length ?? 0
     if (wordCount > limits.maxWords) return { ok: false, reason: RESOURCE_LIMIT }
     const canonicalJson = json(record)
+    const linePayloadBytes = utf8(json(record.line))
     const canonicalBuffer = Buffer.from(canonicalJson, 'utf8')
-    if (canonicalBuffer.byteLength > maxInputBytes) return { ok: false, reason: RESOURCE_LIMIT }
+    if (linePayloadBytes > limits.maxRecordBytes || canonicalBuffer.byteLength > maxInputBytes)
+      return { ok: false, reason: RESOURCE_LIMIT }
     const canonicalBytes = Uint8Array.from(canonicalBuffer)
     return {
       ok: true,
@@ -119,7 +126,9 @@ export function canonicalizeIncrementalMeetingRecord(
         sha256: createHash('sha256').update(canonicalBuffer).digest('hex'),
         canonicalBytes,
         canonicalByteLength: canonicalBytes.byteLength,
-        wordCount
+        wordCount,
+        linePayloadBytes,
+        clock: displayClock(record.line.t)
       }
     }
   } catch (error) {

@@ -85,6 +85,44 @@ function requestInputByteLength(
   return size
 }
 
+function canonicalResultByteLength(value: unknown): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return Number.POSITIVE_INFINITY
+  const canonical = value as {
+    identityKey?: unknown
+    sha256?: unknown
+    canonicalBytes?: unknown
+    canonicalByteLength?: unknown
+    wordCount?: unknown
+    linePayloadBytes?: unknown
+    clock?: unknown
+  }
+  const keys = Object.keys(value).sort().join(',')
+  if (
+    keys !== 'canonicalByteLength,canonicalBytes,clock,identityKey,linePayloadBytes,sha256,wordCount' ||
+    typeof canonical.identityKey !== 'string' ||
+    typeof canonical.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(canonical.sha256) ||
+    typeof canonical.clock !== 'string' ||
+    !Number.isSafeInteger(canonical.wordCount) ||
+    !Number.isSafeInteger(canonical.linePayloadBytes) ||
+    !(canonical.canonicalBytes instanceof Uint8Array) ||
+    canonical.canonicalBytes.byteOffset !== 0 ||
+    canonical.canonicalBytes.byteLength !== canonical.canonicalBytes.buffer.byteLength ||
+    canonical.canonicalByteLength !== canonical.canonicalBytes.byteLength
+  )
+    return Number.POSITIVE_INFINITY
+  const metadataBytes =
+    Buffer.byteLength(canonical.identityKey, 'utf8') +
+    Buffer.byteLength(canonical.sha256, 'utf8') +
+    Buffer.byteLength(canonical.clock, 'utf8') +
+    String(canonical.wordCount).length +
+    String(canonical.linePayloadBytes).length +
+    String(canonical.canonicalByteLength).length +
+    32
+  const size = canonical.canonicalBytes.byteLength + metadataBytes
+  return Number.isSafeInteger(size) ? size : Number.POSITIVE_INFINITY
+}
+
 function policyValid(policy: MeetingSpeechRequest['policy']): boolean {
   const keys = ['maxFieldBytes', 'maxPayloadBytes', 'maxRecordBytes', 'maxRecords', 'maxWords']
   return Boolean(
@@ -280,14 +318,15 @@ export function processMeetingSpeechRequest(raw: unknown): MeetingSpeechReply | 
       envelope.kLocal = rewrapInput.kLocal
       value = Uint8Array.from(Buffer.from(JSON.stringify(envelope), 'utf8'))
     }
-    if (
-      (value instanceof Uint8Array
-        ? value.byteLength
-        : typeof value === 'string'
-          ? Buffer.byteLength(value, 'utf8')
-          : requestInputByteLength(operation, value, policy.limits, policy.maxOutputBytes)) > policy.maxOutputBytes
-    )
-      return failure('RESOURCE_LIMIT')
+    const outputBytes =
+      operation === 'canonical-record'
+        ? canonicalResultByteLength(value)
+        : value instanceof Uint8Array
+          ? value.byteLength
+          : typeof value === 'string'
+            ? Buffer.byteLength(value, 'utf8')
+            : requestInputByteLength(operation, value, policy.limits, policy.maxOutputBytes)
+    if (outputBytes > policy.maxOutputBytes) return failure('RESOURCE_LIMIT')
     return { protocol: 1, id, generation, result: { ok: true, value } }
   } catch {
     return failure('CODEC_FAILURE')

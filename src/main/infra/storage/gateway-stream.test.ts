@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, open, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ContentPresence, DatalessDetector } from './dataless'
-import { createStorageGateway } from './gateway'
+import { createStorageGateway, invokeStorageSinkWhenActive, type StorageFs } from './gateway'
+import { openRegularRead } from './gateway-stream'
 
 const roots: string[] = []
 
@@ -82,6 +83,108 @@ describe('bounded storage streams', () => {
 
     expect(result).toMatchObject({ status: 'unavailable', code: 'SIZE_LIMIT' })
     expect(chunks).toEqual([])
+  })
+
+  it('does not deliver the physical max-plus-one byte when a source grows after admission', async () => {
+    const root = await localRoot()
+    const file = join(root, 'growing.md')
+    await writeFile(file, '1234')
+    const fs: StorageFs = {
+      readdir,
+      readFile,
+      realpath,
+      stat,
+      lstat: (path) =>
+        import('node:fs/promises').then(({ lstat }) =>
+          lstat(path).then((value) => ({ isSymbolicLink: value.isSymbolicLink() }))
+        ),
+      openRead: async (path) => {
+        const opened = await openRegularRead(path)
+        await appendFile(path, '5')
+        return opened
+      }
+    }
+    const gateway = createStorageGateway({ root: () => root, detector: localDetector(), fs })
+    const chunks: Uint8Array[] = []
+
+    const result = await gateway.stream(
+      'growing.md',
+      async (chunk) => {
+        chunks.push(chunk)
+      },
+      {
+        maxBytes: 4,
+        maxChunkBytes: 2
+      }
+    )
+
+    expect(result).toMatchObject({ status: 'unavailable', code: 'SIZE_LIMIT' })
+    expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8')).toBe('1234')
+  })
+
+  it('refuses sink delivery when the signal is already aborted during read settlement', async () => {
+    const root = await localRoot()
+    await writeFile(join(root, 'note.md'), 'bounded')
+    const controller = new AbortController()
+    const fs: StorageFs = {
+      readdir,
+      readFile,
+      realpath,
+      stat,
+      lstat: (path) =>
+        import('node:fs/promises').then(({ lstat }) =>
+          lstat(path).then((value) => ({ isSymbolicLink: value.isSymbolicLink() }))
+        ),
+      openRead: async (path) => {
+        const opened = await openRegularRead(path)
+        let aborted = false
+        return {
+          stats: opened.stats,
+          handle: {
+            read: async (buffer, offset, length, position) => {
+              const result = await opened.handle.read(buffer, offset, length, position)
+              if (!aborted && result.bytesRead > 0) {
+                aborted = true
+                controller.abort()
+              }
+              return result
+            },
+            stat: () => opened.handle.stat(),
+            close: () => opened.handle.close()
+          }
+        }
+      }
+    }
+    const gateway = createStorageGateway({ root: () => root, detector: localDetector(), fs })
+    let sinkCalls = 0
+
+    const result = await gateway.stream(
+      'note.md',
+      async () => {
+        sinkCalls += 1
+      },
+      { maxBytes: 16, maxChunkBytes: 4, signal: controller.signal }
+    )
+
+    expect(result).toEqual({ status: 'aborted' })
+    expect(sinkCalls).toBe(0)
+  })
+
+  it('checks abort after read settlement but before the queued sink thunk runs', async () => {
+    const controller = new AbortController()
+    const read = Promise.resolve(new Uint8Array([1, 2, 3]))
+    const chunk = await read
+    let sinkCalls = 0
+    const scheduled = invokeStorageSinkWhenActive(
+      () => {
+        sinkCalls += 1
+      },
+      chunk,
+      controller.signal
+    )
+    controller.abort()
+    await scheduled
+    expect(sinkCalls).toBe(0)
   })
 
   it('keeps the admitted byte and chunk limits when the caller mutates its options', async () => {

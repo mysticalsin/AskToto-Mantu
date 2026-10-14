@@ -52,6 +52,7 @@ describe('incremental record canonicalization', () => {
         kind: 'cloud',
         captureId: '98d9177d-95a1-49f2-8433-22ba7308dc08',
         captureGeneration: 7,
+        streamGeneration: 7,
         track: 'microphone',
         epoch: 11,
         segmentIndex: 4

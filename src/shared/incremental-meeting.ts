@@ -33,6 +33,7 @@ export const IncrementalMeetingIdentitySchema = z.discriminatedUnion('kind', [
       kind: z.literal('cloud'),
       captureId: UuidSchema,
       captureGeneration: z.number().int().positive().safe(),
+      streamGeneration: z.number().int().positive().safe(),
       track: TrackSchema,
       epoch: z.number().int().positive().safe(),
       segmentIndex: z.number().int().positive().safe()
@@ -65,6 +66,7 @@ export const IncrementalMeetingRecordSchema = z
         speech.segment.final !== true ||
         speech.captureId !== record.identity.captureId ||
         speech.captureGeneration !== record.identity.captureGeneration ||
+        speech.segment.stream.generation !== record.identity.streamGeneration ||
         speech.segment.stream.track !== record.identity.track ||
         speech.segment.stream.epoch !== record.identity.epoch ||
         speech.segment.index !== record.identity.segmentIndex ||
@@ -174,6 +176,8 @@ export type CanonicalIncrementalRecord = {
   canonicalBytes: Uint8Array
   canonicalByteLength: number
   wordCount: number
+  linePayloadBytes: number
+  clock: string
 }
 
 export type IncrementalMeetingCommandParse =

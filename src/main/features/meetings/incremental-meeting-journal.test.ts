@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import type { CanonicalIncrementalRecord } from '@shared/incremental-meeting'
 import {
@@ -7,9 +8,17 @@ import {
   type IncrementalJournalSnapshot,
   type IncrementalMeetingJournalStorage
 } from './incremental-meeting-journal'
+import { issueIncrementalRecordReceipt, type IncrementalRecordReceipt } from './incremental-record-receipt'
 
 const meetingId = '64d5a603-0b18-4da5-8a3f-4a42c9d22031'
-const recordJson = new TextEncoder().encode('{"identityKey":"local-a","sha256":"a"}')
+const localRecordId = '6370e1cc-43f4-4976-a912-04d0c3ca8f9f'
+const recordJson = new TextEncoder().encode(
+  JSON.stringify({
+    identity: { kind: 'local', recordId: localRecordId },
+    source: 'local-final',
+    line: { speaker: 'you', text: 'one', t: 1_700_000_000_000 }
+  })
+)
 const limits: SpeechProvenanceLimits & { maxJournalBytes: number } = {
   maxRecords: 3,
   maxWords: 4,
@@ -32,19 +41,71 @@ function snapshot(patch: Partial<IncrementalJournalSnapshot> = {}): IncrementalJ
   }
 }
 
-function canonical(
-  patch: Partial<CanonicalIncrementalRecord> & { identityKey?: string; sha256?: string } = {}
-): CanonicalIncrementalRecord {
-  const canonicalBytes = Uint8Array.from([1, 2, 3])
+function canonical(text = 'one', wordCount = 0): CanonicalIncrementalRecord {
+  const captureId = '98d9177d-95a1-49f2-8433-22ba7308dc08'
+  const identity = wordCount
+    ? {
+        kind: 'cloud',
+        captureId,
+        captureGeneration: 7,
+        streamGeneration: 9,
+        track: 'microphone',
+        epoch: 11,
+        segmentIndex: 4
+      }
+    : { kind: 'local', recordId: localRecordId }
+  const line = wordCount
+    ? {
+        speaker: 'them',
+        text,
+        t: 1_700_000_000_000,
+        speech: {
+          type: 'segment',
+          captureId,
+          captureGeneration: 7,
+          sequence: 1,
+          segment: {
+            stream: { generation: 9, track: 'microphone', epoch: 11 },
+            engine: 'deepgram-nova3',
+            index: 4,
+            revision: 1,
+            startMs: 0,
+            endMs: 500,
+            final: true,
+            text
+          },
+          words: Array.from({ length: wordCount }, (_, index) => ({
+            text: 'word',
+            startMs: index,
+            endMs: index + 1
+          }))
+        }
+      }
+    : { speaker: 'you', text, t: 1_700_000_000_000 }
+  const record = {
+    identity,
+    source: wordCount ? 'cloud-final' : 'local-final',
+    line
+  }
+  const canonicalText = JSON.stringify(record).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')
+  const canonicalBytes = new TextEncoder().encode(canonicalText)
   return {
-    identityKey: 'local-a',
-    sha256: 'a'.repeat(64),
+    identityKey: JSON.stringify(record.identity),
+    sha256: createHash('sha256').update(canonicalBytes).digest('hex'),
     canonicalBytes,
     canonicalByteLength: canonicalBytes.byteLength,
-    wordCount: 1,
-    linePayloadBytes: 100,
-    clock: '12:34:56',
-    ...patch
+    wordCount,
+    linePayloadBytes: Buffer.byteLength(
+      JSON.stringify(record.line).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e'),
+      'utf8'
+    ),
+    clock: [
+      new Date(record.line.t).getHours(),
+      new Date(record.line.t).getMinutes(),
+      new Date(record.line.t).getSeconds()
+    ]
+      .map((part) => String(part).padStart(2, '0'))
+      .join(':')
   }
 }
 
@@ -54,6 +115,7 @@ function fixture(
     limits?: SpeechProvenanceLimits & { maxJournalBytes: number }
     current?: () => boolean
     canonical?: () => Promise<CanonicalIncrementalRecord>
+    structuralResult?: boolean
     lookup?: IncrementalMeetingJournalStorage['lookupIdentity']
     commit?: IncrementalMeetingJournalStorage['commitAppend']
   } = {}
@@ -79,12 +141,19 @@ function fixture(
         return { status: 'committed', snapshot: currentSnapshot }
       })
   }
+  const isCurrent = options.current ?? (() => true)
   return {
     appender: createIncrementalMeetingAppender({
       meetingId,
       readLimits: () => options.limits ?? limits,
-      isCurrent: options.current ?? (() => true),
-      canonicalizeRecord: options.canonical ?? (async () => canonical()),
+      isCurrent,
+      canonicalizeRecord: async (_recordJson, binding) => {
+        const value = await (options.canonical ?? (async () => canonical()))()
+        if (options.structuralResult) return value as unknown as IncrementalRecordReceipt
+        const receipt = issueIncrementalRecordReceipt(value, { ...binding, isCurrent })
+        if (!receipt) throw new Error('test worker canonicalization should produce a valid receipt')
+        return receipt
+      },
       storage
     }),
     storage,
@@ -108,19 +177,28 @@ describe('bounded incremental meeting append journal', () => {
   it('commits one record and advances only a matching durable frontier', async () => {
     const { appender, readSnapshot, commitCalls } = fixture()
     await expect(appender.append(recordJson, 0)).resolves.toEqual({ status: 'durable', revision: 1, duplicate: false })
-    expect(readSnapshot()).toMatchObject({ acceptedRevision: 1, durableRevision: 1, recordCount: 1, wordCount: 1 })
+    expect(readSnapshot()).toMatchObject({ acceptedRevision: 1, durableRevision: 1, recordCount: 1, wordCount: 0 })
     expect(commitCalls()).toBe(1)
   })
 
+  it('refuses a structurally copied worker record before storage commit', async () => {
+    const copied = fixture({ structuralResult: true })
+    await expect(copied.appender.append(recordJson, 0)).resolves.toEqual({
+      status: 'refused',
+      reason: 'INVALID_RECORD'
+    })
+    expect(copied.commitCalls()).toBe(0)
+  })
+
   it('treats an exact identity-and-digest retry as idempotent and refuses conflicting bytes', async () => {
-    const existing = { status: 'found' as const, sha256: 'a'.repeat(64), revision: 1 }
+    const existing = { status: 'found' as const, sha256: canonical().sha256, revision: 1 }
     const exact = fixture({
       initial: snapshot({
         acceptedRevision: 1,
         durableRevision: 1,
         recordCount: 1,
-        wordCount: 1,
-        linePayloadBytes: 100,
+        wordCount: 0,
+        linePayloadBytes: canonical().linePayloadBytes,
         storedBytes: 3
       }),
       lookup: async () => existing
@@ -132,7 +210,17 @@ describe('bounded incremental meeting append journal', () => {
     })
     expect(exact.commitCalls()).toBe(0)
 
-    const conflict = fixture({ lookup: async () => ({ ...existing, sha256: 'b'.repeat(64) }) })
+    const conflict = fixture({
+      initial: snapshot({
+        acceptedRevision: 1,
+        durableRevision: 1,
+        recordCount: 1,
+        wordCount: 0,
+        linePayloadBytes: canonical().linePayloadBytes,
+        storedBytes: 3
+      }),
+      lookup: async () => ({ ...existing, sha256: 'b'.repeat(64) })
+    })
     await expect(conflict.appender.append(recordJson, 0)).resolves.toEqual({
       status: 'refused',
       reason: 'CONFLICTING_IDENTITY'
@@ -149,48 +237,54 @@ describe('bounded incremental meeting append journal', () => {
         acceptedRevision: limits.maxRecords,
         durableRevision: limits.maxRecords,
         recordCount: limits.maxRecords,
-        linePayloadBytes: limits.maxRecords * 100,
-        storedBytes: limits.maxRecords * 100
+        wordCount: 0,
+        linePayloadBytes: limits.maxRecords * canonical().linePayloadBytes,
+        storedBytes: limits.maxRecords * canonical().canonicalByteLength
       })
     })
-    await expect(count.appender.append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+    await expect(count.appender.append(recordJson, limits.maxRecords)).resolves.toEqual({
+      status: 'refused',
+      reason: 'LIMIT'
+    })
 
     const words = fixture({
+      canonical: async () => canonical('word', 1),
       initial: snapshot({
         acceptedRevision: 1,
         durableRevision: 1,
         recordCount: 1,
         wordCount: limits.maxWords,
-        linePayloadBytes: 100,
-        storedBytes: 100
+        linePayloadBytes: canonical().linePayloadBytes,
+        storedBytes: canonical().canonicalByteLength
       })
     })
-    await expect(words.appender.append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+    await expect(words.appender.append(recordJson, 1)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
 
-    const payloadLimits = { ...limits, maxPayloadBytes: 3_000 }
+    const payloadLimits = { ...limits, maxPayloadBytes: 250 }
     const payload = fixture({
       limits: payloadLimits,
       initial: snapshot({
         acceptedRevision: 1,
         durableRevision: 1,
         recordCount: 1,
-        linePayloadBytes: 2_048,
-        storedBytes: 2_048
-      }),
-      canonical: async () => canonical({ linePayloadBytes: 2_048 })
+        wordCount: 0,
+        linePayloadBytes: canonical().linePayloadBytes,
+        storedBytes: canonical().canonicalByteLength
+      })
     })
-    await expect(payload.appender.append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+    await expect(payload.appender.append(recordJson, 1)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
 
     const disk = fixture({
       initial: snapshot({
         acceptedRevision: 1,
         durableRevision: 1,
         recordCount: 1,
-        linePayloadBytes: 100,
-        storedBytes: limits.maxJournalBytes - 1
+        wordCount: 0,
+        linePayloadBytes: canonical().linePayloadBytes,
+        storedBytes: limits.maxJournalBytes - canonical().canonicalByteLength + 1
       })
     })
-    await expect(disk.appender.append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+    await expect(disk.appender.append(recordJson, 1)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
     for (const result of [count, words, payload, disk]) expect(result.commitCalls()).toBe(0)
   })
 

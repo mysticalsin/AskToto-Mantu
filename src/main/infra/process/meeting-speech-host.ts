@@ -5,6 +5,11 @@ import type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-spee
 import type { TranscriptLine } from '@shared/transcript-line'
 import { IncrementalMeetingIdentitySchema, type CanonicalIncrementalRecord } from '@shared/incremental-meeting'
 import {
+  issueIncrementalRecordReceipt,
+  type IncrementalRecordReceipt,
+  type IncrementalRecordReceiptBinding
+} from '../../features/meetings/incremental-record-receipt'
+import {
   isMeetingSpeechReply,
   type MeetingSpeechFailureCode,
   type MeetingSpeechOperation,
@@ -72,7 +77,10 @@ export interface MeetingSpeechPersistenceService {
   ): Promise<Buffer>
   decryptEnvelopeV2(envelopeJson: Uint8Array, contentKey: Uint8Array, kLocal: string): Promise<string>
   rewrapEnvelopeV2(envelopeJson: Uint8Array, kLocal: string): Promise<Buffer>
-  canonicalizeIncrementalRecord(recordJson: Uint8Array): Promise<CanonicalIncrementalRecord>
+  canonicalizeIncrementalRecord(
+    recordJson: Uint8Array,
+    binding: IncrementalRecordReceiptBinding
+  ): Promise<IncrementalRecordReceipt>
   /** Rejects pending callers immediately and waits for an invalidated worker's exact exit. */
   invalidateCurrent(): Promise<void>
   /** Refuses future work and waits for the child to report its own exit. */
@@ -203,7 +211,8 @@ function validValue(
   operation: MeetingSpeechOperation,
   value: unknown,
   maxOutputBytes: number,
-  maxWords: number
+  maxWords: number,
+  maxRecordBytes: number
 ): boolean {
   if (operation === 'render' || operation === 'project' || operation === 'decrypt-v2')
     return typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= maxOutputBytes
@@ -217,14 +226,20 @@ function validValue(
     if (!value || typeof value !== 'object') return false
     const canonical = value as Partial<CanonicalIncrementalRecord>
     if (
-      Object.keys(value).sort().join(',') !== 'canonicalByteLength,canonicalBytes,identityKey,sha256,wordCount' ||
+      Object.keys(value).sort().join(',') !==
+        'canonicalByteLength,canonicalBytes,clock,identityKey,linePayloadBytes,sha256,wordCount' ||
       typeof canonical.identityKey !== 'string' ||
       canonical.identityKey.length > maxOutputBytes ||
       typeof canonical.sha256 !== 'string' ||
       !/^[a-f0-9]{64}$/.test(canonical.sha256) ||
+      typeof canonical.clock !== 'string' ||
+      !/^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(canonical.clock) ||
       !Number.isSafeInteger(canonical.wordCount) ||
       canonical.wordCount! < 0 ||
       canonical.wordCount! > maxWords ||
+      !Number.isSafeInteger(canonical.linePayloadBytes) ||
+      canonical.linePayloadBytes! <= 0 ||
+      canonical.linePayloadBytes! > maxRecordBytes ||
       !Number.isSafeInteger(canonical.canonicalByteLength) ||
       !(canonical.canonicalBytes instanceof Uint8Array) ||
       canonical.canonicalBytes.byteOffset !== 0 ||
@@ -348,7 +363,8 @@ export function createMeetingSpeechPersistenceService(
           completed.request.operation,
           reply.result.value,
           completed.request.policy.maxOutputBytes,
-          completed.request.policy.limits.maxWords
+          completed.request.policy.limits.maxWords,
+          completed.request.policy.limits.maxRecordBytes
         )
       ) {
         wipeCanonicalOutput()
@@ -538,7 +554,14 @@ export function createMeetingSpeechPersistenceService(
     const snapshotMs = performance.now() - snapshotStartedAt
     let snapshotBytes: number
     try {
-      snapshotBytes = estimatedBytes(inputSnapshot, policy.maxInputBytes, policy.limits)
+      if (operation === 'canonical-record') {
+        const recordJson =
+          inputSnapshot && typeof inputSnapshot === 'object'
+            ? (inputSnapshot as { recordJson?: unknown }).recordJson
+            : null
+        const byteLength = exactOwnedUint8Length(recordJson)
+        snapshotBytes = byteLength === null ? policy.maxInputBytes + 1 : byteLength
+      } else snapshotBytes = estimatedBytes(inputSnapshot, policy.maxInputBytes, policy.limits)
     } catch {
       for (const buffer of transfers) new Uint8Array(buffer).fill(0)
       return Promise.reject(failure('RESOURCE_LIMIT'))
@@ -590,10 +613,42 @@ export function createMeetingSpeechPersistenceService(
     decode: (text) => submit('decode', text),
     rewrite: (text, lines) => submit('rewrite', { text, lines }),
     project: (text) => submit('project', text),
-    canonicalizeIncrementalRecord(recordJson) {
+    canonicalizeIncrementalRecord(recordJson, binding) {
       if (!options.isCurrent) return Promise.reject(failure('UNCONFIGURED'))
       if (exactOwnedUint8Length(recordJson) === null) return Promise.reject(failure('RESOURCE_LIMIT'))
-      return submit<CanonicalIncrementalRecord>('canonical-record', { recordJson }, ['recordJson'])
+      if (binding.meetingId.length > 64 || !options.isCurrent()) return Promise.reject(failure('CANCELLED'))
+      const capturedPolicy = readPolicy()
+      if (!capturedPolicy) return Promise.reject(failure('UNCONFIGURED'))
+      if (
+        Object.keys(binding.limits).sort().join(',') !== Object.keys(capturedPolicy.limits).sort().join(',') ||
+        Object.keys(binding.limits).some(
+          (key) =>
+            binding.limits[key as keyof SpeechProvenanceLimits] !==
+            capturedPolicy.limits[key as keyof SpeechProvenanceLimits]
+        )
+      )
+        return Promise.reject(failure('CANCELLED'))
+      return submit<CanonicalIncrementalRecord>(
+        'canonical-record',
+        { recordJson },
+        ['recordJson'],
+        capturedPolicy
+      ).then((canonical) => {
+        const currentPolicy = readPolicy()
+        if (
+          !options.isCurrent?.() ||
+          !currentPolicy ||
+          Object.keys(capturedPolicy.limits).some(
+            (key) =>
+              currentPolicy.limits[key as keyof SpeechProvenanceLimits] !==
+              capturedPolicy.limits[key as keyof SpeechProvenanceLimits]
+          )
+        )
+          throw failure('CANCELLED')
+        const receipt = issueIncrementalRecordReceipt(canonical, binding)
+        if (!receipt) throw failure('WORKER_FAILED')
+        return receipt
+      })
     },
     encryptEnvelopeV2(content, contentKey, iv, kLocal, kEscrow) {
       const ownedKey = Uint8Array.from(contentKey)

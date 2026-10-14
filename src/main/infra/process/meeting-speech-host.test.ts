@@ -4,6 +4,10 @@ import type { TranscriptLine } from '@shared/transcript-line'
 import type { MeetingSpeechRequest } from './meeting-speech-protocol'
 import { createMeetingSpeechPersistenceService, type MeetingSpeechWorkerPort } from './meeting-speech-host'
 import { processMeetingSpeechRequest } from '../../meeting-speech-worker'
+import {
+  consumeIncrementalRecordReceipt,
+  type IncrementalRecordReceiptBinding
+} from '../../features/meetings/incremental-record-receipt'
 
 const policy = {
   limits: { maxRecords: 4, maxWords: 4, maxFieldBytes: 1024, maxRecordBytes: 4096, maxPayloadBytes: 8192 },
@@ -11,6 +15,16 @@ const policy = {
   maxOutputBytes: 16_384,
   operationDeadlineMs: 2_000,
   shutdownDeadlineMs: 2_000
+}
+
+function receiptBinding(meetingId = '64d5a603-0b18-4da5-8a3f-4a42c9d22031'): IncrementalRecordReceiptBinding {
+  return {
+    ownerToken: Object.freeze(Object.create(null) as object),
+    meetingId,
+    isCurrent: () => true,
+    limits: policy.limits,
+    maxCanonicalBytes: policy.maxOutputBytes
+  }
 }
 
 class TestWorker extends EventEmitter implements MeetingSpeechWorkerPort {
@@ -31,6 +45,26 @@ class TestWorker extends EventEmitter implements MeetingSpeechWorkerPort {
   async terminate(): Promise<number> {
     this.emit('exit', 1)
     return 1
+  }
+}
+
+class TamperedCanonicalWorker extends TestWorker {
+  readonly mutation: 'metadata' | 'bytes'
+  constructor(mutation: 'metadata' | 'bytes') {
+    super()
+    this.mutation = mutation
+  }
+  override postMessage(request: MeetingSpeechRequest): void {
+    this.requests.push(request)
+    const reply = processMeetingSpeechRequest(request)
+    const result = reply?.result as
+      | { ok?: boolean; value?: { canonicalBytes?: Uint8Array; sha256?: string } }
+      | undefined
+    if (result?.ok && result.value) {
+      if (this.mutation === 'metadata') result.value.sha256 = '0'.repeat(64)
+      else if (result.value.canonicalBytes) result.value.canonicalBytes[0] ^= 1
+    }
+    if (reply) this.emit('message', reply)
   }
 }
 
@@ -106,12 +140,6 @@ describe('meeting speech persistence worker host', () => {
 
   it('canonicalizes one retained record in the worker under an explicit current owner', async () => {
     const worker = new TestWorker()
-    const service = createMeetingSpeechPersistenceService({
-      readLimits: () => policy.limits,
-      readBounds: () => policy,
-      isCurrent: () => true,
-      workerFactory: () => worker
-    })
     const recordBytes = new TextEncoder().encode(
       JSON.stringify({
         identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
@@ -119,7 +147,19 @@ describe('meeting speech persistence worker host', () => {
         line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
       })
     )
-    const result = await service.canonicalizeIncrementalRecord(recordBytes)
+    const service = createMeetingSpeechPersistenceService({
+      readLimits: () => policy.limits,
+      readBounds: () => ({ ...policy, maxInputBytes: recordBytes.byteLength }),
+      isCurrent: () => true,
+      workerFactory: () => worker
+    })
+    const binding = receiptBinding()
+    const receipt = await service.canonicalizeIncrementalRecord(recordBytes, binding)
+    expect(consumeIncrementalRecordReceipt({ ...receipt }, binding)).toBeNull()
+    const result = consumeIncrementalRecordReceipt(receipt, binding)
+    expect(consumeIncrementalRecordReceipt(receipt, binding)).toBeNull()
+    expect(result).not.toBeNull()
+    if (!result) return
 
     expect(worker.requests).toHaveLength(1)
     expect(worker.requests[0].operation).toBe('canonical-record')
@@ -128,6 +168,73 @@ describe('meeting speech persistence worker host', () => {
     expect(result.canonicalBytes.byteOffset).toBe(0)
     expect(result.canonicalBytes.byteLength).toBe(result.canonicalByteLength)
     await service.dispose()
+  })
+
+  it.each(['metadata', 'bytes'] as const)('refuses a worker receipt with tampered %s', async (mutation) => {
+    const worker = new TamperedCanonicalWorker(mutation)
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'tamper', t: 1_700_000_000_000 }
+      })
+    )
+    const service = createMeetingSpeechPersistenceService({
+      readLimits: () => policy.limits,
+      readBounds: () => ({ ...policy, maxInputBytes: bytes.byteLength }),
+      isCurrent: () => true,
+      workerFactory: () => worker
+    })
+    await expect(service.canonicalizeIncrementalRecord(bytes, receiptBinding())).rejects.toMatchObject({
+      name: 'WORKER_FAILED'
+    })
+    await service.dispose()
+  })
+
+  it('invalidates an unconsumed worker receipt when its bound owner retires', async () => {
+    let current = true
+    const isCurrent = () => current
+    const worker = new TestWorker()
+    const service = createMeetingSpeechPersistenceService({
+      readLimits: () => policy.limits,
+      readBounds: () => ({ ...policy, maxInputBytes: 16_384 }),
+      isCurrent,
+      workerFactory: () => worker
+    })
+    const binding = { ...receiptBinding(), isCurrent }
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'owned', t: 1_700_000_000_000 }
+      })
+    )
+    const receipt = await service.canonicalizeIncrementalRecord(bytes, binding)
+    current = false
+    expect(consumeIncrementalRecordReceipt(receipt, binding)).toBeNull()
+    await service.dispose()
+  })
+
+  it('accepts a valid canonical worker result at the exact admitted record-byte ceiling', () => {
+    const recordJson = new TextEncoder().encode(
+      JSON.stringify({
+        identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
+      })
+    )
+    const request: MeetingSpeechRequest = {
+      protocol: 1,
+      id: 1,
+      generation: 1,
+      operation: 'canonical-record',
+      policy: { ...policy, maxInputBytes: recordJson.byteLength },
+      input: { recordJson }
+    }
+
+    const reply = processMeetingSpeechRequest(request)
+
+    expect(reply).toMatchObject({ result: { ok: true } })
   })
 
   it('keeps incremental record canonicalization unavailable without a configured current-owner predicate', async () => {
@@ -148,7 +255,8 @@ describe('meeting speech persistence worker host', () => {
             source: 'local-final',
             line: { speaker: 'you', text: 'closed', t: 1_700_000_000_000 }
           })
-        )
+        ),
+        receiptBinding()
       )
     ).rejects.toMatchObject({ name: 'UNCONFIGURED' })
     expect(starts).toBe(0)
@@ -164,7 +272,9 @@ describe('meeting speech persistence worker host', () => {
       workerFactory: () => worker
     })
     const borrowed = new TextEncoder().encode('x{"record":true}').subarray(1)
-    await expect(service.canonicalizeIncrementalRecord(borrowed)).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
+    await expect(service.canonicalizeIncrementalRecord(borrowed, receiptBinding())).rejects.toMatchObject({
+      name: 'RESOURCE_LIMIT'
+    })
     expect(worker.requests).toHaveLength(0)
     await service.dispose()
   })
