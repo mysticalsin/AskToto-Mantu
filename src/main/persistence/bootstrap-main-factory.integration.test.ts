@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { app } from 'electron'
@@ -21,7 +21,6 @@ import {
   parseProfileCatalog,
   toMeetingSpeechPolicy,
   type AdminPolicyReceipt,
-  type BundledPersistenceReceipt,
   type ResolvedPersistenceProfile,
   type ResourcePolicyInput,
   type ResourcePolicyResult
@@ -54,7 +53,9 @@ class SourceWorker extends EventEmitter implements MeetingSpeechWorkerPort {
 
 const fixtureSourceCommit = 'a'.repeat(40)
 
-function sourceFixture(): MainPersistenceBootstrapSourceFixture {
+function sourceFixture(
+  readBundledReceipt: MainPersistenceBootstrapSourceFixture['readBundledReceipt'] = async () => null
+): MainPersistenceBootstrapSourceFixture {
   const catalogBytes = new Uint8Array(readFileSync(resolve(process.cwd(), 'resources/persistence-profiles.v1.json')))
   const parsed = parseProfileCatalog(catalogBytes)
   if (!parsed) throw new Error('Synthetic source fixture catalog failed its real parser')
@@ -85,7 +86,7 @@ function sourceFixture(): MainPersistenceBootstrapSourceFixture {
   })
   const resolver = (_input: ResourcePolicyInput): ResourcePolicyResult => result
   return {
-    readBundledReceipt: async (): Promise<BundledPersistenceReceipt | null> => null,
+    readBundledReceipt,
     readAdminReceipt: async (): Promise<AdminPolicyReceipt> => Object.freeze({}) as AdminPolicyReceipt,
     sourceCommit: () => fixtureSourceCommit,
     resolvePolicy: resolver,
@@ -124,6 +125,42 @@ function configureMainProcess(userData: string): void {
 }
 
 describe('main persistence factory source fixture', () => {
+  it('holds new root/key admission while policy publication is pending', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-persistence-pending-'))
+    configureMainProcess(userData)
+    const settings = { ...DEFAULT_SETTINGS, encryptTranscripts: true }
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    publishSettingsSnapshot(settings, true)
+    let releaseRead!: () => void
+    const readGate = new Promise<void>((resolveRead) => {
+      releaseRead = resolveRead
+    })
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(async () => {
+        await readGate
+        return null
+      })
+    )
+    try {
+      const pendingPrime = bootstrap.prime()
+      await expect(bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1268')).rejects.toThrow(
+        'Retained persistence is not qualified for this runtime'
+      )
+      expect(readdirSync(userData)).toEqual([])
+      releaseRead()
+      await expect(pendingPrime).resolves.toMatchObject({ status: 'ready' })
+      const journal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1268')
+      await journal.settle()
+    } finally {
+      releaseRead()
+      await bootstrap.dispose()
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
   it('creates, appends, settles, freshly reopens read-only, and preserves the durable frontier', async () => {
     const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-persistence-factory-'))
     configureMainProcess(userData)
