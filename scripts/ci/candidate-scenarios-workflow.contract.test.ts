@@ -134,9 +134,7 @@ describe('candidate-scenarios.yml', () => {
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(
         `${platform}_step_timeout_minutes: \${{ steps.resolve.outputs.${platform}_step_timeout_minutes }}`
       )
-      expect(body).toContain(
-        '      METIS_CANDIDATE_RUN_ATTEMPT: \${{ needs.guard.outputs.candidate_run_attempt }}'
-      )
+      expect(body).toContain('      METIS_CANDIDATE_RUN_ATTEMPT: \${{ needs.guard.outputs.candidate_run_attempt }}')
     }
   })
 

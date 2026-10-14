@@ -93,6 +93,9 @@ if (count > BASELINE) {
   }
   console.error(`[check:test-types] FAIL — ${count} type errors in test files, up from the ${BASELINE} baseline.`)
   console.error('')
+  console.error('  Compiler diagnostics:')
+  for (const line of lines) console.error(`    ${line}`)
+  console.error('')
   console.error('  Test files are excluded from `npm run typecheck`, so an error here is one nothing else')
   console.error('  can see. This is the class that shipped `-c undefined` into a tagged release: a test')
   console.error('  calling production code with a shape that no longer exists.')
