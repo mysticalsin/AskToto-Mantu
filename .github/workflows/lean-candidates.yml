@@ -35,6 +35,7 @@ jobs:
           scripts/lib/forbidden-inference-path.test.ts
           scripts/lib/macho-architecture.test.ts
           scripts/lib/lean-checker-args.test.ts
+          scripts/lib/lean-package-stage.test.ts
 
   candidate:
     name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate

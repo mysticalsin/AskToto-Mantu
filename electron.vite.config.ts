@@ -112,13 +112,16 @@ export default defineConfig({
       }
     },
     plugins: [react(), tailwindcss()],
+    // esbuild removes ordinary Rollup banner comments when minifying. Keep this profile banner as
+    // an inline legal comment so the packaged artifact checker can verify the compiled build profile.
+    esbuild: { legalComments: 'inline' },
     build: {
       // electron-vite defaults to minify:false — that shipped every bundle unminified (≈2x parse
       // bytes on the entry chunk and on every lazy view's first click). Main stays readable for
       // crash-log stack traces; the renderer is where the cold-start parse cost lives.
       minify: 'esbuild',
       rollupOptions: {
-        output: { banner: `/* metis-package-profile:${PACKAGE_PROFILE} */` },
+        output: { banner: `/*! metis-package-profile:${PACKAGE_PROFILE} */` },
         // The QA-only design-capture entry joins only when METIS_DESIGN_CAPTURE=1 (scripts/design/renderer-inputs.ts).
         input: rendererInputs(resolve(__dirname, 'src/renderer'), process.env)
       }
