@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -48,7 +48,7 @@ function detector(): DatalessDetector {
 
 async function workerReceipt(input: Uint8Array, binding: Parameters<typeof issueIncrementalRecordReceipt>[1]) {
   const source = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(input)) as unknown
-  const result = canonicalizeIncrementalMeetingRecord(source, limits, limits.maxRecordBytes)
+  const result = canonicalizeIncrementalMeetingRecord(source, binding.limits, binding.maxCanonicalBytes)
   if (!result.ok) throw new Error('test worker canonicalization should accept its valid fixture')
   const receipt = issueIncrementalRecordReceipt(result.value, binding)
   if (!receipt) throw new Error('test worker canonicalization should issue its validated receipt')
@@ -205,6 +205,45 @@ describe('encrypted incremental meeting journal files', () => {
     linked.dispose()
   })
 
+  it('retains the admitted physical root when its own directory contents change', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-root-contents-'))
+    roots.push(root)
+    const canonical = await realpath(root)
+    const resolveRoot = createIncrementalMeetingJournalRoot(root, () => true)
+    expect(await resolveRoot()).toBe(canonical)
+    const before = await lstat(canonical)
+
+    await writeFile(join(root, 'manifest.v1'), 'owned manifest fixture')
+    const afterFile = await lstat(canonical)
+    const rootAfterFile = await resolveRoot()
+    await mkdir(join(root, 'owned-subdirectory'))
+    const afterDirectory = await lstat(canonical)
+    const rootAfterDirectory = await resolveRoot()
+
+    // Only closed booleans and safe link counts: the hosted run determines each filesystem's behavior.
+    console.info(
+      'INCREMENTAL_ROOT_CONTENTS',
+      JSON.stringify({
+        version: 1,
+        canonicalAlias: canonical !== root,
+        rootAfterFileMatches: rootAfterFile === canonical,
+        rootAfterDirectoryMatches: rootAfterDirectory === canonical,
+        physicalOwnerUnchanged: [afterFile, afterDirectory].every(
+          (entry) => entry.dev === before.dev && entry.ino === before.ino
+        ),
+        linksBefore: Number.isSafeInteger(before.nlink) ? before.nlink : null,
+        linksAfterFile: Number.isSafeInteger(afterFile.nlink) ? afterFile.nlink : null,
+        linksAfterDirectory: Number.isSafeInteger(afterDirectory.nlink) ? afterDirectory.nlink : null
+      })
+    )
+    expect(rootAfterFile).toBe(canonical)
+    expect(rootAfterDirectory).toBe(canonical)
+    expect([afterFile, afterDirectory].every((entry) => entry.dev === before.dev && entry.ino === before.ino)).toBe(
+      true
+    )
+    expect(await readFile(join(root, 'manifest.v1'), 'utf8')).toBe('owned manifest fixture')
+  })
+
   it('refuses reads after a valid parent alias is retargeted', async () => {
     const originalParent = await mkdtemp(join(tmpdir(), 'metis-incremental-original-'))
     const replacementParent = await mkdtemp(join(tmpdir(), 'metis-incremental-replacement-'))
@@ -213,9 +252,10 @@ describe('encrypted incremental meeting journal files', () => {
     await symlink(originalParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
     const aliasedRoot = join(aliasParent, 'journal')
     const gateway = createStorageGateway({ root: () => aliasedRoot, detector: detector() })
+    const classify = vi.spyOn(gateway, 'classify')
     const storage = await store(aliasedRoot, () => true, key, gateway)
     await expect(storage.initialize()).resolves.toMatchObject({ status: 'ok' })
-    const classify = vi.spyOn(gateway, 'classify')
+    classify.mockClear()
     await rm(aliasParent, { force: true })
     await symlink(replacementParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
 
@@ -231,9 +271,10 @@ describe('encrypted incremental meeting journal files', () => {
     const root = join(parent, 'journal')
     const replacement = join(parent, 'replacement')
     const gateway = createStorageGateway({ root: () => root, detector: detector() })
+    const classify = vi.spyOn(gateway, 'classify')
     const storage = await store(root, () => true, key, gateway)
     await expect(storage.initialize()).resolves.toMatchObject({ status: 'ok' })
-    const classify = vi.spyOn(gateway, 'classify')
+    classify.mockClear()
     await mkdir(replacement)
     await rm(root, { recursive: true })
     await symlink(replacement, root, process.platform === 'win32' ? 'junction' : 'dir')
@@ -287,7 +328,7 @@ describe('encrypted incremental meeting journal files', () => {
     const target = join(root, 'manifest.v1')
     await writeFile(target, 'original')
     const resolveRoot = createIncrementalMeetingJournalRoot(root, () => true)
-    expect(await resolveRoot()).toBe(root)
+    expect(await resolveRoot()).toBe(await realpath(root))
 
     let markPreparing!: () => void
     let releasePrepare!: () => void

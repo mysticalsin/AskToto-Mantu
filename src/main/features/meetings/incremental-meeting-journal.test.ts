@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
-import type { CanonicalIncrementalRecord } from '@shared/incremental-meeting'
+import { IncrementalMeetingRecordSchema, type CanonicalIncrementalRecord } from '@shared/incremental-meeting'
 import {
   createIncrementalMeetingAppender,
   provenancePayloadBytes,
@@ -89,11 +89,11 @@ function canonical(text = 'one', wordCount = 0): CanonicalIncrementalRecord {
         }
       }
     : { speaker: 'you', text, t: 1_700_000_000_000 }
-  const record = {
+  const record = IncrementalMeetingRecordSchema.parse({
     identity,
     source: wordCount ? 'cloud-final' : 'local-final',
     line
-  }
+  })
   const canonicalText = JSON.stringify(record).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')
   const canonicalBytes = new TextEncoder().encode(canonicalText)
   return {
