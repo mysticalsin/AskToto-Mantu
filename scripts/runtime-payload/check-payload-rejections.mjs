@@ -204,7 +204,8 @@ async function positiveCandidate() {
     {
       id: 'speaker.embedding',
       root: 'model',
-      members: ['model/file.bin', `model/${longDirectory}/${longBasename}`]
+      // Inventory members use canonical path order, independently of metadata input order.
+      members: [`model/${longDirectory}/${longBasename}`, 'model/file.bin']
     }
   ])
   assert.deepEqual(inventory.directories, {})
