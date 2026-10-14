@@ -256,6 +256,7 @@ export function createManualRollbackReport(identity = null) {
       isolated_profile_removed: false,
       install_root_removed: false,
       input_staging_removed: false,
+      attachment_released: false,
       owned_processes_gone: false
     }
   }
@@ -404,6 +405,7 @@ export function manualRollbackReportProblems(report, expected = {}) {
       'isolated_profile_removed',
       'install_root_removed',
       'input_staging_removed',
+      'attachment_released',
       'owned_processes_gone'
     ])
   ) {
@@ -413,6 +415,7 @@ export function manualRollbackReportProblems(report, expected = {}) {
     report.cleanup.isolated_profile_removed !== true ||
     report.cleanup.install_root_removed !== true ||
     report.cleanup.input_staging_removed !== true ||
+    report.cleanup.attachment_released !== true ||
     report.cleanup.owned_processes_gone !== true
   ) {
     problems.push('cleanup-unacknowledged')
@@ -430,10 +433,30 @@ export function markExecutionFailure(report, id, code) {
   recordRow(report, id, 'FAIL', code)
 }
 
+export function cleanShutdownAcknowledged({
+  quitRequested,
+  transportClosed,
+  attachmentReleased,
+  exitCode,
+  signal,
+  forcedTermination,
+  survivors
+}) {
+  return (
+    quitRequested === true &&
+    transportClosed === true &&
+    attachmentReleased === true &&
+    exitCode === 0 &&
+    signal === null &&
+    forcedTermination !== true &&
+    survivors === 0
+  )
+}
+
 export function finalizeManualRollbackResult(report, executionFailed) {
   report.windows.status =
     !executionFailed &&
-    report.rows.filter((row) => row.id !== 'cleanup').every((row) => row.status === 'PASS') &&
+    report.rows.every((row) => row.status === 'PASS') &&
     report.cleanup.status === 'ACKNOWLEDGED'
       ? 'PASS'
       : 'FAIL'
@@ -603,29 +626,87 @@ async function waitForBridge(browser, timeoutMs = 90_000) {
   fail('renderer-bridge-timeout')
 }
 
-async function openPackagedApp(exe, env, installRoot, userData) {
+async function releaseAttachment(attachment, timeoutMs = 5_000) {
+  if (!attachment) return true
+  if (attachment.transportUncertain === true && typeof attachment.lateRelease !== 'function') return false
+  if (attachment.lateRelease == null) return attachment.transportUncertain !== true
+  if (typeof attachment.lateRelease !== 'function') return false
+  try {
+    return (await attachment.lateRelease(timeoutMs)) === true
+  } catch {
+    return false
+  }
+}
+
+export function createAttachmentReceipt(attachment) {
+  return { attachment, released: false }
+}
+
+export async function releaseAttachmentReceipt(receipt, timeoutMs = 5_000) {
+  if (!receipt || typeof receipt !== 'object') return false
+  if (receipt.released === true) return true
+  const released = await releaseAttachment(receipt.attachment, timeoutMs)
+  if (released) receipt.released = true
+  return released
+}
+
+async function openPackagedApp(exe, env, installRoot, userData, registry, attachmentReceipts) {
   const cdpPort = await freeLoopbackPort()
   const inspectPort = await freeLoopbackPort()
   if (cdpPort === inspectPort) fail('port-collision')
   const launched = launchPackagedCdp({ executablePath: exe, env, cdpPort, inspectPort, platform: 'win32' })
   let browser = null
+  let attachment = null
+  let attachmentReceipt = null
   try {
-    const attached = await attachOwnedCdp({
+    try {
+      rememberOwnedProcesses(registry, launched.child.pid, installRoot)
+    } catch {
+      fail('owned-process-census-unavailable')
+    }
+    attachment = await attachOwnedCdp({
       endpoint: launched.cdpEndpoint,
       childPid: launched.child.pid,
       timeoutMs: 90_000
     })
-    if (!attached.browser || attached.failure) fail('app-attach-failed')
-    browser = attached.browser
+    attachmentReceipt = createAttachmentReceipt(attachment)
+    attachmentReceipts.push(attachmentReceipt)
+    if (attachment.transportUncertain === true || !attachment.browser || attachment.failure) {
+      fail('app-attach-failed')
+    }
+    browser = attachment.browser
     const page = await waitForBridge(browser)
     const events = auditEvents(userData)
     const started = events.filter((event) => event.event === 'app.started').at(-1)
     if (started?.version !== '1.9.6' && started?.version !== TARGET_VERSION) fail('app-version-unobserved')
-    return { child: launched.child, browser, page, installRoot, userData, version: started.version }
+    return {
+      child: launched.child,
+      browser,
+      page,
+      installRoot,
+      userData,
+      version: started.version,
+      attachmentReceipt
+    }
   } catch (error) {
-    if (browser) await browser.close().catch(() => undefined)
-    const receipt = await stopOwnedChild(launched.child, { platform: 'win32', timeoutMs: 5_000 })
-    if (receipt.state !== 'acknowledged') fail('app-teardown-unacknowledged')
+    let transportClosed = true
+    if (browser) {
+      try {
+        transportClosed = (await browser.close()) !== false
+      } catch {
+        transportClosed = false
+      }
+    }
+    const attachmentReleased = attachmentReceipt
+      ? await releaseAttachmentReceipt(attachmentReceipt)
+      : await releaseAttachment(attachment)
+    let exit = await waitForChildExit(launched.child, 250)
+    if (!exit) {
+      const receipt = await stopOwnedChild(launched.child, { platform: 'win32', timeoutMs: 5_000 })
+      if (receipt.state !== 'acknowledged') fail('app-teardown-unacknowledged')
+      exit = await waitForChildExit(launched.child, 5_000)
+    }
+    if (!transportClosed || !attachmentReleased || !exit) fail('app-teardown-unacknowledged')
     throw error
   }
 }
@@ -664,32 +745,50 @@ async function stopPackagedApp(session, registry) {
   } catch {
     transportClosed = false
   }
-  let exited = await waitForChildExit(session.child, 30_000)
-  if (!exited) {
+  let exit = await waitForChildExit(session.child, 30_000)
+  let forcedTermination = false
+  if (!exit) {
+    forcedTermination = true
     const receipt = await stopOwnedChild(session.child, { platform: 'win32', timeoutMs: 5_000 })
     if (receipt.state !== 'acknowledged') fail('app-teardown-unacknowledged')
-    exited = await waitForChildExit(session.child, 5_000)
+    exit = await waitForChildExit(session.child, 5_000)
   }
-  let owned = []
+  let remaining = []
   try {
-    owned = rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+    rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+    remaining = currentOwnedSurvivors(registry, session.installRoot)
   } catch {
     fail('owned-process-census-unavailable')
   }
-  if (owned.length) {
-    killOwned(owned)
+  if (remaining.length) {
+    forcedTermination = true
+    killOwned(remaining)
     const deadline = Date.now() + 5_000
     while (Date.now() < deadline) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
       try {
-        owned = rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+        rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+        remaining = currentOwnedSurvivors(registry, session.installRoot)
       } catch {
         fail('owned-process-census-unavailable')
       }
-      if (!owned.length) break
+      if (!remaining.length) break
     }
   }
-  if (!quitRequested || !transportClosed || !exited || owned.length) fail('app-teardown-unacknowledged')
+  const attachmentReleased = await releaseAttachmentReceipt(session.attachmentReceipt)
+  if (
+    !cleanShutdownAcknowledged({
+      quitRequested,
+      transportClosed,
+      attachmentReleased,
+      exitCode: exit?.code,
+      signal: exit?.signal,
+      forcedTermination,
+      survivors: remaining.length
+    })
+  ) {
+    fail('app-teardown-unacknowledged')
+  }
   return true
 }
 
@@ -811,6 +910,7 @@ async function runManualRollback(args) {
   let isolatedRoot = null
   let appSession = null
   const ownedProcessRegistry = new Map()
+  const attachmentReceipts = []
   let executionFailed = false
   let installRootRemoved = false
   let profileRemoved = false
@@ -866,7 +966,14 @@ async function runManualRollback(args) {
     if (baselineInstall.code !== 0 || baselineInstall.timedOut) fail('baseline-install-failed')
 
     activeRow = 'baseline-encrypted-profile'
-    appSession = await openPackagedApp(join(paths.installRoot, 'Metis.exe'), env, paths.installRoot, paths.userData)
+    appSession = await openPackagedApp(
+      join(paths.installRoot, 'Metis.exe'),
+      env,
+      paths.installRoot,
+      paths.userData,
+      ownedProcessRegistry,
+      attachmentReceipts
+    )
     rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)
     if (appSession.version !== '1.9.6') fail('baseline-app-version-mismatch')
     const settingsUpdate = await appSession.page.evaluate(async (meetingsFolder) => {
@@ -922,7 +1029,14 @@ async function runManualRollback(args) {
     activeRow = 'candidate-upgrade-readback'
     const candidateInstall = await installSetup(args.candidateInstaller, paths.installRoot)
     if (candidateInstall.code !== 0 || candidateInstall.timedOut) fail('candidate-install-failed')
-    appSession = await openPackagedApp(join(paths.installRoot, 'Metis.exe'), env, paths.installRoot, paths.userData)
+    appSession = await openPackagedApp(
+      join(paths.installRoot, 'Metis.exe'),
+      env,
+      paths.installRoot,
+      paths.userData,
+      ownedProcessRegistry,
+      attachmentReceipts
+    )
     rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)
     if (appSession.version !== TARGET_VERSION) fail('candidate-app-version-mismatch')
     const candidateRead = await verifyApplicationState(appSession, {
@@ -943,7 +1057,14 @@ async function runManualRollback(args) {
     if (rollbackInstall.code !== 0 || rollbackInstall.timedOut) fail('manual-baseline-reinstall-failed')
     recordRow(report, 'manual-baseline-reinstall', 'PASS')
     activeRow = 'rollback-encrypted-profile-readback'
-    appSession = await openPackagedApp(join(paths.installRoot, 'Metis.exe'), env, paths.installRoot, paths.userData)
+    appSession = await openPackagedApp(
+      join(paths.installRoot, 'Metis.exe'),
+      env,
+      paths.installRoot,
+      paths.userData,
+      ownedProcessRegistry,
+      attachmentReceipts
+    )
     rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)
     if (appSession.version !== '1.9.6') fail('rollback-app-version-mismatch')
     const rollbackRead = await verifyApplicationState(appSession, {
@@ -976,29 +1097,53 @@ async function runManualRollback(args) {
         ownedProcessesGone = false
       }
     }
+    let attachmentsReleased = true
+    for (const receipt of attachmentReceipts) {
+      if (!(await releaseAttachmentReceipt(receipt))) attachmentsReleased = false
+    }
     if (isolatedRoot) {
       const paths = workspacePaths(isolatedRoot)
       try {
         rememberOwnedProcesses(ownedProcessRegistry, null, paths.installRoot)
         let remaining = currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)
+        let forcedCleanup = remaining.length > 0
         const deadline = Date.now() + 5_000
         while (Date.now() < deadline) {
-          if (remaining.length) killOwned(remaining)
+          if (remaining.length) {
+            forcedCleanup = true
+            killOwned(remaining)
+          }
           await new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
           rememberOwnedProcesses(ownedProcessRegistry, null, paths.installRoot)
           remaining = currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)
         }
+        if (remaining.length) {
+          forcedCleanup = true
+          killOwned(remaining)
+          const settleDeadline = Date.now() + 1_000
+          while (remaining.length && Date.now() < settleDeadline) {
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
+            rememberOwnedProcesses(ownedProcessRegistry, null, paths.installRoot)
+            remaining = currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)
+          }
+        }
         ownedProcessesGone = remaining.length === 0
+        if (forcedCleanup) {
+          executionFailed = true
+          markExecutionFailure(report, 'cleanup', 'forced-process-cleanup')
+        }
       } catch {
         ownedProcessesGone = false
       }
-      try {
-        rmSync(isolatedRoot, { recursive: true, force: true })
-        installRootRemoved = !existsSync(paths.installRoot)
-        profileRemoved = !existsSync(paths.profile)
-      } catch {
-        installRootRemoved = false
-        profileRemoved = false
+      if (ownedProcessesGone && attachmentsReleased) {
+        try {
+          rmSync(isolatedRoot, { recursive: true, force: true })
+          installRootRemoved = !existsSync(paths.installRoot)
+          profileRemoved = !existsSync(paths.profile)
+        } catch {
+          installRootRemoved = false
+          profileRemoved = false
+        }
       }
     } else {
       installRootRemoved = true
@@ -1018,12 +1163,14 @@ async function runManualRollback(args) {
         profileRemoved &&
         installRootRemoved &&
         inputRemoved &&
+        attachmentsReleased &&
         ownedProcessesGone
           ? 'ACKNOWLEDGED'
           : 'NOT_ACKNOWLEDGED',
       isolated_profile_removed: profileRemoved,
       install_root_removed: installRootRemoved,
       input_staging_removed: inputRemoved,
+      attachment_released: attachmentsReleased,
       owned_processes_gone: ownedProcessesGone
     }
     if (report.cleanup.status !== 'ACKNOWLEDGED') {

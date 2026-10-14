@@ -7,10 +7,13 @@ import {
   baselineChecksumProblems,
   baselineReleaseProblems,
   candidateBindingProblems,
+  cleanShutdownAcknowledged,
+  createAttachmentReceipt,
   createManualRollbackReport,
   finalizeManualRollbackResult,
   markExecutionFailure,
-  manualRollbackReportProblems
+  manualRollbackReportProblems,
+  releaseAttachmentReceipt
 } from './manual-rollback.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -94,6 +97,7 @@ function passingReport() {
     isolated_profile_removed: true,
     install_root_removed: true,
     input_staging_removed: true,
+    attachment_released: true,
     owned_processes_gone: true
   }
   return report
@@ -176,6 +180,11 @@ describe('manual rollback provenance and report contracts', () => {
     const unclean = structuredClone(report)
     unclean.cleanup.input_staging_removed = false
     expect(manualRollbackReportProblems(unclean, expected)).toContain('cleanup-unacknowledged')
+
+    const attachUnreleased = structuredClone(report)
+    attachUnreleased.cleanup.attachment_released = false
+    expect(manualRollbackReportProblems(attachUnreleased, expected)).toContain('cleanup-unacknowledged')
+
     expect(manualRollbackReportProblems(null as never, expected)).toContain('report-shape-invalid')
   })
 
@@ -202,6 +211,40 @@ describe('manual rollback provenance and report contracts', () => {
     expect(manualRollbackReportProblems(report, expected)).toContain('windows-not-passing')
   })
 
+  it('accepts only a natural zero exit with released attachment and no forced termination or survivors', () => {
+    const cleanExit = {
+      quitRequested: true,
+      transportClosed: true,
+      attachmentReleased: true,
+      exitCode: 0,
+      signal: null,
+      forcedTermination: false,
+      survivors: 0
+    }
+    expect(cleanShutdownAcknowledged(cleanExit)).toBe(true)
+    expect(cleanShutdownAcknowledged({ ...cleanExit, exitCode: 1 })).toBe(false)
+    expect(cleanShutdownAcknowledged({ ...cleanExit, signal: 'SIGTERM' })).toBe(false)
+    expect(cleanShutdownAcknowledged({ ...cleanExit, forcedTermination: true })).toBe(false)
+    expect(cleanShutdownAcknowledged({ ...cleanExit, survivors: 1 })).toBe(false)
+    expect(cleanShutdownAcknowledged({ ...cleanExit, attachmentReleased: false })).toBe(false)
+  })
+
+  it('retains an uncertain attach receipt until a late transport release is acknowledged', async () => {
+    let attempts = 0
+    const receipt = createAttachmentReceipt({
+      transportUncertain: true,
+      lateRelease: async () => {
+        attempts += 1
+        return attempts > 1
+      }
+    })
+
+    expect(await releaseAttachmentReceipt(receipt)).toBe(false)
+    expect(receipt.released).toBe(false)
+    expect(await releaseAttachmentReceipt(receipt)).toBe(true)
+    expect(receipt.released).toBe(true)
+  })
+
   it('keeps the lane manual, hosted, attempt-bound, and separate from the upgrade scenario registry', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/manual-rollback.yml', import.meta.url), 'utf8')
     expect(workflow).toContain('workflow_dispatch:')
@@ -217,12 +260,17 @@ describe('manual rollback provenance and report contracts', () => {
 
   it('captures launch-time process identities and checks survivors through teardown before cleanup', () => {
     const runner = readFileSync(new URL('./manual-rollback.mjs', import.meta.url), 'utf8')
-    expect(runner).toContain(
-      'rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)'
-    )
+    const launchIndex = runner.indexOf('const launched = launchPackagedCdp')
+    const captureIndex = runner.indexOf('rememberOwnedProcesses(registry, launched.child.pid, installRoot)', launchIndex)
+    const attachIndex = runner.indexOf('attachment = await attachOwnedCdp', launchIndex)
+    expect(launchIndex).toBeGreaterThanOrEqual(0)
+    expect(captureIndex).toBeGreaterThan(launchIndex)
+    expect(captureIndex).toBeLessThan(attachIndex)
     expect(runner).toContain('survivors([...registry.values()], listProcesses')
     expect(runner).toContain('currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)')
     expect(runner).toContain('ownedProcessesGone = remaining.length === 0')
+    expect(runner).toContain('for (const receipt of attachmentReceipts)')
+    expect(runner).toContain('if (ownedProcessesGone && attachmentsReleased)')
   })
 
   it('emits only content-free recovery metadata and never records synthetic note or transcript text', () => {
