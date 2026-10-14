@@ -287,7 +287,10 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     )
   }
 
-  async function readMarkerSnapshot(c: SpeechPackComponent): Promise<MarkerSnapshot | null> {
+  async function readMarkerSnapshot(
+    c: SpeechPackComponent,
+    discardUnsafeVersion = false
+  ): Promise<MarkerSnapshot | null> {
     try {
       const componentDir = await lstat(join(rootDir, c.id))
       if (!componentDir.isDirectory()) return null
@@ -312,13 +315,17 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       }
       const marker = JSON.parse(bytes.toString('utf8')) as Partial<Marker>
       if (
-        Object.keys(marker).length !== 4 ||
+        Object.keys(marker).sort().join(',') !== 'component,manifestIdentity,schema,version' ||
         marker.schema !== 2 ||
         marker.component !== c.id ||
-        !validVersion(marker.version) ||
         typeof marker.manifestIdentity !== 'string' ||
         !/^[0-9a-f]{64}$/.test(marker.manifestIdentity)
       ) {
+        return null
+      }
+      if (!validVersion(marker.version)) {
+        // Initialization may invalidate this owned receipt, but never follows its unsafe version path.
+        if (discardUnsafeVersion) await rm(markerFile, { force: true })
         return null
       }
       const versionDir = await lstat(join(rootDir, c.id, marker.version))
@@ -470,7 +477,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         continue
       }
       const dir = finalDir(c)
-      let marker = await readMarkerSnapshot(c)
+      let marker = await readMarkerSnapshot(c, true)
       if (!(await exists(dir))) {
         if (!(await restoreAside(c))) continue
         marker = await readMarkerSnapshot(c)

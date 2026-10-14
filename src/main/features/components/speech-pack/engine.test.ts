@@ -579,6 +579,28 @@ describe('speech-pack engine', () => {
         expect(readFileSync(join(dir, 'en.wav'))).toEqual(outsideBefore)
       })
 
+      it('preserves an unrecognized marker shape instead of treating its missing version as an unsafe path', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const unknownMarker = Buffer.from(
+          JSON.stringify({
+            schema: 2,
+            component: WHISPER,
+            manifestIdentity: componentManifestIdentity(previous),
+            extra: 1
+          })
+        )
+        writeFileSync(marker(WHISPER), unknownMarker)
+
+        const next = make([{ ...previous, version: '2' }])
+        await next.initialise()
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(readFileSync(marker(WHISPER))).toEqual(unknownMarker)
+      })
+
       it('preserves the prior-version marker and directory when preflight refuses an update', async () => {
         server = await serveFiles()
         const previous = whisper(server.base)
