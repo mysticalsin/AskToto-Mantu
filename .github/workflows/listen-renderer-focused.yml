@@ -133,6 +133,10 @@ jobs:
             if (/\bSyntaxError\b/.test(text)) return 'SYNTAX_ERROR'
             return suiteFailure ? 'SUITE_SETUP_FAILURE' : 'UNCLASSIFIED_FAILURE'
           }
+          const safeFailureStatus = (status) => {
+            if (status === 'failed' || status === 'pending' || status === 'todo') return status
+            return 'unknown'
+          }
           const resultPaths = results.map((result) => relativeReportPath(result?.name))
           const expectedSet = new Set(requiredFiles)
           const resultSet = new Set(resultPaths.filter((file) => typeof file === 'string'))
@@ -148,14 +152,14 @@ jobs:
             const file = resultPaths[index]
             const assertions = Array.isArray(result?.assertionResults) ? result.assertionResults : []
             assertionCount += assertions.length
-            const expectedFile = typeof file === 'string' && expectedSet.has(file) ? file : '<unexpected-suite>'
-            if (assertions.length === 0 || result?.status !== 'passed') {
+            const expectedFile = typeof file === 'string' && expectedSet.has(file) ? file : null
+            if (expectedFile && (assertions.length === 0 || result?.status !== 'passed')) {
               const suiteMessages = typeof result?.message === 'string' ? [result.message] : []
               const source = failureSource(suiteMessages)
               cases.push({
                 file: expectedFile,
-                case: '<suite-level failure>',
-                status: result?.status === 'passed' ? 'empty' : String(result?.status ?? 'missing'),
+                assertionOrdinal: 0,
+                status: assertions.length === 0 ? 'empty' : safeFailureStatus(result?.status),
                 code: failureCode(suiteMessages, true),
                 sourceFile: source.file,
                 line: source.line
@@ -164,16 +168,13 @@ jobs:
             for (let assertionIndex = 0; assertionIndex < assertions.length; assertionIndex += 1) {
               const assertion = assertions[assertionIndex]
               if (assertion?.status === 'passed') continue
-              const rawTitle = typeof assertion?.fullName === 'string'
-                ? assertion.fullName
-                : typeof assertion?.title === 'string' ? assertion.title : `<assertion-${assertionIndex + 1}>`
-              const title = rawTitle.replace(/[\r\n\t]/g, ' ').slice(0, 200)
+              if (!expectedFile) continue
               const failureMessages = Array.isArray(assertion?.failureMessages) ? assertion.failureMessages : []
               const source = failureSource(failureMessages)
               cases.push({
                 file: expectedFile,
-                case: title,
-                status: String(assertion?.status ?? 'missing'),
+                assertionOrdinal: assertionIndex + 1,
+                status: safeFailureStatus(assertion?.status),
                 code: failureCode(failureMessages),
                 sourceFile: source.file,
                 line: source.line
@@ -264,7 +265,7 @@ jobs:
           process.stdout.write(`Listen focused summary: status=${summary.status} suites=${results.length}/${requiredFiles.length} tests=${total ?? 'invalid'} passed=${passed ?? 'invalid'} failed=${failed ?? 'invalid'} skipped=${skipped ?? 'invalid'} assertions=${assertionCount} retries=0 manifest=${summary.sourceManifestSha256}\n`)
           for (const item of retainedCases.slice(0, 20)) {
             const source = item.sourceFile && Number.isSafeInteger(item.line) ? `${item.sourceFile}:${item.line}` : 'unavailable'
-            process.stdout.write(`Focused failure: code=${item.code} case=${item.case} source=${source}\n`)
+            process.stdout.write(`Focused failure: code=${item.code} file=${item.file} assertion=${item.assertionOrdinal} status=${item.status} source=${source}\n`)
           }
           if (!passedGate) {
             process.stdout.write(`::error title=Listen focused qualification failed::${reasons.join(',')} suites=${results.length}/${requiredFiles.length} tests=${total ?? 'invalid'} passed=${passed ?? 'invalid'} failed=${failed ?? 'invalid'} skipped=${skipped ?? 'invalid'}; inspect the retained bounded artifact.\n`)
@@ -274,9 +275,9 @@ jobs:
                 ? item.sourceFile
                 : undefined
               const line = file ? item.line : undefined
-              const title = escapeProperty(`${item.code}: ${item.case}`)
+              const title = escapeProperty(`${item.code}: ${item.file} assertion ${item.assertionOrdinal}`)
               const location = file && line ? ` file=${escapeProperty(file)},line=${line},title=${title}` : `title=${title}`
-              process.stdout.write(`::error ${location}::Focused test failure code=${item.code}; details remain in the bounded private artifact.\n`)
+              process.stdout.write(`::error ${location}::Focused test failure code=${item.code} status=${item.status}; details remain in the bounded private artifact.\n`)
             }
             process.exitCode = 1
           }
