@@ -44,6 +44,18 @@ const baseEnv: Env = {
   SPEECH_MAX_SESSION_MS: '300000'
 }
 
+const privacyUnreadyEnv: Env = {
+  ...baseEnv,
+  CF_ACCOUNT_ID: 'fixture-account',
+  SPEECH_DEPLOYMENT_ID: 'fixture-deployment',
+  SPEECH_GATEWAY_ID: 'fixture-gateway',
+  SPEECH_IMPLEMENTATION_REVISION: 'synthetic-test-revision',
+  SPEECH_SESSION_DO: {
+    idFromName: () => 'synthetic-session',
+    get: () => ({ fetch: async () => new Response(null, { status: 503 }) })
+  }
+}
+
 function sessionBody(patch: Record<string, unknown> = {}) {
   return {
     operation: 'create-session',
@@ -195,7 +207,7 @@ describe('authenticated speech session broker boundary', () => {
     const response = await handleRequest(
       await signedRequest({ token: fixture.tokens.get(DEVICE) }),
       {
-        ...baseEnv,
+        ...privacyUnreadyEnv,
         DB: fixture.d1
       },
       {},
@@ -506,13 +518,13 @@ describe('authenticated speech session broker boundary', () => {
     const make = () => signedRequest({ token: fixture.tokens.get(DEVICE), nonce })
     const first = await handleRequest(
       await make(),
-      { ...baseEnv, DB: fixture.d1 },
+      { ...privacyUnreadyEnv, DB: fixture.d1 },
       {},
       { store: fixture.store, now: NOW }
     )
     const replay = await handleRequest(
       await make(),
-      { ...baseEnv, DB: fixture.d1 },
+      { ...privacyUnreadyEnv, DB: fixture.d1 },
       {},
       { store: fixture.store, now: NOW }
     )

@@ -45,8 +45,18 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
     }
   })
 
-  it('schema-alter.sql only ever ALTERs seats, crm_sends, issued_licenses, audit, and integrations (the tables with additive columns)', () => {
-    const allowed = new Set(['seats', 'crm_sends', 'issued_licenses', 'audit', 'pulses', 'asks', 'integrations'])
+  it('schema-alter.sql ALTERs only known additive tables, including versioned speech columns', () => {
+    const allowed = new Set([
+      'seats',
+      'crm_sends',
+      'issued_licenses',
+      'audit',
+      'pulses',
+      'asks',
+      'integrations',
+      'speech_sessions',
+      'speech_grants'
+    ])
     for (const stmt of parseStatements(schemaAlterSql)) {
       const m = /^ALTER TABLE (\w+)/i.exec(stmt)
       if (m) expect(allowed.has(m[1])).toBe(true)
@@ -244,6 +254,17 @@ describe('speech broker additive schema (M2-0107)', () => {
 describe('speech relay durable lifecycle schema (M2-0108)', () => {
   it('adds metadata-only relay streams and owner-reviewed route evidence to fresh and upgrade schemas', () => {
     expect(schemaSql).toContain('consented_tracks_json TEXT NOT NULL')
+    const freshStatements = parseStatements(schemaSql)
+    const upgradeStatements = parseStatements(schemaAlterSql)
+    const freshSessions = freshStatements.find((statement) =>
+      /^CREATE TABLE IF NOT EXISTS speech_sessions\b/i.test(statement)
+    )
+    expect(freshSessions?.replace(/\s+/g, ' ')).toContain('consented_tracks_json TEXT NOT NULL')
+    expect(
+      upgradeStatements.some((statement) =>
+        /ALTER TABLE speech_sessions ADD COLUMN consented_tracks_json TEXT/.test(statement)
+      )
+    ).toBe(true)
     for (const sql of [schemaSql, schemaAlterSql]) {
       const statements = parseStatements(sql)
       const streams = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_streams\b/i.test(statement))
@@ -257,11 +278,6 @@ describe('speech relay durable lifecycle schema (M2-0108)', () => {
       expect(streams).toBeTruthy()
       expect(evidence).toBeTruthy()
       expect(epochs).toBeTruthy()
-      expect(
-        statements.some((statement) =>
-          /ALTER TABLE speech_sessions ADD COLUMN consented_tracks_json TEXT/.test(statement)
-        )
-      ).toBe(true)
       for (const column of [
         'session_id TEXT NOT NULL',
         'grant_id TEXT NOT NULL',

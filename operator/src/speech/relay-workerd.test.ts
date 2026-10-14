@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Miniflare, type WebSocket as WorkerdWebSocket } from 'miniflare'
+import { convertV4MiniflareOptions, Miniflare, type WebSocket as WorkerdWebSocket } from 'miniflare'
 import { describe, expect, it } from 'vitest'
 import { d1Store } from '../d1'
 import { hmacHex } from '../hmac'
@@ -169,54 +169,56 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
   const route = routeId === 'deepgram-via-gateway' ? ROUTE_A : ROUTE_B
   const modelId = route.modelId
   const operatorBundle = await bundleEntry()
-  const runtime = new Miniflare({
-    workers: [
-      {
-        name: 'metis-operator-fixture',
-        script: operatorBundle,
-        modules: true,
-        compatibilityDate: '2026-08-31',
-        d1Databases: { DB: 'metis-speech-relay-fixture' },
-        durableObjects: {
-          SPEECH_SESSION_DO: { className: 'SpeechSessionDurableObject', useSQLite: true }
+  const runtime = new Miniflare(
+    convertV4MiniflareOptions({
+      workers: [
+        {
+          name: 'metis-operator-fixture',
+          script: operatorBundle,
+          modules: true,
+          compatibilityDate: '2026-08-31',
+          d1Databases: { DB: 'metis-speech-relay-fixture' },
+          durableObjects: {
+            SPEECH_SESSION_DO: { className: 'SpeechSessionDurableObject', useSQLite: true }
+          },
+          bindings: {
+            OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
+            OPERATOR_PROMPT_KEY: 'fixture-only-prompt-key',
+            OPERATOR_SKILL_PRIVATE_KEY: 'fixture-only-skill-key',
+            SPEECH_TENANT_ID: TENANT,
+            SPEECH_AUDIENCE: AUDIENCE,
+            SPEECH_POLICY_VERSION: route.policyVersion,
+            SPEECH_ROUTE_ID: routeId,
+            SPEECH_MODEL_ID: modelId,
+            SPEECH_CONFIG_VERSION: route.configVersion,
+            SPEECH_ALLOWED_LANGUAGES:
+              routeId === 'deepgram-via-gateway'
+                ? (PROTOCOL_FIXTURE.capability.readyResponse.languages as string[]).join(',')
+                : route.language,
+            SPEECH_MAX_CONCURRENT_SESSIONS: '2',
+            SPEECH_MAX_CONCURRENT_TRACKS: '4',
+            SPEECH_BUDGET_WINDOW_MS: '120000',
+            SPEECH_BUDGET_MAX_MS: '120000',
+            SPEECH_MAX_SESSION_MS: '60000',
+            SPEECH_DEPLOYMENT_ID: DEPLOYMENT,
+            SPEECH_GATEWAY_ID: GATEWAY,
+            SPEECH_IMPLEMENTATION_REVISION: IMPLEMENTATION_REVISION,
+            SPEECH_GATEWAY_MANAGEMENT_TOKEN: TEST_MANAGEMENT_TOKEN,
+            SPEECH_GATEWAY_RUN_TOKEN: TEST_GATEWAY_TOKEN,
+            ...(routeId === 'deepgram-via-gateway' ? { SPEECH_DEEPGRAM_API_KEY: TEST_DEEPGRAM_KEY } : {}),
+            CF_ACCOUNT_ID: ACCOUNT
+          },
+          outboundService: 'metis-synthetic-gateway'
         },
-        bindings: {
-          OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
-          OPERATOR_PROMPT_KEY: 'fixture-only-prompt-key',
-          OPERATOR_SKILL_PRIVATE_KEY: 'fixture-only-skill-key',
-          SPEECH_TENANT_ID: TENANT,
-          SPEECH_AUDIENCE: AUDIENCE,
-          SPEECH_POLICY_VERSION: route.policyVersion,
-          SPEECH_ROUTE_ID: routeId,
-          SPEECH_MODEL_ID: modelId,
-          SPEECH_CONFIG_VERSION: route.configVersion,
-          SPEECH_ALLOWED_LANGUAGES:
-            routeId === 'deepgram-via-gateway'
-              ? (PROTOCOL_FIXTURE.capability.readyResponse.languages as string[]).join(',')
-              : route.language,
-          SPEECH_MAX_CONCURRENT_SESSIONS: '2',
-          SPEECH_MAX_CONCURRENT_TRACKS: '4',
-          SPEECH_BUDGET_WINDOW_MS: '120000',
-          SPEECH_BUDGET_MAX_MS: '120000',
-          SPEECH_MAX_SESSION_MS: '60000',
-          SPEECH_DEPLOYMENT_ID: DEPLOYMENT,
-          SPEECH_GATEWAY_ID: GATEWAY,
-          SPEECH_IMPLEMENTATION_REVISION: IMPLEMENTATION_REVISION,
-          SPEECH_GATEWAY_MANAGEMENT_TOKEN: TEST_MANAGEMENT_TOKEN,
-          SPEECH_GATEWAY_RUN_TOKEN: TEST_GATEWAY_TOKEN,
-          ...(routeId === 'deepgram-via-gateway' ? { SPEECH_DEEPGRAM_API_KEY: TEST_DEEPGRAM_KEY } : {}),
-          CF_ACCOUNT_ID: ACCOUNT
-        },
-        outboundService: 'metis-synthetic-gateway'
-      },
-      {
-        name: 'metis-synthetic-gateway',
-        script: providerWorker,
-        modules: true,
-        compatibilityDate: '2026-08-31'
-      }
-    ]
-  })
+        {
+          name: 'metis-synthetic-gateway',
+          script: providerWorker,
+          modules: true,
+          compatibilityDate: '2026-08-31'
+        }
+      ]
+    })
+  )
   const database = (await runtime.getD1Database('DB')) as unknown as {
     exec(sql: string): Promise<unknown>
     prepare(query: string): {

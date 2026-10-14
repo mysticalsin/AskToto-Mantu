@@ -155,7 +155,7 @@ async function importEvidence(request: Request, ctx: AdminCtx): Promise<Response
       expires_at, version, created_at, revoked_at, revoked_by
     ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL
     WHERE ? = 0 OR EXISTS (SELECT 1 FROM speech_route_evidence WHERE evidence_key = ?)
-    ON CONFLICT(evidence_key) DO UPDATE SET id = excluded.id, reviewer_email = excluded.reviewer_email,
+    ON CONFLICT(evidence_key) DO UPDATE SET reviewer_email = excluded.reviewer_email,
       imported_by = excluded.imported_by, evidence_refs_json = excluded.evidence_refs_json,
       expires_at = excluded.expires_at, version = speech_route_evidence.version + 1,
       created_at = excluded.created_at, revoked_at = NULL, revoked_by = NULL
@@ -185,8 +185,12 @@ async function importEvidence(request: Request, ctx: AdminCtx): Promise<Response
       .run()
     const changes = (result as { meta?: { changes?: number } }).meta?.changes
     if (changes !== 1) return fail(409, 'EVIDENCE_VERSION_CONFLICT')
+    const current = await ctx.env.DB.prepare('SELECT id FROM speech_route_evidence WHERE evidence_key = ?')
+      .bind(evidenceKey)
+      .first<{ id: string }>()
+    if (!current) return fail(503, 'EVIDENCE_UNAVAILABLE')
     await auditLog(ctx, 'speech-evidence-import', null, safeAuditText(String(routeId)))
-    return json({ ok: true, id, version: Number(expectedVersion) + 1, expiresAt })
+    return json({ ok: true, id: current.id, version: Number(expectedVersion) + 1, expiresAt })
   } catch {
     return fail(503, 'EVIDENCE_UNAVAILABLE')
   }

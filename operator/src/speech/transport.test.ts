@@ -39,6 +39,7 @@ describe('speech upstream transport', () => {
       ...base,
       routeId: 'workers-ai-nova3',
       modelId: '@cf/deepgram/nova-3',
+      allowedLanguages: ['en'],
       language: 'en',
       deepgramApiKey: undefined
     })

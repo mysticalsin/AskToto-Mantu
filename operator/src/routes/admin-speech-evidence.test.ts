@@ -130,7 +130,9 @@ describe('admin speech route evidence versioning', () => {
       expect(inserted?.status).toBe(200)
       const first = (await inserted!.json()) as { id: string; version: number }
       expect(first.version).toBe(1)
-      expect((await post(evidenceBody(1)))?.status).toBe(200)
+      const replaced = await post(evidenceBody(1))
+      expect(replaced?.status).toBe(200)
+      expect(await replaced!.json()).toMatchObject({ id: first.id, version: 2 })
       expect((await post(evidenceBody(1)))?.status).toBe(409)
       const revoked = await post({ expectedVersion: 2 }, `/v1/admin/speech/evidence/${first.id}/revoke`)
       expect(revoked?.status).toBe(200)

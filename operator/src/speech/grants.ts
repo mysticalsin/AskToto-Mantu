@@ -321,14 +321,55 @@ export async function allocateSpeechSession(
         sessionId
       )
   ])
-  try {
-    const results = await db.batch([reserve, ...grantStatements])
-    if (
-      results.length !== grantStatements.length + 1 ||
-      results.some((result) => result.success !== true || dbChanges(result) !== 1)
-    ) {
+  const classifyRejectedReservation = async (): Promise<AllocationResult> => {
+    try {
+      const active = await db
+        .prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM speech_sessions ss WHERE tenant_id = ? AND audience = ? AND status = 'active'
+            AND (lease_expires_at > ? OR EXISTS (SELECT 1 FROM speech_streams st WHERE st.session_id = ss.id
+              AND st.transport_attempted_at IS NOT NULL AND st.close_confirmed_at IS NULL))) AS sessions,
+          COALESCE((SELECT SUM(track_count) FROM speech_sessions ss WHERE tenant_id = ? AND audience = ? AND status = 'active'
+            AND (lease_expires_at > ? OR EXISTS (SELECT 1 FROM speech_streams st WHERE st.session_id = ss.id
+              AND st.transport_attempted_at IS NOT NULL AND st.close_confirmed_at IS NULL))), 0) AS tracks,
+          COALESCE((SELECT SUM(reserved_ms + settled_ms) FROM speech_sessions WHERE tenant_id = ? AND audience = ? AND budget_window_start = ?), 0) AS budget
+      `)
+        .bind(
+          input.tenantId,
+          input.audience,
+          input.now,
+          input.tenantId,
+          input.audience,
+          input.now,
+          input.tenantId,
+          input.audience,
+          budgetWindowStart
+        )
+        .first<{ sessions: number; tracks: number; budget: number }>()
+      if (!active) return { ok: false, code: 'DATABASE_UNAVAILABLE' }
+      if (active.sessions >= input.maxSessions || active.tracks + input.tracks.length > input.maxTracks) {
+        return { ok: false, code: 'CONCURRENCY_LIMIT' }
+      }
+      if (active.budget + input.maxReservedMs > input.budgetMaxMs) {
+        return { ok: false, code: 'BUDGET_LIMIT' }
+      }
+      // A zero-row reservation with remaining quota is an authorization/policy race or an
+      // inconsistent store response. Keep it fail-closed instead of returning a grant.
+      return { ok: false, code: 'DATABASE_UNAVAILABLE' }
+    } catch {
       return { ok: false, code: 'DATABASE_UNAVAILABLE' }
     }
+  }
+  try {
+    const results = await db.batch([reserve, ...grantStatements])
+    if (results.length !== grantStatements.length + 1 || results.some((result) => result.success !== true))
+      return { ok: false, code: 'DATABASE_UNAVAILABLE' }
+    const changes = results.map(dbChanges)
+    if (changes.some((count) => count === null)) return { ok: false, code: 'DATABASE_UNAVAILABLE' }
+    if (changes[0] === 0 && changes.slice(1).every((count) => count === 0)) {
+      return classifyRejectedReservation()
+    }
+    if (changes.some((count) => count !== 1)) return { ok: false, code: 'DATABASE_UNAVAILABLE' }
   } catch {
     return { ok: false, code: 'DATABASE_UNAVAILABLE' }
   }
@@ -362,38 +403,7 @@ export async function allocateSpeechSession(
         /* the absent token response is still safe; lease expiry also closes the reservation */
       }
     }
-    try {
-      const active = await db
-        .prepare(`
-        SELECT
-          (SELECT COUNT(*) FROM speech_sessions ss WHERE tenant_id = ? AND audience = ? AND status = 'active'
-            AND (lease_expires_at > ? OR EXISTS (SELECT 1 FROM speech_streams st WHERE st.session_id = ss.id
-              AND st.transport_attempted_at IS NOT NULL AND st.close_confirmed_at IS NULL))) AS sessions,
-          COALESCE((SELECT SUM(track_count) FROM speech_sessions ss WHERE tenant_id = ? AND audience = ? AND status = 'active'
-            AND (lease_expires_at > ? OR EXISTS (SELECT 1 FROM speech_streams st WHERE st.session_id = ss.id
-              AND st.transport_attempted_at IS NOT NULL AND st.close_confirmed_at IS NULL))), 0) AS tracks,
-          COALESCE((SELECT SUM(reserved_ms + settled_ms) FROM speech_sessions WHERE tenant_id = ? AND audience = ? AND budget_window_start = ?), 0) AS budget
-      `)
-        .bind(
-          input.tenantId,
-          input.audience,
-          input.now,
-          input.tenantId,
-          input.audience,
-          input.now,
-          input.tenantId,
-          input.audience,
-          budgetWindowStart
-        )
-        .first<{ sessions: number; tracks: number; budget: number }>()
-      if (!active) return { ok: false, code: 'DATABASE_UNAVAILABLE' }
-      if (active.sessions >= input.maxSessions || active.tracks + input.tracks.length > input.maxTracks) {
-        return { ok: false, code: 'CONCURRENCY_LIMIT' }
-      }
-      return { ok: false, code: 'BUDGET_LIMIT' }
-    } catch {
-      return { ok: false, code: 'DATABASE_UNAVAILABLE' }
-    }
+    return { ok: false, code: 'DATABASE_UNAVAILABLE' }
   }
   let epochs: Array<{ track: SpeechTrack; stream_epoch: number }>
   try {

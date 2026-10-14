@@ -6,6 +6,7 @@ import {
   MAX_OUTPUT_BYTES_PER_TRACK,
   MAX_OUTPUT_FRAME_BYTES,
   MAX_PROVIDER_MESSAGES,
+  RESERVED_TERMINAL_BYTES,
   createSpeechStreamBudget,
   enqueueSpeechAudio,
   finishSpeechAudio,
@@ -57,7 +58,8 @@ describe('speech stream application bounds', () => {
 
     const bytes = createSpeechStreamBudget(0, 60_000)
     for (let i = 0; i < 15; i++) expect(accountSpeechOutput(bytes, MAX_OUTPUT_FRAME_BYTES)).toMatchObject({ ok: true })
-    expect(accountSpeechOutput(bytes, 24_512)).toMatchObject({ ok: true })
+    const remainingOutputBytes = MAX_OUTPUT_BYTES_PER_TRACK - RESERVED_TERMINAL_BYTES - bytes.outputBytes
+    expect(accountSpeechOutput(bytes, remainingOutputBytes)).toMatchObject({ ok: true })
     expect(accountSpeechOutput(bytes, 1)).toMatchObject({ ok: false, code: 'OUTPUT_LIMIT' })
     expect(MAX_OUTPUT_BYTES_PER_TRACK).toBe(1_048_576)
     expect(MAX_INPUT_BYTES_PER_TRACK).toBe(1_920_000)
