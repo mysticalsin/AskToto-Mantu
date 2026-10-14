@@ -147,7 +147,7 @@ export function startSpeechPackDesktopFromMain(options: {
   })
 }
 
-function resolveTrustedSpeechPackPolicy(
+export function resolveTrustedSpeechPackPolicy(
   settings: ReturnType<typeof getSettings>,
   localSpeechPack: ReturnType<typeof getAdminLocalSpeechPackPolicy>
 ): LocalSpeechPackPolicy {

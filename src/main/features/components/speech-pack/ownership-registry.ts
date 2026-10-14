@@ -85,9 +85,16 @@ export interface PackRegistryBinding {
   principalAssociation: string
   registryRootBinding: string
   keyId: string
-  keyAnchorIdentity: PackPhysicalIdentity
-  registryRootIdentity: PackPhysicalIdentity
-  packRootIdentity: PackPhysicalIdentity
+  keyAnchorIdentity: PackStableIdentity
+  registryRootIdentity: PackStableIdentity
+  packRootIdentity: PackStableIdentity
+}
+
+/** Persistent namespace bindings use inode identity only; mutable directory metadata belongs to each admission. */
+export interface PackStableIdentity {
+  dev: string
+  ino: string
+  birthtimeNs: string
 }
 
 export interface PackRegistrySnapshot {
@@ -175,9 +182,9 @@ export interface PackRegistryScope {
   profileNamespace: string
   profileGeneration: string
   principalAssociation: string
-  keyAnchorIdentity: PackPhysicalIdentity
-  registryRootIdentity: PackPhysicalIdentity
-  packRootIdentity: PackPhysicalIdentity
+  keyAnchorIdentity: PackStableIdentity
+  registryRootIdentity: PackStableIdentity
+  packRootIdentity: PackStableIdentity
 }
 
 export interface SpeechPackOwnershipStore {
@@ -237,6 +244,7 @@ function validateIdentity(value: unknown): value is PackPhysicalIdentity {
     'nlink',
     'uid',
     'gid',
+    'rdev',
     'size',
     'blocks',
     'mtimeNs',
@@ -342,6 +350,16 @@ function validateTransaction(value: unknown): value is PackTransactionRecord {
   return new Set(nodePaths).size === nodePaths.length
 }
 
+function validateStableIdentity(value: unknown): value is PackStableIdentity {
+  return (
+    isRecord(value) &&
+    exactKeys(value, ['dev', 'ino', 'birthtimeNs']) &&
+    DECIMAL.test(String(value.dev)) &&
+    DECIMAL.test(String(value.ino)) &&
+    DECIMAL.test(String(value.birthtimeNs))
+  )
+}
+
 function validateBinding(value: unknown): value is PackRegistryBinding {
   return (
     isRecord(value) &&
@@ -363,9 +381,9 @@ function validateBinding(value: unknown): value is PackRegistryBinding {
     isBoundedString(value.registryRootBinding, 128) &&
     TOKEN.test(value.registryRootBinding) &&
     isBoundedString(value.keyId, 128) &&
-    validateIdentity(value.keyAnchorIdentity) &&
-    validateIdentity(value.registryRootIdentity) &&
-    validateIdentity(value.packRootIdentity)
+    validateStableIdentity(value.keyAnchorIdentity) &&
+    validateStableIdentity(value.registryRootIdentity) &&
+    validateStableIdentity(value.packRootIdentity)
   )
 }
 
@@ -466,10 +484,8 @@ const frozenSnapshot = (snapshot: PackRegistrySnapshot): Readonly<PackRegistrySn
 }
 
 function isSameBinding(a: PackRegistryBinding, b: PackRegistryBinding): boolean {
-  const sameIdentity = (left: PackPhysicalIdentity, right: PackPhysicalIdentity): boolean =>
-    Object.keys(left).every(
-      (key) => left[key as keyof PackPhysicalIdentity] === right[key as keyof PackPhysicalIdentity]
-    )
+  const sameIdentity = (left: PackStableIdentity, right: PackStableIdentity): boolean =>
+    left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs
   return (
     a.profileNamespace === b.profileNamespace &&
     a.profileGeneration === b.profileGeneration &&
@@ -583,12 +599,15 @@ export async function createSpeechPackOwnershipStore(input: {
 
   const persist = async (next: PackRegistrySnapshot): Promise<void> => {
     assertCurrent()
-    if (!validatePackRegistrySnapshot(next) || !isSameBinding(next.binding, binding))
-      throw new SpeechPackError('tamper', 'invalid speech-pack receipt update')
     const sequence = BigInt(current.sequence) + 1n
-    next.sequence = sequence.toString()
-    next.previousDigest = currentDigest
-    const plaintext = encodePackRegistrySnapshot(next)
+    const candidate: PackRegistrySnapshot = {
+      ...next,
+      sequence: sequence.toString(),
+      previousDigest: currentDigest
+    }
+    if (!validatePackRegistrySnapshot(candidate) || !isSameBinding(candidate.binding, binding))
+      throw new SpeechPackError('tamper', 'invalid speech-pack receipt update')
+    const plaintext = encodePackRegistrySnapshot(candidate)
     const envelope = await protector.encrypt(plaintext)
     assertCurrent()
     if (envelope.byteLength > SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
@@ -603,7 +622,7 @@ export async function createSpeechPackOwnershipStore(input: {
     assertCurrent()
     if (!published.durable || published.digest !== digest(envelope))
       throw new SpeechPackError('tamper', 'speech-pack receipt publication was not verified')
-    current = next
+    current = candidate
     currentSlot = slot
     currentDigest = published.digest
     slotDigests[slot] = published.digest

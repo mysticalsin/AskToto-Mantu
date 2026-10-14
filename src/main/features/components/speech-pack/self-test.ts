@@ -37,7 +37,7 @@ export function recognitionMatchesFixture(value: string): boolean {
 type HostPort = UtilityHostPort
 export type SpeechPackHostFork = UtilityHostFork
 
-function parseFixturePcm(bytes: Buffer): ArrayBuffer {
+export function parseFixturePcm(bytes: Buffer): ArrayBuffer {
   if (bytes.length < 44 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WAVE') {
     throw new Error('The pinned self-test fixture is not a WAV file.')
   }

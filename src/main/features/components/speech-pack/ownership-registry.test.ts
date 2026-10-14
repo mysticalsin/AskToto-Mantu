@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  createSpeechPackOwnershipStore,
   SPEECH_PACK_RECEIPT_PURPOSE,
   validatePackRegistrySnapshot,
   type PackRegistrySnapshot
@@ -20,6 +22,7 @@ const identity = {
   birthtimeNs: '5',
   fileId: null
 }
+const stableIdentity = { dev: identity.dev, ino: identity.ino, birthtimeNs: identity.birthtimeNs }
 
 const snapshot = (): PackRegistrySnapshot => ({
   schema: 1,
@@ -30,9 +33,9 @@ const snapshot = (): PackRegistrySnapshot => ({
     principalAssociation: 'principal-1',
     registryRootBinding: 'registry-root-1',
     keyId: 'key-1',
-    keyAnchorIdentity: identity,
-    registryRootIdentity: identity,
-    packRootIdentity: identity
+    keyAnchorIdentity: stableIdentity,
+    registryRootIdentity: stableIdentity,
+    packRootIdentity: stableIdentity
   },
   sequence: '1',
   previousDigest: null,
@@ -56,6 +59,82 @@ const snapshot = (): PackRegistrySnapshot => ({
 describe('speech-pack ownership registry schema', () => {
   it('accepts a bounded, purpose-bound transaction snapshot', () => {
     expect(validatePackRegistrySnapshot(snapshot())).toBe(true)
+  })
+
+  it('requires the complete physical identity tuple including rdev', () => {
+    const value = snapshot()
+    value.transactions[0]?.nodes.push({
+      path: 'tree',
+      kind: 'directory',
+      origin: 'writer-created',
+      identity: { ...identity },
+      sha256: null,
+      bytes: null
+    })
+    expect(validatePackRegistrySnapshot(value)).toBe(true)
+    const missingRdev = snapshot()
+    missingRdev.transactions[0]?.nodes.push({
+      path: 'tree',
+      kind: 'directory',
+      origin: 'writer-created',
+      identity: { ...identity },
+      sha256: null,
+      bytes: null
+    })
+    delete (missingRdev.transactions[0]?.nodes[0]?.identity as Partial<typeof identity>).rdev
+    expect(validatePackRegistrySnapshot(missingRdev)).toBe(false)
+  })
+
+  it('rejects mutable metadata in persistent root bindings', () => {
+    const value = snapshot()
+    const movedMetadata = {
+      ...value.binding.registryRootIdentity,
+      mtimeNs: '20',
+      ctimeNs: '21'
+    }
+    expect(
+      validatePackRegistrySnapshot({
+        ...value,
+        binding: { ...value.binding, registryRootIdentity: movedMetadata }
+      })
+    ).toBe(false)
+  })
+
+  it('publishes sequence one when explicitly creating an empty registry', async () => {
+    const publications: { slot: 0 | 1; bytes: Uint8Array }[] = []
+    const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+    const store = await createSpeechPackOwnershipStore({
+      binding: snapshot().binding,
+      protector: {
+        keyId: 'key-1',
+        async encrypt(bytes) {
+          return Uint8Array.from(bytes)
+        },
+        async decrypt(bytes) {
+          return Uint8Array.from(bytes)
+        },
+        assertCurrent() {},
+        retire() {},
+        async settleAndDispose() {}
+      },
+      backend: {
+        async readSlot() {
+          return null
+        },
+        async publishSlot(input) {
+          publications.push({ slot: input.slot, bytes: Uint8Array.from(input.bytes) })
+          return { digest: digest(input.bytes), durable: true }
+        },
+        async acquireWriter() {
+          return { async release() {} }
+        }
+      },
+      mode: 'create-explicit'
+    })
+    expect(store.snapshot().sequence).toBe('1')
+    expect(publications).toHaveLength(1)
+    expect(publications[0]?.slot).toBe(0)
+    await store.settleAndDispose()
   })
 
   it.each([

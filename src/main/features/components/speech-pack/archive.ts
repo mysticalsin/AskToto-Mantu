@@ -6,6 +6,10 @@ import type { SpeechPackComponent } from './manifest'
 export interface ArchiveSink {
   /** Validates and counts every member, but stores only the exact manifest-pinned members. */
   addFile(name: string, data: AsyncIterable<Uint8Array>): Promise<void>
+}
+
+/** The caller that owns extraction also owns closure and sealing of the writer capability. */
+export interface OwnedArchiveSink extends ArchiveSink {
   /** Closes admission, settles every started write, and seals the exact writer-created inventory. */
   finish(): Promise<OwnedExtractionReceipt>
   /** Closes admission and settles every started write after an extractor error. */
@@ -141,7 +145,7 @@ export async function createArchiveSink(input: {
   component: SpeechPackComponent
   signal: AbortSignal
   assertCurrent: () => void
-}): Promise<ArchiveSink> {
+}): Promise<OwnedArchiveSink> {
   const { writer, rootPath, component, signal, assertCurrent } = input
   if (component.source.kind !== 'archive') throw new SpeechPackError('tamper', 'archive sink has no archive pin')
   const root = await writer.createRoot(rootPath)

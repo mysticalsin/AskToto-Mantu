@@ -91,7 +91,7 @@
     "src/main/infra/process/registry.ts": 3,
     "src/main/infra/process/supervisor.ts": 3,
     "src/main/infra/storage/paths.ts": 12,
-    "src/main/infra/storage/runtime-owned-files.ts": 14,
+    "src/main/infra/storage/runtime-owned-files.ts": 17,
     "src/main/intelligence.ts": 1,
     "src/main/license-lease-key.ts": 2,
     "src/main/license.ts": 19,

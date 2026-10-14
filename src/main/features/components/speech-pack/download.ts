@@ -57,6 +57,10 @@ export interface DownloadRequest {
   signal: AbortSignal
   /** Rechecked before reads and writes so a revoked local policy stops the transfer promptly. */
   authorize?: () => boolean
+  /** Synchronous owner check at mutation boundaries. */
+  authorizeSync?: () => void
+  /** Asynchronous revalidation across transfer boundaries. */
+  authorizeAsync?: () => Promise<void>
   /** A service-process nonce; partial bytes from a prior process cannot resume silently. */
   resumeScope?: string
   /** Owned model root; descendants are checked before any temporary path is created or opened. */
@@ -66,6 +70,16 @@ export interface DownloadRequest {
 }
 
 const MAX_REDIRECTS = 5
+
+function assertDownloadAuthorized(req: DownloadRequest): void {
+  req.authorizeSync?.()
+  if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+}
+
+async function checkDownloadAuthorization(req: DownloadRequest): Promise<void> {
+  await req.authorizeAsync?.()
+  assertDownloadAuthorized(req)
+}
 
 export async function pathExists(path: string): Promise<boolean> {
   try {
@@ -563,14 +577,15 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       let first = true
       arm(timing.idleTimeoutMs)
       for (;;) {
-        if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+        await checkDownloadAuthorization(req)
         const { done, value } = await reader.read()
+        await checkDownloadAuthorization(req)
         if (done) {
           bodyDone = true
           break
         }
         if (!value || value.byteLength === 0) continue
-        if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+        await checkDownloadAuthorization(req)
         if (first) {
           first = false
           if (looksLikeHtmlBytes(value)) throw new SpeechPackError('captive', 'received a web page instead of the file')
@@ -582,7 +597,9 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
         if (value.byteLength > req.bytes - written || (append && value.byteLength > rangeBytes - receivedInRange)) {
           throw new OversizedResponse()
         }
+        assertDownloadAuthorized(req)
         await handle.write(value)
+        await checkDownloadAuthorization(req)
         written += value.byteLength
         receivedInRange += value.byteLength
         req.onProgress(written)
@@ -645,7 +662,7 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
 
   for (;;) {
     if (req.signal.aborted) throw req.signal.reason
-    if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+    await checkDownloadAuthorization(req)
     let before = await sizeOf(partial)
     if (before > req.bytes) {
       await removeFile(partial, { force: true })
@@ -656,8 +673,11 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
     try {
       await transferOnce(req, deps)
       if ((await sha256File(partial)) === req.sha256) {
+        await checkDownloadAuthorization(req)
         await removeFile(`${partial}.json`, { force: true })
+        assertDownloadAuthorized(req)
         await rename(partial, req.dest)
+        await checkDownloadAuthorization(req)
         req.onProgress(req.bytes)
         return
       }
