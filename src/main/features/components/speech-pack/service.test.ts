@@ -311,7 +311,7 @@ describe('explicit speech-pack service boundary', () => {
     await run((service, state) => {
       state.selected = 'parakeet'
       service.selectionChanged()
-    }, 'not-selected')
+    }, 'busy')
     await run((service, state) => {
       state.policy = false
       service.policyChanged()
