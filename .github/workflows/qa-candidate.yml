@@ -543,6 +543,30 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
+      - name: Bind QA provenance to this workflow identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if ! jq -es \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" '
+            ($repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+            ($commit | test("^[0-9a-f]{40}$")) and
+            ($run | test("^[1-9][0-9]*$")) and
+            ($attempt | test("^[1-9][0-9]*$")) and
+            length == 1 and (.[0] |
+              type == "object" and .schema == 2 and
+              .repository == $repository and .commit == $commit and
+              (.run | type == "object") and
+              (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
+              (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
+            )
+          ' provenance/provenance.json > /dev/null; then
+            echo "::error::QA provenance does not match this workflow identity"
+            exit 1
+          fi
       # A candidate download has previously been truncated while download-artifact
       # still reported success. Verify, and on a failed byte check re-download once and verify again;
       # the retry verify has no continue-on-error, so a second bad download still fails the job.
@@ -648,6 +672,30 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
+      - name: Bind QA provenance to this workflow identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if ! jq -es \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" '
+            ($repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+            ($commit | test("^[0-9a-f]{40}$")) and
+            ($run | test("^[1-9][0-9]*$")) and
+            ($attempt | test("^[1-9][0-9]*$")) and
+            length == 1 and (.[0] |
+              type == "object" and .schema == 2 and
+              .repository == $repository and .commit == $commit and
+              (.run | type == "object") and
+              (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
+              (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
+            )
+          ' provenance/provenance.json > /dev/null; then
+            echo "::error::QA provenance does not match this workflow identity"
+            exit 1
+          fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-mac-qa-identity
@@ -803,6 +851,30 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
+      - name: Bind QA provenance to this workflow identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if ! jq -es \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" '
+            ($repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+            ($commit | test("^[0-9a-f]{40}$")) and
+            ($run | test("^[1-9][0-9]*$")) and
+            ($attempt | test("^[1-9][0-9]*$")) and
+            length == 1 and (.[0] |
+              type == "object" and .schema == 2 and
+              .repository == $repository and .commit == $commit and
+              (.run | type == "object") and
+              (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
+              (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
+            )
+          ' provenance/provenance.json > /dev/null; then
+            echo "::error::QA provenance does not match this workflow identity"
+            exit 1
+          fi
       # A candidate download has previously been truncated while download-artifact
       # still reported success. Verify, and on a failed byte check re-download once and verify again;
       # the retry verify has no continue-on-error, so a second bad download still fails the job.
