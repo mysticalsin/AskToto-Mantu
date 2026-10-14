@@ -30,9 +30,13 @@ export async function inventoryCoreFiles(resourcesRoot, { exclude = new Set(['pa
       const path = join(directory, entry.name)
       const rel = relative(resourcesRoot, path).split(sep).join('/')
       if (entry.isSymbolicLink()) throw new Error(`Package inventory refuses a symbolic link: ${rel}`)
+      if (exclude.has(rel)) {
+        if (!entry.isFile()) throw new Error(`Package inventory refuses a non-regular staged resource: ${rel}`)
+        continue
+      }
       if (entry.isDirectory()) {
         await walk(path)
-      } else if (entry.isFile() && !exclude.has(rel)) {
+      } else if (entry.isFile()) {
         const stat = await lstat(path)
         const bytes = await readFile(path)
         files.push({ path: rel, bytes: stat.size, sha256: createHash('sha256').update(bytes).digest('hex') })
