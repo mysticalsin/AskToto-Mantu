@@ -93,9 +93,9 @@ export function createListenAudioChannels(
     if (entries?.size === 0) delete pendingOpen[speaker]
   }
 
-  const releasePending = (speaker: ListenSpeaker, pending: PendingAudioOpen): void => {
+  const releasePending = (speaker: ListenSpeaker, pending: PendingAudioOpen, notifyCancellation = true): void => {
     pending.cancelled = true
-    pending.cancelWait()
+    if (notifyCancellation) pending.cancelWait()
     forgetPending(speaker, pending)
     if (pending.released) return
     pending.released = true
@@ -334,7 +334,8 @@ export function createListenAudioChannels(
       if (channel && current[speaker] === channel) {
         close(speaker, channel)
       } else {
-        releasePending(speaker, pending)
+        // Error cleanup must preserve run's rejection rather than win the outer cancellation race.
+        releasePending(speaker, pending, false)
       }
       if (cancelled) return false
       throw error
