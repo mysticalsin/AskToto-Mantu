@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   CloudSpeechEpochTransitionAckSchema,
   CloudSpeechEpochTransitionEventSchema,
-  CloudSpeechEventSchema,
   CloudSpeechFinishRequestSchema,
   CloudSpeechFinishResultSchema,
   CloudSpeechFrameSchema,
   CloudSpeechCapabilitySchema,
   CloudSpeechStatusResultSchema,
   CloudSpeechStartRequestSchema,
+  CloudSpeechCaptureCeilingEventSchema,
+  CloudSpeechCaptureCeilingAckSchema,
+  CloudSpeechEventSchema,
   type CloudSpeechStartRequest
 } from './cloud-speech'
 import type { Capture } from './contracts/speech'
@@ -41,6 +43,43 @@ function frame(overrides: Record<string, unknown> = {}): unknown {
 }
 
 describe('cloud speech shared wire contracts', () => {
+  it('binds the fixed four-hour ceiling to exact ordered sealed frontiers', () => {
+    const ceiling = {
+      type: 'capture-ceiling',
+      captureId: start.captureId,
+      captureGeneration: capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000704',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    expect(CloudSpeechCaptureCeilingEventSchema.safeParse(ceiling).success).toBe(true)
+    expect(CloudSpeechEventSchema.safeParse(ceiling).success).toBe(true)
+    const ack = {
+      type: 'capture-ceiling-ack',
+      captureId: start.captureId,
+      captureGeneration: capture.generation,
+      ceilingId: ceiling.ceilingId,
+      tracks: [
+        { track: 'microphone', finalSequence: 300, finalSampleOffset: 480_000 },
+        { track: 'system', finalSequence: 299, finalSampleOffset: 478_400 }
+      ]
+    }
+    expect(CloudSpeechCaptureCeilingAckSchema.safeParse(ack).success).toBe(true)
+    for (const invalid of [
+      { ...ceiling, maxSampleOffsetExclusive: 230_400_001 },
+      { ...ceiling, ceilingId: 'not-a-uuid' },
+      { ...ack, tracks: [ack.tracks[0], ack.tracks[0]] },
+      { ...ack, tracks: [...ack.tracks, ack.tracks[0]] },
+      { ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 230_400_001 }, ack.tracks[1]] },
+      { ...ack, privateSessionId: 'server-only' }
+    ]) {
+      expect(
+        'type' in invalid && invalid.type === 'capture-ceiling'
+          ? CloudSpeechCaptureCeilingEventSchema.safeParse(invalid).success
+          : CloudSpeechCaptureCeilingAckSchema.safeParse(invalid).success
+      ).toBe(false)
+    }
+  })
+
   it('binds closed and opened epoch inventories to the exact capture and opaque handoff receipt', () => {
     const closed = {
       type: 'epoch-transition',
