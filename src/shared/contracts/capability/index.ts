@@ -90,7 +90,10 @@ function checkEngineSelection(
  * once, at `capability`, and its engines are not checked against an engine set it never claimed.
  */
 function labelled<Schema extends z.ZodTypeAny>(capability: 'speech' | 'generation', schema: Schema) {
-  return z.object({ capability: z.literal(capability) }).passthrough().pipe(schema)
+  return z
+    .object({ capability: z.literal(capability) })
+    .passthrough()
+    .pipe(schema)
 }
 
 export const SpeechCapabilitySchema = labelled(

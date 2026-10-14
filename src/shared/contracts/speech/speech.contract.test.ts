@@ -98,32 +98,35 @@ describe('speech contract: negative fixtures', () => {
     expect(negative.map((fixture) => fixture.file)).toEqual(Object.keys(REJECTED_AT).sort())
   })
 
-  it.each(negative.map((fixture) => [fixture.file, fixture] as const))(
-    '%s is rejected at its invariant',
-    (file, fixture) => {
-      const result = fixture.schema.safeParse(fixture.value)
-      expect(result.success).toBe(false)
-      expect(result.error?.issues.map((issue) => issue.path)).toEqual([REJECTED_AT[file]])
-    }
-  )
+  it.each(
+    negative.map((fixture) => [fixture.file, fixture] as const)
+  )('%s is rejected at its invariant', (file, fixture) => {
+    const result = fixture.schema.safeParse(fixture.value)
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([REJECTED_AT[file]])
+  })
 })
 
 describe('speech contract: multi-issue numeric fixtures', () => {
   it('keeps multi-issue numeric cases separate from the single-issue negative fixtures', () => {
-    expect(multiIssueNumeric.map((fixture) => fixture.file)).toEqual(Object.keys(MULTI_ISSUE_NUMERIC_REJECTED_AT).sort())
+    expect(multiIssueNumeric.map((fixture) => fixture.file)).toEqual(
+      Object.keys(MULTI_ISSUE_NUMERIC_REJECTED_AT).sort()
+    )
   })
 
-  it.each(multiIssueNumeric.map((fixture) => [fixture.file, fixture] as const))('%s is rejected at its numeric fields', (file, fixture) => {
+  it.each(
+    multiIssueNumeric.map((fixture) => [fixture.file, fixture] as const)
+  )('%s is rejected at its numeric fields', (file, fixture) => {
     const result = fixture.schema.safeParse(fixture.value)
     expect(result.success).toBe(false)
     const expectedPath = MULTI_ISSUE_NUMERIC_REJECTED_AT[file]
     const issuePaths = result.error?.issues.map((issue) => issue.path) ?? []
     expect(issuePaths.length).toBeGreaterThan(0)
-    expect(issuePaths.every((path) => expectedPath.some((expected) => JSON.stringify(path) === JSON.stringify(expected)))).toBe(
-      true
-    )
-    expect(expectedPath.every((expected) => issuePaths.some((path) => JSON.stringify(path) === JSON.stringify(expected)))).toBe(
-      true
-    )
+    expect(
+      issuePaths.every((path) => expectedPath.some((expected) => JSON.stringify(path) === JSON.stringify(expected)))
+    ).toBe(true)
+    expect(
+      expectedPath.every((expected) => issuePaths.some((path) => JSON.stringify(path) === JSON.stringify(expected)))
+    ).toBe(true)
   })
 })
