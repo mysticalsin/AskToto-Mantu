@@ -68,7 +68,13 @@ describe('measure-lean-candidate strict installer-size verdict', () => {
 
     const result = spawnSync(
       process.execPath,
-      [join(fixtureRoot, 'scripts', 'measure-lean-candidate.mjs'), 'win', 'x64', 'release/lean-win-x64'],
+      [
+        join(fixtureRoot, 'scripts', 'measure-lean-candidate.mjs'),
+        'win',
+        'x64',
+        'release/lean-win-x64',
+        'win-x64-solid'
+      ],
       { encoding: 'utf8', timeout: 60_000, maxBuffer: 2 * 1024 * 1024 }
     )
     expect(result.error).toBeUndefined()
@@ -80,5 +86,9 @@ describe('measure-lean-candidate strict installer-size verdict', () => {
     expect(evidence.installer.bytes).toBe(bytes)
     expect(evidence.installer.sha256).toBe(zeroBytesSha256(bytes))
     expect(evidence.installer.under150MB).toBe(underLimit)
+    expect(evidence.experiment).toEqual({
+      id: 'win-x64-solid',
+      builderArgs: ['-c.compression=maximum', '-c.nsis.differentialPackage=false']
+    })
   })
 })

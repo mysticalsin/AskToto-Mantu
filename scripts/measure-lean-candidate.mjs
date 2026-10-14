@@ -5,11 +5,45 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const [target, arch, outputArgument] = process.argv.slice(2)
-if (!['mac', 'win'].includes(target) || !['arm64', 'x64'].includes(arch) || !outputArgument) {
-  throw new Error('Usage: node scripts/measure-lean-candidate.mjs <mac|win> <arm64|x64> <release-directory>')
+const EXPERIMENTS = Object.freeze({
+  'mac-arm64-udbz': Object.freeze({
+    target: 'mac',
+    arch: 'arm64',
+    builderArgs: Object.freeze(['-c.compression=maximum', '-c.dmg.format=UDBZ'])
+  }),
+  'mac-arm64-ulfo': Object.freeze({
+    target: 'mac',
+    arch: 'arm64',
+    builderArgs: Object.freeze(['-c.compression=maximum', '-c.dmg.format=ULFO'])
+  }),
+  'mac-x64-udbz': Object.freeze({
+    target: 'mac',
+    arch: 'x64',
+    builderArgs: Object.freeze(['-c.compression=maximum', '-c.dmg.format=UDBZ'])
+  }),
+  'mac-x64-ulfo': Object.freeze({
+    target: 'mac',
+    arch: 'x64',
+    builderArgs: Object.freeze(['-c.compression=maximum', '-c.dmg.format=ULFO'])
+  }),
+  'win-x64-solid': Object.freeze({
+    target: 'win',
+    arch: 'x64',
+    builderArgs: Object.freeze(['-c.compression=maximum', '-c.nsis.differentialPackage=false'])
+  })
+})
+
+const [target, arch, outputArgument, experimentId] = process.argv.slice(2)
+if (!['mac', 'win'].includes(target) || !['arm64', 'x64'].includes(arch) || !outputArgument || !experimentId) {
+  throw new Error(
+    'Usage: node scripts/measure-lean-candidate.mjs <mac|win> <arm64|x64> <release-directory> <experiment-id>'
+  )
 }
 if (target === 'win' && arch !== 'x64') throw new Error('Windows lean candidates are x64 only')
+const experiment = Object.hasOwn(EXPERIMENTS, experimentId) ? EXPERIMENTS[experimentId] : null
+if (!experiment || experiment.target !== target || experiment.arch !== arch) {
+  throw new Error('Measurement target and experiment must match one of the closed lean compression variants')
+}
 const outputRoot = join(ROOT, outputArgument)
 
 async function walk(directory, results = []) {
@@ -84,11 +118,15 @@ for (const [name, relativePath] of Object.entries({
   }
 }
 const appBytes = await bytesIn(appDirectory)
+const under150MB = installerBytes.byteLength < 150_000_000
 const output = {
   schema: 1,
   profile: 'lean',
   target,
   arch,
+  experiment: { id: experimentId, builderArgs: experiment.builderArgs },
+  workflowSha: process.env.GITHUB_SHA ?? null,
+  workflowRef: process.env.GITHUB_REF ?? null,
   sourceCommit: inventory.sourceCommit,
   packageInventoryIdentity: inventory.identity,
   appVersion: inventory.appVersion,
@@ -99,7 +137,7 @@ const output = {
     name: relative(outputRoot, installer).split(sep).join('/'),
     bytes: installerBytes.byteLength,
     sha256: createHash('sha256').update(installerBytes).digest('hex'),
-    under150MB: installerBytes.byteLength < 150_000_000
+    under150MB
   }
 }
 const evidenceDir = join(ROOT, 'build', 'lean-measurements')
@@ -108,3 +146,7 @@ const evidencePath = join(evidenceDir, `${target}-${arch}.json`)
 await writeFile(evidencePath, `${JSON.stringify(output, null, 2)}\n`)
 console.log(`[lean-measurement] ${JSON.stringify(output)}`)
 console.log(`[lean-measurement] evidence=${relative(ROOT, evidencePath)}`)
+if (!under150MB) {
+  console.error(`[lean-measurement] nonpromotable installer bytes=${installerBytes.byteLength} requiredBelow=150000000`)
+  process.exitCode = 1
+}

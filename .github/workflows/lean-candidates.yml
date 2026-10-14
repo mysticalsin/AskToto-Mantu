@@ -40,7 +40,7 @@ jobs:
           scripts/measure-lean-candidate.test.ts
 
   candidate:
-    name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate
+    name: Unsigned ${{ matrix.variant }} candidate
     needs: profile-contract
     strategy:
       fail-fast: false
@@ -49,12 +49,27 @@ jobs:
           - target: mac
             arch: arm64
             runner: macos-latest
+            variant: mac-arm64-udbz
+            dmg_format: UDBZ
+          - target: mac
+            arch: arm64
+            runner: macos-latest
+            variant: mac-arm64-ulfo
+            dmg_format: ULFO
           - target: mac
             arch: x64
             runner: macos-latest
+            variant: mac-x64-udbz
+            dmg_format: UDBZ
+          - target: mac
+            arch: x64
+            runner: macos-latest
+            variant: mac-x64-ulfo
+            dmg_format: ULFO
           - target: win
             arch: x64
             runner: windows-latest
+            variant: win-x64-solid
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -107,30 +122,43 @@ jobs:
         env:
           METIS_PACKAGE_PROFILE: lean
           METIS_PACKAGE_ARCH: ${{ matrix.arch }}
+          DEBUG: electron-builder,electron-builder:7z
         run: >-
           npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+          -c.compression=maximum -c.dmg.format=${{ matrix.dmg_format }}
           -c.npmRebuild=false -c.electronDist=resources/electron-dist
-          -c.mac.identity=null -c.directories.output=release/lean-mac-${{ matrix.arch }}
+          -c.mac.identity=null -c.directories.output=release/lean-${{ matrix.variant }}
       - name: Build unsigned Windows x64 installer candidate
         if: matrix.target == 'win'
         shell: bash
         env:
           METIS_PACKAGE_PROFILE: lean
           METIS_PACKAGE_ARCH: x64
+          DEBUG: electron-builder,electron-builder:7z
         run: >-
-          npx electron-builder --config electron-builder.win.yml --win nsis --x64 --publish never
-          -c.npmRebuild=false -c.directories.output=release/lean-win-x64
+          npx electron-builder --config electron-builder.win.yml
+          -c.compression=maximum -c.nsis.differentialPackage=false
+          --win nsis --x64 --publish never
+          -c.npmRebuild=false -c.directories.output=release/lean-${{ matrix.variant }}
       - name: Measure final installer and app tree
         shell: bash
-        run: node scripts/measure-lean-candidate.mjs ${{ matrix.target }} ${{ matrix.arch }} release/lean-${{ matrix.target }}-${{ matrix.arch }}
+        run: node scripts/measure-lean-candidate.mjs ${{ matrix.target }} ${{ matrix.arch }} release/lean-${{ matrix.variant }} ${{ matrix.variant }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: metis-lean-${{ matrix.target }}-${{ matrix.arch }}-unsigned
+          name: metis-lean-${{ matrix.variant }}-measurement
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          path: build/lean-measurements/${{ matrix.target }}-${{ matrix.arch }}.json
+        if: always()
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: success()
+        with:
+          name: metis-lean-${{ matrix.variant }}-unsigned
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
           path: |
-            release/lean-${{ matrix.target }}-${{ matrix.arch }}/*.dmg
-            release/lean-${{ matrix.target }}-${{ matrix.arch }}/*.exe
-            release/lean-${{ matrix.target }}-${{ matrix.arch }}/*.blockmap
-            build/lean-measurements/${{ matrix.target }}-${{ matrix.arch }}.json
+            release/lean-${{ matrix.variant }}/*.dmg
+            release/lean-${{ matrix.variant }}/*.exe
+            release/lean-${{ matrix.variant }}/*.blockmap
