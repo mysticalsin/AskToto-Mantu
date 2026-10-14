@@ -124,6 +124,8 @@ describe('admin speech route evidence versioning', () => {
       return matchRoute(request, { ...ctx, request, url: new URL(request.url) })
     }
     try {
+      expect((await post(evidenceBody(9)))?.status).toBe(409)
+      expect(database.prepare('SELECT COUNT(*) AS n FROM speech_route_evidence').get()).toMatchObject({ n: 0 })
       const inserted = await post(evidenceBody(0))
       expect(inserted?.status).toBe(200)
       const first = (await inserted!.json()) as { id: string; version: number }
