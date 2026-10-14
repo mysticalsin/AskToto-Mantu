@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { inventoryCoreFiles, packageInventoryIdentity, validatePackageInventory } from './package-inventory.mjs'
+import { removeCloudflareEmbedPlaceholder } from './lean-package-stage.mjs'
 import type { PackageInventoryV1 } from '../../src/shared/package-profile'
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -31,6 +32,37 @@ function inventory(): PackageInventoryV1 {
 }
 
 describe('lean package inventory contract', () => {
+  it('omits only the cloudflare directory placeholder while preserving real zero-byte files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-cloudflare-'))
+    try {
+      await mkdir(join(root, 'cloudflare-embed', 'nested'), { recursive: true })
+      await writeFile(join(root, 'cloudflare-embed', '.gitkeep'), '')
+      await writeFile(join(root, 'cloudflare-embed', 'empty-runtime-resource'), '')
+      await writeFile(join(root, 'cloudflare-embed', 'nested', '.gitkeep'), '')
+
+      await expect(removeCloudflareEmbedPlaceholder(root)).resolves.toBe(true)
+      await expect(inventoryCoreFiles(root)).resolves.toMatchObject([
+        { path: 'cloudflare-embed/empty-runtime-resource', bytes: 0 },
+        { path: 'cloudflare-embed/nested/.gitkeep', bytes: 0 }
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed if the exact staging placeholder is not the known empty regular file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-cloudflare-invalid-'))
+    const placeholder = join(root, 'cloudflare-embed', '.gitkeep')
+    try {
+      await mkdir(join(root, 'cloudflare-embed'), { recursive: true })
+      await writeFile(placeholder, 'unexpected payload')
+      await expect(removeCloudflareEmbedPlaceholder(root)).rejects.toThrow(/zero-byte regular file/)
+      await expect(inventoryCoreFiles(root)).resolves.toMatchObject([{ path: 'cloudflare-embed/.gitkeep', bytes: 18 }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('uses a canonical ordered payload identity that validates for one target', () => {
     expect(validatePackageInventory(inventory()).arch).toBe('arm64')
   })
