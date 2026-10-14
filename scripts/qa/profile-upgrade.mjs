@@ -3,14 +3,7 @@
 // to one provenance-bound 1.9.7 candidate. All app data is synthetic and lives under RUNNER_TEMP.
 // This lane is intentionally fail-closed: only a complete set of PASS rows is accepted.
 import { createHash } from 'node:crypto'
-import {
-  existsSync,
-  mkdirSync,
-  rmSync,
-  readFileSync,
-  statSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, mkdirSync, rmSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -64,7 +57,7 @@ export const REQUIRED_CHECKS = Object.freeze([
 ])
 
 const SYNTHETIC = Object.freeze({
-  apiKey: 'qa-synthetic-never-valid-1f49c751',
+  apiKey: 'synthetic-only',
   meetingTitle: 'QA Synthetic Upgrade Meeting 71f9',
   meetingLine: 'Synthetic transcript continuity 3b20',
   noteTitle: 'QA Synthetic Upgrade Note 19d4',
@@ -80,55 +73,102 @@ export function sha256Bytes(bytes) {
 
 /** Validate the exact hosted candidate run and its Windows Setup byte binding before installation. */
 export function verifyCandidateIdentity(run, provenance, candidateRun, approvedCommit, approvedRef) {
-  if (!COMMIT.test(String(approvedCommit ?? ''))) throw new Error('an explicit approved 40-character candidate commit is required.')
-  if (typeof approvedRef !== 'string' || !approvedRef.trim()) throw new Error('an explicit approved candidate ref is required.')
+  if (!COMMIT.test(String(approvedCommit ?? '')))
+    throw new Error('an explicit approved 40-character candidate commit is required.')
+  if (typeof approvedRef !== 'string' || !approvedRef.trim())
+    throw new Error('an explicit approved candidate ref is required.')
   const problems = candidateRunProblems(run, candidateRun)
   if (problems.length) throw new Error(problems.join('\n'))
-  if (run.repository?.full_name !== REPOSITORY) throw new Error(`candidate run repository is not ${REPOSITORY}.`)
-  if (provenance.repository !== REPOSITORY) throw new Error(`candidate provenance repository is not ${REPOSITORY}.`)
+  if (run.repository?.full_name !== REPOSITORY)
+    throw new Error(`candidate run repository is not ${REPOSITORY}.`)
+  if (provenance.repository !== REPOSITORY)
+    throw new Error(`candidate provenance repository is not ${REPOSITORY}.`)
   assertCandidateProvenance(provenance, candidateRun, run.run_attempt)
-  if (provenance.run?.attempt !== run.run_attempt) throw new Error('candidate provenance attempt differs from the Actions run attempt.')
-  if (run.head_sha !== approvedCommit) throw new Error('candidate run head SHA differs from the explicitly approved commit.')
-  if (run.head_branch !== approvedRef) throw new Error('candidate run ref differs from the explicitly approved ref.')
-  if (provenance.version !== CANDIDATE_VERSION) throw new Error(`candidate version is ${provenance.version}, expected ${CANDIDATE_VERSION}.`)
-  if (provenance.commit !== run.head_sha) throw new Error('candidate provenance commit differs from the Actions run head SHA.')
+  if (provenance.run?.attempt !== run.run_attempt)
+    throw new Error('candidate provenance attempt differs from the Actions run attempt.')
+  if (run.head_sha !== approvedCommit)
+    throw new Error('candidate run head SHA differs from the explicitly approved commit.')
+  if (run.head_branch !== approvedRef)
+    throw new Error('candidate run ref differs from the explicitly approved ref.')
+  if (provenance.version !== CANDIDATE_VERSION)
+    throw new Error(`candidate version is ${provenance.version}, expected ${CANDIDATE_VERSION}.`)
+  if (provenance.commit !== run.head_sha)
+    throw new Error('candidate provenance commit differs from the Actions run head SHA.')
   const build = provenance.builds?.find((entry) => entry.variant === 'win')
   if (!build || build.platform !== 'win' || build.version !== CANDIDATE_VERSION) {
     throw new Error('candidate provenance has no Windows 1.9.7 Setup build.')
   }
-  const matches = (build.assets ?? []).filter((asset) => asset.name === `Metis-Setup-${CANDIDATE_VERSION}.exe`)
-  if (matches.length !== 1 || !SHA256.test(matches[0]?.sha256 ?? '') || !Number.isSafeInteger(matches[0]?.size) || matches[0].size <= 0) {
-    throw new Error('Windows provenance must name exactly one non-empty 1.9.7 Setup installer with a sha256.')
+  const matches = (build.assets ?? []).filter(
+    (asset) => asset.name === `Metis-Setup-${CANDIDATE_VERSION}.exe`
+  )
+  if (
+    matches.length !== 1 ||
+    !SHA256.test(matches[0]?.sha256 ?? '') ||
+    !Number.isSafeInteger(matches[0]?.size) ||
+    matches[0].size <= 0
+  ) {
+    throw new Error(
+      'Windows provenance must name exactly one non-empty 1.9.7 Setup installer with a sha256.'
+    )
   }
-  return { run_id: String(candidateRun), attempt: run.run_attempt, commit: run.head_sha, ref: run.head_branch, version: CANDIDATE_VERSION, sha256: matches[0].sha256 }
+  return {
+    run_id: String(candidateRun),
+    attempt: run.run_attempt,
+    commit: run.head_sha,
+    ref: run.head_branch,
+    version: CANDIDATE_VERSION,
+    sha256: matches[0].sha256
+  }
 }
 
 /** Missing, malformed, skipped, unrun and failing rows all fail the assessment. */
 export function assessUpgradeReport(report, expected = {}) {
   const problems = []
-  if (!report || typeof report !== 'object' || Array.isArray(report)) return { accepted: false, problems: ['report is not an object'] }
+  if (!report || typeof report !== 'object' || Array.isArray(report))
+    return { accepted: false, problems: ['report is not an object'] }
   if (report.schema !== 1) problems.push('report schema must be 1')
   if (report.platform !== 'win32') problems.push('platform must be win32')
-  if (report.baseline?.version !== BASELINE.version || report.baseline?.tag !== BASELINE.tag) problems.push('baseline identity is not pinned to v1.9.6-unsigned')
-  if (report.candidate?.version !== CANDIDATE_VERSION) problems.push('candidate version must be 1.9.7')
+  if (report.baseline?.version !== BASELINE.version || report.baseline?.tag !== BASELINE.tag)
+    problems.push('baseline identity is not pinned to v1.9.6-unsigned')
+  if (report.candidate?.version !== CANDIDATE_VERSION)
+    problems.push('candidate version must be 1.9.7')
   if (report.error !== null) problems.push('scenario contains an execution error')
-  if (!SHA256.test(report.baseline?.sha256 ?? '') || (expected.baselineSha256 && report.baseline.sha256 !== expected.baselineSha256)) {
+  if (
+    !SHA256.test(report.baseline?.sha256 ?? '') ||
+    (expected.baselineSha256 && report.baseline.sha256 !== expected.baselineSha256)
+  ) {
     problems.push('baseline installer sha256 is missing or does not match the expected bytes')
   }
-  if (!SHA256.test(report.candidate?.sha256 ?? '') || (expected.candidateSha256 && report.candidate.sha256 !== expected.candidateSha256)) {
+  if (
+    !SHA256.test(report.candidate?.sha256 ?? '') ||
+    (expected.candidateSha256 && report.candidate.sha256 !== expected.candidateSha256)
+  ) {
     problems.push('candidate installer sha256 is missing or does not match the expected bytes')
   }
-  if (!COMMIT.test(report.candidate?.commit ?? '') || (expected.commit && report.candidate.commit !== expected.commit)) {
+  if (
+    !COMMIT.test(report.candidate?.commit ?? '') ||
+    (expected.commit && report.candidate.commit !== expected.commit)
+  ) {
     problems.push('candidate commit is missing or does not match the expected run')
   }
-  if (typeof report.candidate?.ref !== 'string' || !report.candidate.ref || (expected.ref && report.candidate.ref !== expected.ref)) {
+  if (
+    typeof report.candidate?.ref !== 'string' ||
+    !report.candidate.ref ||
+    (expected.ref && report.candidate.ref !== expected.ref)
+  ) {
     problems.push('candidate ref is missing or does not match the expected ref')
   }
-  if (String(report.candidate?.run_id ?? '') !== String(expected.candidateRun ?? report.candidate?.run_id ?? '') || !/^[1-9]\d*$/.test(String(report.candidate?.run_id ?? ''))) {
+  if (
+    String(report.candidate?.run_id ?? '') !== String(expected.candidateRun ?? report.candidate?.run_id ?? '') ||
+    !/^[1-9]\d*$/.test(String(report.candidate?.run_id ?? ''))
+  ) {
     problems.push('candidate run id is missing or unexpected')
   }
-  if (!Number.isSafeInteger(report.candidate?.attempt) || report.candidate.attempt < 1 ||
-    (Number.isSafeInteger(expected.attempt) && report.candidate.attempt !== expected.attempt)) {
+  if (
+    !Number.isSafeInteger(report.candidate?.attempt) ||
+    report.candidate.attempt < 1 ||
+    (Number.isSafeInteger(expected.attempt) && report.candidate.attempt !== expected.attempt)
+  ) {
     problems.push('candidate attempt is missing, invalid, or does not match the expected run attempt')
   }
   const checks = Array.isArray(report.checks) ? report.checks : []
@@ -137,10 +177,13 @@ export function assessUpgradeReport(report, expected = {}) {
   for (const id of REQUIRED_CHECKS) {
     const row = byId.get(id)
     if (!row) problems.push(`required check missing: ${id}`)
-    else if (row.status !== 'PASS') problems.push(`${id} status is ${String(row.status ?? 'missing')}, expected PASS`)
-    else if (typeof row.evidence !== 'string' || row.evidence.length < 8) problems.push(`${id} has no evidence summary`)
+    else if (row.status !== 'PASS')
+      problems.push(`${id} status is ${String(row.status ?? 'missing')}, expected PASS`)
+    else if (typeof row.evidence !== 'string' || row.evidence.length < 8)
+      problems.push(`${id} has no evidence summary`)
   }
-  for (const row of checks) if (!REQUIRED_CHECKS.includes(row?.id)) problems.push(`unexpected check id: ${String(row?.id)}`)
+  for (const row of checks)
+    if (!REQUIRED_CHECKS.includes(row?.id)) problems.push(`unexpected check id: ${String(row?.id)}`)
   return { accepted: problems.length === 0, problems }
 }
 
@@ -171,7 +214,11 @@ function disposableRootsAreSafe(installRoot, runnerRoot, reportPath) {
 }
 
 function rememberOwnedProcesses(ownership, requireRoot = false) {
-  const census = ownedCensus({ platform: 'win32', mainPid: ownership.child.pid, installRoot: ownership.installRoot })
+  const census = ownedCensus({
+    platform: 'win32',
+    mainPid: ownership.child.pid,
+    installRoot: ownership.installRoot
+  })
   for (const entry of census.owned) ownership.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
   if (requireRoot && !census.owned.some((entry) => entry.pid === ownership.child.pid)) {
     ownership.censusAvailable = false
@@ -179,14 +226,37 @@ function rememberOwnedProcesses(ownership, requireRoot = false) {
   }
 }
 
-export function ownedTreeHasExited({ rootExited, censusAvailable, owned, current, installRoot, platform = 'win32' }) {
-  return rootExited === true && censusAvailable === true &&
+export function ownedTreeHasExited({
+  rootExited,
+  censusAvailable,
+  owned,
+  current,
+  installRoot,
+  platform = 'win32'
+}) {
+  return (
+    rootExited === true &&
+    censusAvailable === true &&
     survivors(owned, current, { installRoot, platform }).length === 0
+  )
 }
 
-export function cleanShutdownPassed({ quitDelivered, rootExitCode, rootSignalCode, treeExited, forcedCleanup, transportReleased }) {
-  return quitDelivered === true && rootExitCode === 0 && rootSignalCode === null && treeExited === true &&
-    forcedCleanup === false && transportReleased === true
+export function cleanShutdownPassed({
+  quitDelivered,
+  rootExitCode,
+  rootSignalCode,
+  treeExited,
+  forcedCleanup,
+  transportReleased
+}) {
+  return (
+    quitDelivered === true &&
+    rootExitCode === 0 &&
+    rootSignalCode === null &&
+    treeExited === true &&
+    forcedCleanup === false &&
+    transportReleased === true
+  )
 }
 
 export function noteReadMatchesExpected(result, expected) {
@@ -277,7 +347,13 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
   const cdpPort = await freeLoopbackPort()
   let inspectPort = await freeLoopbackPort()
   while (inspectPort === cdpPort) inspectPort = await freeLoopbackPort()
-  const launched = launchPackagedCdp({ executablePath: executable, env, cdpPort, inspectPort, platform: 'win32' })
+  const launched = launchPackagedCdp({
+    executablePath: executable,
+    env,
+    cdpPort,
+    inspectPort,
+    platform: 'win32'
+  })
   const ownership = {
     child: launched.child,
     installRoot,
@@ -295,7 +371,8 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
   try {
     rememberOwnedProcesses(ownership, true)
     browser = await waitFor(async () => {
-      if (packagedLaunchFailed(launched.child, launched.latches)) throw new Error('packaged process exited before CDP attached')
+      if (packagedLaunchFailed(launched.child, launched.latches))
+        throw new Error('packaged process exited before CDP attached')
       rememberOwnedProcesses(ownership)
       const attachment = await attachOwnedCdp({
         endpoint: launched.cdpEndpoint,
@@ -314,7 +391,10 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
     const page = await waitFor(async () => {
       for (const candidate of findPages(browser)) {
         try {
-          if (await candidate.evaluate(() => Boolean(window.toto && typeof window.toto.getSettings === 'function'))) return candidate
+          if (
+            await candidate.evaluate(() => Boolean(window.toto && typeof window.toto.getSettings === 'function'))
+          )
+            return candidate
         } catch { /* renderer still booting */ }
       }
       return null
@@ -322,9 +402,14 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
     return { ...launched, browser, page, profile, qaRoot, ownership }
   } catch (error) {
     const treeExited = await stopOwnedProcessTree(ownership)
-    if (!treeExited) throw new Error(`packaged launch failed and its complete owned process tree was not verified stopped: ${error instanceof Error ? error.message : String(error)}`)
+    if (!treeExited)
+      throw new Error(
+        `packaged launch failed and its complete owned process tree was not verified stopped: ${error instanceof Error ? error.message : String(error)}`
+      )
     if (!(await releaseOwnedTransports(ownership))) {
-      throw new Error(`packaged launch failed and its CDP transport cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(
+        `packaged launch failed and its CDP transport cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
     throw error
   }
@@ -332,7 +417,11 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
 
 async function stopApp(app) {
   let quitDelivered = false
-  try { rememberOwnedProcesses(app.ownership) } catch { app.ownership.censusAvailable = false }
+  try {
+    rememberOwnedProcesses(app.ownership)
+  } catch {
+    app.ownership.censusAvailable = false
+  }
   try {
     quitDelivered = await app.page.evaluate(async () => {
       if (!window.toto || typeof window.toto.quit !== 'function') return false
@@ -375,13 +464,34 @@ function writeReport(path, report) {
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 }
 
-async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot }) {
-  const checks = REQUIRED_CHECKS.map((id) => ({ id, status: 'NOT_RUN', evidence: 'check was not reached' }))
+async function runUpgrade({
+  baselineInstaller,
+  candidateInstaller,
+  candidateRun,
+  candidateAttempt,
+  candidateCommit,
+  candidateRef,
+  reportPath,
+  installRoot,
+  runnerRoot
+}) {
+  const checks = REQUIRED_CHECKS.map((id) => ({
+    id,
+    status: 'NOT_RUN',
+    evidence: 'check was not reached'
+  }))
   const report = {
     schema: 1,
     platform: process.platform,
     baseline: { tag: BASELINE.tag, version: BASELINE.version, sha256: null },
-    candidate: { run_id: String(candidateRun), attempt: Number(candidateAttempt), commit: String(candidateCommit), ref: String(candidateRef), version: CANDIDATE_VERSION, sha256: null },
+    candidate: {
+      run_id: String(candidateRun),
+      attempt: Number(candidateAttempt),
+      commit: String(candidateCommit),
+      ref: String(candidateRef),
+      version: CANDIDATE_VERSION,
+      sha256: null
+    },
     checks,
     error: null,
     coverage_limitations: []
@@ -403,34 +513,74 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
   let overallError = null
   const safeRoots = disposableRootsAreSafe(installRoot, runnerRoot, reportPath)
   try {
-    if (process.platform !== 'win32') throw new Error('This acceptance harness must run on a hosted Windows runner.')
-    if (!safeRoots) throw new Error('disposable install/profile roots must be separate RUNNER_TEMP children, and the report must be outside both.')
+    if (process.platform !== 'win32')
+      throw new Error('This acceptance harness must run on a hosted Windows runner.')
+    if (!safeRoots)
+      throw new Error(
+        'disposable install/profile roots must be separate RUNNER_TEMP children, and the report must be outside both.'
+      )
     const baselineHash = hashFile(baselineInstaller)
     report.baseline.sha256 = baselineHash
-    record(checks, 'baseline_installer_identity', baselineHash === BASELINE.sha256, `sha256=${baselineHash}`)
-    if (baselineHash !== BASELINE.sha256) throw new Error('downloaded baseline installer is not the pinned public 1.9.6 byte set')
+    record(
+      checks,
+      'baseline_installer_identity',
+      baselineHash === BASELINE.sha256,
+      `sha256=${baselineHash}`
+    )
+    if (baselineHash !== BASELINE.sha256)
+      throw new Error('downloaded baseline installer is not the pinned public 1.9.6 byte set')
 
     const run = JSON.parse(readFileSync(identityPath, 'utf8'))
     const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-    const identity = verifyCandidateIdentity(run, provenance, candidateRun, candidateCommit, candidateRef)
+    const identity = verifyCandidateIdentity(
+      run,
+      provenance,
+      candidateRun,
+      candidateCommit,
+      candidateRef
+    )
     const candidateHash = hashFile(candidateInstaller)
     report.candidate.sha256 = candidateHash
-    record(checks, 'candidate_installer_identity', candidateHash === identity.sha256, `sha256=${candidateHash}; run=${identity.run_id}; attempt=${identity.attempt}`)
-    if (candidateHash !== identity.sha256 || identity.commit !== candidateCommit || identity.attempt !== Number(candidateAttempt)) {
-      throw new Error('candidate installer/run identity differs from the caller-pinned artifact identity')
+    record(
+      checks,
+      'candidate_installer_identity',
+      candidateHash === identity.sha256,
+      `sha256=${candidateHash}; run=${identity.run_id}; attempt=${identity.attempt}`
+    )
+    if (
+      candidateHash !== identity.sha256 ||
+      identity.commit !== candidateCommit ||
+      identity.attempt !== Number(candidateAttempt)
+    ) {
+      throw new Error(
+        'candidate installer/run identity differs from the caller-pinned artifact identity'
+      )
     }
 
     mkdirSync(runnerRoot, { recursive: true })
     mkdirSync(installRoot, { recursive: true })
     const { spawnSync } = await import('node:child_process')
     const install = (installer) => {
-      const result = spawnSync(installer, ['/S', `/D=${installRoot}`], { windowsHide: true, timeout: 5 * 60_000, encoding: 'utf8' })
-      if (result.error || result.status !== 0) throw new Error(`installer failed with status ${result.status ?? 'null'}${result.error ? ` (${result.error.message})` : ''}`)
+      const result = spawnSync(installer, ['/S', `/D=${installRoot}`], {
+        windowsHide: true,
+        timeout: 5 * 60_000,
+        encoding: 'utf8'
+      })
+      if (result.error || result.status !== 0)
+        throw new Error(
+          `installer failed with status ${result.status ?? 'null'}${result.error ? ` (${result.error.message})` : ''}`
+        )
     }
     install(baselineInstaller)
     const baselineExe = join(installRoot, 'Metis.exe')
-      if (statSync(baselineExe).size <= 0) throw new Error('baseline installed executable was empty')
-    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder, installRoot, launchRecords)
+    if (statSync(baselineExe).size <= 0) throw new Error('baseline installed executable was empty')
+    activeApp = await startApp(
+      baselineExe,
+      join(runnerRoot, 'windows-home'),
+      keyFolder,
+      installRoot,
+      launchRecords
+    )
     const settings = await appCall(activeApp, async (synthetic) => {
       const initial = await window.toto.getSettings()
       const saved = await window.toto.setSettings({
@@ -445,8 +595,12 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
       })
       const keyResult = await window.toto.setApiKey('openai', synthetic.apiKey)
       const meeting = await window.toto.saveTranscript({
-        title: synthetic.meetingTitle, mode: 'general', startedAt: 1792000000000,
-        durationMs: 64000, lines: [{ speaker: 'you', text: synthetic.meetingLine, t: 1792000002000 }], recap: 'Synthetic encrypted recap 495a'
+        title: synthetic.meetingTitle,
+        mode: 'general',
+        startedAt: 1792000000000,
+        durationMs: 64000,
+        lines: [{ speaker: 'you', text: synthetic.meetingLine, t: 1792000002000 }],
+        recap: 'Synthetic encrypted recap 495a'
       })
       const note = await window.toto.saveNote({
         title: synthetic.noteTitle, mode: 'general',
@@ -458,7 +612,8 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
           onboardingDone: saved.onboardingDone,
           encryptTranscripts: saved.encryptTranscripts,
           temperature: saved.temperature,
-          providersBlocked: Array.isArray(saved.allowedProviders) && saved.allowedProviders.length === 0
+        providersBlocked:
+          Array.isArray(saved.allowedProviders) && saved.allowedProviders.length === 0
         },
         hasOpenAi: keyResult.hasKeys?.openai === true,
         hasKeysOpenAi: saved.hasKeys?.openai === true,
@@ -467,49 +622,125 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
         after: await window.toto.getSettings()
       }
     }, SYNTHETIC)
-    record(checks, 'baseline_install_version', settings.initialVersion === BASELINE.version, `version=${String(settings.initialVersion)}`)
-    record(checks, 'synthetic_cloud_provider_route_blocked', settings.saved.providersBlocked, 'synthetic managed policy denies cloud providers; packaged app receives no runner credentials')
-    record(checks, 'synthetic_encrypted_settings_written', settings.saved.onboardingDone === true && settings.saved.encryptTranscripts === true && settings.saved.temperature === 0.42, 'settings persisted through app IPC')
-    record(checks, 'synthetic_api_key_written', settings.hasOpenAi, 'synthetic OpenAI key accepted through app IPC')
-    record(checks, 'synthetic_encrypted_meeting_written', typeof settings.meetingPath === 'string' && settings.meetingPath.length > 0, 'synthetic meeting saved through app IPC')
-    record(checks, 'synthetic_encrypted_note_written', typeof settings.notePath === 'string' && settings.notePath.length > 0, 'synthetic note saved through app IPC')
-    if (settings.initialVersion !== BASELINE.version || !settings.saved.encryptTranscripts || !settings.hasOpenAi || !settings.meetingPath || !settings.notePath) {
+    record(
+      checks,
+      'baseline_install_version',
+      settings.initialVersion === BASELINE.version,
+      `version=${String(settings.initialVersion)}`
+    )
+    record(
+      checks,
+      'synthetic_cloud_provider_route_blocked',
+      settings.saved.providersBlocked,
+      'synthetic managed policy denies cloud providers; packaged app receives no runner credentials'
+    )
+    record(
+      checks,
+      'synthetic_encrypted_settings_written',
+      settings.saved.onboardingDone === true &&
+        settings.saved.encryptTranscripts === true &&
+        settings.saved.temperature === 0.42,
+      'settings persisted through app IPC'
+    )
+    record(
+      checks,
+      'synthetic_api_key_written',
+      settings.hasOpenAi,
+      'synthetic OpenAI key accepted through app IPC'
+    )
+    record(
+      checks,
+      'synthetic_encrypted_meeting_written',
+      typeof settings.meetingPath === 'string' && settings.meetingPath.length > 0,
+      'synthetic meeting saved through app IPC'
+    )
+    record(
+      checks,
+      'synthetic_encrypted_note_written',
+      typeof settings.notePath === 'string' && settings.notePath.length > 0,
+      'synthetic note saved through app IPC'
+    )
+    if (
+      settings.initialVersion !== BASELINE.version ||
+      !settings.saved.encryptTranscripts ||
+      !settings.hasOpenAi ||
+      !settings.meetingPath ||
+      !settings.notePath
+    ) {
       throw new Error('baseline app did not create the expected synthetic profile state')
     }
     meetingFolder = settings.after.resolvedMeetingsFolder
-    if (typeof meetingFolder !== 'string' || !inside(keyFolder, meetingFolder) || !inside(meetingFolder, settings.meetingPath) || !inside(meetingFolder, settings.notePath)) {
+    if (
+      typeof meetingFolder !== 'string' ||
+      !inside(keyFolder, meetingFolder) ||
+      !inside(meetingFolder, settings.meetingPath) ||
+      !inside(meetingFolder, settings.notePath)
+    ) {
       throw new Error('app reported a data path outside the disposable isolated profile')
     }
     baselineMeetingPath = settings.meetingPath
     baselineNotePath = settings.notePath
-    if (!checkEncryptedFile(baselineMeetingPath, SYNTHETIC.meetingLine) || !checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer)) {
-      throw new Error('one or more synthetic meeting/note files are not ATKENC2 ciphertext or contain their plaintext marker')
+    if (
+      !checkEncryptedFile(baselineMeetingPath, SYNTHETIC.meetingLine) ||
+      !checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer)
+    ) {
+      throw new Error(
+        'one or more synthetic meeting/note files are not ATKENC2 ciphertext or contain their plaintext marker'
+      )
     }
     baselineMeetingHash = hashFile(baselineMeetingPath)
     baselineNoteHash = hashFile(baselineNotePath)
     baselineSecretKeyHash = hashFile(join(keyFolder, 'secret-key.bin'))
     baselineSecretKeySize = statSync(join(keyFolder, 'secret-key.bin')).size
     baselineApiKeyHash = hashFile(join(keyFolder, 'key-openai.bin'))
-    record(checks, 'meeting_and_note_ciphertext_at_rest', true, `meeting=${baselineMeetingHash}; note=${baselineNoteHash}`)
+    record(
+      checks,
+      'meeting_and_note_ciphertext_at_rest',
+      true,
+      `meeting=${baselineMeetingHash}; note=${baselineNoteHash}`
+    )
 
     const baselineExit = await stopApp(activeApp)
     activeApp = null
-    record(checks, 'baseline_clean_shutdown', baselineExit.passed,
-      `quit=${baselineExit.quitDelivered}; rootExit0=${baselineExit.exited}; ownedTreeExited=${baselineExit.treeExited}; forcedCleanup=${baselineExit.forcedCleanup}`)
-    record(checks, 'baseline_cdp_transport_released', baselineExit.transportReleased, 'PID-bound CDP transport and any late-attach cleanup receipts were acknowledged')
+    record(
+      checks,
+      'baseline_clean_shutdown',
+      baselineExit.passed,
+      `quit=${baselineExit.quitDelivered}; rootExit0=${baselineExit.exited}; ownedTreeExited=${baselineExit.treeExited}; forcedCleanup=${baselineExit.forcedCleanup}`
+    )
+    record(
+      checks,
+      'baseline_cdp_transport_released',
+      baselineExit.transportReleased,
+      'PID-bound CDP transport and any late-attach cleanup receipts were acknowledged'
+    )
     if (!baselineExit.passed) throw new Error('baseline app process tree did not shut down cleanly')
 
     // Re-run the same official Setup installer with the same /D target: this is an in-place replacement,
     // not a side-by-side install or a profile copy/restore.
     install(candidateInstaller)
-    if (!statSync(baselineExe).isFile()) throw new Error('candidate installer removed the stable install-root executable')
-    record(checks, 'candidate_replaced_same_install_root', true, 'candidate Setup reran at the unchanged disposable install root')
-    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder, installRoot, launchRecords)
+    if (!statSync(baselineExe).isFile())
+      throw new Error('candidate installer removed the stable install-root executable')
+    record(
+      checks,
+      'candidate_replaced_same_install_root',
+      true,
+      'candidate Setup reran at the unchanged disposable install root'
+    )
+    activeApp = await startApp(
+      baselineExe,
+      join(runnerRoot, 'windows-home'),
+      keyFolder,
+      installRoot,
+      launchRecords
+    )
 
     const after = await appCall(activeApp, async ({ noteFile, expected }) => {
       const settingsNow = await window.toto.getSettings()
       const history = await window.toto.recallList()
-      const meeting = Array.isArray(history) ? history.find((item) => item.title === expected.meetingTitle) : null
+      const meeting = Array.isArray(history)
+        ? history.find((item) => item.title === expected.meetingTitle)
+        : null
       const read = meeting?.file ? await window.toto.recallRead(meeting.file) : null
       const noteRead = await window.toto.recallRead(noteFile)
       return {
@@ -517,22 +748,78 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
         onboardingDone: settingsNow.onboardingDone,
         encryptTranscripts: settingsNow.encryptTranscripts,
         temperature: settingsNow.temperature,
-        providersBlocked: Array.isArray(settingsNow.allowedProviders) && settingsNow.allowedProviders.length === 0,
+        providersBlocked:
+          Array.isArray(settingsNow.allowedProviders) && settingsNow.allowedProviders.length === 0,
         hasOpenAi: settingsNow.hasKeys?.openai === true,
         historyTitles: Array.isArray(history) ? history.map((item) => item.title) : null,
-        meeting: meeting ? { file: meeting.file, title: meeting.title, locked: meeting.locked === true } : null,
-        read: read ? { ok: read.ok, title: read.title, lines: read.lines?.map((line) => line.text) ?? [] } : null,
+        meeting: meeting
+          ? { file: meeting.file, title: meeting.title, locked: meeting.locked === true }
+          : null,
+        read: read
+          ? { ok: read.ok, title: read.title, lines: read.lines?.map((line) => line.text) ?? [] }
+          : null,
         noteRead
       }
     }, { noteFile: basename(baselineNotePath), expected: SYNTHETIC })
-    record(checks, 'candidate_launch_version', after.version === CANDIDATE_VERSION, `version=${String(after.version)}`)
-    record(checks, 'settings_app_visible_after_upgrade', after.onboardingDone === true && after.encryptTranscripts === true && after.temperature === 0.42 && after.providersBlocked, 'settings values and synthetic provider-blocking policy read from candidate app IPC')
-    record(checks, 'api_key_app_visible_after_upgrade', after.hasOpenAi === true, 'hasKeys.openai=true from candidate app IPC')
-    record(checks, 'meeting_history_app_visible_after_upgrade', Array.isArray(after.historyTitles) && after.historyTitles.includes(SYNTHETIC.meetingTitle), 'History contains the synthetic meeting title')
-    record(checks, 'meeting_content_app_visible_after_upgrade', after.read?.ok === true && after.read.title === SYNTHETIC.meetingTitle && after.read.lines.includes(SYNTHETIC.meetingLine), 'candidate recallRead decrypted the synthetic transcript')
-    record(checks, 'windows_dpapi_keystore_preserved', baselineSecretKeySize > 32 && statSync(join(keyFolder, 'secret-key.bin')).size === baselineSecretKeySize && hashFile(join(keyFolder, 'secret-key.bin')) === baselineSecretKeyHash && hashFile(join(keyFolder, 'key-openai.bin')) === baselineApiKeyHash && after.hasOpenAi, 'non-raw Windows safeStorage-wrapped key and encrypted provider key are byte-identical; app decrypted key after upgrade')
-    record(checks, 'meeting_ciphertext_preserved', hashFile(baselineMeetingPath) === baselineMeetingHash && checkEncryptedFile(baselineMeetingPath, SYNTHETIC.meetingLine), 'meeting ciphertext is byte-identical and remains encrypted')
-    record(checks, 'note_ciphertext_preserved', hashFile(baselineNotePath) === baselineNoteHash && checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer), 'note ciphertext is byte-identical and remains encrypted')
+    record(
+      checks,
+      'candidate_launch_version',
+      after.version === CANDIDATE_VERSION,
+      `version=${String(after.version)}`
+    )
+    record(
+      checks,
+      'settings_app_visible_after_upgrade',
+      after.onboardingDone === true &&
+        after.encryptTranscripts === true &&
+        after.temperature === 0.42 &&
+        after.providersBlocked,
+      'settings values and synthetic provider-blocking policy read from candidate app IPC'
+    )
+    record(
+      checks,
+      'api_key_app_visible_after_upgrade',
+      after.hasOpenAi === true,
+      'hasKeys.openai=true from candidate app IPC'
+    )
+    record(
+      checks,
+      'meeting_history_app_visible_after_upgrade',
+      Array.isArray(after.historyTitles) && after.historyTitles.includes(SYNTHETIC.meetingTitle),
+      'History contains the synthetic meeting title'
+    )
+    record(
+      checks,
+      'meeting_content_app_visible_after_upgrade',
+      after.read?.ok === true &&
+        after.read.title === SYNTHETIC.meetingTitle &&
+        after.read.lines.includes(SYNTHETIC.meetingLine),
+      'candidate recallRead decrypted the synthetic transcript'
+    )
+    record(
+      checks,
+      'windows_dpapi_keystore_preserved',
+      baselineSecretKeySize > 32 &&
+        statSync(join(keyFolder, 'secret-key.bin')).size === baselineSecretKeySize &&
+        hashFile(join(keyFolder, 'secret-key.bin')) === baselineSecretKeyHash &&
+        hashFile(join(keyFolder, 'key-openai.bin')) === baselineApiKeyHash &&
+        after.hasOpenAi,
+      'non-raw Windows safeStorage-wrapped key and encrypted provider key are byte-identical; app decrypted key after upgrade'
+    )
+    record(
+      checks,
+      'meeting_ciphertext_preserved',
+      hashFile(baselineMeetingPath) === baselineMeetingHash &&
+        checkEncryptedFile(baselineMeetingPath, SYNTHETIC.meetingLine),
+      'meeting ciphertext is byte-identical and remains encrypted'
+    )
+    record(
+      checks,
+      'note_ciphertext_preserved',
+      hashFile(baselineNotePath) === baselineNoteHash &&
+        checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer),
+      'note ciphertext is byte-identical and remains encrypted'
+    )
     const noteResult = after.noteRead
     const noteReadable = noteReadMatchesExpected(noteResult, SYNTHETIC)
     const noteEvidence = noteReadable
@@ -540,31 +827,67 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
       : 'FAIL: candidate recallRead did not return the expected synthetic note kind/title/question/answer'
     record(checks, 'note_content_app_visible_after_upgrade', noteReadable, noteEvidence)
     if (!noteReadable) {
-      report.coverage_limitations.push('The candidate did not prove saved-note app-visible decryption; preserved ciphertext alone is not an acceptance substitute.')
+      report.coverage_limitations.push(
+        'The candidate did not prove saved-note app-visible decryption; preserved ciphertext alone is not an acceptance substitute.'
+      )
     }
     const candidateExit = await stopApp(activeApp)
     activeApp = null
-    record(checks, 'candidate_clean_shutdown', candidateExit.passed,
-      `quit=${candidateExit.quitDelivered}; rootExit0=${candidateExit.exited}; ownedTreeExited=${candidateExit.treeExited}; forcedCleanup=${candidateExit.forcedCleanup}`)
-    record(checks, 'candidate_cdp_transport_released', candidateExit.transportReleased, 'PID-bound CDP transport and any late-attach cleanup receipts were acknowledged')
-    if (!after.version || !after.onboardingDone || !after.encryptTranscripts || !after.hasOpenAi || !after.meeting || !after.read?.ok || !noteReadable || !candidateExit.passed) {
+    record(
+      checks,
+      'candidate_clean_shutdown',
+      candidateExit.passed,
+      `quit=${candidateExit.quitDelivered}; rootExit0=${candidateExit.exited}; ownedTreeExited=${candidateExit.treeExited}; forcedCleanup=${candidateExit.forcedCleanup}`
+    )
+    record(
+      checks,
+      'candidate_cdp_transport_released',
+      candidateExit.transportReleased,
+      'PID-bound CDP transport and any late-attach cleanup receipts were acknowledged'
+    )
+    if (
+      !after.version ||
+      !after.onboardingDone ||
+      !after.encryptTranscripts ||
+      !after.hasOpenAi ||
+      !after.meeting ||
+      !after.read?.ok ||
+      !noteReadable ||
+      !candidateExit.passed
+    ) {
       throw new Error('candidate failed at least one app-visible preservation assertion')
     }
   } catch (error) {
     overallError = error instanceof Error ? error.message : String(error)
   } finally {
     if (activeApp) {
-      try { await stopApp(activeApp) } catch (error) {
-        overallError = [overallError, `app cleanup failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join('; ')
+      try {
+        await stopApp(activeApp)
+      } catch (error) {
+        overallError = [
+          overallError,
+          `app cleanup failed: ${error instanceof Error ? error.message : String(error)}`
+        ]
+          .filter(Boolean)
+          .join('; ')
       }
     }
     for (const ownership of launchRecords) {
       if (!ownership.teardownVerified) {
         const treeExited = await stopOwnedProcessTree(ownership)
-        if (!treeExited) overallError = [overallError, 'a launch-owned process tree could not be verified stopped'].filter(Boolean).join('; ')
+        if (!treeExited)
+          overallError = [overallError, 'a launch-owned process tree could not be verified stopped']
+            .filter(Boolean)
+            .join('; ')
       }
-      if (ownership.teardownVerified && !ownership.transportReleased && !(await releaseOwnedTransports(ownership))) {
-        overallError = [overallError, 'a launch-owned CDP transport cleanup receipt was not acknowledged'].filter(Boolean).join('; ')
+      if (
+        ownership.teardownVerified &&
+        !ownership.transportReleased &&
+        !(await releaseOwnedTransports(ownership))
+      ) {
+        overallError = [overallError, 'a launch-owned CDP transport cleanup receipt was not acknowledged']
+          .filter(Boolean)
+          .join('; ')
       }
     }
     let removed = false
@@ -576,17 +899,31 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
         rmSync(runnerRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
         removed = !existsSync(installRoot) && !existsSync(runnerRoot)
       } catch (error) {
-        overallError = [overallError, `disposable root cleanup failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join('; ')
+        overallError = [
+          overallError,
+          `disposable root cleanup failed: ${error instanceof Error ? error.message : String(error)}`
+        ]
+          .filter(Boolean)
+          .join('; ')
       }
     }
-    record(checks, 'disposable_roots_removed', removed, removed
-      ? 'both isolated install and synthetic profile roots were recursively removed and verified absent'
-      : 'FAIL: one or both isolated roots remain, cleanup paths were unsafe, or a launch-owned process tree remains unverified')
-    if (!removed && !overallError) overallError = 'disposable install/profile roots could not be verified absent after cleanup.'
+    record(
+      checks,
+      'disposable_roots_removed',
+      removed,
+      removed
+        ? 'both isolated install and synthetic profile roots were recursively removed and verified absent'
+        : 'FAIL: one or both isolated roots remain, cleanup paths were unsafe, or a launch-owned process tree remains unverified'
+    )
+    if (!removed && !overallError)
+      overallError = 'disposable install/profile roots could not be verified absent after cleanup.'
     report.error = overallError
     report.assessment = assessUpgradeReport(report, {
-      candidateRun, candidateSha256: report.candidate.sha256, commit: candidateCommit,
-      ref: candidateRef, attempt: Number(candidateAttempt)
+      candidateRun,
+      candidateSha256: report.candidate.sha256,
+      commit: candidateCommit,
+      ref: candidateRef,
+      attempt: Number(candidateAttempt)
     })
     writeReport(reportPath, report)
   }
@@ -597,10 +934,23 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
   }
 }
 
-function verifyCandidateCommand(runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath) {
+function verifyCandidateCommand(
+  runPath,
+  provenancePath,
+  candidateRun,
+  approvedCommit,
+  approvedRef,
+  outputPath
+) {
   const run = JSON.parse(readFileSync(runPath, 'utf8'))
   const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-  const identity = verifyCandidateIdentity(run, provenance, candidateRun, approvedCommit, approvedRef)
+  const identity = verifyCandidateIdentity(
+    run,
+    provenance,
+    candidateRun,
+    approvedCommit,
+    approvedRef
+  )
   writeFileSync(outputPath, `${JSON.stringify(identity, null, 2)}\n`)
 }
 
@@ -608,16 +958,53 @@ async function main(argv) {
   const [command, ...args] = argv
   if (command === 'verify-candidate') {
     const [runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath] = args
-    if (!runPath || !provenancePath || !candidateRun || !approvedCommit || !approvedRef || !outputPath) throw new Error('usage: profile-upgrade.mjs verify-candidate <run.json> <provenance.json> <run-id> <approved-commit> <approved-ref> <identity.json>')
+    if (!runPath || !provenancePath || !candidateRun || !approvedCommit || !approvedRef || !outputPath)
+      throw new Error(
+        'usage: profile-upgrade.mjs verify-candidate <run.json> <provenance.json> <run-id> <approved-commit> <approved-ref> <identity.json>'
+      )
     verifyCandidateCommand(runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath)
     return
   }
   if (command === 'run') {
-    const [baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot] = args
-    if (![baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot].every(Boolean)) {
-      throw new Error('usage: profile-upgrade.mjs run <baseline.exe> <candidate.exe> <run-id> <attempt> <commit> <ref> <report.json> <install-root> <runner-root>')
+    const [
+      baselineInstaller,
+      candidateInstaller,
+      candidateRun,
+      candidateAttempt,
+      candidateCommit,
+      candidateRef,
+      reportPath,
+      installRoot,
+      runnerRoot
+    ] = args
+    if (
+      ![
+        baselineInstaller,
+        candidateInstaller,
+        candidateRun,
+        candidateAttempt,
+        candidateCommit,
+        candidateRef,
+        reportPath,
+        installRoot,
+        runnerRoot
+      ].every(Boolean)
+    ) {
+      throw new Error(
+        'usage: profile-upgrade.mjs run <baseline.exe> <candidate.exe> <run-id> <attempt> <commit> <ref> <report.json> <install-root> <runner-root>'
+      )
     }
-    await runUpgrade({ baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot })
+    await runUpgrade({
+      baselineInstaller,
+      candidateInstaller,
+      candidateRun,
+      candidateAttempt,
+      candidateCommit,
+      candidateRef,
+      reportPath,
+      installRoot,
+      runnerRoot
+    })
     return
   }
   throw new Error('usage: profile-upgrade.mjs <verify-candidate|run> ...')
