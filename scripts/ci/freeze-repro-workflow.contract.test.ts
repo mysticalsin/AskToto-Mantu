@@ -138,6 +138,7 @@ describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
   it('the shared guard accepts main and release/1.9.x qa-candidate dispatches and refuses any other branch', () => {
     const successful = {
       id: 4242,
+      run_attempt: 1,
       path: '.github/workflows/qa-candidate.yml',
       event: 'workflow_dispatch',
       head_branch: 'main',
