@@ -73,9 +73,9 @@ describe('atomic streamed saved write', () => {
     await expect(
       atomicSavedWriteStream(target, byteChunks('123456789'), { ...bounds, maxChunkBytes: 8 })
     ).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
-    await expect(
-      atomicSavedWriteStream(target, byteChunks('12345678', '12345678', 'x'), bounds)
-    ).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
+    await expect(atomicSavedWriteStream(target, byteChunks('12345678', '12345678', 'x'), bounds)).rejects.toMatchObject(
+      { name: 'RESOURCE_LIMIT' }
+    )
     await expect(
       atomicSavedWriteStream(target, byteChunks('a', 'b', 'c', 'd', 'e'), { ...bounds, maxChunks: 4 })
     ).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
