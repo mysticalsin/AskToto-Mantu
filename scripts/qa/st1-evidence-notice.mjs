@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 const MAX_REPORT_BYTES = 4 * 1024 * 1024
 const MAX_PROVENANCE_BYTES = 4 * 1024 * 1024
 const MAX_DIAGNOSTIC_BYTES = 8 * 1024
+const MAX_ANNOTATION_BYTES = 3_500
 const ROWS = new Set(['fifo', 'none', 'synthetic-dataless'])
 const VERDICTS = new Set(['PASS', 'FAIL', 'INCOMPLETE', 'NOT_EXERCISED'])
 const CRITERIA = new Set([
@@ -94,7 +95,7 @@ function projectOperationTiming(value) {
 }
 
 function diagnosticsUnavailable(reason) {
-  return { version: 1, state: 'unavailable', reason }
+  return { version: 2, state: 'unavailable', reason }
 }
 
 function projectProfilerDiagnostics(value, sampleLimit) {
@@ -283,13 +284,54 @@ function projectProfilerDiagnostics(value, sampleLimit) {
     })
   }
 
+  // Keep the GitHub annotation projection positional and compact. Slot maps:
+  // setup/summary = [requested, settled, status]; commands = [commandIndex, requested, settled, status];
+  // samples = [selector, index, t, request, settled, status, late, hung, histogram, histogramOverlaps,
+  // roundTripOverlaps, metrics, optionalWitness]. Overlap rows are [commandIndex, waitMs, boundKnown].
+  // Metrics are [loopSinceLast, loopDuringWrite, write, lookup, roundTrip]; witness is [loop, write, cpuBusy].
   const diagnostics = {
-    version: 1,
+    version: 2,
     state: 'available',
-    setup: setup.value,
-    summary: summary.value,
-    profilerCommands,
-    samples
+    setup: setup.value && [setup.value.requestedAtMs, setup.value.settledAtMs, setup.value.status],
+    summary: summary.value && [summary.value.requestedAtMs, summary.value.settledAtMs, summary.value.status],
+    commands: profilerCommands.map((entry) => [
+      DIAGNOSTIC_COMMANDS.indexOf(entry.command),
+      entry.requestedAtMs,
+      entry.settledAtMs,
+      entry.status
+    ]),
+    samples: samples.map((sample) => {
+      const overlapRows = (entries) =>
+        entries.map((entry) => [
+          DIAGNOSTIC_COMMANDS.indexOf(entry.command),
+          entry.observedWaitMs,
+          entry.executionBoundKnown
+        ])
+      const metrics = DIAGNOSTIC_METRICS.map((key) => sample.metrics[key] ?? null)
+      const witness =
+        sample.witness && ['worst-loop', 'first-late-or-hung'].includes(sample.selector)
+          ? [
+              sample.witness.loopMaxSinceLastMs ?? null,
+              sample.witness.writeMs ?? null,
+              sample.witness.cpuBusyPct ?? null
+            ]
+          : undefined
+      return [
+        sample.selector,
+        sample.index,
+        sample.tMs,
+        sample.requestAtMs,
+        sample.settledAtMs,
+        sample.status,
+        sample.late,
+        sample.hung,
+        [sample.histogram.lowerBoundMs, sample.histogram.upperBoundMs, sample.histogram.boundsKnown],
+        overlapRows(sample.overlaps.histogram),
+        overlapRows(sample.overlaps.sampleRoundTrip),
+        metrics,
+        ...(witness ? [witness] : [])
+      ]
+    })
   }
   if (Buffer.byteLength(JSON.stringify(diagnostics), 'utf8') > MAX_DIAGNOSTIC_BYTES) {
     return diagnosticsUnavailable('diagnostics_too_large')
@@ -487,6 +529,7 @@ function reportSummary(report, context, reportSha256) {
   const notice = {
     schema: 1,
     state: 'available',
+    reportSha256,
     context: publicContext,
     mode: 'strict-hosted',
     verdict: report.verdict,
@@ -494,10 +537,9 @@ function reportSummary(report, context, reportSha256) {
     teardownAcknowledged: report.teardown.state === 'acknowledged',
     criteria,
     metrics,
-    diagnostics: projectProfilerDiagnostics(report.profilerDiagnostics, sampleLimit),
-    reportSha256
+    diagnostics: projectProfilerDiagnostics(report.profilerDiagnostics, sampleLimit)
   }
-  if (Buffer.byteLength(JSON.stringify(notice), 'utf8') > MAX_DIAGNOSTIC_BYTES) {
+  if (Buffer.byteLength(annotationMessage(notice), 'utf8') > MAX_ANNOTATION_BYTES) {
     notice.diagnostics = diagnosticsUnavailable('diagnostics_too_large')
   }
   return notice

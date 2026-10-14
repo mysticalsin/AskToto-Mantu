@@ -123,7 +123,7 @@ function validDiagnostics() {
 
 function fullProducerDiagnostics() {
   const setup = { requestedAtMs: 10, settledAtMs: 20, status: 'answered' }
-  const summary = { requestedAtMs: 305_000, settledAtMs: 305_020, status: 'answered' }
+  const summary = { requestedAtMs: 309_000, settledAtMs: 309_020, status: 'answered' }
   const timeline = []
   let previousTiming = null
   let requestAtMs = 420
@@ -134,7 +134,7 @@ function fullProducerDiagnostics() {
       settledAtMs: requestAtMs + roundTripMs,
       status: 'answered'
     }
-    const metric = (sampleIndex, value, fallback = 0) => (index === sampleIndex ? value : fallback)
+    const metric = (sampleIndex: number, value: number, fallback = 0) => (index === sampleIndex ? value : fallback)
     timeline.push({
       tMs: requestAtMs,
       ...sampleDiagnosticTiming(timing, previousTiming, setup),
@@ -286,6 +286,11 @@ describe('strict ST-1 GitHub notice serializer', () => {
       'first-late-or-hung'
     ])
     expect(diagnostics.samples.map((sample) => sample[1])).toEqual([60, 20, 40, 298, 298])
+    for (const sample of diagnostics.samples) {
+      const metrics = sample[11] as unknown[]
+      expect(metrics).toHaveLength(5)
+      for (const metric of metrics) expect(metric).toEqual(expect.any(Number))
+    }
     expect(diagnostics.samples[0]?.[11]).toEqual([1_700, 120, 0, 0, 20])
     expect(diagnostics.samples[0]?.[12]).toEqual([24, 5, 47])
     expect(diagnostics.samples[4]?.[12]).toEqual([24, 5, 47])
@@ -376,10 +381,20 @@ describe('strict ST-1 GitHub notice serializer', () => {
         state: 'available',
         setup: null,
         samples: [
-          {
-            histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false },
-            overlaps: { histogram: [], sampleRoundTrip: [], histogramUnknown: true }
-          }
+          [
+            'worst-loop',
+            2,
+            1_000,
+            990,
+            1_010,
+            'answered',
+            false,
+            false,
+            [null, null, false],
+            [],
+            [],
+            [null, null, 20, 3, 20]
+          ]
         ]
       }
     })
@@ -401,7 +416,7 @@ describe('strict ST-1 GitHub notice serializer', () => {
       state: 'available',
       diagnostics: { version: 2, state: 'unavailable', reason: 'diagnostics_too_large' }
     })
-    expect(Buffer.byteLength(JSON.stringify(notice))).toBeLessThanOrEqual(8 * 1024)
+    expect(Buffer.byteLength(annotationMessage(notice), 'utf8')).toBeLessThan(3_500)
   })
 
   it('emits a fixed typed diagnostic for malformed, missing, oversized, and unknown-criterion reports', () => {
