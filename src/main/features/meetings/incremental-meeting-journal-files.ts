@@ -8,6 +8,8 @@ import { withIncrementalMeetingMutation } from './incremental-meeting-mutation-l
 import { createBoundedJournalFileReader } from './incremental-meeting-journal-file-read'
 import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journal-root'
 import { consumeIncrementalRecordReceipt } from './incremental-record-receipt'
+import { createApplicationMetadataStore } from './incremental-meeting-journal-application-metadata'
+import { readIncrementalJournalPage } from './incremental-meeting-journal-page-reader'
 import {
   SHA256,
   UUID,
@@ -65,7 +67,8 @@ export interface IncrementalMeetingJournalFileStorage extends IncrementalMeeting
     expectedRevision: number,
     maxRecords: number,
     sink: (record: IncrementalJournalFileRecord) => void | Promise<void>,
-    isCurrent: () => boolean
+    isCurrent: () => boolean,
+    maxBytes?: number
   ): Promise<IncrementalJournalPageResult>
   readApplicationMetadata(isCurrent: () => boolean): Promise<IncrementalJournalApplicationMetadataResult>
   commitApplicationMetadata(
@@ -217,6 +220,21 @@ export function createIncrementalMeetingJournalFileStorage(
       bytes.fill(0)
     }
   }
+
+  const applicationMetadata = createApplicationMetadataStore({
+    baseCurrent,
+    maxJournalBytes,
+    key: key!,
+    readManifest,
+    async writeManifest(core, recordBytes, requestCurrent) {
+      const bytes = setManifestStoredBytes(core, recordBytes, key!)
+      if (!requestCurrent() || core.storedBytes > maxJournalBytes) {
+        bytes.fill(0)
+        return false
+      }
+      return writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
+    }
+  })
 
   const storage: IncrementalMeetingJournalFileStorage = {
     async initialize() {
@@ -655,69 +673,27 @@ export function createIncrementalMeetingJournalFileStorage(
       return { status: 'committed', snapshot: snapshotFrom(finalCore) }
     },
 
-    async readPage(afterRevision, expectedRevision, maxRecords, sink, isCurrent) {
-      if (
-        !Number.isSafeInteger(afterRevision) ||
-        afterRevision < 0 ||
-        afterRevision > Number.MAX_SAFE_INTEGER - maxPageRecords ||
-        !Number.isSafeInteger(expectedRevision) ||
-        expectedRevision < afterRevision ||
-        !Number.isSafeInteger(maxRecords) ||
-        maxRecords <= 0 ||
-        maxRecords > maxPageRecords ||
-        typeof sink !== 'function'
-      )
-        return { status: 'unavailable' }
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent()) return { status: 'unavailable' }
-      const durableRevision = loaded.core.durableRevision
-      loaded.bytes.fill(0)
-      if (durableRevision !== expectedRevision || afterRevision > durableRevision) return { status: 'unavailable' }
-      const stopAt = Math.min(durableRevision, afterRevision + maxRecords)
-      let nextRevision = afterRevision
-      let pageBytes = 0
-      for (let revision = afterRevision + 1; revision <= stopAt; revision++) {
-        if (!requestCurrent()) return { status: 'stale-owner' }
-        const encodedIndex = await readBytes(indexName(revision), 512, requestCurrent)
-        const indexByteLength = encodedIndex.status === 'ok' ? encodedIndex.bytes.byteLength : 0
-        const index = encodedIndex.status === 'ok' && verifyIndex(encodedIndex.bytes, key!, meetingId, revision)
-        if (encodedIndex.status === 'ok') encodedIndex.bytes.fill(0)
-        if (!index || !requestCurrent()) return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-        if (
-          index.recordBytes > maxPhysicalRecordBytes ||
-          pageBytes > maxPageBytes - indexByteLength - index.recordBytes
-        )
-          return { status: 'unavailable' }
-        const recordRead = await readBytes(recordName(index.identityHash), index.recordBytes, requestCurrent)
-        if (recordRead.status !== 'ok' || recordRead.bytes.byteLength !== index.recordBytes || !requestCurrent()) {
-          if (recordRead.status === 'ok') recordRead.bytes.fill(0)
-          return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-        }
-        pageBytes += indexByteLength + index.recordBytes
-        const decoded = decodeRecord(recordRead.bytes, key!, meetingId, index.identityHash, revision)
-        recordRead.bytes.fill(0)
-        if (!decoded || decoded.metadata.sha256 !== index.sha256) {
-          decoded?.canonicalBytes.fill(0)
-          return { status: 'unavailable' }
-        }
-        const value: IncrementalJournalFileRecord = {
-          revision,
-          ...decoded.metadata,
-          canonicalBytes: decoded.canonicalBytes
-        }
-        try {
-          await sink(value)
-        } catch {
-          value.canonicalBytes.fill(0)
-          return { status: 'unavailable' }
-        }
-        value.canonicalBytes.fill(0)
-        if (!requestCurrent()) return { status: 'stale-owner' }
-        nextRevision = revision
-      }
-      if (!requestCurrent()) return { status: 'stale-owner' }
-      return { status: 'ok', nextRevision, durableRevision, complete: nextRevision === durableRevision }
+    async readPage(afterRevision, expectedRevision, maxRecords, sink, isCurrent, requestedMaxBytes = maxPageBytes) {
+      return readIncrementalJournalPage({
+        afterRevision,
+        expectedRevision,
+        maxRecords,
+        maxPageRecords,
+        maxPageBytes,
+        maxPhysicalRecordBytes,
+        requestedMaxBytes,
+        meetingId,
+        key: key!,
+        baseCurrent,
+        isCurrent,
+        readManifest,
+        readBytes,
+        indexName,
+        recordName,
+        verifyIndex,
+        decodeRecord,
+        sink
+      })
     },
 
     async transitionState(state, isCurrent) {
@@ -745,117 +721,7 @@ export function createIncrementalMeetingJournalFileStorage(
       return wrote ? 'committed' : requestCurrent() ? 'unavailable' : 'stale-owner'
     },
 
-    async readApplicationMetadata(isCurrent) {
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      if (!requestCurrent()) return { status: 'stale-owner' }
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent())
-        return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-      try {
-        const encoded = loaded.core.applicationMetadata
-        if (encoded === null) return { status: 'ok', revision: loaded.core.applicationRevision, bytes: null }
-        const bytes = Buffer.from(encoded, 'base64')
-        if (bytes.toString('base64') !== encoded || !requestCurrent()) {
-          bytes.fill(0)
-          return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-        }
-        const output = Uint8Array.from(bytes)
-        bytes.fill(0)
-        return { status: 'ok', revision: loaded.core.applicationRevision, bytes: output }
-      } catch {
-        return { status: 'unavailable' }
-      } finally {
-        loaded.bytes.fill(0)
-      }
-    },
-
-    async commitApplicationMetadata(expectedRevision, suppliedBytes, maxBytes, isCurrent) {
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent())
-        return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-      const old = loaded.core
-      if (old.pending || old.state !== 'active') {
-        loaded.bytes.fill(0)
-        return { status: 'unavailable' }
-      }
-      if (!validCounter(expectedRevision) || expectedRevision !== old.applicationRevision) {
-        loaded.bytes.fill(0)
-        return { status: 'stale-revision' }
-      }
-      if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
-        loaded.bytes.fill(0)
-        return { status: 'limit' }
-      }
-      let encodedMetadata: string | null = null
-      let ownedMetadata: Uint8Array | null = null
-      if (suppliedBytes !== null) {
-        const prototype = Object.getPrototypeOf(Uint8Array.prototype) as object
-        const lengthGetter = Object.getOwnPropertyDescriptor(prototype, 'byteLength')?.get
-        const offsetGetter = Object.getOwnPropertyDescriptor(prototype, 'byteOffset')?.get
-        const bufferGetter = Object.getOwnPropertyDescriptor(prototype, 'buffer')?.get
-        const arrayBufferLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get
-        const resizableGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get
-        let byteLength = -1
-        try {
-          if (!(suppliedBytes instanceof Uint8Array) || Object.getPrototypeOf(suppliedBytes) !== Uint8Array.prototype)
-            throw new Error()
-          byteLength = lengthGetter?.call(suppliedBytes) as number
-          const byteOffset = offsetGetter?.call(suppliedBytes) as number
-          const buffer = bufferGetter?.call(suppliedBytes) as unknown
-          if (
-            !lengthGetter ||
-            !offsetGetter ||
-            !bufferGetter ||
-            !arrayBufferLengthGetter ||
-            !resizableGetter ||
-            !(buffer instanceof ArrayBuffer) ||
-            byteOffset !== 0 ||
-            arrayBufferLengthGetter?.call(buffer) !== byteLength ||
-            resizableGetter?.call(buffer) === true
-          )
-            throw new Error()
-        } catch {
-          loaded.bytes.fill(0)
-          return { status: 'limit' }
-        }
-        if (byteLength <= 0 || byteLength > maxBytes) {
-          loaded.bytes.fill(0)
-          return { status: 'limit' }
-        }
-        ownedMetadata = new Uint8Array(new ArrayBuffer(byteLength))
-        ownedMetadata.set(suppliedBytes)
-        encodedMetadata = Buffer.from(ownedMetadata).toString('base64')
-      }
-      const core: ManifestCore = {
-        ...old,
-        applicationRevision: old.applicationRevision + 1,
-        applicationMetadata: encodedMetadata,
-        manifestBytes: 0
-      }
-      const recordBytes = old.storedBytes - old.manifestBytes
-      const bytes = setManifestStoredBytes(core, recordBytes, key!)
-      loaded.bytes.fill(0)
-      if (!requestCurrent()) {
-        bytes.fill(0)
-        ownedMetadata?.fill(0)
-        return { status: 'stale-owner' }
-      }
-      if (bytes.byteLength > 16_384 || core.storedBytes > maxJournalBytes) {
-        bytes.fill(0)
-        ownedMetadata?.fill(0)
-        return { status: 'limit' }
-      }
-      const wrote = await writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
-      bytes.fill(0)
-      if (!wrote || !requestCurrent()) {
-        ownedMetadata?.fill(0)
-        return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-      }
-      const output = ownedMetadata === null ? null : Uint8Array.from(ownedMetadata)
-      ownedMetadata?.fill(0)
-      return { status: 'ok', revision: core.applicationRevision, bytes: output }
-    },
+    ...applicationMetadata,
 
     dispose() {
       if (disposed) return

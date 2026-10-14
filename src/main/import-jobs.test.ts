@@ -226,6 +226,28 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-1')).toMatchObject({ state: 'failed', cursor: 1, lines: [{ text: 'durable line' }] })
   })
 
+  it('fails closed when configured same-process resume has no strict source validator', async () => {
+    const { manager, store, decode } = createManager({ persistenceState: () => 'configured' })
+    await store.save({
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interrupted import',
+      state: 'failed',
+      cursor: 1,
+      totalChunks: 2,
+      lines: [{ t: source.mtimeMs, speaker: 'unknown', text: 'durable line' }],
+      createdAt: 1,
+      updatedAt: 1
+    })
+    await manager.recover()
+
+    await expect(manager.resume('job-1')).rejects.toMatchObject({ reason: 'UNCONFIGURED' })
+    expect(decode).not.toHaveBeenCalled()
+  })
+
   it('pins the persona active at start() into the job so a mid-queue persona switch cannot reshape the recap', async () => {
     let liveMode = 'sales'
     const { manager, store } = createManager({ personaMode: () => liveMode })

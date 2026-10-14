@@ -845,7 +845,15 @@ export class ImportJobManager {
         this.assertPersistenceConfigured()
         this.retentionPolicy.assertAllowed()
       },
-      validateSource: (job) => this.deps.validateSource?.(job),
+      validateSource: async (job) => {
+        if (!this.deps.validateSource) {
+          if (this.deps.persistenceState?.() === 'configured') {
+            throw new ImportCheckpointUnavailableError('UNCONFIGURED')
+          }
+          return
+        }
+        await this.deps.validateSource(job)
+      },
       persist: (job) => this.persist(job),
       releaseHold: (job) => this.releaseHold(job),
       prepareCheckpoint: prepareImportCheckpoint,

@@ -67,6 +67,7 @@ export type ImportCheckpointFailure =
   | 'SOURCE_CHANGED'
   | 'OWNERSHIP_UNPROVEN'
   | 'KEY_UNAVAILABLE'
+  | 'UNAVAILABLE'
   | 'STALE_OWNER'
   | 'CONFLICT'
 
@@ -84,6 +85,7 @@ export interface ImportCheckpointWindowChange {
 /** Runtime implementations must keep handles opaque and never return transcript-sized main-process arrays. */
 export interface ImportCheckpointRepository {
   listHeldIds(): Promise<Readonly<{ jobIds: readonly string[]; overflow: boolean }>>
+  createNew(header: ImportJobHeader, origin: ImportLegacyOriginHandle): Promise<ImportCheckpointResumeResult>
   resume(jobId: string, origin: ImportLegacyOriginHandle): Promise<ImportCheckpointResumeResult>
   appendWindow(
     checkpoint: ImportCheckpoint,
