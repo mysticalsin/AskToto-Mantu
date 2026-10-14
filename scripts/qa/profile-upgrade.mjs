@@ -79,17 +79,14 @@ export function verifyCandidateIdentity(run, provenance, candidateRun, approvedC
     throw new Error('an explicit approved candidate ref is required.')
   const problems = candidateRunProblems(run, candidateRun)
   if (problems.length) throw new Error(problems.join('\n'))
-  if (run.repository?.full_name !== REPOSITORY)
-    throw new Error(`candidate run repository is not ${REPOSITORY}.`)
-  if (provenance.repository !== REPOSITORY)
-    throw new Error(`candidate provenance repository is not ${REPOSITORY}.`)
+  if (run.repository?.full_name !== REPOSITORY) throw new Error(`candidate run repository is not ${REPOSITORY}.`)
+  if (provenance.repository !== REPOSITORY) throw new Error(`candidate provenance repository is not ${REPOSITORY}.`)
   assertCandidateProvenance(provenance, candidateRun, run.run_attempt)
   if (provenance.run?.attempt !== run.run_attempt)
     throw new Error('candidate provenance attempt differs from the Actions run attempt.')
   if (run.head_sha !== approvedCommit)
     throw new Error('candidate run head SHA differs from the explicitly approved commit.')
-  if (run.head_branch !== approvedRef)
-    throw new Error('candidate run ref differs from the explicitly approved ref.')
+  if (run.head_branch !== approvedRef) throw new Error('candidate run ref differs from the explicitly approved ref.')
   if (provenance.version !== CANDIDATE_VERSION)
     throw new Error(`candidate version is ${provenance.version}, expected ${CANDIDATE_VERSION}.`)
   if (provenance.commit !== run.head_sha)
@@ -98,18 +95,14 @@ export function verifyCandidateIdentity(run, provenance, candidateRun, approvedC
   if (!build || build.platform !== 'win' || build.version !== CANDIDATE_VERSION) {
     throw new Error('candidate provenance has no Windows 1.9.7 Setup build.')
   }
-  const matches = (build.assets ?? []).filter(
-    (asset) => asset.name === `Metis-Setup-${CANDIDATE_VERSION}.exe`
-  )
+  const matches = (build.assets ?? []).filter((asset) => asset.name === `Metis-Setup-${CANDIDATE_VERSION}.exe`)
   if (
     matches.length !== 1 ||
     !SHA256.test(matches[0]?.sha256 ?? '') ||
     !Number.isSafeInteger(matches[0]?.size) ||
     matches[0].size <= 0
   ) {
-    throw new Error(
-      'Windows provenance must name exactly one non-empty 1.9.7 Setup installer with a sha256.'
-    )
+    throw new Error('Windows provenance must name exactly one non-empty 1.9.7 Setup installer with a sha256.')
   }
   return {
     run_id: String(candidateRun),
@@ -130,8 +123,7 @@ export function assessUpgradeReport(report, expected = {}) {
   if (report.platform !== 'win32') problems.push('platform must be win32')
   if (report.baseline?.version !== BASELINE.version || report.baseline?.tag !== BASELINE.tag)
     problems.push('baseline identity is not pinned to v1.9.6-unsigned')
-  if (report.candidate?.version !== CANDIDATE_VERSION)
-    problems.push('candidate version must be 1.9.7')
+  if (report.candidate?.version !== CANDIDATE_VERSION) problems.push('candidate version must be 1.9.7')
   if (report.error !== null) problems.push('scenario contains an execution error')
   if (
     !SHA256.test(report.baseline?.sha256 ?? '') ||
@@ -178,10 +170,8 @@ export function assessUpgradeReport(report, expected = {}) {
   for (const id of REQUIRED_CHECKS) {
     const row = byId.get(id)
     if (!row) problems.push(`required check missing: ${id}`)
-    else if (row.status !== 'PASS')
-      problems.push(`${id} status is ${String(row.status ?? 'missing')}, expected PASS`)
-    else if (typeof row.evidence !== 'string' || row.evidence.length < 8)
-      problems.push(`${id} has no evidence summary`)
+    else if (row.status !== 'PASS') problems.push(`${id} status is ${String(row.status ?? 'missing')}, expected PASS`)
+    else if (typeof row.evidence !== 'string' || row.evidence.length < 8) problems.push(`${id} has no evidence summary`)
   }
   for (const row of checks)
     if (!REQUIRED_CHECKS.includes(row?.id)) problems.push(`unexpected check id: ${String(row?.id)}`)
@@ -227,18 +217,9 @@ function rememberOwnedProcesses(ownership, requireRoot = false) {
   }
 }
 
-export function ownedTreeHasExited({
-  rootExited,
-  censusAvailable,
-  owned,
-  current,
-  installRoot,
-  platform = 'win32'
-}) {
+export function ownedTreeHasExited({ rootExited, censusAvailable, owned, current, installRoot, platform = 'win32' }) {
   return (
-    rootExited === true &&
-    censusAvailable === true &&
-    survivors(owned, current, { installRoot, platform }).length === 0
+    rootExited === true && censusAvailable === true && survivors(owned, current, { installRoot, platform }).length === 0
   )
 }
 
@@ -261,18 +242,31 @@ export function cleanShutdownPassed({
 }
 
 export function noteReadMatchesExpected(result, expected) {
-  return result?.ok === true && result.kind === 'note' && result.title === expected?.noteTitle &&
-    result.question === expected?.noteQuestion && result.answer === expected?.noteAnswer
+  return (
+    result?.ok === true &&
+    result.kind === 'note' &&
+    result.title === expected?.noteTitle &&
+    result.question === expected?.noteQuestion &&
+    result.answer === expected?.noteAnswer
+  )
 }
 
 async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
   if (!ownership?.child?.pid || ownership.child.pid <= 1) return false
   const child = ownership.child
   const deadline = Date.now() + timeoutMs
-  try { rememberOwnedProcesses(ownership) } catch { ownership.censusAvailable = false }
+  try {
+    rememberOwnedProcesses(ownership)
+  } catch {
+    ownership.censusAvailable = false
+  }
   if (child.exitCode === null && child.signalCode === null) {
     ownership.forcedCleanup = true
-    try { child.kill('SIGTERM') } catch { /* the bounded census below owns final status */ }
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      /* the bounded census below owns final status */
+    }
     await waitForChildExit(child, Math.min(3_000, Math.max(1, deadline - Date.now())))
   }
   while (Date.now() < deadline) {
@@ -281,13 +275,15 @@ async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
       rememberOwnedProcesses(ownership)
       const current = listProcesses('win32')
       const rootExited = child.exitCode !== null || child.signalCode !== null
-      if (ownedTreeHasExited({
-        rootExited,
-        censusAvailable: ownership.censusAvailable,
-        owned: [...ownership.owned.values()],
-        current,
-        installRoot: ownership.installRoot
-      })) {
+      if (
+        ownedTreeHasExited({
+          rootExited,
+          censusAvailable: ownership.censusAvailable,
+          owned: [...ownership.owned.values()],
+          current,
+          installRoot: ownership.installRoot
+        })
+      ) {
         ownership.teardownVerified = true
         return true
       }
@@ -319,7 +315,10 @@ async function releaseOwnedTransports(ownership) {
 }
 
 function findPages(browser) {
-  return browser.contexts().flatMap((context) => context.pages()).filter((page) => !page.isClosed())
+  return browser
+    .contexts()
+    .flatMap((context) => context.pages())
+    .filter((page) => !page.isClosed())
 }
 
 async function startApp(executable, qaRoot, profile, installRoot, launchRecords) {

@@ -167,9 +167,9 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
     expect(() => verifyCandidateIdentity(run, provenance, run.id, run.head_sha, undefined)).toThrow(
       /explicit approved candidate ref/
     )
-    expect(() => verifyCandidateIdentity(run, { ...provenance, builds: [] }, run.id, run.head_sha, run.head_branch)).toThrow(
-      /no Windows/
-    )
+    expect(() =>
+      verifyCandidateIdentity(run, { ...provenance, builds: [] }, run.id, run.head_sha, run.head_branch)
+    ).toThrow(/no Windows/)
     expect(() =>
       verifyCandidateIdentity(
         run,
