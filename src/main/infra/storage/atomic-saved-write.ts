@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto'
-import { open, rename, unlink, writeFile } from 'node:fs/promises'
+import { lstat, open, rename, unlink, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { recordLocalWrite } from './local-writes'
 
 export interface AtomicSavedWriteStreamBounds {
-  /** Trusted caller-owned limits; no default means unbounded. */
+  /** Explicit finite caller-admitted limits are required; this writer supplies no defaults. */
   maxBytes: number
   maxChunkBytes: number
   maxChunks: number
@@ -25,6 +25,18 @@ function invalidLimit(): Error {
   return error
 }
 
+function checkAdmission(check: (() => void) | undefined): void {
+  if (!check) return
+  const result = (check as () => unknown)()
+  if (result === null || (typeof result !== 'object' && typeof result !== 'function')) return
+  const then = (result as { then?: unknown }).then
+  if (typeof then !== 'function') return
+  void Promise.resolve(result).catch(() => {})
+  const error = new Error('Streamed saved write admission checks must be synchronous.')
+  error.name = 'ASYNC_ADMISSION'
+  throw error
+}
+
 function validBounds(bounds: AtomicSavedWriteStreamBounds): boolean {
   return (
     Number.isSafeInteger(bounds.maxBytes) &&
@@ -37,24 +49,76 @@ function validBounds(bounds: AtomicSavedWriteStreamBounds): boolean {
   )
 }
 
-function fixedOwnedBytes(value: unknown): value is Uint8Array {
-  if (!(value instanceof Uint8Array) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength)
-    return false
-  if (!(value.buffer instanceof ArrayBuffer)) return false
+interface ExactByteView {
+  buffer: ArrayBuffer
+  byteLength: number
+}
+
+interface TempIdentity {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+  nlink: number
+}
+
+type CreatedIdentity = Pick<TempIdentity, 'dev' | 'ino'>
+
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer')?.get
+const typedArrayByteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset')?.get
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')?.get
+const arrayBufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get
+
+function exactFixedBytes(value: unknown): ExactByteView | null {
+  if (!ArrayBuffer.isView(value) || Object.getPrototypeOf(value) !== Uint8Array.prototype) return null
   try {
+    const buffer = typedArrayBuffer?.call(value)
+    const byteOffset = typedArrayByteOffset?.call(value)
+    const byteLength = typedArrayByteLength?.call(value)
+    if (!(buffer instanceof ArrayBuffer) || !Number.isSafeInteger(byteLength)) return null
+    if (byteOffset !== 0 || byteLength !== arrayBufferByteLength?.call(buffer)) return null
     const resizable = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get
-    return resizable?.call(value.buffer) !== true
+    if (resizable?.call(buffer) === true) return null
+    return { buffer, byteLength }
   } catch {
-    return false
+    return null
   }
 }
 
-async function writeAll(handle: FileHandle, bytes: Uint8Array): Promise<void> {
+async function writeAll(handle: FileHandle, bytes: Uint8Array, beforeWrite: () => void): Promise<void> {
   let offset = 0
   while (offset < bytes.byteLength) {
+    beforeWrite()
     const result = await handle.write(bytes, offset, bytes.byteLength - offset, null)
+    beforeWrite()
     if (result.bytesWritten <= 0) throw new Error('Streamed saved write did not advance.')
     offset += result.bytesWritten
+  }
+}
+
+async function isUnchangedTemp(
+  path: string,
+  identity: TempIdentity | undefined,
+  expectedBytes: number
+): Promise<boolean> {
+  if (!identity) return false
+  try {
+    const entry = await lstat(path)
+    return (
+      entry.isFile() &&
+      entry.nlink === 1 &&
+      entry.dev === identity.dev &&
+      entry.ino === identity.ino &&
+      entry.nlink === identity.nlink &&
+      entry.size === expectedBytes &&
+      entry.size === identity.size &&
+      entry.mtimeMs === identity.mtimeMs &&
+      entry.ctimeMs === identity.ctimeMs
+    )
+  } catch {
+    return false
   }
 }
 
@@ -68,40 +132,89 @@ export async function atomicSavedWriteStream(
   chunks: AsyncIterable<Uint8Array>,
   bounds: AtomicSavedWriteStreamBounds
 ): Promise<AtomicSavedWriteStreamResult> {
-  if (!validBounds(bounds)) throw invalidLimit()
+  const limits: AtomicSavedWriteStreamBounds = {
+    maxBytes: bounds.maxBytes,
+    maxChunkBytes: bounds.maxChunkBytes,
+    maxChunks: bounds.maxChunks,
+    beforeChunk: bounds.beforeChunk,
+    beforeReplace: bounds.beforeReplace
+  }
+  if (!validBounds(limits)) throw invalidLimit()
   const tmp = `${file}.${randomBytes(12).toString('hex')}.tmp`
   const iterator = chunks[Symbol.asyncIterator]()
   let handle: FileHandle | undefined
   let bytesWritten = 0
   let chunksWritten = 0
   let replaced = false
+  let created = false
+  let createdIdentity: CreatedIdentity | undefined
+  let tempIdentity: TempIdentity | undefined
   try {
-    bounds.beforeChunk?.()
+    checkAdmission(limits.beforeChunk)
     handle = await open(tmp, 'wx', 0o600)
+    created = true
+    const openedStats = await handle.stat()
+    createdIdentity = { dev: openedStats.dev, ino: openedStats.ino }
+    checkAdmission(limits.beforeChunk)
     while (true) {
-      bounds.beforeChunk?.()
+      checkAdmission(limits.beforeChunk)
       const next = await iterator.next()
       if (next.done) break
-      bounds.beforeChunk?.()
+      checkAdmission(limits.beforeChunk)
       const chunk = next.value
+      const view = exactFixedBytes(chunk)
       if (
-        !fixedOwnedBytes(chunk) ||
-        chunk.byteLength === 0 ||
-        chunk.byteLength > bounds.maxChunkBytes ||
-        chunksWritten >= bounds.maxChunks ||
-        bytesWritten > bounds.maxBytes - chunk.byteLength
+        !view ||
+        view.byteLength === 0 ||
+        view.byteLength > limits.maxChunkBytes ||
+        chunksWritten >= limits.maxChunks ||
+        bytesWritten > limits.maxBytes - view.byteLength
       )
         throw invalidLimit()
-      await writeAll(handle, chunk)
-      bytesWritten += chunk.byteLength
+      // Producer memory is no longer trusted once yielded. Copy exactly one admitted chunk before any
+      // write await so a retained reference cannot mutate bytes in flight.
+      const owned = new Uint8Array(view.byteLength)
+      owned.set(new Uint8Array(view.buffer, 0, view.byteLength))
+      await writeAll(handle, owned, () => checkAdmission(limits.beforeChunk))
+      bytesWritten += view.byteLength
       chunksWritten += 1
     }
-    bounds.beforeChunk?.()
+    checkAdmission(limits.beforeChunk)
     await handle.sync()
+    checkAdmission(limits.beforeChunk)
+    const syncedStats = await handle.stat()
+    if (!syncedStats.isFile() || syncedStats.nlink !== 1 || syncedStats.size !== bytesWritten) {
+      const error = new Error('Streamed saved write temporary file changed before promotion.')
+      error.name = 'TEMP_OWNERSHIP'
+      throw error
+    }
+    tempIdentity = {
+      dev: syncedStats.dev,
+      ino: syncedStats.ino,
+      size: syncedStats.size,
+      mtimeMs: syncedStats.mtimeMs,
+      ctimeMs: syncedStats.ctimeMs,
+      nlink: syncedStats.nlink
+    }
+    if (tempIdentity.dev !== createdIdentity.dev || tempIdentity.ino !== createdIdentity.ino) {
+      const error = new Error('Streamed saved write temporary file identity changed.')
+      error.name = 'TEMP_OWNERSHIP'
+      throw error
+    }
+    checkAdmission(limits.beforeChunk)
     await handle.close()
+    checkAdmission(limits.beforeChunk)
     handle = undefined
     for (let attempt = 0; ; attempt++) {
-      bounds.beforeReplace?.()
+      checkAdmission(limits.beforeChunk)
+      if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
+        const error = new Error('Streamed saved write lost ownership of its temporary file.')
+        error.name = 'TEMP_OWNERSHIP'
+        throw error
+      }
+      // This synchronous policy check follows the final metadata await and stays outside the retry catch.
+      checkAdmission(limits.beforeReplace)
+      checkAdmission(limits.beforeChunk)
       try {
         await rename(tmp, file)
         replaced = true
@@ -117,15 +230,43 @@ export async function atomicSavedWriteStream(
   } catch (error) {
     if (!replaced) {
       try {
-        await iterator.return?.()
+        const pendingReturn = iterator.return?.()
+        if (pendingReturn) void Promise.resolve(pendingReturn).catch(() => {})
       } catch {
         // The original refusal/error owns the result; cleanup must not replace it.
       }
     }
     throw error
   } finally {
+    let cleanupIdentity = tempIdentity
+    if (!replaced && created && !cleanupIdentity && handle) {
+      const current = await handle.stat().catch(() => undefined)
+      if (
+        current?.isFile() &&
+        current.nlink === 1 &&
+        current.dev === createdIdentity?.dev &&
+        current.ino === createdIdentity?.ino
+      ) {
+        cleanupIdentity = {
+          dev: current.dev,
+          ino: current.ino,
+          size: current.size,
+          mtimeMs: current.mtimeMs,
+          ctimeMs: current.ctimeMs,
+          nlink: current.nlink
+        }
+      }
+    }
     await handle?.close().catch(() => {})
-    if (!replaced) await unlink(tmp).catch(() => {})
+    if (
+      !replaced &&
+      created &&
+      cleanupIdentity &&
+      cleanupIdentity.dev === createdIdentity?.dev &&
+      cleanupIdentity.ino === createdIdentity?.ino &&
+      (await isUnchangedTemp(tmp, cleanupIdentity, cleanupIdentity.size))
+    )
+      await unlink(tmp).catch(() => {})
   }
 }
 
