@@ -26,8 +26,10 @@ import {
   pinnedExpression,
   projectProfilerDiagnostics,
   recordSample,
+  sampleDiagnosticTiming,
   releaseExpression,
   sampleExpression,
+  startProfiler,
   timedInspectorCommand,
   shouldProbeHistory,
   syntheticDatalessPlan,
@@ -304,6 +306,57 @@ describe('recordSample', () => {
     expect(run.errors).toEqual([{ step: 'sample', tMs: 5_000, message: 'Runtime.evaluate: Promise was collected' }])
   })
 
+  it('adds diagnostic request and conservative histogram bounds without changing existing sample values', () => {
+    const run = emptyRun()
+    const timing = {
+      requestAtMs: 2_990,
+      settledAtMs: 3_040,
+      diagnosticStatus: 'answered',
+      histogramLowerBoundMs: 1_990,
+      histogramUpperBoundMs: 3_040,
+      histogramBoundsKnown: true
+    }
+    recordSample(
+      run,
+      3_000,
+      { ok: true, value: { writeMs: 2, lookupMs: 1 }, elapsedMs: 40 },
+      { lateAfterMs: 1_000, boundMs: 5_000, timing }
+    )
+    expect(run.samples).toEqual([
+      {
+        tMs: 3_000,
+        writeMs: 2,
+        lookupMs: 1,
+        answeredMs: 40,
+        ...timing
+      }
+    ])
+  })
+
+  it('projects actual inspector timing through the production mapper and recorded sample', () => {
+    const run = emptyRun()
+    const setup = { requestedAtMs: 10, settledAtMs: 20, status: 'answered' }
+    const completed = { timing: { requestedAtMs: 100, settledAtMs: 140, status: 'answered' } }
+    recordSample(
+      run,
+      100,
+      { ok: true, value: { loopMaxSinceLastMs: 30, writeMs: 2, lookupMs: 1 }, elapsedMs: 40 },
+      {
+        lateAfterMs: 1000,
+        boundMs: 5000,
+        timing: sampleDiagnosticTiming(completed.timing, null, setup)
+      }
+    )
+    const diagnostics = projectProfilerDiagnostics({ setup, timeline: run.samples })
+    expect(diagnostics.samples).toHaveLength(4)
+    expect(diagnostics.samples.find((sample) => sample.selector === 'worst-loop')).toMatchObject({
+      requestAtMs: 100,
+      settledAtMs: 140,
+      metrics: { roundTripMs: 40 },
+      histogram: { lowerBoundMs: 10, upperBoundMs: 140, boundsKnown: true }
+    })
+  })
+
   it('gives every timeline entry it files, late and hung ones included, the runner witness (M2-0515)', () => {
     const witness = { loopMaxSinceLastMs: 310, writeMs: 4, cpuBusyPct: 97.5 }
     const run = emptyRun()
@@ -334,17 +387,10 @@ describe('ST-1 profiler timing diagnostics', () => {
       return { late: false, result: { accepted: method } }
     })
     const now = () => clock
-
-    for (const [method, params, timeoutMs] of [
-      ['Profiler.enable', {}, 1_000],
-      ['Profiler.setSamplingInterval', { interval: 1_000 }, 1_000],
-      ['Profiler.start', {}, 1_000],
-      ['Profiler.stop', {}, 30_000]
-    ] as const) {
-      const result = await timedInspectorCommand(send, method, params, timeoutMs, now, commands)
-      expect(result).toEqual({ late: false, result: { accepted: method } })
-    }
-
+    const profiler = await startProfiler({ send }, now, commands, 1_000, 1_000)
+    const stopResult = await timedInspectorCommand(send, 'Profiler.stop', {}, 30_000, now, commands)
+    expect(stopResult).toEqual({ late: false, result: { accepted: 'Profiler.stop' } })
+    expect(profiler).toEqual({ requestedAtMs: 110, answeredAtMs: 115, startedAtMs: 115, running: true })
     expect(send).toHaveBeenCalledTimes(4)
     expect(events).toEqual([
       { method: 'Profiler.enable', params: {}, timeoutMs: 1_000 },
@@ -507,6 +553,11 @@ describe('ST-1 profiler timing diagnostics', () => {
     expect(diagnostics.samples[0]).toMatchObject({
       index: 0,
       histogram: { boundsKnown: false },
+      overlaps: {
+        histogram: [expect.objectContaining({ command: 'stop', executionBoundKnown: false })],
+        sampleRoundTrip: [expect.objectContaining({ command: 'stop', executionBoundKnown: false })],
+        histogramUnknown: true
+      },
       witness: { loopMaxSinceLastMs: 90, writeMs: 8, cpuBusyPct: 95 }
     })
     expect(diagnostics.samples[1]).toMatchObject({ selector: 'worst-write', index: 0 })

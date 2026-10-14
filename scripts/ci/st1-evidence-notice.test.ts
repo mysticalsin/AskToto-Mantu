@@ -102,7 +102,8 @@ function validDiagnostics() {
         histogram: { lowerBoundMs: 500, upperBoundMs: 1_010, boundsKnown: true },
         overlaps: {
           histogram: [{ command: 'start', observedWaitMs: 19, executionBoundKnown: true }],
-          sampleRoundTrip: []
+          sampleRoundTrip: [],
+          histogramUnknown: false
         },
         metrics: { loopMaxSinceLastMs: 700, loopMaxDuringWriteMs: 40, writeMs: 20, lookupMs: 3, roundTripMs: 20 },
         witness: {
@@ -177,7 +178,8 @@ describe('strict ST-1 GitHub notice serializer', () => {
             histogram: { lowerBoundMs: 500, upperBoundMs: 1_010, boundsKnown: true },
             overlaps: {
               histogram: [{ command: 'start', observedWaitMs: 19, executionBoundKnown: true }],
-              sampleRoundTrip: []
+              sampleRoundTrip: [],
+              histogramUnknown: false
             },
             witness: { loopMaxSinceLastMs: 5, writeMs: 2, cpuBusyPct: 20 }
           })
@@ -202,9 +204,18 @@ describe('strict ST-1 GitHub notice serializer', () => {
       profilerCommands: [{ ...validDiagnostics().profilerCommands[0], command: 'Profiler.start' }]
     },
     { ...validDiagnostics(), profilerCommands: [{ ...validDiagnostics().profilerCommands[0], settledAtMs: 29 }] },
+    {
+      ...validDiagnostics(),
+      profilerCommands: [
+        validDiagnostics().profilerCommands[0],
+        { ...validDiagnostics().profilerCommands[0], requestedAtMs: 36, settledAtMs: 40 }
+      ]
+    },
     { ...validDiagnostics(), samples: Array(6).fill(validDiagnostics().samples[0]) },
     { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], index: -1 }] },
     { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], settledAtMs: -1 }] },
+    { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], requestAtMs: 1_020, settledAtMs: 1_010 }] },
+    { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], requestAtMs: Infinity }] },
     { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], status: 'unknown' }] },
     {
       ...validDiagnostics(),
@@ -244,7 +255,11 @@ describe('strict ST-1 GitHub notice serializer', () => {
       setup: null,
       summary: null,
       samples: [
-        { ...validDiagnostics().samples[0], histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false } }
+        {
+          ...validDiagnostics().samples[0],
+          histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false },
+          overlaps: { histogram: [], sampleRoundTrip: [], histogramUnknown: true }
+        }
       ]
     }
     const input = fixture({ ...validReport(), profilerDiagnostics: diagnostics })
@@ -254,7 +269,12 @@ describe('strict ST-1 GitHub notice serializer', () => {
         version: 1,
         state: 'available',
         setup: null,
-        samples: [{ histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false } }]
+        samples: [
+          {
+            histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false },
+            overlaps: { histogram: [], sampleRoundTrip: [], histogramUnknown: true }
+          }
+        ]
       }
     })
   })

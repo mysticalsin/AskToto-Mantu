@@ -138,16 +138,268 @@ export function failureRecord(step, tMs, outcome, boundMs) {
  * timeline entry this files, late ones included, carries it.
  */
 export function recordSample(run, tMs, outcome, options) {
-  const { lateAfterMs, boundMs, witness } = options
+  const { lateAfterMs, boundMs, witness, timing } = options
   const witnessed = witness ? { witness } : {}
+  const timed = timing ? { ...timing } : {}
   if (outcome.ok) {
-    const entry = { tMs, ...outcome.value, answeredMs: Math.round(outcome.elapsedMs), ...witnessed }
+    const entry = { tMs, ...outcome.value, answeredMs: Math.round(outcome.elapsedMs), ...witnessed, ...timed }
     if (outcome.elapsedMs > lateAfterMs) run.late.push(entry)
     else run.samples.push(entry)
     return
   }
-  if (outcome.timedOut) run.late.push({ tMs, hung: true, ...witnessed })
+  if (outcome.timedOut) run.late.push({ tMs, hung: true, ...witnessed, ...timed })
   run.errors.push(failureRecord('sample', tMs, outcome, boundMs))
+}
+
+/** Translate the actual inspector completion clock into the sample diagnostic wire fields. */
+export function sampleDiagnosticTiming(sampleTiming, previousSampleTiming, setupTiming) {
+  const previous = previousSampleTiming ?? setupTiming
+  const histogramLowerBoundMs = previous?.requestedAtMs ?? null
+  return {
+    ...sampleTiming,
+    requestAtMs: sampleTiming.requestedAtMs,
+    diagnosticStatus: sampleTiming.status,
+    histogramLowerBoundMs,
+    histogramUpperBoundMs: sampleTiming.status === 'answered' ? sampleTiming.settledAtMs : null,
+    histogramBoundsKnown:
+      previous?.status === 'answered' && sampleTiming.status === 'answered' && histogramLowerBoundMs !== null
+  }
+}
+
+const PROFILER_COMMANDS = new Map([
+  ['Profiler.enable', 'enable'],
+  ['Profiler.setSamplingInterval', 'set-sampling-interval'],
+  ['Profiler.start', 'start'],
+  ['Profiler.stop', 'stop']
+])
+const PROFILER_STATUSES = new Set(['answered', 'timed-out', 'error'])
+const PROFILER_SELECTORS = [
+  ['worst-loop', 'loopMaxSinceLastMs'],
+  ['worst-write', 'writeMs'],
+  ['worst-lookup', 'lookupMs'],
+  ['worst-round-trip', 'roundTripMs']
+]
+
+/** Calls one existing Profiler command exactly once, preserving its result/error while recording bounded timing. */
+export async function timedInspectorCommand(send, method, params, timeoutMs, sinceSpawn, commands) {
+  const command = PROFILER_COMMANDS.get(method)
+  if (!command) throw new Error('unsupported profiler command')
+  const entry = { command, requestedAtMs: sinceSpawn(), settledAtMs: null, status: 'error' }
+  if (commands.length < PROFILER_COMMANDS.size) commands.push(entry)
+  try {
+    const result = await send(method, params, timeoutMs)
+    entry.status = result?.late ? 'timed-out' : 'answered'
+    return result
+  } catch (error) {
+    entry.status = 'error'
+    throw error
+  } finally {
+    entry.settledAtMs = sinceSpawn()
+  }
+}
+
+/** Existing Profiler setup command sequence, kept injectable for call-order/timing tests. */
+export async function startProfiler(cdp, sinceSpawn, profilerCommands, samplingIntervalUs, commandTimeoutMs) {
+  let requestedAtMs = null
+  const timedSend = (method, params, timeoutMs) => cdp.send(method, params, timeoutMs)
+  try {
+    await timedInspectorCommand(timedSend, 'Profiler.enable', {}, commandTimeoutMs, sinceSpawn, profilerCommands)
+    await timedInspectorCommand(
+      timedSend,
+      'Profiler.setSamplingInterval',
+      { interval: samplingIntervalUs },
+      commandTimeoutMs,
+      sinceSpawn,
+      profilerCommands
+    )
+    requestedAtMs = sinceSpawn()
+    const started = await timedInspectorCommand(
+      timedSend,
+      'Profiler.start',
+      {},
+      commandTimeoutMs,
+      sinceSpawn,
+      profilerCommands
+    )
+    const answeredAtMs = sinceSpawn()
+    return started.late
+      ? { requestedAtMs, answeredAtMs, startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
+      : { requestedAtMs, answeredAtMs, startedAtMs: answeredAtMs, running: true }
+  } catch (error) {
+    return {
+      requestedAtMs,
+      answeredAtMs: requestedAtMs === null ? null : sinceSpawn(),
+      startedAtMs: null,
+      running: false,
+      error: error.message
+    }
+  }
+}
+
+function safeDiagnosticNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function diagnosticTiming(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const requestedAtMs = safeDiagnosticNumber(value.requestedAtMs)
+  const settledAtMs = safeDiagnosticNumber(value.settledAtMs)
+  if (
+    requestedAtMs === null ||
+    settledAtMs === null ||
+    settledAtMs < requestedAtMs ||
+    !PROFILER_STATUSES.has(value.status)
+  ) {
+    return null
+  }
+  return { requestedAtMs, settledAtMs, status: value.status }
+}
+
+function diagnosticCommands(entries) {
+  if (!Array.isArray(entries)) return []
+  return entries.slice(0, PROFILER_COMMANDS.size).flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const command = entry.command
+    if (!['enable', 'set-sampling-interval', 'start', 'stop'].includes(command)) return []
+    const timing = diagnosticTiming(entry)
+    return timing ? [{ command, ...timing }] : []
+  })
+}
+
+function overlapCommands(startMs, endMs, commands) {
+  if (safeDiagnosticNumber(startMs) === null || safeDiagnosticNumber(endMs) === null || endMs < startMs) return []
+  return commands.flatMap((command) => {
+    const mayStillRun = command.status === 'timed-out'
+    const intersects = mayStillRun
+      ? command.requestedAtMs <= endMs
+      : command.requestedAtMs <= endMs && command.settledAtMs >= startMs
+    return intersects
+      ? [
+          {
+            command: command.command,
+            observedWaitMs: command.settledAtMs - command.requestedAtMs,
+            executionBoundKnown: !mayStillRun
+          }
+        ]
+      : []
+  })
+}
+
+function diagnosticWitness(witness) {
+  if (!witness || typeof witness !== 'object' || Array.isArray(witness)) return null
+  const result = {}
+  for (const key of [
+    'loopMaxSinceLastMs',
+    'writeMs',
+    'cpuBusyPct',
+    'readRequestedAtMs',
+    'readSettledAtMs',
+    'writeStartedAtMs',
+    'writeSettledAtMs'
+  ]) {
+    const value = safeDiagnosticNumber(witness[key])
+    if (value !== null) result[key] = value
+  }
+  return Object.keys(result).length > 0 ? result : null
+}
+
+function diagnosticSample(entry, index, selector, commands) {
+  const requestAtMs = safeDiagnosticNumber(entry.requestAtMs)
+  const settledAtMs = safeDiagnosticNumber(entry.settledAtMs)
+  const tMs = safeDiagnosticNumber(entry.tMs)
+  if (
+    requestAtMs === null ||
+    settledAtMs === null ||
+    settledAtMs < requestAtMs ||
+    tMs === null ||
+    !PROFILER_STATUSES.has(entry.diagnosticStatus)
+  ) {
+    return null
+  }
+  const lowerBoundMs = safeDiagnosticNumber(entry.histogramLowerBoundMs)
+  const upperBoundMs = safeDiagnosticNumber(entry.histogramUpperBoundMs)
+  const boundsKnown =
+    entry.histogramBoundsKnown === true &&
+    lowerBoundMs !== null &&
+    upperBoundMs !== null &&
+    upperBoundMs >= lowerBoundMs
+  const histogramEndMs = upperBoundMs ?? settledAtMs
+  const histogram = {
+    lowerBoundMs,
+    upperBoundMs,
+    boundsKnown
+  }
+  const metrics = {}
+  for (const [source, target] of [
+    ['loopMaxSinceLastMs', 'loopMaxSinceLastMs'],
+    ['loopMaxDuringWriteMs', 'loopMaxDuringWriteMs'],
+    ['writeMs', 'writeMs'],
+    ['lookupMs', 'lookupMs']
+  ]) {
+    const value = safeDiagnosticNumber(entry[source])
+    if (value !== null) metrics[target] = value
+  }
+  metrics.roundTripMs = settledAtMs - requestAtMs
+  const witness = diagnosticWitness(entry.witness)
+  return {
+    selector,
+    index,
+    tMs,
+    requestAtMs,
+    settledAtMs,
+    status: entry.diagnosticStatus,
+    late: entry.late === true,
+    hung: entry.hung === true,
+    histogram,
+    overlaps: {
+      histogram: overlapCommands(lowerBoundMs, histogramEndMs, commands),
+      sampleRoundTrip: overlapCommands(requestAtMs, settledAtMs, commands),
+      histogramUnknown: !boundsKnown
+    },
+    metrics,
+    ...(witness ? { witness } : {})
+  }
+}
+
+/** Closed, <=5-sample diagnostic projection; it is report-only and never feeds criteria.
+ * @param {{ setup?: Record<string, unknown> | null, summary?: Record<string, unknown> | null, profilerCommands?: Array<Record<string, unknown>>, timeline?: Array<Record<string, unknown>> }} input
+ */
+export function projectProfilerDiagnostics({
+  setup = null,
+  summary = null,
+  profilerCommands = [],
+  timeline = []
+} = {}) {
+  const commands = diagnosticCommands(profilerCommands)
+  const entries = Array.isArray(timeline) ? timeline : []
+  const selections = []
+  const selectMetric = (selector, metric) => {
+    let selected = null
+    let maximum = -Infinity
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]
+      const sample = diagnosticSample(entry, index, selector, commands)
+      const value = metric === 'roundTripMs' ? sample?.metrics.roundTripMs : safeDiagnosticNumber(entry?.[metric])
+      if (sample && value !== null && value !== undefined && value > maximum) {
+        maximum = value
+        selected = sample
+      }
+    }
+    if (selected) selections.push(selected)
+  }
+  for (const [selector, metric] of PROFILER_SELECTORS) selectMetric(selector, metric)
+  const firstLateIndex = entries.findIndex((entry) => entry?.late === true || entry?.hung === true)
+  if (firstLateIndex >= 0) {
+    const firstLate = diagnosticSample(entries[firstLateIndex], firstLateIndex, 'first-late-or-hung', commands)
+    if (firstLate) selections.push(firstLate)
+  }
+  return {
+    version: 1,
+    setup: diagnosticTiming(setup),
+    summary: diagnosticTiming(summary),
+    profilerCommands: commands,
+    samples: selections.slice(0, 5)
+  }
 }
 
 /**
@@ -879,6 +1131,7 @@ export function emptyRun() {
     history: [],
     errors: [],
     profiler: null,
+    profilerDiagnostics: { setup: null, summary: null, profilerCommands: [] },
     loop: null,
     witnessLoop: null
   }
@@ -951,6 +1204,10 @@ export function buildReport({
   const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort(
     (a, b) => a.tMs - b.tMs
   )
+  const profilerDiagnostics = projectProfilerDiagnostics({
+    ...(measured.profilerDiagnostics ?? {}),
+    timeline
+  })
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
@@ -998,6 +1255,7 @@ export function buildReport({
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
     timeline,
+    profilerDiagnostics,
     historyMode,
     witness: witnessSummary(timeline, measured.witnessLoop),
     history: measured.history,
