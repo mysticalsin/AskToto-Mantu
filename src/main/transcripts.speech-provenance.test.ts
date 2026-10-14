@@ -13,7 +13,7 @@ import {
   readSavedFile
 } from './transcripts'
 import { configureMeetingSpeechLimits } from './features/meetings/meeting-speech'
-import { recallRead, updateMeetingTranscript, updateMeetingRecap, searchMeetings } from './recall'
+import { recallRead, updateMeetingTranscript, updateMeetingRecap, searchMeetings, renameMeeting } from './recall'
 import { readSavedMeeting, meetingOpenTarget } from './history-actions'
 import { readSourceText } from './brain/inputs'
 import { useStorageForTests } from './infra/storage/meetings-storage'
@@ -241,5 +241,35 @@ describe('actual saved final speech provenance', () => {
     expect(recalled.ok).toBe(true)
     expect(recalled.recap).toContain('&lt;!-- /metis-speech-provenance -->')
     expect(recalled.lines).toEqual(input.lines)
+  })
+
+  it('refuses reserved syntax in new titles and renames without corrupting an existing speech file', async () => {
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    const before = readFileSync(file)
+    const title = 'Synthetic <!-- metis-speech-provenance:v1 --> title'
+    await expect(saveMeeting(settings, { ...input, title })).rejects.toThrow(
+      'Meeting text contains reserved storage syntax.'
+    )
+    expect((await renameMeeting(settings, basename(file), title)).ok).toBe(false)
+    expect(readFileSync(file)).toEqual(before)
+    await saveDraftTranscript(settings, input)
+    const draft = readdirSync(folder).find((name) => name.startsWith('.autosave-draft-'))!
+    const draftBefore = readFileSync(join(folder, draft))
+    await saveDraftTranscript(settings, { ...input, title })
+    expect(readFileSync(join(folder, draft))).toEqual(draftBefore)
+  })
+
+  it('retains original displayed clocks during names-only rewrite after a timezone change', async () => {
+    vi.stubEnv('TZ', 'America/New_York')
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    expect(readSavedFile(file)).toContain('**[00:00:00]')
+    vi.stubEnv('TZ', 'UTC')
+    const renamed = input.lines.map((line) => ({ ...line, name: 'Updated name after timezone change' }))
+    expect(await updateMeetingTranscript(settings, basename(file), renamed)).toEqual({ ok: true })
+    expect(readSavedFile(file)).toContain('**[00:00:00]')
+    expect(readSavedFile(file)).not.toContain('**[04:00:00]')
+    expect((await recallRead(basename(file))).lines).toEqual(renamed)
   })
 })
