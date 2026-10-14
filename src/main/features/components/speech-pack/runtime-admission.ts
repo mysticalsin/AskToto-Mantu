@@ -28,12 +28,18 @@ export async function acquirePackageRuntimeLease(
   const before = await getPackageRuntimeContract()
   if (before.status === 'invalid') throw new Error('The packaged runtime contract is invalid.')
   if (before.status !== 'verified' || before.profile !== 'lean') {
-    const legacyFeature = feature === 'offline-asr' ? 'asr' : feature === 'speaker-embedding' ? 'speaker embedding' : 'local LLM'
+    const legacyFeature =
+      feature === 'offline-asr' ? 'asr' : feature === 'speaker-embedding' ? 'speaker embedding' : 'local LLM'
     await assertLegacyRuntimeClosure(legacyFeature)
     return null
   }
   const identity = packageIdentity(before)
-  const lease = await acquireFeatureRuntime(feature, runtimeTargetFor(before, app.getVersion()), selectedModelId, signal)
+  const lease = await acquireFeatureRuntime(
+    feature,
+    runtimeTargetFor(before, app.getVersion()),
+    selectedModelId,
+    signal
+  )
   try {
     if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
     const after = await getPackageRuntimeContract()

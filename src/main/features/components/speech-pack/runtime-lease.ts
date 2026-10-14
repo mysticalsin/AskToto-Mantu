@@ -104,11 +104,15 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
     if (typeof value === 'string' && value.length <= 4096 && !value.includes('\0')) env[key] = value
   }
   const ownedRoots = lease.loaderDirectories()
-  const systemRoots = process.platform === 'win32'
-    ? [process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows', `${process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows'}\\System32`]
-    : process.platform === 'darwin'
-      ? ['/usr/lib', '/System/Library/Frameworks']
-      : ['/lib', '/usr/lib', '/lib64', '/usr/lib64']
+  const systemRoots =
+    process.platform === 'win32'
+      ? [
+          process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows',
+          `${process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows'}\\System32`
+        ]
+      : process.platform === 'darwin'
+        ? ['/usr/lib', '/System/Library/Frameworks']
+        : ['/lib', '/usr/lib', '/lib64', '/usr/lib64']
   const loaderRoots = [...ownedRoots, ...systemRoots]
   if (process.platform === 'win32') env.PATH = loaderRoots.join(delimiter)
   if (process.platform === 'linux') {
@@ -166,7 +170,8 @@ function exactPathMap<T extends string>(
     if (!safeRelativePath(source[key] ?? '')) throw new Error('Optional runtime provider omitted a required entry.')
   }
   for (const [key, value] of Object.entries(source)) {
-    if (typeof value !== 'string' || !safeRelativePath(value)) throw new Error('Optional runtime provider returned an invalid path.')
+    if (typeof value !== 'string' || !safeRelativePath(value))
+      throw new Error('Optional runtime provider returned an invalid path.')
     if (!allowed.includes(key as T)) throw new Error('Optional runtime provider returned an unknown role.')
   }
   return Object.freeze({ ...source })
@@ -174,10 +179,19 @@ function exactPathMap<T extends string>(
 
 function exactRuntimeTarget(actual: OptionalRuntimeTarget, expected: OptionalRuntimeTarget): boolean {
   const keys = [
-    'packageProfileIdentity', 'packagePlatform', 'packageArch', 'runningPlatform', 'runningArch',
-    'appVersion', 'electronVersion', 'nodeAbi', 'napiVersion', 'chromiumVersion'
+    'packageProfileIdentity',
+    'packagePlatform',
+    'packageArch',
+    'runningPlatform',
+    'runningArch',
+    'appVersion',
+    'electronVersion',
+    'nodeAbi',
+    'napiVersion',
+    'chromiumVersion'
   ] as const
-  if (!actual || typeof actual !== 'object' || Object.keys(actual).sort().join(',') !== [...keys].sort().join(',')) return false
+  if (!actual || typeof actual !== 'object' || Object.keys(actual).sort().join(',') !== [...keys].sort().join(','))
+    return false
   return keys.every((key) => actual[key] === expected[key])
 }
 
@@ -226,9 +240,14 @@ function validateGeneration(
     const model = generation.models[key as RuntimeModelId]
     if (
       !allowedModels.includes(key as RuntimeModelId) ||
-      !model || typeof model !== 'object' || !safeRelativePath(model.root) ||
-      !Array.isArray(model.members) || model.members.length < 1 || model.members.length > 100_000
-    ) throw new Error('Optional runtime provider returned an invalid model root.')
+      !model ||
+      typeof model !== 'object' ||
+      !safeRelativePath(model.root) ||
+      !Array.isArray(model.members) ||
+      model.members.length < 1 ||
+      model.members.length > 100_000
+    )
+      throw new Error('Optional runtime provider returned an invalid model root.')
     const members = new Set<string>()
     const foldedMembers = new Set<string>()
     for (const member of model.members) {
@@ -244,14 +263,14 @@ function validateGeneration(
       ? ['asr.parakeet-tdt-0.6b-v3-int8', 'asr.whisper-base-q8']
       : feature === 'speaker-embedding'
         ? ['speaker.embedding']
-        : selectedModelId ? [selectedModelId] : []
+        : selectedModelId
+          ? [selectedModelId]
+          : []
   if (modelKeys.length !== requiredModels.length || requiredModels.some((id) => !modelKeys.includes(id))) {
     throw new Error('Optional runtime provider returned a partial or unexpected model closure.')
   }
   const requiredMembers: Partial<Record<RuntimeModelId, readonly string[]>> = {
-    'asr.parakeet-tdt-0.6b-v3-int8': [
-      'encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'
-    ],
+    'asr.parakeet-tdt-0.6b-v3-int8': ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'],
     'asr.whisper-base-q8': [
       'Xenova/whisper-base/config.json',
       'Xenova/whisper-base/generation_config.json',
@@ -272,17 +291,24 @@ function validateGeneration(
   for (const id of requiredModels) {
     const model = generation.models[id]
     const required = requiredMembers[id] ?? []
-    if (!model || !safeRelativePath(model.root) || required.length !== model.members.length ||
-      required.some((member) => !model.members.includes(member))) {
+    if (
+      !model ||
+      !safeRelativePath(model.root) ||
+      required.length !== model.members.length ||
+      required.some((member) => !model.members.includes(member))
+    ) {
       throw new Error('Optional runtime provider omitted a required model member.')
     }
   }
   for (const path of generation.nativeLibraryDirs) {
-    if (!safeRelativePath(path)) throw new Error('Optional runtime provider returned an invalid native library directory.')
+    if (!safeRelativePath(path))
+      throw new Error('Optional runtime provider returned an invalid native library directory.')
   }
   if (
     feature === 'local-llm' &&
-    (!selectedModelId || !generation.models[selectedModelId] || !safeRelativePath(generation.models[selectedModelId]?.root ?? ''))
+    (!selectedModelId ||
+      !generation.models[selectedModelId] ||
+      !safeRelativePath(generation.models[selectedModelId]?.root ?? ''))
   ) {
     throw new Error('Optional runtime provider omitted the selected LLM model root.')
   }
@@ -316,7 +342,10 @@ export async function acquireFeatureRuntime(
     throw error
   }
   let released = false
-  const getPath = <K extends RuntimeEntryRole | RuntimeModelId>(map: Readonly<Partial<Record<K, string>>>, key: K): string => {
+  const getPath = <K extends RuntimeEntryRole | RuntimeModelId>(
+    map: Readonly<Partial<Record<K, string>>>,
+    key: K
+  ): string => {
     if (released) throw new Error('Optional runtime lease has been released.')
     const path = map[key]
     if (!path) throw new Error('Optional runtime entry is not part of this lease.')
@@ -342,7 +371,8 @@ export async function acquireFeatureRuntime(
     modelFile(id: RuntimeModelId, member: string): string {
       if (released || !safeRelativePath(member)) throw new Error('Optional runtime model file is not available.')
       const model = generation.models[id]
-      if (!model || !model.members.includes(member)) throw new Error('Optional runtime model file is not in the verified inventory.')
+      if (!model || !model.members.includes(member))
+        throw new Error('Optional runtime model file is not in the verified inventory.')
       return absoluteOwnedPath(generation.rootDir, `${model.root}/${member}`)
     },
     rendererFile(relativePath: string): string {
@@ -353,16 +383,18 @@ export async function acquireFeatureRuntime(
     },
     rendererResources(): ReadonlyMap<string, string> {
       if (released) throw new Error('Optional runtime lease has been released.')
-      return new Map(Object.entries(generation.rendererFiles).map(([name, path]) => [
-        name,
-        absoluteOwnedPath(generation.rootDir, path)
-      ]))
+      return new Map(
+        Object.entries(generation.rendererFiles).map(([name, path]) => [
+          name,
+          absoluteOwnedPath(generation.rootDir, path)
+        ])
+      )
     },
     async release(): Promise<void> {
       if (released) return
       released = true
       await generation.release()
-    },
+    }
   })
   liveLeases.set(lease as object, { feature })
   return lease

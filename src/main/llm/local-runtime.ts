@@ -613,8 +613,14 @@ function maybeAutoRestart(platform: LlamaPlatform): void {
  *  comparison previously ignored vision entirely, which would have reported "same model" and silently
  *  never restarted for the first screen ask. */
 function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
-  return !!a && a.gguf === b.gguf && a.mmproj === b.mmproj && (a.vision || !b.vision) &&
-    a.runtimeLease?.generationIdentity === b.runtimeLease?.generationIdentity && a.runtimeBinary === b.runtimeBinary
+  return (
+    !!a &&
+    a.gguf === b.gguf &&
+    a.mmproj === b.mmproj &&
+    (a.vision || !b.vision) &&
+    a.runtimeLease?.generationIdentity === b.runtimeLease?.generationIdentity &&
+    a.runtimeBinary === b.runtimeBinary
+  )
 }
 
 /**
@@ -637,7 +643,7 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
   // cpuPinned drops the Vulkan candidate for the rest of the session (no-op on mac, which has no Vulkan
   // candidate). Filtered here rather than in resolveBinaryPath() so that stays a pure path resolver.
   const candidates = modelPaths.runtimeBinary
-    ? [{ path: modelPaths.runtimeBinary, variant: platform === 'win' ? 'cpu' as const : 'mac' as const }]
+    ? [{ path: modelPaths.runtimeBinary, variant: platform === 'win' ? ('cpu' as const) : ('mac' as const) }]
     : resolveBinaryPath(platform).filter((c) => !(cpuPinned && c.variant === 'vulkan'))
   let lastErr: Error | null = null
   for (let i = 0; i < candidates.length; i++) {

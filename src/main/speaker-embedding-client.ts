@@ -86,16 +86,18 @@ function finishTermination(generation: Generation): void {
   if (generation.exitTimer) clearTimeout(generation.exitTimer)
   generation.exitTimer = null
   const termination = generation.termination
-  void releaseGenerationLease(generation).catch((error: unknown) => {
-    mainLog.warn('[speaker-embedding] runtime lease release failed:', asError(error).message)
-  }).finally(() => {
-    if (current === generation) current = null
-    if (releaseGate === termination) releaseGate = null
-    if (blockedRelease?.generation === generation) blockedRelease = null
-    generation.resolveTermination?.()
-    generation.resolveTermination = null
-    generation.rejectTermination = null
-  })
+  void releaseGenerationLease(generation)
+    .catch((error: unknown) => {
+      mainLog.warn('[speaker-embedding] runtime lease release failed:', asError(error).message)
+    })
+    .finally(() => {
+      if (current === generation) current = null
+      if (releaseGate === termination) releaseGate = null
+      if (blockedRelease?.generation === generation) blockedRelease = null
+      generation.resolveTermination?.()
+      generation.resolveTermination = null
+      generation.rejectTermination = null
+    })
 }
 
 function handleExit(generation: Generation, code: number | null): void {
@@ -117,11 +119,15 @@ function handleExit(generation: Generation, code: number | null): void {
 
 function spawnGeneration(runtimeLease: RuntimeFeatureLease | null, modelPath: string): Generation {
   const number = generationNumber++
-  const child: UtilityProcess = utilityProcess.fork(runtimeLease?.entry('speaker-embedding-host') ?? join(__dirname, 'speaker-embedding-host.js'), [], {
-    serviceName: `metis-speaker-embedding-${number}`,
-    stdio: 'pipe',
-    ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
-  })
+  const child: UtilityProcess = utilityProcess.fork(
+    runtimeLease?.entry('speaker-embedding-host') ?? join(__dirname, 'speaker-embedding-host.js'),
+    [],
+    {
+      serviceName: `metis-speaker-embedding-${number}`,
+      stdio: 'pipe',
+      ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
+    }
+  )
   const generation: Generation = {
     number,
     child,

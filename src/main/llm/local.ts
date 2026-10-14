@@ -118,10 +118,7 @@ export async function ensureLocalRuntimeStarted(
   // cannot turn a requested local answer into a silent no-op. Check both before costly verification and
   // again immediately before start: an import can begin while the integrity read is in flight.
   if (canStartSpeculatively?.() === false) return
-  let lease: RuntimeFeatureLease | null = await acquirePackageRuntimeLease(
-    'local-llm',
-    modelId as RuntimeModelId
-  )
+  let lease: RuntimeFeatureLease | null = await acquirePackageRuntimeLease('local-llm', modelId as RuntimeModelId)
   try {
     if (canStartSpeculatively?.() === false) return
     const paths = resolveLocalModelPaths(modelId)
@@ -143,7 +140,7 @@ export async function ensureLocalRuntimeStarted(
       gpuLayers: paths.gpuLayers,
       runtimeLease: lease ?? undefined,
       runtimeBinary: lease?.entry('llama-server'),
-      runtimeModelId: lease ? modelId as 'qwen3.5-0.8b' | 'qwen3.5-4b' : undefined
+      runtimeModelId: lease ? (modelId as 'qwen3.5-0.8b' | 'qwen3.5-4b') : undefined
     })
     // On success local-runtime owns this lease through the actual child exit event.
     lease = null
@@ -196,9 +193,14 @@ export async function prewarmLocal(
 ): Promise<void> {
   // A summary warm must land on the engine and slot the recap itself will use, so it is qualified with
   // the same prompt size and answer budget the recap request carries.
-  const engine = purpose === 'summary'
-    ? await pickLocalEngine('summary', messages.reduce((n, m) => n + m.content.length, 0), LOCAL_OUTPUT_TOKEN_BUDGETS.summary)
-    : await pickLocalEngine('suggest')
+  const engine =
+    purpose === 'summary'
+      ? await pickLocalEngine(
+          'summary',
+          messages.reduce((n, m) => n + m.content.length, 0),
+          LOCAL_OUTPUT_TOKEN_BUDGETS.summary
+        )
+      : await pickLocalEngine('suggest')
   if (engine === 'apple') {
     // Engine selection is async. Recheck after it, directly before loading fm serve, so a concurrent
     // import can defer this best-effort warm without affecting the later user-initiated request.
@@ -226,18 +228,26 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
       if (aborted) return
       opts.handlers.onError(
         'This transcript is too long to summarize locally without omitting earlier discussion. ' +
-        'Use a shorter transcript, or explicitly choose a cloud provider in Settings → AI. ' +
-        'Métis will not send this local request to the cloud automatically.'
+          'Use a shorter transcript, or explicitly choose a cloud provider in Settings → AI. ' +
+          'Métis will not send this local request to the cloud automatically.'
       )
     })
-    return { abort: () => { aborted = true } }
+    return {
+      abort: () => {
+        aborted = true
+      }
+    }
   }
   const background = opts.background === true
   if (background && interactiveSummaries > 0) {
     queueMicrotask(() => {
       if (!aborted) opts.handlers.onError(LOCAL_PREEMPTED_MESSAGE)
     })
-    return { abort: () => { aborted = true } }
+    return {
+      abort: () => {
+        aborted = true
+      }
+    }
   }
   const releaseInteractive = !background && opts.req.mode === 'summary' ? beginInteractiveSummary() : () => {}
   let inner: StreamHandle | null = null

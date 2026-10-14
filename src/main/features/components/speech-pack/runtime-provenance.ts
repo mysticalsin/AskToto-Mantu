@@ -5,12 +5,12 @@ import { constants } from 'node:fs'
 import { bundleFromJSON } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
+import { parseRuntimeInventory } from './runtime-inventory'
 
 const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
 const MAX_INVENTORY_BYTES = 20 * 1024 * 1024
 const MAX_TRUST_ROOT_BYTES = 2 * 1024 * 1024
 const MAX_INVENTORY_FILES = 100_000
-const MAX_INVENTORY_LICENSES = 10_000
 const MAX_TOTAL_PAYLOAD_BYTES = 10_000_000_000
 const SHA256 = /^[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40}$/
@@ -39,7 +39,12 @@ export interface RuntimeCatalogRow {
     readonly chromiumVersion: string
     readonly hostProtocol: 1
   }
-  readonly archive: { readonly bytes: number; readonly sha256: string; readonly url: string; readonly releaseAssetId: number }
+  readonly archive: {
+    readonly bytes: number
+    readonly sha256: string
+    readonly url: string
+    readonly releaseAssetId: number
+  }
   readonly inventory: { readonly bytes: number; readonly sha256: string }
   readonly bundle: { readonly bytes: number; readonly sha256: string }
   readonly signer: {
@@ -59,7 +64,13 @@ export interface RuntimeCatalogV1 {
   readonly schemaVersion: 1
   readonly protocolVersion: 1
   readonly catalogId: string
-  readonly trustRoot: { readonly path: string; readonly bytes: number; readonly sha256: string; readonly source: string } | null
+  readonly trustRoot: {
+    readonly path: string
+    readonly bytes: number
+    readonly sha256: string
+    readonly source: string
+    readonly receipt: { readonly path: string; readonly bytes: number; readonly sha256: string }
+  } | null
   readonly targets: readonly RuntimeCatalogRow[]
 }
 
@@ -92,7 +103,12 @@ export interface RuntimeInventoryV1 {
     readonly revision: string
     readonly digest: { readonly algorithm: 'sha256' | 'sha512'; readonly value: string }
   }[]
-  readonly files: readonly { readonly path: string; readonly bytes: number; readonly sha256: string; readonly executable: boolean }[]
+  readonly files: readonly {
+    readonly path: string
+    readonly bytes: number
+    readonly sha256: string
+    readonly executable: boolean
+  }[]
   readonly licenses: readonly {
     readonly package: string
     readonly version: string
@@ -128,11 +144,18 @@ export function assertRuntimeFileClosure(
     const pin = expected.get(file.path)
     if (
       !safePath(file.path) ||
-      !Number.isSafeInteger(file.bytes) || file.bytes < 0 ||
-      !SHA256.test(file.sha256) || typeof file.executable !== 'boolean' ||
-      !pin || pin.bytes !== file.bytes || pin.sha256 !== file.sha256 || pin.executable !== file.executable ||
-      seen.has(file.path) || folded.has(key)
-    ) throw new Error('RUNTIME_ARCHIVE_FILE_CLOSURE_MISMATCH')
+      !Number.isSafeInteger(file.bytes) ||
+      file.bytes < 0 ||
+      !SHA256.test(file.sha256) ||
+      typeof file.executable !== 'boolean' ||
+      !pin ||
+      pin.bytes !== file.bytes ||
+      pin.sha256 !== file.sha256 ||
+      pin.executable !== file.executable ||
+      seen.has(file.path) ||
+      folded.has(key)
+    )
+      throw new Error('RUNTIME_ARCHIVE_FILE_CLOSURE_MISMATCH')
     seen.add(file.path)
     folded.add(key)
   }
@@ -144,6 +167,8 @@ export interface RuntimeProvenanceInput {
   readonly trustRootPin: RuntimeCatalogV1['trustRoot']
   /** App-owned root snapshot whose bytes match the app-owned catalog pin and verified TUF receipt. */
   readonly trustedRootJson: Uint8Array
+  /** App-owned acquisition receipt, separately pinned by the app-owned catalog. */
+  readonly trustedRootReceiptJson: Uint8Array
   readonly bundleBytes: Uint8Array
   readonly archivePath: string
   readonly inventoryBytes: Uint8Array
@@ -170,7 +195,9 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 }
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
 }
 
 function boundedUtf8Json(bytes: Uint8Array, limit: number, code: string): unknown {
@@ -196,7 +223,8 @@ function safePath(path: unknown): path is string {
     !/^[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*$/.test(path) ||
     /[. ](?:\/|$)/.test(path) ||
     /(?:^|\/)(?:con|prn|aux|nul|conin\$|conout\$|clock\$|com[1-9]|lpt[1-9])(?:\.|\/|$)/iu.test(path)
-  ) return false
+  )
+    return false
   return path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..')
 }
 
@@ -204,7 +232,14 @@ function httpsImmutableUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 2048) return false
   try {
     const parsed = new URL(value)
-    return parsed.protocol === 'https:' && parsed.hostname.length > 0 && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+    return (
+      parsed.protocol === 'https:' &&
+      parsed.hostname.length > 0 &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash
+    )
   } catch {
     return false
   }
@@ -214,8 +249,10 @@ function productionArchiveUrl(value: unknown): value is string {
   if (!httpsImmutableUrl(value)) return false
   try {
     const parsed = new URL(value)
-    return parsed.hostname === 'github.com' &&
+    return (
+      parsed.hostname === 'github.com' &&
       /^\/mysticalsin\/AskToto-Mantu\/releases\/download\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(parsed.pathname)
+    )
   } catch {
     return false
   }
@@ -223,7 +260,21 @@ function productionArchiveUrl(value: unknown): value is string {
 
 function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
   const row = record(value)
-  if (!row || !exactKeys(row, ['kind', 'componentId', 'artifactId', 'target', 'runtime', 'archive', 'inventory', 'bundle', 'signer'])) return false
+  if (
+    !row ||
+    !exactKeys(row, [
+      'kind',
+      'componentId',
+      'artifactId',
+      'target',
+      'runtime',
+      'archive',
+      'inventory',
+      'bundle',
+      'signer'
+    ])
+  )
+    return false
   const target = record(row.target)
   const runtime = record(row.runtime)
   const archive = record(row.archive)
@@ -232,49 +283,113 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
   const signer = record(row.signer)
   return Boolean(
     row.kind === 'runtime' &&
-    typeof row.componentId === 'string' && /^[a-z][a-z0-9.-]{0,79}$/.test(row.componentId) &&
-    typeof row.artifactId === 'string' && /^[a-z][a-z0-9.-]{0,79}$/.test(row.artifactId) &&
-    target && exactKeys(target, ['platform', 'arch']) && (target.platform === 'darwin' || target.platform === 'win32') &&
-    (target.arch === 'arm64' || target.arch === 'x64') && runtime && exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) &&
-    typeof runtime.electronVersion === 'string' && /^\d+\.\d+\.\d+$/.test(runtime.electronVersion) &&
-    typeof runtime.nodeAbi === 'string' && /^\d{1,8}$/.test(runtime.nodeAbi) &&
-    typeof runtime.napi === 'string' && /^\d{1,8}$/.test(runtime.napi) &&
-    typeof runtime.chromiumVersion === 'string' && /^\d+\.\d+\.\d+\.\d+$/.test(runtime.chromiumVersion) &&
-    runtime.hostProtocol === 1 &&
-    archive && exactKeys(archive, ['bytes', 'sha256', 'url', 'releaseAssetId']) && Number.isSafeInteger(archive.bytes) && (archive.bytes as number) > 0 && (archive.bytes as number) <= MAX_TOTAL_PAYLOAD_BYTES &&
-    typeof archive.sha256 === 'string' && SHA256.test(archive.sha256) && productionArchiveUrl(archive.url) &&
-    Number.isSafeInteger(archive.releaseAssetId) && (archive.releaseAssetId as number) > 0 &&
-    inventory && exactKeys(inventory, ['bytes', 'sha256']) && Number.isSafeInteger(inventory.bytes) && (inventory.bytes as number) > 0 && (inventory.bytes as number) <= MAX_INVENTORY_BYTES &&
-    typeof inventory.sha256 === 'string' && SHA256.test(inventory.sha256) &&
-    bundle && exactKeys(bundle, ['bytes', 'sha256']) && Number.isSafeInteger(bundle.bytes) && (bundle.bytes as number) > 0 && (bundle.bytes as number) <= MAX_BUNDLE_BYTES &&
-    typeof bundle.sha256 === 'string' && SHA256.test(bundle.sha256) && signer && exactKeys(signer, [
-      'issuer', 'repositoryUri', 'repositoryId', 'workflowPath', 'ref', 'sourceCommit', 'workflowCommit', 'predicateType', 'runnerEnvironment'
-    ]) && signer.issuer === 'https://token.actions.githubusercontent.com' && signer.repositoryUri === SOURCE_REPOSITORY &&
-    signer.repositoryId === SOURCE_REPOSITORY_ID && typeof signer.workflowPath === 'string' &&
-    /^\.github\/workflows\/[a-z0-9-]+\.yml$/.test(signer.workflowPath) &&
-    signer.ref === 'refs/heads/main' &&
-    typeof signer.sourceCommit === 'string' && COMMIT.test(signer.sourceCommit) &&
-    typeof signer.workflowCommit === 'string' && COMMIT.test(signer.workflowCommit) &&
-    signer.predicateType === 'https://slsa.dev/provenance/v1' && signer.runnerEnvironment === 'github-hosted'
+      typeof row.componentId === 'string' &&
+      /^[a-z][a-z0-9.-]{0,79}$/.test(row.componentId) &&
+      typeof row.artifactId === 'string' &&
+      /^[a-z][a-z0-9.-]{0,79}$/.test(row.artifactId) &&
+      target &&
+      exactKeys(target, ['platform', 'arch']) &&
+      (target.platform === 'darwin' || target.platform === 'win32') &&
+      (target.arch === 'arm64' || target.arch === 'x64') &&
+      runtime &&
+      exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) &&
+      typeof runtime.electronVersion === 'string' &&
+      /^\d+\.\d+\.\d+$/.test(runtime.electronVersion) &&
+      typeof runtime.nodeAbi === 'string' &&
+      /^\d{1,8}$/.test(runtime.nodeAbi) &&
+      typeof runtime.napi === 'string' &&
+      /^\d{1,8}$/.test(runtime.napi) &&
+      typeof runtime.chromiumVersion === 'string' &&
+      /^\d+\.\d+\.\d+\.\d+$/.test(runtime.chromiumVersion) &&
+      runtime.hostProtocol === 1 &&
+      archive &&
+      exactKeys(archive, ['bytes', 'sha256', 'url', 'releaseAssetId']) &&
+      Number.isSafeInteger(archive.bytes) &&
+      (archive.bytes as number) > 0 &&
+      (archive.bytes as number) <= MAX_TOTAL_PAYLOAD_BYTES &&
+      typeof archive.sha256 === 'string' &&
+      SHA256.test(archive.sha256) &&
+      productionArchiveUrl(archive.url) &&
+      Number.isSafeInteger(archive.releaseAssetId) &&
+      (archive.releaseAssetId as number) > 0 &&
+      inventory &&
+      exactKeys(inventory, ['bytes', 'sha256']) &&
+      Number.isSafeInteger(inventory.bytes) &&
+      (inventory.bytes as number) > 0 &&
+      (inventory.bytes as number) <= MAX_INVENTORY_BYTES &&
+      typeof inventory.sha256 === 'string' &&
+      SHA256.test(inventory.sha256) &&
+      bundle &&
+      exactKeys(bundle, ['bytes', 'sha256']) &&
+      Number.isSafeInteger(bundle.bytes) &&
+      (bundle.bytes as number) > 0 &&
+      (bundle.bytes as number) <= MAX_BUNDLE_BYTES &&
+      typeof bundle.sha256 === 'string' &&
+      SHA256.test(bundle.sha256) &&
+      signer &&
+      exactKeys(signer, [
+        'issuer',
+        'repositoryUri',
+        'repositoryId',
+        'workflowPath',
+        'ref',
+        'sourceCommit',
+        'workflowCommit',
+        'predicateType',
+        'runnerEnvironment'
+      ]) &&
+      signer.issuer === 'https://token.actions.githubusercontent.com' &&
+      signer.repositoryUri === SOURCE_REPOSITORY &&
+      signer.repositoryId === SOURCE_REPOSITORY_ID &&
+      typeof signer.workflowPath === 'string' &&
+      /^\.github\/workflows\/[a-z0-9-]+\.yml$/.test(signer.workflowPath) &&
+      signer.ref === 'refs/heads/main' &&
+      typeof signer.sourceCommit === 'string' &&
+      COMMIT.test(signer.sourceCommit) &&
+      typeof signer.workflowCommit === 'string' &&
+      COMMIT.test(signer.workflowCommit) &&
+      signer.predicateType === 'https://slsa.dev/provenance/v1' &&
+      signer.runnerEnvironment === 'github-hosted'
   )
 }
 
 /** Parse only the closed application-owned catalog shape. Candidate files cannot define trust policy. */
 export function parseRuntimeCatalog(bytes: Uint8Array): RuntimeCatalogV1 {
   const parsed = record(boundedUtf8Json(bytes, MAX_INVENTORY_BYTES, 'RUNTIME_CATALOG_INVALID'))
-  if (!parsed || !exactKeys(parsed, ['schemaVersion', 'protocolVersion', 'catalogId', 'trustRoot', 'targets']) ||
-      parsed.schemaVersion !== 1 || parsed.protocolVersion !== 1 || parsed.catalogId !== 'metis-runtime-catalog-v1' ||
-      !Array.isArray(parsed.targets) || parsed.targets.length > 64) {
+  if (
+    !parsed ||
+    !exactKeys(parsed, ['schemaVersion', 'protocolVersion', 'catalogId', 'trustRoot', 'targets']) ||
+    parsed.schemaVersion !== 1 ||
+    parsed.protocolVersion !== 1 ||
+    parsed.catalogId !== 'metis-runtime-catalog-v1' ||
+    !Array.isArray(parsed.targets) ||
+    parsed.targets.length > 64
+  ) {
     throw new Error('RUNTIME_CATALOG_INVALID')
   }
   let trustRoot: RuntimeCatalogV1['trustRoot'] = null
   if (parsed.trustRoot !== null) {
     const root = record(parsed.trustRoot)
-    if (!root || !exactKeys(root, ['path', 'bytes', 'sha256', 'source']) ||
-        root.path !== 'runtime-trust/sigstore-trusted-root.json' ||
-        !Number.isSafeInteger(root.bytes) || (root.bytes as number) < 1 || (root.bytes as number) > MAX_TRUST_ROOT_BYTES ||
-        typeof root.sha256 !== 'string' || !SHA256.test(root.sha256) ||
-        root.source !== 'https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json') {
+    const receipt = root && record(root.receipt)
+    if (
+      !root ||
+      !exactKeys(root, ['path', 'bytes', 'sha256', 'source', 'receipt']) ||
+      root.path !== 'runtime-trust/sigstore-trusted-root.json' ||
+      !Number.isSafeInteger(root.bytes) ||
+      (root.bytes as number) < 1 ||
+      (root.bytes as number) > MAX_TRUST_ROOT_BYTES ||
+      typeof root.sha256 !== 'string' ||
+      !SHA256.test(root.sha256) ||
+      root.source !== 'https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json' ||
+      !receipt ||
+      !exactKeys(receipt, ['path', 'bytes', 'sha256']) ||
+      receipt.path !== 'runtime-trust/acquisition-receipt.json' ||
+      !Number.isSafeInteger(receipt.bytes) ||
+      (receipt.bytes as number) < 1 ||
+      (receipt.bytes as number) > 64 * 1024 ||
+      typeof receipt.sha256 !== 'string' ||
+      !SHA256.test(receipt.sha256)
+    ) {
       throw new Error('RUNTIME_TRUST_ROOT_UNAVAILABLE')
     }
     trustRoot = root as RuntimeCatalogV1['trustRoot']
@@ -295,97 +410,6 @@ export function parseRuntimeCatalog(bytes: Uint8Array): RuntimeCatalogV1 {
   })
 }
 
-function parseInventory(value: unknown, row: RuntimeCatalogRow): RuntimeInventoryV1 {
-  const inventory = record(value)
-  if (!inventory || !exactKeys(inventory, ['schemaVersion', 'kind', 'componentId', 'artifactId', 'target', 'runtime', 'source', 'builder', 'upstream', 'files', 'licenses'])) {
-    throw new Error('RUNTIME_INVENTORY_INVALID')
-  }
-  const source = record(inventory.source)
-  if (!source || !exactKeys(source, ['repositoryUri', 'commit', 'workflowPath', 'workflowCommit', 'runId', 'attempt', 'lockSha256'])) {
-    throw new Error('RUNTIME_INVENTORY_INVALID')
-  }
-  const builder = record(inventory.builder)
-  const target = record(inventory.target)
-  const runtime = record(inventory.runtime)
-  if (
-    inventory.schemaVersion !== 1 || inventory.kind !== 'runtime' || inventory.componentId !== row.componentId || inventory.artifactId !== row.artifactId ||
-    !target || !exactKeys(target, ['platform', 'arch']) || target.platform !== row.target.platform || target.arch !== row.target.arch ||
-    !runtime || !exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) ||
-    runtime.electronVersion !== row.runtime.electronVersion || runtime.nodeAbi !== row.runtime.nodeAbi ||
-    runtime.napi !== row.runtime.napi || runtime.chromiumVersion !== row.runtime.chromiumVersion || runtime.hostProtocol !== row.runtime.hostProtocol ||
-    source.repositoryUri !== SOURCE_REPOSITORY || source.commit !== row.signer.sourceCommit ||
-    source.workflowPath !== row.signer.workflowPath || source.workflowCommit !== row.signer.workflowCommit ||
-    typeof source.runId !== 'string' || !/^\d{1,20}$/.test(source.runId) || !Number.isSafeInteger(source.attempt) || (source.attempt as number) < 1 ||
-    typeof source.lockSha256 !== 'string' || !SHA256.test(source.lockSha256) ||
-    !builder || !exactKeys(builder, ['nodeVersion', 'npmVersion', 'zlibVersion', 'packages']) ||
-    typeof builder.nodeVersion !== 'string' || !/^v\d+\.\d+\.\d+$/.test(builder.nodeVersion) ||
-    typeof builder.npmVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(builder.npmVersion) ||
-    typeof builder.zlibVersion !== 'string' || builder.zlibVersion.length < 1 || builder.zlibVersion.length > 64 ||
-    !Array.isArray(builder.packages) || builder.packages.length < 1 || builder.packages.length > 128 ||
-    !Array.isArray(inventory.upstream) || inventory.upstream.length < 1 || inventory.upstream.length > 256 ||
-    !Array.isArray(inventory.files) || inventory.files.length < 1 || inventory.files.length > MAX_INVENTORY_FILES ||
-    !Array.isArray(inventory.licenses) || inventory.licenses.length < 1 || inventory.licenses.length > MAX_INVENTORY_LICENSES
-  ) throw new Error('RUNTIME_INVENTORY_IDENTITY_MISMATCH')
-
-  let previousPackage = ''
-  for (const raw of builder.packages) {
-    const item = record(raw)
-    if (!item || !exactKeys(item, ['name', 'version']) || typeof item.name !== 'string' || item.name.length < 1 || item.name.length > 256 ||
-        typeof item.version !== 'string' || item.version.length < 1 || item.version.length > 128 || item.name <= previousPackage) {
-      throw new Error('RUNTIME_BUILDER_INVENTORY_INVALID')
-    }
-    previousPackage = item.name
-  }
-  for (const raw of inventory.upstream) {
-    const item = record(raw)
-    const digest = item && record(item.digest)
-    if (!item || !exactKeys(item, ['name', 'version', 'sourceUri', 'revision', 'digest']) ||
-        typeof item.name !== 'string' || item.name.length < 1 || item.name.length > 256 ||
-        typeof item.version !== 'string' || item.version.length < 1 || item.version.length > 128 || !httpsImmutableUrl(item.sourceUri) ||
-        typeof item.revision !== 'string' || item.revision.length < 1 || item.revision.length > 256 ||
-        !digest || !exactKeys(digest, ['algorithm', 'value']) || (digest.algorithm !== 'sha256' && digest.algorithm !== 'sha512') ||
-        typeof digest.value !== 'string' || (digest.algorithm === 'sha256' ? !SHA256.test(digest.value) : !/^[0-9a-f]{128}$/.test(digest.value))) {
-      throw new Error('RUNTIME_UPSTREAM_INVENTORY_INVALID')
-    }
-  }
-
-  let totalBytes = 0
-  let previousPath = ''
-  const exact = new Map<string, { bytes: number; sha256: string }>()
-  const folded = new Set<string>()
-  for (const raw of inventory.files) {
-    const file = record(raw)
-    if (!file || !exactKeys(file, ['path', 'bytes', 'sha256', 'executable']) || !safePath(file.path) ||
-        !Number.isSafeInteger(file.bytes) || (file.bytes as number) < 0 || typeof file.sha256 !== 'string' || !SHA256.test(file.sha256) ||
-        typeof file.executable !== 'boolean' || file.path <= previousPath) throw new Error('RUNTIME_INVENTORY_INVALID')
-    const key = file.path.toLowerCase()
-    if (exact.has(file.path) || folded.has(key)) throw new Error('RUNTIME_INVENTORY_PATH_COLLISION')
-    exact.set(file.path, { bytes: file.bytes as number, sha256: file.sha256 })
-    folded.add(key)
-    previousPath = file.path
-    totalBytes += file.bytes as number
-    if (!Number.isSafeInteger(totalBytes) || totalBytes > MAX_TOTAL_PAYLOAD_BYTES) throw new Error('RUNTIME_INVENTORY_TOO_LARGE')
-  }
-  for (const raw of inventory.licenses) {
-    const license = record(raw)
-    if (!license || !exactKeys(license, ['package', 'version', 'spdx', 'sourceUri', 'noticePath', 'noticeBytes', 'noticeSha256', 'sourceReceiptUri'])) {
-      throw new Error('RUNTIME_LICENSE_RECEIPT_INVALID')
-    }
-    if (typeof license.package !== 'string' || !/^[A-Za-z0-9@/._+-]{1,200}$/.test(license.package) ||
-        typeof license.version !== 'string' || !/^[A-Za-z0-9._+-]{1,80}$/.test(license.version) ||
-        typeof license.spdx !== 'string' || !/^[A-Za-z0-9.+() -]{1,128}$/.test(license.spdx) ||
-        !httpsImmutableUrl(license.sourceUri) || !safePath(license.noticePath) ||
-        !Number.isSafeInteger(license.noticeBytes) || (license.noticeBytes as number) < 1 ||
-        typeof license.noticeSha256 !== 'string' || !SHA256.test(license.noticeSha256) ||
-        !httpsImmutableUrl(license.sourceReceiptUri)) throw new Error('RUNTIME_LICENSE_RECEIPT_INVALID')
-    const notice = exact.get(license.noticePath)
-    if (!notice || notice.bytes !== license.noticeBytes || notice.sha256 !== license.noticeSha256) {
-      throw new Error('RUNTIME_LICENSE_NOTICE_MISSING')
-    }
-  }
-  return inventory as unknown as RuntimeInventoryV1
-}
-
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
@@ -398,7 +422,13 @@ async function hashPinnedArchive(path: string, expectedBytes: number): Promise<s
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   try {
     const opened = await handle.stat()
-    if (!opened.isFile() || opened.nlink !== 1 || opened.size !== expectedBytes || opened.dev !== before.dev || opened.ino !== before.ino) {
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      opened.size !== expectedBytes ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    ) {
       throw new Error('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
     }
     const hash = createHash('sha256')
@@ -412,7 +442,14 @@ async function hashPinnedArchive(path: string, expectedBytes: number): Promise<s
     }
     const after = await handle.stat()
     const pathAfter = await lstat(path)
-    if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size || pathAfter.dev !== opened.dev || pathAfter.ino !== opened.ino || pathAfter.size !== opened.size) {
+    if (
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size ||
+      pathAfter.dev !== opened.dev ||
+      pathAfter.ino !== opened.ino ||
+      pathAfter.size !== opened.size
+    ) {
       throw new Error('RUNTIME_ARCHIVE_CHANGED_DURING_VERIFY')
     }
     return hash.digest('hex')
@@ -438,14 +475,24 @@ function expectedSignerUri(row: RuntimeCatalogRow): string {
 function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): void {
   const signerRecord = record(signer)
   const identity = signerRecord && record(signerRecord.identity)
-  if (!identity || identity.issuer !== row.signer.issuer || identity.subjectAlternativeName !== expectedSignerUri(row) || !Array.isArray(identity.oids)) {
+  if (
+    !identity ||
+    identity.issuer !== row.signer.issuer ||
+    identity.subjectAlternativeName !== expectedSignerUri(row) ||
+    !Array.isArray(identity.oids)
+  ) {
     throw new Error('RUNTIME_CERTIFICATE_IDENTITY_UNSUPPORTED')
   }
   const claims = new Map<string, string>()
   for (const raw of identity.oids) {
     const extension = record(raw)
     const oid = extension && record(extension.oid)
-    if (!extension || !oid || !Array.isArray(oid.id) || !oid.id.every((part) => Number.isInteger(part) && part >= 0 && part <= 4_294_967_295)) {
+    if (
+      !extension ||
+      !oid ||
+      !Array.isArray(oid.id) ||
+      !oid.id.every((part) => Number.isInteger(part) && part >= 0 && part <= 4_294_967_295)
+    ) {
       throw new Error('RUNTIME_CERTIFICATE_EXTENSION_UNSUPPORTED')
     }
     const id = oid.id.join('.')
@@ -463,23 +510,40 @@ function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): v
     [OID.sourceRef, row.signer.ref],
     [OID.repositoryId, row.signer.repositoryId]
   ])
-  for (const [oid, value] of expected) if (claims.get(oid) !== value) throw new Error('RUNTIME_CERTIFICATE_CLAIM_MISMATCH')
+  for (const [oid, value] of expected)
+    if (claims.get(oid) !== value) throw new Error('RUNTIME_CERTIFICATE_CLAIM_MISMATCH')
 }
 
 function assertStatement(statement: unknown, row: RuntimeCatalogRow, archiveHash: string, inventoryHash: string): void {
   const recordValue = record(statement)
-  if (!recordValue || !exactKeys(recordValue, ['_type', 'subject', 'predicateType', 'predicate']) ||
-      recordValue._type !== 'https://in-toto.io/Statement/v1' || recordValue.predicateType !== row.signer.predicateType ||
-      !Array.isArray(recordValue.subject) || recordValue.subject.length !== 2 || !record(recordValue.predicate)) {
+  if (
+    !recordValue ||
+    !exactKeys(recordValue, ['_type', 'subject', 'predicateType', 'predicate']) ||
+    recordValue._type !== 'https://in-toto.io/Statement/v1' ||
+    recordValue.predicateType !== row.signer.predicateType ||
+    !Array.isArray(recordValue.subject) ||
+    recordValue.subject.length !== 2 ||
+    !record(recordValue.predicate)
+  ) {
     throw new Error('RUNTIME_ATTESTATION_FORMAT_UNSUPPORTED')
   }
   const subjects = new Map<string, string>()
   for (const raw of recordValue.subject) {
     const subject = record(raw)
     const digest = subject && record(subject.digest)
-    if (!subject || !exactKeys(subject, ['name', 'digest']) || typeof subject.name !== 'string' || subject.name.length < 1 ||
-        subject.name.length > 512 || !safePath(subject.name) || !digest || !exactKeys(digest, ['sha256']) ||
-        typeof digest.sha256 !== 'string' || !SHA256.test(digest.sha256) || subjects.has(subject.name)) {
+    if (
+      !subject ||
+      !exactKeys(subject, ['name', 'digest']) ||
+      typeof subject.name !== 'string' ||
+      subject.name.length < 1 ||
+      subject.name.length > 512 ||
+      !safePath(subject.name) ||
+      !digest ||
+      !exactKeys(digest, ['sha256']) ||
+      typeof digest.sha256 !== 'string' ||
+      !SHA256.test(digest.sha256) ||
+      subjects.has(subject.name)
+    ) {
       throw new Error('RUNTIME_ATTESTATION_FORMAT_UNSUPPORTED')
     }
     subjects.set(subject.name, digest.sha256)
@@ -503,22 +567,86 @@ function assertStatement(statement: unknown, row: RuntimeCatalogRow, archiveHash
  * the exact archive and inventory bytes. Unsupported certificate encodings fail closed.
  */
 export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): Promise<VerifiedRuntimeProvenance> {
-  const { row, trustRootPin, bundleBytes, archivePath, inventoryBytes, trustedRootJson } = input
+  const { row, trustRootPin, bundleBytes, archivePath, inventoryBytes, trustedRootJson, trustedRootReceiptJson } = input
   if (!isCatalogRow(row)) throw new Error('RUNTIME_CATALOG_ROW_INVALID')
   if (!trustRootPin) throw new Error('RUNTIME_TRUST_ROOT_UNAVAILABLE')
-  if (trustedRootJson.byteLength !== trustRootPin.bytes || trustedRootJson.byteLength > MAX_TRUST_ROOT_BYTES || sha256(trustedRootJson) !== trustRootPin.sha256) {
+  if (
+    trustedRootJson.byteLength !== trustRootPin.bytes ||
+    trustedRootJson.byteLength > MAX_TRUST_ROOT_BYTES ||
+    sha256(trustedRootJson) !== trustRootPin.sha256
+  ) {
     throw new Error('RUNTIME_TRUST_ROOT_PIN_MISMATCH')
   }
-  if (bundleBytes.byteLength !== row.bundle.bytes || bundleBytes.byteLength > MAX_BUNDLE_BYTES || sha256(bundleBytes) !== row.bundle.sha256) {
+  if (
+    bundleBytes.byteLength !== row.bundle.bytes ||
+    bundleBytes.byteLength > MAX_BUNDLE_BYTES ||
+    sha256(bundleBytes) !== row.bundle.sha256
+  ) {
     throw new Error('RUNTIME_BUNDLE_PIN_MISMATCH')
   }
-  if (inventoryBytes.byteLength !== row.inventory.bytes || inventoryBytes.byteLength > MAX_INVENTORY_BYTES || sha256(inventoryBytes) !== row.inventory.sha256) {
+  if (
+    inventoryBytes.byteLength !== row.inventory.bytes ||
+    inventoryBytes.byteLength > MAX_INVENTORY_BYTES ||
+    sha256(inventoryBytes) !== row.inventory.sha256
+  ) {
     throw new Error('RUNTIME_INVENTORY_PIN_MISMATCH')
   }
   const archiveHash = await hashPinnedArchive(archivePath, row.archive.bytes)
   if (archiveHash !== row.archive.sha256) throw new Error('RUNTIME_ARCHIVE_PIN_MISMATCH')
   const inventoryHash = sha256(inventoryBytes)
-  const inventory = parseInventory(boundedUtf8Json(inventoryBytes, MAX_INVENTORY_BYTES, 'RUNTIME_INVENTORY_INVALID'), row)
+  const inventory = parseRuntimeInventory(
+    boundedUtf8Json(inventoryBytes, MAX_INVENTORY_BYTES, 'RUNTIME_INVENTORY_INVALID'),
+    row
+  )
+  if (
+    trustedRootReceiptJson.byteLength !== trustRootPin.receipt.bytes ||
+    trustedRootReceiptJson.byteLength > 64 * 1024 ||
+    sha256(trustedRootReceiptJson) !== trustRootPin.receipt.sha256
+  ) {
+    throw new Error('RUNTIME_TRUST_ROOT_RECEIPT_PIN_MISMATCH')
+  }
+  const receipt = record(boundedUtf8Json(trustedRootReceiptJson, 64 * 1024, 'RUNTIME_TRUST_ROOT_RECEIPT_INVALID'))
+  const verifiedBy = receipt && record(receipt.verifiedBy)
+  if (
+    !receipt ||
+    !exactKeys(receipt, [
+      'schemaVersion',
+      'source',
+      'verifiedBy',
+      'sourceCommit',
+      'workflowRef',
+      'workflowCommit',
+      'runId',
+      'attempt',
+      'lockSha256',
+      'rootBytes',
+      'rootSha256'
+    ]) ||
+    receipt.schemaVersion !== 1 ||
+    receipt.source !== trustRootPin.source ||
+    !verifiedBy ||
+    !exactKeys(verifiedBy, ['package', 'version']) ||
+    verifiedBy.package !== '@sigstore/tuf' ||
+    verifiedBy.version !== '5.0.0' ||
+    typeof receipt.sourceCommit !== 'string' ||
+    !COMMIT.test(receipt.sourceCommit) ||
+    typeof receipt.workflowCommit !== 'string' ||
+    !COMMIT.test(receipt.workflowCommit) ||
+    typeof receipt.workflowRef !== 'string' ||
+    !/^mysticalsin\/AskToto-Mantu\/\.github\/workflows\/runtime-trust-root\.yml@refs\/heads\/[A-Za-z0-9._/-]{1,256}$/.test(
+      receipt.workflowRef
+    ) ||
+    typeof receipt.runId !== 'string' ||
+    !/^\d{1,20}$/.test(receipt.runId) ||
+    !Number.isSafeInteger(receipt.attempt) ||
+    (receipt.attempt as number) < 1 ||
+    typeof receipt.lockSha256 !== 'string' ||
+    !SHA256.test(receipt.lockSha256) ||
+    receipt.rootBytes !== trustRootPin.bytes ||
+    receipt.rootSha256 !== trustRootPin.sha256
+  ) {
+    throw new Error('RUNTIME_TRUST_ROOT_RECEIPT_INVALID')
+  }
   const trustedRoot = record(boundedUtf8Json(trustedRootJson, MAX_TRUST_ROOT_BYTES, 'RUNTIME_TRUST_ROOT_UNAVAILABLE'))
   if (!trustedRoot) throw new Error('RUNTIME_TRUST_ROOT_UNAVAILABLE')
   const bundleJson = boundedUtf8Json(bundleBytes, MAX_BUNDLE_BYTES, 'RUNTIME_BUNDLE_INVALID')
@@ -530,8 +658,12 @@ export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): 
   }
   const dsse = record(bundle)
   const envelope = dsse && record(dsse.dsseEnvelope)
-  if (!envelope || typeof envelope.payload !== 'string' || envelope.payload.length > MAX_BUNDLE_BYTES * 2 ||
-      !/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.payload)) {
+  if (
+    !envelope ||
+    typeof envelope.payload !== 'string' ||
+    envelope.payload.length > MAX_BUNDLE_BYTES * 2 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.payload)
+  ) {
     throw new Error('RUNTIME_ATTESTATION_FORMAT_UNSUPPORTED')
   }
   const rootProto = TrustedRoot.fromJSON(trustedRoot)

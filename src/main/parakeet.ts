@@ -117,16 +117,18 @@ function finishTermination(generation: HostGeneration): void {
   if (generation.exitTimer) clearTimeout(generation.exitTimer)
   generation.exitTimer = null
   const termination = generation.termination
-  void releaseRuntimeLease(generation).catch((error: unknown) => {
-    mainLog.warn('[parakeet] runtime lease release failed:', asError(error).message)
-  }).finally(() => {
-    if (current === generation) current = null
-    if (releaseGate === termination) releaseGate = null
-    if (blockedRelease?.generation === generation) blockedRelease = null
-    generation.resolveTermination?.()
-    generation.resolveTermination = null
-    generation.rejectTermination = null
-  })
+  void releaseRuntimeLease(generation)
+    .catch((error: unknown) => {
+      mainLog.warn('[parakeet] runtime lease release failed:', asError(error).message)
+    })
+    .finally(() => {
+      if (current === generation) current = null
+      if (releaseGate === termination) releaseGate = null
+      if (blockedRelease?.generation === generation) blockedRelease = null
+      generation.resolveTermination?.()
+      generation.resolveTermination = null
+      generation.rejectTermination = null
+    })
 }
 
 function handleExit(generation: HostGeneration, code: number | null): void {
@@ -148,11 +150,15 @@ function handleExit(generation: HostGeneration, code: number | null): void {
 
 function spawnGeneration(modelFiles: ModelFiles, runtimeLease: RuntimeFeatureLease | null): HostGeneration {
   const number = nextGeneration++
-  const child: UtilityProcess = utilityProcess.fork(runtimeLease?.entry('parakeet-host') ?? join(__dirname, 'parakeet-asr-host.js'), [], {
-    serviceName: `metis-parakeet-asr-${number}`,
-    stdio: 'pipe',
-    ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
-  })
+  const child: UtilityProcess = utilityProcess.fork(
+    runtimeLease?.entry('parakeet-host') ?? join(__dirname, 'parakeet-asr-host.js'),
+    [],
+    {
+      serviceName: `metis-parakeet-asr-${number}`,
+      stdio: 'pipe',
+      ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
+    }
+  )
   const generation: HostGeneration = {
     number,
     child,
@@ -257,10 +263,7 @@ function terminateGeneration(generation: HostGeneration, pendingError: Error): P
 }
 
 async function requestHost(
-  request:
-    | { type: 'probe' }
-    | { type: 'warmup' }
-    | { type: 'transcribe'; pcm: ArrayBuffer },
+  request: { type: 'probe' } | { type: 'warmup' } | { type: 'transcribe'; pcm: ArrayBuffer },
   revision = operationRevision
 ): Promise<HostResponse> {
   assertCurrentOperation(revision)

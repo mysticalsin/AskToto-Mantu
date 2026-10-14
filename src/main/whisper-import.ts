@@ -181,12 +181,12 @@ async function createHost(): Promise<UtilityProcess> {
       // Re-resolve the profile and activated path after the old-host exit barrier. A path checked before
       // that wait is stale authority if selection/profile changes while the old helper is stopping.
       if (admissionVersion !== importTierAdmissionVersion) continue
-      const approvedModelsPath = runtimeLease
-        ? runtimeLease.model('asr.whisper-base-q8')
-        : await modelsDir()
+      const approvedModelsPath = runtimeLease ? runtimeLease.model('asr.whisper-base-q8') : await modelsDir()
       if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
       if (admissionVersion !== importTierAdmissionVersion) continue
-      const child = forkHost(tierAdmission, approvedModelsPath, runtimeLease, () => { leaseTransferred = true })
+      const child = forkHost(tierAdmission, approvedModelsPath, runtimeLease, () => {
+        leaseTransferred = true
+      })
       return child
     } finally {
       if (!leaseTransferred) await runtimeLease?.release()
@@ -209,11 +209,15 @@ function forkHost(
   runtimeLease: RuntimeFeatureLease | null,
   onLeaseTransferred: () => void
 ): UtilityProcess {
-  const child = utilityProcess.fork(runtimeLease?.entry('whisper-import-host') ?? join(__dirname, 'whisper-asr-host.js'), [], {
-    serviceName: 'metis-whisper-import',
-    stdio: 'pipe',
-    ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
-  })
+  const child = utilityProcess.fork(
+    runtimeLease?.entry('whisper-import-host') ?? join(__dirname, 'whisper-asr-host.js'),
+    [],
+    {
+      serviceName: 'metis-whisper-import',
+      stdio: 'pipe',
+      ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
+    }
+  )
   hostLease = runtimeLease
   onLeaseTransferred()
   child.stderr?.on('data', (chunk: Buffer) => mainLog.warn('[whisper-host]', chunk.toString('utf8').trim()))
@@ -261,9 +265,14 @@ function forkHost(
       failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
     }
     if (hostLease === runtimeLease) hostLease = null
-    void Promise.resolve(runtimeLease?.release()).catch((error: unknown) => {
-      mainLog.warn('[whisper-host] runtime lease release failed:', error instanceof Error ? error.message : String(error))
-    }).finally(() => settleHostStop(child))
+    void Promise.resolve(runtimeLease?.release())
+      .catch((error: unknown) => {
+        mainLog.warn(
+          '[whisper-host] runtime lease release failed:',
+          error instanceof Error ? error.message : String(error)
+        )
+      })
+      .finally(() => settleHostStop(child))
   })
   host = child
   hostReady = false
