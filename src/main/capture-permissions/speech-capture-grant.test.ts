@@ -19,6 +19,18 @@ function armedRegistry(owner = context()) {
 }
 
 describe('SpeechCaptureGrantRegistry', () => {
+  it('reconciles an accepted successor while duplicate context preserves the current issued grant', () => {
+    const { registry, owner } = armedRegistry()
+    const pending = registry.beginPendingGrant(owner)!
+    registry.recordGrantCallbackResult(pending, owner, { callbackSucceeded: true, audioGranted: true })
+    expect(registry.reconcileListenContext({ ...owner })).toBe(true)
+    expect(registry.hasIssuedLoopbackGrant(owner)).toBe(true)
+    const successor = { ...owner, listenStartedAt: owner.listenStartedAt + 1 }
+    expect(registry.reconcileListenContext(successor)).toBe(true)
+    expect(registry.getAcceptedListenContext()).toEqual(successor)
+    expect(registry.hasIssuedLoopbackGrant(owner)).toBe(false)
+    expect(registry.hasIssuedLoopbackGrant(successor)).toBe(false)
+  })
   it('records only a successful nonempty grant for the exact still-current async context', () => {
     const { registry, owner } = armedRegistry()
     const pending = registry.beginPendingGrant(owner)
