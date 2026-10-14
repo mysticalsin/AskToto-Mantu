@@ -18,10 +18,13 @@ import {
   freeLoopbackPort,
   launchPackagedCdp,
   packagedLaunchFailed,
+  ownedCensus,
+  killOwned,
   strictLaunchEnvironment,
   waitFor,
   waitForChildExit
 } from './lib/app-driver.mjs'
+import { listProcesses, survivors } from './owned-processes.mjs'
 import { candidateRunProblems, assertCandidateProvenance } from './candidate-scenarios.mjs'
 
 export const BASELINE = Object.freeze({
@@ -164,11 +167,68 @@ function disposableRootsAreSafe(installRoot, runnerRoot, reportPath) {
   return !inside(install, report) && !inside(runner, report)
 }
 
+function rememberOwnedProcesses(ownership, requireRoot = false) {
+  const census = ownedCensus({ platform: 'win32', mainPid: ownership.child.pid, installRoot: ownership.installRoot })
+  for (const entry of census.owned) ownership.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
+  if (requireRoot && !census.owned.some((entry) => entry.pid === ownership.child.pid)) {
+    ownership.censusAvailable = false
+    throw new Error('launch-owned process census did not observe the exact app root PID')
+  }
+}
+
+export function ownedTreeHasExited({ rootExited, censusAvailable, owned, current, installRoot, platform = 'win32' }) {
+  return rootExited === true && censusAvailable === true &&
+    survivors(owned, current, { installRoot, platform }).length === 0
+}
+
+export function cleanShutdownPassed({ quitDelivered, rootExitCode, rootSignalCode, treeExited }) {
+  return quitDelivered === true && rootExitCode === 0 && rootSignalCode === null && treeExited === true
+}
+
+async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
+  if (!ownership?.child?.pid || ownership.child.pid <= 1) return false
+  const child = ownership.child
+  const deadline = Date.now() + timeoutMs
+  try { rememberOwnedProcesses(ownership) } catch { ownership.censusAvailable = false }
+  if (child.exitCode === null && child.signalCode === null) {
+    try { child.kill('SIGTERM') } catch { /* the bounded census below owns final status */ }
+    await waitForChildExit(child, Math.min(3_000, Math.max(1, deadline - Date.now())))
+  }
+  while (Date.now() < deadline) {
+    try {
+      // Refresh the same PID-tree plus install-root census used by the packaged smoke harness.
+      rememberOwnedProcesses(ownership)
+      const current = listProcesses('win32')
+      const rootExited = child.exitCode !== null || child.signalCode !== null
+      if (ownedTreeHasExited({
+        rootExited,
+        censusAvailable: ownership.censusAvailable,
+        owned: [...ownership.owned.values()],
+        current,
+        installRoot: ownership.installRoot
+      })) {
+        ownership.teardownVerified = true
+        return true
+      }
+      const remaining = survivors([...ownership.owned.values()], current, {
+        installRoot: ownership.installRoot,
+        platform: 'win32'
+      })
+      if (remaining.length) killOwned(remaining)
+    } catch {
+      ownership.censusAvailable = false
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250))
+  }
+  ownership.teardownVerified = false
+  return false
+}
+
 function findPages(browser) {
   return browser.contexts().flatMap((context) => context.pages()).filter((page) => !page.isClosed())
 }
 
-async function startApp(executable, qaRoot, profile) {
+async function startApp(executable, qaRoot, profile, installRoot, launchRecords) {
   const paths = {
     home: qaRoot,
     userProfile: qaRoot,
@@ -195,10 +255,20 @@ async function startApp(executable, qaRoot, profile) {
   let inspectPort = await freeLoopbackPort()
   while (inspectPort === cdpPort) inspectPort = await freeLoopbackPort()
   const launched = launchPackagedCdp({ executablePath: executable, env, cdpPort, inspectPort, platform: 'win32' })
+  const ownership = {
+    child: launched.child,
+    installRoot,
+    owned: new Map(),
+    censusAvailable: true,
+    teardownVerified: false
+  }
+  launchRecords.push(ownership)
   let browser = null
   try {
+    rememberOwnedProcesses(ownership, true)
     browser = await waitFor(async () => {
       if (packagedLaunchFailed(launched.child, launched.latches)) throw new Error('packaged process exited before CDP attached')
+      rememberOwnedProcesses(ownership)
       try { return await attach(launched.cdpEndpoint, 1_500) } catch { return null }
     }, 'packaged app did not expose loopback CDP', 60_000, 250)
     const page = await waitFor(async () => {
@@ -209,16 +279,18 @@ async function startApp(executable, qaRoot, profile) {
       }
       return null
     }, 'packaged app never exposed its window.toto bridge', 60_000, 250)
-    return { ...launched, browser, page, profile, qaRoot }
+    return { ...launched, browser, page, profile, qaRoot, ownership }
   } catch (error) {
     try { await browser?.close() } catch { /* best effort */ }
-    try { launched.child.kill() } catch { /* exact child only */ }
+    const treeExited = await stopOwnedProcessTree(ownership)
+    if (!treeExited) throw new Error(`packaged launch failed and its complete owned process tree was not verified stopped: ${error instanceof Error ? error.message : String(error)}`)
     throw error
   }
 }
 
 async function stopApp(app) {
   let quitDelivered = false
+  try { rememberOwnedProcesses(app.ownership) } catch { app.ownership.censusAvailable = false }
   try {
     quitDelivered = await app.page.evaluate(async () => {
       if (!window.toto || typeof window.toto.quit !== 'function') return false
@@ -227,14 +299,19 @@ async function stopApp(app) {
     })
   } catch { /* process exit may close CDP before reply */ }
   try { await app.browser?.close() } catch { /* best effort */ }
-  const exited = await waitForChildExit(app.child, 30_000)
-  if (!exited) {
-    // Only kill the process tree rooted at this harness's direct child.
-    const { spawnSync } = await import('node:child_process')
-    spawnSync('taskkill', ['/PID', String(app.child.pid), '/T', '/F'], { windowsHide: true, timeout: 10_000 })
-    await waitForChildExit(app.child, 5_000)
+  await waitForChildExit(app.child, 30_000)
+  const treeExited = await stopOwnedProcessTree(app.ownership)
+  return {
+    quitDelivered,
+    exited: app.child.exitCode === 0 && app.child.signalCode === null,
+    treeExited,
+    passed: cleanShutdownPassed({
+      quitDelivered,
+      rootExitCode: app.child.exitCode,
+      rootSignalCode: app.child.signalCode,
+      treeExited
+    })
   }
-  return { quitDelivered, exited: app.child.exitCode === 0 }
 }
 
 async function appCall(app, callback, argument = undefined) {
@@ -275,7 +352,8 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
   let baselineApiKeyHash = null
   let baselineSettings = null
   let meetingFolder = null
-  let keyFolder = resolve(runnerRoot, 'isolated-user-data')
+  const keyFolder = resolve(runnerRoot, 'isolated-user-data')
+  const launchRecords = []
   let overallError = null
   const safeRoots = disposableRootsAreSafe(installRoot, runnerRoot, reportPath)
   try {
@@ -306,7 +384,7 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     install(baselineInstaller)
     const baselineExe = join(installRoot, 'Metis.exe')
       if (statSync(baselineExe).size <= 0) throw new Error('baseline installed executable was empty')
-    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder)
+    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder, installRoot, launchRecords)
     const settings = await appCall(activeApp, async (synthetic) => {
       const initial = await window.toto.getSettings()
       const saved = await window.toto.setSettings({
@@ -370,24 +448,23 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
 
     const baselineExit = await stopApp(activeApp)
     activeApp = null
-    record(checks, 'baseline_clean_shutdown', baselineExit.quitDelivered && baselineExit.exited, `quit=${baselineExit.quitDelivered}; exit0=${baselineExit.exited}`)
-    if (!baselineExit.quitDelivered || !baselineExit.exited) throw new Error('baseline app did not quit cleanly')
+    record(checks, 'baseline_clean_shutdown', baselineExit.passed,
+      `quit=${baselineExit.quitDelivered}; rootExit0=${baselineExit.exited}; ownedTreeExited=${baselineExit.treeExited}`)
+    if (!baselineExit.passed) throw new Error('baseline app process tree did not shut down cleanly')
 
     // Re-run the same official Setup installer with the same /D target: this is an in-place replacement,
     // not a side-by-side install or a profile copy/restore.
     install(candidateInstaller)
     if (!statSync(baselineExe).isFile()) throw new Error('candidate installer removed the stable install-root executable')
     record(checks, 'candidate_replaced_same_install_root', true, 'candidate Setup reran at the unchanged disposable install root')
-    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder)
+    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder, installRoot, launchRecords)
 
     const after = await appCall(activeApp, async ({ noteFile, expected }) => {
       const settingsNow = await window.toto.getSettings()
       const history = await window.toto.recallList()
       const meeting = Array.isArray(history) ? history.find((item) => item.title === expected.meetingTitle) : null
       const read = meeting?.file ? await window.toto.recallRead(meeting.file) : null
-      const bridge = window.toto
-      let noteRead = { available: typeof bridge.recallReadNote === 'function', result: null }
-      if (noteRead.available) noteRead.result = await bridge.recallReadNote(noteFile)
+      const noteRead = await window.toto.recallRead(noteFile)
       return {
         version: settingsNow.version ?? null,
         onboardingDone: settingsNow.onboardingDone,
@@ -410,21 +487,21 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     record(checks, 'meeting_ciphertext_preserved', hashFile(baselineMeetingPath) === baselineMeetingHash && checkEncryptedFile(baselineMeetingPath, SYNTHETIC.meetingLine), 'meeting ciphertext is byte-identical and remains encrypted')
     record(checks, 'note_ciphertext_preserved', hashFile(baselineNotePath) === baselineNoteHash && checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer), 'note ciphertext is byte-identical and remains encrypted')
     const noteResult = after.noteRead?.result
-    const noteReadable = after.noteRead?.available === true && noteResult?.ok === true &&
-      (noteResult.answer === SYNTHETIC.noteAnswer || noteResult.content?.includes(SYNTHETIC.noteAnswer))
+    const noteReadable = noteResult?.ok === true && noteResult.kind === 'note' &&
+      noteResult.title === SYNTHETIC.noteTitle && noteResult.question === SYNTHETIC.noteQuestion &&
+      noteResult.answer === SYNTHETIC.noteAnswer
     const noteEvidence = noteReadable
-      ? 'candidate note-read API returned the expected synthetic answer'
-      : after.noteRead?.available
-        ? 'FAIL: candidate note-read API did not return the expected synthetic answer'
-        : 'BLOCKED: candidate bridge does not expose saved-note read; ciphertext alone cannot prove app-visible decryption'
+      ? 'candidate recallRead returned the expected note kind, title, question, and answer'
+      : 'FAIL: candidate recallRead did not return the expected synthetic note kind/title/question/answer'
     record(checks, 'note_content_app_visible_after_upgrade', noteReadable, noteEvidence)
     if (!noteReadable) {
       report.coverage_limitations.push('The candidate did not prove saved-note app-visible decryption; preserved ciphertext alone is not an acceptance substitute.')
     }
     const candidateExit = await stopApp(activeApp)
     activeApp = null
-    record(checks, 'candidate_clean_shutdown', candidateExit.quitDelivered && candidateExit.exited, `quit=${candidateExit.quitDelivered}; exit0=${candidateExit.exited}`)
-    if (!after.version || !after.onboardingDone || !after.encryptTranscripts || !after.hasOpenAi || !after.meeting || !after.read?.ok || !noteReadable || !candidateExit.quitDelivered || !candidateExit.exited) {
+    record(checks, 'candidate_clean_shutdown', candidateExit.passed,
+      `quit=${candidateExit.quitDelivered}; rootExit0=${candidateExit.exited}; ownedTreeExited=${candidateExit.treeExited}`)
+    if (!after.version || !after.onboardingDone || !after.encryptTranscripts || !after.hasOpenAi || !after.meeting || !after.read?.ok || !noteReadable || !candidateExit.passed) {
       throw new Error('candidate failed at least one app-visible preservation assertion')
     }
   } catch (error) {
@@ -435,8 +512,14 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
         overallError = [overallError, `app cleanup failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join('; ')
       }
     }
+    for (const ownership of launchRecords) {
+      if (ownership.teardownVerified) continue
+      const treeExited = await stopOwnedProcessTree(ownership)
+      if (!treeExited) overallError = [overallError, 'a launch-owned process tree could not be verified stopped'].filter(Boolean).join('; ')
+    }
     let removed = false
-    if (safeRoots) {
+    const allLaunchTreesExited = launchRecords.every((ownership) => ownership.teardownVerified)
+    if (safeRoots && allLaunchTreesExited) {
       try {
         rmSync(installRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
         rmSync(runnerRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
@@ -447,7 +530,7 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     }
     record(checks, 'disposable_roots_removed', removed, removed
       ? 'both isolated install and synthetic profile roots were recursively removed and verified absent'
-      : 'FAIL: one or both isolated roots remain or cleanup paths were not safe')
+      : 'FAIL: one or both isolated roots remain, cleanup paths were unsafe, or a launch-owned process tree remains unverified')
     if (!removed && !overallError) overallError = 'disposable install/profile roots could not be verified absent after cleanup.'
     report.error = overallError
     report.assessment = assessUpgradeReport(report, {

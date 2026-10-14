@@ -4,6 +4,8 @@ import {
   CANDIDATE_VERSION,
   REQUIRED_CHECKS,
   assessUpgradeReport,
+  cleanShutdownPassed,
+  ownedTreeHasExited,
   verifyCandidateIdentity
 } from './profile-upgrade.mjs'
 
@@ -42,6 +44,21 @@ function completeReport() {
 }
 
 describe('hosted in-place Windows profile upgrade acceptance', () => {
+  it('requires a complete owned-process census to prove shutdown and permit root cleanup', () => {
+    const installRoot = 'C:\\runner-temp\\metis-upgrade-install'
+    const main = { pid: 410, ppid: 1, startedMs: 100, exe: `${installRoot}\\Metis.exe`, role: 'Metis.exe' }
+    const renderer = { pid: 411, ppid: 410, startedMs: 101, exe: `${installRoot}\\Metis.exe`, role: 'Metis.exe (renderer)' }
+    const owned = [main, renderer]
+    const base = { rootExited: true, censusAvailable: true, owned, installRoot, platform: 'win32' }
+    expect(ownedTreeHasExited({ ...base, current: [] })).toBe(true)
+    expect(ownedTreeHasExited({ ...base, current: [renderer] })).toBe(false)
+    expect(ownedTreeHasExited({ ...base, current: [{ ...renderer, pid: 412, exe: `${installRoot}\\helper.exe` }] })).toBe(false)
+    expect(ownedTreeHasExited({ ...base, rootExited: false, current: [] })).toBe(false)
+    expect(ownedTreeHasExited({ ...base, censusAvailable: false, current: [] })).toBe(false)
+    expect(cleanShutdownPassed({ quitDelivered: true, rootExitCode: 0, rootSignalCode: null, treeExited: true })).toBe(true)
+    expect(cleanShutdownPassed({ quitDelivered: true, rootExitCode: 0, rootSignalCode: null, treeExited: false })).toBe(false)
+  })
+
   it('pins the exact successful hosted candidate workflow run and Setup bytes', () => {
     expect(verifyCandidateIdentity(run, provenance, run.id, run.head_sha, run.head_branch)).toEqual({
       run_id: String(run.id), attempt: 1, commit: run.head_sha,
@@ -76,12 +93,12 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
     expect(assessUpgradeReport({ ...report, candidate: { ...report.candidate, ref: 'release/1.9.x' } }, { ref: run.head_branch }).accepted).toBe(false)
   })
 
-  it('requires explicit app-visible saved-note readability for overall acceptance', () => {
+  it('requires recallRead to return the saved-note kind, title, question, and answer', () => {
     const report = completeReport()
     const note = report.checks.find((row) => row.id === 'note_content_app_visible_after_upgrade')
     if (!note) throw new Error('required note-read row missing')
     note.status = 'BLOCKED'
-    note.evidence = 'no saved-note reader is present in the candidate bridge'
+    note.evidence = 'recallRead did not return the expected saved-note fields'
     const verdict = assessUpgradeReport(report)
     expect(verdict.accepted).toBe(false)
     expect(verdict.problems.join('\n')).toContain('note_content_app_visible_after_upgrade status is BLOCKED')
