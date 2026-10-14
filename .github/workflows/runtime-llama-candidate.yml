@@ -245,8 +245,8 @@ jobs:
           test "$(jq -r '.source.runnerEnvironment' "$model_dir/model.qwen3.5-0.8b.inventory.json")" = github-hosted
           test "$(jq -r '.payloadBytes' "$model_dir/candidate.json")" = "$(jq '[.files[].bytes] | add' "$model_dir/model.qwen3.5-0.8b.inventory.json")"
           test "$(jq -r '.payloadBytes' "$model_dir/candidate.json")" = 763771056
-          test "$(jq -r '[.licenses[] | select(.package == \"Qwen3.5-0.8B-GGUF\" and .spdx == \"Apache-2.0\")] | length' "$model_dir/model.qwen3.5-0.8b.inventory.json")" = 1
-          test "$(jq -r '[.upstream[] | select(.revision == \"6ab461498e2023f6e3c1baea90a8f0fe38ab64d0\" and .digest.algorithm == \"sha256\")] | length' "$model_dir/model.qwen3.5-0.8b.inventory.json")" = 2
+          test "$(jq -r '[.licenses[] | select(.package == "Qwen3.5-0.8B-GGUF" and .spdx == "Apache-2.0")] | length' "$model_dir/model.qwen3.5-0.8b.inventory.json")" = 1
+          test "$(jq -r '[.upstream[] | select(.revision == "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0" and .digest.algorithm == "sha256")] | length' "$model_dir/model.qwen3.5-0.8b.inventory.json")" = 2
           test "$(sha256sum "$model_dir/model.qwen3.5-0.8b.tar.gz" | cut -d' ' -f1)" = "$(jq -r '.archive.sha256' "$model_dir/candidate.json")"
           test "$(sha256sum "$model_dir/model.qwen3.5-0.8b.inventory.json" | cut -d' ' -f1)" = "$(jq -r '.inventory.sha256' "$model_dir/candidate.json")"
       - id: provenance_darwin_arm64

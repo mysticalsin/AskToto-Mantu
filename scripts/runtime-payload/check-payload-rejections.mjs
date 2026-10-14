@@ -19,6 +19,7 @@ const repoRoot = resolve(dirname(script), '../..')
 const lockBytes = await readFile(resolve(repoRoot, 'package-lock.json'))
 const root = await mkdtemp(resolve(tmpdir(), 'metis-runtime-negative-'))
 const ajv = new Ajv2020({ allErrors: true, strict: false })
+let activeCase = 'setup'
 const validateInventorySchema = ajv.compile(
   JSON.parse(await readFile(resolve(repoRoot, 'resources/runtime-schema/inventory.schema.json'), 'utf8'))
 )
@@ -89,6 +90,7 @@ function makeMetadata() {
 }
 
 async function rejected(name, setup, expectedCode) {
+  activeCase = name
   const caseRoot = resolve(root, name)
   const output = resolve(root, `${name}-output`)
   await mkdir(caseRoot, { recursive: true })
@@ -492,10 +494,29 @@ try {
     'RUNTIME_PAYLOAD_MODEL_CLOSURE_MISMATCH'
   )
 
+  await rejected(
+    'model-root-is-file',
+    async (payloadRoot) => {
+      await writeFile(resolve(payloadRoot, 'model'), 'not a model directory')
+    },
+    'RUNTIME_PAYLOAD_MODEL_MEMBER_MISSING'
+  )
+
+  await rejected(
+    'wrong-model-root',
+    async (payloadRoot, _metadataPath, metadata) => {
+      await createValidModelFiles(payloadRoot)
+      metadata.models[0].root = 'other-model'
+      metadata.models[0].members = ['other-model/file.bin']
+    },
+    'RUNTIME_PAYLOAD_MODEL_MEMBER_MISSING'
+  )
+
+  activeCase = 'positive-candidate'
   await positiveCandidate()
-  process.stdout.write('RUNTIME_PAYLOAD_PUBLISHER_CASES_PASSED negative=22 positive=1\n')
+  process.stdout.write('RUNTIME_PAYLOAD_PUBLISHER_CASES_PASSED negative=24 positive=1\n')
 } catch {
-  process.stderr.write('RUNTIME_PAYLOAD_NEGATIVE_CASES_FAILED\n')
+  process.stderr.write(`RUNTIME_PAYLOAD_NEGATIVE_CASES_FAILED case=${activeCase}\n`)
   process.exitCode = 1
 } finally {
   await rm(root, { recursive: true, force: true })

@@ -84,6 +84,7 @@ jobs:
           artifact-ids: '11908439090'
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/runtime-candidate-readback
+          merge-multiple: true
       - name: Verify app-owned root, Sigstore identity, and both signed subjects
         env:
           RUNNER_TEMP: ${{ runner.temp }}

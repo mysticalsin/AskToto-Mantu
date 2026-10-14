@@ -31,8 +31,9 @@ try {
   if (typeof electron !== 'string') throw new Error('RUNTIME_FIXTURE_LOCK_INVALID')
 
   await mkdir(resolve(payloadRoot, 'model'), { recursive: true })
+  await mkdir(resolve(payloadRoot, 'licenses'), { recursive: true })
   await writeFile(resolve(payloadRoot, 'model', 'fixture.onnx'), model, { flag: 'wx', mode: 0o600 })
-  await writeFile(resolve(payloadRoot, 'model', 'NOTICE.txt'), notice, { flag: 'wx', mode: 0o600 })
+  await writeFile(resolve(payloadRoot, 'licenses', 'NOTICE.txt'), notice, { flag: 'wx', mode: 0o600 })
 
   const sourceUri = `https://github.com/mysticalsin/AskToto-Mantu/blob/${process.env.GITHUB_SHA}/scripts/runtime-payload/create-attestation-fixture.mjs`
   const metadata = {
@@ -77,7 +78,7 @@ try {
         version: '1',
         spdx: 'NOASSERTION',
         sourceUri,
-        noticePath: 'model/NOTICE.txt',
+        noticePath: 'licenses/NOTICE.txt',
         noticeBytes: notice.length,
         noticeSha256: sha256(notice),
         sourceReceiptUri: sourceUri
