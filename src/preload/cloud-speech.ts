@@ -51,18 +51,7 @@ export type CloudSpeechPreloadApi = {
 }
 
 function failure(identity?: unknown, code: CloudSpeechFailure['code'] = 'INVALID_REQUEST'): CloudSpeechFailure {
-  let source = identity
-  try {
-    if (typeof identity === 'object' && identity !== null) {
-      source = {
-        captureId: Reflect.get(identity, 'captureId'),
-        captureGeneration: Reflect.get(identity, 'captureGeneration')
-      }
-    }
-  } catch {
-    source = undefined
-  }
-  const parsedIdentity = CloudSpeechIdentitySchema.safeParse(source)
+  const parsedIdentity = CloudSpeechIdentitySchema.safeParse(projectIdentity(identity))
   return parsedIdentity.success ? { ok: false, code, ...parsedIdentity.data } : { ok: false, code }
 }
 
@@ -73,7 +62,7 @@ function transportFailure<T>(schema: ZodType<T>, value: unknown, identity?: unkn
 }
 
 function matchesIdentity(value: unknown, identity: unknown): boolean {
-  const expected = CloudSpeechIdentitySchema.safeParse(identity)
+  const expected = CloudSpeechIdentitySchema.safeParse(projectIdentity(identity))
   if (!expected.success || typeof value !== 'object' || value === null) return false
   let ok: unknown
   try {
@@ -89,6 +78,22 @@ function matchesIdentity(value: unknown, identity: unknown): boolean {
     )
   } catch {
     return false
+  }
+}
+
+function projectIdentity(identity: unknown): unknown {
+  if (typeof identity !== 'object' || identity === null) return identity
+  try {
+    const capture = Reflect.get(identity, 'capture')
+    const generation =
+      Reflect.get(identity, 'captureGeneration') ??
+      (typeof capture === 'object' && capture !== null ? Reflect.get(capture, 'generation') : undefined)
+    return {
+      captureId: Reflect.get(identity, 'captureId'),
+      captureGeneration: generation
+    }
+  } catch {
+    return undefined
   }
 }
 
@@ -131,11 +136,21 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
       }
       if (!parsed.success) return failure(request, 'INVALID_REQUEST')
       try {
-        return transportFailure(
+        const result = transportFailure(
           CloudSpeechStartResultSchema,
           await renderer.invoke(CLOUD_SPEECH_IPC.start, parsed.data),
           parsed.data
         )
+        if (
+          result.ok &&
+          (result.engine !== parsed.data.capture.engine ||
+            !sameTracks(
+              result.streams.map((stream) => stream.track),
+              parsed.data.capture.capturedTracks
+            ))
+        )
+          return failure(parsed.data, 'TRANSPORT')
+        return result
       } catch {
         return failure(parsed.data, 'TRANSPORT')
       }
@@ -188,11 +203,20 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
       }
       if (!parsed.success) return failure(request, 'INVALID_REQUEST')
       try {
-        return transportFailure(
+        const result = transportFailure(
           CloudSpeechFinishResultSchema,
           await renderer.invoke(CLOUD_SPEECH_IPC.finish, parsed.data),
           parsed.data
         )
+        if (
+          result.ok &&
+          !sameTracks(
+            result.tracks.map((track) => track.stream.track),
+            parsed.data.tracks.map((track) => track.track)
+          )
+        )
+          return failure(parsed.data, 'TRANSPORT')
+        return result
       } catch {
         return failure(parsed.data, 'TRANSPORT')
       }
@@ -262,4 +286,8 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
       return unsubscribe
     }
   }
+}
+
+function sameTracks(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && expected.every((track) => actual.includes(track))
 }

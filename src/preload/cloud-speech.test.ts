@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CLOUD_SPEECH_IPC, type CloudSpeechEvent, type CloudSpeechStartRequest } from '../shared/cloud-speech'
+import {
+  CLOUD_SPEECH_IPC,
+  type CloudSpeechEvent,
+  type CloudSpeechFinishRequest,
+  type CloudSpeechStartRequest
+} from '../shared/cloud-speech'
 import type { Capture } from '../shared/contracts/speech'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 
@@ -79,6 +84,33 @@ describe('cloud speech preload boundary', () => {
       captureId,
       captureGeneration: capture.generation
     })
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      engine: 'deepgram-nova3',
+      streams: [{ track: 'microphone', streamEpoch: 1 }],
+      limits: { frameBytes: 3_200, maxPendingFrames: 20, maxPendingBytes: 65_536, maxPendingAudioMs: 2_000 }
+    })
+    await expect(api.cloudSpeechStart(start)).resolves.toMatchObject({ ok: true, captureId })
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      engine: 'cloudflare-nova3',
+      streams: [{ track: 'microphone', streamEpoch: 1 }],
+      limits: { frameBytes: 3_200, maxPendingFrames: 20, maxPendingBytes: 65_536, maxPendingAudioMs: 2_000 }
+    })
+    await expect(api.cloudSpeechStart(start)).resolves.toMatchObject({ ok: false, code: 'TRANSPORT' })
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      engine: 'deepgram-nova3',
+      streams: [{ track: 'system', streamEpoch: 1 }],
+      limits: { frameBytes: 3_200, maxPendingFrames: 20, maxPendingBytes: 65_536, maxPendingAudioMs: 2_000 }
+    })
+    await expect(api.cloudSpeechStart(start)).resolves.toMatchObject({ ok: false, code: 'TRANSPORT' })
   })
 
   it('clones the fixed PCM buffer and refuses a second concurrent frame invoke per track', async () => {
@@ -147,6 +179,50 @@ describe('cloud speech preload boundary', () => {
       captureId,
       captureGeneration: capture.generation
     })
+  })
+
+  it('accepts a finish result only when its exact capture tuple matches the request', async () => {
+    const fixture = makeRenderer()
+    const request: CloudSpeechFinishRequest = {
+      captureId,
+      captureGeneration: capture.generation,
+      tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 0 }]
+    }
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: capture.generation, track: 'microphone', epoch: 1 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    const api = createCloudSpeechPreloadApi(fixture.renderer)
+    await expect(api.cloudSpeechFinish(request)).resolves.toMatchObject({ ok: true, captureId })
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: capture.generation, track: 'system', epoch: 1 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    await expect(api.cloudSpeechFinish(request)).resolves.toMatchObject({ ok: false, code: 'TRANSPORT' })
   })
 
   it('filters strict events by the subscribed capture tuple and removes the exact listener', () => {
