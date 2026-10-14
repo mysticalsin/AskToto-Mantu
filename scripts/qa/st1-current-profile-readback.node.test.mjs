@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { findUnpinnedUses } from '../ci/check-workflow-pins.mjs'
@@ -138,6 +139,31 @@ test('partitions a maximum-density analyzer result losslessly below the annotati
   const payloads = notices.map((notice) => JSON.parse(notice.slice('::notice::'.length)))
   const summarySha256 = payloads[0]?.summarySha256
   assert.match(summarySha256, /^[a-f0-9]{64}$/)
+  const envelopeKeys = new Set([
+    'schema',
+    'runId',
+    'attempt',
+    'sourceHeadSha',
+    'measuredCommit',
+    'artifactSha256',
+    'reportSha256',
+    'profileSha256',
+    'originalVerdict',
+    'st1Evidence',
+    'causalConclusion',
+    'summarySha256',
+    'part',
+    'partCount'
+  ])
+  const serializedParts = payloads.map((payload) =>
+    Object.fromEntries(Object.entries(payload).filter(([key]) => !envelopeKeys.has(key)))
+  )
+  assert.equal(
+    summarySha256,
+    createHash('sha256')
+      .update(JSON.stringify({ partCount: payloads.length, parts: serializedParts }))
+      .digest('hex')
+  )
   assert.deepEqual(
     payloads.map((part) => part.part),
     payloads.map((_, index) => index + 1)
@@ -188,6 +214,14 @@ test('partitions a maximum-density analyzer result losslessly below the annotati
     .filter((part) => part.section === 'windows')
     .sort((left, right) => left.windowStartIndex - right.windowStartIndex)
   assert.equal(windows[0]?.windowTotalCount, summary.windows.length)
+  assert.ok(
+    windows.every(
+      (part) =>
+        part.windowTotalCount === summary.windows.length &&
+        part.omittedWindowCount === summary.omittedWindowCount &&
+        part.windowsCoverageComplete === summary.windowsCoverageComplete
+    )
+  )
   assert.deepEqual(
     windows.map((part) => part.windowStartIndex),
     [0, 1, 2, 3, 4, 5, 6, 7]
@@ -200,6 +234,7 @@ test('partitions a maximum-density analyzer result losslessly below the annotati
     .filter((part) => part.section === 'profile-bins')
     .sort((left, right) => left.firstBinIndex - right.firstBinIndex)
   assert.equal(bins[0]?.profileBinTotalCount, summary.profile.bins.length)
+  assert.ok(bins.every((part) => part.profileBinTotalCount === summary.profile.bins.length))
   assert.deepEqual(
     bins.map((part) => part.firstBinIndex),
     [0, 4, 8, 12, 16]
@@ -224,6 +259,7 @@ test('partitions a maximum-density analyzer result losslessly below the annotati
   for (const part of stages) {
     const { stages: _partialStages, ...metadata } = part.bootStages
     assert.deepEqual(metadata, bootMetadata)
+    assert.equal(part.stageTotalCount, summary.bootStages.stages.length)
   }
   const {
     bins: _bins,
