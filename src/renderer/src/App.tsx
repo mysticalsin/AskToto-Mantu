@@ -4046,19 +4046,14 @@ export function App(): JSX.Element {
   // key is locked. The user sees this surface before the main process is allowed to probe Keychain.
   if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError)) {
     return (
-      <div
-        ref={setRoot}
-        className="onboard-exclusive-lock flex h-full min-h-0 w-full items-center justify-center p-6"
-      >
+      <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full items-center justify-center p-6">
         <Panel>
           <div className="m-auto flex max-w-sm flex-col items-center gap-3 px-4 py-5 text-center">
-            <h1 className="m-0 text-[18px] font-semibold text-[color:var(--color-ink)]">
-              Unlock secure storage
-            </h1>
+            <h1 className="m-0 text-[18px] font-semibold text-[color:var(--color-ink)]">Unlock secure storage</h1>
             <p className="m-0 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-              Métis needs macOS secure storage before it can open or create this profile. Continue to let
-              Métis request access to the Keychain. If macOS asks, approve access for Métis. Denying access
-              leaves your files unchanged.
+              Métis needs macOS secure storage before it can open or create this profile. Continue to let Métis request
+              access to the Keychain. If macOS asks, approve access for Métis. Denying access leaves your files
+              unchanged.
             </p>
             <button
               type="button"

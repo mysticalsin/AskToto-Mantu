@@ -15,10 +15,7 @@ import type {
   SignInResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
-import {
-  isEncryptedProfileRecoveryMessage,
-  isMacKeychainUnlockMessage
-} from '@shared/encrypted-profile-recovery'
+import { isEncryptedProfileRecoveryMessage, isMacKeychainUnlockMessage } from '@shared/encrypted-profile-recovery'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -186,11 +183,7 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       // the next animation frame and would cancel that batch. Page Visibility is the explicit condition for
       // the frozen-safe fallback; timers are no help there because they are frozen alongside rAF.
       if (!rafRef.current) rafRef.current = requestAnimationFrame(measureAndPush)
-      if (
-        !microRef.current &&
-        typeof document !== 'undefined' &&
-        document.visibilityState === 'hidden'
-      ) {
+      if (!microRef.current && typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         microRef.current = true
         void Promise.resolve().then(() => {
           microRef.current = false
@@ -296,15 +289,18 @@ export function useAsk(): {
   // onto it. If the request ends with no real output at all (onDone/onError with zero deltas), the stale
   // text is cleared then instead — so a copy/feedback action can never act on the wrong answer.
   const pendingReplaceRef = useRef(false)
-  const updateAnswer = useCallback((update: (current: AnswerState | null) => AnswerState | null): AnswerState | null => {
-    const next = update(answerRef.current)
-    answerRef.current = next
-    // All first-mount publications, including a fast terminal event, stay in the transition lane so
-    // lazy Answer/Copilot mounting cannot suspend synchronous input (React #426).
-    if (answerMountedRef.current) setAnswer(next)
-    else startTransition(() => setAnswer(next))
-    return next
-  }, [])
+  const updateAnswer = useCallback(
+    (update: (current: AnswerState | null) => AnswerState | null): AnswerState | null => {
+      const next = update(answerRef.current)
+      answerRef.current = next
+      // All first-mount publications, including a fast terminal event, stay in the transition lane so
+      // lazy Answer/Copilot mounting cannot suspend synchronous input (React #426).
+      if (answerMountedRef.current) setAnswer(next)
+      else startTransition(() => setAnswer(next))
+      return next
+    },
+    []
+  )
 
   const flush = useCallback((): void => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -315,24 +311,32 @@ export function useAsk(): {
     const replace = pendingReplaceRef.current
     pendingRef.current = ''
     pendingReplaceRef.current = false
-    updateAnswer((a) => a && a.id === id ? { ...a, text: replace ? chunk : a.text + chunk } : a)
+    updateAnswer((a) => (a && a.id === id ? { ...a, text: replace ? chunk : a.text + chunk } : a))
   }, [updateAnswer])
 
-  const finishCurrent = useCallback((
-    completion: 'complete' | 'incomplete', error: string | null, retainPrevious = false
-  ): AnswerState | null => {
-    const id = idRef.current
-    if (!id) return answerRef.current
-    flush() // includes current tokens that have not reached their animation frame or first paint
-    idRef.current = '' // terminal ownership ends now; duplicate or late IPC events are inert
-    const noOutput = pendingReplaceRef.current
-    pendingReplaceRef.current = false
-    return updateAnswer((a) => a && a.id === id ? {
-      ...a, streaming: false, completion, error,
-      text: noOutput && !retainPrevious ? '' : a.text,
-      usedScreen: noOutput && !retainPrevious ? false : a.usedScreen
-    } : a)
-  }, [flush, updateAnswer])
+  const finishCurrent = useCallback(
+    (completion: 'complete' | 'incomplete', error: string | null, retainPrevious = false): AnswerState | null => {
+      const id = idRef.current
+      if (!id) return answerRef.current
+      flush() // includes current tokens that have not reached their animation frame or first paint
+      idRef.current = '' // terminal ownership ends now; duplicate or late IPC events are inert
+      const noOutput = pendingReplaceRef.current
+      pendingReplaceRef.current = false
+      return updateAnswer((a) =>
+        a && a.id === id
+          ? {
+              ...a,
+              streaming: false,
+              completion,
+              error,
+              text: noOutput && !retainPrevious ? '' : a.text,
+              usedScreen: noOutput && !retainPrevious ? false : a.usedScreen
+            }
+          : a
+      )
+    },
+    [flush, updateAnswer]
+  )
 
   useEffect(() => {
     const offDelta = window.toto.onDelta((d: StreamDelta) => {
@@ -363,9 +367,7 @@ export function useAsk(): {
               // the INTENT flag it sent, and on the fast path main decides at send time whether its
               // on-device description still existed (MQA-180). Absent = no verdict (plain/vision asks),
               // so the optimistic value stands.
-              ...(m.usedScreen === undefined
-                ? {}
-                : { usedScreen: m.usedScreen, screenMissed: !m.usedScreen })
+              ...(m.usedScreen === undefined ? {} : { usedScreen: m.usedScreen, screenMissed: !m.usedScreen })
             }
           : a
       )
@@ -433,24 +435,26 @@ export function useAsk(): {
         usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
         ephemeral: req.mode === 'suggest'
       }))
-      void window.toto.ask({
-        id,
-        mode: req.mode,
-        prompt: req.prompt ?? '',
-        image: req.image,
-        transcript: req.transcript,
-        depth: req.depth,
-        kind: req.kind,
-        redactPrompt: req.redactPrompt,
-        agentOverride: req.agentOverride,
-        providerOverride: req.providerOverride,
-        wantsScreenContext: req.wantsScreenContext,
-        history: req.history ?? []
-      }).catch(() => {
-        // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
-        // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
-        if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
-      })
+      void window.toto
+        .ask({
+          id,
+          mode: req.mode,
+          prompt: req.prompt ?? '',
+          image: req.image,
+          transcript: req.transcript,
+          depth: req.depth,
+          kind: req.kind,
+          redactPrompt: req.redactPrompt,
+          agentOverride: req.agentOverride,
+          providerOverride: req.providerOverride,
+          wantsScreenContext: req.wantsScreenContext,
+          history: req.history ?? []
+        })
+        .catch(() => {
+          // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
+          // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
+          if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
+        })
       return id
     },
     [resetBuffer, updateAnswer, finishCurrent]
@@ -514,7 +518,6 @@ export function useAsk(): {
     [answer, run, fail, retry, deeper, cancel, clear]
   )
 }
-
 
 /** Bound a boot IPC so a hung invoke (never settles) advances retries instead of spinning forever. */
 export const BOOT_IPC_TIMEOUT_MS = 2000

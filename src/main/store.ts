@@ -8,7 +8,9 @@ import {
   renameSync,
   statSync,
   readdirSync,
-  mkdtempSync, unlinkSync } from 'node:fs'
+  mkdtempSync,
+  unlinkSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { totalmem as physicalTotalMemory } from 'node:os'
 import {
@@ -258,7 +260,6 @@ function adminManagedContent(): string | null {
     c.mtime === id.mtime &&
     c.dev === id.dev &&
     c.ino === id.ino &&
-
     now - c.at >= 0 &&
     now - c.at < ADMIN_POLICY_REPROBE_MS
   ) {
@@ -415,7 +416,9 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
   }
   const recovered = tryParseSettingsBuffer(buf)
   if (!recovered) return null
-  mainLog.warn(`[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`)
+  mainLog.warn(
+    `[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`
+  )
   return recovered
 }
 
@@ -465,14 +468,20 @@ function readUserRaw(): Record<string, unknown> | null {
       if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
+      preserveUnreadableSettings(
+        buf,
+        'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed'
+      )
       return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
       if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
+      preserveUnreadableSettings(
+        buf,
+        'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine'
+      )
       return null
     }
     const parsed = tryParseSettingsBuffer(buf)
@@ -484,14 +493,19 @@ function readUserRaw(): Record<string, unknown> | null {
           const tmp = `${p}.tmp`
           writeFileSync(tmp, serializeUserRaw(parsed), { mode: 0o600 })
           renameSync(tmp, p)
-        } catch { /* migration is best-effort; old format still works */ }
+        } catch {
+          /* migration is best-effort; old format still works */
+        }
       }
       return parsed
     }
     // Undecryptable (keychain/OS user changed) — fall back to defaults, but try `.recovered` first.
     const recoveredV1 = tryRecoveredSettings()
     if (recoveredV1) return recoveredV1
-    preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
+    preserveUnreadableSettings(
+      buf,
+      'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed'
+    )
     return null
   }
 
@@ -557,7 +571,11 @@ function migrateLegacyBidstackConnection(raw: Record<string, unknown>): void {
 // Cache is also explicitly invalidated in setSettings / setApiKey / clearApiKey for safety.
 
 function safeMtime(p: string): number {
-  try { return statSync(p).mtimeMs } catch { return 0 }
+  try {
+    return statSync(p).mtimeMs
+  } catch {
+    return 0
+  }
 }
 
 interface SettingsCache {
@@ -591,13 +609,10 @@ export function resetAsrHardwarePreferenceForTests(): void {
 
 function setupIsComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
   const userDone = 'onboardingDone' in user ? shape().onboardingDone.safeParse(user.onboardingDone) : null
-  const managedDone =
-    'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
+  const managedDone = 'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
   return (
     (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
-    (typeof user.onboardingDoneAt === 'number' &&
-      Number.isFinite(user.onboardingDoneAt) &&
-      user.onboardingDoneAt > 0)
+    (typeof user.onboardingDoneAt === 'number' && Number.isFinite(user.onboardingDoneAt) && user.onboardingDoneAt > 0)
   )
 }
 
@@ -609,10 +624,7 @@ export function resetSettingsCacheForTests(): void {
   _settingsCache = null
 }
 
-function currentSettingsMtimes(): Pick<
-  SettingsCache,
-  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'
-> {
+function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
   return {
     // settings.json path is part of the key so a change of profile directory always misses the cache.
     // In production `settingsPath()` is constant; test suites point app.getPath('userData') at a fresh
@@ -1172,7 +1184,11 @@ export function getApiKey(provider: ProviderId): string {
       const plain = buf.subarray(6).toString('utf8')
       // Migrate to current backend on first read (defense-in-depth for disk backups).
       // setApiKey will delete _apiKeyCache[provider]; we re-set it below.
-      try { setApiKey(provider, plain) } catch { /* keep the plaintext file; key still works */ }
+      try {
+        setApiKey(provider, plain)
+      } catch {
+        /* keep the plaintext file; key still works */
+      }
       key = plain
     } else if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
       // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
@@ -1191,7 +1207,11 @@ export function getApiKey(provider: ProviderId): string {
       try {
         const plain = safeStorage.decryptString(buf)
         // Best-effort migration: re-save with the current backend so future reads don't need keychain.
-        try { setApiKey(provider, plain) } catch { /* keep the old blob; key still works */ }
+        try {
+          setApiKey(provider, plain)
+        } catch {
+          /* keep the old blob; key still works */
+        }
         key = plain
       } catch (e) {
         rethrowMacKeychainDecryptFailure(e)

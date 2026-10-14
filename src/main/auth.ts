@@ -214,7 +214,11 @@ function stickyConfiguredPath(): string {
 function writeStickyConfigured(): void {
   const p = stickyConfiguredPath()
   if (!existsSync(p)) {
-    try { writeFileSync(p, '1', { mode: 0o600 }) } catch { /* best-effort */ }
+    try {
+      writeFileSync(p, '1', { mode: 0o600 })
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
@@ -222,11 +226,17 @@ function clearStickyConfigured(): void {
   try {
     const p = stickyConfiguredPath()
     if (existsSync(p)) rmSync(p)
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 function isStickyConfigured(): boolean {
-  try { return existsSync(stickyConfiguredPath()) } catch { return false }
+  try {
+    return existsSync(stickyConfiguredPath())
+  } catch {
+    return false
+  }
 }
 
 // ─── Last-known-good (LKG) sign-in config ─────────────────────────────────────
@@ -270,7 +280,9 @@ function readLkgConfig(): Partial<AzureConfig> {
     const j = JSON.parse(readFileSync(lkgConfigPath(), 'utf8'))
     const clientId = String(j?.clientId || '').trim()
     const tenantId = String(j?.tenantId || '').trim()
-    const allowedDomain = String(j?.allowedDomain || '').trim().replace(/^@/, '')
+    const allowedDomain = String(j?.allowedDomain || '')
+      .trim()
+      .replace(/^@/, '')
     if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
   } catch {
     /* absent / unreadable / malformed — no recovery config */
@@ -282,7 +294,9 @@ function clearLkgConfig(): void {
   try {
     const p = lkgConfigPath()
     if (existsSync(p)) rmSync(p)
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 function msalCachePath(): string {
@@ -306,23 +320,39 @@ function makeCachePlugin(): any {
         let json: string | null = null
 
         if (useFileBackend()) {
-          try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
+          try {
+            json = decryptSecret(buf)
+          } catch {
+            /* not AES-GCM format — try safeStorage below */
+          }
         }
         // Fallback / migration: try safeStorage (old installs or prod reads on prod path). Skipped when
         // the file backend is in force, so an old safeStorage-wrapped token can't re-open the Keychain
         // prompt we route around on an un-notarized build — the user just re-authenticates once instead.
         if (json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()) {
-          try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob either */ }
+          try {
+            json = safeStorage.decryptString(buf)
+          } catch {
+            /* not a safeStorage blob either */
+          }
           // If we read it via safeStorage while in file-backend mode, migrate now (best-effort)
           if (json !== null && useFileBackend()) {
-            try { writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
+            try {
+              writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 })
+            } catch {
+              /* best-effort */
+            }
           }
         }
         // Reverse migration (mirrors loadSession): the cache may have been written by a build that
         // FORCED the file keystore on a platform that no longer does. Without this the Graph token
         // cache is dropped on upgrade and the user must re-authenticate interactively.
         if (json === null && !useFileBackend()) {
-          try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
+          try {
+            json = decryptSecret(buf)
+          } catch {
+            /* not AES-GCM either, or the file key is unrecoverable */
+          }
         }
         if (json !== null) ctx.tokenCache.deserialize(json)
       } catch {
@@ -609,11 +639,7 @@ function loadSession(): void {
     // Fallback / migration: try legacy safeStorage after explicit unlock on packaged macOS, or when
     // the current backend otherwise uses safeStorage. On macOS preserve a failed attempt until the
     // AES-GCM fallback is tried, then surface denial instead of caching a false signed-out state.
-    if (
-      json === null &&
-      (packagedMac || !useFileBackend()) &&
-      (packagedMac || safeStorage.isEncryptionAvailable())
-    ) {
+    if (json === null && (packagedMac || !useFileBackend()) && (packagedMac || safeStorage.isEncryptionAvailable())) {
       try {
         json = safeStorage.decryptString(buf)
       } catch {
@@ -622,7 +648,11 @@ function loadSession(): void {
       }
       // Migrate to file backend if we're now in file-backend mode (best-effort).
       if (json !== null && useFileBackend()) {
-        try { writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
+        try {
+          writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 })
+        } catch {
+          /* best-effort */
+        }
       }
     }
     // Reverse migration: this file may have been written by a build that FORCED the file keystore on a
@@ -638,7 +668,11 @@ function loadSession(): void {
         /* not AES-GCM either */
       }
       if (json !== null && safeStorage.isEncryptionAvailable()) {
-        try { writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 }) } catch { /* best-effort */ }
+        try {
+          writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 })
+        } catch {
+          /* best-effort */
+        }
       }
     }
     if (json === null && packagedMac && safeStorageDecryptFailed) throw new MacKeychainUnlockRequiredError()
@@ -680,7 +714,10 @@ function saveSession(s: Session): void {
     // Session persisted to memory only — sign-in still works for this run, but will silently sign
     // the user out on next launch with no trace unless we log it. Never log session contents
     // (email/name/tokens) — reason/class only.
-    mainLog.warn('[auth] failed to persist session to disk (in-memory only this run):', e instanceof Error ? e.message : String(e))
+    mainLog.warn(
+      '[auth] failed to persist session to disk (in-memory only this run):',
+      e instanceof Error ? e.message : String(e)
+    )
   }
 }
 

@@ -20,7 +20,7 @@ describe('packaged macOS secure-keystore startup', () => {
 
   it('shows an explicit unlock action before retrying a locked encrypted profile', () => {
     expect(state).toContain('if (isMacKeychainUnlockMessage(message))')
-    expect(app).toContain("isMacKeychainUnlockMessage(settingsBootError)")
+    expect(app).toContain('isMacKeychainUnlockMessage(settingsBootError)')
     expect(app).toContain('Unlock secure storage')
     expect(app).toContain('Continue to Keychain')
     expect(app).toContain('unlockEncryptedProfile()')
@@ -29,8 +29,12 @@ describe('packaged macOS secure-keystore startup', () => {
   })
 
   it('can paint the locked-profile surface without reading profile settings', () => {
-    expect(main).toMatch(/function liveOverlayLayout\(\): OverlayLayout \{[\s\S]*?catch \{[\s\S]*?return DEFAULT_OVERLAY_LAYOUT/)
-    expect(main).toMatch(/function liveOverlayPlacement\(\): OverlayPlacement \{[\s\S]*?catch \{[\s\S]*?return 'top-center'/)
+    expect(main).toMatch(
+      /function liveOverlayLayout\(\): OverlayLayout \{[\s\S]*?catch \{[\s\S]*?return DEFAULT_OVERLAY_LAYOUT/
+    )
+    expect(main).toMatch(
+      /function liveOverlayPlacement\(\): OverlayPlacement \{[\s\S]*?catch \{[\s\S]*?return 'top-center'/
+    )
     expect(main).toContain('DEFAULT_OVERLAY_LAYOUT,')
   })
 
@@ -44,7 +48,7 @@ describe('packaged macOS secure-keystore startup', () => {
 
     expect(settingsReadStart).toBeGreaterThanOrEqual(0)
     expect(settingsReadEnd).toBeGreaterThan(settingsReadStart)
-    expect(rawReadPath).toContain("return tryRecoveredSettings() ?? {}")
+    expect(rawReadPath).toContain('return tryRecoveredSettings() ?? {}')
     expect(settingsReadPath).not.toContain('serializeUserRaw(')
     expect(settingsReadPath).not.toContain('encryptSecret(')
     expect(rawReadPath).not.toContain('encryptSecret(')
@@ -60,17 +64,25 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(main).toContain('releaseStartupBootWorkIfReady()')
     expect(main).toContain('resumeDeferredMacProfileBootSteps()')
     expect(main).toContain('if (!isMacProfileUnlockError(e)) throw e')
-    expect(main).toContain('if (isMacProfileUnlockError(e)) {\n              deferMacProfileBootStep(name, () => runStep(name, fn))')
+    expect(main).toContain(
+      'if (isMacProfileUnlockError(e)) {\n              deferMacProfileBootStep(name, () => runStep(name, fn))'
+    )
     expect(auth).toContain('json === null &&\n      (packagedMac || !useFileBackend())')
     expect(auth).toContain('export function reloadSessionAfterProfileUnlock(): void')
   })
 
   it('does not probe safeStorage or allow a raw-key override before the explicit Mac unlock', () => {
     expect(secrets).toMatch(/if \(packagedMacRequiresKeychain\(\) && !_macKeychainUnlockConfirmed\) return true/)
-    expect(secrets).toMatch(/function packagedMacRequiresKeychain\(\): boolean \{[\s\S]*?return app\.isPackaged && process\.platform === 'darwin'/)
-    expect(secrets).toMatch(/requireMacKeychainUnlock\(\)\s+const keychainAvailable = !localKeystoreForced && isKeychainAvailable\(\)/)
+    expect(secrets).toMatch(
+      /function packagedMacRequiresKeychain\(\): boolean \{[\s\S]*?return app\.isPackaged && process\.platform === 'darwin'/
+    )
+    expect(secrets).toMatch(
+      /requireMacKeychainUnlock\(\)\s+const keychainAvailable = !localKeystoreForced && isKeychainAvailable\(\)/
+    )
     expect(main).toContain("if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()")
-    expect(main).toContain('error instanceof KeychainKeyRecoveryError) {\n        throw new MacKeychainUnlockRequiredError()')
+    expect(main).toContain(
+      'error instanceof KeychainKeyRecoveryError) {\n        throw new MacKeychainUnlockRequiredError()'
+    )
     expect(main).toContain('reloadSessionAfterProfileUnlock()')
     expect(main).toContain('prepareFileKeyForWrite()')
     const settingsGetStart = main.indexOf('ipcMain.handle(IPC.settingsGet')
@@ -88,7 +100,9 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(onboardingStart).toBeGreaterThan(unlockSurfaceStart)
     const unlockSurface = app.slice(unlockSurfaceStart, onboardingStart)
     expect(unlockSurface).toContain('Continue to Keychain')
-    expect(unlockSurface).not.toMatch(/recoverEncryptedProfile|archiveEncryptedProfile|Create new local profile|provisionalOnboardingSettings/)
+    expect(unlockSurface).not.toMatch(
+      /recoverEncryptedProfile|archiveEncryptedProfile|Create new local profile|provisionalOnboardingSettings/
+    )
     expect(state).toContain('if (isMacKeychainUnlockMessage(message))')
     expect(store).toContain('requireMacKeychainUnlock()')
     expect(store).toContain('throw error')
@@ -117,9 +131,15 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(apiKeyReader).toContain('rethrowMacKeychainDecryptFailure(e)')
     expect(dustTokenReader).toContain('rethrowMacKeychainDecryptFailure(e)')
     expect(sonioxReader).toContain('rethrowMacKeychainDecryptFailure(e)')
-    expect(store).toMatch(/function rethrowMacKeychainDecryptFailure\(error: unknown\): void \{[\s\S]*?if \(app\.isPackaged && process\.platform === 'darwin'\) throw new MacKeychainUnlockRequiredError\(\)/)
-    expect(apiKeyReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(apiKeyReader.indexOf('_apiKeyCache.has(provider)'))
-    expect(sonioxReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(sonioxReader.indexOf('_sonioxKeyCache !== undefined'))
+    expect(store).toMatch(
+      /function rethrowMacKeychainDecryptFailure\(error: unknown\): void \{[\s\S]*?if \(app\.isPackaged && process\.platform === 'darwin'\) throw new MacKeychainUnlockRequiredError\(\)/
+    )
+    expect(apiKeyReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(
+      apiKeyReader.indexOf('_apiKeyCache.has(provider)')
+    )
+    expect(sonioxReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(
+      sonioxReader.indexOf('_sonioxKeyCache !== undefined')
+    )
     expect(store).toContain('export function resetCredentialReadCachesAfterProfileUnlock(): void')
     expect(store).toContain('_apiKeyCache.clear()\n  _sonioxKeyCache = undefined')
     expect(main).toContain('resetCredentialReadCachesAfterProfileUnlock()')
@@ -128,13 +148,17 @@ describe('packaged macOS secure-keystore startup', () => {
   it('routes ordinary Keychain decrypt denial back to the visible retry surface', () => {
     expect(recovery).toContain('export function isMacKeychainUnlockMessage(message: string): boolean')
     expect(recovery).toContain('message.startsWith(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)')
-    expect(main).toMatch(/ipcMain\.handle\(IPC\.settingsUnlockProfile,[\s\S]*?error instanceof KeychainKeyRecoveryError\)[\s\S]*?throw new MacKeychainUnlockRequiredError\(\)/)
+    expect(main).toMatch(
+      /ipcMain\.handle\(IPC\.settingsUnlockProfile,[\s\S]*?error instanceof KeychainKeyRecoveryError\)[\s\S]*?throw new MacKeychainUnlockRequiredError\(\)/
+    )
     expect(main).toContain('void hasKeysMap()\n      void getDustRefreshToken()')
     expect(main).toContain('resetMacKeychainUnlockAuthorization()\n      resetCredentialReadCachesAfterProfileUnlock()')
-    expect(state).toContain('if (isMacKeychainUnlockMessage(message)) {\n            if (!cancelled) setBootError(message)')
+    expect(state).toContain(
+      'if (isMacKeychainUnlockMessage(message)) {\n            if (!cancelled) setBootError(message)'
+    )
     expect(state).toContain('setBootError(message)\n      throw e')
-    expect(app).toContain("if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError))")
-    expect(app).toContain(".finally(() => setUnlockingEncryptedProfile(false))")
+    expect(app).toContain('if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError))')
+    expect(app).toContain('.finally(() => setUnlockingEncryptedProfile(false))')
   })
 
   it('keeps denied auth-session reads uncached so a later Keychain retry can restore the session', () => {
@@ -146,9 +170,15 @@ describe('packaged macOS secure-keystore startup', () => {
 
     expect(loadSession).toContain('if (packagedMac && !isMacKeychainUnlockAuthorized())')
     expect(loadSession).toContain('safeStorageDecryptFailed = true')
-    expect(loadSession).toContain('if (json === null && packagedMac && safeStorageDecryptFailed) throw new MacKeychainUnlockRequiredError()')
-    expect(loadSession).toMatch(/if \(e instanceof KeychainKeyRecoveryError\)[\s\S]*?loaded = false[\s\S]*?throw new MacKeychainUnlockRequiredError\(\)/)
+    expect(loadSession).toContain(
+      'if (json === null && packagedMac && safeStorageDecryptFailed) throw new MacKeychainUnlockRequiredError()'
+    )
+    expect(loadSession).toMatch(
+      /if \(e instanceof KeychainKeyRecoveryError\)[\s\S]*?loaded = false[\s\S]*?throw new MacKeychainUnlockRequiredError\(\)/
+    )
     expect(loadSession.indexOf('loaded = true')).toBeGreaterThan(loadSession.indexOf('} catch (e) {'))
-    expect(auth).toMatch(/export function reloadSessionAfterProfileUnlock\(\): void \{\s*session = null\s*loaded = false\s*loadSession\(\)/)
+    expect(auth).toMatch(
+      /export function reloadSessionAfterProfileUnlock\(\): void \{\s*session = null\s*loaded = false\s*loadSession\(\)/
+    )
   })
 })
