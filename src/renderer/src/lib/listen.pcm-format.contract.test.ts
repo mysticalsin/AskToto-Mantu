@@ -6,7 +6,8 @@ import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('live capture PCM handoff', () => {
-  it('passes AudioContext’s actual rate into a worklet that emits only 16 kHz PCM', () => {
+  it('delegates runtime sample-rate admission to audio channels and emits only 16 kHz PCM', () => {
+    // listen.loopback.contract.test.ts covers runtime rejection and exact callback routing.
     expect(listenSrc).toMatch(/audioChannels\.open\(speaker, stream, epoch, micCapture\)/)
     expect(WHISPER_WORKLET_SRC).toContain('this.resampler = new Pcm16kResampler(this.sourceSampleRate, SAMPLE_RATE)')
     expect(WHISPER_WORKLET_SRC).toContain('{ audio: chunk, sampleRate: SAMPLE_RATE, partial: true }')

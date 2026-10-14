@@ -4,6 +4,7 @@ import type {
   CloudSpeechStartRequest,
   CloudSpeechStartResult
 } from '@shared/cloud-speech'
+import { CloudSpeechEventSchema } from '@shared/cloud-speech'
 import { createCloudSpeechResultTracker } from './cloud-speech-results'
 
 const request: CloudSpeechStartRequest = {
@@ -149,5 +150,20 @@ describe('cloud speech result epoch tracking', () => {
     tracker.markTerminalApplied(terminal.stream)
     tracker.markApplied(terminal.stream, terminal.lastSequence)
     expect(tracker.validateTransition(closed)).toBe(false)
+  })
+
+  it('rejects an unconfirmed terminal marked as having a complete tail', () => {
+    expect(
+      CloudSpeechEventSchema.safeParse({
+        type: 'terminal',
+        captureId: request.captureId,
+        captureGeneration: request.capture.generation,
+        stream: { generation: request.capture.generation, track: 'microphone', epoch: 3 },
+        lastSequence: 0,
+        closeConfirmed: false,
+        tail: 'complete',
+        reason: 'unknown'
+      }).success
+    ).toBe(false)
   })
 })

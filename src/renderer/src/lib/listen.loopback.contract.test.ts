@@ -237,7 +237,7 @@ describe('MQA-267: loopback acquisition keeps rendered system audio unprocessed'
 })
 
 describe('MQA-268: owned audio channels preserve the limiter graph and serialized recovery', () => {
-  it('passes the AudioContext’s actual sample rate to the worklet', async () => {
+  it('passes the actual source rate to the worklet and admits only 16 kHz audio callbacks', async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext)
     vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
     FakeAudioContext.actualSampleRate = 48000
@@ -250,6 +250,24 @@ describe('MQA-268: owned audio channels preserve the limiter graph and serialize
     const worklet = channels.current.you?.worklet as unknown as FakeAudioWorkletNode | undefined
     expect(context?.sampleRate).toBe(48000)
     expect(worklet?.options.processorOptions).toEqual({ sourceSampleRate: 48000 })
+
+    const audio = new Float32Array([0.25, -0.25])
+    worklet?.port.onmessage?.({ data: { audio } } as MessageEvent)
+    worklet?.port.onmessage?.({ data: { audio, sampleRate: 48000, partial: true } } as MessageEvent)
+    expect(host.onAudio).not.toHaveBeenCalled()
+
+    worklet?.port.onmessage?.({ data: { audio, sampleRate: 16000, partial: true } } as MessageEvent)
+    expect(host.onAudio).toHaveBeenCalledOnce()
+    expect(host.onAudio).toHaveBeenCalledWith('you', audio, true, 10)
+
+    const themStream = fakeStream(fakeTrack())
+    await expect(channels.open('them', themStream, 1)).resolves.toBe(true)
+    const themWorklet = channels.current.them?.worklet as unknown as FakeAudioWorkletNode | undefined
+    const themAudio = new Float32Array([-0.5, 0.5])
+    themWorklet?.port.onmessage?.({ data: { audio: themAudio, sampleRate: 16000, partial: false } } as MessageEvent)
+    expect(host.onAudio).toHaveBeenCalledTimes(2)
+    expect(host.onAudio).toHaveBeenLastCalledWith('them', themAudio, false, 10)
+    channels.close('them')
     channels.close('you')
   })
 
