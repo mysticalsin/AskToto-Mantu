@@ -328,7 +328,7 @@ describe('downloadVerified', () => {
       return handle
     }) as typeof openAsync
     const removeFile = (async (path, options) => {
-      if (path.endsWith('model.bin.partial')) cleanupObserved = closed
+      if (typeof path === 'string' && path.endsWith('model.bin.partial')) cleanupObserved = closed
       return rmAsync(path, options)
     }) as typeof rmAsync
     const fetch = (async () =>
@@ -357,7 +357,11 @@ describe('downloadVerified', () => {
     })
 
     try {
-      await closeStarted
+      const closedOrFinished = await Promise.race([
+        closeStarted.then(() => 'close-started' as const),
+        outcome.then(() => 'operation-settled' as const)
+      ])
+      expect(closedOrFinished).toBe('close-started')
       await Promise.resolve()
       expect(settled).toBe(false)
       expect(cleanupObserved).toBe(false)
