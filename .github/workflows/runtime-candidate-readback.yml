@@ -57,7 +57,7 @@ jobs:
             .head_sha == "613d7886504f608766022fa740b1ed7297e17b16" and
             .head_branch == "m2/M2-0475-runtime-artifact-publisher" and
             .run_attempt == 1 and
-            .path == ".github/workflows/runtime-llama-candidate.yml@refs/heads/m2/M2-0475-runtime-artifact-publisher" and
+            .path == ".github/workflows/runtime-llama-candidate.yml" and
             .head_repository.id == 1282463398 and
             .head_repository.full_name == "mysticalsin/AskToto-Mantu"
           ' "$RUNNER_TEMP/runtime-run-metadata.json" >/dev/null || {
