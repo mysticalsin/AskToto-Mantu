@@ -232,7 +232,7 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
     expect(retired).toMatch(/frame\.parent === null && frame\.url === sender\.url/)
     expect(retired).toMatch(/sender\.expiresAt <= Date\.now\(\)/)
 
-    const localModels = sliceBetween('ipcMain.handle(IPC.localModelsList', '// Explicit Download/Retry')
+    const localModels = sliceBetween('ipcMain.handle(IPC.localModelsList', '// MQA-247:')
     const park = sliceBetween('ipcMain.handle(IPC.overlayParkAfterHide', '// Renderer ErrorBoundary')
     const asrIpc = sliceBetween("runStep('asrAssetsIpc'", "runStep('asrModelProtocol'")
     expect(localModels.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(

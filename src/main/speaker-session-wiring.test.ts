@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -646,6 +647,7 @@ describe('exact import attempt integration', () => {
       },
       EncryptedImportJobStore: class {},
       getSettings: () => ({ asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
+      randomUUID,
       resetImportLanguageFollow: noop,
       startImportDecoder: noop,
       parakeetTranscribe: noop,

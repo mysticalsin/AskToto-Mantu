@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_SETTINGS, IPC } from '@shared/ipc'
 import { createQuitTrace } from './lifecycle/quit-trace'
-import { startSpeechPackDesktop } from './speech-pack-bootstrap'
+import { registerOptionalModelProvisioningIpc, startSpeechPackDesktop } from './speech-pack-bootstrap'
 
 const mocks = vi.hoisted(() => {
   const service = {
@@ -20,7 +21,10 @@ const mocks = vi.hoisted(() => {
       inventory: null
     })),
     configurePackageRuntimeContractProvider: vi.fn(),
-    registerSpeechPackIpc: vi.fn(() => unregister)
+    registerSpeechPackIpc: vi.fn(() => unregister),
+    getPackageRuntimeContract: vi.fn(),
+    readSettingsAtAuthorityBoundary: vi.fn(),
+    getSpeechPolicyAuthorityStatus: vi.fn()
   }
 })
 vi.mock('./features/components', () => ({
@@ -29,6 +33,20 @@ vi.mock('./features/components', () => ({
   configurePackageRuntimeContractProvider: mocks.configurePackageRuntimeContractProvider
 }))
 vi.mock('./ipc/speech-pack-ipc', () => ({ registerSpeechPackIpc: mocks.registerSpeechPackIpc }))
+vi.mock('./features/components/speech-pack/package-runtime-state', () => ({
+  getPackageRuntimeContract: mocks.getPackageRuntimeContract
+}))
+vi.mock('./store', () => ({
+  configureFreshLeanSpeechDefaults: vi.fn(),
+  getAdminLocalSpeechPackPolicy: vi.fn(),
+  getSettings: vi.fn(),
+  getSpeechPackPolicyIdentity: vi.fn(),
+  getSpeechPackSelectionIdentity: vi.fn(),
+  readSettingsAtAuthorityBoundary: mocks.readSettingsAtAuthorityBoundary
+}))
+vi.mock('./model-policy-client', () => ({
+  getSpeechPolicyAuthorityStatus: mocks.getSpeechPolicyAuthorityStatus
+}))
 vi.mock('@shared/package-profile', () => ({ METIS_PACKAGE_PROFILE: 'full' }))
 vi.mock('electron', () => ({ app: { getVersion: () => '2.1.0' } }))
 
@@ -51,6 +69,61 @@ const options = () => ({
 })
 
 describe('speech-pack desktop lifecycle', () => {
+  it.each([
+    ['admitted', true],
+    ['unreadable policy', false]
+  ] as const)('wires explicit local-model readiness through the IPC helper for %s admission', async (_, readable) => {
+    const handlers = new Map<string, (...args: any[]) => Promise<unknown>>()
+    const ipcMain = {
+      handle: (channel: string, handler: (...args: any[]) => Promise<unknown>) => handlers.set(channel, handler)
+    } as unknown as Electron.IpcMain
+    const modelPolicyIdentity = 'policy:unmanaged:0'
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      localLlm: { ...DEFAULT_SETTINGS.localLlm, modelId: 'qwen3.5-0.8b' },
+      enterpriseLive: { ...DEFAULT_SETTINGS.enterpriseLive, managed: false, inferenceMode: 'legacy' as const },
+      operatorUrl: '',
+      operatorIngestSecret: '',
+      operatorLicenseToken: ''
+    }
+    mocks.getPackageRuntimeContract.mockResolvedValue({ status: 'legacy-full', profile: 'full', inventory: null })
+    mocks.readSettingsAtAuthorityBoundary.mockResolvedValue({
+      settings,
+      readable,
+      allowedProviders: null,
+      localSpeechPack: null
+    })
+    mocks.getSpeechPolicyAuthorityStatus.mockReturnValue({
+      status: 'unconfigured',
+      identity: modelPolicyIdentity
+    })
+    const ensureLocalModel = vi.fn(
+      async (_modelId: string, authorized: () => Promise<boolean>, validateCurrent: () => boolean) =>
+        (await authorized()) && validateCurrent()
+    )
+    const refreshScreenPreprocess = vi.fn()
+
+    registerOptionalModelProvisioningIpc({
+      ipcMain,
+      assertMainWindow: vi.fn(),
+      requireAuth: () => true,
+      ensureLocalModel,
+      captureActive: () => false,
+      captureIdentity: () => 'capture:0',
+      localModelIdentity: () => 'local-model:0',
+      currentModelPolicyIdentity: () => modelPolicyIdentity,
+      refreshScreenPreprocess,
+      logProvisioningFailure: vi.fn(),
+      auditAsrTransfer: vi.fn()
+    })
+
+    const handler = handlers.get(IPC.localModelsEnsure)
+    if (!handler) throw new Error('explicit model ensure handler was not registered')
+    await expect(handler({} as Electron.IpcMainInvokeEvent)).resolves.toEqual({ ok: readable })
+    expect(ensureLocalModel).toHaveBeenCalledTimes(readable ? 1 : 0)
+    expect(refreshScreenPreprocess).toHaveBeenCalledTimes(readable ? 1 : 0)
+  })
+
   it('refreshes current policy, selection and capture without starting a transfer', async () => {
     vi.useFakeTimers()
     const active = vi.fn().mockReturnValue(false)
