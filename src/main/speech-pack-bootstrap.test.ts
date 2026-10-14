@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => {
     policyChanged: vi.fn(),
     selectionChanged: vi.fn(),
     captureActivityChanged: vi.fn(),
-    shutdown: vi.fn()
+    shutdown: vi.fn(async () => {})
   }
   const unregister = vi.fn()
   return {
@@ -123,5 +123,12 @@ describe('speech-pack desktop lifecycle', () => {
     expect(quit).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(quit).toHaveBeenCalledOnce()
+  })
+
+  it('still stops owned work when IPC deregistration throws', async () => {
+    mocks.unregister.mockImplementationOnce(() => { throw new Error('/private/cleanup') })
+    const desktop = startSpeechPackDesktop(options())
+    await expect(desktop.shutdown()).rejects.toThrow(/^Speech pack cleanup failed$/)
+    expect(mocks.service.shutdown).toHaveBeenCalledOnce()
   })
 })
