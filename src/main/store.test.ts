@@ -21,11 +21,20 @@ import {
   getAllowedProviders,
   getAdminLocalSpeechPackPolicy,
   getLockedKeys,
+  configureFreshLeanSpeechDefaults,
+  readSettingsAtAuthorityBoundary,
+  getSpeechPackSelectionIdentity,
+  getSpeechPackPolicyIdentity,
   resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
 } from './store'
 import { decryptSecret } from './secrets'
-import { observeSettingsSnapshot, getSettingsObservationEpoch } from './settings-observation'
+import * as winSecurity from './win-security'
+import {
+  getPublishedSettingsObservation,
+  observeSettingsSnapshot,
+  getSettingsObservationEpoch
+} from './settings-observation'
 
 const hardware = vi.hoisted(() => ({ totalmem: vi.fn(() => 16 * 1024 ** 3) }))
 vi.mock('node:os', async (importOriginal) => {
@@ -77,6 +86,24 @@ function readPersisted(path: string): Record<string, unknown> {
 const mockAppGetPath = app.getPath as ReturnType<typeof vi.fn>
 const NOW = 1_725_000_000_000
 
+function verifiedLeanPackage() {
+  return {
+    status: 'verified' as const,
+    profile: 'lean' as const,
+    inventory: {
+      schema: 1 as const,
+      profile: 'lean' as const,
+      platform: 'darwin' as const,
+      arch: 'arm64' as const,
+      appVersion: '2.0.0',
+      electronVersion: '43.0.0',
+      sourceCommit: 'a'.repeat(40),
+      coreFiles: [{ path: 'speech-pack-profile.json', bytes: 27, sha256: 'b'.repeat(64) }],
+      identity: 'c'.repeat(64)
+    }
+  }
+}
+
 function operatorPolicy(localSpeechPack: ModelPolicyDocument['localSpeechPack']): ModelPolicyDocument {
   const capabilities = Object.fromEntries(
     MODEL_POLICY_CAPABILITIES.map((capability) => [capability, emptyModelPolicyEntry('openai', 'gpt-5')])
@@ -106,6 +133,117 @@ describe('store', () => {
     } finally {
       unsubscribe()
     }
+  })
+
+  it('projects the fresh lean route, persists it on the first unrelated write, and preserves it after restart', async () => {
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    const projected = getSettings()
+    expect(projected.brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'cloudflare-nova3' })
+    expect(existsSync(join(userData, 'settings.json'))).toBe(false)
+
+    const saved = setSettings({ temperature: 0.42 })
+    expect(saved.brokerSpeech).toEqual(projected.brokerSpeech)
+    expect(readPersisted(join(userData, 'settings.json'))).toMatchObject({
+      temperature: 0.42,
+      brokerSpeech: projected.brokerSpeech
+    })
+
+    resetSettingsCacheForTests()
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(projected.brokerSpeech)
+  })
+
+  it('does not derive the fresh lean route for a pre-existing or malformed managed profile', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ temperature: 0.42 }), 'utf8')
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+
+    rmSync(join(userData, 'settings.json'))
+    writeFileSync(join(userData, 'secret-key.bin'), 'existing-profile-key', 'utf8')
+    resetSettingsCacheForTests()
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+
+    rmSync(join(userData, 'secret-key.bin'))
+    writeFileSync(join(userData, 'managed-config.json'), '{broken', 'utf8')
+    resetSettingsCacheForTests()
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ locked: null, lockedKeys: [] }), 'utf8')
+    resetSettingsCacheForTests()
+    getSettings()
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+  })
+
+  it('does not derive a fresh lean route when a recovered settings profile exists', async () => {
+    writeFileSync(join(userData, 'settings.json.recovered'), 'unreadable profile', 'utf8')
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+  })
+
+  it('uses a strict authority boundary for managed settings and keeps unreadability through cache hits', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    mkdirSync(join(userData, 'managed-config.json'))
+
+    const authority = await readSettingsAtAuthorityBoundary()
+    expect(authority.readable).toBe(false)
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+    expect(getSettings().onboardingDone).toBe(true)
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+  })
+
+  it('keeps an invalid admin snapshot unreadable when its path is absent at the later legacy read', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    const reader = vi
+      .spyOn(winSecurity, 'readManagedPolicyAuthorityFile')
+      .mockImplementation(async (_path, _max, admin) => (admin ? { status: 'invalid' } : { status: 'absent' }))
+    try {
+      const authority = await readSettingsAtAuthorityBoundary()
+      expect(reader).toHaveBeenCalled()
+      expect(authority.readable).toBe(false)
+      expect(getPublishedSettingsObservation()?.readable).toBe(false)
+    } finally {
+      reader.mockRestore()
+    }
+  })
+
+  it('treats a known profile marker directory as an existing profile', async () => {
+    mkdirSync(join(userData, 'auth-session.bin'))
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+  })
+
+  it('preserves an explicit broker route on a fresh lean profile', async () => {
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ brokerSpeech: { transport: 'broker-v1', engine: 'openai-realtime' } }),
+      'utf8'
+    )
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'openai-realtime' })
+  })
+
+  it('advances the opaque speech selection identity on accepted selection changes, including a return', () => {
+    const before = getSpeechPackSelectionIdentity()
+    const alternate = getSettings().asrEngine === 'whisper' ? 'parakeet' : 'whisper'
+    setSettings({ asrEngine: alternate })
+    const changed = getSpeechPackSelectionIdentity()
+    setSettings({ asrEngine: getSettings().asrEngine === 'whisper' ? 'parakeet' : 'whisper' })
+    const returned = getSpeechPackSelectionIdentity()
+    expect(changed).not.toBe(before)
+    expect(returned).not.toBe(changed)
+  })
+
+  it('advances speech policy identity when Operator configuration is added and removed', () => {
+    const before = getSpeechPackPolicyIdentity()
+    setSettings({ operatorUrl: 'https://operator.example.test' })
+    const configured = getSpeechPackPolicyIdentity()
+    setSettings({ operatorUrl: '' })
+    const returned = getSpeechPackPolicyIdentity()
+    expect(configured).not.toBe(before)
+    expect(returned).not.toBe(configured)
   })
 
   beforeEach(() => {

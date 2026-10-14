@@ -185,6 +185,24 @@ export async function readPinnedFixtureFile(path: string, pin: { bytes: number; 
   }
 }
 
+/** Validate the shared fixture pin before asking the selected isolated host to inspect a pack. */
+export async function runPinnedSpeechPackSelfTest(input: {
+  componentId: SpeechPackComponentId
+  packDir: string
+  wavPath: string
+  signal: AbortSignal
+  fixture: { readonly bytes: number; readonly sha256: string }
+  selfTest: (input: {
+    componentId: SpeechPackComponentId
+    packDir: string
+    wavPath: string
+    signal: AbortSignal
+  }) => Promise<string>
+}): Promise<string> {
+  await readPinnedFixtureFile(input.wavPath, input.fixture)
+  return input.selfTest(input)
+}
+
 /** Internal protocol seam for lifecycle tests; production verifies the pinned fixture first. */
 export async function runSpeechPackHostProtocol(input: {
   componentId: SpeechPackComponentId

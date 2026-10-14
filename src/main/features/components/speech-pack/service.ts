@@ -31,6 +31,7 @@ import {
 } from './manifest'
 import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 import { runSpeechPackSelfTest } from './self-test'
+import type { PriorReadyMarker } from './activation-authority'
 import type { PackageRuntimeContract } from './package-contract'
 import { resolveOptionalRuntimeReadiness, runtimeIdsForEngine, runtimeIdsForLocalLlm } from './runtime-components'
 
@@ -44,6 +45,12 @@ export interface SpeechPackServiceOptions {
   policyAllowsTransfer: () => boolean
   /** Stable opaque identity for the effective policy; changes invalidate a reviewed plan. */
   policyIdentity?: () => string
+  /** Force current managed/admin trust only at explicit admission and activation boundaries. */
+  refreshAuthority?: () => boolean | Promise<boolean>
+  /** Fresh trust read for restoration-only renames after an interrupted/revoked activation. */
+  refreshRollbackAuthority?: () => boolean | Promise<boolean>
+  /** Synchronous published identity/policy fence after the rollback trust read. */
+  rollbackAuthorityCurrent?: () => boolean
   /** Live authoritative capture state; a throwing getter fails closed. */
   captureActive?: () => boolean
   /** Stable capture epoch identity, including a capture that starts and ends between status polls. */
@@ -55,9 +62,9 @@ export interface SpeechPackServiceOptions {
   /** Loaded once at the explicit app startup boundary; immutable for this app process. */
   packageRuntimeContract?: () => Promise<PackageRuntimeContract>
   /** Full/development packages keep the established bundled runtime path; lean needs an activated runtime pack. */
-  engineRuntimeReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean
+  engineRuntimeReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean | Promise<boolean>
   /** Existing packaged model readiness, separate from a userData speech-pack activation. */
-  engineModelReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean
+  engineModelReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean | Promise<boolean>
   shutdownTimeoutMs?: number
 }
 
@@ -66,6 +73,7 @@ interface InstallPlanRecord {
   authorityRevision: number
   selectedEngine: 'whisper' | 'parakeet' | 'apple'
   packageStatus: PackageRuntimeContract['status']
+  packageIdentity: string | null
   policyIdentity: string
   selectionIdentity: string
   captureIdentity: string
@@ -107,6 +115,18 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     SpeechPackComponentId,
     { policyIdentity: string; selectionIdentity: string; captureIdentity: string }
   >()
+  const rollbackAuthority = new Map<
+    SpeechPackComponentId,
+    {
+      transaction: symbol
+      rootDir: string
+      packageStatus: PackageRuntimeContract['status']
+      packageIdentity: string | null
+      selectionIdentity: string
+      captureIdentity: string
+    }
+  >()
+  const rollbackMarkerIdentity = new WeakMap<object, string | null>()
   const pendingAdmissions = new Map<SpeechPackComponentId, symbol>()
   let authorityRevision = 0
   let captureActive = false
@@ -152,7 +172,39 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return null
     }
   }
+  const refreshAuthority = async (): Promise<boolean> => {
+    try {
+      return (await options.refreshAuthority?.()) !== false
+    } catch {
+      return false
+    }
+  }
+  const refreshRollbackAuthority = async (): Promise<boolean> => {
+    try {
+      return (await options.refreshRollbackAuthority?.()) !== false
+    } catch {
+      return false
+    }
+  }
+  const rollbackTicket = (id: SpeechPackComponentId, marker: PriorReadyMarker | null, transaction?: symbol) => {
+    const authority = rollbackAuthority.get(id)
+    if (
+      !authority ||
+      !transaction ||
+      authority.transaction !== transaction ||
+      authority.rootDir !== options.rootDir ||
+      isCaptureActive() ||
+      currentCaptureIdentity() !== authority.captureIdentity ||
+      currentSelectionIdentity() !== authority.selectionIdentity
+    )
+      return null
+    const identity = marker ? `${marker.version}:${marker.manifestIdentity}` : null
+    const boundIdentity = rollbackMarkerIdentity.get(authority)
+    if (boundIdentity === undefined) rollbackMarkerIdentity.set(authority, identity)
+    return rollbackMarkerIdentity.get(authority) === identity ? authority : null
+  }
   let observedSelectionIdentity = currentSelectionIdentity()
+  let observedPolicyIdentity = currentPolicyIdentity()
 
   const isCaptureActive = (): boolean => {
     if (captureActive) return true
@@ -184,6 +236,45 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
             selectedId(options.selectedEngine()) === id &&
             currentSelectionIdentity() === authority.selectionIdentity
         )
+      },
+      authorizeActivation: async (id) => {
+        if (!(await refreshAuthority())) return false
+        const authority = activeAuthority.get(id)
+        return Boolean(
+          authority &&
+            activity.has(id) &&
+            policyAllows() &&
+            currentPolicyIdentity() === authority.policyIdentity &&
+            !isCaptureActive() &&
+            currentCaptureIdentity() === authority.captureIdentity &&
+            selectedId(options.selectedEngine()) === id &&
+            currentSelectionIdentity() === authority.selectionIdentity
+        )
+      },
+      authorizeRollback: async (id, marker, transaction) => {
+        const ticket = rollbackTicket(id, marker, transaction)
+        if (!ticket || !(await refreshRollbackAuthority())) return false
+        let currentPackage: PackageRuntimeContract
+        try {
+          currentPackage = await currentPackageContract()
+        } catch {
+          return false
+        }
+        return (
+          currentPackage.status === ticket.packageStatus &&
+          (currentPackage.status === 'verified' ? currentPackage.inventory.identity : null) ===
+            ticket.packageIdentity &&
+          rollbackAuthority.get(id) === ticket &&
+          rollbackTicket(id, marker, transaction) === ticket
+        )
+      },
+      authorizeRollbackCurrent: (id, marker, transaction) =>
+        rollbackTicket(id, marker, transaction) !== null && (options.rollbackAuthorityCurrent?.() ?? true),
+      onTransactionSettled: (id, transaction) => {
+        if (rollbackAuthority.get(id)?.transaction !== transaction) return
+        rollbackAuthority.delete(id)
+        activity.delete(id)
+        activeAuthority.delete(id)
       }
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
@@ -214,10 +305,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (state.status === 'error' || state.status === 'paused') {
         repairVerified.delete(id)
       }
-      if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') {
-        activity.delete(id)
-        activeAuthority.delete(id)
-      }
+      // Terminal progress can precede awaited rollback/cleanup. The engine settlement callback owns
+      // releasing the activity lease so a successor cannot replace its transaction authority.
     })
     return engine
   }
@@ -249,6 +338,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     )
     // Read selection only after metadata I/O so a slow result cannot pair old engine state with new progress.
     const selectedEngine = options.selectedEngine()
+    const selectedIdentity = options.selectionIdentity?.() ?? selectedEngine
     const selectedComponent = selectedId(selectedEngine)
     const selectedRow = selectedComponent ? rows.find((row) => row.componentId === selectedComponent) : undefined
     const runtimeComponentIds = runtimeIdsForEngine(selectedEngine)
@@ -272,11 +362,25 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       engineState = 'incompatible'
     } else if (runtimeReadiness === 'not-configured') {
       engineState = 'not-configured'
-    } else if (options.engineRuntimeReady?.(selectedEngine) === false) {
-      engineState = 'runtime-needed'
+    } else if (options.engineRuntimeReady) {
+      try {
+        if (!(await options.engineRuntimeReady(selectedEngine))) {
+          engineState = 'runtime-needed'
+        } else if (options.engineModelReady) {
+          engineState = (await options.engineModelReady(selectedEngine)) ? 'ready' : 'model-needed'
+        } else if (selectedRow?.state === 'repair-needed') {
+          engineState = 'repair-needed'
+        } else if (selectedRow?.state === 'ready') {
+          engineState = 'ready'
+        } else {
+          engineState = 'model-needed'
+        }
+      } catch {
+        engineState = 'runtime-needed'
+      }
     } else if (options.engineModelReady) {
       try {
-        engineState = options.engineModelReady(selectedEngine) ? 'ready' : 'model-needed'
+        engineState = (await options.engineModelReady(selectedEngine)) ? 'ready' : 'model-needed'
       } catch {
         engineState = 'model-needed'
       }
@@ -287,6 +391,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     } else {
       engineState = 'model-needed'
     }
+    if (selectedIdentity !== (options.selectionIdentity?.() ?? options.selectedEngine())) engineState = 'unavailable'
     return SpeechPackSnapshotSchema.parse({
       featureEnabled: featureEnabled(),
       profile,
@@ -349,6 +454,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-manifest' })
     if (sourceHost(component) === null)
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
+    if (!(await refreshAuthority()))
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (closing) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
     if (!featureEnabled()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'disabled' })
     const initiallySelectedEngine = options.selectedEngine()
@@ -438,6 +545,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       authorityRevision,
       selectedEngine,
       packageStatus: packageContract.status,
+      packageIdentity: profileIdentity,
       policyIdentity,
       selectionIdentity,
       captureIdentity,
@@ -457,6 +565,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     installPlans.delete(request.planId)
     if (!record || record.expiresAt <= Date.now())
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'plan-expired' })
+    if (!(await refreshAuthority())) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (record.authorityRevision !== authorityRevision || request.action !== record.plan.action)
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
     if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })
@@ -519,9 +628,21 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (isCaptureActive()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     if (request.action === 'install' && readiness.status === 'ready')
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
-    if (pendingAdmissions.has(component.id) || activity.has(component.id)) {
+    if (pendingAdmissions.has(component.id) || activity.has(component.id) || rollbackAuthority.has(component.id)) {
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     }
+    if (!(await refreshAuthority())) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (
+      record.authorityRevision !== authorityRevision ||
+      selectedId(options.selectedEngine()) !== component.id ||
+      currentPolicyIdentity() !== record.policyIdentity ||
+      currentSelectionIdentity() !== record.selectionIdentity ||
+      currentCaptureIdentity() !== record.captureIdentity ||
+      isCaptureActive()
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    if (pendingAdmissions.has(component.id) || activity.has(component.id) || rollbackAuthority.has(component.id))
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     const instance = getEngine()
     const state = instance.getState(component.id)
     if (
@@ -533,6 +654,16 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     }
     activity.add(component.id)
+    const transaction = Symbol('speech-pack-activation')
+    const rollbackTicket = Object.freeze({
+      transaction,
+      rootDir: options.rootDir,
+      packageStatus: record.packageStatus,
+      packageIdentity: record.packageIdentity,
+      selectionIdentity: record.selectionIdentity,
+      captureIdentity: record.captureIdentity
+    })
+    rollbackAuthority.set(component.id, rollbackTicket)
     activeAuthority.set(component.id, {
       policyIdentity: record.policyIdentity,
       selectionIdentity: record.selectionIdentity,
@@ -545,8 +676,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       bytesTotal: componentDownloadBytes(component),
       state: 'queued'
     }
-    if (request.action === 'repair') instance.repair(component.id)
-    else instance.enqueue([component.id], component.id)
+    if (request.action === 'repair') instance.repair(component.id, transaction)
+    else instance.enqueue([component.id], component.id, transaction)
     return SpeechPackActionResultSchema.parse({ ok: true })
   }
 
@@ -567,8 +698,6 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (!engine) return result({ ok: true })
       if (request.action === 'pause') engine.pause(component.id)
       else engine.cancel(component.id)
-      activity.delete(component.id)
-      activeAuthority.delete(component.id)
       return result({ ok: true })
     }
     return result({ ok: false, reason: 'unavailable' })
@@ -584,7 +713,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return () => listeners.delete(listener)
     },
     policyChanged(): void {
-      if (policyAllows() && featureEnabled()) return
+      const nextIdentity = currentPolicyIdentity()
+      const identityChanged = nextIdentity !== observedPolicyIdentity
+      observedPolicyIdentity = nextIdentity
+      if (!identityChanged && nextIdentity !== null && policyAllows() && featureEnabled()) return
       authorityRevision += 1
       installPlans.clear()
       for (const id of activity) engine?.cancel(id)
@@ -630,6 +762,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
         ])
         clearTimeout(timeout)
       }
+      rollbackAuthority.clear()
       unsubscribe?.()
       unsubscribe = null
       listeners.clear()

@@ -35,17 +35,10 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
     expect(boot).toContain('refreshScreenPreprocess')
   })
 
-  it('MQA-178 — the local-model download re-arms it when the weights land mid-session', () => {
-    // An opted-in model fetch is unawaited, so boot can reconcile before localReady becomes true.
-    // Only a successful eligible provisioning result should re-arm the feature and warm the model.
-    const download = sliceBetween(
-      indexSrc,
-      "bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)",
-      'app.setAppUserModelId'
-    )
-    expect(download).toMatch(
-      /\.then\(\(ready\) => \{\s*if \(!ready\) return\s*refreshScreenPreprocess\(\)\s*void runAsMaintenance\(warmLocalIfReady\)/
-    )
+  it('MQA-178 — explicit model installation re-arms it when weights land mid-session', () => {
+    const download = sliceBetween(indexSrc, 'ipcMain.handle(IPC.localModelsEnsure', '// MQA-247')
+    expect(download).toMatch(/const ready = await provisionLocalModel\(admittedModel/)
+    expect(download).toMatch(/if \(ready && getSettings\(\)\.localLlm === admittedModel\) refreshScreenPreprocess\(\)/)
   })
 })
 
