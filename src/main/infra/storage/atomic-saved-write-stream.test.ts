@@ -121,6 +121,45 @@ describe('atomic streamed saved write', () => {
     expect(await readFile(collision, 'utf8')).toBe('foreign temp')
   })
 
+  it('keeps the admitted byte and chunk limits when the caller mutates its options', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    const mutable = { maxBytes: 1, maxChunkBytes: 1, maxChunks: 1 }
+
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield Uint8Array.from(Buffer.from('a'))
+      mutable.maxBytes = Number.POSITIVE_INFINITY
+      mutable.maxChunkBytes = Number.POSITIVE_INFINITY
+      mutable.maxChunks = 100
+      yield Uint8Array.from(Buffer.from('b'))
+    }
+
+    await expect(atomicSavedWriteStream(target, chunks(), mutable)).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('does not trust overridable typed-array metadata accessors', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    const backing = Uint8Array.from(Buffer.from('xx'))
+    const view = backing.subarray(1)
+    Object.defineProperties(view, {
+      byteOffset: { configurable: true, get: () => 0 },
+      byteLength: { configurable: true, get: () => backing.byteLength }
+    })
+
+    await expect(
+      atomicSavedWriteStream(
+        target,
+        (async function* () {
+          yield view
+        })(),
+        bounds
+      )
+    ).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
+    expect(await readdir(root)).toEqual([])
+  })
+
   it('checks the current owner after writes and immediately before the rename', async () => {
     const root = await directory()
     const target = join(root, 'meeting.md')
