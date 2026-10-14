@@ -1,0 +1,138 @@
+name: Runtime activation qualification
+
+on:
+  push:
+    paths:
+      - .github/workflows/runtime-activation-qualification.yml
+      - electron-builder.yml
+      - electron.vite.config.ts
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - scripts/architecture-baseline.json
+      - scripts/check-architecture.mjs
+      - scripts/check-architecture.test.ts
+      - scripts/design/**
+      - scripts/qa/**
+      - src/main/**
+      - src/preload/**
+      - src/renderer/**
+      - src/shared/**
+      - native/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-activation-qualification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Runtime activation source fixtures (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Select isolated test report path
+        run: echo "REPORT=$RUNNER_TEMP/runtime-activation-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run complete runtime activation fixture inventory
+        run: >-
+          node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=default --reporter=json --outputFile="$REPORT"
+          scripts/check-architecture.test.ts
+          scripts/design/design-capture.test.ts
+          src/main/features/components/speech-pack/download.test.ts
+          src/main/features/components/speech-pack/runtime-admission.test.ts
+          src/main/features/components/speech-pack/runtime-archive.test.ts
+          src/main/features/components/speech-pack/runtime-lease.test.ts
+          src/main/features/components/speech-pack/runtime-resource-protocol.test.ts
+          src/main/features/components/speech-pack/runtime-staged-verifier.test.ts
+          src/main/features/components/speech-pack/runtime-tar.test.ts
+          src/main/features/components/speech-pack/runtime-trust.test.ts
+          src/main/infra/process/supervisor.test.ts
+          src/main/infra/storage/runtime-owned-files.test.ts
+          src/main/llm/local-runtime.concurrency.test.ts
+          src/main/llm/local-runtime.test.ts
+          src/main/parakeet-client.test.ts
+          src/main/speaker-embedding-client.test.ts
+          src/main/whisper-import.test.ts
+          src/main/speaker-session-wiring.test.ts
+          src/main/asr-bundled-ensure.test.ts
+          src/main/asr-model-manifest.test.ts
+      - name: Require complete actual inventory and no failed or skipped assertions
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const report = JSON.parse(readFileSync(process.env.REPORT, 'utf8'))
+          const required = [
+            'scripts/check-architecture.test.ts',
+            'scripts/design/design-capture.test.ts',
+            'src/main/features/components/speech-pack/download.test.ts',
+            'src/main/features/components/speech-pack/runtime-admission.test.ts',
+            'src/main/features/components/speech-pack/runtime-archive.test.ts',
+            'src/main/features/components/speech-pack/runtime-lease.test.ts',
+            'src/main/features/components/speech-pack/runtime-resource-protocol.test.ts',
+            'src/main/features/components/speech-pack/runtime-staged-verifier.test.ts',
+            'src/main/features/components/speech-pack/runtime-tar.test.ts',
+            'src/main/features/components/speech-pack/runtime-trust.test.ts',
+            'src/main/infra/process/supervisor.test.ts',
+            'src/main/infra/storage/runtime-owned-files.test.ts',
+            'src/main/llm/local-runtime.concurrency.test.ts',
+            'src/main/llm/local-runtime.test.ts',
+            'src/main/parakeet-client.test.ts',
+            'src/main/speaker-embedding-client.test.ts',
+            'src/main/whisper-import.test.ts',
+            'src/main/speaker-session-wiring.test.ts',
+            'src/main/asr-bundled-ensure.test.ts',
+            'src/main/asr-model-manifest.test.ts'
+          ]
+          const results = report.testResults
+          const counterKeys = [
+            'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests',
+            'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites'
+          ]
+          const countersValid = counterKeys.every((key) => Number.isSafeInteger(report[key]) && report[key] >= 0)
+          const paths = Array.isArray(results)
+            ? results.map((result) => typeof result.name === 'string' ? result.name.replaceAll('\\', '/') : '')
+            : []
+          const assertions = Array.isArray(results)
+            ? results.flatMap((result) => Array.isArray(result.assertionResults) ? result.assertionResults : [])
+            : []
+          const complete = countersValid && Array.isArray(results) && results.length === required.length &&
+            required.every((path) => paths.filter((actual) => actual.endsWith(`/${path}`)).length === 1) &&
+            results.every((result) => result.status === 'passed' &&
+              Array.isArray(result.assertionResults) && result.assertionResults.length > 0) &&
+            assertions.every((assertion) => assertion.status === 'passed') &&
+            assertions.length === report.numTotalTests &&
+            report.numTotalTests > 0 && report.numPassedTests === report.numTotalTests &&
+            report.numFailedTests === 0 && report.numPendingTests === 0 && report.numTodoTests === 0 &&
+            report.numTotalTestSuites > 0 && report.numPassedTestSuites === report.numTotalTestSuites &&
+            report.numFailedTestSuites === 0 && report.numPendingTestSuites === 0
+          console.log(JSON.stringify({ files: paths.length, total: report.numTotalTests,
+            passed: report.numPassedTests, failed: report.numFailedTests,
+            pending: report.numPendingTests, todo: report.numTodoTests }))
+          if (!complete || report.success !== true) throw new Error('RUNTIME_ACTIVATION_REPORT_REJECTED')
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: runtime-activation-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT }}
+          if-no-files-found: error
+          retention-days: 14
