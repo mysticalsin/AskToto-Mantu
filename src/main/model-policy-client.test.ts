@@ -31,6 +31,7 @@ import {
   resolveManagedModel,
   setModelPolicyDirForTests,
   setModelPolicyFetchForTests,
+  setSpeechPolicyClockForTests,
   setSpeechPolicyIdentityReader
 } from './model-policy-client'
 
@@ -76,6 +77,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'model-policy-client-'))
   setModelPolicyDirForTests(dir)
   resetModelPolicyStateForTests()
+  setSpeechPolicyClockForTests(() => LICENSE_NOW)
   auditLogMock.mockClear()
   machineIdentity.durableId = 'machine-test-0001'
 })
@@ -84,6 +86,7 @@ afterEach(() => {
   setModelPolicyFetchForTests(null)
   setModelPolicyDirForTests(null)
   setSpeechPolicyIdentityReader(null)
+  setSpeechPolicyClockForTests(null)
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -250,6 +253,18 @@ describe('refreshModelPolicy / getActiveModelPolicy', () => {
     expect(getActiveModelPolicy(original)?.version).toBe(NOW)
     expect(getActiveModelPolicy({ ...original, operatorIngestSecret: 'rotated-secret' })).toBeNull()
   })
+
+  it('does not retain an in-memory legacy policy after the Operator origin changes', async () => {
+    const doc = policy()
+    const original = { operatorUrl: 'https://operator.test', operatorIngestSecret: 'same-secret' }
+    setModelPolicyFetchForTests(async () =>
+      jsonResponse({ ok: true, policy: doc, signature: sign('same-secret', doc) })
+    )
+    await refreshModelPolicy(original, NOW)
+    expect(getActiveModelPolicy(original)?.version).toBe(NOW)
+    rmSync(join(dir, 'model-policy-cache.json'), { force: true })
+    expect(getActiveModelPolicy({ ...original, operatorUrl: 'https://replacement.test' })).toBeNull()
+  })
 })
 
 describe('verified speech policy authority', () => {
@@ -257,7 +272,7 @@ describe('verified speech policy authority', () => {
     const doc = policy()
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
-    expect(getVerifiedSpeechPolicySnapshot(NOW)).toBeNull()
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
   })
 
   it('returns a scoped snapshot only for the current device licence, origin, device and freshness window', async () => {
@@ -274,9 +289,13 @@ describe('verified speech policy authority', () => {
     })
     expect(snapshot?.verifiedAt).toEqual(expect.any(Number))
     expect(snapshot?.revision).toEqual(expect.any(String))
-    expect(getVerifiedSpeechPolicySnapshot(snapshot!.verifiedAt + 60_000)).toEqual(snapshot)
-    expect(getVerifiedSpeechPolicySnapshot(snapshot!.verifiedAt + 60_001)).toBeNull()
-    expect(getVerifiedSpeechPolicySnapshot(snapshot!.verifiedAt - 1)).toBeNull()
+    setSpeechPolicyClockForTests(() => snapshot!.verifiedAt + 60_000)
+    expect(getVerifiedSpeechPolicySnapshot()).toEqual(snapshot)
+    setSpeechPolicyClockForTests(() => snapshot!.verifiedAt + 60_001)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    setSpeechPolicyClockForTests(() => snapshot!.verifiedAt - 1)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    setSpeechPolicyClockForTests(() => LICENSE_NOW)
 
     setSpeechPolicyIdentityReader(() => ({
       settings: { ...SPEECH_SETTINGS, operatorUrl: 'https://replacement.test' },
@@ -301,7 +320,7 @@ describe('verified speech policy authority', () => {
       { ...SPEECH_SETTINGS, operatorLicenseToken: 'METIS-OP-1.invalid' },
       {
         ...SPEECH_SETTINGS,
-        operatorLicenseToken: `METIS-OP-1.2123456789abcdef.${nowSeconds - 7200}.${nowSeconds - 3600}.CCCCCCCCCCCCCCCCCCCC`
+        operatorLicenseToken: `METIS-OP-1.2123456789abcdef.-1.${nowSeconds + 3600}.CCCCCCCCCCCCCCCCCCCC`
       },
       {
         ...SPEECH_SETTINGS,
@@ -337,8 +356,10 @@ describe('verified speech policy authority', () => {
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     const snapshot = getVerifiedSpeechPolicySnapshot()
     expect(snapshot).not.toBeNull()
-    expect(getVerifiedSpeechPolicySnapshot(snapshot!.verifiedAt + 59_999)?.verifiedAt).toBe(snapshot!.verifiedAt)
-    expect(getVerifiedSpeechPolicySnapshot(snapshot!.verifiedAt + 60_001)).toBeNull()
+    setSpeechPolicyClockForTests(() => snapshot!.verifiedAt + 59_999)
+    expect(getVerifiedSpeechPolicySnapshot()?.verifiedAt).toBe(snapshot!.verifiedAt)
+    setSpeechPolicyClockForTests(() => snapshot!.verifiedAt + 60_001)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
   })
 
   it('clears speech authority on a signed unmanaged response', async () => {
@@ -360,6 +381,51 @@ describe('verified speech policy authority', () => {
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: { version: 1 } }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+    setModelPolicyFetchForTests(async () => jsonResponse(null))
+    await expect(refreshModelPolicyChecked(SPEECH_SETTINGS)).resolves.toMatchObject({ ok: false })
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+  })
+
+  it.each([401, 403])('clears speech authority after an explicit HTTP %s rejection', async (status) => {
+    useSpeechIdentity()
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+
+    setModelPolicyFetchForTests(async () => new Response('denied', { status }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+  })
+
+  it('clears speech authority as soon as denied response headers arrive, without waiting for its body', async () => {
+    useSpeechIdentity()
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+
+    const stalledBody = new ReadableStream<Uint8Array>({ start() {} })
+    setModelPolicyFetchForTests(async () => new Response(stalledBody, { status: 401 }))
+    await expect(refreshModelPolicyChecked(SPEECH_SETTINGS)).resolves.toMatchObject({ ok: false })
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+  })
+
+  it('rejects oversized policy response bodies before JSON parsing and clears speech authority', async () => {
+    useSpeechIdentity()
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
+
+    const oversized = new Response(new Uint8Array(65_537).fill(0x20), { status: 200 })
+    setModelPolicyFetchForTests(async () => oversized)
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
   })
 
   it('rejects contradictory same-version policy content and retains a monotonic version high-water mark', async () => {
@@ -371,16 +437,16 @@ describe('verified speech policy authority', () => {
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()?.policy.updatedBy).toBe(current.updatedBy)
 
-    const conflict = { ...current, updatedBy: 'different-owner' }
-    setModelPolicyFetchForTests(async () =>
-      jsonResponse({ ok: true, policy: conflict, signature: sign(SPEECH_TOKEN, conflict) })
-    )
-    await refreshModelPolicyChecked(SPEECH_SETTINGS)
-    expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
-
     const lower = { ...policy(), version: NOW - 1, updatedAt: NOW - 1 }
     setModelPolicyFetchForTests(async () =>
       jsonResponse({ ok: true, policy: lower, signature: sign(SPEECH_TOKEN, lower) })
+    )
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getVerifiedSpeechPolicySnapshot()?.policy.version).toBe(NOW)
+
+    const conflict = { ...current, updatedBy: 'different-owner' }
+    setModelPolicyFetchForTests(async () =>
+      jsonResponse({ ok: true, policy: conflict, signature: sign(SPEECH_TOKEN, conflict) })
     )
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
