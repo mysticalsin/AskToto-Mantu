@@ -26,13 +26,16 @@ test('normalizes only module specifiers that are import paths', () => {
     "const message = '../not-an-import'"
   ].join('\n')
 
-  assert.equal(normalizeImportPaths(source), [
-    "import value from '__IMPORT_PATH__'",
-    "export { value } from '__IMPORT_PATH__'",
-    "const lazy = import('__IMPORT_PATH__')",
-    "const loaded = require('__IMPORT_PATH__')",
-    "const message = '../not-an-import'"
-  ].join('\n'))
+  assert.equal(
+    normalizeImportPaths(source),
+    [
+      "import value from '__IMPORT_PATH__'",
+      "export { value } from '__IMPORT_PATH__'",
+      "const lazy = import('__IMPORT_PATH__')",
+      "const loaded = require('__IMPORT_PATH__')",
+      "const message = '../not-an-import'"
+    ].join('\n')
+  )
 })
 
 test('accepts moved code when only import paths change', () => {
@@ -48,10 +51,13 @@ test('accepts moved code when only import paths change', () => {
     ['head:src/index.ts', "export { answer } from './new/thing'\n"]
   ])
 
-  assert.deepEqual(verifyPureMove({
-    entries,
-    readAtRevision: (side, path) => contents.get(`${side}:${path}`)
-  }), { ok: true, modifiedProblems: [], orderProblems: [], unsupported: [], tokenProblems: [] })
+  assert.deepEqual(
+    verifyPureMove({
+      entries,
+      readAtRevision: (side, path) => contents.get(`${side}:${path}`)
+    }),
+    { ok: true, modifiedProblems: [], orderProblems: [], unsupported: [], tokenProblems: [] }
+  )
 })
 
 test('rejects a behavior edit hidden inside a moved file', () => {
@@ -209,7 +215,10 @@ test('CLI writes an artifact and fails when a pure move changes tokens', () => {
   mkdirSync(join(repo, 'scripts', 'refactor'), { recursive: true })
   mkdirSync(join(repo, 'src', 'old'), { recursive: true })
   mkdirSync(join(repo, 'src', 'new'), { recursive: true })
-  writeFileSync(join(repo, 'scripts', 'refactor', 'verify-move.mjs'), readFileSync(new URL('./verify-move.mjs', import.meta.url)))
+  writeFileSync(
+    join(repo, 'scripts', 'refactor', 'verify-move.mjs'),
+    readFileSync(new URL('./verify-move.mjs', import.meta.url))
+  )
   writeFileSync(join(repo, 'src', 'old', 'thing.ts'), 'export const answer = 42\n')
   execFileSync('git', ['init'], { cwd: repo })
   execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repo })
@@ -224,7 +233,10 @@ test('CLI writes an artifact and fails when a pure move changes tokens', () => {
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
 
   assert.throws(
-    () => execFileSync(process.execPath, ['scripts/refactor/verify-move.mjs', '--base', base, '--head', head], { cwd: repo }),
+    () =>
+      execFileSync(process.execPath, ['scripts/refactor/verify-move.mjs', '--base', base, '--head', head], {
+        cwd: repo
+      }),
     /Pure-move verification failed/
   )
   const report = JSON.parse(readFileSync(join(repo, 'out', 'refactor', 'verify-move', 'verify-move.json'), 'utf8'))
@@ -286,7 +298,10 @@ const bigMove = [
   { status: 'D', code: 'D', path: 'src/old/big.ts' },
   { status: 'A', code: 'A', path: 'src/new/big.ts' }
 ]
-const bigContents = new Map([['base:src/old/big.ts', bigBody], ['head:src/new/big.ts', bigBody]])
+const bigContents = new Map([
+  ['base:src/old/big.ts', bigBody],
+  ['head:src/new/big.ts', bigBody]
+])
 
 test('PR kind fails when the kind field is missing or both kinds are ticked', () => {
   assert.equal(kindFixture('no checklist', [], new Map()).ok, false)
@@ -300,9 +315,15 @@ test('PR kind fails a behaviour change that carries a relocated block above the 
   assert.equal(result.ok, false)
   assert.match(result.problems[0], /relocates \d+ tokens/)
 
-  const small = new Map([['base:src/old/big.ts', 'export const a = 1\n'], ['head:src/new/big.ts', 'export const a = 1\n']])
+  const small = new Map([
+    ['base:src/old/big.ts', 'export const a = 1\n'],
+    ['head:src/new/big.ts', 'export const a = 1\n']
+  ])
   assert.equal(kindFixture(behaviour, [...bigMove, sourceMapEdit], small).ok, true)
-  assert.equal(kindFixture('- [x] Pure move\n- [ ] Behaviour change\n', [...bigMove, sourceMapEdit], bigContents).ok, true)
+  assert.equal(
+    kindFixture('- [x] Pure move\n- [ ] Behaviour change\n', [...bigMove, sourceMapEdit], bigContents).ok,
+    true
+  )
 })
 
 test('PR kind fails a refactor that moved files without touching the source map', () => {
@@ -315,7 +336,8 @@ test('PR kind fails a refactor that moved files without touching the source map'
 
 test('inventory counts test cases and guard call sites but not guard definitions', () => {
   assert.equal(countTestCases("test('a', () => {})\nit.skip('b', () => {})\nconst latest = 1\nlatest('x')\n"), 2)
-  const source = 'function assertMainWindow(e) {}\nassertMainWindow(e)\nif (denyIfLimited()) return\nobj.requireAuth()\n'
+  const source =
+    'function assertMainWindow(e) {}\nassertMainWindow(e)\nif (denyIfLimited()) return\nobj.requireAuth()\n'
   assert.equal(countGuardCalls(source), 2)
 })
 
@@ -323,8 +345,12 @@ test('inventory fails a drop unless each removal is listed with its replacement'
   const base = { tests: 10, guards: 5 }
   const head = { tests: 9, guards: 4 }
   assert.equal(compareInventories({ base, head, body: '## Removed guards and tests\n' }).ok, false)
-  assert.equal(compareInventories({ base, head, body: '## Removed guards and tests\n- a.test.ts case => b.test.ts case\n' }).ok, false)
-  const listed = '## Removed guards and tests\n\n- a.test.ts case => b.test.ts case\n- old handler guard => shared registerHandler guard\n\n## Evidence\n'
+  assert.equal(
+    compareInventories({ base, head, body: '## Removed guards and tests\n- a.test.ts case => b.test.ts case\n' }).ok,
+    false
+  )
+  const listed =
+    '## Removed guards and tests\n\n- a.test.ts case => b.test.ts case\n- old handler guard => shared registerHandler guard\n\n## Evidence\n'
   assert.equal(compareInventories({ base, head, body: listed }).ok, true)
   assert.equal(compareInventories({ base, head: base, body: '' }).ok, true)
   assert.equal(compareInventories({ base, head: { tests: 12, guards: 6 }, body: '' }).ok, true)
@@ -416,9 +442,15 @@ test('git inventory fails closed for disjoint or unreadable revisions', (t) => {
   writeFixtureFile(root, 'src/other.test.ts', "test('unrelated root', () => {})\n")
   const disjointHead = commitFixture(root, 'unrelated history')
 
-  assert.throws(() => guardTestInventory.compareGitInventories({ base: common, head: disjointHead, body: '', cwd: root }))
-  assert.throws(() => guardTestInventory.compareGitInventories({ base: 'missing-base-ref', head: common, body: '', cwd: root }))
-  assert.throws(() => guardTestInventory.compareGitInventories({ base: common, head: 'missing-head-ref', body: '', cwd: root }))
+  assert.throws(() =>
+    guardTestInventory.compareGitInventories({ base: common, head: disjointHead, body: '', cwd: root })
+  )
+  assert.throws(() =>
+    guardTestInventory.compareGitInventories({ base: 'missing-base-ref', head: common, body: '', cwd: root })
+  )
+  assert.throws(() =>
+    guardTestInventory.compareGitInventories({ base: common, head: 'missing-head-ref', body: '', cwd: root })
+  )
 })
 
 test('inventory ignores removals commented out in the template', () => {

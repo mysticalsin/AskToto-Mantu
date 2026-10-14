@@ -26,7 +26,9 @@ export function countGuardCalls(source) {
 // Removals are declared as `- <what was removed> => <its replacement>` lines under the removals heading.
 export function parseRemovals(body) {
   const lines = body.replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)
-  const start = lines.findIndex((line) => /^#{1,6}\s+/.test(line) && line.replace(/^#+\s+/, '').trim() === REMOVALS_HEADING)
+  const start = lines.findIndex(
+    (line) => /^#{1,6}\s+/.test(line) && line.replace(/^#+\s+/, '').trim() === REMOVALS_HEADING
+  )
   if (start < 0) return []
   const removals = []
   for (const line of lines.slice(start + 1)) {
@@ -75,7 +77,9 @@ export function compareGitInventories({ base, head, body, cwd = repoRoot }) {
 
 function usageError(message) {
   console.error(`guard-test-inventory: ${message}`)
-  console.error('usage: node scripts/refactor/guard-test-inventory.mjs --pr-event <event.json> --base <rev> --head <rev> [--output-dir <dir>]')
+  console.error(
+    'usage: node scripts/refactor/guard-test-inventory.mjs --pr-event <event.json> --base <rev> --head <rev> [--output-dir <dir>]'
+  )
   process.exit(2)
 }
 
@@ -112,7 +116,9 @@ function runCli() {
     for (const problem of result.problems) console.error(problem)
     process.exit(1)
   }
-  console.log(`Guard and test inventory holds (tests ${result.base.tests} -> ${result.head.tests}, guards ${result.base.guards} -> ${result.head.guards}); report written to ${displayPath}`)
+  console.log(
+    `Guard and test inventory holds (tests ${result.base.tests} -> ${result.head.tests}, guards ${result.base.guards} -> ${result.head.guards}); report written to ${displayPath}`
+  )
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) runCli()
