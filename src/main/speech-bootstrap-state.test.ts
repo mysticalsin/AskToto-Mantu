@@ -157,7 +157,8 @@ describe('speech bootstrap metadata cache', () => {
   })
 
   it('invalidates immediately on an unreadable profile, semantic authority change, or policy path change', async () => {
-    const state = createSpeechBootstrapState({ readBoundary: async () => boundary(), now: () => NOW })
+    let currentBoundary = boundary()
+    const state = createSpeechBootstrapState({ readBoundary: async () => currentBoundary, now: () => NOW })
     state.observeSettings(observation())
     await state.refresh('startup')
     expect(state.readState().metadataReady).toBe(true)
@@ -174,14 +175,58 @@ describe('speech bootstrap metadata cache', () => {
       observation({ settings: settings({ operatorLicenseToken: `${OPERATOR_LICENSE_TOKEN}x` }), epoch: 3 })
     )
     expect(state.readState().metadataReady).toBe(false)
+    currentBoundary = boundary({
+      observation: observation({
+        settings: settings({ operatorLicenseToken: `${OPERATOR_LICENSE_TOKEN}x` }),
+        epoch: 3
+      })
+    })
     await state.refresh('credential-change')
     expect(state.readState().metadataReady).toBe(true)
 
-    state.observeSettings(observation({ authConfigurationRevision: 'auth-config-hash-b', epoch: 4 }))
+    const changedCredentialSettings = settings({ operatorLicenseToken: `${OPERATOR_LICENSE_TOKEN}x` })
+    state.observeSettings(
+      observation({ settings: changedCredentialSettings, authConfigurationRevision: 'auth-config-hash-b', epoch: 4 })
+    )
     expect(state.readState().metadataReady).toBe(false)
-    state.observeSettings(observation({ policyPathsRevision: 'policy-paths-b', epoch: 5 }))
+    currentBoundary = boundary({
+      observation: observation({
+        settings: changedCredentialSettings,
+        authConfigurationRevision: 'auth-config-hash-b',
+        epoch: 4
+      })
+    })
+    await state.refresh('auth-config-change')
+    expect(state.readState().metadataReady).toBe(true)
+
+    state.observeSettings(
+      observation({
+        settings: changedCredentialSettings,
+        authConfigurationRevision: 'auth-config-hash-b',
+        policyPathsRevision: 'policy-paths-b',
+        epoch: 5
+      })
+    )
     expect(state.readState().metadataReady).toBe(false)
-    state.observeSettings(observation({ readable: false, epoch: 6 }))
+    currentBoundary = boundary({
+      observation: observation({
+        settings: changedCredentialSettings,
+        authConfigurationRevision: 'auth-config-hash-b',
+        policyPathsRevision: 'policy-paths-b',
+        epoch: 5
+      })
+    })
+    await state.refresh('policy-path-change')
+    expect(state.readState().metadataReady).toBe(true)
+    state.observeSettings(
+      observation({
+        settings: changedCredentialSettings,
+        authConfigurationRevision: 'auth-config-hash-b',
+        policyPathsRevision: 'policy-paths-b',
+        readable: false,
+        epoch: 6
+      })
+    )
     expect(state.readState().metadataReady).toBe(false)
     state.dispose()
   })
