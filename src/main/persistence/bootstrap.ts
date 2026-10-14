@@ -173,6 +173,7 @@ function createMainPersistenceBootstrapInternal(
   let generation = randomUUID()
   let observation = getPublishedSettingsObservation()
   let speech: MeetingSpeechPersistenceService | undefined
+  let disposal: Promise<void> | undefined
   const scopes = new WeakMap<object, ScopeEntry>()
   const liveScopes = new Set<ScopeEntry>()
   const journals = new Set<OpenJournal>()
@@ -710,16 +711,20 @@ function createMainPersistenceBootstrapInternal(
       if (currentSettlement) await currentSettlement
       await Promise.all([...speechSettlements.values()])
     },
-    async dispose() {
-      if (disposed) return
+    dispose() {
+      if (disposal) return disposal
+      if (disposed) return Promise.resolve()
       retire('dispose')
       disposed = true
       unsubscribeSettings()
       unsubscribeAuth()
-      await this.settle()
-      if (speech) await speech.dispose()
-      speech = undefined
-      capability = Object.freeze({ status: 'disposed' })
+      disposal = (async () => {
+        await this.settle()
+        if (speech) await speech.dispose()
+        speech = undefined
+        capability = Object.freeze({ status: 'disposed' })
+      })()
+      return disposal
     }
   }
   refreshPolicy = bootstrap.prime

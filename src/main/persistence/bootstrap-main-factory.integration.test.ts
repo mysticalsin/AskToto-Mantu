@@ -267,9 +267,11 @@ describe('main persistence factory source fixture', () => {
       bootstrap.retire('test-worker-exit')
       await terminating
       let settled = false
-      const settlement = bootstrap.settle().then(() => {
+      const disposal = bootstrap.dispose()
+      const settlement = disposal.then(() => {
         settled = true
       })
+      expect(bootstrap.dispose()).toBe(disposal)
       await Promise.resolve()
       expect(settled).toBe(false)
       allowExit()
