@@ -666,6 +666,129 @@ describe('QA candidate strict hosted ST-1 final reports', () => {
   })
 })
 
+describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
+  const strictJobs = ['st1-mac-fifo', 'st1-mac-control', 'st1-mac-dataless-synthetic']
+  const bindingName = 'Bind QA provenance to this workflow identity'
+  const expected = {
+    repository: 'mysticalsin/AskToto-Mantu',
+    commit: 'a'.repeat(40),
+    run: '12345678901',
+    attempt: '2'
+  }
+  const producer = {
+    schema: 2,
+    repository: expected.repository,
+    commit: expected.commit,
+    run: { id: 12345678901, attempt: 2 }
+  }
+
+  it('places one hard identity check after provenance download and before installer downloads, byte checks, and ST-1', () => {
+    const predicates: string[] = []
+    for (const name of strictJobs) {
+      const jobSteps = steps(name)
+      const bindings = jobSteps.filter((step) => step.includes(`name: ${bindingName}`))
+      expect(bindings, `${name} binding count`).toHaveLength(1)
+      const binding = bindings[0]
+      const bindingIndex = jobSteps.indexOf(binding)
+      const provenanceIndex = jobSteps.findIndex((step) => step.includes('name: candidate-provenance'))
+      expect(provenanceIndex).toBeGreaterThan(-1)
+      expect(bindingIndex).toBeGreaterThan(provenanceIndex)
+      for (const [index, step] of jobSteps.entries()) {
+        if (step.includes('name: candidate-mac')) expect(bindingIndex).toBeLessThan(index)
+        if (step.includes('scripts/qa/provenance.mjs verify')) expect(bindingIndex).toBeLessThan(index)
+        if (step.includes('scripts/qa/st-1.mjs')) expect(bindingIndex).toBeLessThan(index)
+      }
+      expect(binding).toMatch(/^        env:\n          TMPDIR: \$\{\{ runner\.temp \}\}$/m)
+      expect(binding).not.toMatch(/^        if:/m)
+      expect(binding).not.toMatch(/^        continue-on-error:/m)
+      expect(binding).not.toMatch(/secrets\.|inputs\.|github\.event\./)
+      for (const key of ['GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) {
+        expect(binding).toContain(`"$${key}"`)
+      }
+      expect(binding).toContain('::error::QA provenance does not match this workflow identity')
+      predicates.push(
+        binding.match(/jq -es --arg repository "\$GITHUB_REPOSITORY" --arg commit "\$GITHUB_SHA" --arg run "\$GITHUB_RUN_ID" --arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/)?.[1] ?? ''
+      )
+    }
+    expect(predicates.every((predicate) => predicate.length > 0)).toBe(true)
+    expect(new Set(predicates).size).toBe(1)
+  })
+
+  it('evaluates the exact workflow jq predicate against matching and mismatched producer identity', () => {
+    const binding = steps('st1-mac-fifo').find((step) => step.includes(`name: ${bindingName}`)) ?? ''
+    const match = binding.match(
+      /jq -es --arg repository "\$GITHUB_REPOSITORY" --arg commit "\$GITHUB_SHA" --arg run "\$GITHUB_RUN_ID" --arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/
+    )
+    expect(match, 'extract the actual workflow predicate').not.toBeNull()
+    const predicate = match![1]
+
+    const evaluate = (input: string, context = expected) => {
+      const result = spawnSync(
+        'jq',
+        [
+          '-es',
+          '--arg',
+          'repository',
+          context.repository,
+          '--arg',
+          'commit',
+          context.commit,
+          '--arg',
+          'run',
+          context.run,
+          '--arg',
+          'attempt',
+          context.attempt,
+          predicate
+        ],
+        { input, encoding: 'utf8', timeout: 5_000 }
+      )
+      expect(result.error, 'jq must execute the actual workflow predicate').toBeUndefined()
+      return result.status === 0
+    }
+    const document = JSON.stringify(producer)
+    expect(evaluate(document)).toBe(true)
+
+    const producerFailures = [
+      { ...producer, repository: 'other/AskToto-Mantu' },
+      { ...producer, repository: undefined },
+      { ...producer, commit: 'b'.repeat(40) },
+      { ...producer, commit: undefined },
+      { ...producer, schema: 1 },
+      { ...producer, schema: undefined },
+      { ...producer, run: { id: 12345678902, attempt: 2 } },
+      { ...producer, run: { id: 12345678901, attempt: 3 } },
+      { ...producer, run: { id: '12345678901', attempt: 2 } },
+      { ...producer, run: { id: 12345678901, attempt: '2' } },
+      { ...producer, run: { id: 0, attempt: 2 } },
+      { ...producer, run: { id: -1, attempt: 2 } },
+      { ...producer, run: { id: 1.5, attempt: 2 } },
+      { ...producer, run: { id: 9007199254740992, attempt: 2 } },
+      { ...producer, run: { id: 12345678901 } },
+      { ...producer, run: { attempt: 2 } },
+      { ...producer, run: undefined },
+      { ...producer, run: null },
+      { ...producer, run: [] }
+    ]
+    for (const invalid of producerFailures) expect(evaluate(JSON.stringify(invalid))).toBe(false)
+
+    for (const invalid of [null, [], true, 2, 'text']) expect(evaluate(JSON.stringify(invalid))).toBe(false)
+    for (const input of ['', ' \n\t', '{', `${document}\n${document}`, `${document}\n${JSON.stringify({ ...producer, repository: 'other/repo' })}`]) {
+      expect(evaluate(input)).toBe(false)
+    }
+
+    const invalidContexts = [
+      { ...expected, repository: '' },
+      { ...expected, repository: 'no-slash' },
+      { ...expected, commit: '' },
+      { ...expected, commit: 'a'.repeat(39) },
+      ...['', '0', '-1', '1.0', '1e3', '01'].map((run) => ({ ...expected, run })),
+      ...['', '0', '-1', '1.0', '1e3', '01'].map((attempt) => ({ ...expected, attempt }))
+    ]
+    for (const context of invalidContexts) expect(evaluate(document, context)).toBe(false)
+  })
+})
+
 describe('QA candidate owned-process acknowledgement', () => {
   const windowSteps = steps('st1-mac-window')
   const measure = windowSteps.find((step) => step.includes('id: window_measure')) ?? ''
