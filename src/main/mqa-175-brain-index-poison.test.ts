@@ -6,7 +6,14 @@ import { randomBytes, createCipheriv, createHash } from 'node:crypto'
 import { safeStorage } from 'electron'
 import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema } from '@shared/brain'
-import { brainDir, readIndex, writeIndex, indexUnavailable, purgeBrain, BrainIndexUnavailableError } from './brain/store'
+import {
+  brainDir,
+  readIndex,
+  writeIndex,
+  indexUnavailable,
+  purgeBrain,
+  BrainIndexUnavailableError
+} from './brain/store'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 
 vi.mock('electron')
@@ -63,10 +70,7 @@ function poisonedIndexBytes(): Buffer {
   const env = JSON.parse(buf.subarray(ENC_MARKER_V2.length).toString('utf8')) as { ct: string }
   const ct = Buffer.from(env.ct, 'base64')
   ct[0] ^= 0xff // flip a byte -> auth tag no longer matches
-  return Buffer.concat([
-    ENC_MARKER_V2,
-    Buffer.from(JSON.stringify({ ...env, ct: ct.toString('base64') }), 'utf8')
-  ])
+  return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify({ ...env, ct: ct.toString('base64') }), 'utf8')])
 }
 
 /** FOREIGN-F — the M2-0003 incident fixture: a v2 envelope whose `kLocal` is the file-backend ('F:')
@@ -262,7 +266,9 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
         `seed-snapshot-${i}`
       )
     }
-    const before5 = readdirSync(brainDir(s)).filter((f) => f.startsWith('index.corrupt-auto-')).sort()
+    const before5 = readdirSync(brainDir(s))
+      .filter((f) => f.startsWith('index.corrupt-auto-'))
+      .sort()
     expect(before5).toHaveLength(5)
 
     const bad = Buffer.from('{"ingested": tru', 'utf8')
@@ -276,7 +282,9 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     // The 6th invalid index stays exactly where it was — no rename past the cap.
     expect(existsSync(primary)).toBe(true)
     expect(readFileSync(primary)).toEqual(bad)
-    const after5 = readdirSync(brainDir(s)).filter((f) => f.startsWith('index.corrupt-auto-')).sort()
+    const after5 = readdirSync(brainDir(s))
+      .filter((f) => f.startsWith('index.corrupt-auto-'))
+      .sort()
     expect(after5).toEqual(before5) // no 6th snapshot created
 
     await expect(writeIndex(s, idx)).rejects.toMatchObject({ unavailable: 'corrupt-kept' })
@@ -338,7 +346,6 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     expect(readdirSync(brainDir(s)).filter((f) => f.includes('.corrupt-'))).toHaveLength(0)
   })
 })
-
 
 describe('MQA-175 — an early death must leave a trace and route the next launch to safety', () => {
   let userData: string
@@ -438,7 +445,9 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(finallyBody).toMatch(/setBootPowerSaveBlock\(false\)/)
     expect(finallyBody).toMatch(/clearBootWatchOnce\('mqa-175'\)/)
     // Power-save stop + sentinel clear live in finally (after any resume throw path), not only the happy path.
-    expect(finallyBody.indexOf('setBootPowerSaveBlock(false)')).toBeLessThan(finallyBody.indexOf("clearBootWatchOnce('mqa-175')"))
+    expect(finallyBody.indexOf('setBootPowerSaveBlock(false)')).toBeLessThan(
+      finallyBody.indexOf("clearBootWatchOnce('mqa-175')")
+    )
     // Per-step isolation around the brain resume calls (sync throws must not skip finally or siblings).
     for (const step of [
       'resumeBackfillIfPending',
@@ -458,7 +467,9 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
   it('FITO-185-G-SHOW+G-TIMER: early sentinel clear past kill zone + exclusive 2s reveal', () => {
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     expect(source).toMatch(/const clearBootWatchOnce = \(reason: string\): void =>/)
-    expect(source).toMatch(/auditLog\('app\.boot\.watch_cleared',\s*\{\s*earlyDeath:\s*Boolean\(earlyDeath\),\s*reason\s*\}\)/)
+    expect(source).toMatch(
+      /auditLog\('app\.boot\.watch_cleared',\s*\{\s*earlyDeath:\s*Boolean\(earlyDeath\),\s*reason\s*\}\)/
+    )
     expect(source).toMatch(/clearBootWatchOnce\('createWindow'\)/)
     expect(source).toMatch(/clearBootWatchOnce\('registerIpc'\)/)
     // FITO-185-X: IPC handlers before loadURL
