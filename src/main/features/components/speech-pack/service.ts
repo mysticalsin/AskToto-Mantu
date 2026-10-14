@@ -256,7 +256,14 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     const runtimeReadiness = runtimeComponentId
       ? resolveOptionalRuntimeReadiness(runtimeComponentId, packageContract)
       : 'ready'
-    let engineState: 'ready' | 'model-needed' | 'runtime-needed' | 'not-configured' | 'incompatible' | 'repair-needed' | 'unavailable'
+    let engineState:
+      | 'ready'
+      | 'model-needed'
+      | 'runtime-needed'
+      | 'not-configured'
+      | 'incompatible'
+      | 'repair-needed'
+      | 'unavailable'
     if (selectedEngine === 'apple') {
       engineState = process.platform === 'darwin' ? 'ready' : 'unavailable'
     } else if (packageContract.status === 'invalid') {
@@ -310,18 +317,25 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   }
 
   async function currentPackageContract(): Promise<PackageRuntimeContract> {
-    packageContractPromise ??= (async () => {
-      if (options.packageRuntimeContract) return options.packageRuntimeContract()
-      if (!options.packaged) return { status: 'development', profile: 'development', inventory: null }
-      return {
-        status: 'invalid',
-        reason: 'inventory-invalid',
-        profile: null,
-        inventory: null
-      }
-    })().catch(
-      (): PackageRuntimeContract => ({ status: 'invalid', reason: 'inventory-invalid', profile: null, inventory: null })
-    )
+    if (packageContractPromise === null) {
+      packageContractPromise = (async (): Promise<PackageRuntimeContract> => {
+        if (options.packageRuntimeContract) return options.packageRuntimeContract()
+        if (!options.packaged) return { status: 'development', profile: 'development', inventory: null }
+        return {
+          status: 'invalid',
+          reason: 'inventory-invalid',
+          profile: null,
+          inventory: null
+        }
+      })().catch(
+        (): PackageRuntimeContract => ({
+          status: 'invalid',
+          reason: 'inventory-invalid',
+          profile: null,
+          inventory: null
+        })
+      )
+    }
     return packageContractPromise
   }
 
@@ -333,7 +347,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (!component) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'invalid-request' })
     if (componentManifestIdentity(component) !== request.manifestIdentity)
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-manifest' })
-    if (sourceHost(component) === null) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
+    if (sourceHost(component) === null)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
     if (closing) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
     if (!featureEnabled()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'disabled' })
     const initiallySelectedEngine = options.selectedEngine()
@@ -369,8 +384,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       // A model pack by itself cannot make an engine usable; its reviewed runtime artifact is unavailable.
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
     }
-    if (!policyAllows() || currentPolicyIdentity() !== policyIdentity) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
-    if (isCaptureActive() || currentCaptureIdentity() !== captureIdentity) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    if (!policyAllows() || currentPolicyIdentity() !== policyIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive() || currentCaptureIdentity() !== captureIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
     const readiness = await resolveSpeechPack(options.rootDir, component)
     if (
       revision !== authorityRevision ||
@@ -380,8 +397,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     ) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
     }
-    if (!policyAllows() || currentPolicyIdentity() !== policyIdentity) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
-    if (isCaptureActive() || currentCaptureIdentity() !== captureIdentity) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    if (!policyAllows() || currentPolicyIdentity() !== policyIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive() || currentCaptureIdentity() !== captureIdentity)
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
     if (request.action === 'install' && readiness.status === 'ready') {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'unavailable' })
     }
@@ -444,15 +463,18 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     const component = byId.get(record.plan.selectedComponent)
     if (!component || componentManifestIdentity(component) !== record.plan.missingComponents[0]?.manifestIdentity)
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-manifest' })
-    if (sourceHost(component) === null) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'not-configured' })
+    if (sourceHost(component) === null)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'not-configured' })
     if (selectedId(options.selectedEngine()) !== component.id || options.selectedEngine() !== record.selectedEngine)
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'not-selected' })
-    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (
       isCaptureActive() ||
       currentCaptureIdentity() !== record.captureIdentity ||
       currentSelectionIdentity() !== record.selectionIdentity
-    ) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     const packageContract = await currentPackageContract()
     if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })
     if (packageContract.status === 'invalid' || packageContract.status !== record.packageStatus) {
@@ -474,12 +496,14 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     ) {
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
     }
-    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (!policyAllows() || currentPolicyIdentity() !== record.policyIdentity)
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (
       isCaptureActive() ||
       currentCaptureIdentity() !== record.captureIdentity ||
       currentSelectionIdentity() !== record.selectionIdentity
-    ) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     // Consent expires if the model state changes before transfer admission.
     const readiness = await resolveSpeechPack(options.rootDir, component)
     if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })

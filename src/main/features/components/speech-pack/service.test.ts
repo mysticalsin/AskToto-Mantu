@@ -12,7 +12,7 @@ import {
 } from './manifest'
 import * as Resolver from './resolver'
 import { componentManifestIdentity } from './resolver'
-import * as Profile from './profile'
+import type { PackageRuntimeContract } from './package-contract'
 import { createSpeechPackService } from '../index'
 
 vi.mock('electron', () => ({
@@ -83,6 +83,17 @@ function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]>
   return { service: createSpeechPackService(options), engine, createEngine, update }
 }
 
+function deferredPackageContract(): {
+  promise: Promise<PackageRuntimeContract>
+  release: (contract: PackageRuntimeContract) => void
+} {
+  let release!: (contract: PackageRuntimeContract) => void
+  const promise = new Promise<PackageRuntimeContract>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+
 async function install(
   service: ReturnType<typeof createSpeechPackService>,
   component: SpeechPackComponent = WHISPER_BASE_Q8,
@@ -127,7 +138,10 @@ describe('explicit speech-pack service boundary', () => {
     }
     const { service, createEngine } = setup({ packageRuntimeContract: async () => leanContract })
     const snapshot = await service.snapshot()
-    expect(snapshot.engineReadiness).toMatchObject({ state: 'not-configured', runtimeComponentIds: ['runtime.asr-whisper-worker'] })
+    expect(snapshot.engineReadiness).toMatchObject({
+      state: 'not-configured',
+      runtimeComponentIds: ['runtime.asr-whisper-worker']
+    })
     await expect(
       service.planPreview({
         componentId: WHISPER_BASE_Q8.id,
@@ -176,7 +190,9 @@ describe('explicit speech-pack service boundary', () => {
     const next = await service.planPreview(request)
     expect(next.ok).toBe(true)
     if (!next.ok) throw new Error('expected a fresh plan after capture ended')
-    await expect(service.installWithPlan({ planId: next.plan.planId, action: 'install' })).resolves.toEqual({ ok: true })
+    await expect(service.installWithPlan({ planId: next.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: true
+    })
     await expect(service.installWithPlan({ planId: next.plan.planId, action: 'install' })).resolves.toEqual({
       ok: false,
       reason: 'plan-expired'
@@ -212,7 +228,9 @@ describe('explicit speech-pack service boundary', () => {
     expect(preview.ok).toBe(true)
     if (!preview.ok) throw new Error('expected plan preview')
     service.selectionChanged()
-    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({ ok: true })
+    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: true
+    })
     await service.shutdown()
   })
 
@@ -351,72 +369,45 @@ describe('explicit speech-pack service boundary', () => {
     expect(failClosed.createEngine).not.toHaveBeenCalled()
   })
 
-  it('invalidates an action whose async profile admission is pending when the user cancels', async () => {
-    let releaseProfile!: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
-    const profileRead = new Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>((resolve) => {
-      releaseProfile = resolve
-    })
-    const read = vi.spyOn(Profile, 'readSpeechPackProfile').mockReturnValue(profileRead)
-    try {
-      const { service, createEngine } = setup()
-      const request = {
-        componentId: WHISPER_BASE_Q8.id,
-        action: 'install' as const,
-        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
-      }
-      const pending = service.planPreview(request)
-      await expect(service.action({ ...request, action: 'cancel' })).resolves.toEqual({ ok: true })
-      releaseProfile({ profile: 'development' })
-      await expect(pending).resolves.toEqual({ ok: false, reason: 'stale-plan' })
-      expect(createEngine).not.toHaveBeenCalled()
-    } finally {
-      read.mockRestore()
+  it('invalidates an action whose package admission is pending when the user cancels', async () => {
+    const pendingContract = deferredPackageContract()
+    const { service, createEngine } = setup({ packageRuntimeContract: () => pendingContract.promise })
+    const request = {
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install' as const,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
     }
+    const pending = service.planPreview(request)
+    await expect(service.action({ ...request, action: 'cancel' })).resolves.toEqual({ ok: true })
+    pendingContract.release({ status: 'development', profile: 'development', inventory: null })
+    await expect(pending).resolves.toEqual({ ok: false, reason: 'stale-plan' })
+    expect(createEngine).not.toHaveBeenCalled()
   })
 
-  it('does not let an obsolete admission clear a newer same-component pending action', async () => {
-    const pendingReads: Array<{
-      promise: Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>
-      release: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
-    }> = []
-    const read = vi.spyOn(Profile, 'readSpeechPackProfile').mockImplementation(() => {
-      let release!: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
-      const promise = new Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>((resolve) => {
-        release = resolve
-      })
-      pendingReads.push({ promise, release })
-      return promise
-    })
-    try {
-      const { service, engine } = setup()
-      const request = {
-        componentId: WHISPER_BASE_Q8.id,
-        action: 'install' as const,
-        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
-      }
-      const obsolete = service.planPreview(request)
-      await Promise.resolve()
-      await service.action({ ...request, action: 'cancel' })
-      const current = service.planPreview(request)
-      await Promise.resolve()
-      expect(pendingReads).toHaveLength(2)
-
-      pendingReads[0].release({ profile: 'development' })
-      await expect(obsolete).resolves.toEqual({ ok: false, reason: 'stale-plan' })
-      expect(engine.enqueue).not.toHaveBeenCalled()
-
-      pendingReads[1].release({ profile: 'development' })
-      const plan = await current
-      expect(plan.ok).toBe(true)
-      if (!plan.ok) throw new Error('expected a current install plan')
-      await service.installWithPlan({ planId: plan.plan.planId, action: 'install' })
-      expect(engine.enqueue).toHaveBeenCalledTimes(1)
-    } finally {
-      read.mockRestore()
+  it('does not let obsolete package admission supersede a newer same-component plan', async () => {
+    const pendingContract = deferredPackageContract()
+    const { service, engine } = setup({ packageRuntimeContract: () => pendingContract.promise })
+    const request = {
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install' as const,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
     }
+    const obsolete = service.planPreview(request)
+    await Promise.resolve()
+    await service.action({ ...request, action: 'cancel' })
+    const current = service.planPreview(request)
+    pendingContract.release({ status: 'development', profile: 'development', inventory: null })
+
+    await expect(obsolete).resolves.toEqual({ ok: false, reason: 'stale-plan' })
+    expect(engine.enqueue).not.toHaveBeenCalled()
+    const plan = await current
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) throw new Error('expected a current install plan')
+    await service.installWithPlan({ planId: plan.plan.planId, action: 'install' })
+    expect(engine.enqueue).toHaveBeenCalledTimes(1)
   })
 
-  it('rechecks selection, policy, capture and shutdown after async profile admission', async () => {
+  it('rechecks selection, policy, capture and shutdown after async package admission', async () => {
     const identity = componentManifestIdentity(WHISPER_BASE_Q8)
     const run = async (
       invalidate: (
@@ -425,31 +416,27 @@ describe('explicit speech-pack service boundary', () => {
       ) => void | Promise<void>,
       expected: 'busy' | 'not-selected'
     ): Promise<void> => {
-      let releaseProfile!: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
-      const profileRead = new Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>((resolve) => {
-        releaseProfile = resolve
+      const pendingContract = deferredPackageContract()
+      const pendingState = { selected: 'whisper' as 'whisper' | 'parakeet', policy: true, capture: false }
+      const { service, createEngine } = setup({
+        selectedEngine: () => pendingState.selected,
+        policyAllowsTransfer: () => pendingState.policy,
+        captureActive: () => pendingState.capture,
+        packageRuntimeContract: () => pendingContract.promise
       })
-      const read = vi.spyOn(Profile, 'readSpeechPackProfile').mockReturnValue(profileRead)
-      try {
-        const pendingState = { selected: 'whisper' as 'whisper' | 'parakeet', policy: true, capture: false }
-        const { service, createEngine } = setup({
-          selectedEngine: () => pendingState.selected,
-          policyAllowsTransfer: () => pendingState.policy,
-          captureActive: () => pendingState.capture
-        })
-        const pending = service.planPreview({
-          componentId: WHISPER_BASE_Q8.id,
-          action: 'install',
-          manifestIdentity: identity
-        })
-        await Promise.resolve()
-        await invalidate(service, pendingState)
-        releaseProfile({ profile: 'development' })
-        await expect(pending).resolves.toEqual({ ok: false, reason: expected === 'not-selected' ? 'not-selected' : 'stale-plan' })
-        expect(createEngine).not.toHaveBeenCalled()
-      } finally {
-        read.mockRestore()
-      }
+      const pending = service.planPreview({
+        componentId: WHISPER_BASE_Q8.id,
+        action: 'install',
+        manifestIdentity: identity
+      })
+      await Promise.resolve()
+      await invalidate(service, pendingState)
+      pendingContract.release({ status: 'development', profile: 'development', inventory: null })
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        reason: expected === 'not-selected' ? 'not-selected' : 'stale-plan'
+      })
+      expect(createEngine).not.toHaveBeenCalled()
     }
 
     await run((service, state) => {

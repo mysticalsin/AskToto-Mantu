@@ -51,9 +51,7 @@ const HASH = /^[0-9a-f]{64}$/
 const SOURCE_COMMIT = /^[0-9a-f]{40}$/
 const SAFE_RESOURCE_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
 
-function invalid(
-  reason: Extract<PackageRuntimeContract, { status: 'invalid' }>['reason']
-): PackageRuntimeContract {
+function invalid(reason: Extract<PackageRuntimeContract, { status: 'invalid' }>['reason']): PackageRuntimeContract {
   return { status: 'invalid', reason, profile: null, inventory: null }
 }
 
@@ -146,7 +144,7 @@ function isInventory(value: unknown): value is PackageInventoryV1 {
       file.path.includes('\\') ||
       file.path.split('/').some((part) => !part || part === '.' || part === '..') ||
       !Number.isSafeInteger(file.bytes) ||
-      (file.bytes as number) <= 0 ||
+      (file.bytes as number) < 0 ||
       typeof file.sha256 !== 'string' ||
       !HASH.test(file.sha256) ||
       (previousPath !== null && file.path <= previousPath)
@@ -202,12 +200,18 @@ export async function readPackageRuntimeContract(
     return { status: 'legacy-full', profile: 'full', inventory: null }
   }
   if (!profileExists) return invalid(options.compiledProfile === 'lean' ? 'inventory-missing' : 'profile-invalid')
-  if (!inventoryExists) return invalid(options.compiledProfile === 'lean' ? 'inventory-missing' : 'inventory-invalid')
 
   const profileRead = await readSpeechPackProfile(options.resourcesRoot, true)
   if (profileRead.profile === null) return invalid('profile-invalid')
   if (profileRead.profile !== options.compiledProfile) return invalid('profile-mismatch')
   if (profileRead.profile !== 'full' && profileRead.profile !== 'lean') return invalid('profile-invalid')
+  if (!inventoryExists) {
+    // Existing full packages ship the exact profile marker but predate the inventory resource.
+    // Preserve that established runtime closure only for a valid compiled-full package.
+    return options.compiledProfile === 'full' && profileRead.profile === 'full'
+      ? { status: 'legacy-full', profile: 'full', inventory: null }
+      : invalid('inventory-missing')
+  }
 
   const bytes = await readBoundedFile(inventoryPath, MAX_INVENTORY_BYTES)
   if (!bytes) return invalid('inventory-invalid')
