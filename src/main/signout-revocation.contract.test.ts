@@ -177,6 +177,9 @@ describe('index.ts — one revoke covers the whole privileged surface', () => {
   })
 
   it('MQA-154 — the revoke is registered on auth\'s session-cleared hook, not on one IPC handler', () => {
-    expect(indexSrc).toMatch(/setSessionClearedHandler\(revokePrivilegedSurface\)/)
+    const compactIndexSrc = indexSrc.replace(/\s+/g, '')
+    expect(compactIndexSrc).toContain(
+      "setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared',revokePrivilegedSurface))"
+    )
   })
 })
