@@ -171,7 +171,7 @@ afterEach(() => {
   vi.resetModules()
 })
 
-describe('loopback acquisition keeps rendered system audio unprocessed', () => {
+describe('MQA-267: loopback acquisition keeps rendered system audio unprocessed', () => {
   it('uses non-processing constraints for both Windows acquisition attempts and keeps the granted track', async () => {
     const track = fakeTrack()
     const stream = fakeStream(track)
@@ -234,7 +234,7 @@ describe('loopback acquisition keeps rendered system audio unprocessed', () => {
   })
 })
 
-describe('owned audio channels preserve the limiter graph and serialized recovery', () => {
+describe('MQA-268: owned audio channels preserve the limiter graph and serialized recovery', () => {
   it('connects the system boost through the limiter and disconnects it with the channel', async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext)
     vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
