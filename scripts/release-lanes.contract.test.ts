@@ -242,13 +242,15 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
     expect(Object.keys(jobs).sort()).toEqual([...DRY_RUN, ...DECISION, ...SHARED, ...MAC, ...WIN].sort())
   })
 
-  it('the computed release decision stands alone: it needs no job and gates no publication (M2-0171)', () => {
+  it('the computed release decision runs independently and gates both publishers (M2-0171)', () => {
     const { jobs } = modelReleaseWorkflow()
     expect(jobs['release-decision'].condition).toBe("github.event_name == 'push'")
     expect(jobs['release-decision'].needs).toEqual([])
     expect(jobs['release-decision'].uploads).toEqual(['release-decision'])
-    for (const [name, job] of Object.entries(jobs)) {
-      expect(job.needs, `${name} must not wait on the decision`).not.toContain('release-decision')
+    expect(jobs['publish-macos'].needs).toContain('release-decision')
+    expect(jobs['publish-windows'].needs).toContain('release-decision')
+    for (const name of ['release-quality', 'release-macos', 'release-windows']) {
+      expect(jobs[name].needs, `${name} must build independently of the decision`).not.toContain('release-decision')
     }
   })
 
@@ -290,10 +292,25 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
     expect(running.has('publish-windows')).toBe(false)
   })
 
-  it('each publish job stands on exactly its own build and the shared gate', () => {
+  it('a failing release decision prevents both platform publishers', () => {
     const { jobs } = modelReleaseWorkflow()
-    expect([...ancestors(jobs, 'publish-macos')].sort()).toEqual(['release-macos', 'release-quality'])
-    expect([...ancestors(jobs, 'publish-windows')].sort()).toEqual(['release-quality', 'release-windows'])
+    const running = jobsThatRun(jobs, 'release-decision')
+    expect(running.has('publish-macos')).toBe(false)
+    expect(running.has('publish-windows')).toBe(false)
+  })
+
+  it('each publish job stands on its own build, the shared source gate and release decision', () => {
+    const { jobs } = modelReleaseWorkflow()
+    expect([...ancestors(jobs, 'publish-macos')].sort()).toEqual([
+      'release-decision',
+      'release-macos',
+      'release-quality'
+    ])
+    expect([...ancestors(jobs, 'publish-windows')].sort()).toEqual([
+      'release-decision',
+      'release-quality',
+      'release-windows'
+    ])
   })
 
   it('each publish job consumes only its own platform bytes', () => {
