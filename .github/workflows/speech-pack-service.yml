@@ -15,6 +15,7 @@ on:
       - src/main/infra/process/speech-pack-host*
       - src/main/ipc/asr-assets-ipc*
       - src/main/ipc/speech-pack-ipc*
+      - src/main/ipc/parakeet-assets-ipc*
       - src/main/parakeet*
       - src/main/whisper-import*
       - src/main/lifecycle/boot-work.test.ts
@@ -82,6 +83,7 @@ jobs:
             src/main/infra/process/speech-pack-host.test.ts \
             src/main/ipc/asr-assets-ipc.test.ts \
             src/main/ipc/speech-pack-ipc.test.ts \
+            src/main/ipc/parakeet-assets-ipc.test.ts \
             src/main/parakeet.test.ts \
             src/main/whisper-import.test.ts \
             src/main/lifecycle/boot-work.test.ts \
@@ -143,6 +145,7 @@ jobs:
             'src/main/infra/process/speech-pack-host.test.ts',
             'src/main/ipc/asr-assets-ipc.test.ts',
             'src/main/ipc/speech-pack-ipc.test.ts',
+            'src/main/ipc/parakeet-assets-ipc.test.ts',
             'src/main/parakeet.test.ts',
             'src/main/whisper-import.test.ts',
             'src/main/lifecycle/boot-work.test.ts',

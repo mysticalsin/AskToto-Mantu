@@ -789,6 +789,7 @@ import {
 import { startIntelligenceWork } from './brain/intelligence-work'
 import { startSpeechPackDesktop } from './speech-pack-bootstrap'
 import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
+import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
@@ -7223,21 +7224,14 @@ function registerIpc(): void {
   // --- Parakeet ASR engine ---
   // Parakeet (on-device, isolated utility process). Whisper stays the renderer default; these only run when the user
   // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
-  ipcMain.handle(IPC.parakeetStatus, async (e) => {
-    assertMainWindow(e)
-    // addonError surfaces WHY the engine isn't ready (native addon missing for this platform/build) as
-    // distinct from "bundled model assets missing" — Settings reads this to show an actionable message.
-    return { ready: await parakeetModelReady(), addonError: await parakeetAddonError() }
-  })
-  ipcMain.handle(IPC.parakeetEnsure, async (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false }
-    try {
-      await ensureParakeetModel((pct) => win?.webContents.send(IPC.parakeetProgress, { pct }))
-      return { ok: await parakeetModelReady() }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
+  registerParakeetAssetsIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    modelReady: parakeetModelReady,
+    addonError: parakeetAddonError,
+    ensureModel: ensureParakeetModel,
+    publishProgress: (progress) => win?.webContents.send(IPC.parakeetProgress, progress)
   })
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -10034,10 +10028,10 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
+      const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
       runStep('speechPackIpc', () => {
-        const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
         speechPackDesktop = startSpeechPackDesktop({
-          resourcesRoot,
+          resourcesRoot: resourcesRoot,
           packaged: app.isPackaged,
           rootDir: userDataSpeechPackRoot(),
           fixtureWavPath: join(resourcesRoot, 'speech-pack-fixtures', 'en.wav'),
@@ -10053,7 +10047,6 @@ if (!app.requestSingleInstanceLock()) {
         })
       })
       runStep('asrAssetsIpc', () => {
-        const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
         const asrAssetsIpc = registerAsrAssetsIpc({
           ipcMain,
           isRecentlyRetiredOverlaySender,
@@ -10071,12 +10064,10 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       runStep('asrModelProtocol', () => {
-        const REPO_ROOT = join(__dirname, '..', '..')
-        const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
         protocol.handle(
           'asr-model',
           createAsrModelProtocolHandler({
-            resourcesRoot: RES_BASE,
+            resourcesRoot: resourcesRoot,
             userModelsRoot: app.isPackaged ? undefined : userDataAsrRoot(),
             resolveSpeechPackModels: asrModelProtocolSpeechPackOptions,
             readLocal: (url) => net.fetch(url)
