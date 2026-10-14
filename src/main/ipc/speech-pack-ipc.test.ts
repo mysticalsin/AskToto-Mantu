@@ -98,4 +98,40 @@ describe('registerSpeechPackIpc', () => {
       IPC.speechPackAction
     ])
   })
+
+  it('continues cleanup and rethrows even an undefined first cleanup error', () => {
+    const { ipcMain, removeHandler } = makeIpc()
+    const unsubscribe = vi.fn()
+    const service = {
+      snapshot: vi.fn(),
+      action: vi.fn(),
+      subscribe: vi.fn(() => unsubscribe)
+    } as unknown as SpeechPackService
+    const cleanup = registerSpeechPackIpc({
+      ipcMain,
+      assertMainWindow: vi.fn(),
+      sendProgress: vi.fn(),
+      service
+    })
+    removeHandler.mockImplementationOnce(() => {
+      throw undefined
+    })
+
+    let didThrow = false
+    let thrown: unknown
+    try {
+      cleanup()
+    } catch (error) {
+      didThrow = true
+      thrown = error
+    }
+
+    expect(didThrow).toBe(true)
+    expect(thrown).toBeUndefined()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(removeHandler.mock.calls.slice(-2).map(([channel]) => channel)).toEqual([
+      IPC.speechPackState,
+      IPC.speechPackAction
+    ])
+  })
 })
