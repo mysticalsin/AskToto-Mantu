@@ -99,16 +99,30 @@ export class MainSpeechCaptureSession {
   ): { event: CloudSpeechEpochTransitionEvent; applied: Promise<boolean> } {
     if (this.phase === 'cancelled' || this.phase === 'closed' || this.pending)
       throw new Error('speech transition is not available')
-    if (!this.matchesOrderedTracks(streams) || deadlineAt <= this.monotonicNow())
+    if (
+      !this.matchesOrderedTracks(streams) ||
+      deadlineAt <= this.monotonicNow() ||
+      (stage === 'opened' && !this.matchesClosedTransition(streams as OpenedStream[])) ||
+      (stage === 'closed' && this.lastCompleted?.stage === 'closed')
+    )
       throw new Error('speech transition inventory or deadline is invalid')
-    const transitionId = ++this.transitionCounter
-    if (!Number.isSafeInteger(transitionId)) throw new Error('speech transition counter exhausted')
+    let transitionId: number
+    let handoffNonce: string
+    if (stage === 'closed') {
+      transitionId = ++this.transitionCounter
+      if (!Number.isSafeInteger(transitionId)) throw new Error('speech transition counter exhausted')
+      handoffNonce = randomUUID()
+    } else {
+      const closed = this.lastCompleted!
+      transitionId = closed.transitionId
+      handoffNonce = closed.handoffNonce
+    }
     const event = {
       type: 'epoch-transition' as const,
       captureId: this.options.captureId,
       captureGeneration: this.options.captureGeneration,
       transitionId,
-      handoffNonce: randomUUID(),
+      handoffNonce,
       stage,
       streams
     } as CloudSpeechEpochTransitionEvent
@@ -274,6 +288,24 @@ export class MainSpeechCaptureSession {
       streams.length === this.options.tracks.length &&
       streams.every((stream, index) => stream.track === this.options.tracks[index]) &&
       new Set(streams.map((stream) => stream.track)).size === streams.length
+    )
+  }
+
+  private matchesClosedTransition(streams: OpenedStream[]): boolean {
+    const closed = this.lastCompleted
+    return (
+      closed?.stage === 'closed' &&
+      closed.streams.length === streams.length &&
+      closed.streams.every((previous, index) => {
+        const next = streams[index]
+        return (
+          next !== undefined &&
+          next.track === previous.track &&
+          next.previousEpoch === previous.previousEpoch &&
+          next.lastSequence === previous.lastSequence &&
+          next.nextEpoch > previous.previousEpoch
+        )
+      })
     )
   }
 
