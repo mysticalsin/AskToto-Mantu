@@ -223,7 +223,9 @@ describe('cloud speech capture controller', () => {
         port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
       }
     }
-    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    // A positive stream origin with no emitted PCM still has the exact empty
+    // capture frontier 0/0; the origin is not evidence that samples exist.
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 48_000)).toBe(true)
     const ceiling: CloudSpeechCaptureCeilingEvent = {
       type: 'capture-ceiling',
       captureId,
