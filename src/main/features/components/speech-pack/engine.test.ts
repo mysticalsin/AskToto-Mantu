@@ -317,6 +317,28 @@ describe('speech-pack engine', () => {
           }
         }))
       })
+
+      it('restores the previous complete pack when cancelled after the replacement marker is written', async () => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const first = make([c])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        rmSync(marker(WHISPER))
+
+        let replacing!: ReturnType<typeof make>
+        replacing = make([c], {
+          onActivationStep: (step) => {
+            if (step === 'marker-written') replacing.cancel(WHISPER)
+          }
+        })
+        replacing.enqueue([WHISPER])
+        await replacing.whenIdle()
+
+        expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+        expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
+        expect(existsSync(marker(WHISPER))).toBe(true)
+      })
     })
   })
 
