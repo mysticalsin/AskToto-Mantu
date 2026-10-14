@@ -99,10 +99,10 @@ describe('incremental meeting command contract', () => {
         speech: {
           captureId: speech.captureId,
           captureGeneration: speech.captureGeneration,
-      sequence: 1,
+          sequence: 1,
           segment: {
-        stream: { generation: 7, track: 'microphone', epoch: 11 },
-        engine: 'deepgram-nova3',
+            stream: { generation: 7, track: 'microphone', epoch: 11 },
+            engine: 'deepgram-nova3',
             index: 4,
             revision: 1,
             startMs: 0,
@@ -155,9 +155,9 @@ describe('incremental meeting command contract', () => {
         target: { kind: 'local', recordId }
       }).ok
     ).toBe(true)
-    expect(
-      parseIncrementalMeetingCommand({ protocol: 1, operation: 'checkpoint', meetingId, frontier: 2 }).ok
-    ).toBe(true)
+    expect(parseIncrementalMeetingCommand({ protocol: 1, operation: 'checkpoint', meetingId, frontier: 2 }).ok).toBe(
+      true
+    )
     expect(
       parseIncrementalMeetingCommand({
         protocol: 1,

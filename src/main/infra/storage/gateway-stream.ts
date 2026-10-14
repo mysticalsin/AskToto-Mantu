@@ -228,11 +228,12 @@ export function createStorageStreamReader(runtime: Runtime): StorageGateway['str
           )
             return { status: 'unavailable', code: 'STREAM_READ_INVALID' }
           if (read.value.bytesRead === 0) break
-          if (bytesRead > maxBytes - read.value.bytesRead) return { status: 'unavailable', code: 'SIZE_LIMIT' }
-          const chunk = read.value.bytesRead === buffer.byteLength ? buffer : buffer.slice(0, read.value.bytesRead)
+          const ownedBytes = read.value.bytesRead
+          if (bytesRead > maxBytes - ownedBytes) return { status: 'unavailable', code: 'SIZE_LIMIT' }
+          const chunk = ownedBytes === buffer.byteLength ? buffer : buffer.slice(0, ownedBytes)
           const delivered = await runtime.untilSink(sink, chunk, request)
           if (delivered.status !== 'ok') return delivered
-          bytesRead += chunk.byteLength
+          bytesRead += ownedBytes
           chunksRead += 1
         }
         const finalStats = await runtime.call(

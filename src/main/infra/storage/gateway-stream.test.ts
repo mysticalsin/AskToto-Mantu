@@ -54,7 +54,7 @@ describe('bounded storage streams', () => {
       'note.md',
       async (chunk) => {
         delivered += chunk.byteLength
-        structuredClone(chunk, { transfer: [chunk.buffer] })
+        structuredClone(chunk, { transfer: [chunk.buffer as ArrayBuffer] })
       },
       { maxBytes: Buffer.byteLength(source), maxChunkBytes: 5 }
     )

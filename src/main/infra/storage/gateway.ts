@@ -579,7 +579,11 @@ export function createStorageGateway({
     fs,
     contentDeadlineMs: CONTENT_DEADLINE_MS,
     untilSink: async (sink, chunk, request) =>
-      untilEnded(settle(Promise.resolve().then(() => sink(chunk, request.signal))), request, 'running')
+      untilEnded(
+        settle(Promise.resolve().then(() => (request.signal.aborted ? undefined : sink(chunk, request.signal)))),
+        request,
+        'running'
+      )
   })
 
   return {
