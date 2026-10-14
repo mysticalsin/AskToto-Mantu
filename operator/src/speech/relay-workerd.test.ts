@@ -373,7 +373,7 @@ async function dispatchSignedRequest(
   input: Parameters<typeof signedRequest>[0]
 ): Promise<Response> {
   const signed = await signedRequest(input)
-  return runtime.dispatchFetch(signed.url, signed.init)
+  return (await runtime.dispatchFetch(signed.url, signed.init)) as unknown as Response
 }
 
 type RelayLifecycleDb = {
@@ -657,13 +657,13 @@ describe('speech relay on pinned hosted workerd', () => {
         observedAuthorization: string
         observedGatewayAuthorization: string
       }
-      expect(providerState).toMatchObject({
-        inferenceCalls: 1,
-        observedPath:
-          '/v1/account-test-001/speech-gateway-test/deepgram/v1/listen?model=nova-3&language=multi&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&mip_opt_out=true',
-        observedAuthorization: `Token ${TEST_DEEPGRAM_KEY}`,
-        observedGatewayAuthorization: `Bearer ${TEST_GATEWAY_TOKEN}`
-      })
+      expect(
+        providerState.inferenceCalls === 1 &&
+          providerState.observedPath ===
+            '/v1/account-test-001/speech-gateway-test/deepgram/v1/listen?model=nova-3&language=multi&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&mip_opt_out=true' &&
+          providerState.observedAuthorization === `Token ${TEST_DEEPGRAM_KEY}` &&
+          providerState.observedGatewayAuthorization === `Bearer ${TEST_GATEWAY_TOKEN}`
+      ).toBe(true)
       const statusBody = JSON.stringify({ ...PROTOCOL_FIXTURE.status.request, sessionId: created.sessionId })
       const status = await dispatchSignedRequest(runtime, {
         license,
@@ -887,18 +887,29 @@ describe('speech relay on pinned hosted workerd', () => {
         ])
       )
       expect(providerState.inferenceCalls).toBe(1)
-      expect(providerState, diagnosticMessage).toMatchObject({
+      expect(
+        {
+          binaryFramesReceived: providerState.binaryFramesReceived,
+          closeStreamControlsReceived: providerState.closeStreamControlsReceived,
+          finalResultsSent: providerState.finalResultsSent,
+          metadataSent: providerState.metadataSent,
+          closeRequested: providerState.closeRequested
+        },
+        diagnosticMessage
+      ).toEqual({
         binaryFramesReceived: 1,
         closeStreamControlsReceived: 1,
         finalResultsSent: 1,
         metadataSent: 1,
         closeRequested: 1
       })
-      expect(providerState.observedPath).toMatch(
-        /^\/v1\/account-test-001\/speech-gateway-test\/workers-ai\?model=%40cf%2Fdeepgram%2Fnova-3&language=en&encoding=linear16&sample_rate=16000&interim_results=true$/
-      )
-      expect(providerState.observedAuthorization).toBe('')
-      expect(providerState.observedGatewayAuthorization).toBe(`Bearer ${TEST_GATEWAY_TOKEN}`)
+      expect(
+        /^\/v1\/account-test-001\/speech-gateway-test\/workers-ai\?model=%40cf%2Fdeepgram%2Fnova-3&language=en&encoding=linear16&sample_rate=16000&interim_results=true$/.test(
+          providerState.observedPath
+        )
+      ).toBe(true)
+      expect(providerState.observedAuthorization.length === 0).toBe(true)
+      expect(providerState.observedGatewayAuthorization === `Bearer ${TEST_GATEWAY_TOKEN}`).toBe(true)
       const status = await dispatchSignedRequest(runtime, {
         license,
         now: Date.now(),
