@@ -6,10 +6,13 @@ import { evaluateCriteria } from './lib/st-1-core.mjs'
 import {
   ARTIFACT,
   SOURCE,
+  analyzeControlEvidence,
+  createReadbackNotices,
   verifyArtifactMetadata,
   verifyReportScope,
   verifyRunMetadata
 } from './st1-current-profile-readback.mjs'
+import { profileFixture, validReportFixture } from './st1-current-profile-readback-fixtures.mjs'
 
 function runRecord() {
   return {
@@ -87,6 +90,29 @@ test('refuses reports outside the fixed failed control scope', () => {
   assert.throws(() => verifyReportScope({ harness: 'ST-1', row: 'fifo', verdict: 'FAIL' }))
   assert.throws(() => verifyReportScope({ harness: 'ST-1', row: 'none', complete: false, verdict: 'FAIL' }))
   assert.throws(() => verifyReportScope({ harness: 'ST-1', row: 'none', complete: true, verdict: 'PASS' }))
+})
+
+test('analyzes a complete report and creates closed notices including approved boot stages', () => {
+  const summary = analyzeControlEvidence(validReportFixture(), profileFixture())
+  const notices = createReadbackNotices(summary, {
+    runId: SOURCE.runId,
+    attempt: SOURCE.attempt,
+    reportSha256: SOURCE.reportSha256,
+    profileSha256: 'c'.repeat(64),
+    archiveSha256: ARTIFACT.sha256
+  })
+  assert.equal(notices.length, 7)
+  const boot = JSON.parse(notices[6].slice('::notice::'.length)).bootStages
+  assert.equal(boot.stages.length, 1)
+  assert.deepEqual(boot.stages[0], {
+    stage: 'createWindow.construct',
+    durationMs: 180,
+    sinceSpawnUpperBoundMs: 2_900
+  })
+  const serialized = notices.join('\n')
+  assert.equal(serialized.includes('untrusted function name'), false)
+  assert.equal(serialized.includes('private://should-never-be-output'), false)
+  for (const notice of notices) assert.ok(Buffer.byteLength(notice, 'utf8') <= 3_500)
 })
 
 test('readback workflow is branch-guarded, read-only, pinned, and runs pure tests before API access', () => {

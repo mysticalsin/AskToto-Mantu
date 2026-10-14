@@ -9,6 +9,7 @@ on:
       - .github/workflows/st1-current-profile-readback.yml
       - scripts/qa/st1-current-profile-readback.mjs
       - scripts/qa/st1-current-profile-readback.node.test.mjs
+      - scripts/qa/st1-current-profile-readback-fixtures.mjs
       - scripts/qa/st1-current-profile-readback.test.ts
       - scripts/qa/retained-profile-analysis.mjs
       - scripts/qa/st1-evidence-notice.mjs
