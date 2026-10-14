@@ -10,7 +10,17 @@ import {
   type RuntimeDirectoryCreationReceipt,
   type RuntimePhysicalSnapshotInput
 } from './runtime-owned-files'
-import { runtimePayloadPlanRoot, type RuntimePayloadWritePlan } from './runtime-payload-plan'
+import {
+  runtimePayloadPlanIdentity,
+  runtimePayloadPlanParentGraph,
+  runtimePayloadPlanRoot,
+  type RuntimePayloadWritePlan
+} from './runtime-payload-plan'
+import {
+  readIssuedRuntimePackParentAuthority,
+  type RuntimePackParentAuthority,
+  type RuntimePackParentRecord
+} from './runtime-pack-parent-authority'
 import {
   runtimeProfileParentAccess,
   type RuntimeProfileBinding,
@@ -43,8 +53,18 @@ interface TreeParentPinState {
   readonly namespace: PackNamespaceState
   readonly plan: RuntimePayloadWritePlan
   readonly treeRootPath: string
-  readonly snapshot: RuntimePhysicalSnapshotInput
+  readonly treeParentPath: string
+  readonly parentDirectories: ParentDirectoryState[]
+  snapshot: RuntimePhysicalSnapshotInput
   disposed: boolean
+}
+
+interface ParentDirectoryState {
+  readonly relativePath: string
+  readonly path: string
+  version: BigIntStats
+  children: readonly string[]
+  created: boolean
 }
 
 declare const runtimePackNamespaceBrand: unique symbol
@@ -81,6 +101,45 @@ function stableOwner(version: BigIntStats): RuntimeStableOwner {
     gid: version.gid.toString(),
     rdev: version.rdev.toString()
   })
+}
+
+function fullVersionRecord(version: BigIntStats) {
+  return Object.freeze({
+    ...stableOwner(version),
+    size: version.size.toString(),
+    blocks: version.blocks.toString(),
+    mtimeNs: version.mtimeNs.toString(),
+    ctimeNs: version.ctimeNs.toString()
+  })
+}
+
+function sameFullVersionRecord(expected: ReturnType<typeof fullVersionRecord>, actual: BigIntStats): boolean {
+  const version = fullVersionRecord(actual)
+  return (
+    expected.dev === version.dev &&
+    expected.ino === version.ino &&
+    expected.birthtimeNs === version.birthtimeNs &&
+    expected.mode === version.mode &&
+    expected.uid === version.uid &&
+    expected.gid === version.gid &&
+    expected.rdev === version.rdev &&
+    expected.size === version.size &&
+    expected.blocks === version.blocks &&
+    expected.mtimeNs === version.mtimeNs &&
+    expected.ctimeNs === version.ctimeNs
+  )
+}
+
+function sameStableOwnerRecord(expected: RuntimeStableOwner, actual: RuntimeStableOwner): boolean {
+  return (
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.birthtimeNs === actual.birthtimeNs &&
+    expected.mode === actual.mode &&
+    expected.uid === actual.uid &&
+    expected.gid === actual.gid &&
+    expected.rdev === actual.rdev
+  )
 }
 
 function sameNames(expected: readonly string[], actual: readonly string[]): boolean {
@@ -147,6 +206,53 @@ function snapshotFor(namespace: PackNamespaceState): RuntimePhysicalSnapshotInpu
           ]),
       { path: namespace.path, version: namespace.rootVersion, children: [...namespace.rootChildren] }
     ]
+  }
+}
+
+function appendDirectory(
+  snapshot: RuntimePhysicalSnapshotInput,
+  path: string,
+  version: BigIntStats,
+  children: readonly string[]
+): RuntimePhysicalSnapshotInput {
+  return {
+    roots: [...snapshot.roots, { path, identity: version }],
+    nodes: [...snapshot.nodes.filter((node) => node.path !== path), { path, version }],
+    directories: [
+      ...snapshot.directories.filter((directory) => directory.path !== path),
+      { path, version, children: [...children] }
+    ]
+  }
+}
+
+function replaceDirectory(
+  snapshot: RuntimePhysicalSnapshotInput,
+  path: string,
+  version: BigIntStats,
+  children: readonly string[]
+): RuntimePhysicalSnapshotInput {
+  return {
+    roots: snapshot.roots.map((root) => (root.path === path ? { path, identity: version } : root)),
+    nodes: snapshot.nodes.map((node) => (node.path === path ? { path, version } : node)),
+    directories: snapshot.directories.map((directory) =>
+      directory.path === path ? { path, version, children: [...children] } : directory
+    )
+  }
+}
+
+async function refreshTreeParentChain(state: TreeParentPinState): Promise<void> {
+  for (const directory of state.parentDirectories) {
+    const current = await captureDirectory(directory.path)
+    state.namespace.parent.assertCurrentSync()
+    if (
+      !sameRuntimeFileVersion(directory.version, current.version) ||
+      !sameNames(directory.children, current.children)
+    ) {
+      state.namespace.retired = true
+      throw new Error('RUNTIME_TREE_PARENT_CHANGED')
+    }
+    directory.version = current.version
+    state.snapshot = replaceDirectory(state.snapshot, directory.path, current.version, current.children)
   }
 }
 
@@ -336,24 +442,160 @@ export async function prepareRuntimeTreeParent(input: {
   readonly namespace: RuntimePackNamespace
   readonly relativeParent: string
   readonly plan: RuntimePayloadWritePlan
+  readonly parentAuthority?: RuntimePackParentAuthority
 }): Promise<RuntimePackTreeParentPin> {
   const namespace = packNamespaces.get(input.namespace as object)
   if (!namespace || namespace.disposed || namespace.retired) throw new Error('RUNTIME_PACK_NAMESPACE_INVALID')
+  const graph = runtimePayloadPlanParentGraph(input.plan)
   const plannedRoot = runtimePayloadPlanRoot(input.plan)
-  if (input.relativeParent !== '' || !plannedRoot || plannedRoot.includes('/') || plannedRoot.includes('\\')) {
+  if (input.relativeParent !== graph.parentRelativePath || !plannedRoot || plannedRoot.includes('\\')) {
     throw new Error('RUNTIME_TREE_PARENT_NOT_ADMITTED')
   }
   await assertRuntimePackNamespaceCurrent(input.namespace)
+  const authorityRecord = input.parentAuthority
+    ? readIssuedRuntimePackParentAuthority(input.parentAuthority, input.namespace, input.plan)
+    : null
+  const parentDirectories: ParentDirectoryState[] = []
+  let snapshot = snapshotFor(namespace)
+  let parentPath = namespace.path
+  for (let index = 0; index < graph.parentChain.length; index += 1) {
+    const relativePath = graph.parentChain[index]
+    const path = join(namespace.path, ...relativePath.split('/'))
+    if (dirname(path) !== parentPath) throw new Error('RUNTIME_TREE_PARENT_NOT_ADMITTED')
+    const authorized = authorityRecord?.directories[index]
+    const expectedAbsent = authorityRecord !== null && index >= authorityRecord.directories.length
+    const currentParent = await captureDirectory(parentPath)
+    namespace.parent.assertCurrentSync()
+    if (index === 0 && parentPath === namespace.path) {
+      if (!sameRuntimeFileVersion(namespace.rootVersion, currentParent.version)) {
+        namespace.retired = true
+        throw new Error('RUNTIME_TREE_PARENT_CHANGED')
+      }
+      namespace.rootChildren = [...currentParent.children]
+    } else {
+      const previous = parentDirectories[index - 1]
+      if (!previous || !sameRuntimeFileVersion(previous.version, currentParent.version)) {
+        namespace.retired = true
+        throw new Error('RUNTIME_TREE_PARENT_CHANGED')
+      }
+      previous.children = [...currentParent.children]
+    }
+    if (currentParent.children.includes(path.slice(parentPath.length + 1))) {
+      if (expectedAbsent || !authorized) throw new Error('RUNTIME_TREE_PARENT_UNAUTHENTICATED')
+      const current = await captureDirectory(path)
+      namespace.parent.assertCurrentSync()
+      if (
+        !sameStableOwnerRecord(authorized.identity, stableOwner(current.version)) ||
+        !sameFullVersionRecord(authorized.version, current.version) ||
+        !sameNames(authorized.children, current.children)
+      ) {
+        throw new Error('RUNTIME_TREE_PARENT_RECORD_MISMATCH')
+      }
+      parentDirectories.push({
+        relativePath,
+        path,
+        version: current.version,
+        children: [...current.children],
+        created: false
+      })
+      snapshot = appendDirectory(snapshot, path, current.version, current.children)
+    } else {
+      if (authorized) throw new Error('RUNTIME_TREE_PARENT_RECORD_MISSING')
+      const creationAdmission = await prepareRuntimeDirectoryCreation({ path, parentPath, snapshot })
+      namespace.parent.assertCurrentSync()
+      const created = await createRuntimeDirectoryAfterAdmission(creationAdmission, () => {
+        namespace.parent.assertCurrentSync()
+      })
+      if (created.status !== 'created') {
+        namespace.retired = true
+        throw new Error('RUNTIME_TREE_PARENT_CREATE_UNCONFIRMED')
+      }
+      if (parentPath === namespace.path) {
+        namespace.rootVersion = created.parentVersion
+        namespace.rootChildren = [...created.parentChildren]
+      } else {
+        const parent = parentDirectories[index - 1]
+        if (!parent || !sameStableDirectoryOwner(parent.version, created.parentVersion)) {
+          namespace.retired = true
+          throw new Error('RUNTIME_TREE_PARENT_CREATE_UNCONFIRMED')
+        }
+        parent.version = created.parentVersion
+        parent.children = [...created.parentChildren]
+        snapshot = replaceDirectory(snapshot, parent.path, parent.version, parent.children)
+      }
+      const current = await captureDirectory(path)
+      namespace.parent.assertCurrentSync()
+      if (!sameRuntimeFileVersion(created.version, current.version) || current.children.length !== 0) {
+        namespace.retired = true
+        throw new Error('RUNTIME_TREE_PARENT_CREATE_UNCONFIRMED')
+      }
+      parentDirectories.push({
+        relativePath,
+        path,
+        version: current.version,
+        children: [...current.children],
+        created: true
+      })
+      snapshot = replaceDirectory(snapshot, parentPath, created.parentVersion, created.parentChildren)
+      snapshot = appendDirectory(snapshot, path, current.version, current.children)
+    }
+    parentPath = path
+  }
+  if (authorityRecord && authorityRecord.directories.length > parentDirectories.length) {
+    throw new Error('RUNTIME_TREE_PARENT_RECORD_INVALID')
+  }
+  const treeRootPath = join(namespace.path, ...plannedRoot.split('/'))
+  if (dirname(treeRootPath) !== parentPath) throw new Error('RUNTIME_TREE_PARENT_NOT_ADMITTED')
+  await namespace.parent.assertCurrent()
+  const physical = await prepareRuntimePhysicalAdmission(snapshot)
+  try {
+    namespace.parent.assertCurrentSync()
+    physical.assertCurrentSync()
+  } finally {
+    await physical.dispose()
+  }
   const pin = Object.freeze({}) as RuntimePackTreeParentPin
   treeParentPins.set(pin, {
     namespaceHandle: input.namespace,
     namespace,
     plan: input.plan,
-    treeRootPath: join(namespace.path, plannedRoot),
-    snapshot: snapshotFor(namespace),
+    treeRootPath,
+    treeParentPath: parentPath,
+    parentDirectories,
+    snapshot,
     disposed: false
   })
   return pin
+}
+
+export function runtimeTreeParentRecord(
+  pin: RuntimePackTreeParentPin,
+  plan: RuntimePayloadWritePlan
+): RuntimePackParentRecord {
+  const state = treeParentPins.get(pin as object)
+  if (!state || state.disposed || state.plan !== plan) throw new Error('RUNTIME_TREE_PARENT_PIN_INVALID')
+  const graph = runtimePayloadPlanParentGraph(plan)
+  return Object.freeze({
+    schemaVersion: 1,
+    purpose: 'metis-speech-pack-tree-parent/v1',
+    rootBinding: state.namespace.bindingId,
+    profileBinding: state.namespace.parent.binding.profileBinding,
+    principalBinding: state.namespace.parent.binding.principalBinding,
+    planIdentity: runtimePayloadPlanIdentity(plan),
+    lane: graph.lane,
+    componentId: graph.componentId,
+    componentVersion: graph.componentVersion,
+    directories: Object.freeze(
+      state.parentDirectories.map((directory) =>
+        Object.freeze({
+          relativePath: directory.relativePath,
+          identity: stableOwner(directory.version),
+          version: fullVersionRecord(directory.version),
+          children: Object.freeze([...directory.children].sort())
+        })
+      )
+    )
+  })
 }
 
 export function runtimeTreeParentDetails(
@@ -372,7 +614,7 @@ export function runtimeTreeParentDetails(
   if (!state || state.disposed || state.plan !== plan) throw new Error('RUNTIME_TREE_PARENT_PIN_INVALID')
   return Object.freeze({
     rootPath: state.treeRootPath,
-    parentPath: state.namespace.path,
+    parentPath: state.treeParentPath,
     parentSnapshot: state.snapshot,
     assertCurrentSync(extra?: () => void): void {
       state.namespace.parent.assertCurrentSync()
@@ -383,6 +625,7 @@ export function runtimeTreeParentDetails(
       state.namespace.parent.assertCurrentSync()
       assertCallerCurrentSync()
       await assertRuntimePackNamespaceCurrent(state.namespaceHandle)
+      await refreshTreeParentChain(state)
       state.namespace.parent.assertCurrentSync()
       assertCallerCurrentSync()
     },
@@ -391,12 +634,33 @@ export function runtimeTreeParentDetails(
         state.namespace.retired = true
         throw new Error('RUNTIME_TREE_PARENT_RECEIPT_INVALID')
       }
-      if (!sameStableDirectoryOwner(state.namespace.rootVersion, receipt.parentVersion)) {
+      if (state.treeParentPath === state.namespace.path) {
+        if (!sameStableDirectoryOwner(state.namespace.rootVersion, receipt.parentVersion)) {
+          state.namespace.retired = true
+          throw new Error('RUNTIME_TREE_PARENT_CHANGED')
+        }
+        state.namespace.rootVersion = receipt.parentVersion
+        state.namespace.rootChildren = [...receipt.parentChildren]
+        state.snapshot = replaceDirectory(
+          state.snapshot,
+          state.namespace.path,
+          receipt.parentVersion,
+          receipt.parentChildren
+        )
+        return
+      }
+      const parent = state.parentDirectories.at(-1)
+      if (
+        !parent ||
+        parent.path !== state.treeParentPath ||
+        !sameStableDirectoryOwner(parent.version, receipt.parentVersion)
+      ) {
         state.namespace.retired = true
         throw new Error('RUNTIME_TREE_PARENT_CHANGED')
       }
-      state.namespace.rootVersion = receipt.parentVersion
-      state.namespace.rootChildren = [...receipt.parentChildren]
+      parent.version = receipt.parentVersion
+      parent.children = [...receipt.parentChildren]
+      state.snapshot = replaceDirectory(state.snapshot, parent.path, parent.version, parent.children)
     }
   })
 }

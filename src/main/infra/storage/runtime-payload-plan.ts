@@ -33,6 +33,15 @@ export interface RuntimePayloadPlanIssuer {
   retire(): void
 }
 
+export interface RuntimePayloadPlanParentGraph {
+  readonly lane: 'legacy' | 'staging' | 'active' | 'work'
+  readonly componentId: string
+  readonly componentVersion: string
+  readonly rootRelativePath: string
+  readonly parentRelativePath: string
+  readonly parentChain: readonly string[]
+}
+
 interface PlannedFile {
   readonly path: string
   readonly byteLength: number
@@ -43,6 +52,8 @@ interface PlannedFile {
 
 interface PlanState {
   readonly identity: string
+  readonly componentId: string
+  readonly componentVersion: string
   readonly rootRelativePath: string
   readonly files: Map<string, PlannedFile>
   readonly directories: Set<string>
@@ -69,6 +80,19 @@ function safeRelativePath(value: string): string {
   return value
 }
 
+function safeComponentSegment(value: string, maximumBytes: number): boolean {
+  return (
+    value.length > 0 &&
+    Buffer.byteLength(value) <= maximumBytes &&
+    !value.includes('/') &&
+    !value.includes('\\') &&
+    !value.includes('\0') &&
+    !value.includes(':') &&
+    value !== '.' &&
+    value !== '..'
+  )
+}
+
 function directoryAncestors(path: string): string[] {
   const result: string[] = []
   const parts = path.split('/')
@@ -88,11 +112,13 @@ export function createRuntimePayloadPlanIssuer(): RuntimePayloadPlanIssuer {
     issue(input: Parameters<RuntimePayloadPlanIssuer['issue']>[0]): RuntimePayloadWritePlan {
       if (retired) throw new Error('RUNTIME_PAYLOAD_ISSUER_RETIRED')
       const rootRelativePath = safeRelativePath(input.rootRelativePath)
+      const legacyRoot = rootRelativePath === 'owned'
+      const activeRoot = rootRelativePath === `${input.componentId}/${input.componentVersion}`
+      const stagingRoot = rootRelativePath === `.staging/${input.componentId}/${input.componentVersion}`
+      const workRoot = rootRelativePath === `.staging/${input.componentId}/work`
       if (
-        !input.componentId ||
-        Buffer.byteLength(input.componentId) > MAX_COMPONENT_ID_BYTES ||
-        !input.componentVersion ||
-        Buffer.byteLength(input.componentVersion) > MAX_VERSION_BYTES ||
+        !safeComponentSegment(input.componentId, MAX_COMPONENT_ID_BYTES) ||
+        !safeComponentSegment(input.componentVersion, MAX_VERSION_BYTES) ||
         !SHA256_PATTERN.test(input.manifestIdentity) ||
         !input.resourcePolicyIdentity ||
         Buffer.byteLength(input.resourcePolicyIdentity) > MAX_VERSION_BYTES ||
@@ -106,7 +132,8 @@ export function createRuntimePayloadPlanIssuer(): RuntimePayloadPlanIssuer {
         input.admittedMaximumPathBytes <= 0 ||
         input.admittedMaximumPathBytes > MAX_PLAN_PATH_BYTES ||
         input.files.length === 0 ||
-        input.files.length > input.admittedMaximumFiles
+        input.files.length > input.admittedMaximumFiles ||
+        (!legacyRoot && !activeRoot && !stagingRoot && !workRoot)
       ) {
         throw new Error('RUNTIME_PAYLOAD_PLAN_INVALID')
       }
@@ -153,6 +180,8 @@ export function createRuntimePayloadPlanIssuer(): RuntimePayloadPlanIssuer {
       })
       const state: PlanState = {
         identity: createHash('sha256').update('metis-runtime-payload-plan/v1\0').update(canonical).digest('hex'),
+        componentId: input.componentId,
+        componentVersion: input.componentVersion,
         rootRelativePath,
         files,
         directories,
@@ -180,6 +209,34 @@ export function runtimePayloadPlanRoot(plan: RuntimePayloadWritePlan): string {
   const state = plans.get(plan as object)
   if (!state || state.retired) throw new Error('RUNTIME_PAYLOAD_PLAN_INVALID')
   return state.rootRelativePath
+}
+
+/** The only parent graph the payload owner may create or reopen for a plan. */
+export function runtimePayloadPlanParentGraph(plan: RuntimePayloadWritePlan): RuntimePayloadPlanParentGraph {
+  const state = plans.get(plan as object)
+  if (!state || state.retired) throw new Error('RUNTIME_PAYLOAD_PLAN_INVALID')
+  const lane =
+    state.rootRelativePath === 'owned'
+      ? 'legacy'
+      : state.rootRelativePath.endsWith('/work')
+        ? 'work'
+        : state.rootRelativePath.startsWith('.staging/')
+          ? 'staging'
+          : 'active'
+  const parentChain =
+    lane === 'legacy'
+      ? []
+      : lane === 'staging' || lane === 'work'
+        ? ['.staging', `.staging/${state.componentId}`]
+        : [state.componentId]
+  return Object.freeze({
+    lane,
+    componentId: state.componentId,
+    componentVersion: state.componentVersion,
+    rootRelativePath: state.rootRelativePath,
+    parentRelativePath: parentChain.at(-1) ?? '',
+    parentChain: Object.freeze(parentChain)
+  })
 }
 
 export function runtimePayloadPlanIdentity(plan: RuntimePayloadWritePlan): string {
