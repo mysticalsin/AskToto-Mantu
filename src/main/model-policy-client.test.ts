@@ -507,12 +507,15 @@ describe('verified speech policy authority', () => {
 
   it('does not extend authority after malformed or unsigned policy responses', async () => {
     useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
     const doc = policy()
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: { version: 1 } }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'invalid-response' }])
 
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign(SPEECH_TOKEN, doc) }))
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
@@ -520,6 +523,10 @@ describe('verified speech policy authority', () => {
     setModelPolicyFetchForTests(async () => jsonResponse(null))
     await expect(refreshModelPolicyChecked(SPEECH_SETTINGS)).resolves.toMatchObject({ ok: false })
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([
+      { kind: 'revoked', reason: 'invalid-response' },
+      { kind: 'revoked', reason: 'invalid-response' }
+    ])
   })
 
   it.each([401, 403])('clears speech authority after an explicit HTTP %s rejection', async (status) => {
@@ -562,6 +569,8 @@ describe('verified speech policy authority', () => {
 
   it('rejects contradictory same-version policy content and retains a monotonic version high-water mark', async () => {
     useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((event) => events.push(event))
     const current = policy()
     setModelPolicyFetchForTests(async () =>
       jsonResponse({ ok: true, policy: current, signature: sign(SPEECH_TOKEN, current) })
@@ -582,6 +591,7 @@ describe('verified speech policy authority', () => {
     )
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).toBeNull()
+    expect(events).toEqual([{ kind: 'revoked', reason: 'policy-conflict' }])
   })
 
   it('does not let an older in-flight response overwrite a newly observed identity policy', async () => {
