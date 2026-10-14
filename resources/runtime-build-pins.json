@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "electron": { "package": "electron", "version": "43.6.0" },
+  "nodeRuntimePackages": [
+    { "package": "sherpa-onnx-node", "version": "1.13.3", "upstreamCommit": "330609dab49be6ee8b30702918ca7abbbad1286a" },
+    { "package": "@huggingface/transformers", "version": "3.8.1" },
+    { "package": "onnxruntime-node", "version": "1.21.0" },
+    { "package": "onnxruntime-web", "version": "1.22.0-dev.20250409-89f8206ba4" }
+  ],
+  "models": [
+    {
+      "id": "asr.whisper-base",
+      "repository": "https://huggingface.co/Xenova/whisper-base",
+      "revision": "d33af214c6ab08c278d722454aaac60f04599f8e",
+      "assetManifest": "resources/runtime-assets-manifest.json",
+      "assetPrefix": "resources/models/Xenova/whisper-base/"
+    },
+    {
+      "id": "asr.parakeet-tdt-0.6b-v3-int8",
+      "repository": "https://github.com/k2-fsa/sherpa-onnx",
+      "revision": "876ff91b4ab4b89c328afdb2b27ff879d3e42f87",
+      "assetManifest": "resources/runtime-assets-manifest.json",
+      "assetPrefix": "resources/asr/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/"
+    },
+    {
+      "id": "speaker.embedding-camplus",
+      "repository": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+      "assetId": "198893105",
+      "bytes": 29596978,
+      "sha256": "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+      "assetPath": "resources/models/speaker/embedding.onnx"
+    },
+    {
+      "id": "llm.qwen3.5-0.8b",
+      "repository": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF",
+      "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+      "assetManifest": "scripts/local-model-assets.mjs",
+      "licensePath": "resources/local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt"
+    },
+    {
+      "id": "runtime.llama.cpp-b9957",
+      "repository": "https://github.com/ggml-org/llama.cpp",
+      "revision": "c4ae9a88f8884ee5a155c8349ace9ea31a58007f",
+      "releaseTag": "b9957",
+      "assetPinsSource": "scripts/fetch-llama-server.mjs"
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mysticalsin/AskToto-Mantu/schema/runtime-catalog-v1.json",
+  "title": "Métis Runtime Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "protocolVersion", "catalogId", "trustRoot", "targets"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocolVersion": { "const": 1 },
+    "catalogId": { "const": "metis-runtime-catalog-v1" },
+    "trustRoot": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "bytes", "sha256", "source"],
+          "properties": {
+            "path": { "const": "runtime-trust/sigstore-trusted-root.json" },
+            "bytes": { "type": "integer", "minimum": 1, "maximum": 2000000 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "source": { "const": "https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json" }
+          }
+        }
+      ]
+    },
+    "targets": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/target" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "gitSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "componentId", "artifactId", "target", "runtime", "archive", "inventory", "bundle", "signer"],
+      "properties": {
+        "kind": { "enum": ["runtime", "model"] },
+        "componentId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,79}$" },
+        "artifactId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,79}$" },
+        "target": {
+          "type": "object", "additionalProperties": false, "required": ["platform", "arch"],
+          "properties": { "platform": { "enum": ["darwin", "win32", "any"] }, "arch": { "enum": ["arm64", "x64", "any"] } }
+        },
+        "runtime": {
+          "oneOf": [
+            { "type": "null" },
+            {
+          "type": "object", "additionalProperties": false,
+          "required": ["electronVersion", "nodeAbi", "napi", "chromiumVersion", "hostProtocol"],
+          "properties": {
+            "electronVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "nodeAbi": { "type": "string", "pattern": "^[0-9]{1,8}$" },
+            "napi": { "type": "string", "pattern": "^[0-9]{1,8}$" },
+            "chromiumVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "hostProtocol": { "const": 1 }
+              }
+            }
+          ]
+        },
+        "archive": {
+          "type": "object", "additionalProperties": false, "required": ["bytes", "sha256", "url", "releaseAssetId"],
+          "properties": {
+            "bytes": { "type": "integer", "minimum": 1, "maximum": 10000000000 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "url": { "type": "string", "pattern": "^https://[^?#]+$" },
+            "releaseAssetId": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "inventory": {
+          "type": "object", "additionalProperties": false, "required": ["bytes", "sha256"],
+          "properties": { "bytes": { "type": "integer", "minimum": 1, "maximum": 20000000 }, "sha256": { "$ref": "#/$defs/sha256" } }
+        },
+        "bundle": {
+          "type": "object", "additionalProperties": false, "required": ["bytes", "sha256"],
+          "properties": { "bytes": { "type": "integer", "minimum": 1, "maximum": 20000000 }, "sha256": { "$ref": "#/$defs/sha256" } }
+        },
+        "signer": {
+          "type": "object", "additionalProperties": false,
+          "required": ["issuer", "repositoryUri", "repositoryId", "workflowPath", "ref", "sourceCommit", "workflowCommit", "predicateType", "runnerEnvironment"],
+          "properties": {
+            "issuer": { "const": "https://token.actions.githubusercontent.com" },
+            "repositoryUri": { "const": "https://github.com/mysticalsin/AskToto-Mantu" },
+            "repositoryId": { "const": "1282463398" },
+            "workflowPath": { "type": "string", "pattern": "^\\.github/workflows/[a-z0-9-]+\\.yml$" },
+            "ref": { "type": "string", "pattern": "^refs/heads/[a-z0-9._/-]+$" },
+            "sourceCommit": { "$ref": "#/$defs/gitSha" },
+            "workflowCommit": { "$ref": "#/$defs/gitSha" },
+            "predicateType": { "const": "https://slsa.dev/provenance/v1" },
+            "runnerEnvironment": { "const": "github-hosted" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "runtime" } }, "required": ["kind"] },
+          "then": {
+            "properties": {
+              "target": { "properties": { "platform": { "enum": ["darwin", "win32"] }, "arch": { "enum": ["arm64", "x64"] } } },
+              "runtime": { "type": "object" }
+            }
+          },
+          "else": {
+            "properties": {
+              "target": { "properties": { "platform": { "const": "any" }, "arch": { "const": "any" } } },
+              "runtime": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

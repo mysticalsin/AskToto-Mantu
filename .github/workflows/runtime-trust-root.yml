@@ -1,0 +1,58 @@
+name: Runtime trust root candidate
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/runtime-trust-root.yml
+      - package.json
+      - package-lock.json
+      - scripts/runtime-payload/fetch-trusted-root.mjs
+      - resources/runtime-catalog.json
+      - resources/runtime-schema/**
+  push:
+    branches:
+      - m2/M2-0475-runtime-artifact-publisher
+    paths:
+      - .github/workflows/runtime-trust-root.yml
+      - package.json
+      - package-lock.json
+      - scripts/runtime-payload/fetch-trusted-root.mjs
+      - resources/runtime-catalog.json
+      - resources/runtime-schema/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-trust-root-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  acquire:
+    name: Acquire TUF-authenticated Sigstore root
+    if: github.repository == 'mysticalsin/AskToto-Mantu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install the frozen TUF verifier closure without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Retrieve the Sigstore root through the official TUF client
+        run: node scripts/runtime-payload/fetch-trusted-root.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sigstore-trusted-root-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/metis-runtime-trust/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
