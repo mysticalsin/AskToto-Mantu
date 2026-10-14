@@ -4,6 +4,7 @@ import {
   SpeechBrokerClient,
   type BrokerFailureCode,
   type CreatedSpeechSession,
+  type SpeechBrokerOperation,
   type SpeechCreateRequest,
   type SpeechTrack
 } from './broker-client'
@@ -25,7 +26,12 @@ export type RelaySessionFinish = {
   reason: 'normal' | 'incomplete' | 'cancelled'
 }
 
-export type RelaySessionFailureCode = BrokerFailureCode | 'TRACK_OPEN' | 'CANCELLED' | 'LEASE_DRAINING'
+export type RelaySessionFailureCode =
+  | BrokerFailureCode
+  | 'TRACK_OPEN'
+  | 'CANCELLED'
+  | 'LEASE_DRAINING'
+  | 'CLOSURE_UNCONFIRMED'
 export type RelaySessionStartResult =
   | { ok: true; value: RelaySpeechSession }
   | { ok: false; code: RelaySessionFailureCode }
@@ -42,6 +48,7 @@ export type RelaySpeechSessionOptions = {
     configVersion: string
     policyVersion: string
   }
+  operation?: SpeechBrokerOperation
   expectedContinuation?: {
     configVersion: string
     policyVersion: string
@@ -149,6 +156,8 @@ export class RelaySpeechSession {
     private readonly policyVersion: string,
     private readonly tracksOrder: SpeechTrack[],
     private readonly initialFrontiers: RelaySpeechSessionOptions['initialFrontiers'],
+    private readonly consentIssuedAt: number,
+    private readonly consentExpiresAt: number,
     private readonly isCurrent: () => boolean,
     private readonly onAllocated: RelaySpeechSessionOptions['onAllocated'],
     private readonly onTranscript?: RelaySpeechSessionOptions['onTranscript']
@@ -163,6 +172,8 @@ export class RelaySpeechSession {
       }
     }
     if (!isCurrent()) return { ok: false, code: 'CANCELLED' }
+    const operationFailure = options.client.operationFailure(options.operation)
+    if (operationFailure) return { ok: false, code: operationFailure }
     for (const track of options.createRequest.tracks) {
       const frontier = options.initialFrontiers?.[track]
       if (
@@ -175,7 +186,7 @@ export class RelaySpeechSession {
       )
         return { ok: false, code: 'SCHEMA' }
     }
-    const created = await options.client.createSession(options.createRequest)
+    const created = await options.client.createSession(options.createRequest, options.operation)
     if (!created.ok) return created
     const allocationAt = Date.now()
     try {
@@ -184,9 +195,10 @@ export class RelaySpeechSession {
       await options.client.cancel(created.value.sessionId, 1_000)
       return { ok: false, code: 'TRACK_OPEN' }
     }
-    if (!isCurrent()) {
+    const lateOperationFailure = options.client.operationFailure(options.operation)
+    if (!isCurrent() || lateOperationFailure) {
       await options.client.cancel(created.value.sessionId, 1_000)
-      return { ok: false, code: 'CANCELLED' }
+      return { ok: false, code: lateOperationFailure ?? 'CANCELLED' }
     }
     if (
       created.value.routeId !== options.expectedSelection.routeId ||
@@ -238,6 +250,8 @@ export class RelaySpeechSession {
       created.value.policyVersion,
       [...options.createRequest.tracks],
       options.initialFrontiers,
+      options.createRequest.consent.issuedAt,
+      options.createRequest.consent.expiresAt,
       isCurrent,
       options.onAllocated,
       options.onTranscript
@@ -248,17 +262,28 @@ export class RelaySpeechSession {
         return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
       }
       let runtime: TrackRuntime | null = null
-      const opened = await options.client.openTrack(created.value, grant.track, (socket) => {
-        if (!isCurrent() || session.cancelled || session.startupFailed || session.finishing)
-          throw new Error('stale session')
-        runtime = session.makeTrackRuntime(grant.track, grant.streamEpoch, socket)
-        session.tracks.set(grant.track, runtime)
-        session.attachTrack(runtime)
-      })
+      const opened = await options.client.openTrack(
+        created.value,
+        grant.track,
+        (socket) => {
+          if (!isCurrent() || session.cancelled || session.startupFailed || session.finishing)
+            throw new Error('stale session')
+          runtime = session.makeTrackRuntime(grant.track, grant.streamEpoch, socket)
+          session.tracks.set(grant.track, runtime)
+          session.attachTrack(runtime)
+        },
+        options.operation
+      )
       const activeRuntime = runtime as TrackRuntime | null
-      if (!opened.ok) {
+      const trackOperationFailure = options.client.operationFailure(options.operation)
+      if (!opened.ok || trackOperationFailure) {
+        if (opened.ok) opened.value.terminate()
         await session.cancel()
-        return { ok: false, code: 'TRACK_OPEN' }
+        return {
+          ok: false,
+          code:
+            trackOperationFailure ?? (opened.ok ? 'TIMEOUT' : opened.code === 'WS_CONNECT' ? 'TRACK_OPEN' : opened.code)
+        }
       }
       if (
         !activeRuntime ||
@@ -273,8 +298,10 @@ export class RelaySpeechSession {
         return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
       }
     }
+    const finalOperationFailure = options.client.operationFailure(options.operation)
     if (
       !isCurrent() ||
+      finalOperationFailure !== null ||
       session.startupFailed ||
       Date.now() >= session.audioDeadlineAt ||
       session.tracks.size !== options.createRequest.tracks.length ||
@@ -283,7 +310,9 @@ export class RelaySpeechSession {
       await session.cancel()
       return {
         ok: false,
-        code: isCurrent() ? (Date.now() >= session.audioDeadlineAt ? 'LEASE_DRAINING' : 'TRACK_OPEN') : 'CANCELLED'
+        code:
+          finalOperationFailure ??
+          (isCurrent() ? (Date.now() >= session.audioDeadlineAt ? 'LEASE_DRAINING' : 'TRACK_OPEN') : 'CANCELLED')
       }
     }
     session.startupComplete = true
@@ -329,21 +358,48 @@ export class RelaySpeechSession {
   }
 
   /** Allocate a fresh relay epoch only after the current one is fully closed; accepted PCM is never replayed. */
-  renew(createRequest: SpeechCreateRequest): Promise<RelaySessionStartResult> {
+  renew(createRequest: SpeechCreateRequest, operation?: SpeechBrokerOperation): Promise<RelaySessionStartResult> {
     if (this.renewPromise) return this.renewPromise
     if (
+      createRequest.operation !== 'create-session' ||
       createRequest.captureGeneration !== this.captureGeneration ||
+      createRequest.consent.accepted !== true ||
+      createRequest.consent.captureGeneration !== this.captureGeneration ||
       createRequest.tracks.length !== this.tracksOrder.length ||
-      createRequest.tracks.some((track, index) => track !== this.tracksOrder[index])
+      createRequest.tracks.some((track, index) => track !== this.tracksOrder[index]) ||
+      createRequest.consent.tracks.length !== this.tracksOrder.length ||
+      createRequest.consent.tracks.some((track, index) => track !== this.tracksOrder[index]) ||
+      (createRequest.language ?? this.language) !== this.language ||
+      !Number.isSafeInteger(createRequest.consent.issuedAt) ||
+      !Number.isSafeInteger(createRequest.consent.expiresAt) ||
+      createRequest.consent.issuedAt <= this.consentIssuedAt ||
+      createRequest.consent.expiresAt <= this.consentExpiresAt ||
+      createRequest.consent.expiresAt <= createRequest.consent.issuedAt ||
+      createRequest.consent.expiresAt - createRequest.consent.issuedAt > 120_000
     )
       return Promise.resolve({ ok: false, code: 'SCHEMA' })
-    this.renewPromise = this.renewOnce(createRequest)
+    this.renewPromise = this.renewOnce(createRequest, operation)
     return this.renewPromise
   }
 
-  private async renewOnce(createRequest: SpeechCreateRequest): Promise<RelaySessionStartResult> {
-    const previous = await this.finish()
-    if (!previous.complete || this.cancelled) return { ok: false, code: 'CANCELLED' }
+  private async renewOnce(
+    createRequest: SpeechCreateRequest,
+    operation?: SpeechBrokerOperation
+  ): Promise<RelaySessionStartResult> {
+    const operationFailure = this.client.operationFailure(operation)
+    if (operationFailure) return { ok: false, code: operationFailure }
+    const finishBudget = this.client.operationBudgetMs(operation, MAX_FINISH_WAIT_MS)
+    const finish = this.finish(finishBudget)
+    const previous = await this.waitForOwnerFinish(finish, operation, finishBudget)
+    if (!previous) {
+      const failure = this.client.operationFailure(operation)
+      return {
+        ok: false,
+        code: failure ?? (operation?.deadlineAt === undefined ? 'CLOSURE_UNCONFIRMED' : 'TIMEOUT')
+      }
+    }
+    if (!previous.complete || this.cancelled)
+      return { ok: false, code: this.client.operationFailure(operation) ?? 'CLOSURE_UNCONFIRMED' }
     const initialFrontiers: Partial<Record<SpeechTrack, { sequence: number; sampleOffset?: number }>> = {}
     for (const [track, runtime] of this.tracks) {
       initialFrontiers[track] = {
@@ -362,6 +418,7 @@ export class RelaySpeechSession {
       },
       expectedCapability: { configVersion: this.configVersion, policyVersion: this.policyVersion },
       initialFrontiers,
+      operation,
       isCurrent: this.isCurrent,
       onAllocated: this.onAllocated,
       onTranscript: this.onTranscript
@@ -386,6 +443,33 @@ export class RelaySpeechSession {
       return { ok: false, code: 'SCHEMA' }
     }
     return next
+  }
+
+  private waitForOwnerFinish(
+    finish: Promise<RelaySessionFinish>,
+    operation: SpeechBrokerOperation | undefined,
+    timeoutMs: number
+  ): Promise<RelaySessionFinish | null> {
+    const remaining = Math.max(0, Math.min(timeoutMs, this.client.operationBudgetMs(operation, timeoutMs)))
+    if (remaining <= 0) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      let settled = false
+      const settle = (value: RelaySessionFinish | null): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        operation?.signal?.removeEventListener('abort', onAbort)
+        resolve(value)
+      }
+      const timer = setTimeout(() => settle(null), remaining)
+      const onAbort = (): void => settle(null)
+      operation?.signal?.addEventListener('abort', onAbort, { once: true })
+      if (operation?.signal?.aborted) {
+        settle(null)
+        return
+      }
+      finish.then(settle, () => settle(null))
+    })
   }
 
   pushFrame(

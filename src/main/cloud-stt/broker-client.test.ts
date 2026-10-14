@@ -107,7 +107,7 @@ describe('speech broker client', () => {
       fetchImpl: fetchImpl as typeof fetch,
       now: () => 1_893_456_000_000
     })
-    expect(await client.createSession(fixture.create.request)).toMatchObject({ ok: false, code: 'TRANSPORT' })
+    expect(await client.createSession(fixture.create.request)).toMatchObject({ ok: false, code: 'UNKNOWN_ALLOCATION' })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 
     const redirect = new SpeechBrokerClient({
@@ -138,7 +138,7 @@ describe('speech broker client', () => {
     const pending = client.createSession(fixture.create.request, { signal: controller.signal, deadlineAt: 2_000 })
     expect(observedSignal).toBeDefined()
     controller.abort()
-    await expect(pending).resolves.toEqual({ ok: false, code: 'CANCELLED' })
+    await expect(pending).resolves.toEqual({ ok: false, code: 'UNKNOWN_ALLOCATION' })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 
     const expiredFetch = vi.fn()
@@ -155,6 +155,46 @@ describe('speech broker client', () => {
     expect(expiredFetch).not.toHaveBeenCalled()
   })
 
+  it('cancels the exact allocation if a transport returns a late successful create after owner abort', async () => {
+    const controller = new AbortController()
+    let resolveFetch!: (response: Response) => void
+    const fetchImpl = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve
+        })
+    )
+    const client = new SpeechBrokerClient({
+      ...settings,
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => 1_893_456_000_000,
+      monotonicNow: () => 1_000
+    })
+    const cancel = vi.spyOn(client, 'cancel').mockResolvedValue({
+      ok: true,
+      value: {
+        ok: true,
+        protocolVersion: 1,
+        sessionId: '00000000-0000-4000-8000-000000000101',
+        cancelled: true,
+        cancellationRequested: true
+      }
+    })
+    const pending = client.createSession(fixture.create.request, {
+      signal: controller.signal,
+      deadlineAt: 2_000
+    })
+    controller.abort()
+    resolveFetch(
+      new Response(JSON.stringify(fixture.create.responseTemplate), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    await expect(pending).resolves.toEqual({ ok: false, code: 'CANCELLED' })
+    expect(cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000101', 1_000)
+  })
+
   it('aborts and terminates a pending WebSocket open at the owner deadline', async () => {
     const response = {
       ...fixture.create.responseTemplate,
@@ -165,8 +205,10 @@ describe('speech broker client', () => {
       static OPEN = 1
       static CONNECTING = 0
       readyState = PendingWebSocket.CONNECTING
-      constructor(_url: string, _options: unknown) {
+      options: unknown
+      constructor(_url: string, options: unknown) {
         super()
+        this.options = options
         sockets.push(this as unknown as MockWebSocket)
       }
       terminate(): void {
@@ -202,6 +244,7 @@ describe('speech broker client', () => {
     await expect(opened).resolves.toEqual({ ok: false, code: 'CANCELLED' })
     expect(sockets).toHaveLength(1)
     expect(sockets[0]?.readyState).toBe(3)
+    expect((sockets[0]?.options as { handshakeTimeout: number }).handshakeTimeout).toBe(1_000)
   })
 
   it('keeps owner-scoped status available when the seat token has expired', async () => {
