@@ -16,6 +16,8 @@ on:
       - operator/src/routes/speech-session.test.ts
       - operator/src/migrate.contract.test.ts
       - operator/scripts/migrate-runner.contract.test.ts
+      - operator/scripts/migrate.mjs
+      - operator/wrangler.jsonc
       - operator/schema.sql
       - operator/schema-alter.sql
   workflow_dispatch:
@@ -85,7 +87,21 @@ jobs:
           const total = report.numTotalTests
           const counts = [total, passed, failed, pending, todo]
           const results = report.testResults ?? []
-          const failedSuites = results.filter((result) => result.status !== 'passed').length
+          const passedSuites = report.numPassedTestSuites
+          const failedSuites = report.numFailedTestSuites
+          const pendingSuites = report.numPendingTestSuites
+          const suiteCounts = [report.numTotalTestSuites, passedSuites, failedSuites, pendingSuites]
+          const assertionCount = results.reduce(
+            (sum, result) => sum + (Array.isArray(result.assertionResults) ? result.assertionResults.length : 0),
+            0
+          )
+          const invalidFiles = results.filter(
+            (result) =>
+              result.status !== 'passed' ||
+              !Array.isArray(result.assertionResults) ||
+              result.assertionResults.length === 0 ||
+              result.assertionResults.some((assertion) => assertion.status !== 'passed')
+          )
           const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
           const required = [
             'src/shared/contracts/speech/speech.contract.test.ts',
@@ -97,10 +113,15 @@ jobs:
             'src/main/features/components/speech-pack/flag.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
-          console.log(`Shared speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, failed_suites=${failedSuites}`)
-          if (!counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
-              results.length !== required.length || missing.length > 0 || failedSuites > 0 || total < 1 ||
-              total !== passed + failed + skipped || failed > 0 || skipped > 0) {
+          console.log(`Shared speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)
+          if (report.success !== true || !counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
+              !suiteCounts.every(Number.isSafeInteger) || suiteCounts.some((count) => count < 0) ||
+              results.length !== required.length || missing.length > 0 || invalidFiles.length > 0 ||
+              report.numTotalTestSuites < 1 ||
+              report.numTotalTestSuites !== passedSuites + failedSuites + pendingSuites ||
+              failedSuites !== 0 || pendingSuites !== 0 || passedSuites !== report.numTotalTestSuites ||
+              total < 1 || assertionCount !== total ||
+              total !== passed + failed + skipped || passed !== total || failed > 0 || skipped > 0) {
             console.error('Shared speech test report is incomplete or contains failures/skips.')
             process.exit(1)
           }
@@ -168,7 +189,21 @@ jobs:
           const total = report.numTotalTests
           const counts = [total, passed, failed, pending, todo]
           const results = report.testResults ?? []
-          const failedSuites = results.filter((result) => result.status !== 'passed').length
+          const passedSuites = report.numPassedTestSuites
+          const failedSuites = report.numFailedTestSuites
+          const pendingSuites = report.numPendingTestSuites
+          const suiteCounts = [report.numTotalTestSuites, passedSuites, failedSuites, pendingSuites]
+          const assertionCount = results.reduce(
+            (sum, result) => sum + (Array.isArray(result.assertionResults) ? result.assertionResults.length : 0),
+            0
+          )
+          const invalidFiles = results.filter(
+            (result) =>
+              result.status !== 'passed' ||
+              !Array.isArray(result.assertionResults) ||
+              result.assertionResults.length === 0 ||
+              result.assertionResults.some((assertion) => assertion.status !== 'passed')
+          )
           const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
           const required = [
             'src/speech/grants.test.ts',
@@ -179,10 +214,15 @@ jobs:
             'scripts/migrate-runner.contract.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
-          console.log(`Operator speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, failed_suites=${failedSuites}`)
-          if (!counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
-              results.length !== required.length || missing.length > 0 || failedSuites > 0 || total < 1 ||
-              total !== passed + failed + skipped || failed > 0 || skipped > 0) {
+          console.log(`Operator speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)
+          if (report.success !== true || !counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
+              !suiteCounts.every(Number.isSafeInteger) || suiteCounts.some((count) => count < 0) ||
+              results.length !== required.length || missing.length > 0 || invalidFiles.length > 0 ||
+              report.numTotalTestSuites < 1 ||
+              report.numTotalTestSuites !== passedSuites + failedSuites + pendingSuites ||
+              failedSuites !== 0 || pendingSuites !== 0 || passedSuites !== report.numTotalTestSuites ||
+              total < 1 || assertionCount !== total ||
+              total !== passed + failed + skipped || passed !== total || failed > 0 || skipped > 0) {
             console.error('Operator speech test report is incomplete or contains failures/skips.')
             process.exit(1)
           }
