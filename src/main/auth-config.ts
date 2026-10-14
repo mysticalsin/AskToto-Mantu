@@ -14,7 +14,11 @@ function isSafeConfigValue(value: string): boolean {
 const TENANT_GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export function isPlausibleAzureConfig(config: AzureConfig): boolean {
-  return isSafeConfigValue(config.clientId) && TENANT_GUID_RE.test(config.tenantId) && isSafeConfigValue(config.allowedDomain)
+  return (
+    isSafeConfigValue(config.clientId) &&
+    TENANT_GUID_RE.test(config.tenantId) &&
+    isSafeConfigValue(config.allowedDomain)
+  )
 }
 
 export function usableAzureConfig(config: Partial<AzureConfig>): AzureConfig | null {
@@ -71,7 +75,9 @@ export function resolveLeaseConfig(
     return usableAzureConfig({
       clientId: String(lkg.clientId || '').trim(),
       tenantId: String(lkg.tenantId || '').trim(),
-      allowedDomain: String(lkg.allowedDomain || '').trim().replace(/^@/, '')
+      allowedDomain: String(lkg.allowedDomain || '')
+        .trim()
+        .replace(/^@/, '')
     })
   }
   return null

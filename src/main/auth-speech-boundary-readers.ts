@@ -7,7 +7,10 @@ function isMissingPathError(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === 'ENOENT'
 }
 
-function stableFileSnapshot(left: Awaited<ReturnType<typeof lstat>>, right: Awaited<ReturnType<typeof lstat>>): boolean {
+function stableFileSnapshot(
+  left: Awaited<ReturnType<typeof lstat>>,
+  right: Awaited<ReturnType<typeof lstat>>
+): boolean {
   return (
     left.isFile() &&
     right.isFile() &&
@@ -26,7 +29,8 @@ export async function readBoundedTextFile(path: string, maxBytes: number): Promi
   } catch (error) {
     return isMissingPathError(error) ? { kind: 'absent' } : { kind: 'invalid' }
   }
-  if (before.isSymbolicLink() || !before.isFile() || before.size < 0 || before.size > maxBytes) return { kind: 'invalid' }
+  if (before.isSymbolicLink() || !before.isFile() || before.size < 0 || before.size > maxBytes)
+    return { kind: 'invalid' }
   let handle: Awaited<ReturnType<typeof open>> | null = null
   try {
     handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
@@ -41,11 +45,7 @@ export async function readBoundedTextFile(path: string, maxBytes: number): Promi
     }
     const pathAfter = await lstat(path)
     const fdAfter = await handle.stat()
-    if (
-      bytesRead > maxBytes ||
-      !stableFileSnapshot(before, pathAfter) ||
-      !stableFileSnapshot(before, fdAfter)
-    ) {
+    if (bytesRead > maxBytes || !stableFileSnapshot(before, pathAfter) || !stableFileSnapshot(before, fdAfter)) {
       return { kind: 'invalid' }
     }
     return {

@@ -1,9 +1,15 @@
-import type { SpeechAuthLeaseReaders, SpeechAuthSession, SpeechAuthConfig, SpeechAuthSettingsObservation, VerifiedSpeechAuthBoundary } from './auth-speech-lease'
+import type {
+  SpeechAuthLeaseReaders,
+  SpeechAuthSession,
+  SpeechAuthConfig,
+  SpeechAuthSettingsObservation,
+  VerifiedSpeechAuthBoundary
+} from './auth-speech-lease'
+import type { BoundedTextRead } from './auth-speech-boundary-readers'
 import { readBoundedTextFile, readTrustedAdminText } from './auth-speech-boundary-readers'
 import { join } from 'node:path'
 import { readTrustedAdminManagedBytes } from './win-security'
 
-type BoundedTextRead = import('./auth-speech-boundary-readers').BoundedTextRead
 type Document = Record<string, unknown>
 
 function parseDocument(read: BoundedTextRead): Document | null {
@@ -44,7 +50,8 @@ export async function readSpeechAuthBoundary(
   }
   const observation = await readers.readSettingsAtBoundary()
   if (!observation?.readable || !Number.isSafeInteger(observation.epoch)) return null
-  if (readers.readSettingsEpoch() !== observation.epoch || pathsRevision !== readers.readPolicyPathsRevision()) return null
+  if (readers.readSettingsEpoch() !== observation.epoch || pathsRevision !== readers.readPolicyPathsRevision())
+    return null
   const userData = sources.readProfilePath()
   const [adminRead, userRead, stickyRead] = await Promise.all([
     readTrustedAdminText(sources.readAdminPath(), readers.readTrustedAdminManagedBytes ?? readTrustedAdminManagedBytes),
