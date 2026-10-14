@@ -199,7 +199,7 @@ export function registerRuntimeConsumers(options: {
       return { readable: authority.readable, allowed, identity, inputAllowed }
     },
     acquireLease: async (signal) => {
-      const lease = await acquirePackageRuntimeLease('offline-asr', 'asr.whisper-base-q8', signal)
+      const lease = await acquirePackageRuntimeLease('offline-asr', undefined, signal)
       if (!lease) throw new Error('RUNTIME_NOT_CONFIGURED')
       return lease
     },

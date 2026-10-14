@@ -572,10 +572,24 @@ function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-function textClaim(value: unknown): string | null {
-  if (!(value instanceof Uint8Array)) return null
+function derUtf8StringClaim(value: unknown): string | null {
+  if (!(value instanceof Uint8Array) || value.byteLength < 2 || value[0] !== 0x0c) return null
+  const firstLength = value[1]
+  let headerBytes = 2
+  let contentBytes = firstLength
+  if (firstLength >= 0x80) {
+    const lengthBytes = firstLength & 0x7f
+    if (lengthBytes === 0 || lengthBytes > 4 || value.byteLength < 2 + lengthBytes || value[2] === 0) return null
+    contentBytes = 0
+    for (let index = 0; index < lengthBytes; index += 1) {
+      contentBytes = contentBytes * 256 + value[2 + index]
+    }
+    if (contentBytes < 0x80) return null
+    headerBytes += lengthBytes
+  }
+  if (contentBytes < 1 || headerBytes + contentBytes !== value.byteLength) return null
   try {
-    const result = new TextDecoder('utf-8', { fatal: true }).decode(value)
+    const result = new TextDecoder('utf-8', { fatal: true }).decode(value.subarray(headerBytes))
     return result.length > 0 && !/[\u0000-\u001f\u007f]/.test(result) ? result : null
   } catch {
     return null
@@ -600,6 +614,7 @@ function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): v
     throw new Error('RUNTIME_CERTIFICATE_IDENTITY_UNSUPPORTED')
   }
   const claims = new Map<string, string>()
+  const required = new Set(Object.values(OID))
   for (const raw of identity.oids) {
     const extension = record(raw)
     const oid = extension && record(extension.oid)
@@ -612,7 +627,8 @@ function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): v
       throw new Error('RUNTIME_CERTIFICATE_EXTENSION_UNSUPPORTED')
     }
     const id = oid.id.join('.')
-    const value = textClaim(extension.value)
+    if (!required.has(id)) continue
+    const value = derUtf8StringClaim(extension.value)
     if (!value || claims.has(id)) throw new Error('RUNTIME_CERTIFICATE_EXTENSION_UNSUPPORTED')
     claims.set(id, value)
   }
@@ -628,6 +644,7 @@ function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): v
   ])
   for (const [oid, value] of expected)
     if (claims.get(oid) !== value) throw new Error('RUNTIME_CERTIFICATE_CLAIM_MISMATCH')
+  if (claims.size !== expected.size) throw new Error('RUNTIME_CERTIFICATE_CLAIM_MISMATCH')
 }
 
 function assertStatement(statement: unknown, row: RuntimeCatalogRow, archiveHash: string, inventoryHash: string): void {
