@@ -58,4 +58,13 @@ jobs:
       - name: Build application and compiled worker
         run: npm run build
       - name: Run focused core tests and compiled Electron worker positive path
+        env:
+          INCREMENTAL_CORE_REPORT_DIR: ${{ runner.temp }}/incremental-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
         run: node scripts/qa/run-incremental-core-validation.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: incremental-core-reports-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/incremental-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -9,7 +9,7 @@ const root = process.cwd()
 const electronVersion = '43.6.0'
 const workerLoader = join(root, 'out', 'main', 'meeting-speech-worker.js')
 const workerBytecode = join(root, 'out', 'main', 'meeting-speech-worker.jsc')
-const testFiles = [
+const sharedTestFiles = [
   'src/main/features/meetings/incremental-record-canonical.test.ts',
   'src/main/features/meetings/incremental-meeting-journal-format.test.ts',
   'src/main/features/meetings/incremental-meeting-journal.test.ts',
@@ -19,6 +19,15 @@ const testFiles = [
   'src/main/infra/storage/gateway-stream.test.ts',
   'src/main/infra/storage/atomic-saved-write-stream.test.ts'
 ]
+const posixTestFiles = ['src/main/infra/storage/gateway-fifo-posix.test.ts']
+const testFilesByPlatform = {
+  linux: [...sharedTestFiles, ...posixTestFiles],
+  darwin: [...sharedTestFiles, ...posixTestFiles],
+  win32: sharedTestFiles
+}
+if (!Object.hasOwn(testFilesByPlatform, process.platform))
+  throw new Error(`Incremental core qualification does not support ${process.platform}.`)
+const testFiles = testFilesByPlatform[process.platform]
 const electronTest = 'src/main/infra/process/incremental-meeting-speech-worker.integration.test.ts'
 const electronBinary =
   process.platform === 'win32'
@@ -97,20 +106,37 @@ function verifyReport(path, requiredFiles, phase) {
   console.log(`${phase}: ${report.numPassedTests}/${report.numTotalTests}; no failed, pending, or todo cases.`)
 }
 
-const reportDirectory = mkdtempSync(join(tmpdir(), 'metis-incremental-core-'))
+const reportDirectory =
+  process.env.INCREMENTAL_CORE_REPORT_DIR ?? mkdtempSync(join(tmpdir(), 'metis-incremental-core-'))
+mkdirSync(reportDirectory, { recursive: true })
+const nodeReport = join(reportDirectory, 'node-tests.json')
+const electronReport = join(reportDirectory, 'electron-worker.json')
+for (const report of [nodeReport, electronReport]) rmSync(report, { force: true })
+console.log(`Incremental core reports retained at ${reportDirectory}`)
+console.log(
+  `Required ${process.platform} test files: ${testFiles.length}; POSIX FIFO suite selected: ${process.platform !== 'win32'}`
+)
 try {
   requireBuiltWorker()
   const vitest = resolve(root, 'node_modules', 'vitest', 'vitest.mjs')
-  const nodeReport = join(reportDirectory, 'node-tests.json')
   execute(
     process.execPath,
-    [vitest, 'run', '--config', 'vitest.config.ts', '--reporter=json', `--outputFile=${nodeReport}`, ...testFiles],
+    [
+      vitest,
+      'run',
+      '--config',
+      'vitest.config.ts',
+      '--reporter=default',
+      '--reporter=github-actions',
+      '--reporter=json',
+      `--outputFile.json=${nodeReport}`,
+      ...testFiles
+    ],
     process.env,
     30 * 60 * 1000
   )
   verifyReport(nodeReport, testFiles, 'Incremental core')
 
-  const electronReport = join(reportDirectory, 'electron-worker.json')
   execute(
     electronBinary,
     [
@@ -118,14 +144,19 @@ try {
       'run',
       '--config',
       'vitest.config.ts',
+      '--reporter=default',
+      '--reporter=github-actions',
       '--reporter=json',
-      `--outputFile=${electronReport}`,
+      `--outputFile.json=${electronReport}`,
       electronTest
     ],
     { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     10 * 60 * 1000
   )
   verifyReport(electronReport, [electronTest], 'Compiled Electron worker')
-} finally {
-  rmSync(reportDirectory, { recursive: true, force: true })
+} catch (error) {
+  for (const report of [nodeReport, electronReport]) {
+    if (existsSync(report)) console.error(`Retained validation report: ${report}`)
+  }
+  throw error
 }
