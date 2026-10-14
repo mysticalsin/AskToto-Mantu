@@ -27,18 +27,54 @@ const state = {
   selectedEngine: config.selectedEngine,
   statusFailure: config.statusFailure,
   actionResult: config.actionResult || { ok: true },
+  planResult: config.planResult || null,
+  installResult: config.installResult || { ok: true },
   statusCalls: 0,
   actionRequests: [],
+  planRequests: [],
+  installRequests: [],
+  pendingStatus: [],
+  holdStatus: false,
   unsubscribeCalls: 0
 }
 const bridge = {
   speechPackState: () => {
     state.statusCalls++
-    return state.statusFailure ? Promise.reject(new Error(state.statusFailure)) : Promise.resolve(state.snapshot)
+    if (state.statusFailure) return Promise.reject(new Error(state.statusFailure))
+    if (state.holdStatus) return new Promise((resolve) => state.pendingStatus.push(resolve))
+    return Promise.resolve(state.snapshot)
   },
   speechPackAction: (request) => {
     state.actionRequests.push(request)
     return Promise.resolve(state.actionResult)
+  },
+  speechPackPlanPreview: (request) => {
+    state.planRequests.push(request)
+    return Promise.resolve(state.planResult || {
+      ok: true,
+      plan: {
+        planId: '00000000-0000-4000-8000-000000000001',
+        action: request.action,
+        feature: 'asr',
+        selectedComponent: request.componentId,
+        missingComponents: [{
+          componentId: request.componentId,
+          manifestIdentity: request.manifestIdentity,
+          downloadBytes: 2000000,
+          storageBytes: 3000000,
+          license: 'Example license',
+          sourceHost: 'models.example.test'
+        }],
+        totalDownloadBytes: 2000000,
+        totalStorageBytes: 3000000,
+        profile: 'lean',
+        profileIdentity: 'c'.repeat(64)
+      }
+    })
+  },
+  speechPackInstallWithPlan: (request) => {
+    state.installRequests.push(request)
+    return Promise.resolve(state.installResult)
   },
   onSpeechPackProgress: (callback) => {
     listeners.add(callback)
@@ -57,6 +93,9 @@ window.__speechPack = {
   inspect: () => ({
     statusCalls: state.statusCalls,
     actionRequests: [...state.actionRequests],
+    planRequests: [...state.planRequests],
+    installRequests: [...state.installRequests],
+    pendingStatusCount: state.pendingStatus.length,
     listenerCount: listeners.size,
     unsubscribeCalls: state.unsubscribeCalls
   }),
@@ -66,6 +105,13 @@ window.__speechPack = {
     render()
   },
   emit: (progress) => listeners.forEach((listener) => listener(progress)),
+  holdStatus: (hold) => {
+    state.holdStatus = hold
+  },
+  resolveStatus: () => {
+    for (const resolve of state.pendingStatus.splice(0)) resolve(state.snapshot)
+    state.holdStatus = false
+  },
   unmount: () => flushSync(() => root.unmount())
 }
 render()
@@ -130,20 +176,66 @@ function snapshot(
     whisperState?: SpeechPackComponentSnapshot['state']
     parakeetState?: SpeechPackComponentSnapshot['state']
     featureEnabled?: boolean
+    readiness?:
+      | 'ready'
+      | 'model-needed'
+      | 'runtime-needed'
+      | 'not-configured'
+      | 'incompatible'
+      | 'repair-needed'
+      | 'unavailable'
   } = {}
-): SpeechPackSnapshot {
+): SpeechPackSnapshot & {
+  packageProfile: {
+    status: 'legacy-full'
+    profile: 'full'
+    identity: null
+    platform: null
+    arch: null
+    reason: null
+  }
+  engineReadiness: {
+    engine: 'whisper' | 'parakeet' | 'apple'
+    state: NonNullable<typeof options.readiness>
+    modelComponentId: SpeechPackComponentSnapshot['componentId'] | null
+    runtimeComponentIds: string[]
+  }
+  optionalRuntimeReadiness: {
+    speakerEmbedding: 'ready' | 'not-configured' | 'incompatible'
+    localLlm: 'ready' | 'not-configured' | 'incompatible'
+  }
+} {
   const engine = options.engine ?? 'whisper'
+  const selectedComponent = engine === 'whisper' ? WHISPER : engine === 'parakeet' ? PARAKEET : null
+  const selectedState = engine === 'whisper' ? options.whisperState : options.parakeetState
   return {
     featureEnabled: options.featureEnabled ?? true,
     profile: 'full',
     profileError: null,
     selectedEngine: engine,
-    selectedComponent: engine === 'whisper' ? WHISPER : engine === 'parakeet' ? PARAKEET : null,
+    selectedComponent,
+    packageProfile: {
+      status: 'legacy-full',
+      profile: 'full',
+      identity: null,
+      platform: null,
+      arch: null,
+      reason: null
+    },
     components: [
       component(WHISPER, WHISPER_ID, options.whisperState ?? 'not-installed'),
       component(PARAKEET, PARAKEET_ID, options.parakeetState ?? 'not-installed')
     ],
-    progress: null
+    progress: null,
+    engineReadiness: {
+      engine,
+      state:
+        options.readiness ??
+        (selectedState === 'not-configured' ? 'not-configured' : selectedState === 'ready' ? 'ready' : 'model-needed'),
+      modelComponentId: selectedComponent,
+      runtimeComponentIds: []
+    },
+    optionalRuntimeReadiness: { speakerEmbedding: 'not-configured', localLlm: 'not-configured' }
   }
 }
 
@@ -152,11 +244,16 @@ type HarnessConfig = {
   selectedEngine: SpeechPackSnapshot['selectedEngine']
   statusFailure?: string
   actionResult?: SpeechPackActionResult
+  planResult?: unknown
+  installResult?: SpeechPackActionResult
 }
 
 type HarnessStats = {
   statusCalls: number
   actionRequests: SpeechPackActionRequest[]
+  planRequests: { componentId: string; manifestIdentity: string; action: 'install' | 'repair' }[]
+  installRequests: { planId: string; action: 'install' | 'repair' }[]
+  pendingStatusCount: number
   listenerCount: number
   unsubscribeCalls: number
 }
@@ -168,6 +265,8 @@ declare global {
       inspect(): HarnessStats
       update(snapshot: SpeechPackSnapshot, selectedEngine: SpeechPackSnapshot['selectedEngine']): void
       emit(progress: SpeechPackProgress): void
+      holdStatus(hold: boolean): void
+      resolveStatus(): void
       unmount(): void
     }
   }
@@ -207,10 +306,22 @@ describe('SpeechPackSection browser behavior', () => {
 
   const inspect = (): Promise<HarnessStats> => page.evaluate(() => window.__speechPack.inspect())
 
-  it('reads and subscribes without starting a download, follows selected progress, and acts only on click', async () => {
+  it('reads and subscribes without starting a download, follows progress, and requires review plus confirmation', async () => {
     await mount({ snapshot: snapshot(), selectedEngine: 'whisper' })
     await page.getByText('Whisper base · Not downloaded').waitFor({ state: 'visible' })
     expect(await inspect()).toMatchObject({ statusCalls: 1, listenerCount: 1, actionRequests: [] })
+
+    await page.evaluate(() =>
+      window.__speechPack.emit({
+        componentId: 'asr.whisper-base-q8',
+        manifestIdentity: 'f'.repeat(64),
+        bytesDone: 400_000,
+        bytesTotal: 2_000_000,
+        state: 'downloading'
+      })
+    )
+    expect(await page.getByRole('progressbar', { name: 'Speech model download progress' }).count()).toBe(0)
+    await page.getByText('Whisper base · Not downloaded').waitFor({ state: 'visible' })
 
     await page.evaluate(() =>
       window.__speechPack.emit({
@@ -231,11 +342,17 @@ describe('SpeechPackSection browser behavior', () => {
     await page.evaluate((next) => window.__speechPack.update(next, 'parakeet'), snapshot({ engine: 'parakeet' }))
     await page.getByText('Parakeet · Not downloaded').waitFor({ state: 'visible' })
     expect(await inspect()).toMatchObject({ statusCalls: 2, listenerCount: 1, unsubscribeCalls: 1, actionRequests: [] })
-    await page.getByRole('button', { name: 'Download' }).click()
-    await page.waitForFunction(() => window.__speechPack.inspect().actionRequests.length === 1)
-    expect((await inspect()).actionRequests).toEqual([
-      { componentId: PARAKEET, action: 'download', manifestIdentity: PARAKEET_ID }
+    await page.getByRole('button', { name: 'Review install' }).click()
+    await page.getByText('2 MB download · 3 MB storage').waitFor({ state: 'visible' })
+    expect((await inspect()).planRequests).toEqual([
+      { componentId: PARAKEET, action: 'install', manifestIdentity: PARAKEET_ID }
     ])
+    await page.getByRole('button', { name: 'Install selected components' }).click()
+    await page.waitForFunction(() => window.__speechPack.inspect().installRequests.length === 1)
+    expect((await inspect()).installRequests).toEqual([
+      { planId: '00000000-0000-4000-8000-000000000001', action: 'install' }
+    ])
+    expect((await inspect()).actionRequests).toEqual([])
   })
 
   it('keeps unavailable, disabled, and ready controls consistent with the live snapshot', async () => {
@@ -244,27 +361,73 @@ describe('SpeechPackSection browser behavior', () => {
       selectedEngine: 'whisper'
     })
     await page.getByText('A trusted download source is not configured for this pack yet.').waitFor({ state: 'visible' })
-    expect(await page.getByRole('button', { name: 'Download' }).count()).toBe(0)
+    expect(await page.getByRole('button', { name: 'Review install' }).count()).toBe(0)
     expect((await inspect()).actionRequests).toEqual([])
 
     await page.evaluate(
       (next) => window.__speechPack.update(next, 'parakeet'),
       snapshot({ engine: 'parakeet', featureEnabled: false })
     )
-    expect(await page.getByRole('button', { name: 'Download' }).isDisabled()).toBe(true)
+    expect(await page.getByRole('button', { name: 'Review install' }).isDisabled()).toBe(true)
     expect((await inspect()).actionRequests).toEqual([])
 
     await page.evaluate((next) => window.__speechPack.update(next, 'whisper'), snapshot({ whisperState: 'ready' }))
     await page.getByText('Files and model test passed.').waitFor({ state: 'visible' })
-    expect(await page.getByRole('button', { name: 'Repair' }).isEnabled()).toBe(true)
-    await page.getByRole('button', { name: 'Repair' }).click()
-    await page.waitForFunction(() => window.__speechPack.inspect().actionRequests.length === 1)
-    expect((await inspect()).actionRequests).toEqual([
+    expect(await page.getByRole('button', { name: 'Review repair' }).isEnabled()).toBe(true)
+    await page.getByRole('button', { name: 'Review repair' }).click()
+    await page.getByRole('button', { name: 'Repair selected components' }).click()
+    await page.waitForFunction(() => window.__speechPack.inspect().installRequests.length === 1)
+    expect((await inspect()).installRequests).toEqual([
+      { planId: '00000000-0000-4000-8000-000000000001', action: 'repair' }
+    ])
+  })
+
+  it('shows engine runtime readiness and only reviews a model-bound plan when the engine can be provisioned', async () => {
+    await mount({
+      snapshot: snapshot({ whisperState: 'ready', readiness: 'runtime-needed' }),
+      selectedEngine: 'whisper'
+    })
+    await page.getByText('Whisper base · Runtime needed').waitFor({ state: 'visible' })
+    await page.getByText('The selected model is present, but its compatible local runtime is missing.').waitFor()
+    await page.getByRole('button', { name: 'Review repair' }).click()
+    expect((await inspect()).planRequests).toEqual([
+      { componentId: WHISPER, action: 'repair', manifestIdentity: WHISPER_ID }
+    ])
+
+    await page.evaluate(
+      (next) => window.__speechPack.update(next, 'whisper'),
+      snapshot({ whisperState: 'ready', readiness: 'not-configured' })
+    )
+    await page.getByText('Whisper base · Runtime not configured').waitFor({ state: 'visible' })
+    await page.getByText('An approved runtime package is not configured for this engine yet.').waitFor()
+    expect(await page.getByRole('button', { name: 'Review repair' }).count()).toBe(0)
+    expect((await inspect()).planRequests).toEqual([
       { componentId: WHISPER, action: 'repair', manifestIdentity: WHISPER_ID }
     ])
   })
 
-  it('shows safe status on bridge failure and a fixed message when the server refuses an explicit action', async () => {
+  it('hides an old plan immediately while the newly selected engine status is pending', async () => {
+    await mount({ snapshot: snapshot({ whisperState: 'ready' }), selectedEngine: 'whisper' })
+    await page.getByRole('button', { name: 'Review repair' }).click()
+    await page.getByRole('button', { name: 'Repair selected components' }).waitFor({ state: 'visible' })
+
+    await page.evaluate(
+      (next) => {
+        window.__speechPack.holdStatus(true)
+        window.__speechPack.update(next, 'parakeet')
+      },
+      snapshot({ engine: 'parakeet' })
+    )
+    await page.getByText('Loading model status…').waitFor({ state: 'visible' })
+    expect(await page.getByRole('button', { name: 'Repair selected components' }).count()).toBe(0)
+    expect((await inspect()).installRequests).toEqual([])
+
+    await page.evaluate(() => window.__speechPack.resolveStatus())
+    await page.getByText('Parakeet · Not downloaded').waitFor({ state: 'visible' })
+    expect(await page.getByRole('button', { name: 'Repair selected components' }).count()).toBe(0)
+  })
+
+  it('shows safe status on bridge failure and a fixed message when plan preview is refused', async () => {
     await mount({ snapshot: snapshot(), selectedEngine: 'whisper', statusFailure: 'private bridge details' })
     await page.getByText('Speech-pack status is unavailable right now.').waitFor({ state: 'visible' })
     expect(await page.getByText('private bridge details').count()).toBe(0)
@@ -274,15 +437,15 @@ describe('SpeechPackSection browser behavior', () => {
     await mount({
       snapshot: snapshot(),
       selectedEngine: 'whisper',
-      actionResult: { ok: false, reason: 'policy-blocked' }
+      planResult: { ok: false, reason: 'policy-blocked' }
     })
-    await page.getByRole('button', { name: 'Download' }).click()
+    await page.getByRole('button', { name: 'Review install' }).click()
     await page.getByRole('status').filter({ hasText: 'Downloads are disabled by your organization.' }).waitFor()
     expect(await page.getByRole('status').textContent()).toBe('Downloads are disabled by your organization.')
-    await page.waitForFunction(() => window.__speechPack.inspect().actionRequests.length === 1)
-    expect((await inspect()).actionRequests).toEqual([
-      { componentId: WHISPER, action: 'download', manifestIdentity: WHISPER_ID }
+    expect((await inspect()).planRequests).toEqual([
+      { componentId: WHISPER, action: 'install', manifestIdentity: WHISPER_ID }
     ])
+    expect((await inspect()).installRequests).toEqual([])
   })
 
   it('unsubscribes progress listeners on unmount and renders invalid package profiles as repair-required', async () => {

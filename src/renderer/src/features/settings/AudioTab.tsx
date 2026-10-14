@@ -15,36 +15,14 @@ import { ToggleRow } from '../../ui/Toggle'
 import { AsrModelRow } from './AiSection'
 import type { SpeechPackBridge } from './SpeechPackSection'
 import { OnDeviceSpeechSettings } from './OnDeviceSpeechSettings'
+import { CloudSpeechSection } from './CloudSpeechSection'
+import { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
+export { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
 
 export { LazyTextarea } from '../../ui/LazyText'
 // Local extension until PublicSettings exposes the WebGPU-to-WASM ASR downgrade marker.
 type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
 type AsrCorrection = PublicSettings['asrCorrections'][number]
-
-/** One `heard => correct` line per correction, in order. Exported for a focused test. */
-export function serializeAsrCorrections(items: AsrCorrection[]): string {
-  return items.map((c) => `${c.from} => ${c.to}`).join('\n')
-}
-
-/** Inverse of serializeAsrCorrections. Pure. Exported for a focused test. */
-export function parseAsrCorrections(raw: string): AsrCorrection[] {
-  return raw
-    .split('\n')
-    .map((line) => {
-      const i = line.indexOf('=>')
-      if (i < 0) return null
-      const from = line.slice(0, i).trim()
-      const to = line.slice(i + 2).trim()
-      return from ? { from, to } : null
-    })
-    .filter((c): c is AsrCorrection => c != null)
-    .slice(0, 100)
-}
-
-/** Value-equality for two correction arrays; order-sensitive by design. */
-export function sameAsrCorrections(a: AsrCorrection[], b: AsrCorrection[]): boolean {
-  return a.length === b.length && a.every((c, i) => c.from === b[i].from && c.to === b[i].to)
-}
 
 /** Keeps in-progress typing intact while lossy correction parsing round-trips through settings. */
 function VocabCorrectionsTextarea({
@@ -672,6 +650,7 @@ export function AudioTab({
         {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
           <OnDeviceSpeechSettings settings={settings} patch={patch} bridge={speechPackBridge} bundled={asrBundled} />
         )}
+        <CloudSpeechSection settings={settings} patch={patch} />
         {(() => {
           const liveProfile = resolveEnterpriseLiveProfile(settings.enterpriseLive)
           const cloudOnly = isCloudOnlyProfile(liveProfile)

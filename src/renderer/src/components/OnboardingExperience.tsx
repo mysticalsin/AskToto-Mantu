@@ -9,10 +9,9 @@
  *   The exception is Act 2's synthetic cursor (OnboardingDemoScene), which needs a per-frame
  *   projection CSS cannot express — a small rAF loop over lib/synthetic-cursor.ts, not a dependency.
  *   Act 1's Métis wordmark is static. No scramble.
- * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrAssetsStatus) — a row only
- *   ever shows "ready" when it is actually true. Never fake the magic moment. Transcription files are
- *   provisioned here (bundled or fetched into userData) — never skipped. A damaged immutable package
- *   gets an explicit repair path rather than an in-place download that could not succeed.
+ * - Scene 4's checks are REAL (permissions, package-scoped speech readiness, and local model status) — a row only
+ *   ever shows "ready" when it is actually true. Legacy/full profiles keep their existing ASR setup flow; verified
+ *   lean profiles report the approved cloud route and never start optional model provisioning here.
  * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
  *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
  *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
@@ -33,12 +32,14 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, Suspense, type Ref, useLayoutEffect } from 'react'
-import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
+import { useCallback, useEffect, useRef, useState, Suspense, useLayoutEffect } from 'react'
 import {
-  AlertCircle,
+  bundleFailureUserMessage,
+  isRepairRequiredBundleMessage,
+  isRetryableBundleMessage
+} from '@shared/bundle-response'
+import {
   Check,
-  CircleCheck,
   Cloud,
   FolderLock,
   KeyRound,
@@ -66,6 +67,7 @@ import type {
   ProfileRecoveryResult,
   PublicSettings
 } from '@shared/ipc'
+import type { CloudSpeechCapability } from '@shared/cloud-speech'
 import { MEETING_AUDIO_SCREEN_LABEL } from '../lib/screen-permission-copy'
 import { ScreenSetupActions, resumeSetupAtLoad, screenRowStatus, useScreenSetup } from './OnboardingScreenSetup'
 import type { OverlayLayout } from '@shared/overlay-chrome'
@@ -75,6 +77,9 @@ import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
+import { ActLicense } from './OnboardingLicenseScene'
+export { licenseErrorMessage } from './OnboardingLicenseScene'
+import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion } from './OnboardingWelcomeScene'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
 // Keep the scripted demo ready when the user reaches Reveal; its heavy Answer/Copilot
 // children remain lazy inside the demo scene.
@@ -113,7 +118,14 @@ import {
   type OnboardingCompletionState
 } from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
-import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../lib/onboarding-portal'
+import {
+  closeOnboardingPortal,
+  disposePortalAudio,
+  playBarLand,
+  playPortalOpen,
+  requestBarLand,
+  requestOnboardingPortalOpen
+} from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -122,15 +134,17 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import {
-  ONBOARDING_HERO_POSTER_SRC,
-  ONBOARDING_HERO_VIDEO_SRC,
-  playOnboardingVideo,
-  preloadOnboardingHeroVideo,
-  resolveOnboardingHeroVideoSrc
-} from '../lib/onboarding-hero-video'
+import { playOnboardingVideo } from '../lib/onboarding-hero-video'
 export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
-import { speechPackAllowsEnsure, speechPackSetupRowVisible, type LocalSpeechPackSetting } from '../lib/local-speech-pack-policy'
+import {
+  speechPackAllowsEnsure,
+  speechPackSetupRowVisible,
+  type LocalSpeechPackSetting
+} from '../lib/local-speech-pack-policy'
+import { packageModeFromStateSnapshot } from '../lib/package-profile-readiness'
+import { allowsAutomaticAsrSetup, type OnboardingPackageMode } from '../lib/product-speech-onboarding'
+import { cloudSpeechRowStatus } from '../lib/cloud-speech-readiness'
+import { createCloudSpeechRequestFence } from '../lib/cloud-speech-request-fence'
 
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
@@ -148,7 +162,11 @@ export interface OnboardingExperienceProps {
   /** Act 6 (Ready, MQA-283): durable completion then one-way window replacement. The destination is
    *  carried through the trusted main-process launch path so the optional AI action opens Settings in
    *  the replacement window, not a BrowserWindow about to be destroyed. */
-  onDone: (result: { mode: ConversationMode; recordingConsent: boolean; destination: 'answer' | 'settings' }) => void | Promise<void>
+  onDone: (result: {
+    mode: ConversationMode
+    recordingConsent: boolean
+    destination: 'answer' | 'settings'
+  }) => void | Promise<void>
   /** Unused. Skip is gone — the tour must be completed. */
   /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
    *  in contexts with no Settings surface to open (the link itself does not render without it). */
@@ -196,15 +214,17 @@ function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
           key={s}
           className={
             'h-1.5 rounded-full transition-all duration-300 ' +
-            (i === idx ? 'w-5 bg-[var(--color-accent)]' : i < idx ? 'w-1.5 bg-[var(--color-accent)]/50' : 'w-1.5 bg-white/15')
+            (i === idx
+              ? 'w-5 bg-[var(--color-accent)]'
+              : i < idx
+                ? 'w-1.5 bg-[var(--color-accent)]/50'
+                : 'w-1.5 bg-white/15')
           }
         />
       ))}
     </div>
   )
 }
-
-const WORDMARK = 'Métis'
 
 function TellTheRoomCard({
   consent,
@@ -232,137 +252,6 @@ function TellTheRoomCard({
   )
 }
 
-/**
- * Act 1 — Welcome. The Métis mark and wordmark land and stay. The wordmark is static.
- * No scramble. The tagline may fade in once. Next starts the six-act tour.
- */
-function OnboardingHeroVideo({
-  videoRef
-}: {
-  videoRef: Ref<HTMLVideoElement>
-}): JSX.Element {
-  const [videoFailed, setVideoFailed] = useState(false)
-  // FITO-185-Y: poster/UI first. The 8.9MB hero mp4 must not contend for first paint.
-  // Video mounts after a short idle; pending <video> stays opacity 0 until a decoded frame.
-  const [allowVideo, setAllowVideo] = useState(false)
-  const [videoReady, setVideoReady] = useState(false)
-  const markReady = useCallback(() => setVideoReady(true), [])
-  useEffect(() => {
-    if (prefersReducedMotion()) return
-    const start = (): void => setAllowVideo(true)
-    const t = window.setTimeout(start, 480)
-    return () => window.clearTimeout(t)
-  }, [])
-  useEffect(() => {
-    if (!allowVideo || prefersReducedMotion()) return
-    preloadOnboardingHeroVideo()
-    const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
-    if (el) {
-      el.load()
-      void el.play().catch(() => {})
-    }
-    // FITO-185-V: exclusive can decode without firing loadeddata; promote once frames advance.
-    const fallbackId = window.setTimeout(() => {
-      const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
-      if (!v) return
-      if (v.currentTime > 0 || v.readyState >= 2) setVideoReady(true)
-    }, 800)
-    return () => {
-      window.clearTimeout(fallbackId)
-      const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
-      v?.pause()
-    }
-  }, [allowVideo, videoRef])
-  return (
-    <div className="onboard-hero-video" aria-hidden="true">
-      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" decoding="sync" fetchPriority="high" />
-      {allowVideo && !prefersReducedMotion() && !videoFailed && (
-        <video
-          ref={videoRef}
-          muted
-          loop
-          playsInline
-          autoPlay
-          preload="auto"
-          poster={ONBOARDING_HERO_POSTER_SRC}
-          src={resolveOnboardingHeroVideoSrc(ONBOARDING_HERO_VIDEO_SRC)}
-          className={videoReady ? 'onboard-hero-video--ready' : 'onboard-hero-video--pending'}
-          onLoadedData={markReady}
-          onCanPlay={markReady}
-          onPlaying={markReady}
-          onTimeUpdate={markReady}
-          onError={() => setVideoFailed(true)}
-        />
-      )}
-      <div className="onboard-hero-video-tint" />
-    </div>
-  )
-}
-
-function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
-  const onBeginRef = useRef(onBegin)
-  onBeginRef.current = onBegin
-  useLayoutEffect(() => {
-    requestOnboardingPortalOpen()
-    const boot = document.getElementById('act1-boot-chrome')
-    boot?.remove()
-    const w = window as Window & { __act1BootNextQueued?: boolean }
-    if (w.__act1BootNextQueued) {
-      w.__act1BootNextQueued = false
-      onBeginRef.current()
-    }
-    const onQueued = (): void => {
-      w.__act1BootNextQueued = false
-      onBeginRef.current()
-    }
-    window.addEventListener('act1-boot-next', onQueued)
-    return () => window.removeEventListener('act1-boot-next', onQueued)
-  }, [])
-  return (
-    <>
-      <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
-        <div className="scene-enter flex flex-col items-center gap-5">
-          <div className="hero-mark onboard-mark-land" aria-hidden="true">
-            <MetisMark size={96} />
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <h1
-              className="hero-wordmark fade-up m-0 select-none"
-              aria-label={WORDMARK}
-              style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'both' }}
-            >
-              <span aria-hidden="true">{WORDMARK}</span>
-            </h1>
-            <p
-              className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
-              style={{ animationDelay: '400ms', animationFillMode: 'both' }}
-            >
-              Your on-device meeting copilot.
-            </p>
-          </div>
-        </div>
-        <button type="button" onClick={onBegin} className="onboard-cta no-drag focus-ring">
-          Next
-        </button>
-        <p
-          className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
-          style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
-        >
-          Mantu ·{' '}
-          <a
-            href="https://www.linkedin.com/in/tonywalteur/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hero-byline-link no-drag focus-ring"
-          >
-            Metis Maintainers
-          </a>
-        </p>
-      </div>
-    </>
-  )
-}
-
 // 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
 // (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
 // 'blocked' = the OS holds an explicit Deny, which no prompt can undo — only the privacy pane can.
@@ -379,7 +268,9 @@ export interface SetupRow {
 
 export function setupRowsForSpeechPackPolicy(policy: LocalSpeechPackSetting): SetupRow[] {
   return [
-    ...(speechPackSetupRowVisible(policy) ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow] : []),
+    ...(speechPackSetupRowVisible(policy)
+      ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow]
+      : []),
     { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
     { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
     { key: 'screen', label: MEETING_AUDIO_SCREEN_LABEL, icon: MonitorUp, state: 'checking' },
@@ -406,9 +297,10 @@ export function micRowStatus(status: PermissionStatus | undefined): { state: Set
  *  generic releases. A non-Cloudflare provider also reads as ready only when main confirms it.
  *  Never gates onboarding's Continue — adding a personal key stays optional, exactly as it is once
  *  onboarding finishes (Settings → AI). */
-export function aiRowStatus(
-  settings: Pick<PublicSettings, 'providerReady' | 'provider'> | null | undefined
-): { state: SetupRowState; detail: string } {
+export function aiRowStatus(settings: Pick<PublicSettings, 'providerReady' | 'provider'> | null | undefined): {
+  state: SetupRowState
+  detail: string
+} {
   if (!settings) return { state: 'checking', detail: '' }
   if (settings.providerReady) {
     return settings.provider === 'cloudflare'
@@ -475,7 +367,14 @@ export function asrAssetsRowStatus(
 ): { state: SetupRowState; detail: string; progress?: number } {
   const s = input ?? IDLE_ASR_STATUS
   if (s.ready || s.status === 'ready') {
-    const selected = engine === 'parakeet' ? 'Parakeet' : engine === 'whisper' ? 'Whisper base' : engine === 'apple' ? 'Apple Speech' : null
+    const selected =
+      engine === 'parakeet'
+        ? 'Parakeet'
+        : engine === 'whisper'
+          ? 'Whisper base'
+          : engine === 'apple'
+            ? 'Apple Speech'
+            : null
     return {
       state: 'ready',
       detail: `Parakeet + Whisper base files ready.${selected ? ` Selected for live meetings: ${selected}.` : ''}`
@@ -574,7 +473,15 @@ export function summarizeSetupRows(rows: SetupRow[]): SetupScanSummary {
  *  Settings.tsx's `Toggle` (which is styled against the separate `--cl-*` settings-panel token set this
  *  onboarding shell never mounts). Same on/off mechanics, themed with the onboarding's own
  *  `--color-accent` tokens instead. */
-function MiniToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }): JSX.Element {
+function MiniToggle({
+  on,
+  onChange,
+  label
+}: {
+  on: boolean
+  onChange: (v: boolean) => void
+  label: string
+}): JSX.Element {
   return (
     <button
       type="button"
@@ -597,166 +504,6 @@ function MiniToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolea
         }
       />
     </button>
-  )
-}
-
-/** Plain-language copy for every code the license server (or this client) can return. Duplicated from
- *  Settings.tsx's / LicenseGate.tsx's licenseErrorMessage on purpose — same reasoning both of those give
- *  for not importing one another: this scene has to keep working even if either of those chunks changes
- *  shape, and the map is a handful of lines. */
-export function licenseErrorMessage(code: string | undefined): string {
-  switch (code) {
-    case 'invalid':
-      return 'That license key was not recognized.'
-    case 'revoked':
-      return 'This license has been revoked.'
-    case 'expired':
-      return 'This license has expired.'
-    case 'seat_limit_reached':
-      return 'All seats on this license are in use.'
-    case 'network':
-      return 'Could not reach the license server. Check the server URL and your connection.'
-    case 'insecure_url':
-      return 'Use an HTTPS license server address. Only localhost can use HTTP for testing.'
-    case 'device_identity_unavailable':
-      return 'Métis cannot save its device setup. Close other Métis copies, check that its data folder is writable, and try again. If it persists, contact support to repair the data folder.'
-    default:
-      return code || 'Could not activate this license.'
-  }
-}
-
-/**
- * Act 5 — License (MQA-281/282). Paste-key -> validate -> activate, in Métis's own voice — never a
- * price or a checkout: the copy is deliberately "the key you were given", matching license-server's
- * README ("no purchase, no price… keys are minted and handed out by an operator"). Rendered ONLY when
- * the caller (OnboardingExperience below) has already decided `settings.licenseGateEnabled` is true;
- * this component itself has no opinion on that, so it stays simple to reason about and to test.
- *
- * Never a dead end: Continue is ALWAYS enabled, activated or not. The real enforcement decision lives
- * in main's checkLicenseGrace() (consulted at boot by App.tsx's <LicenseGate/>, gated on the separate
- * LICENSE_ENFORCEMENT compile-time switch) — this scene's job is only to offer the paste-key flow at a
- * natural point in the narrative, never to become a second, onboarding-only gate that could strand a
- * trial user who has done nothing wrong.
- */
-function ActLicense({
-  settings,
-  onContinue
-}: {
-  settings?: PublicSettings
-  onContinue: () => void
-}): JSX.Element {
-  const [serverUrl, setServerUrl] = useState(settings?.licenseServerUrl || '')
-  const [licenseKey, setLicenseKey] = useState('')
-  const [activating, setActivating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [activated, setActivated] = useState(false)
-  const serverId = useId()
-  const keyId = useId()
-  const mountedRef = useRef(true)
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-
-  const activate = async (): Promise<void> => {
-    const url = serverUrl.trim()
-    const key = licenseKey.trim()
-    if (!url || !key) return
-    setActivating(true)
-    setError(null)
-    const r = await window.toto.licenseActivate({ serverUrl: url, licenseKey: key })
-    if (!mountedRef.current) return
-    setActivating(false)
-    if (r.ok) {
-      setLicenseKey('')
-      setActivated(true)
-    } else {
-      setError(licenseErrorMessage(r.error))
-    }
-  }
-
-  return (
-    <div key="license" className="scene-enter flex flex-col items-center gap-6">
-      <div className="flex flex-col items-center gap-1.5">
-        <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
-          One more thing
-        </p>
-        <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Activate your license</h2>
-        <p className="m-0 max-w-[380px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
-          Your organization runs its own license server. Paste the key you were given. No key yet? You
-          can still continue on a trial and activate later from Settings.
-        </p>
-      </div>
-
-      <div className="flex w-full max-w-[360px] flex-col gap-2 text-left">
-        <label htmlFor={serverId} className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium text-[color:var(--color-ink-3)]">License server URL</span>
-          <input
-            id={serverId}
-            value={serverUrl}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder="https://license.your-company.com"
-            onChange={(e) => {
-              setServerUrl(e.target.value)
-              setError(null)
-              setActivated(false)
-            }}
-            className="no-drag focus-ring rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
-          />
-        </label>
-        <label htmlFor={keyId} className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium text-[color:var(--color-ink-3)]">License key</span>
-          <input
-            id={keyId}
-            type="password"
-            value={licenseKey}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder="Paste the key you were given"
-            onChange={(e) => {
-              setLicenseKey(e.target.value)
-              setError(null)
-              setActivated(false)
-            }}
-            className="no-drag focus-ring rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
-          />
-        </label>
-      </div>
-
-      {error && (
-        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-destructive,#ff8080)]">
-          <AlertCircle size={13} className="mt-px shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-      {!error && activated && (
-        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-accent-2)]">
-          <CircleCheck size={13} className="mt-px shrink-0" />
-          <span>Activated. You're all set.</span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void activate()}
-          disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
-          className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)]/15 px-4 py-2 text-[12px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50"
-        >
-          {activating ? <InlineOrb kind="connecting" /> : <KeyRound size={13} />}
-          Activate
-        </button>
-        <button
-          type="button"
-          onClick={onContinue}
-          className="onboard-cta no-drag focus-ring"
-        >
-          Continue
-        </button>
-      </div>
-    </div>
   )
 }
 
@@ -836,16 +583,18 @@ function ActReady({
 
   const attemptFinish = async (destination: 'answer' | 'settings'): Promise<OnboardingCompletionOutcome> => {
     if (!authReady) return 'blocked'
-    return (await completionFlowRef.current?.attempt(async () => {
-      try {
-        return await onFinish(destination)
-      } catch (error) {
-        const canRecover = !!recoverEncryptedProfile && isEncryptedProfileRecoveryError(error)
-        setRecoveryAvailable(canRecover)
-        if (canRecover) setRecoveryMessage(null)
-        throw error
-      }
-    })) ?? 'blocked'
+    return (
+      (await completionFlowRef.current?.attempt(async () => {
+        try {
+          return await onFinish(destination)
+        } catch (error) {
+          const canRecover = !!recoverEncryptedProfile && isEncryptedProfileRecoveryError(error)
+          setRecoveryAvailable(canRecover)
+          if (canRecover) setRecoveryMessage(null)
+          throw error
+        }
+      })) ?? 'blocked'
+    )
   }
 
   const recoverProfileAndRetry = async (): Promise<void> => {
@@ -903,7 +652,10 @@ function ActReady({
           <p className="m-0 text-[11px] leading-snug text-[color:var(--color-ink-3)]">{asrHint}</p>
           {asrProgress != null && asrProgress > 0 && asrProgress < 1 && (
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-              <div className="h-full rounded-full bg-[#9A2BF0]" style={{ width: `${Math.round(asrProgress * 100)}%` }} />
+              <div
+                className="h-full rounded-full bg-[#9A2BF0]"
+                style={{ width: `${Math.round(asrProgress * 100)}%` }}
+              />
             </div>
           )}
           {showAsrRetry && (
@@ -946,9 +698,13 @@ function ActReady({
         </p>
       )}
       {completionStalled && (
-        <div role="alert" className="flex max-w-[360px] flex-col items-center gap-2 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-accent-soft)]/35 p-3 text-center text-[11px] leading-snug text-[color:var(--color-ink-2)]">
+        <div
+          role="alert"
+          className="flex max-w-[360px] flex-col items-center gap-2 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-accent-soft)]/35 p-3 text-center text-[11px] leading-snug text-[color:var(--color-ink-2)]"
+        >
           <p className="m-0">
-            Métis is still checking whether your setup was saved. Don’t submit it again. Restart Métis to check the saved result.
+            Métis is still checking whether your setup was saved. Don’t submit it again. Restart Métis to check the
+            saved result.
           </p>
           <button
             type="button"
@@ -973,17 +729,15 @@ function ActReady({
             {recoveryBusy ? <InlineOrb kind="loading" /> : <KeyRound size={13} />}
             {recoveryBusy ? 'Creating new local profile…' : 'Create new local profile & retry'}
           </button>
-          {recoveryMessage && <p role="alert" className="m-0 text-[color:var(--color-danger)]">{recoveryMessage}</p>}
+          {recoveryMessage && (
+            <p role="alert" className="m-0 text-[color:var(--color-danger)]">
+              {recoveryMessage}
+            </p>
+          )}
         </div>
       )}
     </div>
   )
-}
-
-function prefersReducedMotion(): boolean {
-  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    : false
 }
 
 /** Bach Aria bed. Starts on exclusive mount. Retries on first click and Next. Scene changes do not stop it. */
@@ -1061,8 +815,16 @@ export function OnboardingExperience({
   const playHero = (): void => {
     // Background media is optional. A synchronous decoder/playback failure must never swallow
     // the same click's scene transition (especially Act 2's user-controlled Next).
-    try { music.start() } catch { /* continue without music */ }
-    try { playOnboardingVideo(heroVideoRef.current) } catch { /* continue without video */ }
+    try {
+      music.start()
+    } catch {
+      /* continue without music */
+    }
+    try {
+      playOnboardingVideo(heroVideoRef.current)
+    } catch {
+      /* continue without video */
+    }
   }
 
   useEffect(() => {
@@ -1123,7 +885,10 @@ export function OnboardingExperience({
   const [mode, setMode] = useState<ConversationMode>('general')
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
   const [placement, setPlacement] = useState<OverlayPlacement>(() => seedOnboardingPlacement(settings))
-  const [appearanceSave, setAppearanceSave] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
+  const [appearanceSave, setAppearanceSave] = useState<{ busy: boolean; error: string | null }>({
+    busy: false,
+    error: null
+  })
   const placementUserSelectedRef = useRef(false)
   const placementManaged = Boolean(settings?.managedKeys?.includes('overlayPlacement'))
   useEffect(() => {
@@ -1185,25 +950,121 @@ export function OnboardingExperience({
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
+  const [productPackageMode, setProductPackageMode] = useState<OnboardingPackageMode>('pending')
+  const [cloudCapability, setCloudCapability] = useState<CloudSpeechCapability | null>(null)
   /** Once true, Continue stays unlocked even if ASR poll returns loading. */
   const [setupAccessFailOpen, setSetupAccessFailOpen] = useState(false)
   const speechPackPolicy = settings?.localSpeechPack ?? 'offered'
-  const speechPackBlocked = !speechPackAllowsEnsure(speechPackPolicy)
+  const autoAsrSetup = allowsAutomaticAsrSetup(productPackageMode, speechPackPolicy)
   const speechPackManaged = speechPackPolicy === 'required'
-  const asrReady = speechPackBlocked || asrStatusIsReady(asrStatus)
-  const asrRowBase = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
-  const asrRow = speechPackManaged
-    ? { ...asrRowBase, detail: `${asrRowBase.detail} Managed by your organization.` }
-    : asrRowBase
+  const cloudRow = cloudSpeechRowStatus(cloudCapability)
+  const asrReady =
+    productPackageMode === 'lean'
+      ? cloudRow.state === 'ready'
+      : productPackageMode === 'legacy'
+        ? !speechPackAllowsEnsure(speechPackPolicy) || asrStatusIsReady(asrStatus)
+        : false
+  const asrRowBase =
+    productPackageMode === 'lean'
+      ? { state: cloudRow.state, detail: cloudRow.detail }
+      : productPackageMode === 'invalid'
+        ? { state: 'action' as const, detail: 'The installed package profile could not be verified.' }
+        : productPackageMode === 'pending'
+          ? { state: 'checking' as const, detail: 'Checking the installed package profile…' }
+          : asrAssetsRowStatus(asrStatus, settings?.asrEngine)
+  const asrRow =
+    productPackageMode === 'legacy' && speechPackManaged
+      ? { ...asrRowBase, detail: `${asrRowBase.detail} Managed by your organization.` }
+      : asrRowBase
   const doneRef = useRef(false)
 
   useEffect(() => {
-    if (speechPackBlocked) return
+    let current = true
+    const timeout = setTimeout(() => {
+      if (current) setSetupAccessFailOpen(true)
+    }, ASR_SETUP_FAIL_OPEN_MS)
+    void window.toto
+      .speechPackState()
+      .then(async (snapshot) => {
+        if (!current) return
+        const packageMode = packageModeFromStateSnapshot(snapshot)
+        setProductPackageMode(packageMode)
+        if (packageMode !== 'lean') {
+          if (packageMode === 'invalid') setSetupAccessFailOpen(true)
+          return
+        }
+        setSetupAccessFailOpen(true)
+      })
+      .catch(() => {
+        if (current) {
+          setProductPackageMode('invalid')
+          setSetupAccessFailOpen(true)
+        }
+      })
+    return () => {
+      current = false
+      clearTimeout(timeout)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (productPackageMode !== 'lean') return
+    let current = true
+    let lastCheckAt = 0
+    const requestFence = createCloudSpeechRequestFence()
+    const refresh = (): void => {
+      if (Date.now() - lastCheckAt < 750) return
+      lastCheckAt = Date.now()
+      const requestId = requestFence.begin()
+      setCloudCapability(null)
+      void window.toto
+        .cloudSpeechCapability()
+        .then((capability) => {
+          if (current && requestFence.isCurrent(requestId)) setCloudCapability(capability)
+        })
+        .catch(() => {
+          if (current && requestFence.isCurrent(requestId)) setCloudCapability(null)
+        })
+        .finally(() => {
+          if (current && requestFence.isCurrent(requestId)) setSetupAccessFailOpen(true)
+        })
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      current = false
+      requestFence.invalidate()
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [
+    productPackageMode,
+    settings?.brokerSpeech.engine,
+    settings?.brokerSpeech.transport,
+    settings?.cloudSttProvider,
+    settings?.licenseValid,
+    settings?.licenseLastValidatedAt,
+    settings?.managedKeys.includes('brokerSpeech'),
+    settings?.managedKeys.includes('cloudSttProvider'),
+    settings?.enterpriseLive.managed,
+    settings?.enterpriseLive.inferenceMode,
+    settings?.enterpriseLive.summaryOnly
+  ])
+
+  useEffect(() => {
+    if (!autoAsrSetup) return
     let live = true
     const apply = (s: AsrAssetsStatus): void => {
       if (live) setAsrStatus(s)
     }
-    void window.toto.asrAssetsEnsure().then(apply).catch((err) => apply(asrEnsureFailureStatus(err)))
+    void window.toto
+      .asrAssetsEnsure()
+      .then(apply)
+      .catch((err) => apply(asrEnsureFailureStatus(err)))
     // A stalled setup must become actionable, but must not turn the final Ready action into a trap.
     const asrSetupTimeout = setTimeout(() => {
       if (!live) return
@@ -1234,7 +1095,7 @@ export function OnboardingExperience({
       clearInterval(interval)
       unsub?.()
     }
-  }, [speechPackBlocked])
+  }, [autoAsrSetup])
   const [restarting, setRestarting] = useState(false)
   useEffect(() => {
     if (scene !== 'setup') return
@@ -1256,7 +1117,9 @@ export function OnboardingExperience({
   useEffect(() => {
     if (scene !== 'setup') return
     let live = true
-    const base = setupRowsForSpeechPackPolicy(speechPackPolicy)
+    const base = setupRowsForSpeechPackPolicy(productPackageMode === 'lean' ? 'offered' : speechPackPolicy).map(
+      (row) => (row.key === 'asr' && productPackageMode === 'lean' ? { ...row, label: 'Cloud speech' } : row)
+    )
     setRows(base)
     const set = (key: string, state: SetupRowState, detail?: string, progress?: number): void => {
       if (!live) return
@@ -1266,7 +1129,7 @@ export function OnboardingExperience({
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      if (!speechPackBlocked) {
+      if (autoAsrSetup) {
         void window.toto
           .asrAssetsEnsure()
           .then((s) => {
@@ -1300,6 +1163,13 @@ export function OnboardingExperience({
         const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
         const detail = speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail
         set('asr', asr.state, detail, asr.progress)
+      } else if (productPackageMode === 'lean') {
+        const status = cloudSpeechRowStatus(cloudCapability)
+        set('asr', status.state, status.detail)
+      } else if (productPackageMode === 'invalid') {
+        set('asr', 'action', 'The installed package profile could not be verified.')
+      } else if (productPackageMode === 'pending') {
+        set('asr', 'checking', 'Checking the installed package profile…')
       }
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
@@ -1340,18 +1210,32 @@ export function OnboardingExperience({
       set('ai', ai.state, ai.detail)
       const models = await window.toto.localModelsList().catch(() => [])
       const current = settingsRef.current
-      const local =
-        models.find((m) => m.id === current?.localLlm.modelId)
+      const local = models.find((m) => m.id === current?.localLlm.modelId)
       // Observe only. Boot and an explicit Local AI opt-in own provisioning; setup must never start
       // optional multi-GB downloads while local AI is off or retry errors on every poll.
-      const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
-        !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
+      const lm = current
+        ? localModelRowStatus(
+            local,
+            current.localLlm.enabled,
+            !current.allowedProviders || current.allowedProviders.includes('local')
+          )
+        : { state: 'checking' as const, detail: '' }
       set('local', lm.state, lm.detail, lm.progress)
     })()
     return () => {
       live = false
     }
-  }, [scene, speechPackBlocked, speechPackManaged])
+  }, [scene, autoAsrSetup, productPackageMode, cloudCapability, speechPackManaged])
+
+  useEffect(() => {
+    if (scene !== 'setup' || productPackageMode !== 'lean') return
+    const status = cloudSpeechRowStatus(cloudCapability)
+    setRows((current) =>
+      current.map((row) =>
+        row.key === 'asr' ? { ...row, label: 'Cloud speech', state: status.state, detail: status.detail } : row
+      )
+    )
+  }, [scene, productPackageMode, cloudCapability])
 
   // --- Live-poll while the scene stays mounted, so a grant flipped in System Settings (possibly in a
   // split view right next to this window) is reflected without the user coming back to click anything.
@@ -1361,20 +1245,30 @@ export function OnboardingExperience({
     const poll = async (): Promise<void> => {
       const perms = await window.toto.getPermissions().catch(() => null)
       const models = await window.toto.localModelsList().catch(() => [])
-      const asrStatusNow = speechPackBlocked ? null : await window.toto.asrAssetsStatus().catch(() => null)
+      const asrStatusNow = autoAsrSetup ? await window.toto.asrAssetsStatus().catch(() => null) : null
       if (!live) return
       if (asrStatusNow) setAsrStatus(asrStatusNow)
       const current = settingsRef.current
       const local = models.find((m) => m.id === current?.localLlm.modelId)
-      const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
-        !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
+      const lm = current
+        ? localModelRowStatus(
+            local,
+            current.localLlm.enabled,
+            !current.allowedProviders || current.allowedProviders.includes('local')
+          )
+        : { state: 'checking' as const, detail: '' }
       const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow, current?.asrEngine) : null
       // The screen row re-derives from this snapshot; a fresh grant mid-scene reads needs-relaunch (macOS).
       if (perms) screenSetup.setPerms(perms)
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'asr' && asr) {
-            return { ...r, state: asr.state, detail: speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail, progress: asr.progress }
+            return {
+              ...r,
+              state: asr.state,
+              detail: speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail,
+              progress: asr.progress
+            }
           }
           if (r.key === 'local') return { ...r, state: lm.state, detail: lm.detail, progress: lm.progress }
           if (!perms) return r
@@ -1387,26 +1281,32 @@ export function OnboardingExperience({
       )
     }
     const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
-    const unsub = window.toto.onImportAssetsProgress?.((d) => {
-      if (!live) return
-      const asr = asrAssetsRowStatus({ ...d, ready: d.status === 'ready' }, settingsRef.current?.asrEngine)
-      setRows((rs) =>
-        rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r))
-      )
-    })
+    const unsub = autoAsrSetup
+      ? window.toto.onImportAssetsProgress?.((d) => {
+          if (!live) return
+          const asr = asrAssetsRowStatus({ ...d, ready: d.status === 'ready' }, settingsRef.current?.asrEngine)
+          setRows((rs) =>
+            rs.map((r) =>
+              r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r
+            )
+          )
+        })
+      : undefined
     return () => {
       live = false
       clearInterval(interval)
       unsub?.()
     }
-  }, [scene, settings?.localLlm.modelId, speechPackBlocked, speechPackManaged])
+  }, [scene, settings?.localLlm.modelId, autoAsrSetup, productPackageMode, speechPackManaged])
 
   const retryAsr = async (): Promise<void> => {
-    if (speechPackBlocked) return
+    if (!autoAsrSetup) return
     const status = await window.toto.asrAssetsEnsure().catch((err) => asrEnsureFailureStatus(err))
     setAsrStatus(status)
     const asr = asrAssetsRowStatus(status, settingsRef.current?.asrEngine)
-    setRows((rs) => rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r)))
+    setRows((rs) =>
+      rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r))
+    )
   }
 
   const requestMic = async (): Promise<void> => {
@@ -1461,7 +1361,9 @@ export function OnboardingExperience({
   // deliberately excluded: transcription works without AI. A managed licence or personal provider
   // can be connected after setup, so AI never blocks Continue the way transcription assets do.
   const needsPerms = rows.some(
-    (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
+    (r) =>
+      (r.key === 'mic' || r.key === 'screen') &&
+      (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
   const asrBlocksContinue = setupAsrBlocksContinue(rows, asrStatus, setupAccessFailOpen)
 
@@ -1472,301 +1374,319 @@ export function OnboardingExperience({
         <OnboardingHeroVideo videoRef={heroVideoRef} />
       )}
       <div
-      className="onboard-root relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
-      onPointerDown={music.start}
-    >
-      {shouldMountKineticGrid(scene) && <KineticGrid />}
-      <button
-        type="button"
-        className="onboard-mute no-drag focus-ring"
-        aria-label={music.muted ? 'Unmute music' : 'Mute music'}
-        aria-pressed={music.muted}
-        onClick={music.toggleMute}
+        className="onboard-root relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
+        onPointerDown={music.start}
       >
-        {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-      </button>
-      <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
-        <ActProgress scene={scene} />
-      </div>
-      <div className="onboard-tour-slot flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
-      {scene === 'hero' && (
-        <HeroWelcome
-          onBegin={() => {
-            // P0: paint problem FIRST — never wait on music/video/portal (Example: after Next → black/Loading).
-            setScene('problem')
-            try {
-              music.start()
-            } catch {
-              /* ignore */
-            }
-            try {
-              playOnboardingVideo(heroVideoRef.current)
-            } catch {
-              /* ignore */
-            }
-            try {
-              requestOnboardingPortalOpen()
-            } catch {
-              /* ignore */
-            }
-          }}
-        />
-      )}
-
-      {scene === 'problem' && (
-        <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
-          <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
-            {PROBLEM_STORY.map((line) => (
-              <p
-                key={line}
-                className="m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
-                style={{ opacity: 1 }}
-              >
-                {line}
-              </p>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              playHero()
-              setScene('reveal')
-            }}
-            className="onboard-cta no-drag focus-ring"
-          >
-            Continue
-          </button>
+        {shouldMountKineticGrid(scene) && <KineticGrid />}
+        <button
+          type="button"
+          className="onboard-mute no-drag focus-ring"
+          aria-label={music.muted ? 'Unmute music' : 'Mute music'}
+          aria-pressed={music.muted}
+          onClick={music.toggleMute}
+        >
+          {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+        </button>
+        <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
+          <ActProgress scene={scene} />
         </div>
-      )}
+        <div className="onboard-tour-slot flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
+          {scene === 'hero' && (
+            <HeroWelcome
+              onBegin={() => {
+                // P0: paint problem FIRST — never wait on music/video/portal (Example: after Next → black/Loading).
+                setScene('problem')
+                try {
+                  music.start()
+                } catch {
+                  /* ignore */
+                }
+                try {
+                  playOnboardingVideo(heroVideoRef.current)
+                } catch {
+                  /* ignore */
+                }
+                try {
+                  requestOnboardingPortalOpen()
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+          )}
 
-      {scene === 'reveal' && (
-        <Suspense
-          fallback={
-            <div className="flex flex-col items-center gap-6">
-              <p className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">See Métis in action</p>
-              <button type="button" className="onboard-cta no-drag focus-ring" onClick={() => setScene(sceneAfterReveal())}>
+          {scene === 'problem' && (
+            <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
+              <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
+                {PROBLEM_STORY.map((line) => (
+                  <p
+                    key={line}
+                    className="m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
+                    style={{ opacity: 1 }}
+                  >
+                    {line}
+                  </p>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  playHero()
+                  setScene('reveal')
+                }}
+                className="onboard-cta no-drag focus-ring"
+              >
                 Continue
               </button>
             </div>
-          }
-        >
-          <OnboardingDemoScene
-            mode={mode}
-            onSetMode={setMode}
-            onContinue={() => {
-              playHero()
-              setScene(sceneAfterReveal())
-            }}
-            onPlayVideo={() => playHero()}
-          />
-        </Suspense>
-      )}
+          )}
 
-      {scene === 'setup' && (
-        <div key="setup" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Your setup</h2>
-          <div className="flex w-full max-w-[440px] flex-col gap-2">
-            {rows.map((r, i) => (
-              <div
-                key={r.key}
-                className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
-                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
-              >
-                <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
-                <div className="min-w-0 flex-1">
-                  <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
-                  {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
-                  {(r.key === 'local' || r.key === 'asr') && r.progress != null && (
-                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="h-full rounded-full bg-[#9A2BF0]"
-                        style={{ width: `${Math.round(r.progress * 100)}%` }}
-                      />
-                    </div>
-                  )}
-                  {r.key === 'local' && r.state === 'action' && r.progress == null && (
-                    <div className="mt-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.localModelsEnsure().catch(() => {})}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Retry
-                      </button>
-                    </div>
-                  )}
-                  {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
+          {scene === 'reveal' && (
+            <Suspense
+              fallback={
+                <div className="flex flex-col items-center gap-6">
+                  <p className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">See Métis in action</p>
+                  <button
+                    type="button"
+                    className="onboard-cta no-drag focus-ring"
+                    onClick={() => setScene(sceneAfterReveal())}
+                  >
+                    Continue
+                  </button>
+                </div>
+              }
+            >
+              <OnboardingDemoScene
+                mode={mode}
+                onSetMode={setMode}
+                onContinue={() => {
+                  playHero()
+                  setScene(sceneAfterReveal())
+                }}
+                onPlayVideo={() => playHero()}
+              />
+            </Suspense>
+          )}
+
+          {scene === 'setup' && (
+            <div key="setup" className="scene-enter flex flex-col items-center gap-6">
+              <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Your setup</h2>
+              <div className="flex w-full max-w-[440px] flex-col gap-2">
+                {rows.map((r, i) => (
+                  <div
+                    key={r.key}
+                    className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
+                    style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
+                  >
+                    <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
+                      {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
+                      {(r.key === 'local' || r.key === 'asr') && r.progress != null && (
+                        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                          <div
+                            className="h-full rounded-full bg-[#9A2BF0]"
+                            style={{ width: `${Math.round(r.progress * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                      {r.key === 'local' && r.state === 'action' && r.progress == null && (
+                        <div className="mt-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void window.toto.localModelsEnsure().catch(() => {})}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+                      {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
                       after — so the user knows what they're being asked for before they're asked. */}
-                  {r.key === 'asr' && asrRowNeedsRetry(r) && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Transcription files download when you first set up Métis. Check your connection.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void retryAsr()}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Try again
-                      </button>
-                    </div>
-                  )}
-                  {r.key === 'asr' && asrRowNeedsRepair(r) && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Reinstall Métis with the official installer, then reopen it.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.quit()}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Quit Métis
-                      </button>
-                    </div>
-                  )}
-                  {r.key === 'mic' && r.state === 'action' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Lets Métis hear your side of the call.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void requestMic()}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Allow Microphone
-                      </button>
-                    </div>
-                  )}
-                  {r.key === 'mic' && r.state === 'blocked' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        {isWindows
-                          ? "Windows is blocking the microphone. Turn it back on in Privacy settings."
-                          : "macOS won't ask again once you've said no. Turn it back on in Privacy settings."}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.openPermissionSettings('microphone')}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Open Microphone Settings
-                      </button>
-                    </div>
-                  )}
-                  {r.key === 'screen' && (r.state === 'action' || r.state === 'blocked') && (
-                    <ScreenSetupActions
-                      perms={screenSetup.perms}
-                      check={screenSetup.check}
-                      onRequest={() => void screenSetup.request()}
-                      onRecheck={screenSetup.recheck}
-                    />
-                  )}
-                  {r.key === 'screen' && r.state === 'restart' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-accent-2)]">
-                        Granted. Restart Métis to finish enabling it.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={restartApp}
-                        disabled={restarting}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60"
-                      >
-                        {restarting ? 'Restarting…' : 'Restart Métis'}
-                      </button>
-                    </div>
-                  )}
-                  {/* Opt-out toggle framed as competence (Act 3 brief): screenAsk is a REAL, on-by-default
+                      {r.key === 'asr' && productPackageMode === 'legacy' && asrRowNeedsRetry(r) && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                            Transcription files download when you first set up Métis. Check your connection.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void retryAsr()}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                          >
+                            Try again
+                          </button>
+                        </div>
+                      )}
+                      {r.key === 'asr' && productPackageMode === 'legacy' && asrRowNeedsRepair(r) && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                            Reinstall Métis with the official installer, then reopen it.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void window.toto.quit()}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                          >
+                            Quit Métis
+                          </button>
+                        </div>
+                      )}
+                      {r.key === 'mic' && r.state === 'action' && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                            Lets Métis hear your side of the call.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void requestMic()}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                          >
+                            Allow Microphone
+                          </button>
+                        </div>
+                      )}
+                      {r.key === 'mic' && r.state === 'blocked' && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                            {isWindows
+                              ? 'Windows is blocking the microphone. Turn it back on in Privacy settings.'
+                              : "macOS won't ask again once you've said no. Turn it back on in Privacy settings."}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void window.toto.openPermissionSettings('microphone')}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                          >
+                            Open Microphone Settings
+                          </button>
+                        </div>
+                      )}
+                      {r.key === 'screen' && (r.state === 'action' || r.state === 'blocked') && (
+                        <ScreenSetupActions
+                          perms={screenSetup.perms}
+                          check={screenSetup.check}
+                          onRequest={() => void screenSetup.request()}
+                          onRecheck={screenSetup.recheck}
+                        />
+                      )}
+                      {r.key === 'screen' && r.state === 'restart' && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] leading-snug text-[color:var(--color-accent-2)]">
+                            Granted. Restart Métis to finish enabling it.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={restartApp}
+                            disabled={restarting}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60"
+                          >
+                            {restarting ? 'Restarting…' : 'Restart Métis'}
+                          </button>
+                        </div>
+                      )}
+                      {/* Opt-out toggle framed as competence (Act 3 brief): screenAsk is a REAL, on-by-default
                       setting (ipc.ts) — never invented for this scene — so it's shown as "already on,
                       your call" rather than a setup step. Independent of the permission grant above: the
                       toggle flips the app's intent to ask, whether or not the OS has said yes yet. */}
-                  {r.key === 'screen' && settings && patch && (
-                    <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Let Métis see your screen when you ask (on by default, your call).
-                      </span>
-                      <MiniToggle
-                        on={settings.screenAsk}
-                        onChange={(v) => patch({ screenAsk: v })}
-                        label="Let Métis see your screen when you ask"
-                      />
+                      {r.key === 'screen' && settings && patch && (
+                        <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
+                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                            Let Métis see your screen when you ask (on by default, your call).
+                          </span>
+                          <MiniToggle
+                            on={settings.screenAsk}
+                            onChange={(v) => patch({ screenAsk: v })}
+                            label="Let Métis see your screen when you ask"
+                          />
+                        </div>
+                      )}
+                      {r.key === 'ai' && r.state === 'action' && (
+                        <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                          Transcription works without an AI connection. Activate your Métis licence in Settings →
+                          Identity for automatic summaries and answers, or connect your own provider in Settings → AI.
+                        </p>
+                      )}
+                      {r.key === 'ai' && r.state === 'ready' && (
+                        <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                          Add your own provider key anytime in Settings (optional, never required).
+                        </p>
+                      )}
                     </div>
-                  )}
-                  {r.key === 'ai' && r.state === 'action' && (
-                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      Transcription works without an AI connection. Activate your Métis licence in Settings → Identity for automatic summaries and answers, or connect your own provider in Settings → AI.
-                    </p>
-                  )}
-                  {r.key === 'ai' && r.state === 'ready' && (
-                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      Add your own provider key anytime in Settings (optional, never required).
-                    </p>
-                  )}
-                </div>
-                {(r.state === 'checking' || r.state === 'loading') && (
-                  <span className="mt-0.5 shrink-0">
-                    <InlineOrb kind="loading" percent={setupRowLoadingPercent(r.progress)} />
-                  </span>
-                )}
-                {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
-                {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
-                {r.state === 'blocked' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">blocked</span>}
-                {r.state === 'restart' && (
-                  <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-accent-2)]">restart</span>
-                )}
+                    {(r.state === 'checking' || r.state === 'loading') && (
+                      <span className="mt-0.5 shrink-0">
+                        <InlineOrb kind="loading" percent={setupRowLoadingPercent(r.progress)} />
+                      </span>
+                    )}
+                    {r.state === 'ready' && (
+                      <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />
+                    )}
+                    {r.state === 'action' && (
+                      <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">
+                        needed
+                      </span>
+                    )}
+                    {r.state === 'blocked' && (
+                      <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">
+                        blocked
+                      </span>
+                    )}
+                    {r.state === 'restart' && (
+                      <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-accent-2)]">
+                        restart
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          {allReady && (
-            <p className="fade-up m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
-              Everything’s ready. Nothing to configure.
-            </p>
-          )}
-          {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
+              {allReady && (
+                <p className="fade-up m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
+                  Everything’s ready. Nothing to configure.
+                </p>
+              )}
+              {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
               act) — but placed HERE, first, rather than saved for the final act, and reinforced again at
               Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
               Métis is actually allowed to listen. */}
-          {scanDone && (
-            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-              Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
-            </p>
+              {scanDone && (
+                <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                  Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
+                </p>
+              )}
+              {asrBlocksContinue && scanDone && (
+                <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                  Transcription files are still finishing in the background. You can Continue now and finish them in
+                  Settings.
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
+                  // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
+                  onClick={() => {
+                    // P0 nuclear: never block Continue on ASR/access — rows stay informational.
+                    playHero()
+                    setScene(sceneAfterSetup())
+                  }}
+                  className="onboard-cta no-drag focus-ring"
+                >
+                  {setupContinueLabel(needsPerms)}
+                </button>
+              </div>
+            </div>
           )}
-          {asrBlocksContinue && scanDone && (
-            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-              Transcription files are still finishing in the background. You can Continue now and finish them in Settings.
-            </p>
-          )}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
-              // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
-              onClick={() => {
-                // P0 nuclear: never block Continue on ASR/access — rows stay informational.
-                playHero()
-                setScene(sceneAfterSetup())
-              }}
-              className="onboard-cta no-drag focus-ring"
-            >
-              {setupContinueLabel(needsPerms)}
-            </button>
-          </div>
-        </div>
-      )}
 
-      {scene === 'personalize' && (
-        <div key="personalize" className="scene-enter onboard-act4 flex flex-col items-center">
-          <div className="onboard-act4-heading flex flex-col items-center gap-2">
-            <p className="onboard-act4-kicker">Last one</p>
-            <h2 className="onboard-act4-title">How should Métis show up?</h2>
-            <p className="onboard-act4-lead">
-              One pick shapes how it listens and what it says next. Change it anytime in Settings.
-            </p>
-          </div>
-          <div className="onboard-persona-row">
-            {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
+          {scene === 'personalize' && (
+            <div key="personalize" className="scene-enter onboard-act4 flex flex-col items-center">
+              <div className="onboard-act4-heading flex flex-col items-center gap-2">
+                <p className="onboard-act4-kicker">Last one</p>
+                <h2 className="onboard-act4-title">How should Métis show up?</h2>
+                <p className="onboard-act4-lead">
+                  One pick shapes how it listens and what it says next. Change it anytime in Settings.
+                </p>
+              </div>
+              <div className="onboard-persona-row">
+                {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
                 after the heavy config step") — three refined cards over the plain three-button picker
                 this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
                 unit-tested against the actual `DEFAULT_MODE_PROMPTS`) rather than inventing personality
@@ -1774,97 +1694,99 @@ export function OnboardingExperience({
                 ring` below), keyed by `mode` so it retriggers fresh on every pick — same remount trick as
                 `.scene-enter`'s `key={scene}` — and folds into the global prefers-reduced-motion rule for
                 free (0ms duration = jumps straight to its end state, i.e. invisible). */}
-            {ONBOARDING_PERSONAS.map((p) => {
-              const Icon = PERSONA_ICONS[p.id]
-              const selected = mode === p.id
-              return (
+                {ONBOARDING_PERSONAS.map((p) => {
+                  const Icon = PERSONA_ICONS[p.id]
+                  const selected = mode === p.id
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setMode(p.id)}
+                      className={'onboard-persona no-drag focus-ring' + (selected ? ' is-selected' : '')}
+                    >
+                      {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
+                      <div className="flex items-center gap-1.5">
+                        <Icon size={13} className="text-[color:var(--color-ink)]" />
+                        <p className="onboard-persona-label">{p.label}</p>
+                      </div>
+                      <p className="onboard-persona-vibe">{p.vibe}</p>
+                      <p className="onboard-persona-changes">{p.changes}</p>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex flex-col items-center gap-4">
+                <TellTheRoomCard consent={consent} onConsent={setConsent} />
                 <button
-                  key={p.id}
                   type="button"
-                  aria-pressed={selected}
-                  onClick={() => setMode(p.id)}
-                  className={'onboard-persona no-drag focus-ring' + (selected ? ' is-selected' : '')}
+                  // Advances to license (only if enabled) or Ready. See onboarding-flow.ts.
+                  onClick={() => {
+                    playHero()
+                    setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
+                  }}
+                  disabled={!consent}
+                  className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
                 >
-                  {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
-                  <div className="flex items-center gap-1.5">
-                    <Icon size={13} className="text-[color:var(--color-ink)]" />
-                    <p className="onboard-persona-label">{p.label}</p>
-                  </div>
-                  <p className="onboard-persona-vibe">{p.vibe}</p>
-                  <p className="onboard-persona-changes">{p.changes}</p>
+                  Continue
                 </button>
-              )
-            })}
-          </div>
-          <div className="flex flex-col items-center gap-4">
-            <TellTheRoomCard consent={consent} onConsent={setConsent} />
-            <button
-              type="button"
-              // Advances to license (only if enabled) or Ready. See onboarding-flow.ts.
-              onClick={() => {
-                playHero()
-                setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
-              }}
-              disabled={!consent}
-              className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
-            >
-              Continue
-            </button>
-          </div>
-        </div>
-      )}
+              </div>
+            </div>
+          )}
 
-      {/* Act 5 (MQA-281/282), re-pointed after personalize by Act 6 (MQA-283) — skipped ENTIRELY when
+          {/* Act 5 (MQA-281/282), re-pointed after personalize by Act 6 (MQA-283) — skipped ENTIRELY when
           settings.licenseGateEnabled is false (the default): personalize's Continue button above only
           ever routes here when that setting is already true, so a normal user (licensing off) never
           sees this scene render, not even for a frame. */}
-      {scene === 'license' && (
-        <ActLicense
-          settings={settings}
-          onContinue={() => {
-            playHero()
-            setScene(sceneAfterLicense())
-          }}
-        />
-      )}
+          {scene === 'license' && (
+            <ActLicense
+              settings={settings}
+              onContinue={() => {
+                playHero()
+                setScene(sceneAfterLicense())
+              }}
+            />
+          )}
 
-      {scene === 'appearance' && (
-        <div key="appearance" className="onboard-appearance-scroll flex min-h-0 w-full flex-col items-center overflow-y-auto px-1 py-4">
-          <OnboardingAppearance
-            value={appearance}
-            locked={appearanceLocked}
-            placement={placement}
-            placementLocked={placementLocked}
-            saving={appearanceSave.busy}
-            error={appearanceSave.error}
-            onChange={(id) => void pickAppearance(id)}
-            onPlacementChange={(id) => void pickPlacement(id)}
-            onContinue={() => {
-              playHero()
-              setScene(sceneAfterAppearance())
-            }}
-          />
+          {scene === 'appearance' && (
+            <div
+              key="appearance"
+              className="onboard-appearance-scroll flex min-h-0 w-full flex-col items-center overflow-y-auto px-1 py-4"
+            >
+              <OnboardingAppearance
+                value={appearance}
+                locked={appearanceLocked}
+                placement={placement}
+                placementLocked={placementLocked}
+                saving={appearanceSave.busy}
+                error={appearanceSave.error}
+                onChange={(id) => void pickAppearance(id)}
+                onPlacementChange={(id) => void pickPlacement(id)}
+                onContinue={() => {
+                  playHero()
+                  setScene(sceneAfterAppearance())
+                }}
+              />
+            </div>
+          )}
+
+          {scene === 'ready' && (
+            <ActReady
+              mode={mode}
+              onFinish={finish}
+              onOpenAiSettings={onOpenAiSettings}
+              asrReady={asrReady}
+              aiReady={settings?.providerReady === true}
+              asrHint={asrRow.detail}
+              asrProgress={asrRow.progress}
+              showAsrRetry={asrRowNeedsRetry(asrRow)}
+              onRetryAsr={() => void retryAsr()}
+              recoverEncryptedProfile={recoverEncryptedProfile}
+              authReady={authReady}
+            />
+          )}
         </div>
-      )}
-
-      {scene === 'ready' && (
-        <ActReady
-          mode={mode}
-          onFinish={finish}
-          onOpenAiSettings={onOpenAiSettings}
-          asrReady={asrReady}
-          aiReady={settings?.providerReady === true}
-          asrHint={asrRow.detail}
-          asrProgress={asrRow.progress}
-          showAsrRetry={asrRowNeedsRetry(asrRow)}
-          onRetryAsr={() => void retryAsr()}
-          recoverEncryptedProfile={recoverEncryptedProfile}
-          authReady={authReady}
-        />
-      )}
-
       </div>
-    </div>
     </>
   )
 }
