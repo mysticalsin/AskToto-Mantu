@@ -1,17 +1,16 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { HeroWelcome } from '../components/OnboardingWelcomeScene'
 import {
   ONBOARDING_BAR_LAND_GAIN,
   ONBOARDING_PORTAL_CLOSE_GAIN,
   ONBOARDING_PORTAL_OPEN_GAIN
 } from './onboarding-portal'
-import {
-  ONBOARDING_MUSIC_ENVELOPE_FLOOR,
-  ONBOARDING_MUSIC_GAIN,
-  onboardingMusicLoopEnvelope
-} from './onboarding-music'
+import { ONBOARDING_MUSIC_ENVELOPE_FLOOR, ONBOARDING_MUSIC_GAIN, onboardingMusicLoopEnvelope } from './onboarding-music'
 import {
   APPEAR_OPACITY_FLOOR,
   appearOpacity,
@@ -74,22 +73,24 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
   })
 
   it('Continue / Next / Set me up sit outside scene-enter on first paint of that act', () => {
-    const hero = actSlice(experience, 'function HeroWelcome', "export type SetupRowState")
-    const nextAt = hero.indexOf('onboard-cta')
+    const hero = renderToStaticMarkup(createElement(HeroWelcome, { onBegin: () => {} }))
+    const nextAt = hero.indexOf('class="onboard-cta')
     const heroCta = hero.slice(nextAt, hero.indexOf('</button>', nextAt))
     expect(heroCta).toMatch(/\bNext\b/)
     expect(heroCta).not.toMatch(/fade-up/)
     expect(heroCta).not.toMatch(/onboard-glass/)
     expect(heroCta).not.toMatch(/animationDelay/)
-    expect(hero.indexOf('scene-enter')).toBeLessThan(hero.indexOf('onboard-cta'))
-    expect(hero.lastIndexOf('</div>', hero.indexOf('onboard-cta'))).toBeGreaterThan(hero.indexOf('scene-enter'))
+    expect(hero.indexOf('class="scene-enter')).toBeLessThan(nextAt)
+    expect(hero.lastIndexOf('</div>', nextAt)).toBeGreaterThan(hero.indexOf('class="scene-enter'))
 
     // FITO-185-P keep-alive: slice problem scene block, not the video ternary.
     const problem = actSlice(experience, "scene === 'problem' && (", "scene === 'reveal' && (")
     expect(problem).toMatch(/scene-enter/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(problem.lastIndexOf('scene-enter'))
 
-    const nextBlock = demo.slice(demo.indexOf('>Next<') > 0 ? demo.indexOf('>Next<') - 400 : demo.search(/>\s*Next\s*</) - 400)
+    const nextBlock = demo.slice(
+      demo.indexOf('>Next<') > 0 ? demo.indexOf('>Next<') - 400 : demo.search(/>\s*Next\s*</) - 400
+    )
     expect(demo).toMatch(/scene-enter/)
     expect(demo.search(/>\s*Next\s*</)).toBeGreaterThan(demo.lastIndexOf('scene-enter', demo.search(/>\s*Next\s*</)))
     expect(demo).toMatch(/>\s*Set me up\s*</)
@@ -98,7 +99,9 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
   })
 
   it('portal video keep-alive on hero|problem|reveal; starfield purple/black after Next', () => {
-    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
+    expect(experience).toMatch(
+      /\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/
+    )
     expect(engine).toMatch(/canvas\.style\.opacity = '0'/)
     expect(engine).toMatch(/setClearColor\(0x05010a/)
     expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)

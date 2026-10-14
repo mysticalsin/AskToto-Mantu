@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
 import type { Browser, Page } from 'playwright'
@@ -12,6 +13,25 @@ import type {
 } from '@shared/speech-pack'
 
 const HARNESS_ID = '\0speech-pack-section-harness'
+const profileMarker = Buffer.from('{"schema":1,"profile":"full"}\n')
+const packageInventoryPayload = {
+  schema: 1,
+  profile: 'full',
+  platform: 'win32',
+  arch: 'x64',
+  appVersion: '2.0.0',
+  electronVersion: '43.6.0',
+  sourceCommit: 'a'.repeat(40),
+  coreFiles: [
+    {
+      path: 'speech-pack-profile.json',
+      bytes: profileMarker.byteLength,
+      sha256: createHash('sha256').update(profileMarker).digest('hex')
+    }
+  ]
+}
+// Mirrors package-contract.ts inventoryIdentity over a valid compiled-full inventory.
+const PROFILE_ID = createHash('sha256').update(JSON.stringify(packageInventoryPayload), 'utf8').digest('hex')
 const rendererSrc = resolve(__dirname, '../..')
 const modulePath = (path: string): string => JSON.stringify(resolve(rendererSrc, path).replace(/\\/g, '/'))
 const HARNESS = `
@@ -67,8 +87,8 @@ const bridge = {
         }],
         totalDownloadBytes: 2000000,
         totalStorageBytes: 3000000,
-        profile: 'lean',
-        profileIdentity: 'c'.repeat(64)
+        profile: 'full',
+        profileIdentity: '${PROFILE_ID}'
       }
     })
   },
@@ -187,11 +207,11 @@ function snapshot(
   } = {}
 ): SpeechPackSnapshot & {
   packageProfile: {
-    status: 'legacy-full'
+    status: 'verified'
     profile: 'full'
-    identity: null
-    platform: null
-    arch: null
+    identity: typeof PROFILE_ID
+    platform: 'win32'
+    arch: 'x64'
     reason: null
   }
   engineReadiness: {
@@ -215,11 +235,11 @@ function snapshot(
     selectedEngine: engine,
     selectedComponent,
     packageProfile: {
-      status: 'legacy-full',
+      status: 'verified',
       profile: 'full',
-      identity: null,
-      platform: null,
-      arch: null,
+      identity: PROFILE_ID,
+      platform: 'win32',
+      arch: 'x64',
       reason: null
     },
     components: [
@@ -308,7 +328,7 @@ describe('SpeechPackSection browser behavior', () => {
 
   it('reads and subscribes without starting a download, follows progress, and requires review plus confirmation', async () => {
     await mount({ snapshot: snapshot(), selectedEngine: 'whisper' })
-    await page.getByText('Whisper base · Not downloaded').waitFor({ state: 'visible' })
+    await page.getByText('Whisper base · Model needed').waitFor({ state: 'visible' })
     expect(await inspect()).toMatchObject({ statusCalls: 1, listenerCount: 1, actionRequests: [] })
 
     await page.evaluate(() =>
@@ -321,7 +341,7 @@ describe('SpeechPackSection browser behavior', () => {
       })
     )
     expect(await page.getByRole('progressbar', { name: 'Speech model download progress' }).count()).toBe(0)
-    await page.getByText('Whisper base · Not downloaded').waitFor({ state: 'visible' })
+    await page.getByText('Whisper base · Model needed').waitFor({ state: 'visible' })
 
     await page.evaluate(() =>
       window.__speechPack.emit({
@@ -340,10 +360,14 @@ describe('SpeechPackSection browser behavior', () => {
     expect((await inspect()).actionRequests).toEqual([])
 
     await page.evaluate((next) => window.__speechPack.update(next, 'parakeet'), snapshot({ engine: 'parakeet' }))
-    await page.getByText('Parakeet · Not downloaded').waitFor({ state: 'visible' })
+    await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     expect(await inspect()).toMatchObject({ statusCalls: 2, listenerCount: 1, unsubscribeCalls: 1, actionRequests: [] })
     await page.getByRole('button', { name: 'Review install' }).click()
-    await page.getByText('2 MB download · 3 MB storage').waitFor({ state: 'visible' })
+    const reviewedPlan = page.getByText('Review this optional install').locator('..')
+    await reviewedPlan.waitFor({ state: 'visible' })
+    const planSummary = reviewedPlan.locator('p').nth(1)
+    await planSummary.waitFor({ state: 'visible' })
+    expect((await planSummary.textContent())?.replace(/\s+/g, ' ').trim()).toBe('2 MB download · 3 MB storage')
     expect((await inspect()).planRequests).toEqual([
       { componentId: PARAKEET, action: 'install', manifestIdentity: PARAKEET_ID }
     ])
@@ -394,6 +418,8 @@ describe('SpeechPackSection browser behavior', () => {
       { componentId: WHISPER, action: 'repair', manifestIdentity: WHISPER_ID }
     ])
 
+    await page.evaluate((next) => window.__speechPack.update(next, 'parakeet'), snapshot({ engine: 'parakeet' }))
+    await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     await page.evaluate(
       (next) => window.__speechPack.update(next, 'whisper'),
       snapshot({ whisperState: 'ready', readiness: 'not-configured' })
@@ -421,9 +447,10 @@ describe('SpeechPackSection browser behavior', () => {
     await page.getByText('Loading model status…').waitFor({ state: 'visible' })
     expect(await page.getByRole('button', { name: 'Repair selected components' }).count()).toBe(0)
     expect((await inspect()).installRequests).toEqual([])
+    await page.waitForFunction(() => window.__speechPack.inspect().pendingStatusCount === 1)
 
     await page.evaluate(() => window.__speechPack.resolveStatus())
-    await page.getByText('Parakeet · Not downloaded').waitFor({ state: 'visible' })
+    await page.getByText('Parakeet · Model needed').waitFor({ state: 'visible' })
     expect(await page.getByRole('button', { name: 'Repair selected components' }).count()).toBe(0)
   })
 
@@ -448,9 +475,58 @@ describe('SpeechPackSection browser behavior', () => {
     expect((await inspect()).installRequests).toEqual([])
   })
 
+  it('refuses a plan whose package identity differs from the compiled full profile', async () => {
+    await mount({
+      snapshot: snapshot(),
+      selectedEngine: 'whisper',
+      planResult: {
+        ok: true,
+        plan: {
+          planId: '00000000-0000-4000-8000-000000000001',
+          action: 'install',
+          feature: 'asr',
+          selectedComponent: WHISPER,
+          missingComponents: [
+            {
+              componentId: WHISPER,
+              manifestIdentity: WHISPER_ID,
+              downloadBytes: 2_000_000,
+              storageBytes: 3_000_000,
+              license: 'Example license',
+              sourceHost: 'models.example.test'
+            }
+          ],
+          totalDownloadBytes: 2_000_000,
+          totalStorageBytes: 3_000_000,
+          profile: 'full',
+          profileIdentity: 'd'.repeat(64)
+        }
+      }
+    })
+    await page.getByRole('button', { name: 'Review install' }).click()
+    await page
+      .getByRole('status')
+      .filter({ hasText: 'The install plan no longer matches the selected speech component.' })
+      .waitFor({ state: 'visible' })
+    expect(await page.getByRole('button', { name: 'Install selected components' }).count()).toBe(0)
+    expect((await inspect()).installRequests).toEqual([])
+  })
+
   it('unsubscribes progress listeners on unmount and renders invalid package profiles as repair-required', async () => {
     await mount({
-      snapshot: { ...snapshot(), profile: null, profileError: 'invalid-profile' },
+      snapshot: {
+        ...snapshot(),
+        profile: null,
+        profileError: 'invalid-profile',
+        packageProfile: {
+          status: 'invalid',
+          profile: null,
+          identity: null,
+          platform: null,
+          arch: null,
+          reason: 'profile-invalid'
+        }
+      },
       selectedEngine: 'whisper'
     })
     await page
