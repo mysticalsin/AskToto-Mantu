@@ -67,26 +67,26 @@ export function priorPackRestoreStillCurrent(
 }
 
 export async function rollbackSpeechPackActivation(options: {
-  currentVersion: string
   previousMarker: { marker: PriorReadyMarker } | null
+  currentVersion: string
   authorize: () => Promise<boolean>
   stillCurrent: () => boolean
   restoreMarker: () => Promise<boolean>
-  removeCurrent: () => Promise<void>
+  removeCurrent: () => Promise<boolean>
   restoreAside: () => Promise<boolean>
-  removeMarker: () => Promise<void>
-}): Promise<void> {
+  removeMarker: () => Promise<boolean>
+}): Promise<boolean> {
   const previous = options.previousMarker
-  if (!(await options.authorize())) return
+  const permitted = async (): Promise<boolean> => (await options.authorize()) && options.stillCurrent()
+  if (!(await permitted())) return false
   if (previous && previous.marker.version !== options.currentVersion) {
-    if (!(await options.restoreMarker()) || !(await options.authorize()) || !options.stillCurrent()) return
-    await options.removeCurrent()
+    if (!(await options.restoreMarker()) || !(await permitted())) return false
+    if (!(await options.removeCurrent())) return false
     await options.restoreAside()
-    return
+    return true
   }
-  if (!options.stillCurrent()) return
-  await options.removeCurrent()
-  const restored = previous ? await options.restoreAside() : false
-  if (previous && restored) await options.restoreMarker()
-  else if ((await options.authorize()) && options.stillCurrent()) await options.removeMarker()
+  if (!(await options.removeCurrent())) return false
+  const restored = await options.restoreAside()
+  if (previous && restored) return (await permitted()) && options.restoreMarker()
+  return (await permitted()) && options.removeMarker()
 }

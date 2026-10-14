@@ -1,5 +1,6 @@
 import { isSafeEntryName } from './archive'
 import type { SpeechPackComponentId } from './manifest'
+import type { PhysicalPathVersion } from './physical-ownership'
 
 export interface SpeechPackActivationMarker {
   schema: 2
@@ -11,6 +12,7 @@ export interface SpeechPackActivationMarker {
 export interface SpeechPackMarkerSnapshot {
   marker: SpeechPackActivationMarker
   bytes: Buffer
+  owner: PhysicalPathVersion
 }
 
 export function isSafeSpeechPackVersion(version: unknown): version is string {

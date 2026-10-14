@@ -6,12 +6,13 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isSafeEntryName } from './archive'
@@ -457,6 +458,119 @@ describe('speech-pack engine', () => {
         expect(existsSync(marker(WHISPER))).toBe(false)
         expect(readdirSync(join(root, WHISPER)).some((name) => name.includes('.old-'))).toBe(false)
       })
+
+      it.each([
+        'root',
+        'component',
+        'final',
+        'aside',
+        'marker'
+      ] as const)('does not mutate or adopt a foreign %s replacement during held rollback', async (target) => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const first = make([c])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        rmSync(marker(WHISPER))
+
+        let entered = false
+        let releaseGate!: () => void
+        const gate = new Promise<void>((resolve) => {
+          releaseGate = resolve
+        })
+        let replacing!: ReturnType<typeof make>
+        replacing = make([c], {
+          onActivationStep: async (step) => {
+            if (step !== 'ready-check') return
+            entered = true
+            await gate
+          }
+        })
+        replacing.enqueue([WHISPER])
+        try {
+          await vi.waitFor(() => expect(entered).toBe(true))
+          replacing.cancel(WHISPER)
+
+          const sentinel = Buffer.from(`foreign-${target}`)
+          const component = join(root, WHISPER)
+          const asideName = readdirSync(component).find((entry) => entry.startsWith('1.old-'))
+          if (!asideName) throw new Error('expected the transaction aside')
+          const promotedMarker = readFileSync(marker(WHISPER))
+          let preservedAside = join(component, asideName)
+          let preservedPromoted = join(component, '1')
+          let preservedMarker = marker(WHISPER)
+          let foreignAside: string | undefined
+          if (target === 'root') {
+            const movedRoot = `${root}.held-owned`
+            renameSync(root, movedRoot)
+            preservedAside = join(movedRoot, WHISPER, asideName)
+            preservedPromoted = join(movedRoot, WHISPER, '1')
+            preservedMarker = join(movedRoot, WHISPER, 'active.json')
+            mkdirSync(root)
+            writeFileSync(join(root, 'foreign'), sentinel)
+            mkdirSync(join(root, WHISPER, '1'), { recursive: true })
+            writeFileSync(join(root, WHISPER, '1', 'foreign'), sentinel)
+          } else if (target === 'component') {
+            const movedComponent = `${component}.held-owned`
+            renameSync(component, movedComponent)
+            preservedAside = join(movedComponent, asideName)
+            preservedPromoted = join(movedComponent, '1')
+            preservedMarker = join(movedComponent, 'active.json')
+            mkdirSync(component)
+            writeFileSync(join(component, 'foreign'), sentinel)
+            mkdirSync(join(component, '1'))
+            writeFileSync(join(component, '1', 'foreign'), sentinel)
+          } else if (target === 'final') {
+            const active = join(root, WHISPER, '1')
+            renameSync(active, `${active}.held-owned`)
+            preservedPromoted = `${active}.held-owned`
+            mkdirSync(active)
+            writeFileSync(join(active, 'foreign'), sentinel)
+          } else if (target === 'aside') {
+            const aside = join(component, asideName)
+            renameSync(aside, `${aside}.held-owned`)
+            preservedAside = `${aside}.held-owned`
+            mkdirSync(aside)
+            for (const file of c.files) {
+              const path = join(aside, file.path)
+              mkdirSync(dirname(path), { recursive: true })
+              writeFileSync(path, contents[file.path])
+            }
+            writeFileSync(join(aside, 'foreign'), sentinel)
+            foreignAside = aside
+          } else {
+            const activeMarker = marker(WHISPER)
+            renameSync(activeMarker, `${activeMarker}.held-owned`)
+            preservedMarker = `${activeMarker}.held-owned`
+            writeFileSync(activeMarker, sentinel)
+          }
+          releaseGate()
+          await replacing.whenIdle()
+
+          expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+          expect(packMatches(c, preservedAside)).toBe(true)
+          expect(packMatches(c, preservedPromoted)).toBe(true)
+          if (target === 'marker') expect(readFileSync(marker(WHISPER))).toEqual(sentinel)
+          else expect(readFileSync(preservedMarker)).toEqual(promotedMarker)
+          if (target === 'root') {
+            expect(readFileSync(join(root, 'foreign'))).toEqual(sentinel)
+            expect(readFileSync(join(root, WHISPER, '1', 'foreign'))).toEqual(sentinel)
+          } else if (target === 'component') {
+            expect(readFileSync(join(root, WHISPER, 'foreign'))).toEqual(sentinel)
+            expect(readFileSync(join(root, WHISPER, '1', 'foreign'))).toEqual(sentinel)
+          } else if (target === 'final') expect(readFileSync(join(root, WHISPER, '1', 'foreign'))).toEqual(sentinel)
+          else if (target === 'aside') {
+            expect(foreignAside).toBeDefined()
+            expect(readFileSync(join(foreignAside as string, 'foreign'))).toEqual(sentinel)
+            expect(packMatches(c, foreignAside as string)).toBe(true)
+            expect(existsSync(join(component, '1'))).toBe(false)
+          } else {
+            expect(readFileSync(marker(WHISPER))).toEqual(sentinel)
+          }
+        } finally {
+          releaseGate()
+        }
+      })
     })
   })
 
@@ -519,7 +633,15 @@ describe('speech-pack engine', () => {
       expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
       expect(packMatches(c, active)).toBe(true)
       expect(existsSync(marker(WHISPER))).toBe(true)
-      expect(asideDirs()).toEqual([])
+      if (step !== 'marker-written') {
+        expect(asideDirs().length).toBeGreaterThan(0)
+        const verifiedLater = make([c])
+        await verifiedLater.initialise()
+        expect(verifiedLater.getState(WHISPER)).toEqual({ status: 'ready' })
+        expect(asideDirs()).toEqual([])
+      } else {
+        expect(asideDirs()).toEqual([])
+      }
       expect(server.requests.length).toBe(before)
     })
 
@@ -760,9 +882,17 @@ describe('speech-pack engine', () => {
 
         const recovered = make([nextVersion])
         await recovered.initialise()
+        expect(recovered.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
+        const before = server.requests.length
+        recovered.enqueue([WHISPER])
+        await recovered.whenIdle()
         expect(recovered.getState(WHISPER)).toEqual({ status: 'ready' })
         expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).version).toBe('2')
         expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(server.requests.length).toBe(before)
       })
     })
 
