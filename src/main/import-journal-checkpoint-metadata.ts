@@ -4,6 +4,7 @@ import type { TranscriptLine } from '@shared/ipc'
 import type { IncrementalJournalSnapshot } from './features/meetings/incremental-meeting-journal'
 import type { ImportCheckpoint, ImportJobHeader, ImportTranscriptHandle } from './import-job-checkpoint-contract'
 import type { ImportPersistencePolicy } from './import-persistence-policy'
+import { MAX_MANIFEST_BYTES } from './features/meetings/incremental-meeting-journal-format'
 
 const SAFE_COMPONENT = /^[A-Za-z0-9_-]{1,128}$/
 const HEADER_FIELDS = new Set([
@@ -50,6 +51,7 @@ export interface PendingWindow {
   nextCursor: number
   baseRevision: number
   recordId: string | null
+  nextHeader: ImportJobHeader
 }
 
 export interface CheckpointMetadata {
@@ -94,6 +96,7 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 
 export function validateHeader(header: unknown, jobId: string): header is ImportJobHeader {
   if (!header || typeof header !== 'object' || Array.isArray(header)) return false
+  if (!boundedJsonBytes(header, MAX_MANIFEST_BYTES)) return false
   const value = header as Record<string, unknown>
   return (
     !('lines' in value) &&
@@ -101,12 +104,15 @@ export function validateHeader(header: unknown, jobId: string): header is Import
     value.jobId === jobId &&
     typeof value.sourcePath === 'string' &&
     value.sourcePath.length > 0 &&
+    Buffer.byteLength(value.sourcePath, 'utf8') <= MAX_MANIFEST_BYTES &&
     typeof value.sourceName === 'string' &&
+    Buffer.byteLength(value.sourceName, 'utf8') <= MAX_MANIFEST_BYTES &&
     Number.isSafeInteger(value.sourceSizeBytes) &&
     (value.sourceSizeBytes as number) >= 0 &&
     Number.isFinite(value.sourceMtimeMs) &&
     typeof value.title === 'string' &&
     value.title.length > 0 &&
+    Buffer.byteLength(value.title, 'utf8') <= MAX_MANIFEST_BYTES &&
     [
       'queued',
       'decoding',
@@ -127,10 +133,14 @@ export function validateHeader(header: unknown, jobId: string): header is Import
         value.progressPct <= 100)) &&
     Number.isFinite(value.createdAt) &&
     Number.isFinite(value.updatedAt) &&
-    (value.file === undefined || typeof value.file === 'string') &&
-    (value.error === undefined || typeof value.error === 'string') &&
-    (value.recapError === undefined || typeof value.recapError === 'string') &&
-    (value.mode === undefined || typeof value.mode === 'string') &&
+    (value.file === undefined ||
+      (typeof value.file === 'string' && Buffer.byteLength(value.file, 'utf8') <= MAX_MANIFEST_BYTES)) &&
+    (value.error === undefined ||
+      (typeof value.error === 'string' && Buffer.byteLength(value.error, 'utf8') <= MAX_MANIFEST_BYTES)) &&
+    (value.recapError === undefined ||
+      (typeof value.recapError === 'string' && Buffer.byteLength(value.recapError, 'utf8') <= MAX_MANIFEST_BYTES)) &&
+    (value.mode === undefined ||
+      (typeof value.mode === 'string' && Buffer.byteLength(value.mode, 'utf8') <= MAX_MANIFEST_BYTES)) &&
     (value.chunkSec === undefined || (Number.isSafeInteger(value.chunkSec) && (value.chunkSec as number) > 0)) &&
     (value.pipeline === undefined || value.pipeline === 'vad-v1' || value.pipeline === 'vad-v2') &&
     (value.durationMs === undefined || (Number.isFinite(value.durationMs) && (value.durationMs as number) >= 0))
@@ -180,17 +190,20 @@ function sameSource(left: ImportJournalSourceVersion, right: ImportJournalSource
   )
 }
 
-function validatePending(value: unknown): value is PendingWindow | null {
+function validatePending(value: unknown, jobId: string): value is PendingWindow | null {
   if (value === null) return true
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const pending = value as Record<string, unknown>
   return (
-    exactKeys(pending, ['cursor', 'nextCursor', 'baseRevision', 'recordId']) &&
+    exactKeys(pending, ['cursor', 'nextCursor', 'baseRevision', 'recordId', 'nextHeader']) &&
     validCounter(pending.cursor) &&
     validCounter(pending.nextCursor) &&
     pending.nextCursor === pending.cursor + 1 &&
     validCounter(pending.baseRevision) &&
-    (pending.recordId === null || (typeof pending.recordId === 'string' && /^[0-9a-f-]{36}$/i.test(pending.recordId)))
+    (pending.recordId === null ||
+      (typeof pending.recordId === 'string' && /^[0-9a-f-]{36}$/i.test(pending.recordId))) &&
+    validateHeader(pending.nextHeader, jobId) &&
+    (pending.nextHeader as ImportJobHeader).cursor === pending.nextCursor
   )
 }
 
@@ -230,7 +243,7 @@ export function decodeCheckpointMetadata(
       Array.isArray(value.frontier) ||
       !exactKeys(value.frontier as Record<string, unknown>, ['revision', 'recordCount', 'wordCount', 'payloadBytes']) ||
       !Object.values(value.frontier as Record<string, unknown>).every(validCounter) ||
-      !validatePending(value.pending)
+      !validatePending(value.pending, binding.jobId)
     )
       return undefined
     const metadata = value as unknown as CheckpointMetadata
@@ -259,6 +272,7 @@ export function decodeCheckpointMetadata(
 
 export function encodeCheckpointMetadata(metadata: CheckpointMetadata, maxBytes: number): Uint8Array | undefined {
   try {
+    if (!boundedJsonBytes(metadata, maxBytes)) return undefined
     const json = JSON.stringify(metadata)
     const length = Buffer.byteLength(json, 'utf8')
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || length <= 0 || length > maxBytes) return undefined
@@ -271,6 +285,73 @@ export function encodeCheckpointMetadata(metadata: CheckpointMetadata, maxBytes:
   } catch {
     return undefined
   }
+}
+
+/** Conservative bounded preflight used before schema cloning or JSON allocation. */
+export function boundedJsonBytes(value: unknown, maxBytes: number): boolean {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) return false
+  let charged = 0
+  let nodes = 0
+  const seen = new Set<object>()
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }]
+  const add = (bytes: number): boolean => {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || charged > maxBytes - bytes) return false
+    charged += bytes
+    return true
+  }
+  const stringBytes = (text: string): number | undefined => {
+    let size = 2
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index)
+      if (code === 34 || code === 92 || code < 32) size += code < 32 ? 6 : 2
+      else if (code < 128) size += 1
+      else if (code < 2048) size += 2
+      else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+        const low = text.charCodeAt(index + 1)
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          size += 4
+          index += 1
+        } else size += 6
+      } else if (code >= 0xd800 && code <= 0xdfff) size += 6
+      else size += 3
+      if (size > maxBytes) return undefined
+    }
+    return size
+  }
+  while (stack.length) {
+    const item = stack.pop()!
+    nodes += 1
+    if (nodes > 256 || item.depth > 8) return false
+    const current = item.value
+    if (current === null) {
+      if (!add(4)) return false
+    } else if (typeof current === 'string') {
+      const size = stringBytes(current)
+      if (size === undefined || !add(size)) return false
+    } else if (typeof current === 'number') {
+      if (!Number.isFinite(current) || !add(String(current).length)) return false
+    } else if (typeof current === 'boolean') {
+      if (!add(current ? 4 : 5)) return false
+    } else if (Array.isArray(current)) {
+      if (seen.has(current) || current.length > 256 || !add(2 + Math.max(0, current.length - 1))) return false
+      seen.add(current)
+      for (let index = current.length - 1; index >= 0; index -= 1)
+        stack.push({ value: current[index], depth: item.depth + 1 })
+    } else if (typeof current === 'object') {
+      if (seen.has(current)) return false
+      seen.add(current)
+      const keys = Object.keys(current)
+      if (keys.length > 128 || !add(2 + Math.max(0, keys.length - 1) * 1)) return false
+      for (const key of keys) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, key)
+        const keySize = stringBytes(key)
+        if (!descriptor || !('value' in descriptor) || keySize === undefined || !add(keySize + 1)) return false
+        stack.push({ value: descriptor.value, depth: item.depth + 1 })
+      }
+    } else return false
+    if (charged > maxBytes) return false
+  }
+  return true
 }
 
 export function checkpointFromMetadata(

@@ -3,6 +3,23 @@ import { hasVadV2MemoryHeadroom } from '@shared/asr-hardware-preference'
 import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
 import * as ImportRetention from './import-retention-policy'
 import { ImportCheckpointUnavailableError } from './import-job-checkpoint-contract'
+import { titleFromSource } from './import-job-title'
+import {
+  MAX_CONCURRENT_DECODES,
+  copyImportJobValue as copy,
+  canFinishImportAttempt,
+  decodeSkipThrough,
+  decoderSlotIsStale,
+  isTerminalImportJobState as terminal,
+  retireImportAttemptAuthority,
+  stopImportAttempt
+} from './import-job-utilities'
+export {
+  MAX_CONCURRENT_DECODES,
+  MAX_CONCURRENT_IMPORTS,
+  decodeSkipThrough,
+  decoderSlotIsStale
+} from './import-job-utilities'
 import {
   acceptImportDecodedChunk,
   importPcmOf,
@@ -57,11 +74,6 @@ export type {
  * never left on disk. On boot, saved imports are inventoried without reading payloads and require an
  * explicit Resume action before source validation or decoder admission.
  */
-/** One decoded recording at a time, from decoder admission through retained-PCM consumption. */
-export const MAX_CONCURRENT_DECODES = 1
-/** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
-export const MAX_CONCURRENT_IMPORTS = MAX_CONCURRENT_DECODES
-
 /** Majority-vote sample points across the recording's windows. Five spread probes beat the old single
  *  window-0 probe because window 0 is disproportionately a greeting in the OTHER language ("Hello" on a
  *  French call) — the documented 2026-08-05 failure that translated a whole meeting. */
@@ -75,34 +87,7 @@ interface SpeakerAttemptState {
   speakerOwned: boolean
   finalized: boolean
   disposed: boolean
-}
-
-const terminal = (state: ImportJobState): boolean =>
-  state === 'done' || state === 'failed' || state === 'policy-held' || state === 'cancelled'
-
-/** The singleton decoder may be reaped once the job is no longer in the decode phase.
- *  Transcribing / saving / recapping must not keep the next file waiting. */
-export function decoderSlotIsStale(state: ImportJobState | undefined): boolean {
-  return state !== 'decoding'
-}
-
-/** VAD cursors count utterance windows, not decoder slabs. Both decoders must replay all PCM. */
-export function decodeSkipThrough(job: Pick<ImportJob, 'pipeline' | 'cursor'>): number {
-  return job.pipeline === 'vad-v1' || job.pipeline === 'vad-v2' ? 0 : job.cursor
-}
-
-function titleFromSource(name: string): string {
-  const base = name.replace(/\.[^./\\]+$/, '')
-  const words = base.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
-  if (!words) return 'Imported audio'
-  return words
-    .split(' ')
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ')
-}
-
-function copy<T>(value: T): T {
-  return structuredClone(value)
+  authorityRetired: boolean
 }
 
 /**
@@ -665,7 +650,8 @@ export class ImportJobManager {
       tailAllowed: true,
       speakerOwned: false,
       finalized: false,
-      disposed: false
+      disposed: false,
+      authorityRetired: false
     }
     const explicitResume = this.explicitResumeJobs.delete(job.jobId)
     if (this.deps.captureAttemptAuthority) {
@@ -697,7 +683,7 @@ export class ImportJobManager {
     } catch {
       attempt.accepting = false
       attempt.tailAllowed = false
-      attempt.authority?.retire()
+      retireImportAttemptAuthority(attempt)
       return false
     }
   }
@@ -707,15 +693,18 @@ export class ImportJobManager {
   }
 
   private attemptCanFinish(attempt: SpeakerAttemptState | undefined): boolean {
-    return !!attempt && attempt.tailAllowed && this.speakerAttempts.get(attempt.identity.jobId) === attempt
+    return (
+      !!attempt &&
+      canFinishImportAttempt(
+        attempt,
+        this.speakerAttempts.get(attempt.identity.jobId) === attempt,
+        () => this.deps.persistenceState?.() === 'configured'
+      )
+    )
   }
 
   private stopSpeakerAttempt(jobId: string): void {
-    const attempt = this.speakerAttempts.get(jobId)
-    if (attempt) {
-      attempt.accepting = false
-      attempt.tailAllowed = false
-    }
+    stopImportAttempt(this.speakerAttempts.get(jobId))
   }
 
   private disposeSpeakerAttempt(jobId: string, attempt: SpeakerAttemptState | undefined, retainForTail = false): void {
@@ -735,7 +724,9 @@ export class ImportJobManager {
   }
 
   private retireAttempt(jobId: string, attempt: SpeakerAttemptState | undefined): void {
-    if (attempt && this.speakerAttempts.get(jobId) === attempt) this.speakerAttempts.delete(jobId)
+    if (!attempt) return
+    retireImportAttemptAuthority(attempt)
+    if (this.speakerAttempts.get(jobId) === attempt) this.speakerAttempts.delete(jobId)
   }
 
   private async persist(job: ImportJob, attempt?: SpeakerAttemptState): Promise<void> {
@@ -870,8 +861,8 @@ export class ImportJobManager {
       copy,
       takePcm: (jobId) => this.takePcm(jobId),
       fail: (job, error) => this.fail(job, error),
-      persist: (job, attempt) => this.persist(job, attempt),
-      attemptAccepts: (attempt) => this.attemptAccepts(attempt),
+      persist: (job, attempt) => this.persist(job, attempt as SpeakerAttemptState | undefined),
+      attemptAccepts: (attempt) => this.attemptAccepts(attempt as SpeakerAttemptState | undefined),
       isAttemptStopped: (error) => error === ATTEMPT_STOPPED,
       transcribeWithRetry: (samples, opts, stillCurrent) => this.transcribeWithRetry(samples, opts, stillCurrent),
       retentionAllowed: () => this.retentionPolicy.allowed(),
@@ -880,10 +871,12 @@ export class ImportJobManager {
         await this.refreshRetentionStatus()
         this.retentionPolicy.assertAllowed()
       },
-      assertJobWriteAllowed: (job, attempt) => this.assertJobWriteAllowed(job, attempt),
-      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt),
+      assertJobWriteAllowed: (job, attempt) =>
+        this.assertJobWriteAllowed(job, attempt as SpeakerAttemptState | undefined),
+      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt as SpeakerAttemptState | undefined),
       holdForPolicy: (job, reason) => this.holdForPolicy(job, reason),
-      isCurrentJob: (job, attempt) => this.jobs.get(job.jobId) === job && (!attempt || this.attemptCanFinish(attempt)),
+      isCurrentJob: (job, attempt) =>
+        this.jobs.get(job.jobId) === job && (!attempt || this.speakerAttempts.get(job.jobId) === attempt),
       abandonIfCancelled: (job, file) => this.abandonIfCancelled(job, file),
       removeCheckpoint: (jobId) => this.removeCheckpoint(jobId),
       releaseDecodeSlot: (jobId) => this.releaseDecodeSlot(jobId),

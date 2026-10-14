@@ -1,5 +1,5 @@
 import type { IncrementalJournalApplicationMetadataResult } from './incremental-meeting-journal'
-import { setManifestStoredBytes, validCounter } from './incremental-meeting-journal-format'
+import { MAX_MANIFEST_BYTES, setManifestStoredBytes, validCounter } from './incremental-meeting-journal-format'
 import type { ManifestCore } from './incremental-meeting-journal-format'
 
 type ManifestRead = { status: 'ok'; core: ManifestCore; bytes: Buffer } | { status: 'missing' | 'unavailable' }
@@ -65,6 +65,28 @@ export function createApplicationMetadataStore(options: {
         loaded.bytes.fill(0)
         return { status: 'limit' }
       }
+      if (!validCounter(old.applicationRevision + 1)) {
+        loaded.bytes.fill(0)
+        return { status: 'limit' }
+      }
+      const recordBytes = old.storedBytes - old.manifestBytes
+      const core: ManifestCore = {
+        ...old,
+        applicationRevision: old.applicationRevision + 1,
+        applicationMetadata: suppliedBytes === null ? null : '',
+        manifestBytes: 0
+      }
+      let emptyManifest: Buffer
+      try {
+        emptyManifest = setManifestStoredBytes(core, recordBytes, options.key)
+      } catch {
+        loaded.bytes.fill(0)
+        return { status: 'limit' }
+      }
+      // Leave room for numeric fields to cross a decimal boundary as base64 grows. This rejects
+      // impossible requests before copying or encoding the caller's data.
+      const encodedCapacity = Math.max(0, MAX_MANIFEST_BYTES - emptyManifest.byteLength - 64 + 2)
+      emptyManifest.fill(0)
       let encodedMetadata: string | null = null
       let ownedMetadata: Uint8Array | null = null
       if (suppliedBytes !== null) {
@@ -97,7 +119,8 @@ export function createApplicationMetadataStore(options: {
           loaded.bytes.fill(0)
           return { status: 'limit' }
         }
-        if (byteLength <= 0 || byteLength > maxBytes) {
+        const base64Length = 4 * Math.ceil(byteLength / 3)
+        if (byteLength <= 0 || byteLength > maxBytes || base64Length > encodedCapacity) {
           loaded.bytes.fill(0)
           return { status: 'limit' }
         }
@@ -105,13 +128,7 @@ export function createApplicationMetadataStore(options: {
         ownedMetadata.set(suppliedBytes)
         encodedMetadata = Buffer.from(ownedMetadata).toString('base64')
       }
-      const core: ManifestCore = {
-        ...old,
-        applicationRevision: old.applicationRevision + 1,
-        applicationMetadata: encodedMetadata,
-        manifestBytes: 0
-      }
-      const recordBytes = old.storedBytes - old.manifestBytes
+      core.applicationMetadata = encodedMetadata
       loaded.bytes.fill(0)
       if (!requestCurrent()) {
         ownedMetadata?.fill(0)

@@ -20,6 +20,90 @@ function snapshot(value: Settings, epoch: number, readable = true): SettingsPoli
 }
 
 describe('import job authority boundary', () => {
+  it('keeps an operation current across verified equivalent fresh Settings publications', async () => {
+    let current: SettingsObservation | null = null
+    let epoch = 1
+    const value = settings()
+    current = snapshot(value, epoch)
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 4,
+      readAuthority: async () => {
+        const fresh = snapshot({ ...value }, ++epoch)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current
+    })
+
+    const operation = await authority.captureOperation()
+    operation.assertCurrent()
+    await authority.assertAdmissionAllowed()
+    operation.assertCurrent()
+    await operation.refreshSameScope()
+    operation.assertCurrent()
+  })
+
+  it('pins the invocation auth generation while its initial authority refresh is queued', async () => {
+    let current: SettingsObservation | null = snapshot(settings(), 1)
+    let generation = 6
+    let releaseRead: (() => void) | undefined
+    let announceRead: (() => void) | undefined
+    const readStarted = new Promise<void>((resolve) => {
+      announceRead = resolve
+    })
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => generation,
+      readAuthority: async () => {
+        announceRead?.()
+        await new Promise<void>((resolve) => {
+          releaseRead = resolve
+        })
+        const fresh = snapshot(settings(), 1)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current
+    })
+
+    const captured = authority.captureOperation()
+    await readStarted
+    generation += 1
+    releaseRead?.()
+    await expect(captured).rejects.toThrow(/policy could not be verified/)
+  })
+
+  it('rejects a settings A to B to A transition while the initial authority refresh is queued', async () => {
+    let current: SettingsObservation | null = snapshot(settings(), 1)
+    let releaseRead: (() => void) | undefined
+    let announceRead: (() => void) | undefined
+    const readStarted = new Promise<void>((resolve) => {
+      announceRead = resolve
+    })
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 2,
+      readAuthority: async () => {
+        announceRead?.()
+        await new Promise<void>((resolve) => {
+          releaseRead = resolve
+        })
+        const fresh = snapshot(settings(), 3)
+        current = fresh
+        return fresh
+      },
+      currentObservation: () => current
+    })
+
+    const captured = authority.captureOperation()
+    await readStarted
+    current = snapshot(settings(true), 2)
+    current = snapshot(settings(), 3)
+    releaseRead?.()
+    await expect(captured).rejects.toThrow(/policy could not be verified/)
+  })
+
   it('requires fresh readable settings and a matching published epoch', async () => {
     let current: SettingsObservation | null = null
     let allowed = true

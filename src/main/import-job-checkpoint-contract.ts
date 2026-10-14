@@ -73,6 +73,7 @@ export type ImportCheckpointFailure =
 
 export type ImportCheckpointResumeResult =
   | { readonly status: 'ready'; readonly checkpoint: ImportCheckpoint }
+  | { readonly status: 'retry'; readonly checkpoint: ImportCheckpoint }
   | { readonly status: 'held'; readonly reason: ImportCheckpointFailure }
 
 export interface ImportCheckpointWindowChange {

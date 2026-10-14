@@ -10,6 +10,7 @@ import {
 import type { IncrementalAppendCommit, IncrementalJournalSnapshot } from './incremental-meeting-journal'
 
 export const MANIFEST_VERSION = 1
+export const MAX_MANIFEST_BYTES = 16_384
 export const RECORD_MAGIC = Buffer.from('MIR1')
 export const RECORD_HEADER_BYTES = 4 + 8 + 12 + 16
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -140,7 +141,7 @@ export function validCounter(value: unknown): value is number {
 
 export function verifyManifest(bytes: Uint8Array, key: Buffer, meetingId: string): ManifestCore | null {
   try {
-    if (bytes.byteLength === 0 || bytes.byteLength > 16_384) return null
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_MANIFEST_BYTES) return null
     const parsed: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'))
     if (!plainObject(parsed)) return null
     const keys = Object.keys(parsed).sort().join(',')

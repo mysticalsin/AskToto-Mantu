@@ -233,6 +233,7 @@ export async function finalizeImportJob(
   attempt?: ImportJobPipelineAttempt
 ): Promise<void> {
   try {
+    host.assertJobWriteAllowed(job, attempt)
     job.progressPct = Math.max(job.progressPct ?? 0, 99)
     await host.refreshRetention()
     host.assertRetentionAllowed()
@@ -247,6 +248,7 @@ export async function finalizeImportJob(
       },
       () => host.assertJobWriteAllowed(job, attempt)
     )
+    host.assertJobWriteAllowed(job, attempt)
     if (await host.stopIfPolicyHeld(job, attempt)) return
     job.file = file
     job.state = 'saving'
@@ -261,13 +263,17 @@ export async function finalizeImportJob(
     try {
       await host.refreshRetention()
       host.assertRetentionAllowed()
+      host.assertJobWriteAllowed(job, attempt)
       const recap = await host.deps.generateRecap(host.copy(job))
+      host.assertJobWriteAllowed(job, attempt)
       if (await host.abandonIfCancelled(job, file)) return
       if (await host.stopIfPolicyHeld(job, attempt)) return
       if (recap?.trim()) {
         await host.refreshRetention()
         host.assertRetentionAllowed()
+        host.assertJobWriteAllowed(job, attempt)
         await host.deps.updateRecap(file, recap, 'complete', () => host.assertJobWriteAllowed(job, attempt))
+        host.assertJobWriteAllowed(job, attempt)
         if (await host.abandonIfCancelled(job, file)) return
         if (await host.stopIfPolicyHeld(job, attempt)) return
         recapPersisted = true
@@ -281,7 +287,9 @@ export async function finalizeImportJob(
     if (host.deps.polish) {
       try {
         if (await host.stopIfPolicyHeld(job, attempt)) return
+        host.assertJobWriteAllowed(job, attempt)
         const polished = await host.deps.polish(host.copy(job.lines))
+        host.assertJobWriteAllowed(job, attempt)
         if (await host.stopIfPolicyHeld(job, attempt)) return
         if (Array.isArray(polished) && polished.length === job.lines.length) job.lines = polished
       } catch {
@@ -292,19 +300,23 @@ export async function finalizeImportJob(
     if (await host.stopIfPolicyHeld(job, attempt)) return
     await host.refreshRetention()
     host.assertRetentionAllowed()
+    host.assertJobWriteAllowed(job, attempt)
     await host.deps.enqueueIngest(file, undefined, () => host.assertJobWriteAllowed(job, attempt))
+    host.assertJobWriteAllowed(job, attempt)
     if (await host.abandonIfCancelled(job, file)) return
     if (await host.stopIfPolicyHeld(job, attempt)) return
 
     const duration = meetingDurationMinutes(job)
     if (recapPersisted) host.deps.recordMeetingSummarized?.(duration)
     const words = wordsFromTexts(...job.lines.map((line) => line.text))
+    host.assertJobWriteAllowed(job, attempt)
     if (estimateNoteTakingMinutes(words) > 0) host.deps.recordTimeSavedNote?.(words, file)
 
     job.progressPct = 100
     job.state = 'done'
     await host.persist(job, attempt)
     if (await host.stopIfPolicyHeld(job, attempt)) return
+    host.assertJobWriteAllowed(job, attempt)
     await host.removeCheckpoint(job.jobId)
   } catch (error) {
     if (error instanceof StaleImportJobWriteError) return

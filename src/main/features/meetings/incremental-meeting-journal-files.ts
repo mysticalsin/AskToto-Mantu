@@ -11,6 +11,7 @@ import { consumeIncrementalRecordReceipt } from './incremental-record-receipt'
 import { createApplicationMetadataStore } from './incremental-meeting-journal-application-metadata'
 import { readIncrementalJournalPage } from './incremental-meeting-journal-page-reader'
 import {
+  MAX_MANIFEST_BYTES,
   SHA256,
   UUID,
   decodeRecord,
@@ -58,6 +59,7 @@ export interface IncrementalMeetingJournalFileStorageOptions {
 
 export interface IncrementalMeetingJournalFileStorage extends IncrementalMeetingJournalStorage {
   initialize(): Promise<IncrementalJournalStorageResult<IncrementalJournalSnapshot>>
+  readPendingAppend(isCurrent: () => boolean): Promise<'pending' | 'clear' | 'unavailable'>
   transitionState(
     state: Exclude<JournalState, 'active'>,
     isCurrent: () => boolean
@@ -185,7 +187,13 @@ export function createIncrementalMeetingJournalFileStorage(
     requestCurrent: () => boolean,
     maxBytes: number
   ): Promise<boolean> {
-    if (!(await rootAligned()) || !baseCurrent() || !requestCurrent() || bytes.byteLength > maxBytes) {
+    if (
+      !(await rootAligned()) ||
+      !baseCurrent() ||
+      !requestCurrent() ||
+      bytes.byteLength > maxBytes ||
+      (name === manifestName && bytes.byteLength > MAX_MANIFEST_BYTES)
+    ) {
       bytes.fill(0)
       return false
     }
@@ -239,6 +247,15 @@ export function createIncrementalMeetingJournalFileStorage(
   })
 
   const storage: IncrementalMeetingJournalFileStorage = {
+    async readPendingAppend(isCurrent) {
+      const requestCurrent = activeCheck(baseCurrent, isCurrent)
+      const loaded = await readManifest(requestCurrent)
+      if (loaded.status !== 'ok' || !requestCurrent()) return 'unavailable'
+      const pending = loaded.core.pending !== null
+      loaded.bytes.fill(0)
+      return requestCurrent() ? (pending ? 'pending' : 'clear') : 'unavailable'
+    },
+
     async initialize() {
       const requestCurrent = baseCurrent
       if (!requestCurrent()) return { status: 'unavailable' }
@@ -488,7 +505,11 @@ export function createIncrementalMeetingJournalFileStorage(
           encrypted.byteLength +
           indexBuffer.byteLength +
           identityIndexBuffer.byteLength
-        if (!Number.isSafeInteger(reservedPhysicalBytes) || reservedPhysicalBytes > request.maxJournalBytes) {
+        if (
+          pendingManifest.byteLength > MAX_MANIFEST_BYTES ||
+          !Number.isSafeInteger(reservedPhysicalBytes) ||
+          reservedPhysicalBytes > request.maxJournalBytes
+        ) {
           pendingManifest.fill(0)
           encrypted.fill(0)
           indexBuffer.fill(0)
@@ -664,7 +685,7 @@ export function createIncrementalMeetingJournalFileStorage(
         committedRecordBytes + activePending.recordBytes + activePending.indexBytes + activePending.identityIndexBytes,
         key!
       )
-      if (finalCore.storedBytes > request.maxJournalBytes) {
+      if (finalBytes.byteLength > MAX_MANIFEST_BYTES || finalCore.storedBytes > request.maxJournalBytes) {
         finalBytes.fill(0)
         currentManifest.bytes.fill(0)
         return { status: 'limit' }
@@ -715,7 +736,7 @@ export function createIncrementalMeetingJournalFileStorage(
         bytes.fill(0)
         return 'stale-owner'
       }
-      if (core.storedBytes > maxJournalBytes) {
+      if (bytes.byteLength > MAX_MANIFEST_BYTES || core.storedBytes > maxJournalBytes) {
         bytes.fill(0)
         return 'unavailable'
       }

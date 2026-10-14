@@ -11,6 +11,7 @@ const workerLoader = join(root, 'out', 'main', 'meeting-speech-worker.js')
 const workerBytecode = join(root, 'out', 'main', 'meeting-speech-worker.jsc')
 const sharedTestFiles = [
   'src/main/features/meetings/incremental-record-canonical.test.ts',
+  'src/main/features/meetings/incremental-meeting-journal-canonical-read.test.ts',
   'src/main/features/meetings/incremental-meeting-journal-format.test.ts',
   'src/main/features/meetings/incremental-meeting-journal.test.ts',
   'src/main/features/meetings/incremental-meeting-journal-files.test.ts',

@@ -92,6 +92,38 @@ function appender(storage: IncrementalMeetingJournalStorage | undefined, isCurre
 }
 
 describe('encrypted incremental meeting journal files', () => {
+  it('refuses an append when the pending manifest would cross its fixed cap without damaging readable state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-manifest-cap-'))
+    roots.push(root)
+    const journal = await store(root)
+    await journal.initialize()
+    const metadata = Uint8Array.from({ length: 11_827 }, (_, index) => index % 251)
+    await expect(journal.commitApplicationMetadata(0, metadata, 16_384, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1
+    })
+    await expect(appender(journal).append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+    await expect(journal.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(journal.readSnapshot(meetingId, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      snapshot: { durableRevision: 0, recordCount: 0 }
+    })
+    journal.dispose()
+
+    const reopened = await store(root)
+    await expect(reopened.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(reopened.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    reopened.dispose()
+  })
+
   it('stores application cursor metadata in the authenticated manifest with revision CAS', async () => {
     const root = await mkdtemp(join(tmpdir(), 'metis-incremental-app-metadata-'))
     roots.push(root)
@@ -642,6 +674,73 @@ describe('encrypted incremental meeting journal files', () => {
     })
     expect(recordReads).toBe(0)
     bounded.dispose()
+  })
+
+  it('returns a continuation after a fitting page prefix instead of failing after delivering it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-page-continuation-'))
+    roots.push(root)
+    const first = await store(root)
+    await first.initialize()
+    await appender(first).append(recordJson, 0)
+    const secondRecord = new TextEncoder().encode(
+      JSON.stringify({
+        identity: { kind: 'local', recordId: 'd6e1a2aa-0478-4a6e-b1e0-4c2e5cbb91e5' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'another private line', t: 1_700_000_000_100 }
+      })
+    )
+    await appender(first).append(secondRecord, 1)
+    first.dispose()
+    const names = await readdir(root)
+    const recordSizes = await Promise.all(
+      names
+        .filter((name) => name.startsWith('record-'))
+        .map(async (name) => (await readFile(join(root, name))).byteLength)
+    )
+    const indexSizes = await Promise.all(
+      names
+        .filter((name) => name.startsWith('index-'))
+        .map(async (name) => (await readFile(join(root, name))).byteLength)
+    )
+    const maxPageBytes =
+      recordSizes.reduce((sum, size) => sum + size, 0) + indexSizes.reduce((sum, size) => sum + size, 0) - 1
+    const paged = await store(root, () => true, key, undefined, maxPageBytes)
+    const seen: number[] = []
+    await expect(
+      paged.readPage(
+        0,
+        2,
+        2,
+        (record) => {
+          seen.push(record.revision)
+        },
+        () => true
+      )
+    ).resolves.toEqual({
+      status: 'ok',
+      nextRevision: 1,
+      durableRevision: 2,
+      complete: false
+    })
+    expect(seen).toEqual([1])
+    await expect(
+      paged.readPage(
+        1,
+        2,
+        2,
+        (record) => {
+          seen.push(record.revision)
+        },
+        () => true
+      )
+    ).resolves.toEqual({
+      status: 'ok',
+      nextRevision: 2,
+      durableRevision: 2,
+      complete: true
+    })
+    expect(seen).toEqual([1, 2])
+    paged.dispose()
   })
 
   it('snapshots page limits and gateway methods before the caller can mutate its options', async () => {

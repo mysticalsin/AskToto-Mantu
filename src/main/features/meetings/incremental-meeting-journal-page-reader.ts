@@ -89,7 +89,9 @@ export async function readIncrementalJournalPage(options: {
       index.recordBytes > maxPhysicalRecordBytes ||
       pageBytes > requestedMaxBytes - indexByteLength - index.recordBytes
     )
-      return { status: 'unavailable' }
+      return nextRevision > afterRevision
+        ? { status: 'ok', nextRevision, durableRevision, complete: false }
+        : { status: 'unavailable' }
     const recordRead = await readBytes(recordName(index.identityHash), index.recordBytes, requestCurrent)
     if (recordRead.status !== 'ok' || recordRead.bytes.byteLength !== index.recordBytes || !requestCurrent()) {
       if (recordRead.status === 'ok') recordRead.bytes.fill(0)

@@ -4,7 +4,10 @@ import type {
   IncrementalMeetingAppender,
   IncrementalJournalSnapshot
 } from './features/meetings/incremental-meeting-journal'
-import type { IncrementalMeetingJournalFileStorage } from './features/meetings/incremental-meeting-journal-files'
+import type {
+  IncrementalJournalFileRecord,
+  IncrementalMeetingJournalFileStorage
+} from './features/meetings/incremental-meeting-journal-files'
 import type { ImportCheckpoint, ImportJobHeader } from './import-job-checkpoint-contract'
 import type { ImportLegacyOriginHandle } from './import-legacy-origin'
 import type { ImportPersistencePolicy } from './import-persistence-policy'
@@ -14,7 +17,6 @@ import {
 } from './import-journal-checkpoint-repository'
 
 const JOB_ID = '11111111-1111-4111-8111-111111111111'
-const MEETING_ID = '22222222-2222-4222-8222-222222222222'
 const ORIGIN = Object.freeze({}) as ImportLegacyOriginHandle
 
 function policy(): ImportPersistencePolicy {
@@ -49,6 +51,7 @@ function fixture() {
   let applicationRevision = 0
   let commitCalls = 0
   let failFinalCommit = true
+  let failFinalCommitAt = 3
   let snapshot: IncrementalJournalSnapshot = {
     state: 'active',
     acceptedRevision: 0,
@@ -60,6 +63,9 @@ function fixture() {
   }
   const records = new Map<string, string>()
   const storage = {
+    async readPendingAppend() {
+      return 'clear' as const
+    },
     async initialize() {
       return { status: 'ok' as const, snapshot }
     },
@@ -73,10 +79,39 @@ function fixture() {
         bytes: applicationBytes ? Uint8Array.from(applicationBytes) : null
       }
     },
+    async readPage(
+      afterRevision: number,
+      expectedRevision: number,
+      _maxRecords: number,
+      sink: (record: IncrementalJournalFileRecord) => void | Promise<void>
+    ) {
+      if (expectedRevision !== snapshot.durableRevision) return { status: 'unavailable' as const }
+      for (let revision = afterRevision + 1; revision <= expectedRevision; revision += 1) {
+        const encoded = [...records.values()][revision - 1]
+        if (!encoded) return { status: 'unavailable' as const }
+        const record = JSON.parse(encoded)
+        await sink({
+          revision,
+          ...record,
+          identityKey: record.identity.recordId,
+          sha256: '0'.repeat(64),
+          clock: '0',
+          wordCount: record.line.text.trim().split(/\s+/).filter(Boolean).length,
+          linePayloadBytes: Buffer.byteLength(record.line.text, 'utf8'),
+          canonicalBytes: new TextEncoder().encode(encoded)
+        })
+      }
+      return {
+        status: 'ok' as const,
+        nextRevision: expectedRevision,
+        durableRevision: expectedRevision,
+        complete: true
+      }
+    },
     async commitApplicationMetadata(expectedRevision: number, bytes: Uint8Array | null) {
       commitCalls += 1
       if (expectedRevision !== applicationRevision) return { status: 'stale-revision' as const }
-      if (failFinalCommit && commitCalls === 3) return { status: 'unavailable' as const }
+      if (failFinalCommit && commitCalls === failFinalCommitAt) return { status: 'unavailable' as const }
       applicationRevision += 1
       applicationBytes?.fill(0)
       applicationBytes = bytes ? Uint8Array.from(bytes) : null
@@ -113,7 +148,7 @@ function fixture() {
   } as IncrementalMeetingAppender
   const session: ImportJournalSession = {
     jobId: JOB_ID,
-    meetingId: MEETING_ID,
+    meetingId: '33333333-3333-4333-8333-333333333333',
     journalId: '33333333-3333-4333-8333-333333333333',
     keyId: 'key_1',
     owner: { profileNamespace: 'profile_1', principalAssociation: 'principal_1', generation: 'generation_1' },
@@ -132,13 +167,15 @@ function fixture() {
     retire: vi.fn(),
     settle: vi.fn(async () => {})
   }
+  let storedSession: ImportJournalSession = session
   const runtime = {
     async createNew(_header: ImportJobHeader, _origin: ImportLegacyOriginHandle, journalId: string) {
-      return { ...session, journalId }
+      storedSession = { ...session, meetingId: journalId, journalId }
+      return storedSession
     },
     async openExisting() {
       failFinalCommit = false
-      return session
+      return storedSession
     },
     async listHeldIds() {
       return { jobIds: [], overflow: false }
@@ -149,6 +186,9 @@ function fixture() {
     repository: createImportJournalCheckpointRepository(runtime),
     session,
     records,
+    failFinalCommitAt(call: number) {
+      failFinalCommitAt = call
+    },
     getSnapshot: () => snapshot,
     async injectMetadata(bytes: Uint8Array) {
       const result = await storage.commitApplicationMetadata(applicationRevision, bytes, 8192, () => true)
@@ -174,7 +214,7 @@ function header(): ImportJobHeader {
 }
 
 describe('import journal checkpoint repository', () => {
-  it('replays an appended pending window after a crash before cursor CAS, then advances once', async () => {
+  it('recovers a durable pending record and advances its cursor without retranscribing', async () => {
     const f = fixture()
     const created = await f.repository.createNew(header(), ORIGIN)
     expect(created.status).toBe('ready')
@@ -197,10 +237,7 @@ describe('import journal checkpoint repository', () => {
     const resumed = await f.repository.resume(JOB_ID, ORIGIN)
     expect(resumed.status).toBe('ready')
     if (resumed.status !== 'ready') return
-    const retried = await f.repository.appendWindow(resumed.checkpoint, change, ORIGIN)
-    expect(retried.status).toBe('ready')
-    if (retried.status !== 'ready') return
-    expect(retried.checkpoint.frontier).toMatchObject({ revision: 1, recordCount: 1, cursor: 1 })
+    expect(resumed.checkpoint.frontier).toMatchObject({ revision: 1, recordCount: 1, cursor: 1 })
     expect(f.records.size).toBe(1)
     expect(f.getSnapshot().durableRevision).toBe(1)
   })
@@ -211,5 +248,94 @@ describe('import journal checkpoint repository', () => {
     expect(created.status).toBe('ready')
     await f.injectMetadata(new TextEncoder().encode('{"unexpected":true}'))
     await expect(f.repository.resume(JOB_ID, ORIGIN)).resolves.toEqual({ status: 'held', reason: 'MALFORMED' })
+  })
+
+  it('normalizes totalChunks across transcript and silent window commits', async () => {
+    const f = fixture()
+    const created = await f.repository.createNew(header(), ORIGIN)
+    expect(created.status).toBe('ready')
+    if (created.status !== 'ready') return
+    const initialized = await f.repository.saveHeader(
+      created.checkpoint,
+      { totalChunks: 10, cursor: 0, updatedAt: 2 },
+      ORIGIN
+    )
+    expect(initialized.status).toBe('ready')
+    if (initialized.status !== 'ready') return
+    f.failFinalCommitAt(4)
+    const transcriptChange = {
+      expectedCursor: 0,
+      nextCursor: 1,
+      record: { speaker: 'unknown', text: 'bounded speech', t: 1_700_000_000_000 } as TranscriptLine,
+      headerPatch: { cursor: 1, totalChunks: 9, updatedAt: 2 }
+    }
+    const first = await f.repository.appendWindow(initialized.checkpoint, transcriptChange, ORIGIN)
+    expect(first.status).toBe('held')
+    if (first.status !== 'held') return
+    // The fixture injects one crash at the final CAS; retrying the same identity completes it.
+    const resumed = await f.repository.resume(JOB_ID, ORIGIN)
+    expect(resumed.status).toBe('ready')
+    if (resumed.status !== 'ready') return
+    expect(resumed.checkpoint.header.totalChunks).toBe(10)
+    const silent = await f.repository.appendWindow(
+      resumed.checkpoint,
+      {
+        expectedCursor: 1,
+        nextCursor: 2,
+        record: null,
+        headerPatch: { cursor: 2, totalChunks: 9, updatedAt: 3 }
+      },
+      ORIGIN
+    )
+    expect(silent.status).toBe('ready')
+    if (silent.status === 'ready') expect(silent.checkpoint.header.totalChunks).toBe(10)
+  })
+
+  it('rejects over-cap transcript fields before reserving a pending cursor or appending', async () => {
+    const f = fixture()
+    const created = await f.repository.createNew(header(), ORIGIN)
+    expect(created.status).toBe('ready')
+    if (created.status !== 'ready') return
+    const before = await f.session.storage.readApplicationMetadata(() => true)
+    if (before.status !== 'ok') throw new Error('Fixture metadata should be readable.')
+    const rejected = await f.repository.appendWindow(
+      created.checkpoint,
+      {
+        expectedCursor: 0,
+        nextCursor: 1,
+        record: { speaker: 'unknown', text: 'x'.repeat(policy().speech.maxFieldBytes + 1), t: 1 } as TranscriptLine,
+        headerPatch: { cursor: 1, totalChunks: 1, updatedAt: 2 }
+      },
+      ORIGIN
+    )
+    expect(rejected).toEqual({ status: 'held', reason: 'RESOURCE_LIMIT' })
+    expect(f.records.size).toBe(0)
+    await expect(f.session.storage.readApplicationMetadata(() => true)).resolves.toEqual(before)
+    before.bytes?.fill(0)
+  })
+
+  it('rejects malformed progress before either silent or transcript cursor commits', async () => {
+    const f = fixture()
+    const created = await f.repository.createNew(header(), ORIGIN)
+    expect(created.status).toBe('ready')
+    if (created.status !== 'ready') return
+    const before = await f.session.storage.readApplicationMetadata(() => true)
+    if (before.status !== 'ok') throw new Error('Fixture metadata should be readable.')
+    for (const record of [null, { speaker: 'unknown', text: 'speech', t: 1 } as TranscriptLine]) {
+      const rejected = await f.repository.appendWindow(
+        created.checkpoint,
+        {
+          expectedCursor: 0,
+          nextCursor: 1,
+          record,
+          headerPatch: { cursor: 1, totalChunks: Number.POSITIVE_INFINITY, updatedAt: 2 }
+        },
+        ORIGIN
+      )
+      expect(rejected).toEqual({ status: 'held', reason: 'MALFORMED' })
+    }
+    expect(f.records.size).toBe(0)
+    await expect(f.session.storage.readApplicationMetadata(() => true)).resolves.toEqual(before)
+    before.bytes?.fill(0)
   })
 })

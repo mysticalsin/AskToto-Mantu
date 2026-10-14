@@ -1429,6 +1429,40 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-1')).toMatchObject({ state: 'done', progressPct: 100 })
   })
 
+  it('retires the original attempt when authority changes during recap and blocks later publication', async () => {
+    const recap = deferred<string | undefined>()
+    const entered = deferred<void>()
+    let current = true
+    const retire = vi.fn()
+    const updateRecap = vi.fn(async () => undefined)
+    const enqueueIngest = vi.fn()
+    const { manager } = createManager({
+      captureAttemptAuthority: () => ({
+        assertCurrent() {
+          if (!current) throw new Error('stale attempt')
+        },
+        retire
+      }),
+      generateRecap: vi.fn(() => {
+        entered.resolve()
+        return recap.promise
+      }),
+      updateRecap,
+      enqueueIngest
+    })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    const finishing = manager.finishDecoding('job-1')
+    await entered.promise
+    current = false
+    recap.resolve('late recap')
+    await finishing
+
+    expect(updateRecap).not.toHaveBeenCalled()
+    expect(enqueueIngest).not.toHaveBeenCalled()
+    expect(retire).toHaveBeenCalledTimes(1)
+  })
+
   it('marks a recap failure visibly while preserving the saved transcript as done', async () => {
     const { manager } = createManager({
       generateRecap: vi.fn(async () => {

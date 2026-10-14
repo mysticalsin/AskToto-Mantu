@@ -90,7 +90,9 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     const before = deps.currentObservation()
     const beforeAuthGeneration = deps.authGeneration()
     if (!Number.isSafeInteger(beforeAuthGeneration)) throw unavailable()
-    if (before && lastVerifiedEpoch !== undefined && before.epoch !== lastVerifiedEpoch) authorityRevision += 1
+    // A new observation epoch can be a benign publication of the same effective authority. Wait
+    // for the trusted read below before deciding; eagerly advancing the revision would revoke
+    // every operation when Settings is reparsed into a fresh object.
     if (lastAuthGeneration !== undefined && beforeAuthGeneration !== lastAuthGeneration) authorityRevision += 1
     const revisionBeforeRead = authorityRevision
     const authority = await deps.readAuthority()
@@ -110,15 +112,19 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
       throw unavailable()
     }
     const signature = authorityScope(authority)
+    const equivalentPublication = Boolean(before && current.epoch === before.epoch + 1)
     if (
       (lastAuthorityScope !== undefined && signature !== lastAuthorityScope) ||
-      (before && current.epoch > before.epoch + 1)
+      (before && current.epoch !== before.epoch && !equivalentPublication)
     ) {
       authorityRevision += 1
     }
     // Only a single equivalent publication from this forced read is allowed to advance the observation
     // epoch. Any other change during the await was an intervening policy/tenant transition.
-    if (revisionBeforeRead !== authorityRevision || (before && current.epoch > before.epoch + 1)) {
+    if (
+      revisionBeforeRead !== authorityRevision ||
+      (before && current.epoch !== before.epoch && !equivalentPublication)
+    ) {
       lastVerifiedEpoch = current.epoch
       lastAuthorityScope = signature
       throw unavailable()
@@ -195,13 +201,28 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
   }
 
   async function captureOperation(): Promise<ImportOperationAuthority> {
+    // Pin the invocation before entering the serialized refresh queue. A request that waits behind
+    // another read must never inherit a later auth generation or settings scope.
+    const invocation = currentObservation()
+    const invocationAuthGeneration = deps.authGeneration()
+    if (!Number.isSafeInteger(invocationAuthGeneration)) throw unavailable()
+    const invocationSettings = importWriteScope(invocation.settings)
+    const invocationRevision = authorityRevision
+    const invocationAuthorityScope = lastAuthorityScope
     await refreshSettings()
     const observation = currentObservation()
     const authGeneration = deps.authGeneration()
+    if (
+      authGeneration !== invocationAuthGeneration ||
+      authorityRevision !== invocationRevision ||
+      observation.epoch > invocation.epoch + 1 ||
+      importWriteScope(observation.settings) !== invocationSettings ||
+      (invocationAuthorityScope !== undefined && lastAuthorityScope !== invocationAuthorityScope)
+    )
+      throw unavailable()
     const expectedRevision = authorityRevision
     const expectedScope = lastAuthorityScope
     const expectedSettings = importWriteScope(observation.settings)
-    let expectedEpoch = observation.epoch
 
     function assertCurrent(): void {
       const current = currentObservation()
@@ -209,7 +230,6 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
         authorityRevision !== expectedRevision ||
         deps.authGeneration() !== authGeneration ||
         lastVerifiedEpoch !== current.epoch ||
-        current.epoch !== expectedEpoch ||
         importWriteScope(current.settings) !== expectedSettings ||
         lastAuthorityScope !== expectedScope
       ) {
@@ -233,7 +253,6 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
         ) {
           throw unavailable()
         }
-        expectedEpoch = current.epoch
         assertCurrent()
       }
     }

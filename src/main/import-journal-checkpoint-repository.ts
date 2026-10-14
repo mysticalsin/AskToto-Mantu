@@ -28,6 +28,7 @@ import {
   encodeCheckpointMetadata,
   matchesCheckpointSnapshot,
   safeComponent,
+  boundedJsonBytes,
   validCounter,
   validateHeader,
   type CheckpointMetadata,
@@ -138,13 +139,49 @@ async function commitMetadata(state: HandleState, expectedRevision: number, next
   }
 }
 
-function safeRecordJson(line: TranscriptLine, recordId: string): Uint8Array {
-  const record = IncrementalMeetingRecordSchema.parse({
+function assertMetadataFits(metadata: CheckpointMetadata, maxBytes: number): void {
+  const bytes = encodeCheckpointMetadata(metadata, maxBytes)
+  if (!bytes) throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
+  bytes.fill(0)
+}
+
+function safeRecordJson(line: TranscriptLine, recordId: string, policy: ImportPersistencePolicy): Uint8Array {
+  if (!line || typeof line !== 'object' || Array.isArray(line) || Object.getPrototypeOf(line) !== Object.prototype) {
+    throw new ImportCheckpointUnavailableError('MALFORMED')
+  }
+  const allowed = new Set(['speaker', 'text', 't', 'name', 'lang', 'provisional', 'speech'])
+  const keys = Object.keys(line)
+  const descriptors = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(line, key)]))
+  if (
+    keys.length > 7 ||
+    descriptors.has('speech') ||
+    keys.some((key) => !allowed.has(key) || !descriptors.get(key) || !('value' in descriptors.get(key)!))
+  ) {
+    throw new ImportCheckpointUnavailableError('MALFORMED')
+  }
+  for (const field of ['text', 'name', 'lang'] as const) {
+    const value = descriptors.get(field)?.value
+    if (
+      value !== undefined &&
+      (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > policy.speech.maxFieldBytes)
+    ) {
+      throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
+    }
+  }
+  const candidate = {
     identity: { kind: 'local', recordId },
     source: 'local-final',
     line
-  })
+  }
+  if (!boundedJsonBytes(candidate, policy.speech.maxRecordBytes)) {
+    throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
+  }
+  const record = IncrementalMeetingRecordSchema.parse(candidate)
   const bytes = encoder.encode(JSON.stringify(record))
+  if (bytes.byteLength > policy.speech.maxRecordBytes) {
+    bytes.fill(0)
+    throw new ImportCheckpointUnavailableError('RESOURCE_LIMIT')
+  }
   return bytes
 }
 
@@ -189,6 +226,7 @@ export function createImportJournalCheckpointRepository(
     jobId: string,
     origin: ImportLegacyOriginHandle
   ): Promise<{
+    status: 'ready' | 'retry'
     checkpoint: ImportCheckpoint
     state: HandleState
   }> {
@@ -223,7 +261,99 @@ export function createImportJournalCheckpointRepository(
         settled: false
       }
       handleStates.set(transcript, state)
-      return { checkpoint: checkpointFromMetadata(metadata.header, metadata, transcript), state }
+      if (metadata.pending) {
+        const pending = metadata.pending
+        if (snapshot.snapshot.durableRevision === pending.baseRevision + 1 && pending.recordId) {
+          let matchedRecord = false
+          const page = await session.storage.readPage(
+            pending.baseRevision,
+            snapshot.snapshot.durableRevision,
+            1,
+            (record) => {
+              session?.assertCurrent()
+              if (
+                record.revision !== pending.baseRevision + 1 ||
+                record.canonicalBytes.byteLength > session!.policy.speech.maxRecordBytes
+              )
+                throw new ImportCheckpointUnavailableError('MALFORMED')
+              let text: string
+              let parsed: unknown
+              try {
+                text = decoder.decode(record.canonicalBytes)
+                parsed = JSON.parse(text)
+              } catch {
+                throw new ImportCheckpointUnavailableError('MALFORMED')
+              } finally {
+                record.canonicalBytes.fill(0)
+              }
+              const result = IncrementalMeetingRecordSchema.safeParse(parsed)
+              if (
+                !result.success ||
+                result.data.source !== 'local-final' ||
+                result.data.identity.kind !== 'local' ||
+                result.data.identity.recordId !== pending.recordId ||
+                JSON.stringify(result.data) !== text
+              )
+                throw new ImportCheckpointUnavailableError('CONFLICT')
+              matchedRecord = true
+            },
+            () => {
+              try {
+                runtime.assertOriginCurrent(origin)
+                session?.assertCurrent()
+                return true
+              } catch {
+                return false
+              }
+            },
+            session.policy.journal.maxPageBytes
+          )
+          session.assertCurrent()
+          if (
+            page.status !== 'ok' ||
+            !page.complete ||
+            page.nextRevision !== snapshot.snapshot.durableRevision ||
+            !matchedRecord
+          ) {
+            throw new ImportCheckpointUnavailableError('CONFLICT')
+          }
+          const next: CheckpointMetadata = {
+            ...metadata,
+            cursor: pending.nextCursor,
+            totalChunks: pending.nextHeader.totalChunks,
+            header: pending.nextHeader,
+            frontier: {
+              revision: snapshot.snapshot.durableRevision,
+              recordCount: snapshot.snapshot.recordCount,
+              wordCount: snapshot.snapshot.wordCount,
+              payloadBytes: snapshot.snapshot.linePayloadBytes
+            },
+            pending: null
+          }
+          await commitMetadata(state, revision, next)
+          return { status: 'ready', checkpoint: checkpointFromMetadata(next.header, next, transcript), state }
+        }
+        if (snapshot.snapshot.durableRevision !== pending.baseRevision) {
+          throw new ImportCheckpointUnavailableError('CONFLICT')
+        }
+        const corePending = await session.storage.readPendingAppend(() => {
+          try {
+            runtime.assertOriginCurrent(origin)
+            session?.assertCurrent()
+            return true
+          } catch {
+            return false
+          }
+        })
+        session.assertCurrent()
+        if (corePending === 'pending') throw new ImportCheckpointUnavailableError('CONFLICT')
+        if (corePending !== 'clear') throw new ImportCheckpointUnavailableError('UNAVAILABLE')
+        const retry: CheckpointMetadata = { ...metadata, pending: null }
+        assertMetadataFits(retry, session.policy.legacy.maxDescriptorBytes)
+        await commitMetadata(state, revision, retry)
+        return { status: 'retry', checkpoint: checkpointFromMetadata(retry.header, retry, transcript), state }
+      }
+      return { status: 'ready', checkpoint: checkpointFromMetadata(metadata.header, metadata, transcript), state }
     } catch (error) {
       session?.retire()
       if (session) await session.settle().catch(() => undefined)
@@ -320,7 +450,7 @@ export function createImportJournalCheckpointRepository(
       if (!JOB_ID.test(jobId)) return { status: 'held', reason: 'MALFORMED' }
       try {
         const opened = await openHandle(jobId, origin)
-        return { status: 'ready', checkpoint: opened.checkpoint }
+        return { status: opened.status, checkpoint: opened.checkpoint }
       } catch (error) {
         return { status: 'held', reason: failure(error) }
       }
@@ -352,21 +482,47 @@ export function createImportJournalCheckpointRepository(
           if (snapshot.status !== 'ok' || !matchesCheckpointSnapshot(current.metadata, snapshot.snapshot)) {
             throw new ImportCheckpointUnavailableError('CONFLICT')
           }
+          const totalChunks = Math.max(state.metadata.totalChunks, change.headerPatch.totalChunks)
+          const nextHeader: ImportJobHeader = {
+            ...state.metadata.header,
+            ...change.headerPatch,
+            cursor: change.nextCursor,
+            totalChunks
+          }
+          if (
+            !validateHeader(nextHeader, state.metadata.jobId) ||
+            !boundedJsonBytes(nextHeader, state.session.policy.legacy.maxDescriptorBytes)
+          )
+            throw new ImportCheckpointUnavailableError('MALFORMED')
           const next: CheckpointMetadata = {
             ...state.metadata,
             cursor: change.nextCursor,
-            totalChunks: Math.max(state.metadata.totalChunks, change.headerPatch.totalChunks),
-            header: { ...state.metadata.header, ...change.headerPatch, cursor: change.nextCursor },
+            totalChunks,
+            header: nextHeader,
             pending: null
           }
+          assertMetadataFits(next, state.session.policy.legacy.maxDescriptorBytes)
           await commitMetadata(state, current.revision, next)
           return { status: 'ready', checkpoint: checkpointFromMetadata(next.header, next, checkpointValue.transcript) }
         }
+        const totalChunks = Math.max(state.metadata.totalChunks, change.headerPatch.totalChunks)
+        const nextHeader: ImportJobHeader = {
+          ...state.metadata.header,
+          ...change.headerPatch,
+          cursor: change.nextCursor,
+          totalChunks
+        }
+        if (
+          !validateHeader(nextHeader, state.metadata.jobId) ||
+          !boundedJsonBytes(nextHeader, state.session.policy.legacy.maxDescriptorBytes)
+        )
+          throw new ImportCheckpointUnavailableError('MALFORMED')
         const pending: PendingWindow = {
           cursor: change.expectedCursor,
           nextCursor: change.nextCursor,
           baseRevision: state.metadata.frontier.revision,
-          recordId: randomUUID()
+          recordId: randomUUID(),
+          nextHeader
         }
         let activePending = current.metadata.pending
         if (activePending) {
@@ -374,15 +530,17 @@ export function createImportJournalCheckpointRepository(
             activePending.cursor !== pending.cursor ||
             activePending.nextCursor !== pending.nextCursor ||
             activePending.baseRevision !== pending.baseRevision ||
-            activePending.recordId === null
+            activePending.recordId === null ||
+            JSON.stringify(activePending.nextHeader) !== JSON.stringify(nextHeader)
           )
             throw new ImportCheckpointUnavailableError('CONFLICT')
         } else {
           const reserved: CheckpointMetadata = { ...state.metadata, pending }
+          assertMetadataFits(reserved, state.session.policy.legacy.maxDescriptorBytes)
           await commitMetadata(state, current.revision, reserved)
           activePending = pending
         }
-        const recordBytes = safeRecordJson(change.record, activePending.recordId!)
+        const recordBytes = safeRecordJson(change.record, activePending.recordId!, state.session.policy)
         let appendResult
         try {
           appendResult = await state.session.appender.append(recordBytes, activePending.baseRevision)
@@ -414,8 +572,8 @@ export function createImportJournalCheckpointRepository(
         const next: CheckpointMetadata = {
           ...state.metadata,
           cursor: change.nextCursor,
-          totalChunks: Math.max(state.metadata.totalChunks, change.headerPatch.totalChunks),
-          header: { ...state.metadata.header, ...change.headerPatch, cursor: change.nextCursor },
+          totalChunks,
+          header: nextHeader,
           frontier: {
             revision: snapshot.snapshot.durableRevision,
             recordCount: snapshot.snapshot.recordCount,
