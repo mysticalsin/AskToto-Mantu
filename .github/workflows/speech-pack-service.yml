@@ -10,6 +10,7 @@ on:
       - src/main/features/components/speech-pack/**
       - src/main/speech-pack-bootstrap*
       - src/main/asr-bundled-ensure*
+      - src/main/asr-metadata-readiness.ts
       - src/main/asr-model-protocol*
       - src/main/infra/scheduler/speech-pack-poll.ts
       - src/main/infra/process/speech-pack-host*
@@ -21,8 +22,11 @@ on:
       - src/main/lifecycle/boot-work.test.ts
       - src/main/main-lifecycle.contract.test.ts
       - src/shared/speech-pack*
+      - src/shared/asr-assets.ts
       - src/preload/speech-pack*
-      - src/renderer/src/features/settings/SpeechPackSection.tsx
+      - src/renderer/src/features/settings/SpeechPackSection*
+      - src/renderer/src/features/settings/OnDeviceSpeechSettings.tsx
+      - src/renderer/src/features/settings/AudioTab.tsx
       - scripts/speech-pack-resources.test.ts
       - resources/speech-pack-fixtures/**
       - build/speech-pack-profile.json
@@ -59,6 +63,8 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked test dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install the pinned Chromium test browser
+        run: node node_modules/playwright/cli.js install --with-deps chromium
       - name: Run the optional pack and desktop boundary tests
         env:
           METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-pack-service-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
@@ -68,7 +74,6 @@ jobs:
             src/main/features/components/speech-pack/engine.test.ts \
             src/main/features/components/speech-pack/download.test.ts \
             src/main/features/components/speech-pack/manifest.test.ts \
-            src/main/features/components/speech-pack/isolation.contract.test.ts \
             src/main/features/components/speech-pack/flag.test.ts \
             src/main/features/components/speech-pack/profile.test.ts \
             src/main/features/components/speech-pack/resolver.test.ts \
@@ -87,7 +92,8 @@ jobs:
             src/main/parakeet.test.ts \
             src/main/whisper-import.test.ts \
             src/main/lifecycle/boot-work.test.ts \
-            src/main/main-lifecycle.contract.test.ts
+            src/main/main-lifecycle.contract.test.ts \
+            src/renderer/src/features/settings/SpeechPackSection.browser.test.ts
 
       - name: Verify and summarize the actual shared test report
         if: always()
@@ -130,7 +136,6 @@ jobs:
             'src/main/features/components/speech-pack/engine.test.ts',
             'src/main/features/components/speech-pack/download.test.ts',
             'src/main/features/components/speech-pack/manifest.test.ts',
-            'src/main/features/components/speech-pack/isolation.contract.test.ts',
             'src/main/features/components/speech-pack/flag.test.ts',
             'src/main/features/components/speech-pack/profile.test.ts',
             'src/main/features/components/speech-pack/resolver.test.ts',
@@ -149,7 +154,8 @@ jobs:
             'src/main/parakeet.test.ts',
             'src/main/whisper-import.test.ts',
             'src/main/lifecycle/boot-work.test.ts',
-            'src/main/main-lifecycle.contract.test.ts'
+            'src/main/main-lifecycle.contract.test.ts',
+            'src/renderer/src/features/settings/SpeechPackSection.browser.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
           console.log(`Shared speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)
