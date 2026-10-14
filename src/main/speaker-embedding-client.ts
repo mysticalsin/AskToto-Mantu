@@ -3,7 +3,8 @@
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { mainLog } from './logger'
-import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
+import { acquirePackageRuntimeLease } from './features/components/speech-pack/runtime-admission'
+import { runtimeHostEnvironment, type RuntimeFeatureLease } from './features/components/speech-pack/runtime-lease'
 import {
   SPEAKER_EMBEDDING_DIMENSIONS,
   SPEAKER_MAX_SAMPLES,
@@ -31,6 +32,8 @@ interface AdmittedWork {
 interface Generation {
   number: number
   child: UtilityProcess
+  runtimeLease: RuntimeFeatureLease | null
+  modelPath: string
   state: 'active' | 'releasing' | 'blocked'
   pending: Map<string, PendingRequest>
   termination: Promise<void> | null
@@ -73,35 +76,57 @@ function failPending(generation: Generation, error: Error): void {
   generation.pending.clear()
 }
 
+function releaseGenerationLease(generation: Generation): Promise<void> {
+  const lease = generation.runtimeLease
+  generation.runtimeLease = null
+  return Promise.resolve(lease?.release()).then(() => undefined)
+}
+
 function finishTermination(generation: Generation): void {
   if (generation.exitTimer) clearTimeout(generation.exitTimer)
   generation.exitTimer = null
-  if (current === generation) current = null
-  if (releaseGate === generation.termination) releaseGate = null
-  if (blockedRelease?.generation === generation) blockedRelease = null
-  generation.resolveTermination?.()
-  generation.resolveTermination = null
-  generation.rejectTermination = null
+  const termination = generation.termination
+  void releaseGenerationLease(generation).catch((error: unknown) => {
+    mainLog.warn('[speaker-embedding] runtime lease release failed:', asError(error).message)
+  }).finally(() => {
+    if (current === generation) current = null
+    if (releaseGate === termination) releaseGate = null
+    if (blockedRelease?.generation === generation) blockedRelease = null
+    generation.resolveTermination?.()
+    generation.resolveTermination = null
+    generation.rejectTermination = null
+  })
 }
 
 function handleExit(generation: Generation, code: number | null): void {
   if (generation.state === 'active') {
     failPending(generation, new Error(`The speaker embedding helper exited unexpectedly (code ${code ?? 'unknown'}).`))
+    generation.state = 'releasing'
     if (current === generation) current = null
+    const releaseBarrier = releaseGenerationLease(generation).catch((error: unknown) => {
+      mainLog.warn('[speaker-embedding] runtime lease release failed:', asError(error).message)
+    })
+    releaseGate = releaseBarrier
+    void releaseBarrier.finally(() => {
+      if (releaseGate === releaseBarrier) releaseGate = null
+    })
     return
   }
   finishTermination(generation)
 }
 
-function spawnGeneration(): Generation {
+function spawnGeneration(runtimeLease: RuntimeFeatureLease | null, modelPath: string): Generation {
   const number = generationNumber++
-  const child = utilityProcess.fork(join(__dirname, 'speaker-embedding-host.js'), [], {
+  const child: UtilityProcess = utilityProcess.fork(runtimeLease?.entry('speaker-embedding-host') ?? join(__dirname, 'speaker-embedding-host.js'), [], {
     serviceName: `metis-speaker-embedding-${number}`,
-    stdio: 'pipe'
+    stdio: 'pipe',
+    ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
   })
   const generation: Generation = {
     number,
     child,
+    runtimeLease,
+    modelPath,
     state: 'active',
     pending: new Map(),
     termination: null,
@@ -171,27 +196,46 @@ async function requestHost(
   if (ownerEpoch[owner] !== admittedEpoch) throw new Error('Speaker embedding processing was cancelled.')
 
   // No await between the epoch check, generation choice and pending-map insertion: release cannot race
-  // a reserved request into an untracked fresh child on this single JS event loop.
-  const generation = current?.state === 'active' ? current : spawnGeneration()
-  const id = `g${generation.number}:r${requestNumber++}`
+  // a reserved request into an untracked fresh child on this single JS event loop. Fresh children retain
+  // the exact verified model/runtime generation until their exit event.
+  let generation = current?.state === 'active' ? current : null
+  if (!generation) {
+    const lease = await acquirePackageRuntimeLease('speaker-embedding')
+    let transferred = false
+    try {
+      if (ownerEpoch[owner] !== admittedEpoch) throw new Error('Speaker embedding processing was cancelled.')
+      if (releaseGate) throw new Error('Speaker embedding host is releasing.')
+      generation = current?.state === 'active' ? current : null
+      if (!generation) {
+        const modelPath = lease ? lease.modelFile('speaker.embedding', 'speaker/embedding.onnx') : request.model
+        generation = spawnGeneration(lease, modelPath)
+        transferred = true
+      }
+    } finally {
+      if (!transferred) await lease?.release()
+    }
+  }
+  if (!generation) throw new Error('Speaker embedding host generation was not created.')
+  const requestGeneration = generation
+  const id = `g${requestGeneration.number}:r${requestNumber++}`
   return new Promise<SpeakerEmbeddingHostResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
-      generation.pending.delete(id)
+      requestGeneration.pending.delete(id)
       const failure = new Error(`Speaker embedding ${request.type} timed out.`)
       reject(failure)
-      void terminateGeneration(generation, failure).catch((terminationError) => {
+      void terminateGeneration(requestGeneration, failure).catch((terminationError) => {
         mainLog.error('[speaker-embedding] timed-out helper did not exit:', asError(terminationError).message)
       })
     }, REQUEST_TIMEOUT_MS)
-    generation.pending.set(id, { resolve, reject, timer })
+    requestGeneration.pending.set(id, { resolve, reject, timer })
     try {
-      generation.child.postMessage({ ...request, id })
+      requestGeneration.child.postMessage({ ...request, model: requestGeneration.modelPath, id })
     } catch (error) {
-      generation.pending.delete(id)
+      requestGeneration.pending.delete(id)
       clearTimeout(timer)
       const failure = asError(error)
       reject(failure)
-      void terminateGeneration(generation, failure).catch((terminationError) => {
+      void terminateGeneration(requestGeneration, failure).catch((terminationError) => {
         mainLog.error('[speaker-embedding] failed helper did not exit:', asError(terminationError).message)
       })
     }
@@ -234,7 +278,6 @@ export async function speakerEmbeddingAvailable(
 ): Promise<boolean> {
   if (!model) return false
   try {
-    await assertLegacyRuntimeClosure('speaker embedding')
     await admitted(owner, 0, (epoch) => requestHost({ type: 'warmup', model }, owner, epoch))
     return true
   } catch (error) {
@@ -252,11 +295,6 @@ export async function computeSpeakerEmbedding(
   if (samples.length > SPEAKER_MAX_SAMPLES) throw new Error('Speaker PCM is too large.')
   for (const sample of samples) {
     if (!Number.isFinite(sample)) throw new Error('Speaker PCM samples must be finite.')
-  }
-  try {
-    await assertLegacyRuntimeClosure('speaker embedding')
-  } catch {
-    return null
   }
   // Immutable admission accounting: caller-owned views may be detached/resized while this awaits.
   const admittedBytes = samples.byteLength
