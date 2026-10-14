@@ -105,6 +105,7 @@ const PUBLIC_KEYS = new Set([
   'windowsCoverageComplete',
   'index',
   'stage',
+  'bootStages',
   'selector',
   'selectors',
   'requestAtMs',

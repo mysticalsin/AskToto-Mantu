@@ -1,7 +1,7 @@
 import { ARTIFACT, SOURCE } from './st1-current-profile-readback.mjs'
 
 export function profileFixture() {
-  const frame = (functionName: string) => ({
+  const frame = (functionName) => ({
     functionName,
     url: 'private://should-never-be-output',
     lineNumber: 1,
