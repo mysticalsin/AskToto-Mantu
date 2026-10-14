@@ -531,7 +531,7 @@ describe('Act 3 — transcription files never skip', () => {
     expect(src).toMatch(/InlineOrb kind="loading"/)
     expect(src).toMatch(/setupRowLoadingPercent\(r\.progress\)/)
     const actionRow = src.slice(src.indexOf("{r.state === 'action' && ("))
-    expect(actionRow).toMatch(/needed/)
+    expect(actionRow).toMatch(/>\s*needed\s*</)
     expect(actionRow).toMatch(/r\.state === 'action'/)
     expect(src).not.toMatch(/r\.state === 'loading'[\s\S]{0,80}needed/)
     expect(setupRowLoadingPercent(0.42)).toBe(42)

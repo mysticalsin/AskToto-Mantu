@@ -168,6 +168,7 @@ describe('Act 1 welcome rendered behavior', () => {
     expect(await page.evaluate(() => window.__act1BootNextQueued)).toBe(false)
     expect(await page.locator('.hero-mark img').evaluate((image) => getComputedStyle(image).width)).toBe('96px')
     expect(await page.locator('.hero-wordmark').getAttribute('aria-label')).toBe('Métis')
+    expect(await page.locator('.hero-wordmark').textContent()).toBe('Métis')
     expect(await page.locator('.hero-byline').getAttribute('class')).toContain('onboard-glass onboard-glass-chip')
 
     await page.getByRole('button', { name: 'Next' }).click()
@@ -209,16 +210,25 @@ describe('Act 1 welcome rendered behavior', () => {
     await expectVideoClass(page, 'onboard-hero-video--ready')
   })
 
-  it('uses the bounded readiness fallback only after media can report decoded data', async () => {
+  it.each([
+    { readyState: 0, currentTime: 0, promotes: false },
+    { readyState: 1, currentTime: 0, promotes: false },
+    { readyState: 2, currentTime: 0, promotes: true },
+    { readyState: 0, currentTime: 0.01, promotes: true }
+  ])('bounds readiness fallback at media state $readyState and playback $currentTime', async (state) => {
     await page.evaluate(() => window.__onboardingWelcome.mount())
     await page.evaluate(() => window.__onboardingWelcome.startVideo())
     const video = page.locator('video')
     await video.waitFor({ state: 'attached' })
     expect((await page.evaluate(() => window.__onboardingWelcome.counts())).fallbackDelay).toBe(800)
     expect(await video.getAttribute('class')).toBe('onboard-hero-video--pending')
-    await video.evaluate((element) => Object.defineProperty(element, 'readyState', { value: 2, configurable: true }))
+    await video.evaluate((element, values) => {
+      Object.defineProperty(element, 'readyState', { value: values.readyState, configurable: true })
+      Object.defineProperty(element, 'currentTime', { value: values.currentTime, configurable: true })
+    }, state)
     await page.evaluate(() => window.__onboardingWelcome.triggerReadyFallback())
-    await expectVideoClass(page, 'onboard-hero-video--ready')
+    if (state.promotes) await expectVideoClass(page, 'onboard-hero-video--ready')
+    else expect(await video.getAttribute('class')).toBe('onboard-hero-video--pending')
   })
 
   it('pauses the mounted video on unmount', async () => {

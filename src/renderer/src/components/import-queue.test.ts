@@ -100,7 +100,7 @@ describe('import queue rendered behavior', () => {
   it('renders meeting names, progress states, and the appropriate actions', () => {
     const html = renderToStaticMarkup(
       createElement(ImportQueue, {
-        jobs: [failedJob, doneJob],
+        jobs: [failedJob, doneJob, job({ jobId: 'active-1', state: 'transcribing', title: 'Active recording' })],
         assets: { status: 'downloading', progress: 0.5, label: 'Downloading' } as ImportAssetsProgress,
         dragOver: true,
         error: null,
@@ -114,6 +114,8 @@ describe('import queue rendered behavior', () => {
     expect(html).toContain('Weekly sync')
     expect(html).toContain('Could not transcribe.')
     expect(html).toContain('Resume')
+    expect(html).toContain('Active recording')
+    expect(html).toContain('Cancel')
     expect(html).toContain('Planning')
     expect(html).toContain('Open')
     expect(html).toContain('Getting transcription files')
