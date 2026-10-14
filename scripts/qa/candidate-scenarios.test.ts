@@ -450,6 +450,7 @@ describe('the scenario registry', () => {
       'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
+      'packaged-restart-recovery',
       'renderer-kill',
       'fresh-onboarding-baseline',
       'hosted-startup-tls'
