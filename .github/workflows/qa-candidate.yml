@@ -436,10 +436,10 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   smoke-win:
-    name: Install and launch win by sha256
+    name: Install, launch and decode win by sha256
     needs: provenance
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -447,6 +447,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
+          cache: npm
+      - run: npm ci
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-provenance
@@ -471,7 +473,7 @@ jobs:
           $runId = $provenance.run.id
           $setupAssets = ($provenance.builds | Where-Object { $_.variant -eq 'win' }).assets
           $portableAssets = ($provenance.builds | Where-Object { $_.variant -eq 'win-portable' }).assets
-          New-Item -ItemType Directory -Force launch-reports | Out-Null
+          New-Item -ItemType Directory -Force launch-reports, asr-reports | Out-Null
           $signatures = @{}
           foreach ($exe in Get-ChildItem assets -Recurse -Filter *.exe) {
             $status = (Get-AuthenticodeSignature $exe.FullName).Status
@@ -492,6 +494,8 @@ jobs:
             $sha = ($launch.Assets | Where-Object { $_.name -eq $name }).sha256
             node scripts/check-packaged-launch.mjs $launch.Exe --report "launch-reports/$name.launch.json" --installer $name --artifact-sha256 $sha --candidate-run $runId --signature ($signatures[$name])
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            node scripts/check-packaged-asr.mjs $launch.Exe --report "asr-reports/$name.asr.json" --installer $name --artifact-sha256 $sha --candidate-run $runId
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Require a PASS report per installer, bound to the provenance sha256
         if: always()
@@ -509,6 +513,22 @@ jobs:
               Write-Output "::error::$($asset.name) has no PASS launch report bound to its provenance sha256."
               $failed = $true
             }
+            $path = "asr-reports/$($asset.name).asr.json"
+            $report = if (Test-Path $path) { Get-Content $path -Raw | ConvertFrom-Json } else { $null }
+            if (
+              $null -eq $report -or
+              $report.installer -ne $asset.name -or
+              $report.verdict -ne 'PASS' -or
+              $report.artifact_sha256 -ne $asset.sha256 -or
+              $report.candidate_run -ne [string]$provenance.run.id -or
+              $report.engines.whisper.job_state -ne 'done' -or
+              $report.engines.parakeet.job_state -ne 'done' -or
+              $report.engines.whisper.readback_ok -ne $true -or
+              $report.engines.parakeet.readback_ok -ne $true
+            ) {
+              Write-Output "::error::$($asset.name) has no PASS Whisper/Parakeet readback report bound to its provenance sha256."
+              $failed = $true
+            }
           }
           if ($failed) { exit 1 }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -516,6 +536,13 @@ jobs:
         with:
           name: candidate-launch-win
           path: launch-reports/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: candidate-asr-win
+          path: asr-reports/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 

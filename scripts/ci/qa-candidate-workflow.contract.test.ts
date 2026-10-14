@@ -141,6 +141,7 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
     expect(block).toContain('Installer = $portable')
     expect(block).toContain("$report.verdict -ne 'PASS'")
     expect(block).toContain('$report.artifact_sha256 -ne $asset.sha256')
+    expect(block).toContain('$report.candidate_run -ne [string]$provenance.run.id')
   })
 
   it('runs real Whisper and Parakeet decode from both installed Windows executables and binds each report to provenance', () => {
