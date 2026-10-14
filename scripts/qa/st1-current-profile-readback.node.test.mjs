@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { findUnpinnedUses } from '../ci/check-workflow-pins.mjs'
+import { evaluateCriteria } from './lib/st-1-core.mjs'
 import {
   ARTIFACT,
   SOURCE,
@@ -103,7 +104,19 @@ test('readback workflow is branch-guarded, read-only, pinned, and runs pure test
   )
   assert.ok(workflow.includes('node scripts/qa/st1-current-profile-readback.mjs'))
   assert.deepEqual(findUnpinnedUses(workflow), [])
-  assert.ok(historicalGate.includes('no-late-samples'))
-  assert.ok(historicalGate.includes('loop.maxMs'))
-  assert.ok(historicalGate.includes('write.maxMs'))
+  assert.ok(historicalGate.includes('all(.[]; .pass == true)'))
+})
+
+test('retains the actual strict gate at every late and numeric boundary', () => {
+  const clean = { samples: [{ writeMs: 249, lookupMs: 249 }], late: [], loop: { p99Ms: 49, maxMs: 249 } }
+  assert.ok(evaluateCriteria('none', clean, {}).every((criterion) => criterion.pass))
+  for (const [name, measured] of [
+    ['no-late-samples', { ...clean, late: [{}] }],
+    ['loop-p99 < 50', { ...clean, loop: { ...clean.loop, p99Ms: 50 } }],
+    ['loop-max < 250', { ...clean, loop: { ...clean.loop, maxMs: 250 } }],
+    ['async-write < 250', { ...clean, samples: [{ writeMs: 250, lookupMs: 249 }] }],
+    ['dns-lookup < 250', { ...clean, samples: [{ writeMs: 249, lookupMs: 250 }] }]
+  ]) {
+    assert.equal(evaluateCriteria('none', measured, {}).find((criterion) => criterion.name === name)?.pass, false)
+  }
 })

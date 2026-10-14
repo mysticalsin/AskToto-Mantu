@@ -12,6 +12,7 @@ import {
   verifyReportScope
 } from './st1-current-profile-readback.mjs'
 import { findUnpinnedUses } from '../ci/check-workflow-pins.mjs'
+import { evaluateCriteria } from './lib/st-1-core.mjs'
 
 function validRun() {
   return {
@@ -408,8 +409,20 @@ describe('current control profile projection', () => {
     expect(workflow).toContain('          persist-credentials: false')
     expect(workflow).toContain('node scripts/qa/st1-current-profile-readback.mjs')
     expect(findUnpinnedUses(workflow)).toEqual([])
-    expect(strict).toContain('lateSamples')
-    expect(strict).toContain('loop.maxMs')
-    expect(strict).toContain('write.maxMs')
+    expect(strict).toContain('all(.[]; .pass == true)')
+  })
+
+  it('keeps the actual late, loop, write and lookup thresholds strict', () => {
+    const clean = { samples: [{ writeMs: 249, lookupMs: 249 }], late: [], loop: { p99Ms: 49, maxMs: 249 } }
+    expect(evaluateCriteria('none', clean, {}).every((criterion) => criterion.pass)).toBe(true)
+    for (const [name, measured] of [
+      ['no-late-samples', { ...clean, late: [{}] }],
+      ['loop-p99 < 50', { ...clean, loop: { ...clean.loop, p99Ms: 50 } }],
+      ['loop-max < 250', { ...clean, loop: { ...clean.loop, maxMs: 250 } }],
+      ['async-write < 250', { ...clean, samples: [{ writeMs: 250, lookupMs: 249 }] }],
+      ['dns-lookup < 250', { ...clean, samples: [{ writeMs: 249, lookupMs: 250 }] }]
+    ]) {
+      expect(evaluateCriteria('none', measured, {}).find((criterion) => criterion.name === name)?.pass).toBe(false)
+    }
   })
 })
