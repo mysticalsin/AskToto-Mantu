@@ -14,7 +14,14 @@ on:
       candidate_run:
         description: Successful workflow_dispatch run ID of qa-candidate.yml for the 1.9.7 bytes to test
         required: true
-        default: '38413517357'
+        type: string
+      candidate_commit:
+        description: Exact approved 40-character commit for the candidate and this dispatch ref
+        required: true
+        type: string
+      candidate_ref:
+        description: Exact approved branch ref for the candidate and this dispatch ref
+        required: true
         type: string
 
 permissions:
@@ -22,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: profile-upgrade-preservation-${{ github.ref }}-${{ inputs.candidate_run || '38413517357' }}
+  group: profile-upgrade-preservation-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -45,6 +52,7 @@ jobs:
       - name: Check the report and provenance contract
         run: npx vitest run scripts/qa/profile-upgrade.test.ts
       - name: Download and verify the published 1.9.6 baseline
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -62,11 +70,20 @@ jobs:
           $sha = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
           if ($sha -ne '77a532f3c33a0be6f9315e7e0df02c2420c25a297e90c5fa6baff18f84193df8') { throw 'Baseline installer bytes differ from the pinned release digest.' }
       - name: Download and verify the exact hosted 1.9.7 candidate
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_RUN: ${{ inputs.candidate_run || '38413517357' }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          APPROVED_COMMIT: ${{ inputs.candidate_commit }}
+          APPROVED_REF: ${{ inputs.candidate_ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:APPROVED_COMMIT -notmatch '^[0-9a-f]{40}$') { throw 'Approved candidate commit must be an explicit 40-character SHA.' }
+          if ($env:APPROVED_COMMIT -ne $env:DISPATCH_SHA) { throw 'Dispatch ref SHA differs from the explicitly approved candidate commit.' }
+          if ($env:APPROVED_REF -ne $env:DISPATCH_REF) { throw 'Dispatch branch differs from the explicitly approved candidate ref.' }
+          if ($env:APPROVED_REF -notin @('main', 'release/1.9.x')) { throw 'Approved candidate ref must be main or release/1.9.x.' }
           New-Item -ItemType Directory -Force -Path candidate-provenance, candidate-win | Out-Null
           gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN" | Set-Content candidate-run.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'Candidate Actions run lookup failed.' }
@@ -76,7 +93,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Candidate Windows installer artifact is unavailable.' }
           node scripts/qa/provenance.mjs verify candidate-provenance/provenance.json candidate-win win
           if ($LASTEXITCODE -ne 0) { throw 'Candidate installer did not match its provenance.' }
-          node scripts/qa/profile-upgrade.mjs verify-candidate candidate-run.json candidate-provenance/provenance.json $env:CANDIDATE_RUN candidate-identity.json
+          node scripts/qa/profile-upgrade.mjs verify-candidate candidate-run.json candidate-provenance/provenance.json $env:CANDIDATE_RUN $env:APPROVED_COMMIT $env:APPROVED_REF candidate-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Candidate run identity or 1.9.7 Setup provenance is invalid.' }
           $identity = Get-Content candidate-identity.json -Raw | ConvertFrom-Json
           node scripts/qa/candidate-installer.mjs candidate-win $identity.sha256 win | Set-Content candidate-installer-path.txt -NoNewline
@@ -88,9 +105,11 @@ jobs:
           "CANDIDATE_RUN=$($identity.run_id)" | Add-Content $env:GITHUB_ENV
           "CANDIDATE_ATTEMPT=$($identity.attempt)" | Add-Content $env:GITHUB_ENV
           "CANDIDATE_COMMIT=$($identity.commit)" | Add-Content $env:GITHUB_ENV
+          "CANDIDATE_REF=$($identity.ref)" | Add-Content $env:GITHUB_ENV
       - name: Create synthetic profile and perform the in-place upgrade
+        if: github.event_name == 'workflow_dispatch'
         env:
-          CANDIDATE_RUN: ${{ inputs.candidate_run || '38413517357' }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
         run: |
           $ErrorActionPreference = 'Stop'
           $baseline = (Get-Item release-artifact/Metis-Setup-1.9.6.exe).FullName
@@ -99,14 +118,14 @@ jobs:
           $installRoot = Join-Path $env:RUNNER_TEMP 'metis-upgrade-install'
           $runnerRoot = Join-Path $env:RUNNER_TEMP 'metis-upgrade-qa'
           $report = Join-Path $env:GITHUB_WORKSPACE 'upgrade-output/upgrade-report.json'
-          node scripts/qa/profile-upgrade.mjs run $baseline $candidate $env:CANDIDATE_RUN $env:CANDIDATE_ATTEMPT $env:CANDIDATE_COMMIT $report $installRoot $runnerRoot
+          node scripts/qa/profile-upgrade.mjs run $baseline $candidate $env:CANDIDATE_RUN $env:CANDIDATE_ATTEMPT $env:CANDIDATE_COMMIT $env:CANDIDATE_REF $report $installRoot $runnerRoot
           if ($LASTEXITCODE -ne 0) { throw 'Hosted profile upgrade acceptance did not pass; inspect upgrade-output/upgrade-report.json.' }
           Get-Content $report | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Upload content-free upgrade report
-        if: always() && hashFiles('upgrade-output/upgrade-report.json') != ''
+        if: github.event_name == 'workflow_dispatch' && always() && hashFiles('upgrade-output/upgrade-report.json') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-profile-upgrade-${{ inputs.candidate_run || '38413517357' }}
+          name: windows-profile-upgrade-${{ inputs.candidate_run }}
           path: upgrade-output/upgrade-report.json
           if-no-files-found: error
           retention-days: 30

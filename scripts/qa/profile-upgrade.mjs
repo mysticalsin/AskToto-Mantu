@@ -4,10 +4,11 @@
 // This lane is intentionally fail-closed: only a complete set of PASS rows is accepted.
 import { createHash } from 'node:crypto'
 import {
+  existsSync,
   mkdirSync,
+  rmSync,
   readFileSync,
   statSync,
-  writeFileSync,
   writeFileSync
 } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
@@ -52,7 +53,8 @@ export const REQUIRED_CHECKS = Object.freeze([
   'meeting_ciphertext_preserved',
   'note_ciphertext_preserved',
   'note_content_app_visible_after_upgrade',
-  'candidate_clean_shutdown'
+  'candidate_clean_shutdown',
+  'disposable_roots_removed'
 ])
 
 const SYNTHETIC = Object.freeze({
@@ -71,12 +73,17 @@ export function sha256Bytes(bytes) {
 }
 
 /** Validate the exact hosted candidate run and its Windows Setup byte binding before installation. */
-export function verifyCandidateIdentity(run, provenance, candidateRun) {
+export function verifyCandidateIdentity(run, provenance, candidateRun, approvedCommit, approvedRef) {
+  if (!COMMIT.test(String(approvedCommit ?? ''))) throw new Error('an explicit approved 40-character candidate commit is required.')
+  if (typeof approvedRef !== 'string' || !approvedRef.trim()) throw new Error('an explicit approved candidate ref is required.')
   const problems = candidateRunProblems(run, candidateRun)
   if (problems.length) throw new Error(problems.join('\n'))
   if (run.repository?.full_name !== REPOSITORY) throw new Error(`candidate run repository is not ${REPOSITORY}.`)
   if (provenance.repository !== REPOSITORY) throw new Error(`candidate provenance repository is not ${REPOSITORY}.`)
   assertCandidateProvenance(provenance, candidateRun, run.run_attempt)
+  if (provenance.run?.attempt !== run.run_attempt) throw new Error('candidate provenance attempt differs from the Actions run attempt.')
+  if (run.head_sha !== approvedCommit) throw new Error('candidate run head SHA differs from the explicitly approved commit.')
+  if (run.head_branch !== approvedRef) throw new Error('candidate run ref differs from the explicitly approved ref.')
   if (provenance.version !== CANDIDATE_VERSION) throw new Error(`candidate version is ${provenance.version}, expected ${CANDIDATE_VERSION}.`)
   if (provenance.commit !== run.head_sha) throw new Error('candidate provenance commit differs from the Actions run head SHA.')
   const build = provenance.builds?.find((entry) => entry.variant === 'win')
@@ -87,7 +94,7 @@ export function verifyCandidateIdentity(run, provenance, candidateRun) {
   if (matches.length !== 1 || !SHA256.test(matches[0]?.sha256 ?? '') || !Number.isSafeInteger(matches[0]?.size) || matches[0].size <= 0) {
     throw new Error('Windows provenance must name exactly one non-empty 1.9.7 Setup installer with a sha256.')
   }
-  return { run_id: String(candidateRun), attempt: run.run_attempt, commit: run.head_sha, version: CANDIDATE_VERSION, sha256: matches[0].sha256 }
+  return { run_id: String(candidateRun), attempt: run.run_attempt, commit: run.head_sha, ref: run.head_branch, version: CANDIDATE_VERSION, sha256: matches[0].sha256 }
 }
 
 /** Missing, malformed, skipped, unrun and failing rows all fail the assessment. */
@@ -108,10 +115,16 @@ export function assessUpgradeReport(report, expected = {}) {
   if (!COMMIT.test(report.candidate?.commit ?? '') || (expected.commit && report.candidate.commit !== expected.commit)) {
     problems.push('candidate commit is missing or does not match the expected run')
   }
+  if (typeof report.candidate?.ref !== 'string' || !report.candidate.ref || (expected.ref && report.candidate.ref !== expected.ref)) {
+    problems.push('candidate ref is missing or does not match the expected ref')
+  }
   if (String(report.candidate?.run_id ?? '') !== String(expected.candidateRun ?? report.candidate?.run_id ?? '') || !/^[1-9]\d*$/.test(String(report.candidate?.run_id ?? ''))) {
     problems.push('candidate run id is missing or unexpected')
   }
-  if (!Number.isSafeInteger(report.candidate?.attempt) || report.candidate.attempt < 1) problems.push('candidate attempt is missing or invalid')
+  if (!Number.isSafeInteger(report.candidate?.attempt) || report.candidate.attempt < 1 ||
+    (Number.isSafeInteger(expected.attempt) && report.candidate.attempt !== expected.attempt)) {
+    problems.push('candidate attempt is missing, invalid, or does not match the expected run attempt')
+  }
   const checks = Array.isArray(report.checks) ? report.checks : []
   const byId = new Map(checks.map((check) => [check?.id, check]))
   if (byId.size !== checks.length) problems.push('duplicate check ids are not allowed')
@@ -139,6 +152,16 @@ function hashFile(path) {
 function inside(parent, child) {
   const root = resolve(parent) + sep
   return resolve(child).startsWith(root)
+}
+
+function disposableRootsAreSafe(installRoot, runnerRoot, reportPath) {
+  const runnerTemp = process.env.RUNNER_TEMP ? resolve(process.env.RUNNER_TEMP) : ''
+  const install = resolve(installRoot)
+  const runner = resolve(runnerRoot)
+  const report = resolve(reportPath)
+  if (!runnerTemp || !inside(runnerTemp, install) || !inside(runnerTemp, runner)) return false
+  if (install === runner || inside(install, runner) || inside(runner, install)) return false
+  return !inside(install, report) && !inside(runner, report)
 }
 
 function findPages(browser) {
@@ -229,13 +252,13 @@ function writeReport(path, report) {
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 }
 
-async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, reportPath, installRoot, runnerRoot }) {
+async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot }) {
   const checks = REQUIRED_CHECKS.map((id) => ({ id, status: 'NOT_RUN', evidence: 'check was not reached' }))
   const report = {
     schema: 1,
     platform: process.platform,
     baseline: { tag: BASELINE.tag, version: BASELINE.version, sha256: null },
-    candidate: { run_id: String(candidateRun), attempt: Number(candidateAttempt), commit: String(candidateCommit), version: CANDIDATE_VERSION, sha256: null },
+    candidate: { run_id: String(candidateRun), attempt: Number(candidateAttempt), commit: String(candidateCommit), ref: String(candidateRef), version: CANDIDATE_VERSION, sha256: null },
     checks,
     error: null,
     coverage_limitations: []
@@ -254,8 +277,10 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
   let meetingFolder = null
   let keyFolder = resolve(runnerRoot, 'isolated-user-data')
   let overallError = null
+  const safeRoots = disposableRootsAreSafe(installRoot, runnerRoot, reportPath)
   try {
     if (process.platform !== 'win32') throw new Error('This acceptance harness must run on a hosted Windows runner.')
+    if (!safeRoots) throw new Error('disposable install/profile roots must be separate RUNNER_TEMP children, and the report must be outside both.')
     const baselineHash = hashFile(baselineInstaller)
     report.baseline.sha256 = baselineHash
     record(checks, 'baseline_installer_identity', baselineHash === BASELINE.sha256, `sha256=${baselineHash}`)
@@ -263,7 +288,7 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
 
     const run = JSON.parse(readFileSync(identityPath, 'utf8'))
     const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-    const identity = verifyCandidateIdentity(run, provenance, candidateRun)
+    const identity = verifyCandidateIdentity(run, provenance, candidateRun, candidateCommit, candidateRef)
     const candidateHash = hashFile(candidateInstaller)
     report.candidate.sha256 = candidateHash
     record(checks, 'candidate_installer_identity', candidateHash === identity.sha256, `sha256=${candidateHash}; run=${identity.run_id}; attempt=${identity.attempt}`)
@@ -406,10 +431,29 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     overallError = error instanceof Error ? error.message : String(error)
   } finally {
     if (activeApp) {
-      try { await stopApp(activeApp) } catch { /* report is already fail-closed */ }
+      try { await stopApp(activeApp) } catch (error) {
+        overallError = [overallError, `app cleanup failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join('; ')
+      }
     }
+    let removed = false
+    if (safeRoots) {
+      try {
+        rmSync(installRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
+        rmSync(runnerRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
+        removed = !existsSync(installRoot) && !existsSync(runnerRoot)
+      } catch (error) {
+        overallError = [overallError, `disposable root cleanup failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join('; ')
+      }
+    }
+    record(checks, 'disposable_roots_removed', removed, removed
+      ? 'both isolated install and synthetic profile roots were recursively removed and verified absent'
+      : 'FAIL: one or both isolated roots remain or cleanup paths were not safe')
+    if (!removed && !overallError) overallError = 'disposable install/profile roots could not be verified absent after cleanup.'
     report.error = overallError
-    report.assessment = assessUpgradeReport(report, { candidateRun, candidateSha256: report.candidate.sha256, commit: candidateCommit })
+    report.assessment = assessUpgradeReport(report, {
+      candidateRun, candidateSha256: report.candidate.sha256, commit: candidateCommit,
+      ref: candidateRef, attempt: Number(candidateAttempt)
+    })
     writeReport(reportPath, report)
   }
   if (report.assessment.accepted) process.stdout.write(`Profile upgrade acceptance: PASS (${reportPath})\n`)
@@ -419,27 +463,27 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
   }
 }
 
-function verifyCandidateCommand(runPath, provenancePath, candidateRun, outputPath) {
+function verifyCandidateCommand(runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath) {
   const run = JSON.parse(readFileSync(runPath, 'utf8'))
   const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-  const identity = verifyCandidateIdentity(run, provenance, candidateRun)
+  const identity = verifyCandidateIdentity(run, provenance, candidateRun, approvedCommit, approvedRef)
   writeFileSync(outputPath, `${JSON.stringify(identity, null, 2)}\n`)
 }
 
 async function main(argv) {
   const [command, ...args] = argv
   if (command === 'verify-candidate') {
-    const [runPath, provenancePath, candidateRun, outputPath] = args
-    if (!runPath || !provenancePath || !candidateRun || !outputPath) throw new Error('usage: profile-upgrade.mjs verify-candidate <run.json> <provenance.json> <run-id> <identity.json>')
-    verifyCandidateCommand(runPath, provenancePath, candidateRun, outputPath)
+    const [runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath] = args
+    if (!runPath || !provenancePath || !candidateRun || !approvedCommit || !approvedRef || !outputPath) throw new Error('usage: profile-upgrade.mjs verify-candidate <run.json> <provenance.json> <run-id> <approved-commit> <approved-ref> <identity.json>')
+    verifyCandidateCommand(runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath)
     return
   }
   if (command === 'run') {
-    const [baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, reportPath, installRoot, runnerRoot] = args
-    if (![baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, reportPath, installRoot, runnerRoot].every(Boolean)) {
-      throw new Error('usage: profile-upgrade.mjs run <baseline.exe> <candidate.exe> <run-id> <attempt> <commit> <report.json> <install-root> <runner-root>')
+    const [baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot] = args
+    if (![baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot].every(Boolean)) {
+      throw new Error('usage: profile-upgrade.mjs run <baseline.exe> <candidate.exe> <run-id> <attempt> <commit> <ref> <report.json> <install-root> <runner-root>')
     }
-    await runUpgrade({ baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, reportPath, installRoot, runnerRoot })
+    await runUpgrade({ baselineInstaller, candidateInstaller, candidateRun, candidateAttempt, candidateCommit, candidateRef, reportPath, installRoot, runnerRoot })
     return
   }
   throw new Error('usage: profile-upgrade.mjs <verify-candidate|run> ...')
