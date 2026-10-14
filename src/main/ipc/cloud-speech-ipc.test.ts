@@ -610,12 +610,15 @@ describe('cloud speech main IPC authority boundary', () => {
     const candidateId = 'c3d23d44-347c-490c-841b-0ff31facbc7e'
     const candidateSession = readyRelay(candidateId, [{ track: 'microphone', streamEpoch: 4 }])
     let onTranscript: ((event: unknown, context: unknown) => void) | undefined
+    let renewalClient: SpeechBrokerClient | undefined
     relayHarness.create.mockImplementation(
       async (options: {
+        client: SpeechBrokerClient
         onAllocated?: (id: string) => void
         onTranscript?: (event: unknown, context: unknown) => void
       }) => {
         options.onAllocated?.(oldSession.identity.sessionId)
+        renewalClient = options.client
         onTranscript = options.onTranscript
         return { ok: true, value: oldSession }
       }
@@ -623,11 +626,13 @@ describe('cloud speech main IPC authority boundary', () => {
     const candidateAllocation = createdSession()
     candidateAllocation.value.sessionId = candidateId
     h.client.createSession = vi.fn(async () => candidateAllocation) as FakeClient['createSession']
-    ;(oldSession as unknown as { renew: () => Promise<unknown> }).renew = vi.fn(async () => {
-      const created = await h.client.createSession({ operation: 'create-session' })
-      if (!created.ok) throw new Error('candidate allocation failed')
-      return { ok: true, value: candidateSession }
-    })
+    ;(oldSession as unknown as { renew: (createRequest: unknown) => Promise<unknown> }).renew = vi.fn(
+      async (createRequest: unknown) => {
+        const created = await renewalClient!.createSession(createRequest)
+        if (!created.ok) throw new Error('candidate allocation failed')
+        return { ok: true, value: candidateSession }
+      }
+    )
 
     await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
     timers[0]!.callback()
@@ -704,10 +709,14 @@ describe('cloud speech main IPC authority boundary', () => {
     const candidateSessions = candidateIds.map((id, index) =>
       readyRelay(id, [{ track: 'microphone', streamEpoch: index + 4 }])
     )
-    relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
-      options.onAllocated?.(oldSession.identity.sessionId)
-      return { ok: true, value: oldSession }
-    })
+    let renewalClient: SpeechBrokerClient | undefined
+    relayHarness.create.mockImplementation(
+      async (options: { client: SpeechBrokerClient; onAllocated?: (id: string) => void }) => {
+        options.onAllocated?.(oldSession.identity.sessionId)
+        renewalClient = options.client
+        return { ok: true, value: oldSession }
+      }
+    )
     const consentRequests: Array<{ consent: { issuedAt: number; expiresAt: number } }> = []
     let allocation = 0
     h.client.createSession = vi.fn(async (raw: unknown) => {
@@ -717,11 +726,13 @@ describe('cloud speech main IPC authority boundary', () => {
       return value
     }) as FakeClient['createSession']
     const renewTo = (session: ReturnType<typeof readyRelay>, next: ReturnType<typeof readyRelay>) => {
-      ;(session as unknown as { renew: () => Promise<unknown> }).renew = vi.fn(async () => {
-        const created = await h.client.createSession({ operation: 'create-session' })
-        if (!created.ok) throw new Error('candidate allocation failed')
-        return { ok: true, value: next }
-      })
+      ;(session as unknown as { renew: (createRequest: unknown) => Promise<unknown> }).renew = vi.fn(
+        async (createRequest: unknown) => {
+          const created = await renewalClient!.createSession(createRequest)
+          if (!created.ok) throw new Error('candidate allocation failed')
+          return { ok: true, value: next }
+        }
+      )
     }
     renewTo(oldSession, candidateSessions[0]!)
     renewTo(candidateSessions[0]!, candidateSessions[1]!)
