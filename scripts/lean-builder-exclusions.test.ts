@@ -37,9 +37,10 @@ it.each([
     projectDir: root,
     appDir: root,
     buildResourcesDir: 'build',
-    isPrepackedAppAsar: false
+    isPrepackedAppAsar: false,
+    debugLogger: { isEnabled: false }
   }
-  const packager = { config, info, debugLogger: { isEnabled: false } }
+  const packager = { config, info }
   const beforePack = (await import('./before-pack.mjs')).default
   await beforePack({ arch: 1, electronPlatformName: platform, packager })
   const target = platform === 'darwin' ? config.mac : config.win
