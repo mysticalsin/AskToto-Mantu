@@ -14,7 +14,8 @@ describe('real ASR model protocol response boundary', () => {
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, text)
   }
-  const handler = () => createAsrModelProtocolHandler({ resourcesRoot: resources, userModelsRoot: userModels, readLocal })
+  const handler = () =>
+    createAsrModelProtocolHandler({ resourcesRoot: resources, userModelsRoot: userModels, readLocal })
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'metis-protocol-')))
     resources = join(root, 'resources')
@@ -40,6 +41,80 @@ describe('real ASR model protocol response boundary', () => {
     const result = await handler()({ url: 'asr-model://models/Xenova/whisper-base/config.json' })
     expect(result.status).toBe(200)
     expect(await result.json()).toEqual({ downloaded: true })
+  })
+
+  it('uses only the explicitly selected speech-pack root when the package profile is lean', async () => {
+    const pack = join(root, 'speech-packs', 'asr.whisper-base-q8', '2')
+    put(join(resources, 'models', 'Xenova', 'whisper-base', 'config.json'), 'bundled fallback must not win')
+    put(join(userModels, 'Xenova', 'whisper-base', 'config.json'), 'legacy fallback must not win')
+    put(join(pack, 'Xenova', 'whisper-base', 'config.json'), 'selected pack')
+    const leanHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      userModelsRoot: userModels,
+      speechPackModelsRoot: pack,
+      useOnlySpeechPackModels: true,
+      readLocal
+    })
+    const result = await leanHandler({ url: 'asr-model://models/Xenova/whisper-base/config.json' })
+    expect(await result.text()).toBe('selected pack')
+  })
+
+  it('does not fall back to bundled or user models when lean selected pack is unavailable', async () => {
+    put(join(resources, 'models', 'Xenova', 'whisper-base', 'config.json'), 'bundled must not be used')
+    put(join(userModels, 'Xenova', 'whisper-base', 'config.json'), 'legacy must not be used')
+    const leanHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      userModelsRoot: userModels,
+      useOnlySpeechPackModels: true,
+      readLocal
+    })
+    expect((await leanHandler({ url: 'asr-model://models/Xenova/whisper-base/config.json' })).status).toBe(404)
+    expect(readLocal).not.toHaveBeenCalled()
+  })
+
+  it('does not revive a static speech-pack root when the current async resolver denies it', async () => {
+    const stalePack = join(root, 'speech-packs', 'asr.whisper-base-q8', '2')
+    put(join(stalePack, 'config.json'), 'stale activation')
+    const dynamicHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      speechPackModelsRoot: stalePack,
+      useOnlySpeechPackModels: true,
+      resolveSpeechPackModels: async () => ({ useOnlySpeechPackModels: true }),
+      readLocal
+    })
+    expect((await dynamicHandler({ url: 'asr-model://models/config.json' })).status).toBe(404)
+    expect(readLocal).not.toHaveBeenCalled()
+  })
+
+  it('fails closed for an invalid package profile instead of using full or lean roots', async () => {
+    put(join(resources, 'models', 'config.json'), 'bundled must not be used')
+    put(join(userModels, 'config.json'), 'user must not be used')
+    const invalidHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      userModelsRoot: userModels,
+      resolveSpeechPackModels: async () => ({ useOnlySpeechPackModels: true }),
+      readLocal
+    })
+    expect((await invalidHandler({ url: 'asr-model://models/config.json' })).status).toBe(404)
+    expect(readLocal).not.toHaveBeenCalled()
+  })
+
+  it('resolves selected pack availability on each request after activation', async () => {
+    const pack = join(root, 'speech-packs', 'asr.whisper-base-q8', '2')
+    put(join(resources, 'models', 'config.json'), 'bundled')
+    put(join(pack, 'config.json'), 'selected')
+    let ready = false
+    const dynamicHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      readLocal,
+      resolveSpeechPackModels: async () => ({
+        useOnlySpeechPackModels: true,
+        ...(ready ? { speechPackModelsRoot: pack } : {})
+      })
+    })
+    expect((await dynamicHandler({ url: 'asr-model://models/config.json' })).status).toBe(404)
+    ready = true
+    expect(await (await dynamicHandler({ url: 'asr-model://models/config.json' })).text()).toBe('selected')
   })
 
   it('uses a downloaded model even when the bundled models directory never existed', async () => {
@@ -72,7 +147,11 @@ describe('real ASR model protocol response boundary', () => {
   it('refuses a model symlink into a sibling resources directory', async () => {
     put(join(resources, 'private', 'secret.json'), 'synthetic secret')
     mkdirSync(join(resources, 'models'), { recursive: true })
-    symlinkSync(join(resources, 'private'), join(resources, 'models', 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+    symlinkSync(
+      join(resources, 'private'),
+      join(resources, 'models', 'escape'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    )
     expect((await handler()({ url: 'asr-model://models/escape/secret.json' })).status).toBe(403)
     expect(readLocal).not.toHaveBeenCalled()
   })
@@ -94,7 +173,11 @@ describe('real ASR model protocol response boundary', () => {
     expect(readLocal).not.toHaveBeenCalled()
   })
 
-  it.each(['asr-model://other/config.json', 'asr-model://models/%2e%2e%5capp.asar', 'asr-model://models/C%3a%5csecret.json'])('forbids invalid resource route %s', async (url) => {
+  it.each([
+    'asr-model://other/config.json',
+    'asr-model://models/%2e%2e%5capp.asar',
+    'asr-model://models/C%3a%5csecret.json'
+  ])('forbids invalid resource route %s', async (url) => {
     expect((await handler()({ url })).status).toBe(403)
     expect(readLocal).not.toHaveBeenCalled()
   })

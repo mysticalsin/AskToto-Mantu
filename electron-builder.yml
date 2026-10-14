@@ -74,6 +74,10 @@ asarUnpack:
   # (OS open). Unpack Vite-emitted Act 1 hero mp4 so file:// can play after asar→unpacked rewrite.
   - '**/*.mp4'
 extraResources:
+  - from: build/speech-pack-profile.json
+    to: speech-pack-profile.json
+  - from: resources/speech-pack-fixtures/en.wav
+    to: speech-pack-fixtures/en.wav
   # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
   # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.
   - from: intelligence/dist

@@ -1,0 +1,224 @@
+import * as fs from 'node:fs/promises'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { SPEECH_PACK_COMPONENTS, type SpeechPackComponent } from './manifest'
+import { componentManifestIdentity, resolveSpeechPack } from './resolver'
+
+// Keep real filesystem behavior while giving Vitest a configurable module namespace for instrumentation.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, open: (...args: Parameters<typeof actual.open>) => actual.open(...args) }
+})
+
+const component = (files = [{ path: 'model.bin', bytes: 6, sha256: '0'.repeat(64) }]): SpeechPackComponent => ({
+  id: 'asr.whisper-base-q8',
+  version: '2',
+  files,
+  source: { kind: 'files', baseUrl: 'https://example.invalid/pinned' }
+})
+
+describe('speech-pack resolver', () => {
+  let root: string
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'speech-pack-resolver-'))
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('accepts a schema-2 marker bound to the exact component manifest and checks sizes without hashing weights', async () => {
+    const c = component()
+    const pack = join(root, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    writeFileSync(
+      join(root, c.id, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    await expect(resolveSpeechPack(root, c)).resolves.toMatchObject({
+      status: 'ready',
+      manifestIdentity: componentManifestIdentity(c)
+    })
+  })
+
+  it('reads only the activation marker during cold resolution and never opens a model weight', async () => {
+    const c = component()
+    const pack = join(root, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    const marker = join(root, c.id, 'active.json')
+    writeFileSync(
+      marker,
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    const openSpy = vi.spyOn(fs, 'open')
+    try {
+      expect((await resolveSpeechPack(root, c)).status).toBe('ready')
+      expect(openSpy.mock.calls.map(([path]) => String(path))).toEqual([marker])
+    } finally {
+      openSpy.mockRestore()
+    }
+  })
+
+  it('rechecks activation metadata on every request instead of retaining fulfilled readiness', async () => {
+    const c = component()
+    const pack = join(root, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    const marker = join(root, c.id, 'active.json')
+    writeFileSync(
+      marker,
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    await expect(resolveSpeechPack(root, c)).resolves.toMatchObject({ status: 'ready' })
+    rmSync(marker)
+    await expect(resolveSpeechPack(root, c)).resolves.toMatchObject({ status: 'not-installed' })
+  })
+
+  it('resolves an owned pack through an ancestor directory alias while rejecting a linked model file', async () => {
+    const c = component()
+    const canonicalParent = join(root, 'canonical')
+    const canonicalRoot = join(canonicalParent, 'packs')
+    const aliasParent = join(root, 'alias')
+    const pack = join(canonicalRoot, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    writeFileSync(
+      join(canonicalRoot, c.id, 'active.json'),
+      JSON.stringify({ schema: 2, component: c.id, version: c.version, manifestIdentity: componentManifestIdentity(c) })
+    )
+    symlinkSync(canonicalParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
+    const aliasedRoot = join(aliasParent, 'packs')
+    await expect(resolveSpeechPack(aliasedRoot, c)).resolves.toMatchObject({ status: 'ready' })
+
+    rmSync(join(pack, 'model.bin'))
+    const outside = join(root, 'outside.bin')
+    writeFileSync(outside, 'abcdef')
+    symlinkSync(outside, join(pack, 'model.bin'))
+    await expect(resolveSpeechPack(aliasedRoot, c)).resolves.toMatchObject({ status: 'repair-needed', reason: 'path' })
+  })
+
+  it('requires explicit repair for legacy, unknown-field, wrong-manifest, wrong-size and symlink markers or files', async () => {
+    const c = component()
+    const componentDir = join(root, c.id)
+    const pack = join(componentDir, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    const markerPath = join(componentDir, 'active.json')
+    const valid = { schema: 2, component: c.id, version: c.version, manifestIdentity: componentManifestIdentity(c) }
+    const cases = [
+      { schema: 1, component: c.id, version: c.version },
+      { ...valid, extra: true },
+      { ...valid, manifestIdentity: 'a'.repeat(64) }
+    ]
+    for (const marker of cases) {
+      writeFileSync(markerPath, JSON.stringify(marker))
+      expect((await resolveSpeechPack(root, c)).status).toBe('repair-needed')
+    }
+    writeFileSync(markerPath, JSON.stringify(valid))
+    writeFileSync(join(pack, 'model.bin'), 'short')
+    expect((await resolveSpeechPack(root, c)).status).toBe('repair-needed')
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    rmSync(join(pack, 'model.bin'))
+    symlinkSync(join(root, 'outside.bin'), join(pack, 'model.bin'))
+    writeFileSync(join(root, 'outside.bin'), 'abcdef')
+    expect((await resolveSpeechPack(root, c)).status).toBe('repair-needed')
+  })
+
+  it('rejects staging, non-regular paths and path escapes without following them', async () => {
+    const c = component()
+    const componentDir = join(root, c.id)
+    mkdirSync(join(root, '.staging', c.id, c.version), { recursive: true })
+    mkdirSync(join(componentDir, c.version), { recursive: true })
+    writeFileSync(
+      join(componentDir, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    expect((await resolveSpeechPack(root, c)).status).toBe('repair-needed')
+    const escaped = component([{ path: '../outside.bin', bytes: 6, sha256: '0'.repeat(64) }])
+    expect((await resolveSpeechPack(root, escaped)).status).toBe('repair-needed')
+  })
+
+  it('rejects a symlinked speech-packs root instead of treating it as a trust boundary', async () => {
+    const c = component()
+    const actual = join(root, 'actual')
+    const linked = join(root, 'linked')
+    const pack = join(actual, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    writeFileSync(
+      join(actual, c.id, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    symlinkSync(actual, linked, process.platform === 'win32' ? 'junction' : 'dir')
+    expect((await resolveSpeechPack(linked, c)).status).toBe('repair-needed')
+  })
+
+  it('rejects linked component and version directories', async () => {
+    const c = component()
+    const outside = join(root, 'outside')
+    const outsidePack = join(outside, c.version)
+    mkdirSync(outsidePack, { recursive: true })
+    writeFileSync(join(outsidePack, 'model.bin'), 'abcdef')
+    writeFileSync(
+      join(outside, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    const componentDir = join(root, c.id)
+    symlinkSync(outside, componentDir, process.platform === 'win32' ? 'junction' : 'dir')
+    expect((await resolveSpeechPack(root, c)).status).toBe('repair-needed')
+    rmSync(componentDir, { recursive: true, force: true })
+
+    mkdirSync(componentDir)
+    const linkedVersion = join(componentDir, c.version)
+    symlinkSync(outsidePack, linkedVersion, process.platform === 'win32' ? 'junction' : 'dir')
+    writeFileSync(
+      join(componentDir, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    expect((await resolveSpeechPack(root, c)).status).toBe('repair-needed')
+  })
+
+  it('derives identities from pinned manifest content, not object key order', () => {
+    const c = component()
+    expect(componentManifestIdentity(c)).toMatch(/^[0-9a-f]{64}$/)
+    expect(componentManifestIdentity({ ...c, files: [...c.files].reverse() })).toBe(componentManifestIdentity(c))
+    expect(SPEECH_PACK_COMPONENTS.length).toBeGreaterThan(0)
+  })
+})

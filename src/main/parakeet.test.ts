@@ -5,6 +5,19 @@ import { join } from 'node:path'
 
 const paths = vi.hoisted(() => ({ resources: '', userData: '', isPackaged: false }))
 const network = vi.hoisted(() => ({ httpsGet: vi.fn(), execFile: vi.fn(), fetch: vi.fn() }))
+const nativeHost = vi.hoisted(() => ({ fork: vi.fn() }))
+const modelOpenGuard = vi.hoisted(() => ({ active: false, calls: 0 }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (modelOpenGuard.active) modelOpenGuard.calls += 1
+      return actual.openSync(...args)
+    }
+  }
+})
 
 vi.mock('electron', () => ({
   app: {
@@ -13,14 +26,21 @@ vi.mock('electron', () => ({
     },
     getPath: () => paths.userData
   },
-  net: { fetch: network.fetch }
+  net: { fetch: network.fetch },
+  utilityProcess: { fork: nativeHost.fork }
 }))
 vi.mock('node:https', () => ({ get: network.httpsGet }))
 vi.mock('node:child_process', () => ({ execFile: network.execFile }))
 vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
-import { ensureParakeetModel, parakeetModelReady } from './parakeet'
-import { PARAKEET_REQUIRED_FILES, setAsrEnsureTestHooks, type AsrEnsureTestHooks } from './asr-bundled-ensure'
+import { ensureParakeetModel, parakeetModelReady, parakeetRelease, parakeetTranscribe } from './parakeet'
+import * as AsrEnsure from './asr-bundled-ensure'
+import {
+  PARAKEET_REQUIRED_FILES,
+  parakeetFilesReady,
+  setAsrEnsureTestHooks,
+  type AsrEnsureTestHooks
+} from './asr-bundled-ensure'
 
 function withTestResources(hooks: Omit<AsrEnsureTestHooks, 'bundledResourceRoot'> = {}): AsrEnsureTestHooks {
   return { ...hooks, bundledResourceRoot: () => paths.resources }
@@ -43,6 +63,7 @@ describe('bundled Parakeet runtime', () => {
     network.httpsGet.mockClear()
     network.execFile.mockClear()
     network.fetch.mockClear()
+    nativeHost.fork.mockClear()
     setAsrEnsureTestHooks(withTestResources())
   })
 
@@ -57,35 +78,103 @@ describe('bundled Parakeet runtime', () => {
 
   it('an unprovisioned development checkout fetches into userData', async () => {
     const progressSpy = vi.fn()
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async (dest, onProgress) => {
-        writeParakeet(dest)
-        onProgress?.(40)
-        onProgress?.(100)
-      }
-    }))
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async (dest, onProgress) => {
+          writeParakeet(dest)
+          onProgress?.(40)
+          onProgress?.(100)
+        }
+      })
+    )
 
-    expect(parakeetModelReady()).toBe(false)
+    await expect(parakeetModelReady()).resolves.toBe(false)
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
-    expect(parakeetModelReady()).toBe(true)
+    await expect(parakeetModelReady()).resolves.toBe(true)
     expect(progressSpy).toHaveBeenCalled()
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
   })
 
-  it('Access login HTML on disk is not a ready Parakeet model', () => {
+  it('rejects Access login HTML at the content validation gate before model use', async () => {
     const dir = join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
     mkdirSync(dir, { recursive: true })
     const html = '<!DOCTYPE html><html><body>cloudflareaccess.com Sign in</body></html>'
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
-    expect(parakeetModelReady()).toBe(false)
+    await expect(parakeetFilesReady(dir)).resolves.toBe(false)
+  })
+
+  it('keeps the Parakeet status probe from opening model files', async () => {
+    writeParakeet(join(paths.resources, 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))
+    modelOpenGuard.calls = 0
+    modelOpenGuard.active = true
+    try {
+      await expect(parakeetModelReady()).resolves.toBe(true)
+      expect(modelOpenGuard.calls).toBe(0)
+    } finally {
+      modelOpenGuard.active = false
+    }
+  })
+
+  it('does not start a helper when release wins during async model-path resolution', async () => {
+    let releasePath!: (path: string) => void
+    let reportPathStart!: () => void
+    const pathPending = new Promise<string>((resolve) => {
+      releasePath = resolve
+    })
+    const pathStarted = new Promise<void>((resolve) => {
+      reportPathStart = resolve
+    })
+    const resolvePath = vi.spyOn(AsrEnsure, 'resolveParakeetDir').mockImplementation(() => {
+      reportPathStart()
+      return pathPending
+    })
+    try {
+      const pending = parakeetTranscribe(new Float32Array(16))
+      await pathStarted
+      await parakeetRelease()
+      releasePath('/tmp/obsolete-model-path')
+      await expect(pending).rejects.toThrow('cancelled')
+      expect(nativeHost.fork).not.toHaveBeenCalled()
+    } finally {
+      resolvePath.mockRestore()
+    }
+  })
+
+  it('does not start a legacy transfer when release wins during async warmup readiness', async () => {
+    let releaseReadiness!: (ready: boolean) => void
+    let reportReadinessStart!: () => void
+    const readinessPending = new Promise<boolean>((resolve) => {
+      releaseReadiness = resolve
+    })
+    const readinessStarted = new Promise<void>((resolve) => {
+      reportReadinessStart = resolve
+    })
+    const ready = vi.spyOn(AsrEnsure, 'parakeetFilesReady').mockImplementation(() => {
+      reportReadinessStart()
+      return readinessPending
+    })
+    const ensure = vi.spyOn(AsrEnsure, 'ensureParakeetAssets')
+    try {
+      const pending = ensureParakeetModel()
+      await readinessStarted
+      await parakeetRelease()
+      releaseReadiness(false)
+      await expect(pending).rejects.toThrow('cancelled')
+      expect(ensure).not.toHaveBeenCalled()
+    } finally {
+      ready.mockRestore()
+      ensure.mockRestore()
+    }
   })
 
   it('a development fetch failure stays an honest connection error', async () => {
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async () => {
-        throw new Error('network down')
-      }
-    }))
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async () => {
+          throw new Error('network down')
+        }
+      })
+    )
     await expect(ensureParakeetModel()).rejects.toThrow(/network down/)
   })
 
