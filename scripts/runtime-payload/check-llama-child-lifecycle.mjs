@@ -8,20 +8,27 @@ function fail(code) {
 
 async function waitForReady(child) {
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('RUNTIME_CHILD_TEST_READY_TIMEOUT')), 5_000)
-    child.on('message', (message) => {
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.off('message', onMessage)
+      child.off('error', onError)
+      child.off('exit', onExit)
+      if (error) reject(error)
+      else resolve()
+    }
+    const onMessage = (message) => {
       if (message?.type !== 'ready') return
-      clearTimeout(timer)
-      resolve()
-    })
-    child.once('error', () => {
-      clearTimeout(timer)
-      reject(new Error('RUNTIME_CHILD_TEST_SPAWN_FAILED'))
-    })
-    child.once('exit', () => {
-      clearTimeout(timer)
-      reject(new Error('RUNTIME_CHILD_TEST_EXITED_BEFORE_READY'))
-    })
+      finish()
+    }
+    const onError = () => finish(new Error('RUNTIME_CHILD_TEST_SPAWN_FAILED'))
+    const onExit = () => finish(new Error('RUNTIME_CHILD_TEST_EXITED_BEFORE_READY'))
+    const timer = setTimeout(() => finish(new Error('RUNTIME_CHILD_TEST_READY_TIMEOUT')), 5_000)
+    child.on('message', onMessage)
+    child.once('error', onError)
+    child.once('exit', onExit)
   })
 }
 
@@ -40,11 +47,23 @@ async function main() {
     ['-e', "process.on('SIGTERM', () => {}); process.send({ type: 'ready' }); setInterval(() => {}, 1000)"],
     { env: {}, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }
   )
-  await waitForReady(resistant)
-  const shutdownStarted = Date.now()
-  await stopOwnedChild(resistant, { spawnMs: 2_000, termMs: 100, killMs: 1_500 })
-  if (Date.now() - shutdownStarted > 2_000 || resistant.signalCode !== 'SIGKILL')
-    fail('RUNTIME_CHILD_TEST_KILL_ESCALATION_FAILED')
+  let testError
+  try {
+    await waitForReady(resistant)
+    const shutdownStarted = Date.now()
+    await stopOwnedChild(resistant, { spawnMs: 2_000, termMs: 100, killMs: 1_500 })
+    if (Date.now() - shutdownStarted > 2_000 || resistant.signalCode !== 'SIGKILL')
+      fail('RUNTIME_CHILD_TEST_KILL_ESCALATION_FAILED')
+  } catch (error) {
+    testError = error
+  } finally {
+    try {
+      await stopOwnedChild(resistant, { spawnMs: 2_000, termMs: 100, killMs: 1_500 })
+    } catch (cleanupError) {
+      if (!testError) testError = cleanupError
+    }
+  }
+  if (testError) throw testError
   process.stdout.write('RUNTIME_CHILD_LIFECYCLE_NEGATIVES_PASSED\n')
 }
 
