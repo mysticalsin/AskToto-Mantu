@@ -78,6 +78,16 @@ function requestText(client, url) {
   })
 }
 
+function assertExpectedAgent(agent) {
+  const assert = require('node:assert/strict')
+  if (!agent) throw new Error('parent did not initialize global-agent')
+  assert.equal(agent.HTTP_PROXY, process.env.METIS_GA_EXPECTED_PROXY)
+  assert.equal(agent.HTTPS_PROXY, process.env.METIS_GA_EXPECTED_PROXY)
+  assert.equal(agent.NO_PROXY, process.env.METIS_GA_EXPECTED_NO_PROXY)
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') throw new Error('TLS verification must remain enabled')
+  return agent
+}
+
 async function main() {
   const mode = process.env.METIS_GA_MODE
   if (mode === 'onnx' || mode === 'onnx-install') {
@@ -100,7 +110,13 @@ async function main() {
       }
       process.dlopen = () => { throw new Error('native module loading forbidden in ONNX install smoke') }
       require('node:module')._extensions['.node'] = () => { throw new Error('native module load forbidden in ONNX install smoke') }
+      process.once('exit', (code) => {
+        assert.equal(code, 0, 'ONNX install script must exit successfully')
+        assertExpectedAgent(global.GLOBAL_AGENT)
+        require('node:fs').writeSync(1, 'METIS_GA_RESULT=' + JSON.stringify({ initialized: true }) + '\n')
+      })
       require(process.env.METIS_GA_ONNX_INSTALL)
+      throw new Error('ONNX install script unexpectedly returned instead of exiting after bootstrap')
     } else {
       onnxRequire('global-agent').bootstrap()
     }
@@ -111,14 +127,7 @@ async function main() {
     throw new Error('unknown compatibility parent')
   }
 
-  const agent = global.GLOBAL_AGENT
-  if (!agent) throw new Error('parent did not initialize global-agent')
-  const expectedProxy = process.env.METIS_GA_EXPECTED_PROXY
-  const expectedNoProxy = process.env.METIS_GA_EXPECTED_NO_PROXY
-  assert.equal(agent.HTTP_PROXY, expectedProxy)
-  assert.equal(agent.HTTPS_PROXY, expectedProxy)
-  assert.equal(agent.NO_PROXY, expectedNoProxy)
-  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') throw new Error('TLS verification must remain enabled')
+  assertExpectedAgent(global.GLOBAL_AGENT)
   const http = require('node:http')
   const https = require('node:https')
 
