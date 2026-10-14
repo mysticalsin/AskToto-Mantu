@@ -631,7 +631,11 @@ describe('cloud speech capture controller', () => {
       stage: 'opened',
       streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 15, lastSequence: 0 }]
     }
-    for (const event of [terminal, closed, opened]) for (const listener of next.events) listener(event)
+    for (const listener of next.events) listener(terminal)
+    await vi.waitFor(() => expect(applied).toEqual([terminal]))
+    for (const listener of next.events) listener(closed)
+    await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(1))
+    for (const listener of next.events) listener(opened)
     await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(2))
     const successor: CloudSpeechEvent = {
       type: 'segment',
@@ -1693,6 +1697,8 @@ describe('cloud speech capture controller', () => {
     const port = new FakePort()
     instance.attachTrack('microphone', port as unknown as MessagePort, 0)
     port.emit(pcmFrame(1, 0))
+    for (let i = 0; i < 8 && frame.mock.calls.length === 0; i++) await Promise.resolve()
+    expect(frame).toHaveBeenCalledOnce()
     const stop = instance.stop()
     await vi.advanceTimersByTimeAsync(50)
     const result = await stop

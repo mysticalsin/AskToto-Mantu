@@ -7,7 +7,7 @@ const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r
 
 describe('live capture PCM handoff', () => {
   it('passes AudioContext’s actual rate into a worklet that emits only 16 kHz PCM', () => {
-    expect(listenSrc).toMatch(/processorOptions: \{ sourceSampleRate: ctx\.sampleRate \}/)
+    expect(listenSrc).toMatch(/audioChannels\.open\(speaker, stream, epoch, micCapture\)/)
     expect(WHISPER_WORKLET_SRC).toContain('this.resampler = new Pcm16kResampler(this.sourceSampleRate, SAMPLE_RATE)')
     expect(WHISPER_WORKLET_SRC).toContain('{ audio: chunk, sampleRate: SAMPLE_RATE, partial: true }')
     expect(WHISPER_WORKLET_SRC).toContain('{ audio: chunk, sampleRate: SAMPLE_RATE, partial: false }')

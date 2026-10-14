@@ -46,8 +46,9 @@ function fakeNode(): FakeNode {
 class FakeAudioContext {
   static instances: FakeAudioContext[] = []
   static addModule: () => Promise<void> = async () => {}
+  static actualSampleRate = 16000
 
-  readonly sampleRate = 16000
+  readonly sampleRate = FakeAudioContext.actualSampleRate
   readonly destination = {}
   readonly audioWorklet = { addModule: (): Promise<void> => FakeAudioContext.addModule() }
   readonly source = fakeNode()
@@ -168,6 +169,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   FakeAudioContext.instances = []
   FakeAudioContext.addModule = async () => {}
+  FakeAudioContext.actualSampleRate = 16000
   vi.resetModules()
 })
 
@@ -235,6 +237,22 @@ describe('MQA-267: loopback acquisition keeps rendered system audio unprocessed'
 })
 
 describe('MQA-268: owned audio channels preserve the limiter graph and serialized recovery', () => {
+  it('passes the AudioContext’s actual sample rate to the worklet', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    FakeAudioContext.actualSampleRate = 48000
+    const host = channelHost()
+    const channels = createListenAudioChannels(() => host)
+
+    await expect(channels.open('you', fakeStream(fakeTrack()), 1)).resolves.toBe(true)
+
+    const context = FakeAudioContext.instances[0]
+    const worklet = channels.current.you?.worklet as unknown as FakeAudioWorkletNode | undefined
+    expect(context?.sampleRate).toBe(48000)
+    expect(worklet?.options.processorOptions).toEqual({ sourceSampleRate: 48000 })
+    channels.close('you')
+  })
+
   it('connects the system boost through the limiter and disconnects it with the channel', async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext)
     vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
@@ -268,9 +286,8 @@ describe('MQA-268: owned audio channels preserve the limiter graph and serialize
     const secondStream = fakeStream(fakeTrack())
     const first = channels.open('them', firstStream, 1)
     const second = channels.open('them', secondStream, 1)
-    await Promise.resolve()
+    await vi.waitFor(() => expect(FakeAudioContext.instances).toHaveLength(1))
 
-    expect(FakeAudioContext.instances).toHaveLength(1)
     gate.resolve()
     await expect(first).resolves.toBe(true)
     await expect(second).resolves.toBe(true)

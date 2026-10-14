@@ -416,7 +416,7 @@ beforeEach(() => {
         track: frame.track,
         sequence: frame.sequence,
         nextSequence: frame.sequence + 1,
-        nextSampleOffset: frame.sampleOffset + frame.pcm16.byteLength / 2
+        nextSampleOffset: frame.sampleOffset + frame.pcm16le.byteLength / 2
       })),
       cloudSpeechFinish: vi.fn(async (request: CloudSpeechFinishRequest) => ({
         ok: true as const,

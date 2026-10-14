@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { CloudSpeechStartRequest, CloudSpeechStartResult } from '@shared/cloud-speech'
+import type {
+  CloudSpeechEpochTransitionEvent,
+  CloudSpeechStartRequest,
+  CloudSpeechStartResult
+} from '@shared/cloud-speech'
 import { createCloudSpeechResultTracker } from './cloud-speech-results'
 
 const request: CloudSpeechStartRequest = {
@@ -39,7 +43,8 @@ describe('cloud speech result epoch tracking', () => {
       reason: 'normal' as const
     }
     expect(tracker.validate(terminal, 'cloudflare-nova3')).toEqual(terminal)
-    tracker.markApplied(terminal)
+    tracker.markTerminalApplied(prior)
+    tracker.markApplied(prior, terminal.lastSequence)
 
     const unannounced = {
       type: 'segment' as const,
@@ -59,9 +64,24 @@ describe('cloud speech result epoch tracking', () => {
     }
     expect(tracker.validate(unannounced, 'cloudflare-nova3')).toBeNull()
 
-    expect(
-      tracker.installEpochTransition([{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 0 }])
-    ).toBe(true)
+    const closed: Extract<CloudSpeechEpochTransitionEvent, { stage: 'closed' }> = {
+      type: 'epoch-transition',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      transitionId: 9,
+      handoffNonce: '00000000-0000-4000-8000-000000000709',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    const opened: Extract<CloudSpeechEpochTransitionEvent, { stage: 'opened' }> = {
+      ...closed,
+      stage: 'opened',
+      streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 0 }]
+    }
+    expect(tracker.validateTransition(closed)).toBe(true)
+    tracker.installTransition(closed)
+    expect(tracker.validateTransition(opened)).toBe(true)
+    tracker.installTransition(opened)
     const successor = {
       ...unannounced,
       segment: { ...unannounced.segment, stream: { ...prior, epoch: 9 }, text: 'announced' }
@@ -72,9 +92,16 @@ describe('cloud speech result epoch tracking', () => {
   it('refuses an opened inventory unless each predecessor terminal is applied and complete', () => {
     const tracker = createCloudSpeechResultTracker(request)
     tracker.initialize(started)
-    expect(
-      tracker.installEpochTransition([{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 0 }])
-    ).toBe(false)
+    const closed: Extract<CloudSpeechEpochTransitionEvent, { stage: 'closed' }> = {
+      type: 'epoch-transition',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      transitionId: 9,
+      handoffNonce: '00000000-0000-4000-8000-000000000709',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    expect(tracker.validateTransition(closed)).toBe(false)
 
     const terminal = {
       type: 'terminal' as const,
@@ -87,10 +114,9 @@ describe('cloud speech result epoch tracking', () => {
       reason: 'unknown' as const
     }
     expect(tracker.validate(terminal, 'cloudflare-nova3')).toEqual(terminal)
-    tracker.markApplied(terminal)
-    expect(
-      tracker.installEpochTransition([{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 0 }])
-    ).toBe(false)
+    tracker.markTerminalApplied(terminal.stream)
+    tracker.markApplied(terminal.stream, terminal.lastSequence)
+    expect(tracker.validateTransition(closed)).toBe(false)
   })
 
   it.each([
@@ -121,6 +147,7 @@ describe('cloud speech result epoch tracking', () => {
 
     expect(tracker.validate(terminal, 'cloudflare-nova3')).toEqual(terminal)
     tracker.markTerminalApplied(terminal.stream)
-    expect(tracker.validate(closed, 'cloudflare-nova3')).toBeNull()
+    tracker.markApplied(terminal.stream, terminal.lastSequence)
+    expect(tracker.validateTransition(closed)).toBe(false)
   })
 })
