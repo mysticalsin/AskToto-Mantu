@@ -77,7 +77,10 @@ describe('cloud speech preload boundary', () => {
       captureId,
       captureGeneration: capture.generation,
       ceilingId: event.ceilingId,
-      tracks: [{ track: 'microphone', finalSequence: 20, finalSampleOffset: 32_000 }]
+      tracks: [
+        { track: 'microphone', finalSequence: 20, finalSampleOffset: 32_000 },
+        { track: 'system', finalSequence: 19, finalSampleOffset: 30_400 }
+      ]
     }
     fixture.invoke.mockResolvedValueOnce({
       ok: true,
@@ -112,12 +115,49 @@ describe('cloud speech preload boundary', () => {
       captureId,
       captureGeneration: capture.generation,
       ceilingId: event.ceilingId,
-      tracks: [{ track: 'microphone', finalSequence: 20, finalSampleOffset: 32_002 }]
+      tracks: [acknowledgement.tracks[1], acknowledgement.tracks[0]]
     })
     await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toMatchObject({
       ok: false,
       code: 'TRANSPORT'
     })
+
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: event.ceilingId,
+      tracks: [
+        acknowledgement.tracks[0],
+        { ...acknowledgement.tracks[1], finalSequence: acknowledgement.tracks[1].finalSequence + 1 }
+      ]
+    })
+    await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toMatchObject({
+      ok: false,
+      code: 'TRANSPORT'
+    })
+
+    for (const mismatchedIdentity of [
+      { captureId: 'c1f85141-fcfe-4bac-9d96-658fce84ca87', captureGeneration },
+      { captureId, captureGeneration: captureGeneration + 1 }
+    ]) {
+      fixture.invoke.mockResolvedValueOnce({
+        ok: true,
+        ...mismatchedIdentity,
+        ceilingId: event.ceilingId,
+        tracks: acknowledgement.tracks
+      })
+      await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toMatchObject({
+        ok: false,
+        code: 'TRANSPORT'
+      })
+    }
+
+    const invokeCount = fixture.invoke.mock.calls.length
+    await expect(
+      api.cloudSpeechAckCaptureCeiling({ ...acknowledgement, privateSessionId: 'private' } as never)
+    ).resolves.toMatchObject({ ok: false, code: 'INVALID_REQUEST' })
+    expect(fixture.invoke).toHaveBeenCalledTimes(invokeCount)
   })
 
   it('does not invoke main for an invalid request and validates successful responses', async () => {

@@ -67,6 +67,7 @@ describe('cloud speech shared wire contracts', () => {
     for (const invalid of [
       { ...ceiling, maxSampleOffsetExclusive: 230_400_001 },
       { ...ceiling, ceilingId: 'not-a-uuid' },
+      { ...ack, tracks: [ack.tracks[0], ack.tracks[0]] },
       { ...ack, tracks: [...ack.tracks, ack.tracks[0]] },
       { ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 230_400_001 }, ack.tracks[1]] },
       { ...ack, privateSessionId: 'server-only' }
