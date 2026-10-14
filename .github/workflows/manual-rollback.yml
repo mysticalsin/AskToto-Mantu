@@ -5,7 +5,7 @@ name: Manual 1.9.7 rollback
 # Setup is reinstalled over the same app directory and must reopen the same data. Windows is exercised
 # on an ephemeral hosted account. Static evidence shows direct macOS downgrade is unsupported after the
 # PR #614 key/settings migration; macOS stays BLOCKED/NEVER_RUN until a separate snapshot-restore lane passes.
-run-name: Manual 1.9.7 rollback ${{ inputs.candidate_run }} attempt ${{ inputs.candidate_attempt }}
+run-name: Manual 1.9.7 rollback ${{ github.event_name == 'pull_request' && '(registration)' || format('{0} attempt {1}', inputs.candidate_run, inputs.candidate_attempt) }}
 
 on:
   pull_request:
