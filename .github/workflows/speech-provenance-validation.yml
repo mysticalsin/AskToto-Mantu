@@ -9,6 +9,9 @@ on:
       - vitest.config.ts
       - src/main/transcripts*
       - src/main/recall*
+      - src/main/history-*
+      - src/main/brain/inputs*
+      - src/main/brain/publish*
       - src/main/features/meetings/**
       - src/shared/transcript-line*
       - src/shared/cloud-speech*
@@ -47,11 +50,14 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run actual encrypted and plaintext persistence regressions
         env:
+          METIS_SPEECH_RESOURCE_REPORT: ${{ runner.temp }}/speech-resources-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
           METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
         run: |
           node -e "require('node:fs').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })"
           node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
-            src/main/transcripts.speech-provenance.test.ts
+            src/main/transcripts.speech-provenance.test.ts \
+            src/main/features/meetings/speech-provenance.test.ts \
+            src/main/transcripts.speech-resources.test.ts
       - name: Verify actual nonempty test results
         env:
           METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
@@ -59,7 +65,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs'
           const report = JSON.parse(readFileSync(process.env.METIS_CI_ROOT_REPORT, 'utf8'))
-          const required = ['src/main/transcripts.speech-provenance.test.ts']
+          const required = ['src/main/transcripts.speech-provenance.test.ts', 'src/main/features/meetings/speech-provenance.test.ts', 'src/main/transcripts.speech-resources.test.ts']
           const counts = [
             'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests',
             'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites'
@@ -87,11 +93,37 @@ jobs:
             throw new Error('Assertion count disagrees with the total test count.')
           console.log(`Persistence tests: ${report.numPassedTests}/${report.numTotalTests}; no failed or skipped cases.`)
           NODE
+      - name: Verify declared workload resource measurements
+        env:
+          METIS_SPEECH_RESOURCE_REPORT: ${{ runner.temp }}/speech-resources-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const report = JSON.parse(readFileSync(process.env.METIS_SPEECH_RESOURCE_REPORT, 'utf8'))
+          if (report.schema !== 1 || report.workloadOnly !== true || !Array.isArray(report.measurements) || report.measurements.length !== 2)
+            throw new Error('Resource measurements missing or invalid.')
+          for (const encrypted of [false, true]) {
+            const matches = report.measurements.filter((entry) => entry.encrypted === encrypted)
+            if (matches.length !== 1) throw new Error('Encryption-mode measurement missing or duplicated.')
+            const entry = matches[0]
+            const expected = { durationMs: 14400000, tracks: 2, segmentDurationMs: 5000, wordsPerSegment: 12, records: 5760, words: 69120, textBytes: 443520 }
+            if (entry.host !== process.platform || entry.memoryScope !== 'worker-process-cumulative' ||
+                Object.keys(expected).some((key) => entry.manifest?.[key] !== expected[key]) || entry.textBytes !== expected.textBytes)
+              throw new Error('Declared resource workload does not match the actual measurement.')
+            const numbers = ['privatePayloadBytes', 'encodedTranscriptBytes', 'documentBytes', 'storedBytes', 'fixtureMs', 'codecMs', 'saveMs', 'decryptReadMs', 'recallMs',
+              'rssBefore', 'rssAfter', 'heapBefore', 'heapAfter', 'processMaxRssKiB', 'eventLoopMaxMs', 'eventLoopP99Ms']
+            if (numbers.some((key) => typeof entry[key] !== 'number' || !Number.isFinite(entry[key]) || entry[key] < 0) || entry.privatePayloadBytes <= 0 || entry.storedBytes <= 0)
+              throw new Error('Resource counters missing, negative or nonfinite.')
+            console.log(JSON.stringify(entry))
+          }
+          NODE
       - name: Retain actual test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: speech-provenance-${{ matrix.os }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          path: |
+            ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+            ${{ runner.temp }}/speech-resources-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
           if-no-files-found: error
           retention-days: 14

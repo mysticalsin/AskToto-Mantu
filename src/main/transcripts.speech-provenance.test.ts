@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import { SaveMeetingSchema, type SaveMeeting, type Settings, type TranscriptLine } from '@shared/ipc'
-import { saveMeeting, isEncryptedFile } from './transcripts'
-import { recallRead } from './recall'
+import {
+  saveMeeting,
+  saveDraftTranscript,
+  recoverOrphanDrafts,
+  isEncryptedFile,
+  appendDebrief,
+  readSavedFile
+} from './transcripts'
+import { configureMeetingSpeechLimits } from './features/meetings/meeting-speech'
+import { recallRead, updateMeetingTranscript, searchMeetings } from './recall'
+import { readSavedMeeting } from './history-actions'
+import { readSourceText } from './brain/inputs'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
 vi.mock('electron')
@@ -63,9 +73,17 @@ describe('actual saved final speech provenance', () => {
     vi.mocked(app.getPath).mockReturnValue(folder)
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
     useStorageForTests()
+    configureMeetingSpeechLimits({
+      maxRecords: 100,
+      maxWords: 1000,
+      maxFieldBytes: 10000,
+      maxRecordBytes: 50000,
+      maxPayloadBytes: 1000000
+    })
   })
 
   afterEach(() => {
+    configureMeetingSpeechLimits(undefined)
     useStorageForTests()
     vi.unstubAllEnvs()
     rmSync(folder, { recursive: true, force: true })
@@ -110,5 +128,51 @@ describe('actual saved final speech provenance', () => {
 
     expect(read.ok).toBe(true)
     expect(read.lines).toEqual(input.lines)
+  })
+
+  it('retains the exact encrypted draft through recovery and typed read', async () => {
+    settings.encryptTranscripts = true
+    const input = meeting()
+    await saveDraftTranscript(settings, input)
+    settings.encryptTranscripts = false
+    expect(await recoverOrphanDrafts(settings)).toEqual({ recovered: 1 })
+    const file = readdirSync(folder).find((name) => name.endsWith('-recovered.md'))!
+    expect(isEncryptedFile(join(folder, file))).toBe(true)
+    expect((await recallRead(file)).lines).toEqual(input.lines)
+  })
+
+  it('preserves valid speech and debrief on a names-only rewrite without exposing JSON to export or LLM', async () => {
+    settings.encryptTranscripts = true
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    await appendDebrief(settings, basename(file), 'Synthetic private debrief')
+    const renamed = input.lines.map((line) => ({ ...line, name: 'Updated synthetic speaker' }))
+    expect(await updateMeetingTranscript(settings, basename(file), renamed)).toEqual({ ok: true })
+    expect((await recallRead(basename(file))).lines).toEqual(renamed)
+    expect(readSavedFile(file)).toContain('Synthetic private debrief')
+    expect(isEncryptedFile(file)).toBe(true)
+    const exported = await readSavedMeeting(folder, basename(file))
+    const source = await readSourceText(file)
+    expect(source.status).toBe('ok')
+    for (const text of [exported, source.status === 'ok' ? source.text : '']) {
+      expect(text).toContain(input.lines[0].text)
+      expect(text).not.toContain('captureGeneration')
+      expect(text).not.toContain(input.lines[0].speech!.captureId)
+    }
+    expect(await searchMeetings(input.lines[0].speech!.captureId)).toEqual([])
+  })
+
+  it('refuses a stale text/event rewrite and preserves the prior complete file', async () => {
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    const before = readFileSync(file)
+    const stale = { ...input.lines[0], text: 'Human edit without matching word evidence' }
+    expect((await updateMeetingTranscript(settings, basename(file), [stale])).ok).toBe(false)
+    expect(readFileSync(file)).toEqual(before)
+  })
+
+  it('refuses metadata save without a trusted main budget rather than losing the event', async () => {
+    configureMeetingSpeechLimits(undefined)
+    await expect(saveMeeting(settings, meeting())).rejects.toThrow('Speech metadata could not be retained.')
   })
 })
