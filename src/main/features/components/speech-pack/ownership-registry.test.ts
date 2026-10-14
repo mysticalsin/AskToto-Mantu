@@ -22,8 +22,6 @@ const identity = {
   birthtimeNs: '5',
   fileId: null
 }
-const stableIdentity = { dev: identity.dev, ino: identity.ino, birthtimeNs: identity.birthtimeNs }
-
 const snapshot = (): PackRegistrySnapshot => ({
   schema: 1,
   purpose: SPEECH_PACK_RECEIPT_PURPOSE,
@@ -32,10 +30,7 @@ const snapshot = (): PackRegistrySnapshot => ({
     profileGeneration: 'generation-1',
     principalAssociation: 'principal-1',
     registryRootBinding: 'registry-root-1',
-    keyId: 'key-1',
-    keyAnchorIdentity: stableIdentity,
-    registryRootIdentity: stableIdentity,
-    packRootIdentity: stableIdentity
+    keyId: 'key-1'
   },
   sequence: '1',
   previousDigest: null,
@@ -85,49 +80,35 @@ describe('speech-pack ownership registry schema', () => {
     expect(validatePackRegistrySnapshot(missingRdev)).toBe(false)
   })
 
-  it('rejects mutable metadata in persistent root bindings', () => {
+  it('rejects unrecognized physical identity fields in the authenticated binding', () => {
     const value = snapshot()
-    const movedMetadata = {
-      ...value.binding.registryRootIdentity,
-      mtimeNs: '20',
-      ctimeNs: '21'
-    }
     expect(
       validatePackRegistrySnapshot({
         ...value,
-        binding: { ...value.binding, registryRootIdentity: movedMetadata }
+        binding: { ...value.binding, registryRootIdentity: identity }
       })
     ).toBe(false)
   })
 
   it('publishes sequence one when explicitly creating an empty registry', async () => {
-    const publications: { slot: 0 | 1; bytes: Uint8Array }[] = []
-    const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+    const publications: { slot: 0 | 1; snapshot: PackRegistrySnapshot }[] = []
+    const slots = new Map<0 | 1, { snapshot: PackRegistrySnapshot; digest: string }>()
+    const digest = (value: PackRegistrySnapshot): string =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex')
     const store = await createSpeechPackOwnershipStore({
       binding: snapshot().binding,
-      protector: {
-        keyId: 'key-1',
-        async encrypt(bytes) {
-          return Uint8Array.from(bytes)
+      backend: {
+        async readSlot(slot) {
+          return slots.get(slot) ?? null
         },
-        async decrypt(bytes) {
-          return Uint8Array.from(bytes)
+        async publishSnapshot(input) {
+          const digestValue = digest(input.snapshot)
+          publications.push({ slot: input.slot, snapshot: input.snapshot })
+          slots.set(input.slot, { snapshot: input.snapshot, digest: digestValue })
+          return { digest: digestValue, durable: true }
         },
         assertCurrent() {},
-        retire() {},
         async settleAndDispose() {}
-      },
-      backend: {
-        async readSlot() {
-          return null
-        },
-        async publishSlot(input) {
-          publications.push({ slot: input.slot, bytes: Uint8Array.from(input.bytes) })
-          return { digest: digest(input.bytes), durable: true }
-        },
-        async acquireWriter() {
-          return { async release() {} }
-        }
       },
       mode: 'create-explicit'
     })
@@ -138,33 +119,23 @@ describe('speech-pack ownership registry schema', () => {
   })
 
   it('serializes overlapping updates without losing a transaction', async () => {
-    const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+    const digest = (value: PackRegistrySnapshot): string =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    const slots = new Map<0 | 1, { snapshot: PackRegistrySnapshot; digest: string }>()
     const store = await createSpeechPackOwnershipStore({
       binding: snapshot().binding,
-      protector: {
-        keyId: 'key-1',
-        async encrypt(bytes) {
-          await Promise.resolve()
-          return Uint8Array.from(bytes)
+      backend: {
+        async readSlot(slot) {
+          return slots.get(slot) ?? null
         },
-        async decrypt(bytes) {
-          return Uint8Array.from(bytes)
+        async publishSnapshot(input) {
+          await Promise.resolve()
+          const digestValue = digest(input.snapshot)
+          slots.set(input.slot, { snapshot: input.snapshot, digest: digestValue })
+          return { digest: digestValue, durable: true }
         },
         assertCurrent() {},
-        retire() {},
         async settleAndDispose() {}
-      },
-      backend: {
-        async readSlot() {
-          return null
-        },
-        async publishSlot(input) {
-          await Promise.resolve()
-          return { digest: digest(input.bytes), durable: true }
-        },
-        async acquireWriter() {
-          return { async release() {} }
-        }
       },
       mode: 'create-explicit'
     })
@@ -191,15 +162,50 @@ describe('speech-pack ownership registry schema', () => {
     await store.settleAndDispose()
   })
 
+  it('settles only a persisted move intent with the same physical identity', async () => {
+    const digest = (value: PackRegistrySnapshot): string =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    const slots = new Map<0 | 1, { snapshot: PackRegistrySnapshot; digest: string }>()
+    const store = await createSpeechPackOwnershipStore({
+      binding: snapshot().binding,
+      backend: {
+        async readSlot(slot) {
+          return slots.get(slot) ?? null
+        },
+        async publishSnapshot(input) {
+          const digestValue = digest(input.snapshot)
+          slots.set(input.slot, { snapshot: input.snapshot, digest: digestValue })
+          return { digest: digestValue, durable: true }
+        },
+        assertCurrent() {},
+        async settleAndDispose() {}
+      },
+      mode: 'create-explicit'
+    })
+    await store.beginInstall({
+      componentId: 'asr.whisper-base-q8',
+      version: '1',
+      manifestIdentity: 'a'.repeat(64),
+      transactionId: 'tx_1',
+      originalMarkerBase64: null,
+      previousMarkerWasAbsent: true
+    })
+    const move = { from: 'staging', to: 'active', identity: { ...identity }, phase: 'prepared' as const }
+    await store.recordMove('tx_1', move)
+    await expect(store.recordMove('tx_1', move)).rejects.toThrow()
+    await expect(
+      store.recordMove('tx_1', { ...move, identity: { ...identity, ino: '3' }, phase: 'moved' })
+    ).rejects.toThrow()
+    await store.recordMove('tx_1', { ...move, phase: 'moved' })
+    expect(store.snapshot().transactions[0]?.moves).toEqual([
+      { from: 'staging', to: 'active', identity, phase: 'moved' }
+    ])
+    await store.settleAndDispose()
+  })
+
   it.each([
     ['wrong purpose', (value: PackRegistrySnapshot) => ({ ...value, purpose: 'metis-protected-meeting-key/v2' })],
-    [
-      'numeric inode',
-      (value: PackRegistrySnapshot) => ({
-        ...value,
-        binding: { ...value.binding, packRootIdentity: { ...identity, ino: 2 } }
-      })
-    ],
+    ['numeric key id', (value: PackRegistrySnapshot) => ({ ...value, binding: { ...value.binding, keyId: 2 } })],
     ['noncanonical sequence', (value: PackRegistrySnapshot) => ({ ...value, sequence: '01' })],
     [
       'absolute node path',

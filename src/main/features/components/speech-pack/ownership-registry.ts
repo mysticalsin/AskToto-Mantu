@@ -1,8 +1,6 @@
-import { createHash } from 'node:crypto'
 import { SpeechPackError } from './errors'
 import type { SpeechPackComponentId } from './manifest'
 import { isOwnedExtractionReceipt, type OwnedExtractionReceipt } from './archive'
-import type { SpeechPackReceiptKeyHandle } from '../../../persistence/speech-pack-receipt-key-contract'
 
 export const SPEECH_PACK_RECEIPT_PURPOSE = 'metis-speech-pack-owner-key/v1' as const
 export const SPEECH_PACK_REGISTRY_LIMITS = {
@@ -85,16 +83,6 @@ export interface PackRegistryBinding {
   principalAssociation: string
   registryRootBinding: string
   keyId: string
-  keyAnchorIdentity: PackStableIdentity
-  registryRootIdentity: PackStableIdentity
-  packRootIdentity: PackStableIdentity
-}
-
-/** Persistent namespace bindings use inode identity only; mutable directory metadata belongs to each admission. */
-export interface PackStableIdentity {
-  dev: string
-  ino: string
-  birthtimeNs: string
 }
 
 export interface PackRegistrySnapshot {
@@ -108,83 +96,24 @@ export interface PackRegistrySnapshot {
 
 export type RegistrySlot = 0 | 1
 
-export interface SpeechPackReceiptProtector {
-  readonly keyId: string
-  encrypt(plaintext: Uint8Array): Promise<Uint8Array>
-  decrypt(envelope: Uint8Array, maxPlaintextBytes: number): Promise<Uint8Array>
-  assertCurrent(): void
-  retire(): void
-  settleAndDispose(): Promise<void>
-}
-
-/** Adapts the purpose-specific key handle's existing-worker envelope capability to the registry store. */
-export function createSpeechPackReceiptProtector(handle: SpeechPackReceiptKeyHandle): SpeechPackReceiptProtector {
-  return {
-    keyId: handle.keyId,
-    assertCurrent: () => handle.assertCurrent(),
-    retire: () => handle.retire(),
-    async encrypt(plaintext) {
-      handle.assertCurrent()
-      const content = new TextDecoder('utf-8', { fatal: true }).decode(plaintext)
-      const envelope = await handle.withKeyUse((key) => key.encrypt(content))
-      handle.assertCurrent()
-      return Uint8Array.from(envelope)
-    },
-    async decrypt(envelope, maxPlaintextBytes) {
-      if (envelope.byteLength > SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
-        throw new SpeechPackError('tamper', 'speech-pack receipt envelope exceeds its limit')
-      handle.assertCurrent()
-      const content = await handle.withKeyUse((key) => key.decrypt(envelope))
-      handle.assertCurrent()
-      const plaintext = new TextEncoder().encode(content)
-      if (plaintext.byteLength > maxPlaintextBytes)
-        throw new SpeechPackError('tamper', 'speech-pack receipt plaintext exceeds its limit')
-      return Uint8Array.from(plaintext)
-    },
-    settleAndDispose: () => handle.settleAndDispose()
-  }
-}
-
-/** This backend must be implemented by the shared storage owner; it exposes no arbitrary filesystem handle. */
 export interface SpeechPackRegistryBackend {
-  readSlot(slot: RegistrySlot, maxBytes: number): Promise<Uint8Array | null>
-  /** Publishes one complete bounded snapshot and verifies the exact published bytes before resolving. */
-  publishSlot(input: {
+  /** Returns only a snapshot already authenticated against its retained original slot owner. */
+  readSlot(slot: RegistrySlot): Promise<Readonly<{ snapshot: PackRegistrySnapshot; digest: string }> | null>
+  /** Creates the pending inode before encoding/encryption, then owner-CAS publishes the exact snapshot. */
+  publishSnapshot(input: {
     slot: RegistrySlot
-    bytes: Uint8Array
+    snapshot: PackRegistrySnapshot
     expectedCurrentDigest: string | null
     assertCurrent: () => void
   }): Promise<{ digest: string; durable: boolean }>
-  acquireWriter(assertCurrent: () => void): Promise<{ release(): Promise<void> }>
-}
-
-export type SpeechPackRegistryAvailability = 'absent' | 'present' | 'unknown'
-
-/** Read-only passive-status probe. It never opens native key storage or creates any path. */
-export async function probeSpeechPackRegistry(
-  backend: Pick<SpeechPackRegistryBackend, 'readSlot'>
-): Promise<SpeechPackRegistryAvailability> {
-  try {
-    const first = await backend.readSlot(0, SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
-    const second = await backend.readSlot(1, SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
-    if (
-      (first && first.byteLength > SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes) ||
-      (second && second.byteLength > SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
-    )
-      return 'unknown'
-    return first || second ? 'present' : 'absent'
-  } catch {
-    return 'unknown'
-  }
+  assertCurrent(): void
+  settleAndDispose(): Promise<void>
 }
 
 export interface PackRegistryScope {
   profileNamespace: string
   profileGeneration: string
   principalAssociation: string
-  keyAnchorIdentity: PackStableIdentity
-  registryRootIdentity: PackStableIdentity
-  packRootIdentity: PackStableIdentity
 }
 
 export interface SpeechPackOwnershipStore {
@@ -350,16 +279,6 @@ function validateTransaction(value: unknown): value is PackTransactionRecord {
   return new Set(nodePaths).size === nodePaths.length
 }
 
-function validateStableIdentity(value: unknown): value is PackStableIdentity {
-  return (
-    isRecord(value) &&
-    exactKeys(value, ['dev', 'ino', 'birthtimeNs']) &&
-    DECIMAL.test(String(value.dev)) &&
-    DECIMAL.test(String(value.ino)) &&
-    DECIMAL.test(String(value.birthtimeNs))
-  )
-}
-
 function validateBinding(value: unknown): value is PackRegistryBinding {
   return (
     isRecord(value) &&
@@ -368,10 +287,7 @@ function validateBinding(value: unknown): value is PackRegistryBinding {
       'profileGeneration',
       'principalAssociation',
       'registryRootBinding',
-      'keyId',
-      'keyAnchorIdentity',
-      'registryRootIdentity',
-      'packRootIdentity'
+      'keyId'
     ]) &&
     isBoundedString(value.profileNamespace, 128) &&
     TOKEN.test(value.profileNamespace) &&
@@ -381,9 +297,7 @@ function validateBinding(value: unknown): value is PackRegistryBinding {
     isBoundedString(value.registryRootBinding, 128) &&
     TOKEN.test(value.registryRootBinding) &&
     isBoundedString(value.keyId, 128) &&
-    validateStableIdentity(value.keyAnchorIdentity) &&
-    validateStableIdentity(value.registryRootIdentity) &&
-    validateStableIdentity(value.packRootIdentity)
+    TOKEN.test(value.keyId)
   )
 }
 
@@ -445,8 +359,6 @@ export function encodePackRegistrySnapshot(snapshot: PackRegistrySnapshot): Uint
   return bytes
 }
 
-const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
-
 const copySnapshot = (snapshot: PackRegistrySnapshot): PackRegistrySnapshot =>
   JSON.parse(JSON.stringify(snapshot)) as PackRegistrySnapshot
 
@@ -476,25 +388,17 @@ const frozenSnapshot = (snapshot: PackRegistrySnapshot): Readonly<PackRegistrySn
   const copy = copySnapshot(snapshot)
   copy.transactions = copy.transactions.map(freezeTransaction)
   Object.freeze(copy.transactions)
-  Object.freeze(copy.binding.keyAnchorIdentity)
-  Object.freeze(copy.binding.registryRootIdentity)
-  Object.freeze(copy.binding.packRootIdentity)
   Object.freeze(copy.binding)
   return Object.freeze(copy)
 }
 
 function isSameBinding(a: PackRegistryBinding, b: PackRegistryBinding): boolean {
-  const sameIdentity = (left: PackStableIdentity, right: PackStableIdentity): boolean =>
-    left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs
   return (
     a.profileNamespace === b.profileNamespace &&
     a.profileGeneration === b.profileGeneration &&
     a.principalAssociation === b.principalAssociation &&
     a.registryRootBinding === b.registryRootBinding &&
-    a.keyId === b.keyId &&
-    sameIdentity(a.keyAnchorIdentity, b.keyAnchorIdentity) &&
-    sameIdentity(a.registryRootIdentity, b.registryRootIdentity) &&
-    sameIdentity(a.packRootIdentity, b.packRootIdentity)
+    a.keyId === b.keyId
   )
 }
 
@@ -520,24 +424,19 @@ function assertTransactionTransition(current: PackTransactionPhase, next: PackTr
 
 export async function createSpeechPackOwnershipStore(input: {
   binding: PackRegistryBinding
-  protector: SpeechPackReceiptProtector
   backend: SpeechPackRegistryBackend
   mode: 'create-explicit' | 'open-existing'
 }): Promise<SpeechPackOwnershipStore> {
   const binding = JSON.parse(JSON.stringify(input.binding)) as PackRegistryBinding
-  const { protector, backend } = input
-  if (binding.keyId !== protector.keyId || !validateBinding(binding))
-    throw new SpeechPackError('tamper', 'speech-pack receipt key binding is invalid')
-  const lease = await backend.acquireWriter(() => {
-    protector.assertCurrent()
-  })
+  const { backend } = input
+  if (!validateBinding(binding)) throw new SpeechPackError('tamper', 'speech-pack receipt key binding is invalid')
   let disposed = false
   let closing = false
   let updateQueue: Promise<void> = Promise.resolve()
   let disposal: Promise<void> | null = null
   const assertCurrent = (): void => {
     if (disposed) throw new SpeechPackError('policy', 'speech-pack receipt session is retired')
-    protector.assertCurrent()
+    backend.assertCurrent()
   }
   const serializeUpdate = <T>(operation: () => Promise<T>): Promise<T> => {
     if (closing || disposed)
@@ -552,18 +451,14 @@ export async function createSpeechPackOwnershipStore(input: {
     )
     return result
   }
-  const readSlot = async (
-    slot: RegistrySlot
-  ): Promise<{ slot: RegistrySlot; snapshot: PackRegistrySnapshot; digest: string } | null> => {
-    const envelope = await backend.readSlot(slot, SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
+  const readSlot = async (slot: RegistrySlot) => {
+    const stored = await backend.readSlot(slot)
     assertCurrent()
-    if (!envelope) return null
-    if (envelope.byteLength > SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
-      throw new SpeechPackError('tamper', 'speech-pack receipt envelope exceeds its limit')
-    const plaintext = await protector.decrypt(envelope, SPEECH_PACK_REGISTRY_LIMITS.plaintextBytes)
-    assertCurrent()
-    const snapshot = decodePackRegistrySnapshot(plaintext, binding)
-    return { slot, snapshot, digest: digest(envelope) }
+    if (!stored) return null
+    if (!validatePackRegistrySnapshot(stored.snapshot) || !isSameBinding(stored.snapshot.binding, binding))
+      throw new SpeechPackError('tamper', 'speech-pack receipt slot is not authenticated for this scope')
+    if (!HEX_256.test(stored.digest)) throw new SpeechPackError('tamper', 'speech-pack receipt digest is invalid')
+    return { slot, snapshot: stored.snapshot, digest: stored.digest }
   }
   let loaded: { slot: RegistrySlot; snapshot: PackRegistrySnapshot; digest: string } | null
   const slotDigests: Record<RegistrySlot, string | null> = { 0: null, 1: null }
@@ -597,9 +492,7 @@ export async function createSpeechPackOwnershipStore(input: {
     if (input.mode === 'create-explicit' && loaded)
       throw new SpeechPackError('tamper', 'speech-pack receipt registry already exists')
   } catch (error) {
-    protector.retire()
-    await lease.release()
-    await protector.settleAndDispose()
+    await backend.settleAndDispose()
     throw error
   }
   let current = loaded?.snapshot ?? {
@@ -623,20 +516,15 @@ export async function createSpeechPackOwnershipStore(input: {
     }
     if (!validatePackRegistrySnapshot(candidate) || !isSameBinding(candidate.binding, binding))
       throw new SpeechPackError('tamper', 'invalid speech-pack receipt update')
-    const plaintext = encodePackRegistrySnapshot(candidate)
-    const envelope = await protector.encrypt(plaintext)
-    assertCurrent()
-    if (envelope.byteLength > SPEECH_PACK_REGISTRY_LIMITS.envelopeBytes)
-      throw new SpeechPackError('tamper', 'speech-pack receipt envelope exceeds its limit')
     const slot: RegistrySlot = currentSlot === 0 ? 1 : 0
-    const published = await backend.publishSlot({
+    const published = await backend.publishSnapshot({
       slot,
-      bytes: envelope,
+      snapshot: candidate,
       expectedCurrentDigest: slotDigests[slot],
       assertCurrent
     })
     assertCurrent()
-    if (!published.durable || published.digest !== digest(envelope))
+    if (!published.durable || !HEX_256.test(published.digest))
       throw new SpeechPackError('tamper', 'speech-pack receipt publication was not verified')
     current = candidate
     currentSlot = slot
@@ -667,9 +555,7 @@ export async function createSpeechPackOwnershipStore(input: {
     try {
       await persist(current)
     } catch (error) {
-      protector.retire()
-      await lease.release()
-      await protector.settleAndDispose()
+      await backend.settleAndDispose()
       throw error
     }
   }
@@ -739,9 +625,22 @@ export async function createSpeechPackOwnershipStore(input: {
     async recordMove(transactionId, move) {
       if (!validateMove(move)) throw new SpeechPackError('tamper', 'speech-pack move receipt is invalid')
       return replaceTransaction(transactionId, (record) => {
-        if (record.moves.some((item) => item.from === move.from || item.to === move.to))
-          throw new SpeechPackError('tamper', 'speech-pack move receipt conflicts with an earlier move')
-        return { ...record, moves: [...record.moves, { ...move, identity: { ...move.identity } }] }
+        const existingIndex = record.moves.findIndex((item) => item.from === move.from && item.to === move.to)
+        if (existingIndex < 0) {
+          if (move.phase !== 'prepared' || record.moves.some((item) => item.from === move.from || item.to === move.to))
+            throw new SpeechPackError('tamper', 'speech-pack move intent conflicts with an earlier move')
+          return { ...record, moves: [...record.moves, { ...move, identity: { ...move.identity } }] }
+        }
+        const existing = record.moves[existingIndex]
+        if (
+          existing.phase !== 'prepared' ||
+          move.phase === 'prepared' ||
+          JSON.stringify(existing.identity) !== JSON.stringify(move.identity)
+        )
+          throw new SpeechPackError('tamper', 'speech-pack move settlement does not match its intent')
+        const moves = [...record.moves]
+        moves[existingIndex] = { ...existing, phase: move.phase }
+        return { ...record, moves }
       })
     },
     async transition(transactionId, phase) {
@@ -754,12 +653,7 @@ export async function createSpeechPackOwnershipStore(input: {
       disposal = (async () => {
         await updateQueue
         disposed = true
-        protector.retire()
-        try {
-          await lease.release()
-        } finally {
-          await protector.settleAndDispose()
-        }
+        await backend.settleAndDispose()
       })()
       return disposal
     }
