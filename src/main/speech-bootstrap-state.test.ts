@@ -63,6 +63,41 @@ function deferred<T>() {
 }
 
 describe('speech bootstrap metadata cache', () => {
+  it('tombstones known MDM and device authority transitions without revoking identical normalized refreshes', async () => {
+    let current = boundary()
+    const onInvalidated = vi.fn()
+    const state = createSpeechBootstrapState({ readBoundary: async () => current, now: () => NOW, onInvalidated })
+    state.observeSettings(observation())
+    await state.refresh('initial')
+    current = boundary({
+      managedPolicy: {
+        state: 'valid',
+        providers: { state: 'valid', providers: ['cloudflare-nova3', 'deepgram-nova3'] },
+        egressAllowlist: ['OPERATOR.EXAMPLE']
+      }
+    })
+    await state.refresh('identical-normalized')
+    expect(onInvalidated).not.toHaveBeenCalled()
+    current = boundary({
+      managedPolicy: { state: 'valid', providers: { state: 'valid', providers: [] }, egressAllowlist: [] }
+    })
+    await state.refresh('known-deny')
+    expect(onInvalidated).toHaveBeenCalledTimes(1)
+    current = boundary()
+    await state.refresh('allow-after-deny')
+    expect(onInvalidated).toHaveBeenCalledTimes(2)
+    current = boundary({ managedPolicy: { state: 'invalid' } })
+    await state.refresh('invalid-policy')
+    expect(onInvalidated).toHaveBeenCalledTimes(3)
+    expect(state.readState().metadataReady).toBe(false)
+    current = boundary()
+    await state.refresh('recovery')
+    current = boundary({ durableDeviceId: 'different-persisted-device' })
+    await state.refresh('device-replaced')
+    expect(onInvalidated).toHaveBeenCalledTimes(4)
+    state.dispose()
+  })
+
   it('publishes only current boundary data and exposes a narrow policy identity source', async () => {
     const readBoundary = vi.fn(async () => boundary())
     const state = createSpeechBootstrapState({ readBoundary, now: () => NOW })
