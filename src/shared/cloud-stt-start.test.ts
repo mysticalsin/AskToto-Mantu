@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from './cloud-stt-start'
+import type { ModelPolicyDocument } from './model-policy'
+
+function policyWithStt(provider: string, fallbacks: { provider: string; model: string }[] = []): ModelPolicyDocument {
+  const entry = (selected: string, entryFallbacks: { provider: string; model: string }[] = []) => ({
+    provider: selected,
+    model: 'm',
+    fallbacks: entryFallbacks
+  })
+  return {
+    version: 1,
+    updatedAt: 1,
+    updatedBy: 'owner@example.test',
+    localSpeechPack: 'offered',
+    capabilities: {
+      askChat: entry('anthropic'),
+      commandAgent: entry('anthropic'),
+      recap: entry('anthropic'),
+      stt: entry(provider, fallbacks),
+      tts: entry('anthropic'),
+      embeddings: entry('anthropic'),
+      localModel: entry('local')
+    }
+  }
+}
 
 describe('cloud speech start acknowledgement', () => {
   it('resolves the existing managed profile without enabling an unmanaged unconfigured session', () => {
@@ -8,6 +32,15 @@ describe('cloud speech start acknowledgement', () => {
     )
     expect(resolveCloudSttStartProvider(null, {}, 'unconfigured')).toBe('unconfigured')
     expect(resolveCloudSttStartProvider(null, {}, 'soniox')).toBe('soniox')
+  })
+  it('enforces the real STT policy and never enables an unconfigured unmanaged choice', () => {
+    const policy = policyWithStt('soniox')
+    expect(resolveCloudSttStartProvider(policy, {}, 'cloudflare-nova3')).toBe('soniox')
+    expect(resolveCloudSttStartProvider(policy, {}, 'unconfigured')).toBe('unconfigured')
+
+    const fallbackPolicy = policyWithStt('cloudflare-nova3', [{ provider: 'soniox', model: 'fallback' }])
+    expect(resolveCloudSttStartProvider(fallbackPolicy, {}, 'soniox')).toBe('soniox')
+    expect(resolveCloudSttStartProvider(fallbackPolicy, {}, 'unconfigured')).toBe('unconfigured')
   })
   it('reports only the provider actually selected by main', () => {
     expect(cloudSttStartAcknowledgement({ ok: true }, 'soniox')).toEqual({ ok: true, provider: 'soniox' })

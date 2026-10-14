@@ -2233,6 +2233,13 @@ export function useListen(
             loadedQualityRef.current = null
             readyRef.current = false
             engineRef.current = 'cloud'
+            if (!cloudProvider) {
+              failAdmittedCapture('Cloud STT is not configured.', {
+                forceCloudStop: true,
+                cloudCaptureId
+              })
+              return
+            }
             const provider = cloudProvider
             console.info(
               '[listen] cloud STT session planned:',
