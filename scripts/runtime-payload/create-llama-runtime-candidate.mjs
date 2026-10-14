@@ -6,7 +6,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assertBeforeDeadline } from './candidate-deadline.mjs'
+import { assertBeforeDeadline, readInferenceResponse } from './candidate-deadline.mjs'
 import { assertNativeBinaryArchitecture } from './native-binary-architecture.mjs'
 import { stopOwnedChild } from './owned-child-shutdown.mjs'
 
@@ -211,24 +211,23 @@ async function smokeInfer(binary, model, directory) {
     if (!healthy) fail('RUNTIME_LLAMA_SERVER_HEALTH_FAILED')
     const remainingMs = Math.floor(deadline - performance.now())
     if (remainingMs <= 0) fail('RUNTIME_LLAMA_INFERENCE_TIMEOUT')
-    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'local',
-        messages: [{ role: 'user', content: 'Reply with the word ready.' }],
-        max_tokens: 8,
-        temperature: 0,
-        stream: false
-      }),
-      signal: AbortSignal.timeout(Math.min(90_000, remainingMs))
-    })
-    ensureWithinDeadline()
-    if (!response.ok) fail('RUNTIME_LLAMA_INFERENCE_HTTP_FAILED')
-    const result = await response.json()
-    ensureWithinDeadline()
-    if (typeof result.choices?.[0]?.message?.content !== 'string' || !result.choices[0].message.content.trim())
-      fail('RUNTIME_LLAMA_INFERENCE_EMPTY')
+    const result = await readInferenceResponse(
+      fetch,
+      `http://127.0.0.1:${port}/v1/chat/completions`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'local',
+          messages: [{ role: 'user', content: 'Reply with the word ready.' }],
+          max_tokens: 8,
+          temperature: 0,
+          stream: false
+        }),
+        signal: AbortSignal.timeout(Math.min(90_000, remainingMs))
+      },
+      deadline
+    )
     inferenceResult = { inferencePassed: true, cpuOnly: true, elapsedMs: Math.round(performance.now() - start) }
   } finally {
     clearTimeout(timer)

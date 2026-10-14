@@ -6,17 +6,21 @@ function fail(code) {
   throw new Error(code)
 }
 
-async function waitForSpawn(child) {
-  if (child.pid !== undefined) return
+async function waitForReady(child) {
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('RUNTIME_CHILD_TEST_SPAWN_TIMEOUT')), 5_000)
-    child.once('spawn', () => {
+    const timer = setTimeout(() => reject(new Error('RUNTIME_CHILD_TEST_READY_TIMEOUT')), 5_000)
+    child.on('message', (message) => {
+      if (message?.type !== 'ready') return
       clearTimeout(timer)
       resolve()
     })
     child.once('error', () => {
       clearTimeout(timer)
       reject(new Error('RUNTIME_CHILD_TEST_SPAWN_FAILED'))
+    })
+    child.once('exit', () => {
+      clearTimeout(timer)
+      reject(new Error('RUNTIME_CHILD_TEST_EXITED_BEFORE_READY'))
     })
   })
 }
@@ -31,11 +35,12 @@ async function main() {
   if (Date.now() - spawnStarted > 2_500 || missing.pid !== undefined)
     fail('RUNTIME_CHILD_TEST_SPAWN_FAILURE_NOT_BOUNDED')
 
-  const resistant = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], {
-    env: {},
-    stdio: 'ignore'
-  })
-  await waitForSpawn(resistant)
+  const resistant = spawn(
+    process.execPath,
+    ['-e', "process.on('SIGTERM', () => {}); process.send({ type: 'ready' }); setInterval(() => {}, 1000)"],
+    { env: {}, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }
+  )
+  await waitForReady(resistant)
   const shutdownStarted = Date.now()
   await stopOwnedChild(resistant, { spawnMs: 2_000, termMs: 100, killMs: 1_500 })
   if (Date.now() - shutdownStarted > 2_000 || resistant.signalCode !== 'SIGKILL')
