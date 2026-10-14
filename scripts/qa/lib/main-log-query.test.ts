@@ -162,7 +162,10 @@ describe('ST-1 synchronous main-log query', () => {
     expect(source).not.toContain('cdp.evaluate(MAIN_LOG_PATH')
     expect(source).toContain('{ expression, awaitPromise: true, returnByValue: true }')
     expect(source).toContain('cdp.evaluate(pinnedExpression(key, expression, ms), ms + EVALUATE_MARGIN_MS)')
-    expect(source).toContain("evaluateBounded(cdp, 'sample', sampleExpression(probeFile), SAMPLE_TIMEOUT_MS)")
-    expect(source).toContain("evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)")
+    expect(source).toContain('const outcome = await evaluateBounded(cdp, step, expression, ms)')
+    expect(source).toContain(
+      "evaluateBoundedTimed(cdp, 'sample', sampleExpression(probeFile), SAMPLE_TIMEOUT_MS, sinceSpawn)"
+    )
+    expect(source).toContain("evaluateBoundedTimed(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS, sinceSpawn)")
   })
 })

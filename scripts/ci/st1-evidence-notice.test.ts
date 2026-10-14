@@ -226,7 +226,8 @@ describe('strict ST-1 GitHub notice serializer', () => {
         commands: [
           [0, 30, 35, 'answered'],
           [1, 36, 40, 'answered'],
-          [2, 490, 509, 'answered']
+          [2, 490, 509, 'answered'],
+          [3, 1_500, 1_520, 'answered']
         ],
         samples: [
           [
@@ -393,7 +394,8 @@ describe('strict ST-1 GitHub notice serializer', () => {
             [null, null, false],
             [],
             [],
-            [null, null, 20, 3, 20]
+            [700, 40, 20, 3, 20],
+            [5, 2, 20]
           ]
         ]
       }
