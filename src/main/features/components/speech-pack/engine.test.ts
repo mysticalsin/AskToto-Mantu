@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import {
   existsSync,
   linkSync,
@@ -13,9 +14,17 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { lstat, mkdir, open, rename } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { isSafeEntryName } from './archive'
+import {
+  isSafeEntryName,
+  type ArchiveCreatedNode,
+  type ArchiveOwnedDirectory,
+  type ArchiveOwnedFile,
+  type ArchiveOwnedWriter,
+  type ArchivePhysicalIdentity
+} from './archive'
 import {
   DISK_HEADROOM_BYTES,
   createSpeechPackEngine,
@@ -81,6 +90,107 @@ const parakeetFiles = (base: string): SpeechPackComponent => ({
   source: { kind: 'files', baseUrl: `${base}/pin` }
 })
 
+async function archiveIdentity(path: string): Promise<ArchivePhysicalIdentity> {
+  const stat = await lstat(path, { bigint: true })
+  return {
+    dev: stat.dev.toString(),
+    ino: stat.ino.toString(),
+    mode: stat.mode.toString(),
+    nlink: stat.nlink.toString(),
+    uid: stat.uid.toString(),
+    gid: stat.gid.toString(),
+    rdev: stat.rdev.toString(),
+    size: stat.size.toString(),
+    blocks: stat.blocks.toString(),
+    mtimeNs: stat.mtimeNs.toString(),
+    ctimeNs: stat.ctimeNs.toString(),
+    birthtimeNs: stat.birthtimeNs.toString(),
+    fileId: null
+  }
+}
+
+function makeTestArchiveWriter(): ArchiveOwnedWriter {
+  const directoryPaths = new WeakMap<ArchiveOwnedDirectory, string>()
+  const mutableIdentity = new WeakMap<ArchiveOwnedDirectory, { current: ArchivePhysicalIdentity }>()
+  const directory = async (path: string, relativePath: string): Promise<ArchiveOwnedDirectory> => {
+    const identity = await archiveIdentity(path)
+    const state = { current: identity }
+    const capability = { relativePath } as ArchiveOwnedDirectory
+    Object.defineProperty(capability, 'identity', { get: () => state.current })
+    directoryPaths.set(capability, path)
+    mutableIdentity.set(capability, state)
+    return capability
+  }
+  const writer: ArchiveOwnedWriter = {
+    async createRoot(path) {
+      await mkdir(path)
+      return directory(path, '')
+    },
+    async createDirectory(parent, name) {
+      const parentPath = directoryPaths.get(parent)
+      if (!parentPath) throw new Error('unknown test directory capability')
+      const path = join(parentPath, name)
+      await mkdir(path)
+      return directory(path, parent.relativePath ? `${parent.relativePath}/${name}` : name)
+    },
+    async createFile(parent, name) {
+      const parentPath = directoryPaths.get(parent)
+      if (!parentPath) throw new Error('unknown test directory capability')
+      const path = join(parentPath, name)
+      const handle = await open(path, 'wx', 0o600)
+      const hash = createHash('sha256')
+      let count = 0
+      const file: ArchiveOwnedFile = {
+        async write(chunk) {
+          let offset = 0
+          while (offset < chunk.byteLength) {
+            const result = await handle.write(chunk, offset, chunk.byteLength - offset)
+            if (result.bytesWritten <= 0) throw new Error('test archive writer made no progress')
+            offset += result.bytesWritten
+          }
+          hash.update(chunk)
+          count += chunk.byteLength
+        },
+        async finish() {
+          await handle.sync()
+          await handle.close()
+          return { bytes: count, sha256: hash.digest('hex'), identity: await archiveIdentity(path) }
+        },
+        async abandon() {
+          await handle.close().catch(() => undefined)
+        }
+      }
+      return file
+    },
+    async seal({ root, nodes, pinnedFiles }) {
+      const rootPath = directoryPaths.get(root)
+      const rootState = mutableIdentity.get(root)
+      if (!rootPath || !rootState) throw new Error('unknown test archive root')
+      rootState.current = await archiveIdentity(rootPath)
+      const sealedNodes: ArchiveCreatedNode[] = []
+      for (const node of nodes) {
+        const path = join(rootPath, ...node.relativePath.split('/'))
+        sealedNodes.push({ ...node, identity: await archiveIdentity(path) })
+      }
+      return { root, nodes: sealedNodes, pinnedFiles, token: {} }
+    },
+    async movePinnedFiles({ receipt, destinationPath, files }) {
+      const sourceRoot = directoryPaths.get(receipt.root)
+      if (!sourceRoot) throw new Error('unknown test archive root')
+      for (const file of files) {
+        const source = receipt.pinnedFiles.find((path) => path.endsWith(`/${file.path}`))
+        if (!source) throw new Error('test archive receipt is missing a pinned file')
+        const from = join(sourceRoot, ...source.split('/'))
+        const to = join(destinationPath, ...file.path.split('/'))
+        await mkdir(dirname(to), { recursive: true })
+        await rename(from, to)
+      }
+    },
+    async abandon() {}
+  }
+  return writer
+}
+
 const make = (components: SpeechPackComponent[], over: Partial<SpeechPackEngineOptions> = {}) =>
   createSpeechPackEngine({
     rootDir: root,
@@ -88,6 +198,7 @@ const make = (components: SpeechPackComponent[], over: Partial<SpeechPackEngineO
     fixture,
     selfTest: async () => 'hello world',
     components,
+    archiveWriter: makeTestArchiveWriter(),
     sleep: async () => undefined,
     freeBytes: () => Number.MAX_SAFE_INTEGER,
     emitIntervalMs: 0,

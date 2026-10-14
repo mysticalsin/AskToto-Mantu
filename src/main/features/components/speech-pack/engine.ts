@@ -28,7 +28,7 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
-import { adoptExtracted, createArchiveSink, type ExtractArchive } from './archive'
+import { createArchiveSink, type ArchiveOwnedWriter, type ExtractArchive, type OwnedExtractionReceipt } from './archive'
 import {
   DEFAULT_TIMING,
   availableBytesAtPath,
@@ -91,6 +91,8 @@ export interface SpeechPackEngineOptions {
   components?: readonly SpeechPackComponent[]
   /** Required for archive-sourced components. */
   extractArchive?: ExtractArchive
+  /** Main-owned exclusive-create and move capability for archive members. */
+  archiveWriter?: ArchiveOwnedWriter
   fetch?: typeof fetch
   sleep?: (ms: number) => Promise<void>
   random?: () => number
@@ -238,7 +240,6 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     cleanupStaging: cleanupOwnedStaging,
     deactivate,
     removeOwnedWork,
-    captureOwnedExtract,
     recordOwnedAside,
     capturePhysicalPathVersion,
     physicalPathVersionMatches,
@@ -358,7 +359,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     )
       throw new SpeechPackError('tamper', 'active directory ownership changed')
     const source = c.source
-    let extractedSnapshot: Awaited<ReturnType<typeof captureOwnedExtract>> = null
+    let extractionReceipt: OwnedExtractionReceipt | null = null
     const archiveDest = join(work, 'archive.download')
     const reusableDirs = (await exists(finalDir(c))) && (await dirVerified(c, finalDir(c))) ? [finalDir(c)] : []
     let missing: SpeechPackComponent['files'][number][] = []
@@ -484,17 +485,29 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       set(c.id, { status: 'verifying' })
       const extractDir = join(work, 'extract')
       if (await exists(extractDir)) throw new SpeechPackError('tamper', 'previous extraction work is not owned')
-      await mkdir(extractDir)
-      await (options.extractArchive as ExtractArchive)(
-        archiveDest,
-        createArchiveSink(extractDir, source.extractCapBytes),
-        signal
-      )
+      if (!options.archiveWriter) throw new SpeechPackError('tamper', 'owned archive writer is unavailable')
+      const archiveSink = await createArchiveSink({
+        writer: options.archiveWriter,
+        rootPath: extractDir,
+        component: c,
+        signal,
+        assertCurrent: () => assertAuthorized(c, signal)
+      })
+      try {
+        await (options.extractArchive as ExtractArchive)(archiveDest, archiveSink, signal)
+        extractionReceipt = await archiveSink.finish()
+      } catch (error) {
+        await archiveSink.abort()
+        throw error
+      }
       if (!(await installDirectoriesCurrent(c, directories)))
         throw new SpeechPackError('tamper', 'pack directory ownership changed during extraction')
-      extractedSnapshot = await captureOwnedExtract(extractDir, c)
-      if (!extractedSnapshot) throw new SpeechPackError('tamper', 'extracted work ownership changed')
-      await adoptExtracted(extractDir, source.entryPrefix, c.files, staging, source.extractCapBytes)
+      await options.archiveWriter.movePinnedFiles({
+        receipt: extractionReceipt,
+        destinationPath: staging,
+        files: c.files,
+        assertCurrent: () => assertAuthorized(c, signal)
+      })
       if (!(await installDirectoriesCurrent(c, directories)))
         throw new SpeechPackError('tamper', 'pack directory ownership changed during adoption')
     }
@@ -503,7 +516,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       !(await physicalOwnerMatches(work, directories.work, 'directory'))
     )
       throw new SpeechPackError('tamper', 'pack work directory ownership changed')
-    if (!(await removeOwnedWork(c, directories, extractedSnapshot ?? undefined)))
+    if (!(await removeOwnedWork(c, directories, extractionReceipt ?? undefined)))
       throw new SpeechPackError('tamper', 'pack work contains an unowned path')
 
     set(c.id, { status: 'verifying' })

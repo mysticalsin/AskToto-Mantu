@@ -8,6 +8,7 @@ import { pathExists as exists } from './download'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
 import { componentManifestIdentity } from './resolver'
 import { createSpeechPackOwnedTreeCleanup, type TreeEntry } from './owned-tree-cleanup'
+import { isOwnedExtractionReceipt, type OwnedExtractionReceipt } from './archive'
 import {
   authorizePriorPackRestore,
   priorPackRestoreStillCurrent,
@@ -675,14 +676,35 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     return removed && (await physicalOwnerMatches(rootDir, owners.root, 'directory'))
   }
 
-  async function captureOwnedExtract(path: string, c: SpeechPackComponent): Promise<TreeEntry[] | null> {
-    return ownedTree.captureExtractTree(path, c)
+  const extractionTree = (receipt: OwnedExtractionReceipt): TreeEntry[] => {
+    if (!isOwnedExtractionReceipt(receipt)) throw new SpeechPackError('tamper', 'archive ownership receipt is invalid')
+    const version = (
+      identity: OwnedExtractionReceipt['root']['identity'],
+      kind: 'directory' | 'file'
+    ): PhysicalPathVersion => ({
+      kind,
+      dev: BigInt(identity.dev),
+      ino: BigInt(identity.ino),
+      mode: BigInt(identity.mode),
+      nlink: BigInt(identity.nlink),
+      size: BigInt(identity.size),
+      mtimeNs: BigInt(identity.mtimeNs),
+      ctimeNs: BigInt(identity.ctimeNs)
+    })
+    return [
+      { relative: '', kind: 'directory', version: version(receipt.root.identity, 'directory') },
+      ...receipt.nodes.map((node) => ({
+        relative: node.relativePath,
+        kind: node.kind,
+        version: version(node.identity, node.kind)
+      }))
+    ]
   }
 
   async function removeOwnedWork(
     c: SpeechPackComponent,
     owners: InstallDirectoryOwners,
-    expectedExtract?: TreeEntry[]
+    expectedExtract?: OwnedExtractionReceipt
   ): Promise<boolean> {
     const work = workDir(c)
     if (!(await installDirectoriesCurrent(c, owners))) return false
@@ -704,7 +726,7 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
             ['archive.download', 'archive.download.partial', 'archive.download.partial.json'].includes(relative)
           )
         },
-        expectedExtract,
+        expectedExtract ? extractionTree(expectedExtract) : undefined,
         movedExtractFiles
       )
     } catch {
@@ -726,7 +748,6 @@ export function createSpeechPackActivationRollback(options: SpeechPackActivation
     cleanupAfterVerifiedInitialize,
     cleanupStaging,
     removeOwnedWork,
-    captureOwnedExtract,
     recordOwnedAside,
     deactivate,
     capturePhysicalOwner,

@@ -195,17 +195,13 @@ export function createSpeechPackOwnedTreeCleanup() {
   }
 
   const treeEntryLimit = (c: SpeechPackComponent): number =>
-    (c.source.kind === 'archive' ? c.source.extractCapBytes : 0) + c.files.length * 4 + 32
-
-  const captureExtractTree = (path: string, c: SpeechPackComponent): Promise<TreeEntry[] | null> =>
-    inspectTree(path, treeEntryLimit(c), (relative) => isSafeEntryName(relative))
+    32 + c.files.reduce((total, file) => total + file.path.split('/').length * 3, 0)
 
   return {
     removeInspectedTree,
     packTreeAllowed,
     stagingTreeAllowed,
     treeEntryLimit,
-    captureExtractTree,
     sameExpectedTree
   }
 }
