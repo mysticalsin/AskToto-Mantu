@@ -128,6 +128,10 @@ describe('resolveSpeechBrokerAuthority', () => {
   })
 
   it('refuses signed policy denials, unknown provider/model aliases, and invalid managed policy', () => {
+    expect(resolveAuthority({ profile: { transport: 'broker-v1', engine: 'deepgram-nova3', extra: true } })).toEqual({
+      ok: false,
+      code: 'PROFILE_INVALID'
+    })
     expect(
       resolveAuthority({
         snapshot: snapshot({ provider: 'cloudflare-nova3', model: '@cf/deepgram/nova-3', fallbacks: [] })
@@ -138,11 +142,21 @@ describe('resolveSpeechBrokerAuthority', () => {
     })
     expect(resolveAuthority({ snapshot: snapshot({ provider: 'deepgram', model: 'nova-3', fallbacks: [] }) })).toEqual({
       ok: false,
-      code: 'POLICY_INVALID'
+      code: 'STT_NOT_ALLOWED'
     })
+    const validSnapshot = snapshot({ provider: 'deepgram-nova3', model: 'nova-3', fallbacks: [] })
+    expect(
+      resolveAuthority({
+        snapshot: { ...validSnapshot, policy: { ...validSnapshot.policy, extra: true } as ModelPolicyDocument }
+      })
+    ).toEqual({ ok: false, code: 'POLICY_INVALID' })
     expect(resolveAuthority({ managedProviders: { state: 'invalid' } })).toEqual({
       ok: false,
       code: 'PROVIDER_POLICY_INVALID'
+    })
+    expect(resolveAuthority({ managedProviders: { state: 'valid', providers: [] } })).toEqual({
+      ok: false,
+      code: 'PROVIDER_DENIED'
     })
   })
 
