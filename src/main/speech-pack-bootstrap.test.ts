@@ -126,7 +126,9 @@ describe('speech-pack desktop lifecycle', () => {
   })
 
   it('still stops owned work when IPC deregistration throws', async () => {
-    mocks.unregister.mockImplementationOnce(() => { throw new Error('/private/cleanup') })
+    mocks.unregister.mockImplementationOnce(() => {
+      throw new Error('/private/cleanup')
+    })
     const desktop = startSpeechPackDesktop(options())
     await expect(desktop.shutdown()).rejects.toThrow(/^Speech pack cleanup failed$/)
     expect(mocks.service.shutdown).toHaveBeenCalledOnce()

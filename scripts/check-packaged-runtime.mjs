@@ -11,15 +11,7 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { extractFile, getRawHeader, listPackage } from '@electron/asar'
-import {
-  closeSync,
-  createReadStream,
-  lstatSync,
-  openSync,
-  readFileSync,
-  readSync,
-  readdirSync
-} from 'node:fs'
+import { closeSync, createReadStream, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { REPO_ROOT } from './local-model-assets.mjs'
 import { verifyLocalModelPayload } from './lib/local-model-inventory.mjs'
@@ -67,15 +59,11 @@ for (const argument of argv) {
   } else if (!resourcesArgument) {
     resourcesArgument = argument
   } else {
-    throw new Error(
-      'Usage: node scripts/check-packaged-runtime.mjs <mac|win> [resources-directory] [--post-sign]'
-    )
+    throw new Error('Usage: node scripts/check-packaged-runtime.mjs <mac|win> [resources-directory] [--post-sign]')
   }
 }
 if (target !== 'mac' && target !== 'win') {
-  throw new Error(
-    'Usage: node scripts/check-packaged-runtime.mjs <mac|win> [resources-directory] [--post-sign]'
-  )
+  throw new Error('Usage: node scripts/check-packaged-runtime.mjs <mac|win> [resources-directory] [--post-sign]')
 }
 
 const defaultRoot =
@@ -91,7 +79,11 @@ function slash(path) {
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable)
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]))
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, stable(value[key])])
+    )
   }
   return value
 }
@@ -153,16 +145,12 @@ function verifyPackagedDependencyPruning() {
   // electron-builder flattens production dependencies into app.asar. Compare these two packages with
   // the reviewed root MCP SDK copies so Dust's stale bundled versions cannot silently replace them.
   for (const dependency of ['express-rate-limit', 'ip-address']) {
-    const source = JSON.parse(
-      readFileSync(join(REPO_ROOT, 'node_modules', dependency, 'package.json'), 'utf8')
-    )
+    const source = JSON.parse(readFileSync(join(REPO_ROOT, 'node_modules', dependency, 'package.json'), 'utf8'))
     const rawKey = rawByPosix.get(`/node_modules/${dependency}/package.json`)
     if (!rawKey) {
       throw new Error(`Packaged ${dependency}/package.json is missing from app.asar`)
     }
-    const packaged = JSON.parse(
-      extractFile(archive, rawKey.replace(/^[\\/]+/, '')).toString('utf8')
-    )
+    const packaged = JSON.parse(extractFile(archive, rawKey.replace(/^[\\/]+/, '')).toString('utf8'))
     if (packaged.version !== source.version) {
       throw new Error(
         `Packaged ${dependency}@${packaged.version} does not match reviewed ${dependency}@${source.version}`
@@ -308,11 +296,7 @@ function electronBuilderPackageJson(source) {
   return Object.fromEntries(Object.entries(source).filter(([key]) => !removedByElectronBuilder.has(key)))
 }
 
-async function requireDependencyTree(
-  sourceDir,
-  packagedDir,
-  { expectedFiles, nativeFile = () => false, label }
-) {
+async function requireDependencyTree(sourceDir, packagedDir, { expectedFiles, nativeFile = () => false, label }) {
   const sourceFiles = inventoryTree(sourceDir).filter(
     (entry) => !entry.endsWith('/') && basename(entry).toLowerCase() !== 'readme.md'
   )
@@ -408,8 +392,18 @@ requireDirectory(resourcesRoot)
 
 await verifyPackagedSharp(
   { repoRoot: REPO_ROOT, resourcesRoot, target, arches: packagedArches, postSign },
-  { requireDirectory, requireRegularFile, inventoryTree, inventoryFromFiles, requireExactInventory,
-    requireSameFile, assertEqual, electronBuilderPackageJson, verifyMachOArches, verifyPeX64 }
+  {
+    requireDirectory,
+    requireRegularFile,
+    inventoryTree,
+    inventoryFromFiles,
+    requireExactInventory,
+    requireSameFile,
+    assertEqual,
+    electronBuilderPackageJson,
+    verifyMachOArches,
+    verifyPeX64
+  }
 )
 
 // The manifest itself is tracked and copied, so both the runtime evidence and every listed asset must
@@ -420,6 +414,14 @@ const runtimeManifest = JSON.parse(readFileSync(runtimeManifestSource, 'utf8'))
 if (runtimeManifest.schemaVersion !== 1 || !runtimeManifest.assets || typeof runtimeManifest.assets !== 'object') {
   throw new Error(`Invalid reviewed runtime manifest: ${runtimeManifestSource}`)
 }
+await requireSameFile(
+  join(REPO_ROOT, 'build', 'speech-pack-profile.json'),
+  join(resourcesRoot, 'speech-pack-profile.json')
+)
+const speechFixturePin =
+  runtimeManifest.assets['resources/asr/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav']
+if (!speechFixturePin) throw new Error('Reviewed speech self-test fixture pin is missing.')
+await requireAsset(join(resourcesRoot, 'speech-pack-fixtures', 'en.wav'), speechFixturePin)
 
 const runtimeByRoot = new Map([
   ['asr', []],
@@ -606,9 +608,7 @@ assertEqual(
 // is a thing a person can forget and the artifact is the thing users run. Cheap, and it is the check whose
 // absence let a signed, notarised, unlaunchable installer ship.
 if (target === 'mac') {
-  const mainEntries = listPackage(join(resourcesRoot, 'app.asar')).filter((entry) =>
-    /^[\/]out[\/]main[\/]/.test(entry)
-  )
+  const mainEntries = listPackage(join(resourcesRoot, 'app.asar')).filter((entry) => /^[\/]out[\/]main[\/]/.test(entry))
   if (!mainEntries.length) throw new Error('app.asar contains no out/main entries — the main process is missing')
   const bytecode = mainEntries.filter((entry) => entry.toLowerCase().endsWith('.jsc'))
   if (bytecode.length) {

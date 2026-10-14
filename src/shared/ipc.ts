@@ -583,6 +583,7 @@ export interface ImportAssetsProgress {
 /** Onboarding / Settings snapshot of Parakeet + Whisper-floor readiness. */
 export interface AsrAssetsStatus extends ImportAssetsProgress {
   ready: boolean
+  reason?: 'lean-pack-not-installed' | 'invalid-profile'
 }
 
 export type ImportJobState =

@@ -786,12 +786,15 @@ import {
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
+import { startSpeechPackDesktop } from './speech-pack-bootstrap'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
   asrAssetsStatusSnapshot,
   importAsrAssetsReady,
-  userDataAsrRoot
+  userDataAsrRoot,
+  userDataSpeechPackRoot,
+  asrModelProtocolSpeechPackOptions
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
@@ -1183,10 +1186,12 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
+let speechPackDesktop: ReturnType<typeof startSpeechPackDesktop> | null = null
 
 function setListeningActive(on: boolean): void {
   if (listeningActive === on) return
   listeningActive = on
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
@@ -5246,6 +5251,7 @@ let lastAppliedManagedSnapshot: string | null = null
 let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
 
 function notifySettingsChanged(): void {
+  speechPackDesktop?.refresh()
   if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
 }
 
@@ -10024,6 +10030,24 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
+      runStep('speechPackIpc', () => {
+        const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
+        speechPackDesktop = startSpeechPackDesktop({
+          resourcesRoot,
+          packaged: app.isPackaged,
+          rootDir: userDataSpeechPackRoot(),
+          fixtureWavPath: join(resourcesRoot, 'speech-pack-fixtures', 'en.wav'),
+          selectedEngine: () => getSettings().asrEngine,
+          policyAllowsTransfer: () =>
+            resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
+          captureActive: captureActiveForWindowRestart,
+          ipcMain,
+          assertMainWindow: (event) => assertMainWindow(event as Electron.IpcMainInvokeEvent),
+          sendProgress: (progress) => {
+            if (win && !win.isDestroyed()) win.webContents.send(IPC.speechPackProgress, progress)
+          }
+        })
+      })
       runStep('asrAssetsIpc', () => {
         const REPO_ROOT = join(__dirname, '..', '..')
         const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
@@ -10078,6 +10102,7 @@ if (!app.requestSingleInstanceLock()) {
           createAsrModelProtocolHandler({
             resourcesRoot: RES_BASE,
             userModelsRoot: app.isPackaged ? undefined : userDataAsrRoot(),
+            resolveSpeechPackModels: asrModelProtocolSpeechPackOptions,
             readLocal: (url) => net.fetch(url)
           })
         )
@@ -10347,6 +10372,14 @@ app.on('window-all-closed', () => {
 // meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
 // main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
 // (App.tsx's reset()) — no new IPC channel needed.
+app.on('before-quit', (e) => {
+  speechPackDesktop?.beforeQuit(
+    e,
+    () => app.quit(),
+    !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed()
+  )
+})
+
 app.on('before-quit', (e) => {
   if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
   e.preventDefault()
