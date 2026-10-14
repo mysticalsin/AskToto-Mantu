@@ -5,6 +5,7 @@ import {
   hasMeetingFlag,
   parse,
   readMeetingFields as frontmatter,
+  recapSectionEndIndex,
   serialize,
   setMeetingField
 } from './features/meetings/meeting-document'
@@ -25,19 +26,6 @@ import type { RecallHydration } from '@shared/recall-hydration'
 // meeting back, editing it, and deleting it. History's list and search read path lives in history-read.ts.
 // Reaches the meetings folder only through the storage gateway and meeting-files.ts, never node:fs.
 export { listMeetings, searchMeetings, searchMeetingsLatest, type HistoryRow } from './history-read'
-
-// The recap's sibling section per document type (see isMeetingDocumentType in history-read.ts): History,
-// search, recap editing, and erasure must never disagree about where a recap ends.
-const FULL_TRANSCRIPT_HEADING_RE = /^## Full transcript\b/m
-const RETENTION_HEADING_RE = /^## Retention\b/m
-
-function recapSectionEndRe(type: string | undefined): RegExp {
-  return type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE
-}
-
-function recapSectionEndIndex(afterNotesHeading: string, type: string | undefined): number {
-  return afterNotesHeading.search(recapSectionEndRe(type))
-}
 
 async function readMeetingBytes(
   folder: string,
