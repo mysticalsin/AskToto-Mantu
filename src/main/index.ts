@@ -136,6 +136,13 @@ import {
   setSonioxApiKey,
   clearSonioxApiKey
 } from './store'
+import {
+  authorizeMacKeychainUnlock,
+  KeychainKeyRecoveryError,
+  MacKeychainUnlockRequiredError,
+  prepareFileKeyForWrite,
+  resetMacKeychainUnlockAuthorization
+} from './secrets'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
@@ -268,6 +275,7 @@ import {
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
+  DEFAULT_OVERLAY_LAYOUT,
   ASK_REVEAL_MIN_HEIGHT_PX,
   BAR_IDLE_HEIGHT_PX,
   askRevealHeight,
@@ -966,15 +974,8 @@ function makeRefreshDustAuth(current: {
   }
 }
 
-// KEYSTORE BACKEND — the default is PLATFORM-SPECIFIC, not global.
-//
-// macOS (forced file keystore): on a self-signed / un-notarized build the Keychain ACL is not stably
-// trusted, so safeStorage prompts for the login-keychain password on launch — AND because the first
-// getSettings() decrypt runs synchronously during boot, BEFORE the overlay window paints, that modal
-// prompt blocks the entire UI behind it (the "load forever" / "I only see the keychain box" report).
-// The AES-256-GCM file backend keeps secrets encrypted at rest (secret-key.bin, mode 0600) with zero
-// OS prompt, so the app boots straight to its UI. Remove this once the app ships signed with an Apple
-// Developer ID + notarization, so it can use the Keychain-backed store again.
+// KEYSTORE BACKEND — packaged installs use OS-backed encryption. On macOS, existing-profile
+// Keychain reads wait for the visible, explicit unlock action registered below.
 //
 // Windows (NOT forced): none of the above applies. safeStorage there is DPAPI-backed, tied to the
 // signed-in Windows account rather than to the binary's code signature, and never shows a prompt.
@@ -985,12 +986,9 @@ function makeRefreshDustAuth(current: {
 // the userData folder is no longer decryptable. TRADEOFF: the profile becomes bound to this Windows
 // user account — see the DPAPI note in secrets.ts and the recoverEncryptedProfile IPC.
 //
-// `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
-// in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 // ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
 // Run before any display-name change and before the first session is initialized.
 freezeAsciiUserAgent(app)
-if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Self-test must own a throwaway userData before anything resolves userData; no-op unless
 // devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
@@ -3293,15 +3291,26 @@ const TOP_CENTER_MARGIN_PX = 24
 const RESIZE_EDGE_MARGIN = 8
 
 function liveOverlayLayout(): OverlayLayout {
-  return resolveOverlayPresentation({
-    placement: liveOverlayPlacement(),
-    layout: parseOverlayLayout(getSettings().overlayLayout)
-  }).layout
+  try {
+    return resolveOverlayPresentation({
+      placement: liveOverlayPlacement(),
+      layout: parseOverlayLayout(getSettings().overlayLayout)
+    }).layout
+  } catch {
+    // A packaged Mac may need visible consent before an existing profile can be read. Keep
+    // window construction independent from that read; the renderer shows the unlock surface.
+    return DEFAULT_OVERLAY_LAYOUT
+  }
 }
 
 /** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
 function liveOverlayPlacement(): OverlayPlacement {
-  return parseOverlayPlacement(getSettings().overlayPlacement)
+  try {
+    return parseOverlayPlacement(getSettings().overlayPlacement)
+  } catch {
+    // The unlock surface must still be positioned while profile settings are Keychain-locked.
+    return 'top-center'
+  }
 }
 
 /** The sidecar falls back to the established top-center behavior on a constrained display. */
@@ -5273,6 +5282,22 @@ function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
   // --- Settings & permissions ---
+  ipcMain.handle(IPC.settingsUnlockProfile, (e) => {
+    assertMainWindow(e)
+    authorizeMacKeychainUnlock()
+    try {
+      // Legacy raw file keys use secrets.ts's atomic tmp+rename migration. Wrapped keys are only
+      // unwrapped after this user action, so macOS never shows a Keychain dialog behind first paint.
+      prepareFileKeyForWrite()
+      return publicSettingsWithSpeakerPolicy()
+    } catch (error) {
+      resetMacKeychainUnlockAuthorization()
+      if (app.isPackaged && process.platform === 'darwin' && error instanceof KeychainKeyRecoveryError) {
+        throw new MacKeychainUnlockRequiredError()
+      }
+      throw error
+    }
+  })
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
     const s = publicSettingsWithSpeakerPolicy()

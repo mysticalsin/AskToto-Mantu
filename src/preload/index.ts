@@ -94,6 +94,7 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 const api = {
   ...createSpeechPackBridge({ invoke: (channel, payload) => ipcRenderer.invoke(channel, payload), subscribe: sub }),
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  unlockEncryptedProfile: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsUnlockProfile),
   onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
   dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),

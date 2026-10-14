@@ -1,0 +1,117 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomBytes } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { app, safeStorage } from 'electron'
+import { MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX } from '@shared/encrypted-profile-recovery'
+import {
+  authorizeMacKeychainUnlock,
+  decryptSecret,
+  encryptSecret,
+  resetMacKeychainUnlockAuthorization,
+  resetSecretKeyCache
+} from './secrets'
+
+vi.mock('electron')
+
+describe('packaged macOS Keychain unlock', () => {
+  let userData: string
+  let originalPlatform: string
+  let originalLocalKeystore: string | undefined
+
+  beforeEach(() => {
+    originalPlatform = process.platform
+    originalLocalKeystore = process.env.ASKTOTO_LOCAL_KEYSTORE
+    delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' })
+    userData = mkdtempSync(join(tmpdir(), 'asktoto-macos-keychain-'))
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = true
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? userData : join(userData, name)
+    )
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation((value: string) =>
+      Buffer.from(`wrapped:${value}`)
+    )
+    ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockImplementation((value: Buffer) => {
+      const text = value.toString('utf8')
+      if (!text.startsWith('wrapped:')) throw new Error('Keychain denied')
+      return text.slice('wrapped:'.length)
+    })
+    ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockClear()
+    resetMacKeychainUnlockAuthorization()
+    resetSecretKeyCache()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = false
+    resetMacKeychainUnlockAuthorization()
+    resetSecretKeyCache()
+    rmSync(userData, { recursive: true, force: true })
+    Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform })
+    if (originalLocalKeystore === undefined) delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    else process.env.ASKTOTO_LOCAL_KEYSTORE = originalLocalKeystore
+  })
+
+  it('keeps a wrapped key byte-identical and does not probe Keychain before the visible unlock action', () => {
+    const keyFile = join(userData, 'secret-key.bin')
+    const wrapped = Buffer.from(`wrapped:${randomBytes(32).toString('base64')}`)
+    writeFileSync(keyFile, wrapped)
+    const ciphertext = randomBytes(12 + 16 + 24)
+
+    expect(() => decryptSecret(ciphertext)).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
+    expect(safeStorage.decryptString).not.toHaveBeenCalled()
+    expect(readFileSync(keyFile)).toEqual(wrapped)
+
+    authorizeMacKeychainUnlock()
+    expect(() => decryptSecret(ciphertext)).toThrow()
+    expect(safeStorage.decryptString).toHaveBeenCalledOnce()
+    expect(readFileSync(keyFile)).toEqual(wrapped)
+  })
+
+  it('atomically migrates an existing raw key through the wrapped format', () => {
+    const keyFile = join(userData, 'secret-key.bin')
+    const originalKey = randomBytes(32)
+    writeFileSync(keyFile, originalKey)
+
+    expect(() => encryptSecret('existing profile data')).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
+    expect(readFileSync(keyFile)).toEqual(originalKey)
+    authorizeMacKeychainUnlock()
+
+    const encrypted = encryptSecret('existing profile data')
+
+    expect(readFileSync(keyFile)).not.toEqual(originalKey)
+    expect(readFileSync(keyFile).toString('utf8')).toBe(`wrapped:${originalKey.toString('base64')}`)
+    expect(decryptSecret(encrypted)).toBe('existing profile data')
+    expect(existsSync(`${keyFile}.migrate.tmp`)).toBe(false)
+  })
+
+  it('keeps an existing raw key intact when atomic wrapping fails', () => {
+    const keyFile = join(userData, 'secret-key.bin')
+    const originalKey = randomBytes(32)
+    writeFileSync(keyFile, originalKey)
+    authorizeMacKeychainUnlock()
+    ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('Keychain denied')
+    })
+
+    expect(() => encryptSecret('existing profile data')).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
+    expect(readFileSync(keyFile)).toEqual(originalKey)
+    expect(existsSync(`${keyFile}.migrate.tmp`)).toBe(false)
+  })
+
+  it('does not create a raw key when packaged macOS safeStorage is unavailable', () => {
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+
+    expect(() => encryptSecret('new profile data')).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
+    expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
+  })
+
+  it('a fresh-profile read never creates or wraps a key', () => {
+    expect(() => decryptSecret(randomBytes(12 + 16 + 24))).toThrow('no file key')
+    expect(safeStorage.encryptString).not.toHaveBeenCalled()
+    expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
+  })
+})

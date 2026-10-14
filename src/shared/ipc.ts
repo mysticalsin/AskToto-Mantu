@@ -76,6 +76,7 @@ void _providerIdParity
 /** Single source of truth for every IPC channel name. */
 export const IPC = {
   settingsGet: 'settings:get',
+  settingsUnlockProfile: 'settings:unlockProfile',
   settingsChanged: 'settings:changed',
   settingsSet: 'settings:set',
   // One-way only: sent after settings:set has replied, so replaying onboarding cannot sever the

@@ -37,7 +37,10 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
-import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
+import {
+  ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX,
+  MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX
+} from '@shared/encrypted-profile-recovery'
 
 const KEY_FILE = 'secret-key.bin'
 const ALG = 'aes-256-gcm' as const
@@ -67,8 +70,38 @@ export class KeychainKeyRecoveryError extends Error {
   }
 }
 
+export class MacKeychainUnlockRequiredError extends KeychainKeyRecoveryError {
+  constructor() {
+    super()
+    this.name = 'MacKeychainUnlockRequiredError'
+    this.message = `${MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX} Choose “Continue to Keychain” to proceed. No data was changed.`
+  }
+}
+
 /** Cached per-install key — module-level singleton, never re-read after first load. */
 let _key: Buffer | null = null
+
+// Packaged macOS profiles require an explicit, visible unlock action before Keychain access. Fresh
+// key creation stays available during setup; a legacy raw->wrapped migration waits for user consent.
+let _macKeychainUnlockConfirmed = false
+
+function packagedMacRequiresKeychain(): boolean {
+  return app.isPackaged && process.platform === 'darwin' && !process.env.ASKTOTO_LOCAL_KEYSTORE
+}
+
+/** Called only by the main-process IPC invoked from the visible secure-storage screen. */
+export function authorizeMacKeychainUnlock(): void {
+  _macKeychainUnlockConfirmed = true
+}
+
+/** A denied unlock must not make automatic retries re-open Apple's native prompt. */
+export function resetMacKeychainUnlockAuthorization(): void {
+  _macKeychainUnlockConfirmed = false
+}
+
+export function isMacKeychainUnlockAuthorized(): boolean {
+  return !packagedMacRequiresKeychain() || _macKeychainUnlockConfirmed
+}
 
 /**
  * True when the AES-GCM file backend should be used for crypto operations.
@@ -96,7 +129,8 @@ export function useFileBackend(): boolean {
  *   is not directly usable without this device's keychain.
  *   Legacy files (exactly 32 raw bytes, written before this change) are detected on read and
  *   migrated to the wrapped format in-place.
- *   When safeStorage is unavailable (Linux / CI), the raw key is written as before.
+ *   When safeStorage is unavailable (Linux / CI), the raw key is written as before. Packaged macOS
+ *   fails closed instead of persisting a raw key.
  *
  * WINDOWS / DPAPI BINDING (the cost of wrapping):
  *   safeStorage on Windows is DPAPI, scoped to the signed-in Windows USER. Once secret-key.bin is
@@ -116,6 +150,11 @@ export function isKeychainAvailable(): boolean {
   }
 }
 
+/** Refuse to probe macOS Keychain until the user has seen the in-app unlock explanation. */
+export function requireMacKeychainUnlock(): void {
+  if (packagedMacRequiresKeychain() && !_macKeychainUnlockConfirmed) throw new MacKeychainUnlockRequiredError()
+}
+
 /**
  * Replace secret-key.bin via tmp+rename, never in place.
  *
@@ -124,8 +163,8 @@ export function isKeychainAvailable(): boolean {
  * Windows user. A plain writeFileSync truncates before it writes, so a crash, an EDR/AV handle denial
  * or ENOSPC in that window leaves a 0-byte or partial key file — and because this file is the only
  * copy of the KEK, every existing ciphertext becomes permanently unreadable while looking intact.
- * rename() is atomic, so the old key survives any failure before it. Callers swallow the error: the
- * in-memory key still works for the session, and the migration simply retries on the next launch.
+ * rename() is atomic, so the old key survives any failure before it. Windows callers may keep using
+ * the in-memory raw key for the session and retry next launch; packaged macOS fails closed on error.
  */
 function persistKeyFileAtomically(p: string, key: Buffer): void {
   const tmp = `${p}.migrate.tmp`
@@ -161,6 +200,11 @@ function loadKey({
   // display a credential dialog behind onboarding and block the first settings save before the UI can
   // explain what happened. The forced local keystore is deliberately independent of that OS service.
   const keychainAvailable = !localKeystoreForced && isKeychainAvailable()
+  // Packaged macOS must not silently fall back to persisting a raw AES key when Keychain is absent.
+  // In particular, do not replace an existing wrapped key or create a new key under this condition.
+  if (packagedMacRequiresKeychain() && !keychainAvailable && (createIfMissing || existsSync(p))) {
+    throw new MacKeychainUnlockRequiredError()
+  }
   // The file backend is the default for unpackaged/dev runs. Never create a Keychain-wrapped key in
   // that mode: a later test/build or a different unsigned binary must remain able to use the raw local
   // keystore without inheriting a signature-bound credential it cannot unlock.
@@ -171,18 +215,24 @@ function loadKey({
     if (canWrap) {
       if (buf.length === 32) {
         // Legacy raw key written before KEK support — migrate to wrapped format now. Atomic, because
-        // this fires on the boot read path for every upgrading Windows user and the file is the only
-        // copy of the KEK (see persistKeyFileAtomically).
+        // this fires on the boot read path for Windows upgrades and only after explicit consent on
+        // packaged macOS. This file is the only copy of the KEK (see persistKeyFileAtomically).
+        requireMacKeychainUnlock()
         _key = buf
         try {
           persistKeyFileAtomically(p, safeStorage.encryptString(buf.toString('base64')))
         } catch {
-          // Migration is best-effort; the raw key is still usable this session and retried next launch.
+          if (packagedMacRequiresKeychain()) {
+            _key = null
+            throw new KeychainKeyRecoveryError()
+          }
+          // On Windows the raw key is still usable this session and migration retries next launch.
         }
       } else {
         // safeStorage-wrapped key (new format) — unwrap. A non-empty key file is always treated as
         // valuable encrypted profile state: if the Keychain cannot unlock it, fail closed instead of
         // regenerating a key and making every existing ciphertext permanently unreadable.
+        requireMacKeychainUnlock()
         try {
           const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
           // AES-256 requires exactly 32 bytes. A stale, truncated, or foreign wrapped value must
@@ -196,7 +246,8 @@ function loadKey({
         }
       }
     } else {
-      // No keychain available now. A raw 32-byte key is usable directly.
+      // In file-backend contexts a raw 32-byte key is usable directly. Packaged macOS is rejected
+      // above when Keychain is unavailable, so it never takes this fallback path.
       if (buf.length === 32) {
         _key = buf
       } else if (allowKeychainMigration && !localKeystoreForced && buf.length > 0) {
@@ -206,6 +257,7 @@ function loadKey({
         // this recovery attempt never generates or overwrites a key unless decrypt succeeds. A forced
         // local keystore never reaches this branch: it surfaces the recovery action instead of hiding
         // a Keychain prompt behind onboarding.
+        requireMacKeychainUnlock()
         try {
           const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
           if (unwrapped.length !== 32) throw new KeychainKeyRecoveryError()
@@ -240,8 +292,18 @@ function loadKey({
 
   _key = randomBytes(32)
   if (canWrap) {
-    writeFileSync(p, safeStorage.encryptString(_key.toString('base64')), { mode: 0o600 })
+    try {
+      writeFileSync(p, safeStorage.encryptString(_key.toString('base64')), { mode: 0o600 })
+    } catch (e) {
+      _key = null
+      if (packagedMacRequiresKeychain()) throw new KeychainKeyRecoveryError()
+      throw e
+    }
   } else {
+    if (packagedMacRequiresKeychain()) {
+      _key = null
+      throw new KeychainKeyRecoveryError()
+    }
     writeFileSync(p, _key, { mode: 0o600 })
   }
   return _key
@@ -278,6 +340,7 @@ export function fileKeyState(): 'absent' | 'locked' | 'available' {
   }
   if (buf.length === 0) return 'absent'
   if (buf.length === 32) return 'available'
+  if (!isMacKeychainUnlockAuthorized()) return 'locked'
   if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) return 'locked'
   try {
     return Buffer.from(safeStorage.decryptString(buf), 'base64').length === 32 ? 'available' : 'locked'

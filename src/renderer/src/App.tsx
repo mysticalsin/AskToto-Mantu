@@ -27,6 +27,7 @@ import {
 import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
 import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
+import { isMacKeychainUnlockMessage } from '@shared/encrypted-profile-recovery'
 import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
@@ -327,6 +328,7 @@ export function App(): JSX.Element {
     patch,
     saveKey,
     recoverEncryptedProfile,
+    unlockEncryptedProfile,
     clearKey,
     testKey,
     refresh
@@ -345,6 +347,7 @@ export function App(): JSX.Element {
   const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const bootError = settingsBootError ?? auth.bootError
+  const [unlockingEncryptedProfile, setUnlockingEncryptedProfile] = useState(false)
   // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
   const [bootSlow, setBootSlow] = useState(false)
 
@@ -4038,6 +4041,43 @@ export function App(): JSX.Element {
   // onboardingExclusiveLive). Live settings replace provisional defaults when getSettings lands.
   const onboardingBoot = isOnboardingBoot(settings)
   const onboardingSettings = settings ?? provisionalOnboardingSettings()
+
+  // Never render onboarding defaults or offer profile replacement while an existing macOS Keychain
+  // key is locked. The user sees this surface before the main process is allowed to probe Keychain.
+  if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError)) {
+    return (
+      <div
+        ref={setRoot}
+        className="onboard-exclusive-lock flex h-full min-h-0 w-full items-center justify-center p-6"
+      >
+        <Panel>
+          <div className="m-auto flex max-w-sm flex-col items-center gap-3 px-4 py-5 text-center">
+            <h1 className="m-0 text-[18px] font-semibold text-[color:var(--color-ink)]">
+              Unlock your encrypted profile
+            </h1>
+            <p className="m-0 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+              Your existing settings and encrypted data are still in place. Continue to let Métis request
+              access to the original macOS Keychain. If macOS asks, approve access for Métis. Nothing is
+              changed if access is denied.
+            </p>
+            <button
+              type="button"
+              disabled={unlockingEncryptedProfile}
+              onClick={() => {
+                setUnlockingEncryptedProfile(true)
+                void unlockEncryptedProfile()
+                  .catch(() => undefined)
+                  .finally(() => setUnlockingEncryptedProfile(false))
+              }}
+              className="no-drag focus-ring rounded-lg bg-[var(--color-accent)] px-3.5 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-60"
+            >
+              {unlockingEncryptedProfile ? 'Waiting for Keychain…' : 'Continue to Keychain'}
+            </button>
+          </div>
+        </Panel>
+      </div>
+    )
+  }
 
   // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
   // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when

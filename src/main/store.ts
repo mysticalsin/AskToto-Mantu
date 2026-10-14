@@ -36,6 +36,7 @@ import {
   KeychainKeyRecoveryError,
   decryptSecret,
   encryptSecret,
+  requireMacKeychainUnlock,
   prepareFileKeyForWrite,
   resetSecretKeyCache,
   useFileBackend
@@ -345,17 +346,23 @@ function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     try {
       return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
-    } catch {
+    } catch (e) {
+      if (e instanceof KeychainKeyRecoveryError) throw e
       return null
     }
   }
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
+    if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     // Only touch safeStorage (the Keychain) when the file backend is NOT in force — see readUserRaw's
     // comment for why a keystore-forced build must never probe it here.
-    if (useFileBackend() || !safeStorage.isEncryptionAvailable()) return null
+    if (useFileBackend() || !safeStorage.isEncryptionAvailable()) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
+      return null
+    }
     try {
       return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
-    } catch {
+    } catch (e) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       return null
     }
   }
@@ -443,16 +450,19 @@ function readUserRaw(): Record<string, unknown> | null {
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
+    if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
     // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
     // treat it as unreadable and serve conservative defaults without caching it as fresh, never prompting.
     if (useFileBackend()) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
       return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')

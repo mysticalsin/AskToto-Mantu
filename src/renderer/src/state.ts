@@ -15,6 +15,10 @@ import type {
   SignInResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import {
+  isEncryptedProfileRecoveryMessage,
+  isMacKeychainUnlockMessage
+} from '@shared/encrypted-profile-recovery'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -542,6 +546,7 @@ export function useSettings(): {
   patch: (p: SettingsPatch) => Promise<PublicSettings>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
+  unlockEncryptedProfile: () => Promise<void>
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
 } {
@@ -561,6 +566,8 @@ export function useSettings(): {
       setBootError(null)
     } catch (e) {
       console.error('[settings] refresh failed', e)
+      const message = e instanceof Error ? e.message : String(e)
+      if (isEncryptedProfileRecoveryMessage(message) || isMacKeychainUnlockMessage(message)) setBootError(message)
     }
   }, [])
   useEffect(() => {
@@ -583,9 +590,14 @@ export function useSettings(): {
           }
           return
         } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          if (isMacKeychainUnlockMessage(message)) {
+            if (!cancelled) setBootError(message)
+            return
+          }
           if (attempt >= 20 || Date.now() >= deadline) {
             console.error('[boot] getSettings failed after retries; app cannot start', e)
-            if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
+            if (!cancelled) setBootError(message)
             return
           }
           const wait = Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
@@ -631,7 +643,27 @@ export function useSettings(): {
   const testKey = useCallback(async (provider: ProviderId, k: string) => {
     return window.toto.testApiKey(provider, k)
   }, [])
-  return { settings, bootError, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey }
+  const unlockEncryptedProfile = useCallback(async (): Promise<void> => {
+    try {
+      setSettings(await window.toto.unlockEncryptedProfile())
+      setBootError(null)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setBootError(message)
+      throw e
+    }
+  }, [])
+  return {
+    settings,
+    bootError,
+    refresh,
+    patch,
+    saveKey,
+    recoverEncryptedProfile,
+    unlockEncryptedProfile,
+    clearKey,
+    testKey
+  }
 }
 
 /** How often the renderer re-polls auth status while the app is open.
