@@ -9118,6 +9118,7 @@ function registerIpc(): void {
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
     void recordOperatorRating(getSettings(), rating)
   })
+
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
   ipcMain.handle(IPC.importAudioPick, async (e) => {
     assertMainWindow(e)
@@ -9182,6 +9183,7 @@ function registerIpc(): void {
     const parsed = ImportJobIdSchema.parse(raw)
     await getImportJobs().remove(parsed.jobId)
   })
+
   ipcMain.on(IPC.importDecoderReady, (e) => {
     if (!isDecoderSender(e)) {
       mainLog.warn('[import-decoder] rejected importDecoderReady from an unauthorized sender')
