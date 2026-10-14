@@ -138,14 +138,16 @@ export function createIncrementalMeetingJournalFileStorage(
   const pathFor = (name: string): string => join(root, name)
   const resolveCurrentRoot = createIncrementalMeetingJournalRoot(rootInputPath, baseCurrent)
   async function canonicalMutationKey(): Promise<string | undefined> {
-    const path = await resolveCurrentRoot()
-    if (!path) return undefined
-    root = path
-    manifestPath = join(root, manifestName)
+    if (!(await rootAligned())) return undefined
     return `${root}\0${meetingId}`
   }
   async function rootAligned(): Promise<boolean> {
-    return (await resolveCurrentRoot()) === root && baseCurrent()
+    const path = await resolveCurrentRoot()
+    if (!path || !baseCurrent()) return false
+    // Read-only adapters also admit the canonical namespace; the helper retains its physical owner.
+    root = path
+    manifestPath = join(root, manifestName)
+    return true
   }
   const readBytes = createBoundedJournalFileReader({
     baseCurrent,
