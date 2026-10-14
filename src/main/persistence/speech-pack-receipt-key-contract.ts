@@ -43,6 +43,7 @@ export interface ProtectedSpeechPackKeyAnchorOwner {
     scope: SpeechPackReceiptKeyScope,
     registryRoot: SpeechPackReceiptRegistryRoot,
     bytes: Buffer,
+    keyId: string,
     maxBytes: number
   ): Promise<ProtectedSpeechPackKeyAnchorLease>
 }
