@@ -41,7 +41,9 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
 
   it('keeps the hero video mounted through problem/reveal (FITO-185-P keep-alive)', () => {
     // Unmounting on Next killed atmosphere — lady bed stays through problem|reveal.
-    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
+    expect(experience).toMatch(
+      /\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/
+    )
     expect(experience).toMatch(/FITO-185-P: keep lady bed through problem\/reveal/)
     expect(experience).toMatch(/v\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
@@ -109,8 +111,13 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     const observed: string[] = []
     function tracked(name: string): HTMLMediaElement {
       return {
-        play() { observed.push(`${name}:play`); return Promise.resolve() },
-        set currentTime(value: number) { observed.push(`${name}:seek:${value}`) }
+        play() {
+          observed.push(`${name}:play`)
+          return Promise.resolve()
+        },
+        set currentTime(value: number) {
+          observed.push(`${name}:seek:${value}`)
+        }
       } as unknown as HTMLMediaElement
     }
     playOnboardingMedia(tracked('video') as HTMLVideoElement, tracked('audio') as HTMLAudioElement, { restart: true })
@@ -130,7 +137,9 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
-    expect(demo).toMatch(/onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*if \(demoNextLeavesTour\(beat\)\) onContinue\(\)/)
+    expect(demo).toMatch(
+      /onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*if \(demoNextLeavesTour\(beat\)\) onContinue\(\)/
+    )
     expect(demo).toMatch(/demoPlaybackAfterNext/)
     expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
     expect(demo).not.toMatch(/setTimeout\(/)
@@ -158,7 +167,6 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(heroSrc).toMatch(/onboarding-hero-lady-planet\.mp4/)
     expect(css).toMatch(/position:\s*absolute/)
   })
-
 })
 
 describe('FITO-185-L poster paint contracts', () => {
@@ -219,19 +227,29 @@ describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
 // R11: optional media may fail, but it cannot swallow a navigation click.
 describe('R11 optional onboarding media failures', () => {
   it('does not throw on a synchronous play failure', () => {
-    const media = { play() { throw new Error('fixture missing media') } } as unknown as HTMLVideoElement
+    const media = {
+      play() {
+        throw new Error('fixture missing media')
+      }
+    } as unknown as HTMLVideoElement
     expect(() => playOnboardingVideo(media, { restart: true })).not.toThrow()
   })
   it('handles rejection before a synchronous seek failure', async () => {
     const media = {
       play: () => Promise.reject(new Error('fixture blocked playback')),
-      set currentTime(_value: number) { throw new Error('fixture not seekable') }
+      set currentTime(_value: number) {
+        throw new Error('fixture not seekable')
+      }
     } as unknown as HTMLVideoElement
     expect(() => playOnboardingVideo(media, { restart: true })).not.toThrow()
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
   })
   it('audio failure cannot prevent an independent video play attempt', () => {
-    const audio = { play() { throw new Error('fixture audio failure') } } as unknown as HTMLAudioElement
+    const audio = {
+      play() {
+        throw new Error('fixture audio failure')
+      }
+    } as unknown as HTMLAudioElement
     const video = { play: vi.fn(() => Promise.resolve()) } as unknown as HTMLVideoElement
     expect(() => playOnboardingMedia(video, audio)).not.toThrow()
     expect(video.play).toHaveBeenCalledOnce()
@@ -256,13 +274,20 @@ describe('R11 repair: two-phase optional media startup', () => {
           }
         } as unknown as HTMLMediaElement
       }
-      expect(() => playOnboardingMedia(media('video') as HTMLVideoElement, media('audio') as HTMLAudioElement, { restart: true })).not.toThrow()
+      expect(() =>
+        playOnboardingMedia(media('video') as HTMLVideoElement, media('audio') as HTMLAudioElement, { restart: true })
+      ).not.toThrow()
       expect(events).toEqual(['audio-play', 'video-play', 'audio-seek', 'video-seek'])
     })
   }
   it('does not seek when restart is false', () => {
     const seek = vi.fn()
-    const video = { play: vi.fn(() => Promise.resolve()), set currentTime(v: number) { seek(v) } } as unknown as HTMLVideoElement
+    const video = {
+      play: vi.fn(() => Promise.resolve()),
+      set currentTime(v: number) {
+        seek(v)
+      }
+    } as unknown as HTMLVideoElement
     playOnboardingMedia(video, null)
     expect(video.play).toHaveBeenCalledOnce()
     expect(seek).not.toHaveBeenCalled()

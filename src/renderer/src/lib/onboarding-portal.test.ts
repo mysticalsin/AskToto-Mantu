@@ -43,7 +43,9 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(experience).toMatch(/await closeOnboardingPortal\(/)
     const finish = experience.slice(experience.indexOf('const finish = async ('))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
-    expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(
+      finish.indexOf('onDone({ mode, recordingConsent: true, destination })')
+    )
   })
 
   it('keeps the full onboarding window opaque instead of opening it through a desktop-revealing mask', () => {
@@ -63,7 +65,9 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open\s*\{[\s\S]*?background:\s*#05010a/)
     expect(css).toMatch(/\.onboard-stage--portal-close\s*\{[\s\S]*?background:\s*#05010a/)
     // A final exit may move content, but the window bed itself must remain opaque.
-    expect(css).toMatch(/\.onboard-stage--portal-close \.onboard-portal-content[\s\S]*?animation:\s*onboard-portal-content-out/)
+    expect(css).toMatch(
+      /\.onboard-stage--portal-close \.onboard-portal-content[\s\S]*?animation:\s*onboard-portal-content-out/
+    )
     expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open \.onboard-portal-content[\s\S]*?opacity:\s*1/)
     // FITO-185-P
     expect(css).toMatch(/onboard-stage--portal-open \.fade-up/)
@@ -157,7 +161,9 @@ describe('FITO-185-L portal-open on Act 1 first paint', () => {
 
   it('HeroWelcome + Act1 mount call requestOnboardingPortalOpen immediately (no 1400ms race)', () => {
     expect(experience).toMatch(/requestOnboardingPortalOpen/)
-    expect(experience).toMatch(/function HeroWelcome[\s\S]*?useLayoutEffect\(\(\) => \{[\s\S]*?requestOnboardingPortalOpen\(\)/)
+    expect(experience).toMatch(
+      /function HeroWelcome[\s\S]*?useLayoutEffect\(\(\) => \{[\s\S]*?requestOnboardingPortalOpen\(\)/
+    )
     expect(experience).not.toMatch(/setTimeout\([\s\S]*?onboard-stage--portal-open[\s\S]*?1400\)/)
     expect(portalSrc).toMatch(/export function requestOnboardingPortalOpen/)
     expect(requestOnboardingPortalOpen).toBeTypeOf('function')
@@ -171,10 +177,7 @@ describe('FITO-185-L portal-open on Act 1 first paint', () => {
 
 describe('FITO-185-V portal-open keeps entrance animations', () => {
   it('unlocks opacity/visibility under portal-open without animation:none (except reduced-motion)', () => {
-    const unlock = css.slice(
-      css.indexOf('FITO-185-V: keep opacity'),
-      css.indexOf('/* Liquid glass')
-    )
+    const unlock = css.slice(css.indexOf('FITO-185-V: keep opacity'), css.indexOf('/* Liquid glass'))
     const ruleBody = unlock.slice(unlock.indexOf('{'), unlock.lastIndexOf('}') + 1)
     expect(ruleBody).toMatch(/opacity:\s*1\s*!important/)
     expect(ruleBody).toMatch(/visibility:\s*visible\s*!important/)

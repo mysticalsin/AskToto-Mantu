@@ -51,13 +51,16 @@ describe('providerTileDisabledReason — step-5 provider tiles must not misrepor
     expect(providerTileDisabledReason({ providerLocked: false, pathAllowed: true, busy: true })).toBe('busy')
   })
 
-  it('never returns "busy" for a tile that does not pass busy at all — the CLI probe must not leak ' +
-      'into the API-key or Mantu Dust tiles', () => {
-    // The bug: cliBusy used to disable all three ProviderOption tiles, and the disabled badge always
-    // said "Restricted by your organization" — so for ~45s the API-key and Dust tiles looked
-    // org-restricted too. Callers for those tiles never pass `busy`, so this must stay null here.
-    expect(providerTileDisabledReason({ providerLocked: false, pathAllowed: true })).toBeNull()
-  })
+  it(
+    'never returns "busy" for a tile that does not pass busy at all — the CLI probe must not leak ' +
+      'into the API-key or Mantu Dust tiles',
+    () => {
+      // The bug: cliBusy used to disable all three ProviderOption tiles, and the disabled badge always
+      // said "Restricted by your organization" — so for ~45s the API-key and Dust tiles looked
+      // org-restricted too. Callers for those tiles never pass `busy`, so this must stay null here.
+      expect(providerTileDisabledReason({ providerLocked: false, pathAllowed: true })).toBeNull()
+    }
+  )
 })
 
 describe('MQA-096 — step-5 "Something else … Pick it in Settings" must obey the org allowlist', () => {
@@ -80,7 +83,7 @@ describe('MQA-096 — step-5 "Something else … Pick it in Settings" must obey 
   })
 })
 
-describe('MQA-094 — slide 1 must not read signIn()\'s unconfigured short-circuit as a sign-in', () => {
+describe("MQA-094 — slide 1 must not read signIn()'s unconfigured short-circuit as a sign-in", () => {
   it('classifies ok:true + configured:false as "not-configured", not success', () => {
     // main/auth.ts returns { ok: true, configured: false } when no Azure config resolves — no browser
     // opened, no session created. Advancing on it presented that no-op as a work-account sign-in.
@@ -174,13 +177,16 @@ describe('MQA-067 — the Mantu Dust one-click path must leave step 6 reading a 
 })
 
 describe('MQA-093 — a DENIED microphone is not the same row state as one that was never asked', () => {
-  it('gives a denied mic its own "blocked" state so the dead "Allow Microphone" button gives way to ' +
-      'the OS privacy pane', () => {
-    // The bug: denied collapsed into 'action', whose only control calls requestPermissionsUpfront —
-    // which main gates on 'not-determined', so every click was a no-op with no prompt and no link.
-    expect(micRowStatus('denied')).toEqual({ state: 'blocked', detail: 'permission denied' })
-    expect(micRowStatus('denied').state).not.toBe('action')
-  })
+  it(
+    'gives a denied mic its own "blocked" state so the dead "Allow Microphone" button gives way to ' +
+      'the OS privacy pane',
+    () => {
+      // The bug: denied collapsed into 'action', whose only control calls requestPermissionsUpfront —
+      // which main gates on 'not-determined', so every click was a no-op with no prompt and no link.
+      expect(micRowStatus('denied')).toEqual({ state: 'blocked', detail: 'permission denied' })
+      expect(micRowStatus('denied').state).not.toBe('action')
+    }
+  )
 
   it('keeps every other status behaving as it did', () => {
     expect(micRowStatus('granted')).toEqual({ state: 'ready', detail: 'granted' })
@@ -232,7 +238,11 @@ describe('Act 3 on-device model row', () => {
   })
 
   it('does not claim an organization-restricted model is downloading', () => {
-    const row = localModelRowStatus({ ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8 }, true, false)
+    const row = localModelRowStatus(
+      { ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8 },
+      true,
+      false
+    )
     expect(row.state).toBe('skipped')
     expect(row.detail).toMatch(/organization/i)
   })
@@ -365,7 +375,9 @@ describe('Act 3 — transcription files never skip', () => {
   })
 
   it('marks Parakeet + Whisper base files ready when assets are present', () => {
-    expect(asrAssetsRowStatus({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toEqual({
+    expect(
+      asrAssetsRowStatus({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })
+    ).toEqual({
       state: 'ready',
       detail: 'Parakeet + Whisper base files ready.'
     })
@@ -416,8 +428,10 @@ describe('Act 3 — transcription files never skip', () => {
       ready: false,
       status: 'error',
       progress: 0,
-      label: 'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.',
-      error: 'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.'
+      label:
+        'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.',
+      error:
+        'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.'
     })
 
     expect(row.state).toBe('action')
@@ -448,18 +462,13 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupAsrBlocksContinue([asrRow('checking')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('loading')])).toBe(true)
 
-
     expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
     expect(setupAsrBlocksContinue([])).toBe(true)
   })
   it('failOpen latches Continue unlocked even while ASR still loading', () => {
     expect(setupAsrBlocksContinue([asrRow('loading')], undefined, true)).toBe(false)
     expect(
-      setupAsrBlocksContinue(
-        [asrRow('checking')],
-        { ready: false, status: 'loading', progress: 10, label: 'x' },
-        true
-      )
+      setupAsrBlocksContinue([asrRow('checking')], { ready: false, status: 'loading', progress: 10, label: 'x' }, true)
     ).toBe(false)
   })
 
@@ -486,7 +495,6 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupScene).not.toMatch(/needsPerms\s*\?\s*'onboard-cta--muted'/)
   })
 
-  
   it('never leaves Continue stuck when the setup list already looks complete', () => {
     const complete = [
       asrRow('skipped'),
@@ -535,10 +543,12 @@ describe('Act 3 — transcription files never skip', () => {
     expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(true)
     expect(firstRunCanFinish({ asrReady: true, consent: false })).toBe(false)
     expect(firstRunCanFinish({ asrReady: true, consent: true })).toBe(true)
-    expect(asrStatusIsReady({ ready: false, status: 'downloading', progress: 0.2, label: 'Getting transcription files…' })).toBe(
-      false
+    expect(
+      asrStatusIsReady({ ready: false, status: 'downloading', progress: 0.2, label: 'Getting transcription files…' })
+    ).toBe(false)
+    expect(asrStatusIsReady({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toBe(
+      true
     )
-    expect(asrStatusIsReady({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toBe(true)
   })
 })
 

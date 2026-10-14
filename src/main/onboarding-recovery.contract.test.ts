@@ -50,7 +50,8 @@ function webContentsOnCallback(target: string, eventName: string): ts.Expression
       node.expression.expression.getText(indexSource) === target &&
       node.expression.name.text === 'on' &&
       node.arguments[0]?.getText(indexSource) === `'${eventName}'`
-    ) callback = node.arguments[1]
+    )
+      callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
   visit(indexSource)
@@ -324,11 +325,13 @@ describe('onFatal — async relaunch dialog', () => {
    *  latch and calls the real dialog — a fresh vm context per call, so `fatalHandled` starts false again
    *  for each test. `persistCrash` is injected rather than lifted: this test is about the async-dialog
    *  half of the ticket, and persistCrash's own redact/log/write behaviour has its own coverage. */
-  function actualOnFatal(globals: Record<string, unknown>): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
+  function actualOnFatal(
+    globals: Record<string, unknown>
+  ): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
     const fatalHandledDecl = indexSource.statements.find(
       (node): node is ts.VariableStatement =>
         ts.isVariableStatement(node) &&
-        node.declarationList.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === 'fatalHandled')
+        node.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === 'fatalHandled')
     )
     const onFatalDecl = topLevelFunctionDeclaration('onFatal')
     const showFatalDialogDecl = topLevelFunctionDeclaration('showFatalDialog')
@@ -349,7 +352,12 @@ describe('onFatal — async relaunch dialog', () => {
    *  stubs the lifted `onFatal`/`showFatalDialog` need. */
   function pendingDialogGlobals(overrides: Record<string, unknown> = {}) {
     let resolveDialog!: (result: { response: number }) => void
-    const showMessageBox = vi.fn(() => new Promise<{ response: number }>((resolve) => { resolveDialog = resolve }))
+    const showMessageBox = vi.fn(
+      () =>
+        new Promise<{ response: number }>((resolve) => {
+          resolveDialog = resolve
+        })
+    )
     const persistCrash = vi.fn()
     const win = {}
     const mainLog = { warn: vi.fn() }
@@ -363,7 +371,14 @@ describe('onFatal — async relaunch dialog', () => {
       process: { platform: 'darwin' },
       ...overrides
     }
-    return { globals, showMessageBox, persistCrash, win, mainLog, resolve: (response: number) => resolveDialog({ response }) }
+    return {
+      globals,
+      showMessageBox,
+      persistCrash,
+      win,
+      mainLog,
+      resolve: (response: number) => resolveDialog({ response })
+    }
   }
 
   // M2-0429: Electron's own orphan "Failed to get sources." rejection for a refused macOS capture used to
@@ -388,7 +403,10 @@ describe('onFatal — async relaunch dialog', () => {
     // onFatal is synchronous and returns immediately: showFatalDialog only reaches its first `await` after
     // showMessageBox has already been called, so the assertion below runs before that promise settles.
     expect(persistCrash).toHaveBeenCalledExactlyOnceWith('uncaughtException', expect.stringContaining('boom'), 'boom')
-    expect(showMessageBox).toHaveBeenCalledExactlyOnceWith(win, expect.objectContaining({ buttons: ['Relaunch Métis', 'Continue'] }))
+    expect(showMessageBox).toHaveBeenCalledExactlyOnceWith(
+      win,
+      expect.objectContaining({ buttons: ['Relaunch Métis', 'Continue'] })
+    )
   })
 
   it('calls exitAndRelaunch when the user picks "Relaunch Métis" (response 0)', async () => {
@@ -432,7 +450,11 @@ describe('onFatal — async relaunch dialog', () => {
 
     onFatal('unhandledRejection', 'a rejected promise reason')
 
-    expect(persistCrash).toHaveBeenCalledExactlyOnceWith('unhandledRejection', 'a rejected promise reason', 'a rejected promise reason')
+    expect(persistCrash).toHaveBeenCalledExactlyOnceWith(
+      'unhandledRejection',
+      'a rejected promise reason',
+      'a rejected promise reason'
+    )
     expect(showMessageBox).not.toHaveBeenCalled()
   })
 })

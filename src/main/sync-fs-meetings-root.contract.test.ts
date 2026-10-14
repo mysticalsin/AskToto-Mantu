@@ -200,7 +200,9 @@ function callList(calls: readonly SyncFsCall[]): string {
 
 describe('meetings-root readers — synchronous node:fs structural ratchet', () => {
   it('counts only real CallExpression nodes imported from node:fs', () => {
-    const calls = collectSyncFsCalls('synthetic.ts', `
+    const calls = collectSyncFsCalls(
+      'synthetic.ts',
+      `
       import { readFileSync, statSync as statNow } from 'node:fs'
       import * as fs from 'node:fs'
       import { readFileSync as readPromiseNamedSame } from 'node:fs/promises'
@@ -212,7 +214,8 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
       statNow('/tmp/a')
       fs.readdirSync('/tmp')
       readPromiseNamedSame('/tmp/b')
-    `)
+    `
+    )
 
     expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync'])
   })
@@ -225,15 +228,15 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
       if (count > baseline) {
         expect.fail(
           `${file}: ${count} sync node:fs call sites, up from the ${baseline} baseline.\n` +
-          'Remove the new main-thread sync fs call; do NOT raise the baseline.\n' +
-          callList(calls)
+            'Remove the new main-thread sync fs call; do NOT raise the baseline.\n' +
+            callList(calls)
         )
       }
       if (count < baseline) {
         expect.fail(
           `${file}: ${count} sync node:fs call sites, BELOW the ${baseline} baseline. Good news, but ` +
-          `the baseline is now stale and would let ${baseline - count} new call sites back in unnoticed. ` +
-          `Set BASELINE['${file}'] = ${count}.`
+            `the baseline is now stale and would let ${baseline - count} new call sites back in unnoticed. ` +
+            `Set BASELINE['${file}'] = ${count}.`
         )
       }
       expect(count, `${file}: sync node:fs baseline`).toBe(baseline)

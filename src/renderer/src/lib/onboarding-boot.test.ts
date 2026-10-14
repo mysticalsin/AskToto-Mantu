@@ -208,10 +208,7 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
 
 describe('FITO-185-T exclusive Act 1 music after interactive', () => {
   it('OnboardingExperience gates Goldberg start on window focus (not mount-only)', () => {
-    const experience = readFileSync(
-      join(__dirname, '../components/OnboardingExperience.tsx'),
-      'utf8'
-    )
+    const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
     expect(experience).toMatch(/FITO-185-T: do not start Goldberg until Act 1 is interactive/)
     expect(experience).toMatch(/document\.hasFocus\(\)/)
     expect(experience).toMatch(/addEventListener\('focus'/)
@@ -221,7 +218,7 @@ describe('FITO-185-T exclusive Act 1 music after interactive', () => {
       experience.indexOf('Demo/Bar/Three chunks')
     )
     expect(mount).toMatch(/kickMusic/)
-    expect(mount.indexOf('kickMusic')).toBeLessThan(mount.indexOf("music.start()"))
+    expect(mount.indexOf('kickMusic')).toBeLessThan(mount.indexOf('music.start()'))
   })
 
   it('main exclusive reveal uses showForExclusiveOnboarding under FITO-185-S (no SFS)', () => {
@@ -232,7 +229,6 @@ describe('FITO-185-T exclusive Act 1 music after interactive', () => {
     expect(main).toMatch(/exclusiveOsFullscreenAllowed/)
   })
 })
-
 
 describe('FITO-185-X post-boot Loading never forever', () => {
   const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8').replace(/\r\n/g, '\n')
