@@ -386,7 +386,13 @@ beforeEach(() => {
       cloudSttStop: vi.fn(async () => ({ timedOut: false })),
       onCloudSttFinal: vi.fn(() => () => {}),
       onCloudSttError: vi.fn(() => () => {}),
-      cloudSpeechCapability: vi.fn(async () => ({})),
+      cloudSpeechCapability: vi.fn(async () => ({
+        disclosureVersion: 'cloud-speech-v1' as const,
+        selected: { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
+        allowed: [{ engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }],
+        ready: true,
+        refusal: null
+      })),
       cloudSpeechStart: vi.fn(async (request: CloudSpeechStartRequest) => {
         const streams = request.capture.capturedTracks.map((track) => ({
           generation: request.capture.generation,
@@ -400,7 +406,7 @@ beforeEach(() => {
           captureId: request.captureId,
           captureGeneration: request.capture.generation,
           engine: request.capture.engine,
-          streams,
+          streams: streams.map(({ track, epoch }) => ({ track, streamEpoch: epoch })),
           limits: {
             frameBytes: CLOUD_SPEECH_FULL_FRAME_BYTES,
             maxPendingFrames: CLOUD_SPEECH_MAX_PENDING_FRAMES,
