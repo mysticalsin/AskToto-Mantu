@@ -576,7 +576,11 @@ describe('speech relay on pinned hosted workerd', () => {
       expect(sessionAuthority.reserved_ms).toBe(expectedMaxStreamMs)
       expect(created.leaseExpiresAt).toBe(consentExpiresAt)
       expect(created.grantExpiresAt).toBe(sessionAuthority.grant_expires_at)
-      expect(created.limits).toEqual({ ...PROTOCOL_FIXTURE.limits, maxStreamMs: expectedMaxStreamMs })
+      expect(created.limits).toEqual({
+        ...PROTOCOL_FIXTURE.limits,
+        maxStreamMs: expectedMaxStreamMs,
+        audioDeadlineAt: consentExpiresAt - PROTOCOL_FIXTURE.limits.drainWindowMs
+      })
       expect(created.limits.maxStreamMs).toBe(expectedMaxStreamMs)
       expect(created.limits.maxStreamMs).toBeLessThanOrEqual(PROTOCOL_FIXTURE.limits.maxStreamMs)
       expect(created.limits.audioDeadlineAt).toBe(consentExpiresAt - PROTOCOL_FIXTURE.limits.drainWindowMs)
