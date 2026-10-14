@@ -9,6 +9,12 @@ const request = {
 }
 
 describe('speech-pack preload boundary', () => {
+  it('sanitizes rejected native transport errors for both request methods', async () => {
+    const invoke = vi.fn().mockRejectedValue(new Error('/private/model https://example.invalid/?token=private'))
+    const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
+    await expect(bridge.speechPackState()).rejects.toThrow(/^Invalid speech pack response$/)
+    await expect(bridge.speechPackAction(request)).rejects.toThrow(/^Invalid speech pack response$/)
+  })
   it('rejects invalid requests before invoking main', async () => {
     const invoke = vi.fn()
     const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
