@@ -177,6 +177,7 @@ function createMainPersistenceBootstrapInternal(
   const liveScopes = new Set<ScopeEntry>()
   const journals = new Set<OpenJournal>()
   const pendingOperations = new Set<Promise<unknown>>()
+  const speechSettlements = new Map<MeetingSpeechPersistenceService, Promise<void>>()
   let refreshPolicy: (() => Promise<PersistenceCapability>) | undefined
   const gateways = new WeakMap<OwnedMeetingRoot, StorageGateway>()
   const currentUserData = (): string => resolve(app.getPath('userData'))
@@ -188,6 +189,20 @@ function createMainPersistenceBootstrapInternal(
       () => pendingOperations.delete(operation)
     )
     return operation
+  }
+
+  function invalidateSpeech(service: MeetingSpeechPersistenceService | undefined): Promise<void> | undefined {
+    if (!service) return undefined
+    const existing = speechSettlements.get(service)
+    if (existing) return existing
+    const settlement = service.invalidateCurrent()
+    speechSettlements.set(service, settlement)
+    // Keep failed exits owned and visible to settle(); do not turn a timeout into physical settlement.
+    void settlement.then(
+      () => speechSettlements.delete(service),
+      () => undefined
+    )
+    return settlement
   }
 
   const roots = new RootRegistry({
@@ -239,7 +254,7 @@ function createMainPersistenceBootstrapInternal(
       journal.root.retire()
       keys.retire(journal.key)
     }
-    void speech?.invalidateCurrent()
+    invalidateSpeech(speech)
   }
 
   const unsubscribeAuth = subscribeSpeechAuthLeaseInvalidation(() => {
@@ -577,7 +592,7 @@ function createMainPersistenceBootstrapInternal(
               )
                 throw new Error('Persistence policy version was not durably committed')
               const speechPolicy = toMeetingSpeechPolicy(resolvedPolicy.profile)
-              speech =
+              const nextSpeech =
                 sourceFixture?.createSpeech(resolvedPolicy.profile) ??
                 createMeetingSpeechPersistenceService({
                   readLimits: () => speechPolicy.limits,
@@ -588,7 +603,11 @@ function createMainPersistenceBootstrapInternal(
                     shutdownDeadlineMs: speechPolicy.shutdownDeadlineMs
                   })
                 })
+              const previousSpeech = speech
+              if (previousSpeech && previousSpeech !== nextSpeech)
+                await invalidateSpeech(previousSpeech)
               if (!highWaterCurrent()) throw new Error('Persistence authority changed before publication')
+              speech = nextSpeech
               policy = resolvedPolicy
               capability = Object.freeze({
                 status: 'ready',
@@ -688,7 +707,9 @@ function createMainPersistenceBootstrapInternal(
     async settle() {
       while (pendingOperations.size > 0) await Promise.allSettled([...pendingOperations])
       await Promise.allSettled([...journals].map((journal) => journal.settle()))
-      await speech?.invalidateCurrent().catch(() => undefined)
+      const currentSettlement = invalidateSpeech(speech)
+      if (currentSettlement) await currentSettlement
+      await Promise.all([...speechSettlements.values()])
     },
     async dispose() {
       if (disposed) return
@@ -697,7 +718,7 @@ function createMainPersistenceBootstrapInternal(
       unsubscribeSettings()
       unsubscribeAuth()
       await this.settle()
-      await speech?.dispose()
+      if (speech) await speech.dispose()
       speech = undefined
       capability = Object.freeze({ status: 'disposed' })
     }

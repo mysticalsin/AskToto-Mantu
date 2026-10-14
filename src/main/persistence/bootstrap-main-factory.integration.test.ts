@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { processMeetingSpeechRequest } from '../meeting-speech-worker'
 import {
   createMeetingSpeechPersistenceService,
+  type MeetingSpeechWorkerFactory,
   type MeetingSpeechWorkerPort
 } from '../infra/process/meeting-speech-host'
 import type { MeetingSpeechRequest } from '../infra/process/meeting-speech-protocol'
@@ -54,7 +55,8 @@ class SourceWorker extends EventEmitter implements MeetingSpeechWorkerPort {
 const fixtureSourceCommit = 'a'.repeat(40)
 
 function sourceFixture(
-  readBundledReceipt: MainPersistenceBootstrapSourceFixture['readBundledReceipt'] = async () => null
+  readBundledReceipt: MainPersistenceBootstrapSourceFixture['readBundledReceipt'] = async () => null,
+  workerFactory?: MeetingSpeechWorkerFactory
 ): MainPersistenceBootstrapSourceFixture {
   const catalogBytes = new Uint8Array(readFileSync(resolve(process.cwd(), 'resources/persistence-profiles.v1.json')))
   const parsed = parseProfileCatalog(catalogBytes)
@@ -109,7 +111,7 @@ function sourceFixture(
           operationDeadlineMs: policy.operationDeadlineMs,
           shutdownDeadlineMs: policy.shutdownDeadlineMs
         }),
-        workerFactory: () => new SourceWorker()
+        workerFactory: workerFactory ?? (() => new SourceWorker())
       })
     }
   }
@@ -205,6 +207,74 @@ describe('main persistence factory source fixture', () => {
     } finally {
       await second?.dispose()
       await first.dispose()
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps main settlement pending until a retired worker reports physical exit', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-persistence-worker-exit-'))
+    configureMainProcess(userData)
+    const settings = { ...DEFAULT_SETTINGS, encryptTranscripts: true }
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    publishSettingsSnapshot(settings, true)
+    let allowExit!: () => void
+    let markTerminating!: () => void
+    let markWorkerCreated!: () => void
+    const exitGate = new Promise<void>((resolveExit) => {
+      allowExit = resolveExit
+    })
+    const terminating = new Promise<void>((resolveTerminating) => {
+      markTerminating = resolveTerminating
+    })
+    const workerCreated = new Promise<void>((resolveCreated) => {
+      markWorkerCreated = resolveCreated
+    })
+    class HeldExitWorker extends SourceWorker {
+      override async terminate(): Promise<number> {
+        markTerminating()
+        await exitGate
+        this.emit('exit', 0)
+        return 0
+      }
+    }
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(async () => null, () => {
+        markWorkerCreated()
+        return new HeldExitWorker()
+      })
+    )
+    try {
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      const journal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1269')
+      const append = journal.append(
+        new TextEncoder().encode(
+          JSON.stringify({
+            identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9e' },
+            source: 'local-final',
+            line: { speaker: 'you', text: 'held worker exit', t: 1_700_000_000_001 }
+          })
+        ),
+        0
+      )
+      void append.catch(() => undefined)
+      await workerCreated
+      bootstrap.retire('test-worker-exit')
+      await terminating
+      let settled = false
+      const settlement = bootstrap.settle().then(() => {
+        settled = true
+      })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      allowExit()
+      await settlement
+      expect(settled).toBe(true)
+    } finally {
+      allowExit()
+      await bootstrap.dispose()
       vi.restoreAllMocks()
       rmSync(userData, { recursive: true, force: true })
     }
