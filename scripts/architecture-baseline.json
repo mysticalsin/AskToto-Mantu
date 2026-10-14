@@ -281,7 +281,7 @@
     "src/renderer/src/lib/listen.test.ts": 1,
     "src/renderer/src/lib/no-native-dialogs.test.ts": 4,
     "src/renderer/src/lib/onboarding-appearance.test.ts": 5,
-    "src/renderer/src/lib/onboarding-boot.test.ts": 11,
+    "src/renderer/src/lib/onboarding-boot.test.ts": 10,
     "src/renderer/src/lib/onboarding-close-audio-cta.test.ts": 5,
     "src/renderer/src/lib/onboarding-copy.test.ts": 8,
     "src/renderer/src/lib/onboarding-demo-clock.test.ts": 2,
