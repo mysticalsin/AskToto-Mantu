@@ -1,14 +1,8 @@
-import type { ImportJob, ImportJobStore } from './import-jobs'
+import type { ImportJob, ImportJobStore, ImportHoldInventory } from './import-job-types'
+export type { ImportHoldInventory } from './import-job-types'
 import { ImportRetentionBlockedError } from './import-retention-policy'
 
 export class StaleImportJobWriteError extends Error {}
-
-export interface ImportHoldInventory {
-  jobIds: string[]
-  policyHeldJobIds: string[]
-  inventoryOverflow: boolean
-  policyHoldOverflow: boolean
-}
 
 export interface ImportRetentionHost {
   jobs: Map<string, ImportJob>
