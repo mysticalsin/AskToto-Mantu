@@ -23,6 +23,7 @@ import {
 } from './features/components'
 import { registerSpeechPackIpc } from './ipc/speech-pack-ipc'
 import { startSpeechPackPoll, waitForSpeechPackQuitFlush } from './infra/scheduler/speech-pack-poll'
+import type { QuitTrace } from './lifecycle/quit-trace'
 
 export function registerOptionalModelProvisioningIpc(options: {
   ipcMain: Electron.IpcMain
@@ -107,6 +108,7 @@ export function startSpeechPackDesktopFromMain(options: {
   ipcMain: Parameters<typeof registerSpeechPackIpc>[0]['ipcMain']
   assertMainWindow: Parameters<typeof registerSpeechPackIpc>[0]['assertMainWindow']
   sendProgress: Parameters<typeof registerSpeechPackIpc>[0]['sendProgress']
+  quitTrace?: QuitTrace
 }) {
   const policyAllowsTransfer = (): boolean => {
     const settings = getSettings()
@@ -182,6 +184,7 @@ export function startSpeechPackDesktop(options: {
   ipcMain: Parameters<typeof registerSpeechPackIpc>[0]['ipcMain']
   assertMainWindow: Parameters<typeof registerSpeechPackIpc>[0]['assertMainWindow']
   sendProgress: Parameters<typeof registerSpeechPackIpc>[0]['sendProgress']
+  quitTrace?: QuitTrace
 }) {
   const packageRuntimeContract =
     options.packageRuntimeContract ??
@@ -233,11 +236,30 @@ export function startSpeechPackDesktop(options: {
       } catch {
         cleanupFailed = true
       }
-      closing = service.shutdown()
+      if (options.quitTrace?.enabled) {
+        options.quitTrace.mark('PACK_SHUTDOWN_START')
+        options.quitTrace.mark(service.hasEngine() ? 'PACK_ENGINE_PRESENT' : 'PACK_ENGINE_NONE')
+      }
+      const serviceShutdown = service.shutdown()
+      closing = serviceShutdown
       if (cleanupFailed)
         closing = closing.then(() => {
           throw new Error('Speech pack cleanup failed')
         })
+      if (options.quitTrace?.enabled) {
+        const trace = options.quitTrace
+        const record = (phase: 'PACK_SHUTDOWN_SETTLED' | 'PACK_SHUTDOWN_REJECTED'): void => {
+          try {
+            trace.mark(phase)
+          } catch {
+            /* diagnostics must not alter the shutdown barrier */
+          }
+        }
+        void closing.then(
+          () => record('PACK_SHUTDOWN_SETTLED'),
+          () => record('PACK_SHUTDOWN_REJECTED')
+        )
+      }
       return closing
     },
     beforeQuit(event: { preventDefault(): void }, quit: () => void, meetingFlushPending = false): void {
@@ -247,7 +269,12 @@ export function startSpeechPackDesktop(options: {
       quitPending = true
       const resume = (): void => {
         quitReady = true
-        quit()
+        if (options.quitTrace?.enabled) {
+          options.quitTrace.mark('PACK_QUIT_RESUME')
+          options.quitTrace.call('PACK_RESUME', quit)
+        } else {
+          quit()
+        }
       }
       void Promise.allSettled([
         desktop.shutdown(),

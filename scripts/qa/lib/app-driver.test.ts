@@ -1479,11 +1479,12 @@ describe('quitOwnedAppBeforeAutomationClose', () => {
       async () => {
         order.push('automation-close')
       },
-      100
+      100,
+      () => order.push('observation-snapshot')
     )
 
     await expect(pending).resolves.toEqual({ request: 'accepted', exit: 'zero', cleanShutdown: true })
-    expect(order).toEqual(['quit-request', 'process-exit', 'automation-close'])
+    expect(order).toEqual(['quit-request', 'process-exit', 'observation-snapshot', 'automation-close'])
   })
 
   it('still closes automation after the app-owned quit request is rejected', async () => {

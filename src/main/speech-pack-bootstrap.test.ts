@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createQuitTrace } from './lifecycle/quit-trace'
 import { startSpeechPackDesktop } from './speech-pack-bootstrap'
 
 const mocks = vi.hoisted(() => {
@@ -125,6 +126,49 @@ describe('speech-pack desktop lifecycle', () => {
     event.preventDefault.mockClear()
     desktop.beforeQuit(event, quit)
     expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('resumes the original quit when no diagnostic observer is installed', async () => {
+    const desktop = startSpeechPackDesktop(options())
+    const event = { preventDefault: vi.fn() }
+    const quit = vi.fn()
+
+    desktop.beforeQuit(event, quit)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(quit).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+
+    expect(mocks.service.shutdown).toHaveBeenCalledOnce()
+  })
+
+  it('resumes the original quit when diagnostic tracing is disabled', async () => {
+    const lines: string[] = []
+    const desktop = startSpeechPackDesktop({
+      ...options(),
+      quitTrace: createQuitTrace(false, (line) => lines.push(line))
+    })
+    const event = { preventDefault: vi.fn() }
+    const quit = vi.fn()
+
+    desktop.beforeQuit(event, quit)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(quit).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+
+    expect(mocks.service.shutdown).toHaveBeenCalledOnce()
+    expect(lines).toEqual([])
+  })
+
+  it.each([
+    'absent',
+    'disabled'
+  ] as const)('preserves the service shutdown promise identity when tracing is %s', (traceMode) => {
+    const serviceShutdown = Promise.resolve()
+    mocks.service.shutdown.mockImplementationOnce(() => serviceShutdown)
+    const quitTrace = traceMode === 'disabled' ? createQuitTrace(false, () => undefined) : undefined
+    const desktop = startSpeechPackDesktop({ ...options(), quitTrace })
+
+    expect(desktop.shutdown()).toBe(serviceShutdown)
   })
 
   it('preserves the existing meeting flush window even when model shutdown finishes immediately', async () => {
