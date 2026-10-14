@@ -25,8 +25,22 @@ if errorlevel 1 exit /b 1
 exit /b 0
 "@
 Set-Content -LiteralPath $commandFile -Value $command -Encoding Ascii
-$compile = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/s', '/c', "`"$commandFile`"") -NoNewWindow -Wait -PassThru
-if ($compile.ExitCode -ne 0) { throw 'The owned-process shutdown proof fixtures did not compile.' }
+$compileInfo = [System.Diagnostics.ProcessStartInfo]::new()
+$compileInfo.FileName = 'cmd.exe'
+$compileInfo.Arguments = '/d /s /c ""' + $commandFile + '""'
+$compileInfo.UseShellExecute = $false
+$compileInfo.CreateNoWindow = $true
+$compile = [System.Diagnostics.Process]::new()
+$compile.StartInfo = $compileInfo
+if (-not $compile.Start()) { throw 'The owned-process shutdown fixture compiler did not start.' }
+if (-not $compile.WaitForExit(60000)) {
+  try { $compile.Kill($true) } catch {}
+  $compile.Dispose()
+  throw 'The owned-process shutdown fixture build exceeded its 60-second process deadline.'
+}
+$compileExitCode = $compile.ExitCode
+$compile.Dispose()
+if ($compileExitCode -ne 0) { throw 'The owned-process shutdown proof fixtures did not compile.' }
 
 $runDirectory = Join-Path $output 'run'
 New-Item -ItemType Directory -Path $runDirectory | Out-Null

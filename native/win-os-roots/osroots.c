@@ -53,12 +53,13 @@ static int valid_canonical_directory(const WCHAR *path) {
 
   /* No component may be a traversal alias, even if the API accepted the spelling. */
   const WCHAR *component = path + 3;
-  for (const WCHAR *cursor = component;; cursor++) {
-    if (*cursor == L'\\' || *cursor == L'\0') {
+  const WCHAR *end = path + length;
+  for (const WCHAR *cursor = component; cursor <= end; cursor++) {
+    if (*cursor == L'\\' || cursor == end) {
       size_t componentLength = (size_t)(cursor - component);
       if (componentLength == 0 || (componentLength == 1 && component[0] == L'.') ||
           (componentLength == 2 && component[0] == L'.' && component[1] == L'.')) return 0;
-      if (*cursor == L'\0') break;
+      if (cursor == end) break;
       component = cursor + 1;
     }
   }
