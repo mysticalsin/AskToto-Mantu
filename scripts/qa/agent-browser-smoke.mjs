@@ -707,6 +707,7 @@ async function main() {
     composerVisibleInDom: false,
     diagnosticAccessVerified: { pageErrors: false, console: false, networkRequests: false },
     cleanShutdown: false,
+    quitOutcome: { request: 'not-attempted', exit: 'not-waited' },
     ownedProcessesCleaned: false,
     agentBrowserProcessesCleaned: true,
     preexistingOwnedProcessCount: 0,
@@ -856,16 +857,24 @@ async function main() {
       }
     }
     if (!leaveRunning) {
-      report.cleanShutdown = await quitOwnedAppBeforeAutomationClose(
+      const quitOutcome = await quitOwnedAppBeforeAutomationClose(
         appChild,
-        () =>
-          ownedBrowser && appPage
-            ? appPage.evaluate(() => {
-                if (!window.toto || typeof window.toto.quit !== 'function') return false
-                void window.toto.quit()
-                return true
-              })
-            : Promise.resolve(false),
+        async () => {
+          if (!ownedBrowser || !appPage || appPage.isClosed()) return 'page-unavailable'
+          try {
+            return await appPage.evaluate(async () => {
+              if (!window.toto || typeof window.toto.quit !== 'function') return 'bridge-unavailable'
+              try {
+                await window.toto.quit()
+                return 'accepted'
+              } catch {
+                return 'ipc-rejected'
+              }
+            })
+          } catch {
+            return 'evaluation-failed'
+          }
+        },
         async () => {
           try {
             await ownedBrowser?.close()
@@ -891,6 +900,8 @@ async function main() {
         },
         CHILD_STOP_TIMEOUT_MS
       )
+      report.quitOutcome = { request: quitOutcome.request, exit: quitOutcome.exit }
+      report.cleanShutdown = quitOutcome.cleanShutdown
     }
 
     if (appChild && !leaveRunning) {
