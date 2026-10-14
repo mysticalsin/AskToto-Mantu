@@ -108,7 +108,10 @@ export function describeImportProgress(job: ImportProgressSnapshot): ImportProgr
   const reportedPercent = job.pct === null ? null : percentage(job.pct)
   const hasNumericProgress = totalChunks > 0 || reportedPercent !== null
   const percent = hasNumericProgress ? reportedPercent : null
-  const chunkDetail = percent === null || totalChunks === 0 ? null : `chunk ${Math.min(totalChunks, completedChunks + 1)} of ${totalChunks}`
+  const chunkDetail =
+    percent === null || totalChunks === 0
+      ? null
+      : `chunk ${Math.min(totalChunks, completedChunks + 1)} of ${totalChunks}`
   const transcribed = percent === null ? null : `${percent}% transcribed`
 
   switch (job.state) {
@@ -212,6 +215,15 @@ export function describeImportProgress(job: ImportProgressSnapshot): ImportProgr
         label: 'Import needs attention',
         percent,
         valueText: transcribed ?? 'Import needs attention',
+        pulseAtFull: false
+      }
+    case 'policy-held':
+      return {
+        active: false,
+        detail: 'Your organization’s policy prevents this import from continuing.',
+        label: 'Import paused by policy',
+        percent,
+        valueText: 'Import paused by policy',
         pulseAtFull: false
       }
   }

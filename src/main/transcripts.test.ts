@@ -1128,6 +1128,7 @@ describe('writeSaved', () => {
   it('retries a rename that fails once with EPERM (e.g. OneDrive/AV holding the file open)', async () => {
     const target = join(folder, 'note.md')
     let calls = 0
+    const beforeReplace = vi.fn()
     vi.mocked(renameAsync).mockImplementationOnce(async () => {
       calls++
       const err = new Error('EPERM: operation not permitted, rename') as NodeJS.ErrnoException
@@ -1135,10 +1136,25 @@ describe('writeSaved', () => {
       throw err
     })
 
-    await writeSaved(target, 'hello world', false)
+    await writeSaved(target, 'hello world', false, beforeReplace)
 
     expect(calls).toBe(1) // first rename failed transiently, retry (the default real impl) succeeded
+    expect(beforeReplace).toHaveBeenCalledTimes(2)
     expect(readFileSync(target, 'utf8')).toBe('hello world')
+  })
+
+  it('preserves callback refusals without retrying even when the thrown value is falsy', async () => {
+    const target = join(folder, 'refused.md')
+    for (const refusal of [undefined, null]) {
+      vi.mocked(renameAsync).mockClear()
+      const beforeReplace = () => {
+        throw refusal
+      }
+
+      await expect(writeSaved(target, 'must not replace', false, beforeReplace)).rejects.toBe(refusal)
+      expect(renameAsync).not.toHaveBeenCalled()
+      expect(readdirSync(folder).some((name) => name.endsWith('.tmp'))).toBe(false)
+    }
   })
 
   it('does not retry and rethrows on a non-transient error', async () => {

@@ -13,6 +13,7 @@ import {
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, DEBRIEF_HEADING } from './transcripts'
 import { formatTranscript } from './features/meetings/transcript-format'
 import { storageAt } from './infra/storage/meetings-storage'
+import { writeWithAdmission } from './infra/storage/write-with-admission'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
@@ -443,7 +444,8 @@ export async function updateMeetingRecap(
   settings: Settings,
   file: string,
   newRecap: string,
-  recapStatus?: RecapStatus
+  recapStatus?: RecapStatus,
+  beforeReplace?: () => void
 ): Promise<{ ok: boolean; error?: string }> {
   const statusError = recapStatusValidationError(newRecap, recapStatus)
   if (statusError) return { ok: false, error: statusError }
@@ -504,9 +506,11 @@ export async function updateMeetingRecap(
     updated = serialize(setMeetingField(doc, 'recap_status', recapStatus))
   }
 
-  try {
-    await writeSaved(fullPath, updated, wasEncrypted)
-  } catch {
+  const writeResult = await writeWithAdmission(beforeReplace, (guard) =>
+    writeSaved(fullPath, updated, wasEncrypted, guard)
+  )
+  if (writeResult.kind === 'admission-refused') throw writeResult.error
+  if (writeResult.kind === 'write-failed') {
     return { ok: false, error: 'Could not save your changes.' }
   }
   return { ok: true }

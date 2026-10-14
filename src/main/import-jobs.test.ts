@@ -16,17 +16,60 @@ import {
 
 class MemoryStore implements ImportJobStore {
   readonly jobs = new Map<string, ImportJob>()
+  readonly held = new Set<string>()
+  readonly policyHeld = new Set<string>()
 
   async save(job: ImportJob): Promise<void> {
     this.jobs.set(job.jobId, structuredClone(job))
   }
 
   async list(): Promise<ImportJob[]> {
-    return [...this.jobs.values()].map((job) => structuredClone(job))
+    return [...this.jobs.values()].filter((job) => !this.held.has(job.jobId)).map((job) => structuredClone(job))
   }
 
   async remove(jobId: string): Promise<void> {
     this.jobs.delete(jobId)
+    this.held.delete(jobId)
+    this.policyHeld.delete(jobId)
+  }
+
+  async markExistingJobsHeld(reason: 'policy' | 'restart' = 'restart') {
+    for (const id of this.jobs.keys()) {
+      this.held.add(id)
+      if (reason === 'policy') this.policyHeld.add(id)
+    }
+    return {
+      jobIds: [...this.held],
+      policyHeldJobIds: [...this.policyHeld],
+      inventoryOverflow: false,
+      policyHoldOverflow: false
+    }
+  }
+
+  async listHeldJobIds() {
+    return {
+      jobIds: [...this.held],
+      policyHeldJobIds: [...this.policyHeld],
+      inventoryOverflow: false,
+      policyHoldOverflow: false
+    }
+  }
+
+  async loadHeld(jobId: string): Promise<ImportJob | undefined> {
+    const job = this.held.has(jobId) ? this.jobs.get(jobId) : undefined
+    return job ? structuredClone(job) : undefined
+  }
+
+  async markHeld(jobId: string): Promise<boolean> {
+    if (!this.jobs.has(jobId)) return false
+    this.held.add(jobId)
+    this.policyHeld.add(jobId)
+    return true
+  }
+
+  async clearHold(jobId: string): Promise<void> {
+    this.held.delete(jobId)
+    this.policyHeld.delete(jobId)
   }
 }
 
@@ -262,20 +305,35 @@ describe('ImportJobManager', () => {
       freeMemoryBytes: () => VAD_V2_MIN_FREE_MEMORY_BYTES - 1
     })
     await store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name,
-      sourceSizeBytes: source.sizeBytes, sourceMtimeMs: source.mtimeMs,
-      title: 'Interrupted VAD import', state: 'failed', cursor: 1, totalChunks: 2,
-      pipeline: 'vad-v2', chunkSec: IMPORT_CHUNK_SECONDS,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interrupted VAD import',
+      state: 'failed',
+      cursor: 1,
+      totalChunks: 2,
+      pipeline: 'vad-v2',
+      chunkSec: IMPORT_CHUNK_SECONDS,
       lines: [{ t: source.mtimeMs, speaker: 'unknown', text: 'durable VAD window' }],
-      progressPct: 60, durationMs: 24_000, createdAt: 1, updatedAt: 1
+      progressPct: 60,
+      durationMs: 24_000,
+      createdAt: 1,
+      updatedAt: 1
     })
 
     await manager.recover()
     await manager.resume('job-1')
 
-    expect(decode).toHaveBeenLastCalledWith(expect.objectContaining({
-      jobId: 'job-1', pipeline: undefined, cursor: 0, lines: []
-    }))
+    expect(decode).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        jobId: 'job-1',
+        pipeline: undefined,
+        cursor: 0,
+        lines: []
+      })
+    )
     expect(manager.get('job-1')).toMatchObject({ pipeline: undefined, cursor: 0, totalChunks: 0 })
     expect(manager.get('job-1')?.progressPct).toBeUndefined()
   })
@@ -298,7 +356,8 @@ describe('ImportJobManager', () => {
     ])
 
     expect(manager.get('job-1')).toMatchObject({
-      state: 'failed', error: 'optional model release failed'
+      state: 'failed',
+      error: 'optional model release failed'
     })
     expect(manager.get('job-2')?.state).toBe('decoding')
     expect(decode).toHaveBeenCalledTimes(1)
@@ -314,18 +373,30 @@ describe('ImportJobManager', () => {
     expect(slabs).toHaveLength(0)
   })
 
-  it.each(['transcribing', 'failed'] as const)('MQA-309 restarts %s vad-v1 checkpoints at the new pause-aware boundaries', async (state) => {
+  it.each([
+    'transcribing',
+    'failed'
+  ] as const)('MQA-309 restarts %s vad-v1 checkpoints at the new pause-aware boundaries', async (state) => {
     const { manager, store, decode, transcribe } = createManager()
     await store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name,
-      sourceSizeBytes: source.sizeBytes, sourceMtimeMs: source.mtimeMs,
-      title: 'Old interrupted import', state, cursor: 1, totalChunks: 2,
-      pipeline: 'vad-v1', chunkSec: IMPORT_CHUNK_SECONDS,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Old interrupted import',
+      state,
+      cursor: 1,
+      totalChunks: 2,
+      pipeline: 'vad-v1',
+      chunkSec: IMPORT_CHUNK_SECONDS,
       lines: [{ t: source.mtimeMs, speaker: 'unknown', text: 'old hard-cut fragment' }],
-      progressPct: 65, createdAt: 1, updatedAt: 1
+      progressPct: 65,
+      createdAt: 1,
+      updatedAt: 1
     })
     await manager.recover()
-    if (state === 'failed') await manager.resume('job-1')
+    await manager.resume('job-1')
     expect(decode).toHaveBeenCalledWith(expect.objectContaining({ pipeline: 'vad-v2', cursor: 0, lines: [] }))
     expect(manager.get('job-1')?.progressPct).toBeUndefined()
     const pcm = twoWindowPcm()
@@ -406,7 +477,10 @@ describe('ImportJobManager', () => {
   })
 
   it('retries one failed transcription before checkpointing the window (vad-v2)', async () => {
-    const transcribe = vi.fn().mockRejectedValueOnce(new Error('temporary ASR error')).mockResolvedValueOnce('recovered')
+    const transcribe = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary ASR error'))
+      .mockResolvedValueOnce('recovered')
     const { manager } = createManager({ transcribe })
     await manager.start(source)
     await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
@@ -425,17 +499,39 @@ describe('ImportJobManager', () => {
   it('a recovered legacy (pre-vad-v2) checkpoint still supports a streaming decoder that learns total chunk count only at EOF', async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 0, totalChunks: 0,
-      chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'decoding',
+      cursor: 0,
+      totalChunks: 0,
+      chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [],
+      createdAt: 1,
+      updatedAt: 1
       // no `pipeline` field: an older-build (pre-MQA-235) in-flight checkpoint.
     })
     const second = createManager()
     ;(second.store as MemoryStore).jobs.clear()
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
+    const listCheckpointPayloads = vi.spyOn(second.store, 'list')
 
     await second.manager.recover()
-    expect(second.manager.get('job-1')?.pipeline).toBeUndefined() // recover() never upgrades a legacy job onto vad-v2
+    expect(listCheckpointPayloads).not.toHaveBeenCalled()
+    expect(second.decode).not.toHaveBeenCalled()
+    expect(second.manager.list()).toEqual([])
+    await expect(second.manager.snapshot()).resolves.toMatchObject({
+      jobs: [],
+      heldJobIds: ['job-1'],
+      policyBlocked: false,
+      inventoryOverflow: false
+    })
+    expect(second.decode).not.toHaveBeenCalled() // boot inventories only; Resume is explicit
+    await second.manager.resume('job-1')
+    expect(second.manager.get('job-1')?.pipeline).toBeUndefined() // manual Resume preserves legacy pipeline semantics
 
     await second.manager.acceptDecodedChunk('job-1', 0, 0, new Float32Array([1]))
     await second.manager.acceptDecodedChunk('job-1', 1, 0, new Float32Array([2]))
@@ -575,7 +671,12 @@ describe('ImportJobManager', () => {
 
     it.each([
       ['refuses', () => false],
-      ['throws', () => { throw new Error('speaker admission unavailable') }]
+      [
+        'throws',
+        () => {
+          throw new Error('speaker admission unavailable')
+        }
+      ]
     ])('keeps ASR anonymous when beginSpeakers %s', async (_label, beginSpeakers) => {
       const speakerFor = vi.fn().mockResolvedValue('Wrong person')
       const finalizeSpeakers = vi.fn(() => new Map([['Wrong person', 'Still wrong']]))
@@ -831,16 +932,39 @@ describe('ImportJobManager', () => {
       const decode = vi.fn((job: ImportJob) => (job.jobId === 'job-2' ? secondDecode.promise : undefined))
       const { manager, store, saveMeeting } = createManager({ decode })
       await store.save({
-        jobId: 'job-1', sourcePath: source.path, sourceName: 'legacy.wav', sourceSizeBytes: source.sizeBytes,
-        sourceMtimeMs: source.mtimeMs, title: 'Legacy', state: 'queued', cursor: 0, totalChunks: 1,
-        chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+        jobId: 'job-1',
+        sourcePath: source.path,
+        sourceName: 'legacy.wav',
+        sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs,
+        title: 'Legacy',
+        state: 'queued',
+        cursor: 0,
+        totalChunks: 1,
+        chunkSec: IMPORT_CHUNK_SECONDS,
+        lines: [],
+        createdAt: 1,
+        updatedAt: 1
       })
       await store.save({
-        jobId: 'job-2', sourcePath: source.path, sourceName: 'next.wav', sourceSizeBytes: source.sizeBytes,
-        sourceMtimeMs: source.mtimeMs, title: 'Next', state: 'queued', cursor: 0, totalChunks: 0,
-        chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2', lines: [], createdAt: 2, updatedAt: 2
+        jobId: 'job-2',
+        sourcePath: source.path,
+        sourceName: 'next.wav',
+        sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs,
+        title: 'Next',
+        state: 'queued',
+        cursor: 0,
+        totalChunks: 0,
+        chunkSec: IMPORT_CHUNK_SECONDS,
+        pipeline: 'vad-v2',
+        lines: [],
+        createdAt: 2,
+        updatedAt: 2
       })
       await manager.recover()
+      await manager.resume('job-1')
+      await manager.resume('job-2')
       await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([0.1]))
       const finishing = manager.finishDecoding('job-1', 1)
       await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2))
@@ -922,11 +1046,22 @@ describe('ImportJobManager', () => {
       const transcribe = vi.fn(() => pendingAsr.promise)
       const { manager, store, decode } = createManager({ transcribe })
       await store.save({
-        jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-        sourceMtimeMs: source.mtimeMs, title: 'Legacy', state: 'queued', cursor: 0, totalChunks: 1,
-        chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+        jobId: 'job-1',
+        sourcePath: source.path,
+        sourceName: source.name,
+        sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs,
+        title: 'Legacy',
+        state: 'queued',
+        cursor: 0,
+        totalChunks: 1,
+        chunkSec: IMPORT_CHUNK_SECONDS,
+        lines: [],
+        createdAt: 1,
+        updatedAt: 1
       })
       await manager.recover()
+      await manager.resume('job-1')
       const accepting = manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([0.1]))
       await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1))
 
@@ -963,13 +1098,7 @@ describe('ImportJobManager', () => {
       await manager.finishDecoding('job-1')
 
       expect(manager.get('job-1')).toMatchObject({ state: 'failed', error: expect.stringMatching(/no speech/i) })
-      expect(events).toEqual([
-        'begin:job-1',
-        'decode:job-1',
-        'dispose:job-1',
-        'begin:job-2',
-        'decode:job-2'
-      ])
+      expect(events).toEqual(['begin:job-1', 'decode:job-1', 'dispose:job-1', 'begin:job-2', 'decode:job-2'])
     })
 
     it('disposes a decoder-failed attempt before admitting the next decode', async () => {
@@ -994,24 +1123,18 @@ describe('ImportJobManager', () => {
       ])
 
       expect(manager.get('job-1')).toMatchObject({ state: 'failed', error: 'decoder died' })
-      expect(events).toEqual([
-        'begin:job-1',
-        'decode:job-1',
-        'dispose:job-1',
-        'begin:job-2',
-        'decode:job-2'
-      ])
+      expect(events).toEqual(['begin:job-1', 'decode:job-1', 'dispose:job-1', 'begin:job-2', 'decode:job-2'])
     })
 
     it('does not admit speakers or start decode after cancellation wins during admission persistence', async () => {
       const enteredDecodePersist = deferred<void>()
       const releaseDecodePersist = deferred<void>()
       class AdmissionStore extends MemoryStore {
-        private held = false
+        private saveHookHeld = false
 
         override async save(job: ImportJob): Promise<void> {
-          if (job.state === 'decoding' && !this.held) {
-            this.held = true
+          if (job.state === 'decoding' && !this.saveHookHeld) {
+            this.saveHookHeld = true
             enteredDecodePersist.resolve()
             await releaseDecodePersist.promise
           }
@@ -1109,7 +1232,9 @@ describe('ImportJobManager', () => {
 
   describe('fail-open polish pass (deps.polish, MQA-235)', () => {
     it('applies a polish pass that replaces text of the same length', async () => {
-      const polish = vi.fn(async (lines: TranscriptLine[]) => lines.map((line) => ({ ...line, text: line.text.toUpperCase() })))
+      const polish = vi.fn(async (lines: TranscriptLine[]) =>
+        lines.map((line) => ({ ...line, text: line.text.toUpperCase() }))
+      )
       const { manager } = createManager({ polish })
       await manager.start(source)
       await manager.acceptDecodedChunk('job-1', 0, 0, twoWindowPcm())
@@ -1188,20 +1313,34 @@ describe('ImportJobManager', () => {
     await manager.finishDecoding('job-1')
 
     expect(saveMeeting).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Interview', recap: '', lines: [expect.objectContaining({ speaker: 'unknown' })] })
+      expect.objectContaining({
+        title: 'Interview',
+        recap: '',
+        lines: [expect.objectContaining({ speaker: 'unknown' })]
+      })
     )
     // Ingest only after the recap has been saved, so Mantu Intelligence sees the completed note rather
     // than racing an empty-recap version of the same import.
     expect(enqueueIngest).toHaveBeenCalledTimes(1)
-    expect(enqueueIngest).toHaveBeenCalledWith('saved-import.md')
+    expect(enqueueIngest).toHaveBeenCalledWith('saved-import.md', undefined, expect.any(Function))
     expect(generateRecap).toHaveBeenCalledWith(expect.objectContaining({ file: 'saved-import.md' }))
-    expect(updateRecap).toHaveBeenCalledWith('saved-import.md', '## Overview\n\nImported summary', 'complete')
+    expect(updateRecap).toHaveBeenCalledWith(
+      'saved-import.md',
+      '## Overview\n\nImported summary',
+      'complete',
+      expect.any(Function)
+    )
     expect(manager.get('job-1')?.state).toBe('done')
   })
 
   it('holds at 99% while the automatic summary is running and reaches 100% only after it is saved', async () => {
     let resolveRecap!: (text: string) => void
-    const generateRecap = vi.fn(() => new Promise<string>((resolve) => { resolveRecap = resolve }))
+    const generateRecap = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRecap = resolve
+        })
+    )
     const { manager } = createManager({ generateRecap })
     await manager.start(source)
     await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
@@ -1216,12 +1355,20 @@ describe('ImportJobManager', () => {
   })
 
   it('marks a recap failure visibly while preserving the saved transcript as done', async () => {
-    const { manager } = createManager({ generateRecap: vi.fn(async () => { throw new Error('provider unavailable') }) })
+    const { manager } = createManager({
+      generateRecap: vi.fn(async () => {
+        throw new Error('provider unavailable')
+      })
+    })
     await manager.start(source)
     await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
     await manager.finishDecoding('job-1')
 
-    expect(manager.get('job-1')).toMatchObject({ state: 'done', file: 'saved-import.md', recapError: 'provider unavailable' })
+    expect(manager.get('job-1')).toMatchObject({
+      state: 'done',
+      file: 'saved-import.md',
+      recapError: 'provider unavailable'
+    })
   })
 
   it('keeps a completed import visible when no summary provider is configured', async () => {
@@ -1239,7 +1386,12 @@ describe('ImportJobManager', () => {
 
   it('does not resurrect a cancelled job when transcription finishes late (vad-v2)', async () => {
     let resolveTranscribe!: (text: string) => void
-    const transcribe = vi.fn(() => new Promise<string>((resolve) => { resolveTranscribe = resolve }))
+    const transcribe = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveTranscribe = resolve
+        })
+    )
     const onIdle = vi.fn()
     const { manager } = createManager({ transcribe, onIdle })
     await manager.start(source)
@@ -1259,7 +1411,12 @@ describe('ImportJobManager', () => {
 
   it('does not mark a cancelled job done when recap finishes late', async () => {
     let resolveRecap!: (text: string) => void
-    const generateRecap = vi.fn(() => new Promise<string>((resolve) => { resolveRecap = resolve }))
+    const generateRecap = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRecap = resolve
+        })
+    )
     const { manager, enqueueIngest } = createManager({ generateRecap })
     await manager.start(source)
     await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
@@ -1280,7 +1437,12 @@ describe('ImportJobManager', () => {
   describe('a cancelled import never leaves an orphaned meeting behind (MQA-024)', () => {
     it('deletes the saved meeting when cancelled while the summary is being generated', async () => {
       let resolveRecap!: (text: string) => void
-      const generateRecap = vi.fn(() => new Promise<string>((resolve) => { resolveRecap = resolve }))
+      const generateRecap = vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveRecap = resolve
+          })
+      )
       const deleteMeeting = vi.fn(async () => {})
       const { manager, enqueueIngest } = createManager({ generateRecap, deleteMeeting })
       await manager.start(source)
@@ -1301,7 +1463,12 @@ describe('ImportJobManager', () => {
     it('deletes the saved meeting when cancelled while the summary is being written back', async () => {
       let resolveUpdate!: () => void
       const generateRecap = vi.fn(async () => '## Overview\n\nImported summary')
-      const updateRecap = vi.fn(() => new Promise<void>((resolve) => { resolveUpdate = resolve }))
+      const updateRecap = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveUpdate = resolve
+          })
+      )
       const deleteMeeting = vi.fn(async () => {})
       const { manager, enqueueIngest } = createManager({ generateRecap, updateRecap, deleteMeeting })
       await manager.start(source)
@@ -1319,7 +1486,12 @@ describe('ImportJobManager', () => {
 
     it('deletes the saved meeting when cancelled while a failing summary is in flight', async () => {
       let rejectRecap!: (error: Error) => void
-      const generateRecap = vi.fn(() => new Promise<string>((_resolve, reject) => { rejectRecap = reject }))
+      const generateRecap = vi.fn(
+        () =>
+          new Promise<string>((_resolve, reject) => {
+            rejectRecap = reject
+          })
+      )
       const deleteMeeting = vi.fn(async () => {})
       const { manager, enqueueIngest } = createManager({ generateRecap, deleteMeeting })
       await manager.start(source)
@@ -1341,11 +1513,20 @@ describe('ImportJobManager', () => {
   it('does not decode or duplicate a meeting after a crash during recap', async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'recapping', cursor: 1, totalChunks: 1,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'recapping',
+      cursor: 1,
+      totalChunks: 1,
       pipeline: 'vad-v2',
-      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
-      createdAt: 1, updatedAt: 1
+      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }],
+      file: 'already-saved.md',
+      createdAt: 1,
+      updatedAt: 1
     })
     const second = createManager()
     // Share the persisted checkpoint with the recovering manager.
@@ -1353,6 +1534,7 @@ describe('ImportJobManager', () => {
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
+    await second.manager.resume('job-1')
 
     expect(second.decode).not.toHaveBeenCalled()
     expect(second.manager.get('job-1')).toMatchObject({ state: 'done', file: 'already-saved.md' })
@@ -1367,11 +1549,22 @@ describe('ImportJobManager', () => {
     // A tail failure inside finishDecoding — the checkpoint write losing to an AV/OneDrive file lock —
     // after the meeting file had already landed. This is exactly the card that offers Resume.
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'failed', cursor: 1, totalChunks: 1,
-      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2', error: 'EPERM: operation not permitted',
-      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
-      createdAt: 1, updatedAt: 1
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'failed',
+      cursor: 1,
+      totalChunks: 1,
+      chunkSec: IMPORT_CHUNK_SECONDS,
+      pipeline: 'vad-v2',
+      error: 'EPERM: operation not permitted',
+      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }],
+      file: 'already-saved.md',
+      createdAt: 1,
+      updatedAt: 1
     })
     const second = createManager()
     ;(second.store as MemoryStore).jobs.clear()
@@ -1384,7 +1577,9 @@ describe('ImportJobManager', () => {
     expect(second.saveMeeting).not.toHaveBeenCalled()
     expect(second.enqueueIngest).not.toHaveBeenCalled()
     expect(resumed).toMatchObject({
-      state: 'done', file: 'already-saved.md', recapError: expect.stringMatching(/interrupted/i)
+      state: 'done',
+      file: 'already-saved.md',
+      recapError: expect.stringMatching(/interrupted/i)
     })
     expect(resumed.error).toBeUndefined()
     expect((second.store as MemoryStore).jobs.has('job-1')).toBe(false)
@@ -1396,7 +1591,12 @@ describe('ImportJobManager', () => {
   // before it.
   it('a cancel racing the ingest-queue write deletes the meeting and never marks the job done (MQA-104)', async () => {
     let resolveEnqueue!: () => void
-    const enqueueIngest = vi.fn(() => new Promise<void>((resolve) => { resolveEnqueue = resolve }))
+    const enqueueIngest = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveEnqueue = resolve
+        })
+    )
     const generateRecap = vi.fn(async () => '## Overview\n\nImported summary')
     const deleteMeeting = vi.fn(async () => {})
     const recordMeetingSummarized = vi.fn()
@@ -1421,17 +1621,28 @@ describe('ImportJobManager', () => {
   it('recover treats a crash in the saving window (state saving, file present) as a completed transcript (MQA-105)', async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'saving', cursor: 1, totalChunks: 1,
-      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2',
-      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
-      createdAt: 1, updatedAt: 1
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'saving',
+      cursor: 1,
+      totalChunks: 1,
+      chunkSec: IMPORT_CHUNK_SECONDS,
+      pipeline: 'vad-v2',
+      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }],
+      file: 'already-saved.md',
+      createdAt: 1,
+      updatedAt: 1
     })
     const second = createManager()
     ;(second.store as MemoryStore).jobs.clear()
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
+    await second.manager.resume('job-1')
 
     expect(second.decode).not.toHaveBeenCalled()
     expect(second.saveMeeting).not.toHaveBeenCalled()
@@ -1499,17 +1710,27 @@ describe('ImportJobManager', () => {
   it('restarts a queued job from scratch on recover() when its checkpoint predates the current chunk size', async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 3, totalChunks: 7,
-      progressPct: 42, chunkSec: IMPORT_CHUNK_SECONDS + 1,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'decoding',
+      cursor: 3,
+      totalChunks: 7,
+      progressPct: 42,
+      chunkSec: IMPORT_CHUNK_SECONDS + 1,
       lines: [{ speaker: 'unknown', text: 'stale window', t: source.mtimeMs }],
-      createdAt: 1, updatedAt: 1
+      createdAt: 1,
+      updatedAt: 1
     })
     const second = createManager()
     ;(second.store as MemoryStore).jobs.clear()
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
+    await second.manager.resume('job-1')
 
     // A mismatched chunkSec means `cursor` no longer lines up with the current decoder's chunk
     // boundaries — resuming from it would splice differently-sized windows into one transcript, so
@@ -1517,7 +1738,11 @@ describe('ImportJobManager', () => {
     // replaying stale progress.
     expect(second.decode).toHaveBeenCalledTimes(1)
     expect(second.manager.get('job-1')).toMatchObject({
-      state: 'decoding', cursor: 0, totalChunks: 0, lines: [], chunkSec: IMPORT_CHUNK_SECONDS
+      state: 'decoding',
+      cursor: 0,
+      totalChunks: 0,
+      lines: [],
+      chunkSec: IMPORT_CHUNK_SECONDS
     })
     expect(second.manager.get('job-1')?.progressPct).toBeUndefined()
   })
@@ -1525,10 +1750,18 @@ describe('ImportJobManager', () => {
   it('restarts a queued job on recover() when its checkpoint predates the chunkSec field entirely', async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 3, totalChunks: 7,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'decoding',
+      cursor: 3,
+      totalChunks: 7,
       lines: [{ speaker: 'unknown', text: 'stale window', t: source.mtimeMs }],
-      createdAt: 1, updatedAt: 1
+      createdAt: 1,
+      updatedAt: 1
       // chunkSec omitted entirely — an older build's checkpoint, from before this field existed.
     })
     const second = createManager()
@@ -1536,18 +1769,33 @@ describe('ImportJobManager', () => {
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
+    await second.manager.resume('job-1')
 
-    expect(second.manager.get('job-1')).toMatchObject({ cursor: 0, totalChunks: 0, lines: [], chunkSec: IMPORT_CHUNK_SECONDS })
+    expect(second.manager.get('job-1')).toMatchObject({
+      cursor: 0,
+      totalChunks: 0,
+      lines: [],
+      chunkSec: IMPORT_CHUNK_SECONDS
+    })
   })
 
   it('resumes a queued legacy job on recover() when its checkpoint already matches the current chunk size', async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 3, totalChunks: 7,
-      progressPct: 42, chunkSec: IMPORT_CHUNK_SECONDS,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'decoding',
+      cursor: 3,
+      totalChunks: 7,
+      progressPct: 42,
+      chunkSec: IMPORT_CHUNK_SECONDS,
       lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }],
-      createdAt: 1, updatedAt: 1
+      createdAt: 1,
+      updatedAt: 1
       // no `pipeline` field — a recovered pre-MQA-235 checkpoint.
     })
     const second = createManager()
@@ -1555,10 +1803,15 @@ describe('ImportJobManager', () => {
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
+    await second.manager.resume('job-1')
 
     expect(second.decode).toHaveBeenCalledTimes(1)
     expect(second.manager.get('job-1')).toMatchObject({
-      state: 'decoding', cursor: 3, totalChunks: 7, progressPct: 42, chunkSec: IMPORT_CHUNK_SECONDS,
+      state: 'decoding',
+      cursor: 3,
+      totalChunks: 7,
+      progressPct: 42,
+      chunkSec: IMPORT_CHUNK_SECONDS,
       lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }]
     })
   })
@@ -1569,18 +1822,27 @@ describe('ImportJobManager', () => {
   it("recover() never resets a vad-v2 checkpoint on chunkSec grounds — resume re-segments from scratch, it doesn't index by chunkSec", async () => {
     const first = createManager()
     await first.store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'transcribing', cursor: 1, totalChunks: 2,
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'transcribing',
+      cursor: 1,
+      totalChunks: 2,
       chunkSec: IMPORT_CHUNK_SECONDS + 1, // deliberately mismatched — must not matter for vad-v2
       pipeline: 'vad-v2',
       lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }],
-      createdAt: 1, updatedAt: 1
+      createdAt: 1,
+      updatedAt: 1
     })
     const second = createManager()
     ;(second.store as MemoryStore).jobs.clear()
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
+    await second.manager.resume('job-1')
 
     expect(second.decode).toHaveBeenCalledTimes(1)
     // cursor/lines/chunkSec all survive untouched — only `totalChunks` is reset. It was carrying phase
@@ -1588,7 +1850,11 @@ describe('ImportJobManager', () => {
     // 0 per slab (see pump()'s comment), so a stale non-zero value here would trip acceptDecodedChunk's
     // "decoder changed the recording chunk count" guard on the very first re-fed slab.
     expect(second.manager.get('job-1')).toMatchObject({
-      state: 'decoding', cursor: 1, totalChunks: 0, chunkSec: IMPORT_CHUNK_SECONDS + 1, pipeline: 'vad-v2',
+      state: 'decoding',
+      cursor: 1,
+      totalChunks: 0,
+      chunkSec: IMPORT_CHUNK_SECONDS + 1,
+      pipeline: 'vad-v2',
       lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }]
     })
   })
@@ -1809,16 +2075,39 @@ describe('ImportJobManager', () => {
     )
     const { manager, store } = createManager({ transcribe })
     await store.save({
-      jobId: 'job-1', sourcePath: source.path, sourceName: 'legacy.wav', sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Legacy', state: 'queued', cursor: 0, totalChunks: 1,
-      chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: 'legacy.wav',
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Legacy',
+      state: 'queued',
+      cursor: 0,
+      totalChunks: 1,
+      chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [],
+      createdAt: 1,
+      updatedAt: 1
     })
     await store.save({
-      jobId: 'job-2', sourcePath: source.path, sourceName: 'next.wav', sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs, title: 'Next', state: 'queued', cursor: 0, totalChunks: 0,
-      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2', lines: [], createdAt: 2, updatedAt: 2
+      jobId: 'job-2',
+      sourcePath: source.path,
+      sourceName: 'next.wav',
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Next',
+      state: 'queued',
+      cursor: 0,
+      totalChunks: 0,
+      chunkSec: IMPORT_CHUNK_SECONDS,
+      pipeline: 'vad-v2',
+      lines: [],
+      createdAt: 2,
+      updatedAt: 2
     })
     await manager.recover()
+    await manager.resume('job-1')
+    await manager.resume('job-2')
 
     const accepting = manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
     await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())

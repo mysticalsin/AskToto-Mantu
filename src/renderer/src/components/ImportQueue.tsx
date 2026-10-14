@@ -13,6 +13,7 @@ export function ImportQueue({
   error,
   onCancel,
   onResume,
+  resumeDisabled,
   onDismiss,
   onOpenMeeting
 }: {
@@ -22,6 +23,7 @@ export function ImportQueue({
   error: string | null
   onCancel: (jobId: string) => void
   onResume: (jobId: string) => void
+  resumeDisabled?: boolean
   onDismiss: (jobId: string) => void
   onOpenMeeting: (file: string) => void
 }): JSX.Element | null {
@@ -40,13 +42,9 @@ export function ImportQueue({
           : 'border-[var(--color-hair-soft)] bg-white/[0.03]'
       }`}
     >
-      {dragOver && (
-        <div className="mb-2 text-[12px] text-[color:var(--color-ink)]">Drop recordings to import them</div>
-      )}
+      {dragOver && <div className="mb-2 text-[12px] text-[color:var(--color-ink)]">Drop recordings to import them</div>}
       {headline && (
-        <div className="mb-2 text-[11px] font-medium tracking-wide text-[color:var(--color-ink-3)]">
-          {headline}
-        </div>
+        <div className="mb-2 text-[11px] font-medium tracking-wide text-[color:var(--color-ink-3)]">{headline}</div>
       )}
       {error && <div className="mb-2 text-[11px] text-[var(--color-danger)]">{error}</div>}
       {fetchError && <div className="mb-2 text-[11px] text-[var(--color-danger)]">{fetchError}</div>}
@@ -74,23 +72,26 @@ export function ImportQueue({
             className="mb-2 last:mb-0 rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2"
           >
             <div className="flex items-center gap-2 text-[12px]">
-              <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">
-                {job.title}
-              </span>
+              <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">{job.title}</span>
               <span className="shrink-0 text-[color:var(--color-ink-3)]">{progress.label}</span>
-              {job.state === 'failed' ? (
+              {job.state === 'failed' || job.state === 'policy-held' ? (
                 <>
                   <TextButton
                     onClick={() => onResume(job.jobId)}
-                    title="Resume this import from its last saved transcript checkpoint"
+                    disabled={resumeDisabled}
+                    title={
+                      resumeDisabled
+                        ? 'Your organization’s summary-only policy prevents resuming this import.'
+                        : 'Resume this import from its last saved transcript checkpoint'
+                    }
                   >
                     Resume
                   </TextButton>
                   <TextButton
                     icon={X}
-                    ariaLabel="Dismiss failed import"
+                    ariaLabel={job.state === 'policy-held' ? 'Dismiss saved import' : 'Dismiss failed import'}
                     onClick={() => onDismiss(job.jobId)}
-                    title="Dismiss this failed import"
+                    title={job.state === 'policy-held' ? 'Dismiss this saved import' : 'Dismiss this failed import'}
                   />
                 </>
               ) : job.state === 'done' && job.recapError && job.file ? (

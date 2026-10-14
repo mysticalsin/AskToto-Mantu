@@ -9,7 +9,7 @@ import {
   unlinkSync,
   renameSync
 } from 'node:fs'
-import { writeFile, rename, unlink } from 'node:fs/promises'
+import { unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
@@ -24,7 +24,7 @@ import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
-import { recordLocalWrite } from './infra/storage/local-writes'
+import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
 import type { FileClass } from './infra/storage/gateway'
 import { formatTranscript, speakerLabel } from './features/meetings/transcript-format'
 
@@ -366,40 +366,18 @@ export function isEncryptedFile(path: string): boolean {
 /** Atomic write; encrypts at rest when `encrypt` is true. Cleans up temp on failure.
  *  Exported for the brain store (src/main/brain/) so derived knowledge files share the exact same
  *  at-rest encryption semantics as the transcripts they're built from. */
-export async function writeSaved(file: string, content: string, encrypt: boolean): Promise<void> {
+export async function writeSaved(
+  file: string,
+  content: string,
+  encrypt: boolean,
+  beforeReplace?: () => void
+): Promise<void> {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) {
-    // encryptEnvelopeV2 always produces an ATKENC2-marked encrypted envelope — safeStorage path
-    // when the keychain is available, AES-GCM file-backend path otherwise. Any error propagates
-    // to the caller (fail-closed): plaintext is never silently written when encryption is on.
+    // encryptEnvelopeV2 fails closed instead of writing plaintext when encryption is required.
     data = encryptEnvelopeV2(content)
   }
-  // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
-  // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
-  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
-  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
-    // The default meetings folder lives under OneDrive, which routinely holds a just-written file
-    // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
-    // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
-    // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await rename(tmp, file)
-        break
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code
-        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
-        await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
-      }
-    }
-    // These bytes are on this device: reading them back must not wait on a placeholder probe.
-    await recordLocalWrite(file)
-  } catch (e) {
-    if (existsSync(tmp)) await unlink(tmp).catch(() => {}) // don't leave an orphaned .tmp on failure
-    throw e
-  }
+  await atomicSavedWrite(file, data, beforeReplace)
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
@@ -615,7 +593,7 @@ export function meetingDurationMin(m: { startedAt: number; durationMs?: number; 
 }
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
-export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
+export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeReplace?: () => void): Promise<string> {
   const statusError = recapStatusValidationError(m.recap, m.recapStatus)
   if (statusError) throw new Error(statusError)
   // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
@@ -676,7 +654,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
       ? `## Retention\n\n_Summary/action record — full transcript not retained under managed enterprise profile._\n`
       : `## Full transcript\n\n${transcript || '_No speech captured._'}\n`)
 
-  await writeSaved(file, frontmatter + body, settings.encryptTranscripts) // atomic; encrypted at rest when on
+  await writeSaved(file, frontmatter + body, settings.encryptTranscripts, beforeReplace) // atomic; encrypted at rest when on
 
   if (!settings.encryptTranscripts) {
     const di = new Date(started)

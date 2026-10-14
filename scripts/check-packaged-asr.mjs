@@ -50,7 +50,13 @@ import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
-import { describeFixture, fixtureFacts, fixtureProblem, importDiagnostics, importReport } from './lib/packaged-asr-fixture.mjs'
+import {
+  describeFixture,
+  fixtureFacts,
+  fixtureProblem,
+  importDiagnostics,
+  importReport
+} from './lib/packaged-asr-fixture.mjs'
 
 const root = resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -63,7 +69,9 @@ const PHRASE = 'The quarterly revenue target is seven million dollars'
 const ENGINES = ['whisper', 'parakeet']
 
 if (process.platform !== 'win32') {
-  console.error(`[check:packaged-asr] FAIL — this gate synthesizes its fixture via Windows SAPI; host is ${process.platform}.`)
+  console.error(
+    `[check:packaged-asr] FAIL — this gate synthesizes its fixture via Windows SAPI; host is ${process.platform}.`
+  )
   process.exit(2)
 }
 if (!existsSync(target)) {
@@ -71,7 +79,13 @@ if (!existsSync(target)) {
   process.exit(1)
 }
 
-const POWERSHELL = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+const POWERSHELL = join(
+  process.env.SystemRoot || 'C:\\Windows',
+  'System32',
+  'WindowsPowerShell',
+  'v1.0',
+  'powershell.exe'
+)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ── 1. Synthesize the fixture. No repo bytes — SAPI speaks it fresh every run. ─────────────────────
@@ -99,7 +113,9 @@ function synthesizeFixture() {
       { encoding: 'utf8', timeout: SAPI_SYNTH_TIMEOUT_MS }
     )
   } catch (error) {
-    console.error(`[check:packaged-asr] FAIL — could not synthesize the SAPI fixture: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(
+      `[check:packaged-asr] FAIL — could not synthesize the SAPI fixture: ${error instanceof Error ? error.message : String(error)}`
+    )
     process.exit(1)
   }
   if (!existsSync(wavPath)) {
@@ -126,7 +142,12 @@ console.log(`[check:packaged-asr]   fixture: ${wavPath}`)
 // ── 2. Launch the packaged app under Playwright's Electron driver, isolated profile. ───────────────
 const userData = mkdtempSync(join(tmpdir(), 'metis-asr-userdata-'))
 const meetingsFolder = join(userData, 'meetings')
-const env = { ...process.env, ASKTOTO_USERDATA: userData, ASKTOTO_LOCAL_KEYSTORE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
+const env = {
+  ...process.env,
+  ASKTOTO_USERDATA: userData,
+  ASKTOTO_LOCAL_KEYSTORE: '1',
+  ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
+}
 for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
 
 console.log(`[check:packaged-asr] launching ${target}`)
@@ -135,7 +156,16 @@ console.log(`[check:packaged-asr]   isolated profile: ${userData}`)
 let app
 function killApp() {
   try {
-    execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', "Get-Process -Name 'Metis*' -ErrorAction SilentlyContinue | Stop-Process -Force"], { timeout: 15000 })
+    execFileSync(
+      POWERSHELL,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-Process -Name 'Metis*' -ErrorAction SilentlyContinue | Stop-Process -Force"
+      ],
+      { timeout: 15000 }
+    )
   } catch {
     /* best-effort */
   }
@@ -144,7 +174,9 @@ function safeRmSync(path) {
   try {
     rmSync(path, { recursive: true, force: true })
   } catch (error) {
-    console.error(`[check:packaged-asr]   (cleanup) could not remove ${path}: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(
+      `[check:packaged-asr]   (cleanup) could not remove ${path}: ${error instanceof Error ? error.message : String(error)}`
+    )
   }
 }
 async function fail(reason) {
@@ -162,116 +194,134 @@ async function fail(reason) {
 }
 
 async function main() {
-try {
-  app = await electron.launch({ executablePath: target, env })
-  await app.evaluate(installAsrObserver)
-} catch (error) {
-  return fail(`the packaged app failed to launch under Playwright: ${error instanceof Error ? error.message : String(error)}`)
-}
-
-let page
-try {
-  page = await app.firstWindow()
-  await page.waitForFunction(() => !!window.toto, undefined, { timeout: 60_000 })
-} catch (error) {
-  await fail(`no renderer window exposing window.toto appeared within 60s: ${error instanceof Error ? error.message : String(error)}`)
-}
-console.log('[check:packaged-asr] attached to the main window.')
-const resourcesPath = await app.evaluate(() => process.resourcesPath)
-const mainLogPath = join(await app.evaluate(({ app: electronApp }) => electronApp.getPath('logs')), 'main.log')
-
-// ── 3. Substitute only the native picker's RETURN VALUE inside the real main process. ───────────────
-// Runs in Electron's main process (not a Chromium page — this is Playwright's Electron bridge), so this
-// is the actual `dialog` module the real ipcMain.handle(IPC.importAudioPick) handler calls into. Nothing
-// about pickAudioFile()/consumePickedAudio()'s own logic is bypassed — only the OS's native file-picker
-// UI, which this gate cannot drive fast enough to be usable (see the file header). importAudioPick() and
-// importAudioStart() below are the real, unmodified IPC round trip.
-await app.evaluate(async ({ dialog }, pickedFile) => {
-  Object.defineProperty(dialog, 'showOpenDialog', {
-    configurable: true,
-    value: async () => ({ canceled: false, filePaths: [pickedFile] })
-  })
-}, wavPath)
-
-// ── 4. Separate real IPC jobs, each scoped to fresh request evidence and the existing deadline. ──────
-const jobIds = new Set()
-for (const engine of ENGINES) {
-  await page.evaluate(
-    (args) => window.toto.setSettings({ asrEngine: args.engine, meetingsFolder: args.folder, encryptTranscripts: false }),
-    { engine, folder: meetingsFolder }
-  )
-  const confirmedEngine = await page.evaluate(async () => (await window.toto.getSettings()).asrEngine)
-  if (confirmedEngine !== engine) return fail(`asrEngine did not stick — getSettings() reported "${confirmedEngine}", expected "${engine}".`)
-  const afterSequence = await app.evaluate(() => globalThis.__metisPackagedAsrGate.sequence)
-  const logOffset = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').length : 0
-  const picked = await page.evaluate(() => window.toto.importAudioPick())
-  if (picked?.error) return fail(`importAudioPick() returned an error: ${picked.error}`)
-  if (!picked?.token) return fail(`importAudioPick() did not return a usable capability token: ${JSON.stringify(picked)}`)
-  const started = await page.evaluate((token) => window.toto.importAudioStart(token), picked.token)
-  if (!started?.jobId || jobIds.has(started.jobId)) return fail(`${engine}: importAudioStart() did not create a separate job.`)
-  jobIds.add(started.jobId)
-  console.log(`[check:packaged-asr] ${engine} import started: ${started.jobId}`)
-
-  const jobDeadline = Date.now() + timeoutSeconds * 1000
-  let job = started
-  let meeting
-  // Every failure after the import starts first prints what the gate saw of it (content-free), so a red
-  // run separates a product fault (job, read-back, native ASR) from a harness one (fixture) by itself. The
-  // same facts follow as one JSON line, the record a content-free JSON report copies.
-  const failImport = async (reason) => {
-    const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate).catch(() => undefined)
-    const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(logOffset) : ''
-    const seen = { engine, job, meeting, fixture, observed, afterSequence, mainLog }
-    for (const line of importDiagnostics(seen)) console.error(`[check:packaged-asr]   ${line}`)
-    console.error(`[check:packaged-asr]   report: ${JSON.stringify(importReport(seen))}`)
-    return fail(reason)
-  }
-  while (Date.now() < jobDeadline) {
-    await sleep(1000)
-    job = await page.evaluate(
-      async (jobId) => (await window.toto.importJobsList()).find((j) => j.jobId === jobId),
-      started.jobId
-    )
-    if (job?.state === 'done' || job?.state === 'failed') break
-  }
-  if (!job) return failImport(`${engine}: the import job disappeared from importJobsList().`)
-  if (job.state === 'failed') return failImport(`${engine}: the import job failed: ${job.error || '(no error message)'}`)
-  if (job.state !== 'done') return failImport(`${engine}: the import job did not finish within ${timeoutSeconds}s (last state: ${job.state}).`)
-  if (!job.file) return failImport(`${engine}: the import job reported done but has no saved meeting file.`)
-
-  // A ready message is emitted before lazy model loading, so it cannot satisfy this gate on its own.
-  // Match a real PCM request/result from the exact bundled host/model AND the saved transcript.
-  meeting = await page.evaluate((file) => window.toto.recallRead(file), job.file)
-  if (!meeting?.ok) return failImport(`${engine}: the saved meeting could not be read back: ${meeting?.error || '(no error message)'}`)
-  if (!meeting.lines?.length) return failImport(`${engine}: the saved meeting has no transcript lines.`)
-  const transcript = meeting.lines.map((line) => line.text).join(' ')
-  const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate)
-  let verified
   try {
-    verified = assertPackagedAsrEvidence(engine, {
-      ...observed, resourcesPath, afterSequence, transcript,
-      mainLog: readFileSync(mainLogPath, 'utf8').slice(logOffset)
-    })
+    app = await electron.launch({ executablePath: target, env })
+    await app.evaluate(installAsrObserver)
   } catch (error) {
-    return failImport(error instanceof Error ? error.message : String(error))
+    return fail(
+      `the packaged app failed to launch under Playwright: ${error instanceof Error ? error.message : String(error)}`
+    )
   }
-  console.log(`[check:packaged-asr] ${engine} decoded transcript: "${transcript}"`)
-  console.log(`[check:packaged-asr] VERIFIED ${JSON.stringify(verified)}`)
-}
 
-console.log('[check:packaged-asr] OK — separate real Whisper and Parakeet imports verified; no engine fallback.')
+  let page
+  try {
+    page = await app.firstWindow()
+    await page.waitForFunction(() => !!window.toto, undefined, { timeout: 60_000 })
+  } catch (error) {
+    await fail(
+      `no renderer window exposing window.toto appeared within 60s: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  console.log('[check:packaged-asr] attached to the main window.')
+  const resourcesPath = await app.evaluate(() => process.resourcesPath)
+  const mainLogPath = join(await app.evaluate(({ app: electronApp }) => electronApp.getPath('logs')), 'main.log')
 
-try {
-  await app.evaluate(({ app: electronApp }) => electronApp.exit(0))
-} catch {
-  /* best-effort */
-}
-await app.close().catch(() => {})
-killApp()
-await sleep(500)
-safeRmSync(userData)
-safeRmSync(workDir)
-process.exit(0)
+  // ── 3. Substitute only the native picker's RETURN VALUE inside the real main process. ───────────────
+  // Runs in Electron's main process (not a Chromium page — this is Playwright's Electron bridge), so this
+  // is the actual `dialog` module the real ipcMain.handle(IPC.importAudioPick) handler calls into. Nothing
+  // about pickAudioFile()/consumePickedAudio()'s own logic is bypassed — only the OS's native file-picker
+  // UI, which this gate cannot drive fast enough to be usable (see the file header). importAudioPick() and
+  // importAudioStart() below are the real, unmodified IPC round trip.
+  await app.evaluate(async ({ dialog }, pickedFile) => {
+    Object.defineProperty(dialog, 'showOpenDialog', {
+      configurable: true,
+      value: async () => ({ canceled: false, filePaths: [pickedFile] })
+    })
+  }, wavPath)
+
+  // ── 4. Separate real IPC jobs, each scoped to fresh request evidence and the existing deadline. ──────
+  const jobIds = new Set()
+  for (const engine of ENGINES) {
+    await page.evaluate(
+      (args) =>
+        window.toto.setSettings({ asrEngine: args.engine, meetingsFolder: args.folder, encryptTranscripts: false }),
+      { engine, folder: meetingsFolder }
+    )
+    const confirmedEngine = await page.evaluate(async () => (await window.toto.getSettings()).asrEngine)
+    if (confirmedEngine !== engine)
+      return fail(`asrEngine did not stick — getSettings() reported "${confirmedEngine}", expected "${engine}".`)
+    const afterSequence = await app.evaluate(() => globalThis.__metisPackagedAsrGate.sequence)
+    const logOffset = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').length : 0
+    const picked = await page.evaluate(() => window.toto.importAudioPick())
+    if (picked?.error) return fail(`importAudioPick() returned an error: ${picked.error}`)
+    if (!picked?.token)
+      return fail(`importAudioPick() did not return a usable capability token: ${JSON.stringify(picked)}`)
+    const started = await page.evaluate((token) => window.toto.importAudioStart(token), picked.token)
+    if (!started?.jobId || jobIds.has(started.jobId))
+      return fail(`${engine}: importAudioStart() did not create a separate job.`)
+    jobIds.add(started.jobId)
+    console.log(`[check:packaged-asr] ${engine} import started: ${started.jobId}`)
+
+    const jobDeadline = Date.now() + timeoutSeconds * 1000
+    let job = started
+    let meeting
+    // Every failure after the import starts first prints what the gate saw of it (content-free), so a red
+    // run separates a product fault (job, read-back, native ASR) from a harness one (fixture) by itself. The
+    // same facts follow as one JSON line, the record a content-free JSON report copies.
+    const failImport = async (reason) => {
+      const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate).catch(() => undefined)
+      const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(logOffset) : ''
+      const seen = { engine, job, meeting, fixture, observed, afterSequence, mainLog }
+      for (const line of importDiagnostics(seen)) console.error(`[check:packaged-asr]   ${line}`)
+      console.error(`[check:packaged-asr]   report: ${JSON.stringify(importReport(seen))}`)
+      return fail(reason)
+    }
+    while (Date.now() < jobDeadline) {
+      await sleep(1000)
+      job = await page.evaluate(
+        async (jobId) => (await window.toto.importJobsList()).jobs.find((j) => j.jobId === jobId),
+        started.jobId
+      )
+      if (job?.state === 'done' || job?.state === 'failed') break
+    }
+    if (!job) return failImport(`${engine}: the import job disappeared from importJobsList().`)
+    if (job.state === 'failed')
+      return failImport(`${engine}: the import job failed: ${job.error || '(no error message)'}`)
+    if (job.state !== 'done')
+      return failImport(
+        `${engine}: the import job did not finish within ${timeoutSeconds}s (last state: ${job.state}).`
+      )
+    if (!job.file) return failImport(`${engine}: the import job reported done but has no saved meeting file.`)
+
+    // A ready message is emitted before lazy model loading, so it cannot satisfy this gate on its own.
+    // Match a real PCM request/result from the exact bundled host/model AND the saved transcript.
+    meeting = await page.evaluate((file) => window.toto.recallRead(file), job.file)
+    if (!meeting?.ok)
+      return failImport(
+        `${engine}: the saved meeting could not be read back: ${meeting?.error || '(no error message)'}`
+      )
+    if (!meeting.lines?.length) return failImport(`${engine}: the saved meeting has no transcript lines.`)
+    const transcript = meeting.lines.map((line) => line.text).join(' ')
+    const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate)
+    let verified
+    try {
+      verified = assertPackagedAsrEvidence(engine, {
+        ...observed,
+        resourcesPath,
+        afterSequence,
+        transcript,
+        mainLog: readFileSync(mainLogPath, 'utf8').slice(logOffset)
+      })
+    } catch (error) {
+      return failImport(error instanceof Error ? error.message : String(error))
+    }
+    console.log(`[check:packaged-asr] ${engine} decoded transcript: "${transcript}"`)
+    console.log(`[check:packaged-asr] VERIFIED ${JSON.stringify(verified)}`)
+  }
+
+  console.log('[check:packaged-asr] OK — separate real Whisper and Parakeet imports verified; no engine fallback.')
+
+  try {
+    await app.evaluate(({ app: electronApp }) => electronApp.exit(0))
+  } catch {
+    /* best-effort */
+  }
+  await app.close().catch(() => {})
+  killApp()
+  await sleep(500)
+  safeRmSync(userData)
+  safeRmSync(workDir)
+  process.exit(0)
 }
 
 await main().catch((error) => fail(error instanceof Error ? error.message : String(error)))

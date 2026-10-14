@@ -565,6 +565,7 @@ export type ImportJobState =
   | 'recapping'
   | 'done'
   | 'failed'
+  | 'policy-held'
   | 'cancelled'
 
 /** Sanitised job state exposed to the overlay. Source paths remain main-process-only. */
@@ -582,6 +583,16 @@ export interface ImportJobView {
   createdAt: number
   updatedAt: number
   queuePosition?: number
+}
+
+/** Main-owned, content-free view of recoverable jobs and policy-held checkpoint identities. */
+export interface ImportJobsSnapshot {
+  jobs: ImportJobView[]
+  policyBlocked: boolean
+  heldJobIds: string[]
+  policyHeldJobIds: string[]
+  inventoryOverflow: boolean
+  policyHoldOverflow: boolean
 }
 
 export const ImportJobIdSchema = z.object({ jobId: z.string().min(1).max(200) })

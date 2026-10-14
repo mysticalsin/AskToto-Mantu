@@ -1,11 +1,6 @@
 import type { ImportAudioPickResult, ImportAudioPickedFile, ImportJobView } from '@shared/ipc'
 
-const ACTIVE: ReadonlySet<ImportJobView['state']> = new Set([
-  'decoding',
-  'transcribing',
-  'saving',
-  'recapping'
-])
+const ACTIVE: ReadonlySet<ImportJobView['state']> = new Set(['decoding', 'transcribing', 'saving', 'recapping'])
 
 const RANK: Record<ImportJobView['state'], number> = {
   decoding: 0,
@@ -14,6 +9,7 @@ const RANK: Record<ImportJobView['state'], number> = {
   recapping: 0,
   queued: 1,
   failed: 2,
+  'policy-held': 2,
   done: 3,
   cancelled: 4
 }
@@ -58,6 +54,7 @@ export function importQueueHeadline(jobs: ImportJobView[]): string {
   if (!visible.length) return ''
   const done = visible.filter((j) => j.state === 'done').length
   const failed = visible.filter((j) => j.state === 'failed').length
+  const held = visible.filter((j) => j.state === 'policy-held').length
   const active = visible.filter((j) => ACTIVE.has(j.state) || j.state === 'queued').length
   const n = visible.length
   const meeting = n === 1 ? 'meeting' : 'meetings'
@@ -65,6 +62,8 @@ export function importQueueHeadline(jobs: ImportJobView[]): string {
     return n === 1 ? `Importing ${visible[0].title}` : `Importing ${n} ${meeting}`
   }
   if (done === n) return n === 1 ? 'Meeting ready' : `${n} meetings ready`
+  if (held && active === 0 && failed === 0 && done === 0)
+    return held === 1 ? '1 saved import paused' : `${held} saved imports paused`
   if (failed && !active) {
     return failed === 1 ? '1 meeting needs attention' : `${failed} meetings need attention`
   }

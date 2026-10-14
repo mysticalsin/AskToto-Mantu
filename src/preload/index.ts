@@ -72,6 +72,7 @@ import {
   type RendererCrashReport,
   type AsrAssetsStatus,
   type ImportJobView,
+  type ImportJobsSnapshot,
   type LocalModelSummary,
   type ProfileRecoveryResult,
   type ScreenCaptureCheckResult,
@@ -304,7 +305,7 @@ const api = {
   importAudioStart: (token: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importAudioStart, { token }),
   importAudioStartBatch: (tokens: string[]): Promise<ImportJobView[]> =>
     ipcRenderer.invoke(IPC.importAudioStartBatch, { tokens }),
-  importJobsList: (): Promise<ImportJobView[]> => ipcRenderer.invoke(IPC.importJobsList),
+  importJobsList: (): Promise<ImportJobsSnapshot> => ipcRenderer.invoke(IPC.importJobsList),
   importJobCancel: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobCancel, { jobId }),
   importJobResume: (jobId: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importJobResume, { jobId }),
   importJobRemove: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobRemove, { jobId }),
