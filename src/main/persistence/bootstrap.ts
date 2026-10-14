@@ -26,11 +26,15 @@ import {
   resolvePersistenceResourcePolicy,
   toMeetingSpeechPolicy,
   type ResourcePolicyResult,
+  type ResourcePolicyInput,
+  type AdminPolicyReceipt,
+  type BundledPersistenceReceipt,
   type ResolvedPersistenceProfile
 } from './resource-policy'
 import {
   createNativeMeetingKeyStore,
   createProtectedMeetingKeys,
+  type NativeKeyStore,
   type ProtectedKeyHandle,
   type ProtectedMeetingKeys
 } from './protected-meeting-keys'
@@ -81,6 +85,21 @@ export interface MainPersistenceBootstrap {
   retire(reason: string): void
   settle(): Promise<void>
   dispose(): Promise<void>
+}
+
+/** Explicit source-fixture adapters; production callers use the fixed main-owned resolver below. */
+export interface MainPersistenceBootstrapSourceFixture {
+  readonly readBundledReceipt: () => Promise<BundledPersistenceReceipt | null>
+  readonly readAdminReceipt: () => Promise<AdminPolicyReceipt>
+  readonly sourceCommit: () => string
+  readonly resolvePolicy: (input: ResourcePolicyInput) => ResourcePolicyResult
+  readonly nativeKeyStore: NativeKeyStore
+  readonly createSpeech: (profile: ResolvedPersistenceProfile) => MeetingSpeechPersistenceService
+}
+
+export interface MainPersistenceBootstrapOptions {
+  readonly afterFirstShow: () => boolean
+  readonly nativeKeyIntent: 'allowed' | 'explicitly-disabled'
 }
 
 interface ScopeEntry {
@@ -142,10 +161,10 @@ function identityHash(value: string): string {
 }
 
 /** Main-process composition. It reads policy at prime, but native key work is lazy and action-gated. */
-export function createMainPersistenceBootstrap(options: {
-  readonly afterFirstShow: () => boolean
-  readonly nativeKeyIntent: 'allowed' | 'explicitly-disabled'
-}): MainPersistenceBootstrap {
+function createMainPersistenceBootstrapInternal(
+  options: MainPersistenceBootstrapOptions,
+  sourceFixture?: MainPersistenceBootstrapSourceFixture
+): MainPersistenceBootstrap {
   let disposed = false
   let policy: ResourcePolicyResult | undefined
   let policyReadGeneration = 0
@@ -178,7 +197,7 @@ export function createMainPersistenceBootstrap(options: {
       gateways.set(root, createStorageGateway({ root: () => join(root.meetingPath, 'journal') }))
     }
   })
-  const nativeKeys = createNativeMeetingKeyStore()
+  const nativeKeys = sourceFixture?.nativeKeyStore ?? createNativeMeetingKeyStore()
   const speechProxy: MeetingSpeechPersistenceService = {
     reportTiming: (...args) => speech?.reportTiming(...args),
     readLimitBytes: () => speech?.readLimitBytes(),
@@ -513,13 +532,13 @@ export function createMainPersistenceBootstrap(options: {
               isSettingsAuthorityCurrent(settingsAuthority) &&
               authBoundary.isCurrent()
             const [bundledReceipt, adminReceipt, highWater] = await Promise.all([
-              readBundledPersistenceReceipt(),
-              readAdminPolicyReceipt(),
+              sourceFixture?.readBundledReceipt() ?? readBundledPersistenceReceipt(),
+              sourceFixture?.readAdminReceipt() ?? readAdminPolicyReceipt(),
               highWaterStore.read(highWaterCurrent)
             ])
             if (highWater.status !== 'ok' || !highWaterCurrent())
               throw new Error('Persistence policy rollback state is unreadable or stale')
-            const source = sourceCommit()
+            const source = sourceFixture?.sourceCommit() ?? sourceCommit()
             if (!source) throw new Error('Packaged source commit provenance is missing')
             const inputs = {
               bundledReceipt: bundledReceipt ?? undefined,
@@ -528,12 +547,13 @@ export function createMainPersistenceBootstrap(options: {
               adminReceipt,
               highWater: highWater.value
             }
-            let resolvedPolicy = resolvePersistenceResourcePolicy({ ...inputs, mode: 'production' })
+            const resolvePolicy = sourceFixture?.resolvePolicy ?? resolvePersistenceResourcePolicy
+            let resolvedPolicy = resolvePolicy({ ...inputs, mode: 'production' })
             if (
               resolvedPolicy.status === 'refused' &&
               ['PROFILE_UNQUALIFIED', 'QUALIFICATION_MISSING', 'QUALIFICATION_INVALID'].includes(resolvedPolicy.code)
             ) {
-              const candidate = resolvePersistenceResourcePolicy({ ...inputs, mode: 'qualification' })
+              const candidate = resolvePolicy({ ...inputs, mode: 'qualification' })
               if (candidate.status === 'candidate' && candidate.profile.qualification.state === 'PROPOSED') {
                 resolvedPolicy = candidate
                 policy = resolvedPolicy
@@ -553,15 +573,17 @@ export function createMainPersistenceBootstrap(options: {
               )
                 throw new Error('Persistence policy version was not durably committed')
               const speechPolicy = toMeetingSpeechPolicy(resolvedPolicy.profile)
-              speech = createMeetingSpeechPersistenceService({
-                readLimits: () => speechPolicy.limits,
-                readBounds: () => ({
-                  maxInputBytes: speechPolicy.maxInputBytes,
-                  maxOutputBytes: speechPolicy.maxOutputBytes,
-                  operationDeadlineMs: speechPolicy.operationDeadlineMs,
-                  shutdownDeadlineMs: speechPolicy.shutdownDeadlineMs
+              speech =
+                sourceFixture?.createSpeech(resolvedPolicy.profile) ??
+                createMeetingSpeechPersistenceService({
+                  readLimits: () => speechPolicy.limits,
+                  readBounds: () => ({
+                    maxInputBytes: speechPolicy.maxInputBytes,
+                    maxOutputBytes: speechPolicy.maxOutputBytes,
+                    operationDeadlineMs: speechPolicy.operationDeadlineMs,
+                    shutdownDeadlineMs: speechPolicy.shutdownDeadlineMs
+                  })
                 })
-              })
               if (!highWaterCurrent()) throw new Error('Persistence authority changed before publication')
               policy = resolvedPolicy
               capability = Object.freeze({
@@ -676,6 +698,18 @@ export function createMainPersistenceBootstrap(options: {
   }
   refreshPolicy = bootstrap.prime
   return bootstrap
+}
+
+export function createMainPersistenceBootstrap(options: MainPersistenceBootstrapOptions): MainPersistenceBootstrap {
+  return createMainPersistenceBootstrapInternal(options)
+}
+
+/** Source fixture only: exercises the same open/create/core path with explicit synthetic policy/key adapters. */
+export function createMainPersistenceBootstrapWithSourceFixture(
+  options: MainPersistenceBootstrapOptions,
+  fixture: MainPersistenceBootstrapSourceFixture
+): MainPersistenceBootstrap {
+  return createMainPersistenceBootstrapInternal(options, fixture)
 }
 
 /** Captured in index.ts before the legacy macOS default is assigned. */
