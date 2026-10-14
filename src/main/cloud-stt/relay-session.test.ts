@@ -74,12 +74,6 @@ class MockRelaySocket extends EventEmitter {
 }
 
 function makeClient(): SpeechBrokerClient {
-  const request = fixture.create.request as Record<string, unknown>
-  const oneTrackRequest = {
-    ...request,
-    tracks: ['microphone'],
-    consent: { ...(request.consent as Record<string, unknown>), tracks: ['microphone'] }
-  }
   const response = {
     ...fixture.create.responseTemplate,
     grants: [{ track: 'microphone', streamEpoch: 11, token: 'B'.repeat(43) }]
@@ -134,7 +128,7 @@ describe('RelaySpeechSession', () => {
     expect(MockRelaySocket.instances[0].sent[1]).toBe('{"type":"finish"}')
   })
 
-  it('reports incomplete when a socket closes without a terminal event', async () => {
+  it('reports incomplete when no terminal event arrives before the bounded finish deadline', async () => {
     MockRelaySocket.instances = []
     const started = await RelaySpeechSession.create({
       client: makeClient(),

@@ -113,7 +113,16 @@ describe('speech broker client', () => {
       WebSocketImpl: MockWebSocket as unknown as typeof WebSocket,
       now: () => 1_893_456_000_000
     })
-    const created = await client.createSession(fixture.create.request)
+    const createRequest = fixture.create.request as Record<string, unknown>
+    const singleTrackRequest = {
+      ...createRequest,
+      tracks: ['microphone'],
+      consent: {
+        ...(createRequest.consent as Record<string, unknown>),
+        tracks: ['microphone']
+      }
+    }
+    const created = await client.createSession(singleTrackRequest)
     expect(created.ok).toBe(true)
     if (!created.ok) return
     expect(created.value.sessionId).toBe(sessionId)
