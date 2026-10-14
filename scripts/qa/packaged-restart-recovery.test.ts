@@ -153,6 +153,11 @@ describe('packaged restart recovery candidate scenario', () => {
     expect(packagedRecoveryReportProblems(invalid)).toContain('isolated app teardown was not acknowledged.')
     const failed = { ...report(), outcome: 'FAIL' }
     expect(packagedRecoveryReportProblems(failed)).toContain('packaged restart recovery outcome is FAIL.')
+    const contradictory = { ...report(), failure: 'launch-failed' }
+    expect(packagedRecoveryReportProblems(contradictory)).toContain('PASS report has failure code launch-failed.')
+    expect(assessPackagedRecoveryReport(contradictory).problems).toContain(
+      'PASS report has failure code launch-failed.'
+    )
   })
 
   it('requires an acknowledged quit, normal exit status, and no signal for a clean shutdown', () => {

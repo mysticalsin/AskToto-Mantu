@@ -107,6 +107,9 @@ export function packagedRecoveryReportProblems(report) {
   }
   if (ids.size !== RECOVERY_ASSERTIONS.length) return ['report-assertions-incomplete']
   if (report.outcome !== 'PASS') problems.push(`packaged restart recovery outcome is ${report.outcome}.`)
+  if (report.outcome === 'PASS' && report.failure !== 'none') {
+    problems.push(`PASS report has failure code ${report.failure}.`)
+  }
   if (report.teardown !== 'ACKNOWLEDGED') problems.push('isolated app teardown was not acknowledged.')
   if (report.outcome === 'PASS' && problems.length) problems.unshift('PASS report contains incomplete assertions.')
   return problems
