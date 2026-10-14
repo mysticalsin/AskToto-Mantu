@@ -96,6 +96,25 @@ export function windowsScreenStatus(): PermissionStatus {
   return screenProbeResult ?? 'unknown'
 }
 
+/** Current native speech permission statuses, without diagnosis reads, capture probes, or cached grants. */
+export function getNativeSpeechPermissions(): Pick<PlatformPermissions, 'microphone' | 'screenRecording'> {
+  const nativeStatus = (kind: 'microphone' | 'screen'): PermissionStatus => {
+    try {
+      return macStatus(kind)
+    } catch {
+      return 'unknown'
+    }
+  }
+  if (process.platform === 'darwin') {
+    return { microphone: nativeStatus('microphone'), screenRecording: nativeStatus('screen') }
+  }
+  if (process.platform === 'win32') {
+    // No native static screen status exists on Windows; the caller owns the separate capture grant.
+    return { microphone: nativeStatus('microphone'), screenRecording: 'unknown' }
+  }
+  return { microphone: 'not-required', screenRecording: 'not-required' }
+}
+
 export function getPlatformPermissions(): PlatformPermissions {
   const base = basePlatformPermissions()
   return screenDiagnosisProvider ? { ...base, ...screenDiagnosisProvider() } : base

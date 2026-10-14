@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { desktopCapturer, systemPreferences } from 'electron'
 import {
   clearScreenProbe,
+  getNativeSpeechPermissions,
   getPlatformPermissions,
   noteScreenCaptureOutcome,
   probeScreenCapture,
@@ -30,6 +31,78 @@ afterEach(() => {
   vi.mocked(systemPreferences.getMediaAccessStatus).mockReset()
   vi.mocked(desktopCapturer.getSources).mockReset()
   clearScreenProbe()
+  setScreenDiagnosisProvider(null)
+})
+
+describe('getNativeSpeechPermissions — current native authority without diagnosis or probe fallback', () => {
+  it('reads macOS microphone and screen revocation on every call', () => {
+    setPlatform('darwin')
+    let status: 'granted' | 'denied' = 'granted'
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockImplementation(() => status)
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'granted', screenRecording: 'granted' })
+    status = 'denied'
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'denied', screenRecording: 'denied' })
+    expect(vi.mocked(systemPreferences.getMediaAccessStatus).mock.calls).toEqual([
+      ['microphone'],
+      ['screen'],
+      ['microphone'],
+      ['screen']
+    ])
+  })
+
+  it('reads Windows microphone revocation without querying unsupported screen status', () => {
+    setPlatform('win32')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValueOnce('granted').mockReturnValueOnce('denied')
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'granted', screenRecording: 'unknown' })
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'denied', screenRecording: 'unknown' })
+    expect(vi.mocked(systemPreferences.getMediaAccessStatus).mock.calls).toEqual([['microphone'], ['microphone']])
+  })
+
+  it('does not elevate unknown macOS native status from an earlier successful probe', async () => {
+    setPlatform('darwin')
+    vi.mocked(desktopCapturer.getSources).mockResolvedValue([{ id: 'screen:0' }] as never)
+    await probeScreenCapture()
+    vi.mocked(desktopCapturer.getSources).mockClear()
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('not-determined')
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'unknown', screenRecording: 'unknown' })
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled()
+    // The existing readiness API retains its deliberate probe fallback.
+    expect(getPlatformPermissions().screenRecording).toBe('granted')
+  })
+
+  it('never consults the diagnosis provider or performs a capture probe', () => {
+    setPlatform('darwin')
+    const diagnosis = vi.fn(() => {
+      throw new Error('Unexpected settings-backed diagnosis read')
+    })
+    setScreenDiagnosisProvider(diagnosis)
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('granted')
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'granted', screenRecording: 'granted' })
+    expect(diagnosis).not.toHaveBeenCalled()
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed native query as unknown without leaking its error or skipping the other query', () => {
+    setPlatform('darwin')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockImplementation((kind) => {
+      if (kind === 'microphone') throw new Error('Private native permission detail')
+      return 'granted'
+    })
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'unknown', screenRecording: 'granted' })
+    expect(vi.mocked(systemPreferences.getMediaAccessStatus).mock.calls).toEqual([['microphone'], ['screen']])
+  })
+
+  it('reports Linux not-required without invoking native permission APIs or diagnosis', () => {
+    setPlatform('linux')
+    const diagnosis = vi.fn(() => {
+      throw new Error('Unexpected settings-backed diagnosis read')
+    })
+    setScreenDiagnosisProvider(diagnosis)
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'not-required', screenRecording: 'not-required' })
+    expect(systemPreferences.getMediaAccessStatus).not.toHaveBeenCalled()
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled()
+    expect(diagnosis).not.toHaveBeenCalled()
+  })
 })
 
 describe('getPlatformPermissions — Windows microphone', () => {
@@ -177,7 +250,12 @@ describe('screen diagnosis provider', () => {
     }
     const identity = { version: '1.9.7', cdhash: 'a'.repeat(40), teamId: '', adhoc: true }
     setScreenDiagnosisProvider(() => ({ screenDiagnosis, identity }))
-    expect(getPlatformPermissions()).toEqual({ microphone: 'denied', screenRecording: 'denied', screenDiagnosis, identity })
+    expect(getPlatformPermissions()).toEqual({
+      microphone: 'denied',
+      screenRecording: 'denied',
+      screenDiagnosis,
+      identity
+    })
   })
 
   it('windowsScreenStatus reads the probe verdict without consulting the provider', () => {
