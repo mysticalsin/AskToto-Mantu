@@ -15,6 +15,36 @@ describe('quit trace collector', () => {
     })
   })
 
+  it('accepts the fixed closed-cleanup and fatal-dialog causal phases', () => {
+    const collector = createQuitTraceCollector(true)
+    collector.feed(
+      [
+        'CLOSED_CLEANUP_ENTER',
+        'CLOSED_CLEANUP_THROWN',
+        'FATAL_UNCAUGHT_DURING_QUIT',
+        'FATAL_PERSIST_RETURNED',
+        'FATAL_FIRST_DIALOG',
+        'FATAL_DIALOG_CALL_ENTER',
+        'FATAL_DIALOG_CALL_RETURNED'
+      ]
+        .map((phase) => `[METIS_QUIT_TRACE] ${phase}\n`)
+        .join('')
+    )
+
+    expect(collector.snapshot()).toMatchObject({
+      phases: [
+        'CLOSED_CLEANUP_ENTER',
+        'CLOSED_CLEANUP_THROWN',
+        'FATAL_UNCAUGHT_DURING_QUIT',
+        'FATAL_PERSIST_RETURNED',
+        'FATAL_FIRST_DIALOG',
+        'FATAL_DIALOG_CALL_ENTER',
+        'FATAL_DIALOG_CALL_RETURNED'
+      ],
+      valid: true
+    })
+  })
+
   it('isolates stdout trace framing from interleaved stderr output', () => {
     const stdout = new PassThrough()
     const stderr = new PassThrough()
