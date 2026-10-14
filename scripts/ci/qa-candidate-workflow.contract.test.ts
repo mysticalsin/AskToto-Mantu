@@ -717,9 +717,7 @@ describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
 
   it('evaluates the exact workflow jq predicate against matching and mismatched producer identity', () => {
     const binding = steps('st1-mac-fifo').find((step) => step.includes(`name: ${bindingName}`)) ?? ''
-    const match = binding.match(
-      /--arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/
-    )
+    const match = binding.match(/--arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/)
     expect(match, 'extract the actual workflow predicate').not.toBeNull()
     const predicate = match![1]
 
