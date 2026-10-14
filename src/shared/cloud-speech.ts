@@ -9,6 +9,7 @@ export const CLOUD_SPEECH_IPC = {
   finish: 'cloud-speech:v1:finish',
   cancel: 'cloud-speech:v1:cancel',
   status: 'cloud-speech:v1:status',
+  transitionAck: 'cloud-speech:v1:transition-ack',
   event: 'cloud-speech:v1:event'
 } as const
 
@@ -29,6 +30,7 @@ export type CloudSpeechEngine = z.infer<typeof CloudSpeechEngineSchema>
 const CaptureIdSchema = z.string().uuid()
 const CounterSchema = z.number().int().positive().safe()
 const OffsetSchema = z.number().int().nonnegative().safe()
+const HandoffNonceSchema = z.string().uuid()
 const LanguageSchema = z
   .string()
   .regex(/^(?:auto|multi|[a-z]{2}(?:-[A-Z]{2})?)$/)
@@ -429,7 +431,83 @@ const TerminalEventSchema = z
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['closeConfirmed'] })
   })
 
-export const CloudSpeechEventSchema = z.union([SegmentEventSchema, TerminalEventSchema])
+const EpochClosedTrackSchema = z
+  .object({ track: TrackSchema, previousEpoch: CounterSchema, lastSequence: OffsetSchema })
+  .strict()
+const EpochOpenedTrackSchema = z
+  .object({
+    track: TrackSchema,
+    previousEpoch: CounterSchema,
+    nextEpoch: CounterSchema,
+    lastSequence: OffsetSchema
+  })
+  .strict()
+  .superRefine((track, context) => {
+    if (track.nextEpoch <= track.previousEpoch) context.addIssue({ code: z.ZodIssueCode.custom, path: ['nextEpoch'] })
+  })
+
+const EpochTransitionIdentitySchema = z
+  .object({
+    captureId: CaptureIdSchema,
+    captureGeneration: CounterSchema,
+    transitionId: CounterSchema,
+    handoffNonce: HandoffNonceSchema
+  })
+  .strict()
+
+function refineUniqueEpochTracks(value: { streams: Array<{ track: string }> }, context: z.RefinementCtx): void {
+  if (value.streams.length < 1 || value.streams.length > 2)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['streams'] })
+  if (new Set(value.streams.map(({ track }) => track)).size !== value.streams.length)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['streams'] })
+}
+
+export const CloudSpeechEpochTransitionEventSchema = z
+  .discriminatedUnion('stage', [
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition'),
+      stage: z.literal('closed'),
+      streams: z.array(EpochClosedTrackSchema).min(1).max(2)
+    }).strict(),
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition'),
+      stage: z.literal('opened'),
+      streams: z.array(EpochOpenedTrackSchema).min(1).max(2)
+    }).strict()
+  ])
+  .superRefine(refineUniqueEpochTracks)
+export type CloudSpeechEpochTransitionEvent = z.infer<typeof CloudSpeechEpochTransitionEventSchema>
+
+export const CloudSpeechEpochTransitionAckSchema = z
+  .discriminatedUnion('stage', [
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition-ack'),
+      stage: z.literal('closed'),
+      streams: z.array(EpochClosedTrackSchema).min(1).max(2)
+    }).strict(),
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition-ack'),
+      stage: z.literal('opened'),
+      streams: z.array(EpochOpenedTrackSchema).min(1).max(2)
+    }).strict()
+  ])
+  .superRefine(refineUniqueEpochTracks)
+export type CloudSpeechEpochTransitionAck = z.infer<typeof CloudSpeechEpochTransitionAckSchema>
+
+export const CloudSpeechEpochTransitionAckResultSchema = z.union([
+  FailureSchema,
+  EpochTransitionIdentitySchema.extend({
+    ok: z.literal(true),
+    stage: z.enum(['closed', 'opened'])
+  }).strict()
+])
+export type CloudSpeechEpochTransitionAckResult = z.infer<typeof CloudSpeechEpochTransitionAckResultSchema>
+
+export const CloudSpeechEventSchema = z.union([
+  SegmentEventSchema,
+  TerminalEventSchema,
+  CloudSpeechEpochTransitionEventSchema
+])
 export type CloudSpeechEvent = z.infer<typeof CloudSpeechEventSchema>
 
 export const CloudSpeechIdentitySchema = CaptureIdentitySchema

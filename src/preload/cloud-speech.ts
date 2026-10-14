@@ -5,6 +5,8 @@ import {
   CLOUD_SPEECH_IPC,
   CLOUD_SPEECH_MAX_EVENT_SUBSCRIPTIONS,
   CLOUD_SPEECH_MAX_PRELOAD_FRAME_INVOKES,
+  CloudSpeechEpochTransitionAckSchema,
+  CloudSpeechEpochTransitionAckResultSchema,
   CloudSpeechCancelRequestSchema,
   CloudSpeechCancelResultSchema,
   CloudSpeechCapabilitySchema,
@@ -23,6 +25,8 @@ import {
   type CloudSpeechCancelRequest,
   type CloudSpeechCapability,
   type CloudSpeechEvent,
+  type CloudSpeechEpochTransitionAck,
+  type CloudSpeechEpochTransitionAckResult,
   type CloudSpeechFinishRequest,
   type CloudSpeechFinishResult,
   type CloudSpeechFrame,
@@ -43,6 +47,9 @@ export type CloudSpeechPreloadApi = {
   cloudSpeechFinish: (request: CloudSpeechFinishRequest) => Promise<CloudSpeechFinishResult>
   cloudSpeechCancel: (request: CloudSpeechCancelRequest) => Promise<CloudSpeechCancelResult>
   cloudSpeechStatus: (request: CloudSpeechStatusRequest) => Promise<CloudSpeechStatusResult>
+  cloudSpeechAckEpochTransition: (
+    request: CloudSpeechEpochTransitionAck
+  ) => Promise<CloudSpeechEpochTransitionAckResult>
   onCloudSpeechEvent: (
     captureId: string,
     captureGeneration: number,
@@ -262,6 +269,35 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
         )
       } catch {
         return failure(parsed.data, 'TRANSPORT')
+      }
+    },
+    async cloudSpeechAckEpochTransition(request) {
+      let parsed: ReturnType<typeof CloudSpeechEpochTransitionAckSchema.safeParse>
+      try {
+        parsed = CloudSpeechEpochTransitionAckSchema.safeParse(request)
+      } catch {
+        return failure(request, 'INVALID_REQUEST')
+      }
+      if (!parsed.success) return failure(request, 'INVALID_REQUEST')
+      const value = parsed.data
+      try {
+        const result = transportFailure(
+          CloudSpeechEpochTransitionAckResultSchema,
+          await renderer.invoke(CLOUD_SPEECH_IPC.transitionAck, value),
+          value
+        )
+        if (
+          result.ok &&
+          (result.captureId !== value.captureId ||
+            result.captureGeneration !== value.captureGeneration ||
+            result.transitionId !== value.transitionId ||
+            result.handoffNonce !== value.handoffNonce ||
+            result.stage !== value.stage)
+        )
+          return failure(value, 'TRANSPORT')
+        return result
+      } catch {
+        return failure(value, 'TRANSPORT')
       }
     },
     onCloudSpeechEvent(captureId, captureGeneration, callback) {
