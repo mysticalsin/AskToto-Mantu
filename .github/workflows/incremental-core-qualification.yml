@@ -1,0 +1,71 @@
+name: Incremental persistence core qualification
+
+on:
+  push:
+    paths:
+      - .github/workflows/incremental-core-qualification.yml
+      - electron.vite.config.ts
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - vitest.incremental-worker.config.ts
+      - scripts/qa/run-incremental-core-validation.mjs
+      - src/main/features/meetings/incremental-meeting-*.ts
+      - src/main/features/meetings/incremental-record-*.ts
+      - src/main/features/meetings/meeting-public-projection*
+      - src/main/infra/storage/gateway*
+      - src/main/infra/storage/atomic-saved-write*
+      - src/main/infra/process/meeting-speech-*
+      - scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts
+      - src/main/meeting-speech-worker.ts
+      - src/shared/incremental-meeting.ts
+      - src/shared/meeting-speech-contract.ts
+      - src/shared/transcript-line.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: incremental-core-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  qualify:
+    name: Incremental core and compiled worker (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frozen test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install and verify pinned Electron host runtime
+        run: node scripts/ensure-electron-runtime.mjs
+      - name: Build application and compiled worker
+        run: npm run build
+      - name: Run focused core tests and compiled Electron worker positive path
+        env:
+          INCREMENTAL_CORE_REPORT_DIR: ${{ runner.temp }}/incremental-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+        run: node scripts/qa/run-incremental-core-validation.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: incremental-core-reports-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/incremental-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}/
+          if-no-files-found: warn
+          retention-days: 14

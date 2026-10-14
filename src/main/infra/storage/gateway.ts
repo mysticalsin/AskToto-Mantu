@@ -34,7 +34,24 @@ import { lstat, open, readdir, readFile, realpath, stat } from 'node:fs/promises
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
+import {
+  createStorageStreamReader,
+  openRegularRead,
+  type StorageOpenedRead,
+  type StorageReadHandle,
+  type StorageReadStats,
+  type StorageStreamResult,
+  type StreamOptions
+} from './gateway-stream'
 import { isLocalWrite } from './local-writes'
+
+export type {
+  StorageOpenedRead,
+  StorageReadHandle,
+  StorageReadStats,
+  StorageStreamResult,
+  StreamOptions
+} from './gateway-stream'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
 const DEFAULT_POOL_SIZE = 4
@@ -117,6 +134,12 @@ export interface StorageGateway {
   /** A file's bytes, read only when they are on this device. Concurrent reads of one version share one fs
    *  call and one buffer: treat it as read-only. */
   read(relPath: string, options?: ReadOptions): Promise<ReadResult>
+  /** Reads bounded owned chunks from a local, regular, non-symlink file; no complete file buffer is built. */
+  stream(
+    relPath: string,
+    sink: (chunk: Uint8Array, signal: AbortSignal) => void | Promise<void>,
+    options: StreamOptions
+  ): Promise<StorageStreamResult>
 }
 
 /** The fs calls the gateway makes; each is one libuv pool request. Injectable so tests can hold a call
@@ -127,12 +150,21 @@ export interface StorageFs {
   /** Reads at most maxBytes + 1 bytes; callers use the extra byte to detect concurrent file growth. */
   readFileBounded?(path: string, maxBytes: number): Promise<Buffer>
   realpath(path: string): Promise<string>
-  stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number; isFile?: () => boolean }>
+  stat(path: string): Promise<{
+    mtimeMs: number
+    ctimeMs: number
+    size: number
+    dev?: number
+    ino?: number
+    isFile?: () => boolean
+  }>
   /** Unlike `stat`, never follows the final path component: the only way to tell a plain file apart
    *  from a symlink wearing its name (e.g. a symlink planted with a draft-shaped name that points at
    *  another meeting already inside the root — `stat`/`realpath`'s in-root check alone would not catch
    *  that, since the *target* is still inside the root). */
   lstat(path: string): Promise<{ isSymbolicLink: boolean }>
+  /** Optional so existing test adapters remain compatible; production config supplies this capability. */
+  openRead?(path: string): Promise<StorageOpenedRead>
 }
 
 export interface StorageGatewayOptions {
@@ -246,6 +278,15 @@ function settle<T>(pending: Promise<T>): Promise<Settled<T>> {
   return pending.then((value): Settled<T> => ({ status: 'ok', value }), failureOf)
 }
 
+/** Rechecks cancellation at the sink's queued invocation, after the read has settled. */
+export function invokeStorageSinkWhenActive(
+  sink: (chunk: Uint8Array, signal: AbortSignal) => void | Promise<void>,
+  chunk: Uint8Array,
+  signal: AbortSignal
+): Promise<void> {
+  return Promise.resolve().then(() => (signal.aborted ? undefined : sink(chunk, signal)))
+}
+
 function reportProgress(onProgress: ReadOptions['onProgress'], progress: HydrationProgress): void {
   try {
     onProgress?.(progress)
@@ -339,7 +380,8 @@ export function createStorageGateway({
     readFileBounded,
     realpath,
     stat,
-    lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() }))
+    lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })),
+    openRead: openRegularRead
   },
   poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE),
   admission = poolAdmission(poolSize)
@@ -370,10 +412,21 @@ export function createStorageGateway({
   }
 
   /** One fs call under admission. */
-  async function call<T>(lane: Lane, request: Request, fsCall: () => Promise<T>): Promise<Settled<T>> {
+  async function call<T>(
+    lane: Lane,
+    request: Request,
+    fsCall: () => Promise<T>,
+    onLate?: (pending: Promise<Settled<T>>) => void
+  ): Promise<Settled<T>> {
     const refused = await admit(lane, request)
     if (refused) return refused
-    return untilEnded(settle(admission.run(fsCall)), request, 'running')
+    let settled = false
+    const pending = settle(admission.run(fsCall)).finally(() => {
+      settled = true
+    })
+    const result = await untilEnded(pending, request, 'running')
+    if (!settled) onLate?.(pending)
+    return result
   }
 
   async function statFile(path: string, request: Request): Promise<Settled<StatedFile>> {
@@ -521,6 +574,23 @@ export function createStorageGateway({
     failures.set(path, { result, expiresAt: now + FAILURE_TTL_MS })
   }
 
+  const stream = createStorageStreamReader({
+    currentRoot,
+    underRoot,
+    openRequest,
+    statFile,
+    isSymlink,
+    presenceWithin,
+    resolveInside,
+    call,
+    failureOf,
+    outsideRoot,
+    fs,
+    contentDeadlineMs: CONTENT_DEADLINE_MS,
+    untilSink: async (sink, chunk, request) =>
+      untilEnded(settle(invokeStorageSinkWhenActive(sink, chunk, request.signal)), request, 'running')
+  })
+
   return {
     async list(relDir, { signal } = {}) {
       const base = currentRoot()
@@ -594,6 +664,8 @@ export function createStorageGateway({
       } finally {
         request.close()
       }
-    }
+    },
+
+    stream
   }
 }

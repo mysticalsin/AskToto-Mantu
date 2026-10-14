@@ -13,6 +13,7 @@ import {
   rewriteSpeechTranscript
 } from './features/meetings/speech-provenance'
 import { formatTranscript } from './features/meetings/transcript-format'
+import { canonicalizeIncrementalMeetingRecord } from './features/meetings/incremental-record-canonical'
 
 function requestInputByteLength(
   operation: MeetingSpeechRequest['operation'],
@@ -20,6 +21,18 @@ function requestInputByteLength(
   limits: MeetingSpeechRequest['policy']['limits'],
   byteLimit = Number.MAX_SAFE_INTEGER
 ): number {
+  if (operation === 'canonical-record' && input && typeof input === 'object') {
+    const value = input as { recordJson?: unknown }
+    if (
+      Object.keys(input).sort().join(',') === 'recordJson' &&
+      value.recordJson instanceof Uint8Array &&
+      value.recordJson.buffer instanceof ArrayBuffer &&
+      value.recordJson.byteOffset === 0 &&
+      value.recordJson.byteLength === value.recordJson.buffer.byteLength
+    )
+      return value.recordJson.byteLength
+    return Number.POSITIVE_INFINITY
+  }
   if (operation === 'decrypt-v2' && input && typeof input === 'object') {
     const value = input as { envelopeJson?: unknown; contentKey?: unknown; kLocal?: unknown }
     if (
@@ -72,6 +85,44 @@ function requestInputByteLength(
   return size
 }
 
+function canonicalResultByteLength(value: unknown): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return Number.POSITIVE_INFINITY
+  const canonical = value as {
+    identityKey?: unknown
+    sha256?: unknown
+    canonicalBytes?: unknown
+    canonicalByteLength?: unknown
+    wordCount?: unknown
+    linePayloadBytes?: unknown
+    clock?: unknown
+  }
+  const keys = Object.keys(value).sort().join(',')
+  if (
+    keys !== 'canonicalByteLength,canonicalBytes,clock,identityKey,linePayloadBytes,sha256,wordCount' ||
+    typeof canonical.identityKey !== 'string' ||
+    typeof canonical.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(canonical.sha256) ||
+    typeof canonical.clock !== 'string' ||
+    !Number.isSafeInteger(canonical.wordCount) ||
+    !Number.isSafeInteger(canonical.linePayloadBytes) ||
+    !(canonical.canonicalBytes instanceof Uint8Array) ||
+    canonical.canonicalBytes.byteOffset !== 0 ||
+    canonical.canonicalBytes.byteLength !== canonical.canonicalBytes.buffer.byteLength ||
+    canonical.canonicalByteLength !== canonical.canonicalBytes.byteLength
+  )
+    return Number.POSITIVE_INFINITY
+  const metadataBytes =
+    Buffer.byteLength(canonical.identityKey, 'utf8') +
+    Buffer.byteLength(canonical.sha256, 'utf8') +
+    Buffer.byteLength(canonical.clock, 'utf8') +
+    String(canonical.wordCount).length +
+    String(canonical.linePayloadBytes).length +
+    String(canonical.canonicalByteLength).length +
+    32
+  const size = canonical.canonicalBytes.byteLength + metadataBytes
+  return Number.isSafeInteger(size) ? size : Number.POSITIVE_INFINITY
+}
+
 function policyValid(policy: MeetingSpeechRequest['policy']): boolean {
   const keys = ['maxFieldBytes', 'maxPayloadBytes', 'maxRecordBytes', 'maxRecords', 'maxWords']
   return Boolean(
@@ -95,7 +146,7 @@ export function processMeetingSpeechRequest(raw: unknown): MeetingSpeechReply | 
     Object.keys(request).sort().join(',') !== 'generation,id,input,operation,policy,protocol' ||
     !Number.isSafeInteger(request.id) ||
     !Number.isSafeInteger(request.generation) ||
-    !['render', 'decode', 'rewrite', 'project', 'encrypt-v2', 'decrypt-v2', 'rewrap-v2'].includes(
+    !['render', 'decode', 'rewrite', 'project', 'canonical-record', 'encrypt-v2', 'decrypt-v2', 'rewrap-v2'].includes(
       String(request.operation)
     ) ||
     !policyValid(request.policy as MeetingSpeechRequest['policy'])
@@ -131,6 +182,26 @@ export function processMeetingSpeechRequest(raw: unknown): MeetingSpeechReply | 
       const requestInput = input as { text: string; lines: import('@shared/transcript-line').TranscriptLine[] }
       if (typeof requestInput.text !== 'string' || !Array.isArray(requestInput.lines)) return failure('INVALID_REQUEST')
       value = rewriteSpeechTranscript(requestInput.text, requestInput.lines, policy.limits)
+    } else if (operation === 'canonical-record') {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) return failure('INVALID_REQUEST')
+      const recordInput = input as { recordJson?: unknown }
+      if (
+        Object.keys(input).sort().join(',') !== 'recordJson' ||
+        !(recordInput.recordJson instanceof Uint8Array) ||
+        !(recordInput.recordJson.buffer instanceof ArrayBuffer) ||
+        recordInput.recordJson.byteOffset !== 0 ||
+        recordInput.recordJson.byteLength !== recordInput.recordJson.buffer.byteLength
+      )
+        return failure('INVALID_REQUEST')
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(recordInput.recordJson)
+      const canonical = canonicalizeIncrementalMeetingRecord(JSON.parse(decoded), policy.limits, policy.maxInputBytes)
+      if (!canonical.ok)
+        return failure(
+          canonical.reason === 'RESOURCE_LIMIT' || canonical.reason === 'INVALID_LIMITS'
+            ? 'RESOURCE_LIMIT'
+            : 'INVALID_REQUEST'
+        )
+      value = canonical.value
     } else if (operation === 'encrypt-v2') {
       if (!input || typeof input !== 'object' || Array.isArray(input)) return failure('INVALID_REQUEST')
       const envelopeInput = input as {
@@ -247,14 +318,15 @@ export function processMeetingSpeechRequest(raw: unknown): MeetingSpeechReply | 
       envelope.kLocal = rewrapInput.kLocal
       value = Uint8Array.from(Buffer.from(JSON.stringify(envelope), 'utf8'))
     }
-    if (
-      (value instanceof Uint8Array
-        ? value.byteLength
-        : typeof value === 'string'
-          ? Buffer.byteLength(value, 'utf8')
-          : requestInputByteLength(operation, value, policy.limits, policy.maxOutputBytes)) > policy.maxOutputBytes
-    )
-      return failure('RESOURCE_LIMIT')
+    const outputBytes =
+      operation === 'canonical-record'
+        ? canonicalResultByteLength(value)
+        : value instanceof Uint8Array
+          ? value.byteLength
+          : typeof value === 'string'
+            ? Buffer.byteLength(value, 'utf8')
+            : requestInputByteLength(operation, value, policy.limits, policy.maxOutputBytes)
+    if (outputBytes > policy.maxOutputBytes) return failure('RESOURCE_LIMIT')
     return { protocol: 1, id, generation, result: { ok: true, value } }
   } catch {
     return failure('CODEC_FAILURE')
@@ -266,11 +338,21 @@ if (workerPort) {
   workerPort.on('message', (request: unknown) => {
     const startedAt = performance.now()
     const reply = processMeetingSpeechRequest(request)
+    const operation =
+      request && typeof request === 'object' && 'operation' in request
+        ? (request as { operation?: unknown }).operation
+        : undefined
     if (request && typeof request === 'object' && 'input' in request) {
       const raw = request as { operation?: unknown; input?: unknown }
       if (raw.input && typeof raw.input === 'object') {
         const input = raw.input as Record<string, unknown>
-        for (const key of raw.operation === 'encrypt-v2' ? ['contentKey', 'iv'] : ['contentKey']) {
+        const wipeKeys =
+          raw.operation === 'encrypt-v2'
+            ? ['contentKey', 'iv']
+            : raw.operation === 'canonical-record'
+              ? ['recordJson']
+              : ['contentKey']
+        for (const key of wipeKeys) {
           const secret = input[key]
           if (secret instanceof Uint8Array) secret.fill(0)
         }
@@ -280,6 +362,14 @@ if (workerPort) {
       const measured = { ...reply, workerDurationMs: Math.max(0, performance.now() - startedAt) }
       const value = reply.result.ok ? reply.result.value : undefined
       if (value instanceof Uint8Array) workerPort.postMessage(measured, [value.buffer as ArrayBuffer])
+      else if (
+        operation === 'canonical-record' &&
+        value &&
+        typeof value === 'object' &&
+        'canonicalBytes' in value &&
+        value.canonicalBytes instanceof Uint8Array
+      )
+        workerPort.postMessage(measured, [value.canonicalBytes.buffer as ArrayBuffer])
       else workerPort.postMessage(measured)
     }
   })
