@@ -46,8 +46,12 @@ export const serializeMeetingDocument = serialize
 const FULL_TRANSCRIPT_HEADING_RE = /^## Full transcript\b/m
 const RETENTION_HEADING_RE = /^## Retention\b/m
 
+export function recapSectionEndRe(type: string | undefined): RegExp {
+  return type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE
+}
+
 export function recapSectionEndIndex(afterNotesHeading: string, type: string | undefined): number {
-  return afterNotesHeading.search(type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE)
+  return afterNotesHeading.search(recapSectionEndRe(type))
 }
 
 /** Decodes one raw frontmatter value. Undoes the YAML escaping the writers apply (`\` → `\\`, `"` → `\"`):
