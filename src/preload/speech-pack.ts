@@ -2,10 +2,18 @@ import { IPC } from '../shared/ipc'
 import {
   SpeechPackActionRequestSchema,
   SpeechPackActionResultSchema,
+  SpeechPackInstallWithPlanRequestSchema,
+  SpeechPackInstallWithPlanResultSchema,
+  SpeechPackPlanPreviewRequestSchema,
+  SpeechPackPlanPreviewResultSchema,
   SpeechPackProgressSchema,
   SpeechPackSnapshotSchema,
   type SpeechPackActionRequest,
   type SpeechPackActionResult,
+  type SpeechPackInstallWithPlanRequest,
+  type SpeechPackInstallWithPlanResult,
+  type SpeechPackPlanPreviewRequest,
+  type SpeechPackPlanPreviewResult,
   type SpeechPackProgress,
   type SpeechPackSnapshot
 } from '../shared/speech-pack'
@@ -31,6 +39,24 @@ export function createSpeechPackBridge(transport: {
       const parsed = SpeechPackActionRequestSchema.safeParse(request)
       if (!parsed.success) return { ok: false, reason: 'invalid-request' }
       const result = SpeechPackActionResultSchema.safeParse(await invoke(IPC.speechPackAction, parsed.data))
+      if (!result.success) throw new Error('Invalid speech pack response')
+      return result.data
+    },
+    async speechPackPlanPreview(request: SpeechPackPlanPreviewRequest): Promise<SpeechPackPlanPreviewResult> {
+      const parsed = SpeechPackPlanPreviewRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, reason: 'invalid-request' }
+      const result = SpeechPackPlanPreviewResultSchema.safeParse(await invoke(IPC.speechPackPlanPreview, parsed.data))
+      if (!result.success) throw new Error('Invalid speech pack response')
+      return result.data
+    },
+    async speechPackInstallWithPlan(
+      request: SpeechPackInstallWithPlanRequest
+    ): Promise<SpeechPackInstallWithPlanResult> {
+      const parsed = SpeechPackInstallWithPlanRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, reason: 'invalid-request' }
+      const result = SpeechPackInstallWithPlanResultSchema.safeParse(
+        await invoke(IPC.speechPackInstallWithPlan, parsed.data)
+      )
       if (!result.success) throw new Error('Invalid speech pack response')
       return result.data
     },

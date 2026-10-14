@@ -21,6 +21,7 @@ import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 import { recordSidecarIntent, recordSidecarSpawned, recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
+import { assertLegacyRuntimeClosure } from '../features/components/speech-pack/package-runtime-state'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -626,6 +627,7 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
  * candidate fails — the caller (Rock 3's eligibility check) treats a rejection as "local ineligible now."
  */
 export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = detectPlatform()): Promise<void> {
+  await assertLegacyRuntimeClosure('local LLM')
   if (state === 'unavailable') throw new Error('local runtime unavailable for this session (restart budget exhausted)')
   if (state === 'starting') {
     await startPromise

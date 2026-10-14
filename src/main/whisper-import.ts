@@ -21,6 +21,7 @@ import { mainLog } from './logger'
 import { getSettings, setSettings } from './store'
 import { asrModelRoot, isHighTierAsrModelReady } from './asr-model-download'
 import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './asr-bundled-ensure'
+import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
 
 /** resources/models — or userData/asr-models when the floor was fetched after install. */
 function modelsDir(): Promise<string> {
@@ -499,6 +500,7 @@ export async function whisperImportTranscribe(
   language: string,
   probe?: LanguageProbe
 ): Promise<string> {
+  await assertLegacyRuntimeClosure('asr')
   await ensureWhisperFloorAssets()
   applyInitLanguage(language)
   await probeLanguage(samples, probe)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
+import { METIS_PACKAGE_PROFILE } from '@shared/package-profile'
 import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
 import { detectLanguage, detectLanguages } from '@shared/lang-id'
 import {
@@ -1201,6 +1202,9 @@ export function useListen(
 
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
+    if (METIS_PACKAGE_PROFILE === 'lean') {
+      throw new Error('The optional Whisper runtime is not configured for this package.')
+    }
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     readyRef.current = false
     w.onmessage = (e: MessageEvent): void => {

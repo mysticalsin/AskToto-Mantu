@@ -3,6 +3,7 @@
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { mainLog } from './logger'
+import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
 import {
   SPEAKER_EMBEDDING_DIMENSIONS,
   SPEAKER_MAX_SAMPLES,
@@ -225,6 +226,7 @@ export async function speakerEmbeddingAvailable(
 ): Promise<boolean> {
   if (!model) return false
   try {
+    await assertLegacyRuntimeClosure('speaker embedding')
     await admitted(owner, 0, (epoch) => requestHost({ type: 'warmup', model }, owner, epoch))
     return true
   } catch (error) {
@@ -242,6 +244,11 @@ export async function computeSpeakerEmbedding(
   if (samples.length > SPEAKER_MAX_SAMPLES) throw new Error('Speaker PCM is too large.')
   for (const sample of samples) {
     if (!Number.isFinite(sample)) throw new Error('Speaker PCM samples must be finite.')
+  }
+  try {
+    await assertLegacyRuntimeClosure('speaker embedding')
+  } catch {
+    return null
   }
   // Immutable admission accounting: caller-owned views may be detached/resized while this awaits.
   const admittedBytes = samples.byteLength

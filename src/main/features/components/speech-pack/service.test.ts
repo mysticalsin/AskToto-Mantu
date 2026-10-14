@@ -83,6 +83,20 @@ function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]>
   return { service: createSpeechPackService(options), engine, createEngine, update }
 }
 
+async function install(
+  service: ReturnType<typeof createSpeechPackService>,
+  component: SpeechPackComponent = WHISPER_BASE_Q8,
+  action: 'install' | 'repair' = 'install'
+): Promise<{ ok: boolean; reason?: string }> {
+  const preview = await service.planPreview({
+    componentId: component.id,
+    manifestIdentity: componentManifestIdentity(component),
+    action
+  })
+  if (!preview.ok) return preview
+  return service.installWithPlan({ planId: preview.plan.planId, action })
+}
+
 describe('explicit speech-pack service boundary', () => {
   it('keeps boot/status cold: no engine, downloads or self-test are constructed', async () => {
     const { service, createEngine } = setup()
@@ -95,17 +109,111 @@ describe('explicit speech-pack service boundary', () => {
     expect(service.hasEngine()).toBe(false)
   })
 
-  it('starts exactly the selected component only after an explicit current-manifest action', async () => {
+  it('does not present a model-only lean pack as a ready engine or an installable plan', async () => {
+    const leanContract = {
+      status: 'verified' as const,
+      profile: 'lean' as const,
+      inventory: {
+        schema: 1 as const,
+        profile: 'lean' as const,
+        platform: 'darwin' as const,
+        arch: 'arm64' as const,
+        appVersion: '2.1.0',
+        electronVersion: '43.6.0',
+        sourceCommit: 'a'.repeat(40),
+        coreFiles: [],
+        identity: 'b'.repeat(64)
+      }
+    }
+    const { service, createEngine } = setup({ packageRuntimeContract: async () => leanContract })
+    const snapshot = await service.snapshot()
+    expect(snapshot.engineReadiness).toMatchObject({ state: 'not-configured', runtimeComponentIds: ['runtime.asr-whisper-worker'] })
+    await expect(
+      service.planPreview({
+        componentId: WHISPER_BASE_Q8.id,
+        action: 'install',
+        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+      })
+    ).resolves.toEqual({ ok: false, reason: 'not-configured' })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('starts exactly the selected component only after explicit plan preview and affirmative execution', async () => {
     const { service, engine, createEngine } = setup()
-    const result = await service.action({
+    const preview = await service.planPreview({
       componentId: WHISPER_BASE_Q8.id,
-      action: 'download',
+      action: 'install',
       manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
     })
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error('expected an install plan')
+    expect(createEngine).not.toHaveBeenCalled()
+    const result = await service.installWithPlan({ planId: preview.plan.planId, action: 'install' })
     expect(result).toEqual({ ok: true })
     expect(createEngine).toHaveBeenCalledTimes(1)
     expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id)
     expect((await service.snapshot()).progress?.componentId).toBe(WHISPER_BASE_Q8.id)
+  })
+
+  it('makes each plan single-use and invalidates it when capture becomes active', async () => {
+    const { service, engine, createEngine } = setup()
+    const request = {
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install' as const,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    }
+    const preview = await service.planPreview(request)
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error('expected plan preview')
+    service.captureActivityChanged(true)
+    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: false,
+      reason: 'stale-plan'
+    })
+    expect(createEngine).not.toHaveBeenCalled()
+
+    service.captureActivityChanged(false)
+    const next = await service.planPreview(request)
+    expect(next.ok).toBe(true)
+    if (!next.ok) throw new Error('expected a fresh plan after capture ended')
+    await expect(service.installWithPlan({ planId: next.plan.planId, action: 'install' })).resolves.toEqual({ ok: true })
+    await expect(service.installWithPlan({ planId: next.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: false,
+      reason: 'plan-expired'
+    })
+    expect(engine.enqueue).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a plan after the effective policy identity changes while transfer remains allowed', async () => {
+    let policyIdentity = 'tenant-policy:1'
+    const { service, createEngine } = setup({ policyIdentity: () => policyIdentity })
+    const preview = await service.planPreview({
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install',
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    })
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error('expected plan preview')
+    policyIdentity = 'tenant-policy:2'
+    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: false,
+      reason: 'policy-blocked'
+    })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('keeps consent plans valid across unchanged status polls', async () => {
+    const { service } = setup()
+    const preview = await service.planPreview({
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install',
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    })
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error('expected plan preview')
+    service.selectionChanged()
+    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({ ok: true })
+    await service.shutdown()
   })
 
   it('completes a real engine activation after its ready event clears the service activity lease', async () => {
@@ -149,13 +257,7 @@ describe('explicit speech-pack service boundary', () => {
       }
     })
     try {
-      await expect(
-        service.action({
-          componentId: component.id,
-          action: 'download',
-          manifestIdentity: componentManifestIdentity(component)
-        })
-      ).resolves.toEqual({ ok: true })
+      await expect(install(service, component)).resolves.toEqual({ ok: true })
       const activeEngine = currentEngine()
       if (!activeEngine) throw new Error('expected service to create its engine after explicit consent')
       await activeEngine.whenIdle()
@@ -176,22 +278,22 @@ describe('explicit speech-pack service boundary', () => {
     })
     const identity = componentManifestIdentity(WHISPER_BASE_Q8)
     await expect(
-      service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: '0'.repeat(64) })
+      service.planPreview({ componentId: WHISPER_BASE_Q8.id, action: 'install', manifestIdentity: '0'.repeat(64) })
     ).resolves.toEqual({ ok: false, reason: 'stale-manifest' })
     await expect(
-      service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+      service.planPreview({ componentId: WHISPER_BASE_Q8.id, action: 'install', manifestIdentity: identity })
     ).resolves.toEqual({ ok: false, reason: 'disabled' })
     expect(createEngine).not.toHaveBeenCalled()
 
     const { service: blocked, createEngine: blockedCreate } = setup({ policyAllowsTransfer: () => false })
     await expect(
-      blocked.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+      blocked.planPreview({ componentId: WHISPER_BASE_Q8.id, action: 'install', manifestIdentity: identity })
     ).resolves.toEqual({ ok: false, reason: 'policy-blocked' })
     expect(blockedCreate).not.toHaveBeenCalled()
 
     const { service: other, createEngine: otherCreate } = setup({ selectedEngine: () => 'parakeet' })
     await expect(
-      other.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+      other.planPreview({ componentId: WHISPER_BASE_Q8.id, action: 'install', manifestIdentity: identity })
     ).resolves.toEqual({ ok: false, reason: 'not-selected' })
     expect(otherCreate).not.toHaveBeenCalled()
   })
@@ -199,7 +301,7 @@ describe('explicit speech-pack service boundary', () => {
   it('can pause or cancel an existing selected-only transfer without making a new one', async () => {
     const { service, engine } = setup()
     const identity = componentManifestIdentity(WHISPER_BASE_Q8)
-    await service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+    await install(service)
     await expect(
       service.action({ componentId: WHISPER_BASE_Q8.id, action: 'pause', manifestIdentity: identity })
     ).resolves.toEqual({
@@ -219,9 +321,9 @@ describe('explicit speech-pack service boundary', () => {
     const { service, createEngine } = setup()
     service.captureActivityChanged(true)
     await expect(
-      service.action({
+      service.planPreview({
         componentId: WHISPER_BASE_Q8.id,
-        action: 'download',
+        action: 'install',
         manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
       })
     ).resolves.toEqual({ ok: false, reason: 'busy' })
@@ -233,11 +335,11 @@ describe('explicit speech-pack service boundary', () => {
     const { service, createEngine } = setup({ captureActive: () => active })
     const request = {
       componentId: WHISPER_BASE_Q8.id,
-      action: 'download' as const,
+      action: 'install' as const,
       manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
     }
     active = true
-    await expect(service.action(request)).resolves.toEqual({ ok: false, reason: 'busy' })
+    await expect(service.planPreview(request)).resolves.toEqual({ ok: false, reason: 'busy' })
     expect(createEngine).not.toHaveBeenCalled()
 
     const failClosed = setup({
@@ -245,7 +347,7 @@ describe('explicit speech-pack service boundary', () => {
         throw new Error('capture state unavailable')
       }
     })
-    await expect(failClosed.service.action(request)).resolves.toEqual({ ok: false, reason: 'busy' })
+    await expect(failClosed.service.planPreview(request)).resolves.toEqual({ ok: false, reason: 'busy' })
     expect(failClosed.createEngine).not.toHaveBeenCalled()
   })
 
@@ -259,13 +361,13 @@ describe('explicit speech-pack service boundary', () => {
       const { service, createEngine } = setup()
       const request = {
         componentId: WHISPER_BASE_Q8.id,
-        action: 'download' as const,
+        action: 'install' as const,
         manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
       }
-      const pending = service.action(request)
+      const pending = service.planPreview(request)
       await expect(service.action({ ...request, action: 'cancel' })).resolves.toEqual({ ok: true })
       releaseProfile({ profile: 'development' })
-      await expect(pending).resolves.toEqual({ ok: false, reason: 'busy' })
+      await expect(pending).resolves.toEqual({ ok: false, reason: 'stale-plan' })
       expect(createEngine).not.toHaveBeenCalled()
     } finally {
       read.mockRestore()
@@ -289,23 +391,25 @@ describe('explicit speech-pack service boundary', () => {
       const { service, engine } = setup()
       const request = {
         componentId: WHISPER_BASE_Q8.id,
-        action: 'download' as const,
+        action: 'install' as const,
         manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
       }
-      const obsolete = service.action(request)
+      const obsolete = service.planPreview(request)
       await Promise.resolve()
       await service.action({ ...request, action: 'cancel' })
-      const current = service.action(request)
+      const current = service.planPreview(request)
       await Promise.resolve()
       expect(pendingReads).toHaveLength(2)
 
       pendingReads[0].release({ profile: 'development' })
-      await expect(obsolete).resolves.toEqual({ ok: false, reason: 'busy' })
-      await expect(service.action(request)).resolves.toEqual({ ok: false, reason: 'busy' })
+      await expect(obsolete).resolves.toEqual({ ok: false, reason: 'stale-plan' })
       expect(engine.enqueue).not.toHaveBeenCalled()
 
       pendingReads[1].release({ profile: 'development' })
-      await expect(current).resolves.toEqual({ ok: true })
+      const plan = await current
+      expect(plan.ok).toBe(true)
+      if (!plan.ok) throw new Error('expected a current install plan')
+      await service.installWithPlan({ planId: plan.plan.planId, action: 'install' })
       expect(engine.enqueue).toHaveBeenCalledTimes(1)
     } finally {
       read.mockRestore()
@@ -333,15 +437,15 @@ describe('explicit speech-pack service boundary', () => {
           policyAllowsTransfer: () => pendingState.policy,
           captureActive: () => pendingState.capture
         })
-        const pending = service.action({
+        const pending = service.planPreview({
           componentId: WHISPER_BASE_Q8.id,
-          action: 'download',
+          action: 'install',
           manifestIdentity: identity
         })
         await Promise.resolve()
         await invalidate(service, pendingState)
         releaseProfile({ profile: 'development' })
-        await expect(pending).resolves.toEqual({ ok: false, reason: expected })
+        await expect(pending).resolves.toEqual({ ok: false, reason: expected === 'not-selected' ? 'not-selected' : 'stale-plan' })
         expect(createEngine).not.toHaveBeenCalled()
       } finally {
         read.mockRestore()
@@ -367,9 +471,9 @@ describe('explicit speech-pack service boundary', () => {
     const { service, createEngine } = setup()
     await service.shutdown()
     await expect(
-      service.action({
+      service.planPreview({
         componentId: WHISPER_BASE_Q8.id,
-        action: 'download',
+        action: 'install',
         manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
       })
     ).resolves.toEqual({ ok: false, reason: 'busy' })
@@ -388,7 +492,13 @@ describe('explicit speech-pack service boundary', () => {
     const resolve = vi.spyOn(Resolver, 'resolveSpeechPack').mockResolvedValue(readiness)
     try {
       const { service, update } = setup()
-      await service.action({ componentId: c.id, action: 'download', manifestIdentity: componentManifestIdentity(c) })
+      const preview = await service.planPreview({
+        componentId: c.id,
+        action: 'repair',
+        manifestIdentity: componentManifestIdentity(c)
+      })
+      if (!preview.ok) throw new Error('expected explicit repair plan')
+      await service.installWithPlan({ planId: preview.plan.planId, action: 'repair' })
       update(c.id, { status: 'ready' }) // existing-install shortcut, with no self-test event
       expect((await service.snapshot()).components.find((item) => item.componentId === c.id)?.integrity).toBe(
         'prior-activation-and-size-checked'
@@ -433,9 +543,9 @@ describe('explicit speech-pack service boundary', () => {
       downloadBytes: component.files.reduce((sum, file) => sum + file.bytes, 0)
     })
     await expect(
-      service.action({
+      service.planPreview({
         componentId: component.id,
-        action: 'download',
+        action: 'install',
         manifestIdentity: componentManifestIdentity(component)
       })
     ).resolves.toEqual({ ok: false, reason: 'not-configured' })

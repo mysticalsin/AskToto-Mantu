@@ -13,11 +13,19 @@ const mocks = vi.hoisted(() => {
     service,
     unregister,
     createSpeechPackService: vi.fn((_options: unknown) => service),
+    createPackageRuntimeContractProvider: vi.fn(() => async () => ({ status: 'legacy-full', profile: 'full', inventory: null })),
+    configurePackageRuntimeContractProvider: vi.fn(),
     registerSpeechPackIpc: vi.fn(() => unregister)
   }
 })
-vi.mock('./features/components', () => ({ createSpeechPackService: mocks.createSpeechPackService }))
+vi.mock('./features/components', () => ({
+  createSpeechPackService: mocks.createSpeechPackService,
+  createPackageRuntimeContractProvider: mocks.createPackageRuntimeContractProvider,
+  configurePackageRuntimeContractProvider: mocks.configurePackageRuntimeContractProvider
+}))
 vi.mock('./ipc/speech-pack-ipc', () => ({ registerSpeechPackIpc: mocks.registerSpeechPackIpc }))
+vi.mock('@shared/package-profile', () => ({ METIS_PACKAGE_PROFILE: 'full' }))
+vi.mock('electron', () => ({ app: { getVersion: () => '2.1.0' } }))
 
 afterEach(() => {
   vi.useRealTimers()
