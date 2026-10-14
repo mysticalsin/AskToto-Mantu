@@ -4,7 +4,6 @@ import {
   CLOUD_SPEECH_MAX_PENDING_FRAMES,
   CloudSpeechCapabilitySchema,
   CloudSpeechCancelResultSchema,
-  CloudSpeechEventSchema,
   CloudSpeechFinishResultSchema,
   CloudSpeechFrame,
   CloudSpeechFrameResultSchema,
@@ -21,7 +20,19 @@ import {
   type CloudSpeechFinishResult,
   type CloudSpeechFinishRequest
 } from '@shared/cloud-speech'
-import type { SpeechStreamRef, Track } from '@shared/contracts/speech'
+import type { Track } from '@shared/contracts/speech'
+import {
+  convertFloat32ToPcm16le,
+  getFixedFloat32View,
+  parseWorkletPortMessage,
+  type FlushAck,
+  type WorkletFrame
+} from './cloud-speech-audio'
+import {
+  cloudSpeechFailure as failure,
+  cloudSpeechIdentityMatches as identityMatches,
+  createCloudSpeechResultTracker
+} from './cloud-speech-results'
 
 type CloudSpeechTrack = Track
 
@@ -56,21 +67,6 @@ export interface CloudSpeechController {
   dispose(): void
 }
 
-type WorkletFrame = {
-  type: 'pcm-frame'
-  sequence: number
-  sampleOffset: number
-  sampleRate: number
-  audio: Float32Array
-}
-
-type FlushAck = {
-  type: 'flush-ack'
-  requestId: string
-  finalSequence: number
-  finalSampleOffset: number
-}
-
 type QueuedFrame = {
   wire: CloudSpeechFrame
   enqueuedAt: number
@@ -90,23 +86,14 @@ type TrackInput = {
   queue: QueuedFrame[]
   pumping: Promise<void> | null
   sealing: boolean
+  sealedFinalAdmitted: boolean
   flushRequestId: string | null
   flush: ReturnType<typeof createDeferred<FlushAck>> | null
   flushed: boolean
 }
 
-type RevisionState = { revision: number; final: boolean }
-
 const DEFAULT_DEADLINE_MS = 12_000
 const tracksInOrder: readonly CloudSpeechTrack[] = ['microphone', 'system']
-const typedArrayPrototype = Object.getPrototypeOf(Float32Array.prototype) as object
-const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer')?.get
-const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset')?.get
-const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')?.get
-const typedArrayLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'length')?.get
-const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get
-const arrayBufferResizableGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get
-
 function createDeferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -121,77 +108,6 @@ function isSafeNonnegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) return false
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value)
-  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-}
-
-function getFixedFloat32View(
-  value: unknown
-): { view: Float32Array; buffer: ArrayBuffer; byteOffset: number; byteLength: number; length: number } | null {
-  if (
-    !ArrayBuffer.isView(value) ||
-    !typedArrayBufferGetter ||
-    !typedArrayByteOffsetGetter ||
-    !typedArrayByteLengthGetter ||
-    !typedArrayLengthGetter
-  )
-    return null
-  try {
-    const buffer = typedArrayBufferGetter.call(value) as unknown
-    if (!(buffer instanceof ArrayBuffer) || !arrayBufferByteLengthGetter) return null
-    const bufferLength = arrayBufferByteLengthGetter.call(buffer) as number
-    if (arrayBufferResizableGetter?.call(buffer) === true) return null
-    const byteOffset = typedArrayByteOffsetGetter.call(value) as number
-    const byteLength = typedArrayByteLengthGetter.call(value) as number
-    const length = typedArrayLengthGetter.call(value) as number
-    if (
-      Object.getPrototypeOf(value) !== Float32Array.prototype ||
-      !Number.isSafeInteger(bufferLength) ||
-      !Number.isSafeInteger(byteOffset) ||
-      !Number.isSafeInteger(byteLength) ||
-      !Number.isSafeInteger(length) ||
-      byteLength !== length * Float32Array.BYTES_PER_ELEMENT ||
-      byteOffset + byteLength > bufferLength ||
-      length <= 0
-    )
-      return null
-    return { view: value as Float32Array, buffer: buffer as ArrayBuffer, byteOffset, byteLength, length }
-  } catch {
-    return null
-  }
-}
-
-function failure(code: CloudSpeechFailure['code'], request?: CloudSpeechStartRequest): CloudSpeechFailure {
-  if (
-    request &&
-    typeof request.captureId === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.captureId) &&
-    Number.isSafeInteger(request.capture?.generation) &&
-    request.capture.generation > 0
-  ) {
-    return { ok: false, code, captureId: request.captureId, captureGeneration: request.capture.generation }
-  }
-  return { ok: false, code }
-}
-
-function identityMatches(
-  value: { captureId: string; captureGeneration: number },
-  request: CloudSpeechStartRequest
-): boolean {
-  return value.captureId === request.captureId && value.captureGeneration === request.capture.generation
-}
-
-function streamKey(stream: Pick<SpeechStreamRef, 'track' | 'epoch'>): string {
-  return `${stream.track}:${stream.epoch}`
-}
-
 export function createCloudSpeechController(options: CloudSpeechControllerOptions): CloudSpeechController {
   const now = options.now ?? (() => performance.now())
   const requestedDeadlineMs = options.deadlineMs
@@ -202,12 +118,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   const requestParse = CloudSpeechStartRequestSchema.safeParse(options.request)
   const request = requestParse.success ? requestParse.data : options.request
   const inputs = new Map<CloudSpeechTrack, TrackInput>()
-  const streams = new Map<CloudSpeechTrack, number>()
-  const revisions = new Map<string, RevisionState>()
-  const seenEventSequences = new Map<string, number>()
-  const appliedEventSequences = new Map<string, number>()
-  const expectedEventFrontiers = new Map<string, number>()
-  const terminalStreams = new Set<string>()
+  const resultTracker = createCloudSpeechResultTracker(request)
   const applyWaiters = new Set<() => void>()
 
   let startPromise: Promise<CloudSpeechStartResult> | null = null
@@ -316,44 +227,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   }
 
   const validateEvent = (raw: unknown): CloudSpeechEvent | null => {
-    const parsed = CloudSpeechEventSchema.safeParse(raw)
-    if (!parsed.success || !identityMatches(parsed.data, request) || !started) return null
-    const event = parsed.data
-    const stream = event.type === 'terminal' ? event.stream : event.segment.stream
-    const currentEpoch = streams.get(stream.track)
-    if (currentEpoch === undefined || stream.epoch < currentEpoch) return null
-    if (stream.epoch > currentEpoch) {
-      const priorKey = `${stream.track}:${currentEpoch}`
-      if (stream.epoch !== currentEpoch + 1 || !terminalStreams.has(priorKey)) return null
-      streams.set(stream.track, stream.epoch)
-    }
-    if (event.type === 'terminal') {
-      const key = streamKey(event.stream)
-      if (terminalStreams.has(key) || event.lastSequence !== (seenEventSequences.get(key) ?? 0)) return null
-      terminalStreams.add(key)
-      return event
-    }
-
-    if (!request.capture.capturedTracks.includes(stream.track) || event.segment.engine !== started.engine) return null
-    const key = streamKey(stream)
-    if (terminalStreams.has(key)) return null
-    const previousSequence = seenEventSequences.get(key) ?? 0
-    if (
-      event.sequence !== previousSequence + 1 ||
-      (expectedEventFrontiers.has(key) && event.sequence > (expectedEventFrontiers.get(key) ?? 0))
-    )
-      return null
-    const revisionKey = `${request.captureId}:${request.capture.generation}:${stream.track}:${stream.epoch}:${event.segment.index}`
-    const previousRevision = revisions.get(revisionKey)
-    if (
-      (previousRevision && previousRevision.final) ||
-      (previousRevision && event.segment.revision !== previousRevision.revision + 1) ||
-      (!previousRevision && event.segment.revision !== 1)
-    )
-      return null
-    seenEventSequences.set(key, event.sequence)
-    revisions.set(revisionKey, { revision: event.segment.revision, final: event.segment.final })
-    return event
+    return started ? resultTracker.validate(raw, started.engine) : null
   }
 
   const handleEvent = (raw: unknown): void => {
@@ -364,12 +238,12 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       return
     }
     const stream = event.type === 'segment' ? event.segment.stream : event.stream
-    const key = streamKey(stream)
+    const key = resultTracker.key(stream)
     eventApplyTail = eventApplyTail
       .then(async () => {
         if (stopped || disposed || failureCode) return
         await options.applyEvent(event)
-        if (event.type === 'segment') appliedEventSequences.set(key, event.sequence)
+        if (event.type === 'segment') resultTracker.markApplied(stream, event.sequence)
         notifyApplied()
       })
       .catch(() => invalidate('TRANSPORT'))
@@ -429,6 +303,10 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   const queueFrame = (input: TrackInput, frame: WorkletFrame): void => {
     if (stopped || failureCode || disposed) return
+    if (input.sealedFinalAdmitted) {
+      invalidate('ORDER')
+      return
+    }
     const view = getFixedFloat32View(frame.audio)
     if (
       !view ||
@@ -467,13 +345,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     input.pendingAudioMs += audioMs
     let pcm16le: ArrayBuffer
     try {
-      pcm16le = new ArrayBuffer(pcmBytes)
-      const data = new DataView(pcm16le)
-      for (let index = 0; index < view.length; index += 1) {
-        const sample = Math.max(-1, Math.min(1, view.view[index]))
-        const pcm = sample < 0 ? Math.round(sample * 32_768) : Math.round(sample * 32_767)
-        data.setInt16(index * 2, pcm, true)
-      }
+      pcm16le = convertFloat32ToPcm16le(view.view, view.length)
     } catch {
       input.pendingFrames -= 1
       input.pendingBytes -= pcmBytes
@@ -491,6 +363,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       pcm16le
     }
     input.queue.push({ wire, enqueuedAt: now(), audioMs })
+    if (view.length !== 1_600) input.sealedFinalAdmitted = true
     input.nextSequence += 1
     input.sampleOffset += view.length
     startPump(input)
@@ -506,47 +379,30 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   }
 
   const receivePortMessage = (input: TrackInput, raw: unknown): void => {
-    if (!isPlainRecord(raw) || typeof raw.type !== 'string') {
-      invalidate('INVALID_REQUEST')
+    const message = parseWorkletPortMessage(raw)
+    if (message.kind === 'frame') {
+      queueFrame(input, message.frame)
       return
     }
-    if (raw.type === 'pcm-frame') {
-      if (!exactKeys(raw, ['type', 'sequence', 'sampleOffset', 'sampleRate', 'audio'])) {
-        invalidate('INVALID_REQUEST')
-        return
-      }
-      if (
-        !Number.isSafeInteger(raw.sequence) ||
-        !isSafeNonnegativeInteger(raw.sampleOffset) ||
-        typeof raw.sampleRate !== 'number' ||
-        !Number.isFinite(raw.sampleRate)
-      ) {
-        invalidate('INVALID_REQUEST')
-        return
-      }
-      queueFrame(input, raw as unknown as WorkletFrame)
-      return
-    }
-    if (raw.type === 'flush-ack') {
+    if (message.kind === 'flush') {
+      const { ack } = message
       if (
         !input.sealing ||
         input.flushed ||
         !input.flush ||
-        !exactKeys(raw, ['type', 'requestId', 'finalSequence', 'finalSampleOffset']) ||
-        raw.requestId !== input.flushRequestId ||
-        !isSafeNonnegativeInteger(raw.finalSequence) ||
-        !isSafeNonnegativeInteger(raw.finalSampleOffset) ||
-        raw.finalSequence !== input.nextSequence - 1 ||
-        raw.finalSampleOffset !== input.sampleOffset
+        !ack ||
+        ack.requestId !== input.flushRequestId ||
+        ack.finalSequence !== input.nextSequence - 1 ||
+        ack.finalSampleOffset !== input.sampleOffset
       ) {
         invalidate('ORDER')
         return
       }
       input.flushed = true
-      input.flush.resolve(raw as unknown as FlushAck)
+      input.flush.resolve(ack)
       return
     }
-    invalidate('INVALID_REQUEST')
+    invalidate(message.kind === 'order' ? 'ORDER' : 'INVALID_REQUEST')
   }
 
   const parseFinishResult = (raw: unknown): CloudSpeechFinishResult => {
@@ -560,11 +416,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     result: Extract<CloudSpeechFinishResult, { ok: true }>,
     deadline: number
   ): Promise<boolean> => {
-    const complete = (): boolean =>
-      result.tracks.every((trackResult) => {
-        const key = streamKey(trackResult.stream)
-        return (appliedEventSequences.get(key) ?? 0) >= trackResult.lastSequence
-      })
+    const complete = (): boolean => resultTracker.appliedThrough(result)
     while (!complete()) {
       const remaining = deadline - now()
       if (remaining <= 0) return false
@@ -620,7 +472,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       parsed.data.tracks.some(
         (trackResult) =>
           !request.capture.capturedTracks.includes(trackResult.stream.track) ||
-          streams.get(trackResult.stream.track) !== trackResult.stream.epoch
+          resultTracker.currentEpoch(trackResult.stream.track) !== trackResult.stream.epoch
       )
     )
       return null
@@ -629,7 +481,13 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       captureId: request.captureId,
       captureGeneration: request.capture.generation,
       complete: false,
-      tracks: parsed.data.tracks,
+      tracks: parsed.data.tracks.map((track) => ({
+        stream: track.stream,
+        lastSequence: track.lastSequence,
+        closeConfirmed: track.closeConfirmed,
+        tail: 'incomplete' as const,
+        reason: 'unknown' as const
+      })),
       reason: 'incomplete'
     })
     if (!recovered.success || !recovered.data.ok) return null
@@ -700,7 +558,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
           return failure('STALE', request)
         }
         started = result
-        for (const stream of result.streams) streams.set(stream.track, stream.streamEpoch)
+        resultTracker.initialize(result)
         unsubscribeEvents = options.bridge.onCloudSpeechEvent(
           request.captureId,
           request.capture.generation,
@@ -727,7 +585,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       stopped ||
       disposed ||
       !request.capture.capturedTracks.includes(track) ||
-      !streams.has(track) ||
+      resultTracker.currentEpoch(track) === undefined ||
       inputs.has(track) ||
       !isSafeNonnegativeInteger(originSampleOffset)
     ) {
@@ -745,6 +603,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     input.queue = []
     input.pumping = null
     input.sealing = false
+    input.sealedFinalAdmitted = false
     input.flushRequestId = null
     input.flush = null
     input.flushed = false
@@ -853,22 +712,18 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       if (
         finishResult.tracks.length !== tracks.length ||
         finishResult.tracks.some((trackResult) => {
-          const expected = streams.get(trackResult.stream.track)
+          const expected = resultTracker.currentEpoch(trackResult.stream.track)
           return (
             expected !== trackResult.stream.epoch ||
             !inputs.has(trackResult.stream.track) ||
-            (seenEventSequences.get(streamKey(trackResult.stream)) ?? 0) > trackResult.lastSequence
+            resultTracker.seenSequence(trackResult.stream) > trackResult.lastSequence
           )
         })
       ) {
         invalidate('STALE')
         return failure('STALE', request)
       }
-      expectedEventFrontiers.clear()
-      for (const trackResult of finishResult.tracks) {
-        expectedEventFrontiers.set(streamKey(trackResult.stream), trackResult.lastSequence)
-      }
-      if (finishResult.complete && [...revisions.values()].some((revision) => !revision.final)) {
+      if (!resultTracker.prepareFinish(finishResult)) {
         finishResult = { ...finishResult, complete: false, reason: 'incomplete' }
       }
       if (now() >= deadline || !(await waitForAppliedFrontiers(finishResult, deadline))) {
