@@ -287,6 +287,7 @@ describe('actual saved final speech provenance', () => {
     const before = readFileSync(file)
     const rows = await listMeetings()
     expect(rows.some((row) => row.file === basename(file))).toBe(true)
+    expect(rows.find((row) => row.file === basename(file))?.unavailable).toBe(true)
     expect((await recallRead(basename(file))).ok).toBe(false)
     await expect(readSavedMeeting(folder, basename(file))).rejects.toThrow(
       'Meeting text could not be projected safely.'
