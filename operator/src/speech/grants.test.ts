@@ -172,6 +172,7 @@ describe('D1 speech grants', () => {
     ['revoked seat', "UPDATE seats SET approval = 'revoked' WHERE device_id = 'device-a'"],
     ['rebound license', "UPDATE issued_licenses SET activated_device = 'device-b' WHERE jti = 'license-a'"],
     ['missing entitlement', "UPDATE tiers SET entitlements_json = '[\"listen\"]' WHERE id = 'metis'"],
+    ['non-string entitlement', "UPDATE tiers SET entitlements_json = '[\"listen\",\"operator_keys\",{}]' WHERE id = 'metis'"],
     ['corrupt entitlements', "UPDATE tiers SET entitlements_json = '{broken' WHERE id = 'metis'"]
   ])('refuses grant redemption after current authorization fails: %s', async (_name, mutation) => {
     const db = brokerDb()

@@ -125,8 +125,9 @@ export async function allocateSpeechSession(
           AND COALESCE(LOWER(s.approval), '') != 'revoked'
           AND CASE WHEN json_valid(t.entitlements_json) = 1 THEN
             CASE WHEN json_type(t.entitlements_json) = 'array' THEN
-              (SELECT COUNT(DISTINCT value) FROM json_each(t.entitlements_json)
-               WHERE value IN ('listen', 'operator_keys')) = 2
+              NOT EXISTS (SELECT 1 FROM json_each(t.entitlements_json) WHERE type != 'text')
+              AND (SELECT COUNT(DISTINCT value) FROM json_each(t.entitlements_json)
+                   WHERE value IN ('listen', 'operator_keys')) = 2
             ELSE 0 END
           ELSE 0 END = 1
       )
@@ -233,8 +234,9 @@ export async function redeemSpeechGrant(
             AND s.license_jti = ss.license_jti AND COALESCE(LOWER(s.approval), '') != 'revoked'
             AND CASE WHEN json_valid(t.entitlements_json) = 1 THEN
               CASE WHEN json_type(t.entitlements_json) = 'array' THEN
-                (SELECT COUNT(DISTINCT value) FROM json_each(t.entitlements_json)
-                 WHERE value IN ('listen', 'operator_keys')) = 2
+                NOT EXISTS (SELECT 1 FROM json_each(t.entitlements_json) WHERE type != 'text')
+                AND (SELECT COUNT(DISTINCT value) FROM json_each(t.entitlements_json)
+                     WHERE value IN ('listen', 'operator_keys')) = 2
               ELSE 0 END
             ELSE 0 END = 1
         )
