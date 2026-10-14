@@ -34,7 +34,7 @@ const MAX_RUNTIME_PHYSICAL_PATH_BYTES = 4 * 1024 * 1024
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0
 const NONBLOCK = constants.O_NONBLOCK ?? 0
 
-function readDirectoryNamesSync(directory: string, maxEntries: number): string[] {
+export function readRuntimeDirectoryNamesSync(directory: string, maxEntries: number): string[] {
   if (maxEntries > MAX_RUNTIME_DIRECTORY_ENTRIES) {
     throw new Error('RUNTIME_STAGED_FILE_CLOSURE_MISMATCH')
   }
@@ -50,6 +50,10 @@ function readDirectoryNamesSync(directory: string, maxEntries: number): string[]
   } finally {
     handle.closeSync()
   }
+}
+
+export function readRuntimeNamedVersionSync(path: string): BigIntStats {
+  return lstatSync(path, { bigint: true })
 }
 
 export interface RuntimePointerAdmission {
@@ -366,7 +370,7 @@ export async function prepareRuntimePhysicalAdmission(
   const assertNodes = (): void => {
     for (let index = 0; index < nodes.length; index++) {
       const node = nodes[index]
-      const named = lstatSync(node.path, { bigint: true })
+      const named = readRuntimeNamedVersionSync(node.path)
       const opened = fstatSync(handles[index].fd, { bigint: true })
       if (!sameRuntimeFileVersion(node.version, named) || !sameRuntimeFileVersion(node.version, opened)) {
         throw new Error('RUNTIME_PHYSICAL_NODE_CHANGED')
@@ -381,7 +385,7 @@ export async function prepareRuntimePhysicalAdmission(
       for (const pointer of pointers) pointer.assertCurrentSync()
       assertNodes()
       for (const directory of input.directories) {
-        const actual = readDirectoryNamesSync(directory.path, directory.children.length)
+        const actual = readRuntimeDirectoryNamesSync(directory.path, directory.children.length)
         if (!sameDirectoryMembers(directory.children, actual)) throw new Error('RUNTIME_PHYSICAL_CLOSURE_CHANGED')
       }
       assertNodes()
