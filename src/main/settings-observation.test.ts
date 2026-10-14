@@ -4,6 +4,18 @@ import { DEFAULT_SETTINGS } from '@shared/ipc'
 describe('settings publication', () => {
   beforeEach(() => vi.resetModules())
 
+  it('exposes only the current publication without reading or acknowledging settings', async () => {
+    const bus = await import('./settings-observation')
+    expect(bus.getPublishedSettingsObservation()).toBeNull()
+    bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)
+    const epoch = bus.getSettingsObservationEpoch()
+    expect(bus.getPublishedSettingsObservation()).toEqual({ settings: DEFAULT_SETTINGS, readable: true, epoch })
+    for (let index = 0; index < 600; index += 1) bus.getPublishedSettingsObservation()
+    expect(bus.getSettingsObservationEpoch()).toBe(epoch)
+    bus.observeSettingsSnapshot(() => { throw new Error('synthetic failure') })
+    expect(bus.getPublishedSettingsObservation()).toEqual({ settings: DEFAULT_SETTINGS, readable: false, epoch: epoch + 1 })
+  })
+
   it('publishes cache hits without renewing the epoch and respects subscription ownership', async () => {
     const bus = await import('./settings-observation')
     const first = vi.fn()

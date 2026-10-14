@@ -59,17 +59,22 @@ function fixture() {
     readPolicyPathsRevision: () => 'synthetic-policy-paths-v1',
     installPolicyIdentityReader: (next) => {
       identityReader = next
-    }
+    },
+    invalidatePolicyProof: vi.fn(),
+    observePolicyRevocations: vi.fn(),
+    refreshVerifiedPolicy: vi.fn(async () => {})
   })
   return { bootstrap, metadata, readSettings, publish, settings: () => settings, identity: () => identityReader?.() }
 }
 
 describe('actual speech bootstrap composition', () => {
-  it('keeps repeated runtime checks on memory and preserves legacy ingest policy identity', async () => {
+  it('keeps repeated cached-state reads on memory and preserves legacy ingest policy identity', async () => {
     const f = fixture()
     try {
       await f.bootstrap.prime
       expect(desktop.options?.readState().metadataReady).toBe(true)
+      expect(desktop.options?.readState().settings).not.toHaveProperty('operatorIngestSecret')
+      expect(desktop.options?.readState().settings).not.toHaveProperty('azureClientId')
       const settingsReads = f.readSettings.mock.calls.length
       const boundaryReads = f.metadata.mock.calls.length
       for (let i = 0; i < 600; i += 1) desktop.options?.readState()
@@ -86,7 +91,7 @@ describe('actual speech bootstrap composition', () => {
       f.publish({ ...f.settings(), overlayOpacity: 0.6 })
       expect(desktop.options?.readState().metadataReady).toBe(true)
     } finally {
-      f.bootstrap.dispose()
+      await f.bootstrap.dispose()
     }
     expect(f.identity()).toBeUndefined()
   })
@@ -95,11 +100,11 @@ describe('actual speech bootstrap composition', () => {
     const f = fixture()
     try {
       await f.bootstrap.prime
-      let release: ((value: Awaited<ReturnType<typeof f.metadata>>) => void) | null = null
+      const gate: { release?: (value: Awaited<ReturnType<typeof f.metadata>>) => void } = {}
       f.metadata.mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            release = resolve
+            gate.release = resolve
           })
       )
       const refresh = f.bootstrap.refresh('synthetic-held-boundary')
@@ -109,16 +114,17 @@ describe('actual speech bootstrap composition', () => {
       expect(desktop.options?.readState().metadataReady).toBe(false)
       f.publish(original, false)
       expect(f.identity()?.durableDeviceId).toBeNull()
-      release?.({
-        durableDeviceId: 'synthetic-persisted-device',
+      gate.release?.({
+        durableDeviceId: 'synthetic-retired-device',
         managedPolicy: { state: 'absent' },
         screenDiagnosisState: 'granted'
       })
       await refresh
-      // The forced boundary may recover readable settings, but the retired first read cannot publish its stale authority.
       expect(desktop.invalidate).toHaveBeenCalled()
+      expect(desktop.options?.readState().durableDeviceId).toBe('synthetic-persisted-device')
+      expect(desktop.options?.readState().durableDeviceId).not.toBe('synthetic-retired-device')
     } finally {
-      f.bootstrap.dispose()
+      await f.bootstrap.dispose()
     }
   })
 })
