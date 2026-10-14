@@ -55,9 +55,9 @@ export interface SpeechPackServiceOptions {
   /** Loaded once at the explicit app startup boundary; immutable for this app process. */
   packageRuntimeContract?: () => Promise<PackageRuntimeContract>
   /** Full/development packages keep the established bundled runtime path; lean needs an activated runtime pack. */
-  engineRuntimeReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean
+  engineRuntimeReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean | Promise<boolean>
   /** Existing packaged model readiness, separate from a userData speech-pack activation. */
-  engineModelReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean
+  engineModelReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean | Promise<boolean>
   shutdownTimeoutMs?: number
 }
 
@@ -249,6 +249,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     )
     // Read selection only after metadata I/O so a slow result cannot pair old engine state with new progress.
     const selectedEngine = options.selectedEngine()
+    const selectedIdentity = options.selectionIdentity?.() ?? selectedEngine
     const selectedComponent = selectedId(selectedEngine)
     const selectedRow = selectedComponent ? rows.find((row) => row.componentId === selectedComponent) : undefined
     const runtimeComponentIds = runtimeIdsForEngine(selectedEngine)
@@ -272,11 +273,25 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       engineState = 'incompatible'
     } else if (runtimeReadiness === 'not-configured') {
       engineState = 'not-configured'
-    } else if (options.engineRuntimeReady?.(selectedEngine) === false) {
-      engineState = 'runtime-needed'
+    } else if (options.engineRuntimeReady) {
+      try {
+        if (!(await options.engineRuntimeReady(selectedEngine))) {
+          engineState = 'runtime-needed'
+        } else if (options.engineModelReady) {
+          engineState = (await options.engineModelReady(selectedEngine)) ? 'ready' : 'model-needed'
+        } else if (selectedRow?.state === 'repair-needed') {
+          engineState = 'repair-needed'
+        } else if (selectedRow?.state === 'ready') {
+          engineState = 'ready'
+        } else {
+          engineState = 'model-needed'
+        }
+      } catch {
+        engineState = 'runtime-needed'
+      }
     } else if (options.engineModelReady) {
       try {
-        engineState = options.engineModelReady(selectedEngine) ? 'ready' : 'model-needed'
+        engineState = (await options.engineModelReady(selectedEngine)) ? 'ready' : 'model-needed'
       } catch {
         engineState = 'model-needed'
       }
@@ -287,6 +302,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     } else {
       engineState = 'model-needed'
     }
+    if (selectedIdentity !== (options.selectionIdentity?.() ?? options.selectedEngine())) engineState = 'unavailable'
     return SpeechPackSnapshotSchema.parse({
       featureEnabled: featureEnabled(),
       profile,

@@ -132,6 +132,9 @@ import {
   dustSelectedAgentVision,
   recordMeetingSummarized,
   getAdminLocalSpeechPackPolicy,
+  configureFreshLeanSpeechDefaults,
+  getSpeechPackPolicyIdentity,
+  getSpeechPackSelectionIdentity,
   getSonioxApiKey,
   setSonioxApiKey,
   clearSonioxApiKey
@@ -314,9 +317,11 @@ type ImportSpeakerOwner = {
 const LIVE_SPEAKER_RECEIPT_TTL_MS = 30 * 60_000
 let activeLiveSpeakerStartedAt: number | null = null
 let legacyListeningActive = false
+let speechPackCaptureRevision = 0
 function setLegacyListeningActive(on: boolean): void {
   if (legacyListeningActive === on) return
   legacyListeningActive = on
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
@@ -712,6 +717,7 @@ import {
   withBootFirstShowDeferred
 } from './lifecycle/first-show'
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
+import { getPublishedSettingsObservation } from './settings-observation'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -795,10 +801,17 @@ import {
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
 import { startSpeechPackDesktop } from './speech-pack-bootstrap'
+import { createPackageRuntimeContractProvider } from './features/components/speech-pack/package-contract'
+import {
+  configurePackageRuntimeContractProvider,
+  getPackageRuntimeContract
+} from './features/components/speech-pack/package-runtime-state'
+import { METIS_PACKAGE_PROFILE } from '@shared/package-profile'
 import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
 import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
 import {
   ensureImportAsrAssets,
+  asrModelMetadataReadyForEngine,
   asrAssetsProgress,
   asrAssetsStatusSnapshot,
   importAsrAssetsReady,
@@ -1174,6 +1187,7 @@ let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
   if (cloudSttIpcOwner === owner) return
   cloudSttIpcOwner = owner
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
@@ -1197,6 +1211,7 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
     (context?.webContents as Electron.WebContents | undefined)?.id === webContentsId
   ) {
     speechNavigationEpoch += 1
+    speechPackCaptureRevision += 1
     speechCaptureGrants.invalidateAll()
     speechDesktop?.invalidate('renderer-navigation')
   }
@@ -1212,6 +1227,22 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 let listeningActive = false
 let speechPackDesktop: ReturnType<typeof startSpeechPackDesktop> | null = null
 let speechDesktop: ReturnType<typeof startSpeechDesktopBootstrap> | null = null
+let speechPackEffectivePolicySignature: string | null = null
+let speechPackEffectivePolicyRevision = 0
+
+function speechPackPolicyIdentity(): string {
+  const settings = getSettings()
+  const signature = JSON.stringify({
+    policy: resolveLocalSpeechPackPolicy(settings, getAdminLocalSpeechPackPolicy()),
+    settingsPolicyEpoch: getSpeechPackPolicyIdentity(),
+    readable: getPublishedSettingsObservation()?.readable === true
+  })
+  if (speechPackEffectivePolicySignature !== null && speechPackEffectivePolicySignature !== signature) {
+    speechPackEffectivePolicyRevision += 1
+  }
+  speechPackEffectivePolicySignature = signature
+  return `speech-policy:${speechPackEffectivePolicyRevision}`
+}
 
 function setListeningActive(on: boolean): void {
   if (on && win && !win.isDestroyed() && activeLiveSpeakerStartedAt !== null) {
@@ -1237,6 +1268,7 @@ function setListeningActive(on: boolean): void {
   }
   if (listeningActive === on) return
   listeningActive = on
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
@@ -1245,6 +1277,7 @@ function setAudioArmed(on: boolean): void {
   speechCaptureGrants.setArmed(on)
   if (audioArmed === on) return
   audioArmed = on
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
@@ -5651,6 +5684,7 @@ function registerIpc(): void {
       })
     }
     const next = setSettingsWithSpeakerPolicy(p)
+    speechPackDesktop?.refresh()
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Both onboarding transitions replace the window only after this handler replies: `onboarding:enter`
     // for Replay, `onboarding:exit` for Act 6. Never destroy this renderer in the middle of its invoke.
@@ -5730,15 +5764,6 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI opt-in or an explicit model change provisions the selected model. Disabled profiles
-    // never fetch optional LLM weights automatically; mandatory transcription is a separate path.
-    if (next.localLlm.enabled && (!cur.localLlm.enabled || cur.localLlm.modelId !== next.localLlm.modelId)) {
-      void provisionLocalModel(next.localLlm, getAllowedProviders(), ensureLocalModel)
-        .then((ready) => {
-          if (ready) refreshScreenPreprocess()
-        })
-        .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
-    }
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -7520,16 +7545,23 @@ function registerIpc(): void {
   })
   // Explicit Download/Retry does not enable inference. Policy still applies; the selected model and
   // its RAM/disk/integrity refusal stay visible rather than silently switching to a different model.
-  ipcMain.handle(IPC.localModelsEnsure, (e) => {
+  ipcMain.handle(IPC.localModelsEnsure, async (e) => {
     assertMainWindow(e)
+    const contract = await getPackageRuntimeContract()
+    if (contract.status === 'invalid' || contract.profile === 'lean') return { ok: false }
+    const settings = getSettings()
+    if (getPublishedSettingsObservation()?.readable !== true) return { ok: false }
     const allowed = getAllowedProviders()
     if (allowed && !allowed.includes('local')) return { ok: false }
-    void provisionLocalModel(getSettings().localLlm, allowed, ensureLocalModel, 'explicit')
-      .then((ready) => {
-        if (ready) refreshScreenPreprocess()
-      })
-      .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
-    return { ok: true }
+    const admittedModel = settings.localLlm
+    try {
+      const ready = await provisionLocalModel(admittedModel, allowed, ensureLocalModel, 'explicit')
+      if (ready && getSettings().localLlm === admittedModel) refreshScreenPreprocess()
+      return { ok: ready }
+    } catch (err) {
+      mainLog.warn('[localModels:ensure] provisioning failed:', err)
+      return { ok: false }
+    }
   })
 
   // MQA-247: the high-accuracy transcription model. Same shape as the LLM weights above — paths stay in
@@ -7544,6 +7576,20 @@ function registerIpc(): void {
   ipcMain.handle(IPC.asrModelFetch, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false }
+    const settings = getSettings()
+    if (
+      getPublishedSettingsObservation()?.readable !== true ||
+      resolveLocalSpeechPackPolicy(settings, getAdminLocalSpeechPackPolicy()) === 'blocked'
+    )
+      return { ok: false }
+    const contract = await getPackageRuntimeContract()
+    if (contract.status === 'invalid' || contract.profile === 'lean') return { ok: false }
+    const current = getSettings()
+    if (
+      getPublishedSettingsObservation()?.readable !== true ||
+      resolveLocalSpeechPackPolicy(current, getAdminLocalSpeechPackPolicy()) === 'blocked'
+    )
+      return { ok: false }
     auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })
     return { ok: await ensureHighTierAsrModel() }
   })
@@ -9691,6 +9737,15 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
+      const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
+      const packageRuntimeContract = createPackageRuntimeContractProvider({
+        resourcesRoot,
+        compiledProfile: app.isPackaged ? METIS_PACKAGE_PROFILE : 'development',
+        appVersion: app.getVersion()
+      })
+      const verifiedPackageContract = await packageRuntimeContract()
+      configurePackageRuntimeContractProvider(packageRuntimeContract)
+      configureFreshLeanSpeechDefaults(app.isPackaged ? METIS_PACKAGE_PROFILE : 'full', verifiedPackageContract)
       commandControl.initialize(powerMonitor, initLogging, mainLog)
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
@@ -9766,9 +9821,8 @@ if (!app.requestSingleInstanceLock()) {
           setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
         }
       }
-      // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
-      // selected model (including an explicitly smaller one), and never delay startup for its download.
-      // The downloader retains RAM/disk/hash gates. Transcription assets are provisioned independently.
+      // Local AI boot is readiness-only. We may warm an already-downloaded selected model after policy and
+      // memory checks, but startup never provisions a model on the user's behalf.
       {
         // Warm only an eligible, downloaded model. Re-read opt-in and policy because either can change
         // while provisioning is in flight. Startup never waits for this optional work.
@@ -9787,17 +9841,6 @@ if (!app.requestSingleInstanceLock()) {
             mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
           }
         }
-        // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-        // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
-        bootWork.run('provisionLocalModel', () =>
-          provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
-            .then((ready) => {
-              if (!ready) return
-              refreshScreenPreprocess()
-              void runAsMaintenance(warmLocalIfReady)
-            })
-            .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-        )
         void runAsMaintenance(warmLocalIfReady)
       }
       // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
@@ -9999,7 +10042,6 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
-      const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
       runStep('speechPackIpc', () => {
         speechPackDesktop = startSpeechPackDesktop({
           resourcesRoot: resourcesRoot,
@@ -10007,9 +10049,21 @@ if (!app.requestSingleInstanceLock()) {
           rootDir: userDataSpeechPackRoot(),
           fixtureWavPath: join(resourcesRoot, 'speech-pack-fixtures', 'en.wav'),
           selectedEngine: () => getSettings().asrEngine,
-          policyAllowsTransfer: () =>
-            resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
+          selectionIdentity: getSpeechPackSelectionIdentity,
+          policyAllowsTransfer: () => {
+            const settings = getSettings()
+            return (
+              getPublishedSettingsObservation()?.readable === true &&
+              resolveLocalSpeechPackPolicy(settings, getAdminLocalSpeechPackPolicy()) !== 'blocked'
+            )
+          },
+          policyIdentity: speechPackPolicyIdentity,
           captureActive: captureActiveForWindowRestart,
+          captureIdentity: () => `capture:${speechPackCaptureRevision}`,
+          packageRuntimeContract,
+          engineRuntimeReady: () =>
+            verifiedPackageContract.status !== 'invalid' && verifiedPackageContract.profile !== 'lean',
+          engineModelReady: (engine) => asrModelMetadataReadyForEngine(engine, verifiedPackageContract.profile),
           ipcMain,
           assertMainWindow,
           sendProgress: (progress) => {
@@ -10025,6 +10079,9 @@ if (!app.requestSingleInstanceLock()) {
           readBundledStatus: async () => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(resourcesRoot)),
           getStatus: asrAssetsStatusSnapshot,
           ensureAllowed: () =>
+            verifiedPackageContract.status !== 'invalid' &&
+            verifiedPackageContract.profile !== 'lean' &&
+            getPublishedSettingsObservation()?.readable === true &&
             resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
           ensureAssets: ensureImportAsrAssets,
           getProgress: asrAssetsProgress,

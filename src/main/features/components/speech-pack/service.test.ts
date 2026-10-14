@@ -120,6 +120,31 @@ describe('explicit speech-pack service boundary', () => {
     expect(service.hasEngine()).toBe(false)
   })
 
+  it('uses asynchronous runtime/model metadata and fails closed when the selected engine changes mid-read', async () => {
+    let selectionIdentity = 'selection:0'
+    const { service } = setup({
+      selectionIdentity: () => selectionIdentity,
+      engineRuntimeReady: async () => true,
+      engineModelReady: async () => {
+        selectionIdentity = 'selection:1'
+        return true
+      }
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.engineReadiness.state).toBe('unavailable')
+  })
+
+  it('reports a missing runtime separately and does not claim model readiness', async () => {
+    const engineModelReady = vi.fn(async () => true)
+    const { service } = setup({
+      engineRuntimeReady: async () => false,
+      engineModelReady
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.engineReadiness.state).toBe('runtime-needed')
+    expect(engineModelReady).not.toHaveBeenCalled()
+  })
+
   it('does not present a model-only lean pack as a ready engine or an installable plan', async () => {
     const leanContract = {
       status: 'verified' as const,

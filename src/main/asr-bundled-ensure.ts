@@ -369,6 +369,27 @@ export async function importAsrAssetsReady(): Promise<boolean> {
   return asrMetadataStatusReady(asrMetadataOptions(profile))
 }
 
+/** Read the selected engine's actual model metadata without creating, probing, or warming a runtime. */
+export async function asrModelMetadataReadyForEngine(
+  engine: 'whisper' | 'parakeet' | 'apple',
+  verifiedProfile?: 'full' | 'lean' | 'development' | null
+): Promise<boolean> {
+  if (engine === 'apple') return process.platform === 'darwin'
+  if (verifiedProfile === null) return false
+  const profile = verifiedProfile === undefined ? await speechPackBuildProfile() : { profile: verifiedProfile }
+  if (profile.profile === null) return false
+  if (profile.profile === 'lean') {
+    return (await resolveSelectedSpeechPack(engine)).readiness?.status === 'ready'
+  }
+  if (engine === 'parakeet') {
+    const dir = app.isPackaged ? parakeetBundledDir() : await resolveParakeetDirForProfile(profile)
+    return await parakeetFilesReadyForProfile(dir, profile)
+  }
+  const bundledRoot = join(bundledResourceRoot(), 'models')
+  const modelsRoot = app.isPackaged ? bundledRoot : await resolveWhisperModelsRootForProfile(profile)
+  return (await whisperFloorReadyForProfile(modelsRoot, profile)) && asrManifestComplete(bundledResourceRoot())
+}
+
 function asrMetadataOptions(
   profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
 ): Parameters<typeof asrMetadataStatusReady>[0] {
@@ -729,6 +750,9 @@ export function ensureImportAsrAssets(onProgress?: (pct: number) => void): Promi
 }
 
 async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
+  if (!(await legacyRuntimeClosureAvailable())) {
+    throw new Error('An ASR runtime is not configured for this package.')
+  }
   const profile = await speechPackBuildProfile()
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
   if (profile.profile === 'lean') {

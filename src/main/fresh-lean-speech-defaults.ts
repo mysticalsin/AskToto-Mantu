@@ -14,6 +14,8 @@ export type FreshLeanSpeechDefaultContext = {
   speechRouteExplicit: boolean
   managedKeys: readonly string[]
   lockedKeys: readonly string[]
+  /** Unknown managed/admin policy must never be interpreted as an unmanaged profile. */
+  authorityReadable: boolean
 }
 
 const FRESH_LEAN_BROKER_DEFAULT = Object.freeze({
@@ -21,19 +23,19 @@ const FRESH_LEAN_BROKER_DEFAULT = Object.freeze({
   engine: 'cloudflare-nova3' as const
 })
 
-/** Applies only the proposed fresh lean broker default; every other Settings field stays unchanged. */
-export function projectFreshLeanSpeechDefaults(context: FreshLeanSpeechDefaultContext): Settings {
+/** Whether a persisted route may be derived for this exact fresh, verified, unmanaged lean profile. */
+export function canProjectFreshLeanSpeechDefaults(context: FreshLeanSpeechDefaultContext): boolean {
   const { settings } = context
   if (
     context.compiledPackageProfile !== 'lean' ||
     context.verifiedPackageProfile !== 'lean' ||
     context.freshProfile !== true ||
+    context.authorityReadable !== true ||
     settings.onboardingDone !== false ||
     context.speechRouteExplicit !== false ||
     !Array.isArray(context.managedKeys) ||
     !Array.isArray(context.lockedKeys) ||
-    context.managedKeys.includes('brokerSpeech') ||
-    context.managedKeys.includes('cloudSttProvider') ||
+    context.managedKeys.length > 0 ||
     context.lockedKeys.includes('brokerSpeech') ||
     context.lockedKeys.includes('cloudSttProvider') ||
     settings.cloudSttProvider !== 'unconfigured' ||
@@ -42,7 +44,7 @@ export function projectFreshLeanSpeechDefaults(context: FreshLeanSpeechDefaultCo
     settings.enterpriseLive.inferenceMode !== 'legacy' ||
     settings.enterpriseLive.summaryOnly !== false
   )
-    return settings
+    return false
 
   const broker = BrokerSpeechSettingsSchema.safeParse(settings.brokerSpeech)
   if (
@@ -50,7 +52,14 @@ export function projectFreshLeanSpeechDefaults(context: FreshLeanSpeechDefaultCo
     broker.data.transport !== DEFAULT_BROKER_SPEECH_SETTINGS.transport ||
     broker.data.engine !== DEFAULT_BROKER_SPEECH_SETTINGS.engine
   )
-    return settings
+    return false
 
-  return { ...settings, brokerSpeech: { ...FRESH_LEAN_BROKER_DEFAULT } }
+  return true
+}
+
+/** Applies only the proposed fresh lean broker default; every other Settings field stays unchanged. */
+export function projectFreshLeanSpeechDefaults(context: FreshLeanSpeechDefaultContext): Settings {
+  if (!canProjectFreshLeanSpeechDefaults(context)) return context.settings
+
+  return { ...context.settings, brokerSpeech: { ...FRESH_LEAN_BROKER_DEFAULT } }
 }

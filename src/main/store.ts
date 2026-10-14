@@ -57,25 +57,72 @@ import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
 import { assertBrokerSpeechSettingsPatch, BrokerSpeechSettingsLoadSchema } from '@shared/broker-speech-settings'
+import {
+  canProjectFreshLeanSpeechDefaults,
+  projectFreshLeanSpeechDefaults,
+  type FreshLeanSpeechDefaultContext
+} from './fresh-lean-speech-defaults'
+import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
 
 const dir = () => app.getPath('userData')
 function adminPolicyIdentity(): AdminPolicyIdentity {
   const path = adminManagedConfigPath()
   try {
     const stat = statSync(path)
+    adminPolicyPathState = 'present'
     return { path, mtime: stat.mtimeMs, dev: stat.dev, ino: stat.ino }
-  } catch {
+  } catch (error) {
+    adminPolicyPathState = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unknown'
     return { path, mtime: 0, dev: 0, ino: 0 }
   }
 }
 const adminCache = new AdminManagedCache({ readIdentity: adminPolicyIdentity, readTrusted: readTrustedAdminManaged })
-const adminManagedContent = (): string | null => adminCache.read()
+let adminPolicyPathState: 'absent' | 'present' | 'unknown' = 'unknown'
+let adminPolicyReadable = true
+const adminManagedContent = (): string | null => {
+  const content = adminCache.read()
+  adminPolicyReadable = adminPolicyPathState === 'absent' || (adminPolicyPathState === 'present' && content !== null)
+  return content
+}
 export function resetAdminManagedCache(): void {
   adminCache.reset()
+  adminPolicyReadable = true
+  adminPolicyPathState = 'unknown'
 }
 export const resetAdminManagedCacheForTests = resetAdminManagedCache
 const settingsPath = () => join(dir(), 'settings.json')
 const keyPath = (provider: ProviderId) => join(dir(), `key-${provider}.bin`)
+let userManagedPolicyReadable = true
+let managedPolicyKeys = new Set<string>()
+let freshLeanDefaultsEnabled = false
+let freshLeanDefaultsCompiledProfile: 'full' | 'lean' | null = null
+let freshLeanDefaultsVerifiedProfile: 'full' | 'lean' | null = null
+let freshLeanDefaultWasProjected = false
+let speechPackSelectionRevision = 0
+let speechPackPolicyRevision = 0
+let observedSpeechPackSelection: string | null = null
+let observedSpeechPackPolicy: string | null = null
+
+/** Package facts and pre-initialization absence are bound once before the first settings read. */
+export function configureFreshLeanSpeechDefaults(
+  compiledProfile: 'full' | 'lean',
+  contract: PackageRuntimeContract
+): void {
+  if (freshLeanDefaultsEnabled) return
+  freshLeanDefaultsEnabled = true
+  freshLeanDefaultsCompiledProfile = compiledProfile
+  freshLeanDefaultsVerifiedProfile = contract.status === 'verified' ? contract.profile : null
+  freshLeanDefaultsProfileWasAbsent =
+    contract.status === 'verified' &&
+    contract.profile === 'lean' &&
+    encryptedProfileFiles().length === 0 &&
+    !existsSync(settingsPath()) &&
+    !existsSync(`${settingsPath()}.recovered`) &&
+    !existsSync(`${settingsPath()}.tmp`)
+  freshLeanDefaultWasProjected = false
+}
+
+let freshLeanDefaultsProfileWasAbsent = false
 
 const PROFILE_RECOVERY_FIXED_FILES = new Set([
   'secret-key.bin',
@@ -153,75 +200,130 @@ function validKeysOnly(obj: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-function parseManagedContent(raw: string): Record<string, unknown> {
+function setManagedPolicyReadable(source: 'user' | 'admin', readable: boolean): void {
+  if (!readable) {
+    if (source === 'user') userManagedPolicyReadable = false
+    else adminPolicyReadable = false
+  }
+}
+
+function parseManagedContent(raw: string, source: 'user' | 'admin'): Record<string, unknown> {
   try {
-    const obj = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setManagedPolicyReadable(source, false)
+      return {}
+    }
+    const obj = parsed as Record<string, unknown>
+    for (const key of Object.keys(obj)) if (!key.startsWith('_')) managedPolicyKeys.add(key)
+    if (
+      ('enterpriseLive' in obj && !BaseSettingsSchema.shape.enterpriseLive.safeParse(obj.enterpriseLive).success) ||
+      ('localSpeechPack' in obj && !LocalSpeechPackPolicySchema.safeParse(obj.localSpeechPack).success) ||
+      ('allowedProviders' in obj &&
+        (!Array.isArray(obj.allowedProviders) || obj.allowedProviders.some((key) => typeof key !== 'string')))
+    ) {
+      setManagedPolicyReadable(source, false)
+    }
     const clean: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(obj)) if (!k.startsWith('_')) clean[k] = v
     return validKeysOnly(clean) // drop malformed keys so a typo can't brick the app
   } catch {
+    setManagedPolicyReadable(source, false)
     return {}
   }
 }
 
 function readManagedFrom(p: string): Record<string, unknown> {
   try {
-    return parseManagedContent(readFileSync(p, 'utf8'))
-  } catch {
+    return parseManagedContent(readFileSync(p, 'utf8'), 'user')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') setManagedPolicyReadable('user', false)
     return {}
   }
 }
 
-function parseLockedContent(raw: string): string[] {
+function parseLockedContent(raw: string, source: 'user' | 'admin'): string[] {
   try {
-    const obj = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setManagedPolicyReadable(source, false)
+      return []
+    }
+    const obj = parsed as Record<string, unknown>
     // Canonical key is `locked`; `lockedKeys` is accepted too — the enterprise doc (docs/asktoto-
     // architecture.md) previously told IT admins to use `lockedKeys`, and an admin config written
     // against that name must still lock fields instead of silently locking nothing.
     const raw2 = obj.locked ?? obj.lockedKeys
+    if (
+      (Object.hasOwn(obj, 'locked') || Object.hasOwn(obj, 'lockedKeys')) &&
+      (!Array.isArray(raw2) || raw2.some((key) => typeof key !== 'string'))
+    ) {
+      setManagedPolicyReadable(source, false)
+    }
     const arr: unknown[] = Array.isArray(raw2) ? raw2 : []
     return [...new Set(arr.filter((k): k is string => typeof k === 'string'))]
   } catch {
+    setManagedPolicyReadable(source, false)
     return []
   }
 }
 
 function readLockedFrom(p: string): string[] {
   try {
-    return parseLockedContent(readFileSync(p, 'utf8'))
-  } catch {
+    return parseLockedContent(readFileSync(p, 'utf8'), 'user')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') setManagedPolicyReadable('user', false)
     return []
   }
 }
 
 /** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
-function parseAllowedContent(raw: string): string[] | null {
+function parseAllowedContent(raw: string, source: 'user' | 'admin'): string[] | null {
   try {
-    const obj = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setManagedPolicyReadable(source, false)
+      return null
+    }
+    const obj = parsed as Record<string, unknown>
     const list = obj?.allowedProviders
     // Empty array is deny-all; only absent/non-array means no restriction.
-    if (!Array.isArray(list)) return null
+    if (!Array.isArray(list)) {
+      if (Object.hasOwn(obj, 'allowedProviders')) setManagedPolicyReadable(source, false)
+      return null
+    }
+    if (list.some((value) => typeof value !== 'string')) setManagedPolicyReadable(source, false)
     return [...new Set(list.filter((x): x is string => typeof x === 'string'))]
   } catch {
+    setManagedPolicyReadable(source, false)
     return null
   }
 }
 
-function readRawPolicyFrom(p: string): string | null {
+function readRawPolicyFrom(p: string, source: 'user' | 'admin' = 'user'): string | null {
   try {
     return readFileSync(p, 'utf8')
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') setManagedPolicyReadable(source, false)
     return null
   }
 }
 
-function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null {
+function parseLocalSpeechPackContent(raw: string, source: 'user' | 'admin'): LocalSpeechPackPolicy | null {
   try {
-    const value = JSON.parse(raw)?.localSpeechPack
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setManagedPolicyReadable(source, false)
+      return null
+    }
+    const record = parsed as Record<string, unknown>
+    const value = record.localSpeechPack
     if (value === undefined) return null
-    const parsed = LocalSpeechPackPolicySchema.safeParse(value)
-    return parsed.success ? parsed.data : null
+    const result = LocalSpeechPackPolicySchema.safeParse(value)
+    if (!result.success) setManagedPolicyReadable(source, false)
+    return result.success ? result.data : null
   } catch {
+    setManagedPolicyReadable(source, false)
     return null
   }
 }
@@ -231,7 +333,7 @@ export function validatedManaged(): Record<string, unknown> {
   const admin = adminManagedContent()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...(admin ? parseManagedContent(admin) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
+    ...(admin ? parseManagedContent(admin, 'admin') : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
   }
 }
 
@@ -239,7 +341,7 @@ export function validatedManaged(): Record<string, unknown> {
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
   const admin = adminManagedContent()
-  const machine = admin ? parseLockedContent(admin) : []
+  const machine = admin ? parseLockedContent(admin, 'admin') : []
   return [...new Set([...user, ...machine])]
 }
 
@@ -266,13 +368,16 @@ export function getEgressAllowlist(): string[] | null {
 export function getAllowedProviders(): string[] | null {
   const admin = adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
-  return (admin ? parseAllowedContent(admin) : null) ?? (user ? parseAllowedContent(user) : null)
+  return (admin ? parseAllowedContent(admin, 'admin') : null) ?? (user ? parseAllowedContent(user, 'user') : null)
 }
 
 export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
   const admin = adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
-  return (admin ? parseLocalSpeechPackContent(admin) : null) ?? (user ? parseLocalSpeechPackContent(user) : null)
+  return (
+    (admin ? parseLocalSpeechPackContent(admin, 'admin') : null) ??
+    (user ? parseLocalSpeechPackContent(user, 'user') : null)
+  )
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
@@ -527,6 +632,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  readable: boolean
   userPath: string
   userMtime: number
   managedMtime: number
@@ -569,6 +675,49 @@ function setupIsComplete(user: Record<string, unknown>, managed: Record<string, 
  *  userData. */
 export function resetSettingsCacheForTests(): void {
   _settingsCache = null
+  freshLeanDefaultsEnabled = false
+  freshLeanDefaultsCompiledProfile = null
+  freshLeanDefaultsVerifiedProfile = null
+  freshLeanDefaultsProfileWasAbsent = false
+  freshLeanDefaultWasProjected = false
+  userManagedPolicyReadable = true
+  adminPolicyReadable = true
+  observedSpeechPackSelection = null
+  observedSpeechPackPolicy = null
+  speechPackSelectionRevision = 0
+  speechPackPolicyRevision = 0
+}
+
+function noteSpeechPackAuthority(
+  settings: Settings,
+  managed: Record<string, unknown>,
+  lockedKeys: readonly string[]
+): void {
+  const selection = settings.asrEngine
+  if (observedSpeechPackSelection !== null && observedSpeechPackSelection !== selection)
+    speechPackSelectionRevision += 1
+  observedSpeechPackSelection = selection
+  const policy = JSON.stringify({
+    localSpeechPack: managed.localSpeechPack ?? getAdminLocalSpeechPackPolicy(),
+    allowedProviders: getAllowedProviders(),
+    enterpriseLive: settings.enterpriseLive,
+    localSpeechPackLocked: lockedKeys.includes('localSpeechPack'),
+    readable: userManagedPolicyReadable && adminPolicyReadable
+  })
+  if (observedSpeechPackPolicy !== null && observedSpeechPackPolicy !== policy) speechPackPolicyRevision += 1
+  observedSpeechPackPolicy = policy
+}
+
+/** Opaque monotonic revision; callers must not project the raw user selection as plan authority. */
+export function getSpeechPackSelectionIdentity(): string {
+  getSettings()
+  return `selection:${speechPackSelectionRevision}`
+}
+
+/** Opaque monotonic revision of the currently accepted effective speech-pack policy. */
+export function getSpeechPackPolicyIdentity(): string {
+  getSettings()
+  return `policy:${speechPackPolicyRevision}`
 }
 
 /** Resolve real current settings and revalidate machine trust at an explicit authority boundary. */
@@ -601,11 +750,14 @@ export function getSettings(): Settings {
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime
   ) {
-    publishSettingsSnapshot(_settingsCache.value, true)
+    publishSettingsSnapshot(_settingsCache.value, _settingsCache.readable)
     return _settingsCache.value
   }
 
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
+  userManagedPolicyReadable = true
+  adminPolicyReadable = true
+  managedPolicyKeys = new Set()
   const managed = validatedManaged()
   const base = { ...DEFAULT_SETTINGS, ...managed }
   // null = settings.json is there but could not be read right now (see readUserRaw). Serve DEFAULT+managed
@@ -614,6 +766,7 @@ export function getSettings(): Settings {
   // a fresh-install-shaped profile until something happened to touch the file.
   const stored = readUserRaw()
   const raw = stored ?? {}
+  const speechRouteExplicit = Object.hasOwn(raw, 'brokerSpeech') || Object.hasOwn(raw, 'cloudSttProvider')
   // Migration: 'together' and 'fireworks' were removed as LLM providers. A settings.json written before
   // the removal may still name one as the active provider — coerce it back to the default so a stale
   // value never resurfaces a provider the UI no longer offers. (managed-config is already filtered
@@ -710,9 +863,32 @@ export function getSettings(): Settings {
       : SettingsSchema.parse({ ...DEFAULT_SETTINGS, brokerSpeech: effectiveBrokerSpeech })
   }
 
+  const freshProfile =
+    freshLeanDefaultsProfileWasAbsent &&
+    stored !== null &&
+    Object.keys(raw).length === 0 &&
+    encryptedProfileFiles().length === 0 &&
+    !existsSync(settingsPath()) &&
+    !existsSync(`${settingsPath()}.recovered`) &&
+    !existsSync(`${settingsPath()}.tmp`)
+  const freshContext: FreshLeanSpeechDefaultContext = {
+    settings: value,
+    compiledPackageProfile: freshLeanDefaultsCompiledProfile,
+    verifiedPackageProfile: freshLeanDefaultsVerifiedProfile,
+    freshProfile,
+    speechRouteExplicit,
+    managedKeys: [...new Set([...Object.keys(managed), ...managedPolicyKeys])],
+    lockedKeys,
+    authorityReadable: userManagedPolicyReadable && adminPolicyReadable
+  }
+  freshLeanDefaultWasProjected = canProjectFreshLeanSpeechDefaults(freshContext)
+  value = projectFreshLeanSpeechDefaults(freshContext)
+  const readable = stored !== null && userManagedPolicyReadable && adminPolicyReadable
+  noteSpeechPackAuthority(value, managed, lockedKeys)
+
   // Only memoise a result derived from a settings.json we could actually read — see `stored` above.
-  if (stored !== null) _settingsCache = { value, ...m }
-  publishSettingsSnapshot(value, stored !== null)
+  if (stored !== null) _settingsCache = { value, readable, ...m }
+  publishSettingsSnapshot(value, readable)
   return value
 }
 
@@ -780,9 +956,35 @@ export function setSettings(patch: Partial<Settings>): Settings {
       `Couldn't save settings — Métis can't read its existing settings file at ${settingsPath()}, and saving now would erase everything already saved there. This is usually antivirus, a backup tool, or a synced profile folder holding the file open. Try again in a moment.`
     )
   }
+  userManagedPolicyReadable = true
+  adminPolicyReadable = true
+  managedPolicyKeys = new Set()
   if (Object.hasOwn(prev, 'brokerSpeech')) prev.brokerSpeech = BrokerSpeechSettingsLoadSchema.parse(prev.brokerSpeech)
   const next = { ...prev, ...allowed }
   const managed = validatedManaged()
+  const initialFreshSettings =
+    freshLeanDefaultsProfileWasAbsent &&
+    Object.keys(prev).length === 0 &&
+    !Object.hasOwn(allowed, 'brokerSpeech') &&
+    !Object.hasOwn(allowed, 'cloudSttProvider')
+      ? getSettings()
+      : null
+  if (
+    freshLeanDefaultsProfileWasAbsent &&
+    initialFreshSettings !== null &&
+    freshLeanDefaultWasProjected &&
+    Object.keys(prev).length === 0 &&
+    !Object.hasOwn(prev, 'brokerSpeech') &&
+    !Object.hasOwn(prev, 'cloudSttProvider') &&
+    !Object.hasOwn(allowed, 'brokerSpeech') &&
+    !Object.hasOwn(allowed, 'cloudSttProvider') &&
+    !Object.hasOwn(managed, 'brokerSpeech') &&
+    !Object.hasOwn(managed, 'cloudSttProvider') &&
+    !locked.includes('brokerSpeech') &&
+    !locked.includes('cloudSttProvider')
+  ) {
+    next.brokerSpeech = initialFreshSettings.brokerSpeech
+  }
   const previousAsr = 'asrEngine' in prev && shape().asrEngine.safeParse(prev.asrEngine).success
   const previousCompleted = setupIsComplete(prev, managed)
   // Completing a genuinely fresh unmanaged setup is the sole persistence point for the derived choice.
