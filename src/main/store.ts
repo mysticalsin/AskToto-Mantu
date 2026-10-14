@@ -1148,6 +1148,10 @@ export function getApiKey(provider: ProviderId): string {
   const env = process.env[ENV_VAR[provider]]
   if (env) return env
 
+  // Credential files can be ATKAES1 or legacy safeStorage blobs. Never read either before the
+  // packaged Mac unlock action, even when a caller only wants a seated/not-seated answer.
+  requireMacKeychainUnlock()
+
   if (_apiKeyCache.has(provider)) return _apiKeyCache.get(provider)!
 
   // Compute from disk (file read + AES decrypt). All paths below land on a single `key` assignment
@@ -1168,6 +1172,7 @@ export function getApiKey(provider: ProviderId): string {
       try {
         key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
       } catch (e) {
+        if (e instanceof KeychainKeyRecoveryError) throw e
         mainLog.warn('[store] key file undecryptable for', provider, e)
         key = '' // Corrupt or key rotated
       }
@@ -1182,7 +1187,10 @@ export function getApiKey(provider: ProviderId): string {
         /* not a safeStorage blob for this OS user — unreadable */
       }
     }
-  } catch {
+  } catch (e) {
+    // Unlock/recovery errors are control flow. Returning and caching an empty key would hide the
+    // unlock surface for the rest of this process, and could make a valid credential look absent.
+    if (e instanceof KeychainKeyRecoveryError) throw e
     /* file missing or unreadable */
   }
 
@@ -1240,6 +1248,7 @@ export function setDustRefreshToken(token: string): void {
 }
 
 export function getDustRefreshToken(): string {
+  requireMacKeychainUnlock()
   try {
     const buf = readFileSync(dustRefreshTokenPath())
     if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
@@ -1248,12 +1257,14 @@ export function getDustRefreshToken(): string {
     if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
       try {
         return safeStorage.decryptString(buf)
-      } catch {
+      } catch (e) {
+        if (e instanceof KeychainKeyRecoveryError) throw e
         return ''
       }
     }
     return ''
-  } catch {
+  } catch (e) {
+    if (e instanceof KeychainKeyRecoveryError) throw e
     return ''
   }
 }
@@ -1340,6 +1351,7 @@ export function clearSonioxApiKey(): void {
 }
 
 export function getSonioxApiKeyStored(): string {
+  requireMacKeychainUnlock()
   if (_sonioxKeyCache !== undefined && _sonioxKeyCache !== null) return _sonioxKeyCache
   let key = ''
   try {
@@ -1355,11 +1367,18 @@ export function getSonioxApiKeyStored(): string {
       key = safeStorage.decryptString(buf)
     }
   } catch (e) {
+    if (e instanceof KeychainKeyRecoveryError) throw e
     mainLog.warn('[store] soniox key undecryptable', e)
     key = ''
   }
   _sonioxKeyCache = key
   return key
+}
+
+/** Clear decrypted credential memoization after explicit profile unlock. */
+export function resetCredentialReadCachesAfterProfileUnlock(): void {
+  _apiKeyCache.clear()
+  _sonioxKeyCache = undefined
 }
 
 /** Seated Soniox key from Settings, or SONIOX_API_KEY env. Env wins (same honesty as getApiKey). */

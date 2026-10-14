@@ -134,7 +134,8 @@ import {
   getAdminLocalSpeechPackPolicy,
   getSonioxApiKey,
   setSonioxApiKey,
-  clearSonioxApiKey
+  clearSonioxApiKey,
+  resetCredentialReadCachesAfterProfileUnlock
 } from './store'
 import {
   authorizeMacKeychainUnlock,
@@ -5332,6 +5333,7 @@ function registerIpc(): void {
       // unwrapped after this user action, so macOS never shows a Keychain dialog behind first paint.
       prepareFileKeyForWrite()
       reloadSessionAfterProfileUnlock()
+      resetCredentialReadCachesAfterProfileUnlock()
       const settings = publicSettingsWithSpeakerPolicy()
       if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
       releaseStartupBootWorkIfReady()

@@ -92,4 +92,31 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(store).toContain('requireMacKeychainUnlock()')
     expect(store).toContain('throw error')
   })
+
+  it('gates legacy encrypted credential readers and does not cache unlock failures', () => {
+    const section = (start: string, end: string): string => {
+      const from = store.indexOf(start)
+      const to = store.indexOf(end, from)
+      expect(from).toBeGreaterThanOrEqual(0)
+      expect(to).toBeGreaterThan(from)
+      return store.slice(from, to)
+    }
+    const apiKeyReader = section('export function getApiKey(', 'export function hasApiKey(')
+    const dustTokenReader = section('export function getDustRefreshToken(', '/** Returns false when the token file')
+    const sonioxReader = section('export function getSonioxApiKeyStored(', '/** Seated Soniox key')
+
+    for (const reader of [apiKeyReader, dustTokenReader, sonioxReader]) {
+      expect(reader.indexOf('requireMacKeychainUnlock()')).toBeGreaterThanOrEqual(0)
+      const legacySafeStorageRead = reader.indexOf('safeStorage.isEncryptionAvailable()')
+      if (legacySafeStorageRead >= 0) {
+        expect(reader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(legacySafeStorageRead)
+      }
+      expect(reader).toContain('e instanceof KeychainKeyRecoveryError) throw e')
+    }
+    expect(apiKeyReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(apiKeyReader.indexOf('_apiKeyCache.has(provider)'))
+    expect(sonioxReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(sonioxReader.indexOf('_sonioxKeyCache !== undefined'))
+    expect(store).toContain('export function resetCredentialReadCachesAfterProfileUnlock(): void')
+    expect(store).toContain('_apiKeyCache.clear()\n  _sonioxKeyCache = undefined')
+    expect(main).toContain('resetCredentialReadCachesAfterProfileUnlock()')
+  })
 })
