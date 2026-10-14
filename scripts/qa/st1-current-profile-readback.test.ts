@@ -244,10 +244,12 @@ describe('current control profile projection', () => {
       originalVerdict: 'FAIL',
       st1Evidence: false,
       causalConclusion: 'not-established',
-      preProfileCause: 'unknown',
-      candidateBuildRunId: SOURCE.runId,
-      candidateInstallerSha256: 'd'.repeat(64),
-      candidateDigestBinding: 'historical-provenance-report-only',
+      profile: expect.objectContaining({
+        preProfileCause: 'unknown',
+        candidateBuildRunId: SOURCE.runId,
+        candidateInstallerSha256: 'd'.repeat(64),
+        candidateDigestBinding: 'historical-provenance-report-only'
+      }),
       metrics: {
         sampleCount: 294,
         lateSampleCount: 1,
@@ -326,6 +328,43 @@ describe('current control profile projection', () => {
     })
     expect(JSON.stringify(result.bootStages)).not.toContain('untrusted function name')
     expect(JSON.stringify(result.bootStages)).not.toContain('stageStartMs')
+  })
+
+  it('publishes recognized boot-stage names and validated historical profile binding in closed notices', () => {
+    const report = validReport()
+    report.bootStages.stages = [
+      { stage: 'createTray.loadIcon', ms: 4, sinceSpawnMs: 40 },
+      { stage: 'createTray.newTray', ms: 5, sinceSpawnMs: 45 },
+      { stage: 'createTray.decorate', ms: 6, sinceSpawnMs: 51 },
+      { stage: 'createTray.buildMenu', ms: 7, sinceSpawnMs: 58 },
+      { stage: 'createTray.attachMenu', ms: 8, sinceSpawnMs: 66 },
+      { stage: 'createWindow.prewarm', ms: 9, sinceSpawnMs: 75 },
+      { stage: 'createWindow.construct', ms: 10, sinceSpawnMs: 85 },
+      { stage: 'createWindow.navigate', ms: 11, sinceSpawnMs: 96 },
+      { stage: 'createWindow.firstShow', ms: 12, sinceSpawnMs: 108 },
+      { stage: 'https://private.invalid/secret', ms: 13, sinceSpawnMs: 121 }
+    ]
+    const result = analyzeControlEvidence(report, profile())
+    const notices = createReadbackNotices(result, {
+      runId: SOURCE.runId,
+      attempt: SOURCE.attempt,
+      reportSha256: SOURCE.reportSha256,
+      profileSha256: 'c'.repeat(64),
+      archiveSha256: ARTIFACT.sha256
+    })
+    expect(notices).toHaveLength(7)
+    const first = JSON.parse(notices[0].slice('::notice::'.length))
+    expect(first).toMatchObject({
+      candidateBuildRunId: SOURCE.runId,
+      candidateInstallerSha256: 'd'.repeat(64),
+      candidateDigestBinding: 'historical-provenance-report-only'
+    })
+    const boot = JSON.parse(notices[6].slice('::notice::'.length)).bootStages
+    expect(boot.stages).toHaveLength(9)
+    expect(boot.stages[0]).toMatchObject({ stage: 'createTray.loadIcon', durationMs: 4 })
+    expect(boot).toMatchObject({ omittedCount: 1, coverageComplete: false })
+    expect(JSON.stringify(notices)).not.toContain('https://private.invalid/secret')
+    for (const notice of notices) expect(Buffer.byteLength(notice, 'utf8')).toBeLessThanOrEqual(3_500)
   })
 
   it('bounds notices and prevents untrusted profile/report strings from entering them', () => {

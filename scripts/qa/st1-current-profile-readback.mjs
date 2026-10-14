@@ -104,6 +104,7 @@ const PUBLIC_KEYS = new Set([
   'omittedWindowCount',
   'windowsCoverageComplete',
   'index',
+  'stage',
   'selector',
   'selectors',
   'requestAtMs',
@@ -830,16 +831,22 @@ function validateDigestContext(context) {
 }
 
 function publicParts(summary) {
-  const { bins, ...profile } = summary.profile
+  const {
+    bins,
+    candidateBuildRunId,
+    candidateInstallerSha256,
+    candidateDigestBinding,
+    ...profile
+  } = summary.profile
   return [
     {
       originalVerdict: summary.originalVerdict,
       st1Evidence: summary.st1Evidence,
       causalConclusion: summary.causalConclusion,
       preProfileCause: summary.preProfileCause,
-      candidateBuildRunId: summary.candidateBuildRunId,
-      candidateInstallerSha256: summary.candidateInstallerSha256,
-      candidateDigestBinding: summary.candidateDigestBinding,
+      candidateBuildRunId,
+      candidateInstallerSha256,
+      candidateDigestBinding,
       criteria: summary.criteria,
       metrics: summary.metrics,
       violations: summary.violations,
