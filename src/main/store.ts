@@ -56,12 +56,7 @@ import {
   publishSettingsSnapshot,
   type SettingsPolicyAuthoritySnapshot
 } from './settings-observation'
-import {
-  beginSettingsAuthorityProducerFrame,
-  commitManagedAuthorityDocument,
-  endSettingsAuthorityProducerFrame,
-  flushSettingsAuthorityInvalidations
-} from './settings-authority-history'
+import { createSettingsAuthorityStoreReader } from './settings-authority-store-reader'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -101,43 +96,7 @@ function adminPolicyIdentity(): AdminPolicyIdentity {
 let adminPolicyPathState: 'absent' | 'present' | 'unknown' = 'unknown'
 let freshAdminRead: ManagedPolicyAuthorityRead | null = null
 let freshUserManagedRead: ManagedPolicyAuthorityRead | null = null
-type ManagedRawAuthorityRead = Readonly<{
-  sourceIdentity: string
-  status: 'readable' | 'unreadable'
-  raw: string | null
-}>
-let managedAuthorityReadFrame: Map<'user' | 'admin', ManagedRawAuthorityRead> | null = null
-
-function withManagedAuthorityReadFrame<T>(read: () => T): T {
-  if (managedAuthorityReadFrame) return read()
-  const prior = managedAuthorityReadFrame
-  managedAuthorityReadFrame = new Map()
-  beginSettingsAuthorityProducerFrame()
-  try {
-    return read()
-  } finally {
-    managedAuthorityReadFrame = prior
-    endSettingsAuthorityProducerFrame()
-  }
-}
-
-function readManagedAuthorityRaw(
-  source: 'user' | 'admin',
-  sourceIdentity: string,
-  read: () => ManagedRawAuthorityRead
-): ManagedRawAuthorityRead {
-  const cached = managedAuthorityReadFrame?.get(source)
-  if (cached) {
-    if (cached.sourceIdentity === sourceIdentity) return cached
-    const unreadable = Object.freeze({ sourceIdentity, status: 'unreadable' as const, raw: null })
-    managedAuthorityReadFrame?.set(source, unreadable)
-    publishManagedAuthority(source, sourceIdentity, null, 'unreadable')
-    return unreadable
-  }
-  const result = read()
-  managedAuthorityReadFrame?.set(source, result)
-  return result
-}
+let settingsAuthorityStoreReader: ReturnType<typeof createSettingsAuthorityStoreReader>
 
 const adminCache = new AdminManagedCache({
   readIdentity: adminPolicyIdentity,
@@ -147,23 +106,6 @@ const adminCache = new AdminManagedCache({
     return readTrustedAdminManaged()
   }
 })
-const adminManagedContent = (): string | null => {
-  const identity = adminPolicyIdentity()
-  return readManagedAuthorityRaw('admin', identity.path, () => {
-    if (freshAdminRead?.status === 'invalid') {
-      managedPolicyAuthority.setUnreadable('admin')
-      publishManagedAuthority('admin', identity.path, null, 'unreadable')
-      return Object.freeze({ sourceIdentity: identity.path, status: 'unreadable', raw: null })
-    }
-    const content = managedPolicyAuthority.readAdminContent(
-      () => adminCache.read(),
-      () => adminPolicyPathState
-    )
-    const status = adminPolicyPathState === 'unknown' ? 'unreadable' : 'readable'
-    publishManagedAuthority('admin', identity.path, content, status)
-    return Object.freeze({ sourceIdentity: identity.path, status, raw: content })
-  }).raw
-}
 export function resetAdminManagedCache(): void {
   adminCache.reset()
   managedPolicyAuthority.setAdminReadable(true)
@@ -197,46 +139,7 @@ type Shape = Record<string, { safeParse: (v: unknown) => { success: boolean; dat
 const shape = (): Shape => BaseSettingsSchema.shape as unknown as Shape
 
 function readPolicyFile<T>(path: string, source: 'user' | 'admin', fallback: T, parse: (raw: string) => T): T {
-  const document = readManagedAuthorityRaw(source, path, () => {
-    if (source === 'user' && freshUserManagedRead) {
-      if (freshUserManagedRead.status === 'absent')
-        return Object.freeze({ sourceIdentity: path, status: 'readable', raw: null })
-      if (freshUserManagedRead.status !== 'present')
-        return Object.freeze({ sourceIdentity: path, status: 'unreadable', raw: null })
-      return Object.freeze({
-        sourceIdentity: path,
-        status: 'readable',
-        raw: Buffer.from(freshUserManagedRead.bytes).toString('utf8')
-      })
-    }
-    try {
-      return Object.freeze({ sourceIdentity: path, status: 'readable', raw: readFileSync(path, 'utf8') })
-    } catch (error) {
-      return Object.freeze({
-        sourceIdentity: path,
-        status: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'readable' : 'unreadable',
-        raw: null
-      })
-    }
-  })
-  if (document.status === 'unreadable') {
-    managedPolicyAuthority.setUnreadable(source)
-    publishManagedAuthority(source, path, null, 'unreadable')
-    return fallback
-  }
-  if (document.raw === null) {
-    publishManagedAuthority(source, path, null, 'readable')
-    return fallback
-  }
-  try {
-    const value = parse(document.raw)
-    publishManagedAuthority(source, path, document.raw, 'readable')
-    return value
-  } catch (error) {
-    managedPolicyAuthority.noteReadFailure(source, error)
-    publishManagedAuthority(source, path, null, 'unreadable')
-    return fallback
-  }
+  return settingsAuthorityStoreReader.readPolicyFile(path, source, fallback, parse)
 }
 
 /** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
@@ -250,7 +153,7 @@ const readRawPolicyFrom = (path: string, source: 'user' | 'admin' = 'user'): str
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
   managedPolicyAuthority.reset()
-  const admin = adminManagedContent()
+  const admin = settingsAuthorityStoreReader.adminManagedContent()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
     ...(admin ? managedPolicyAuthority.parseManaged(admin, 'admin', validSettingsKeysOnly) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
@@ -260,7 +163,7 @@ export function validatedManaged(): Record<string, unknown> {
 /** Keys that IT has locked; user edits to these are silently dropped. */
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
-  const admin = adminManagedContent()
+  const admin = settingsAuthorityStoreReader.adminManagedContent()
   const machine = admin ? managedPolicyAuthority.parseLocked(admin, 'admin') : []
   return [...new Set([...user, ...machine])]
 }
@@ -272,7 +175,7 @@ export function getLockedKeys(): string[] {
  * net/egress-guard.ts on both the main-process fetch and the Chromium session.
  */
 export function getEgressAllowlist(): string[] | null {
-  const admin = adminManagedContent()
+  const admin = settingsAuthorityStoreReader.adminManagedContent()
   const fromAdmin = admin ? parseEgressAllowlist(admin) : null
   if (fromAdmin) return fromAdmin
   try {
@@ -286,7 +189,7 @@ export function getEgressAllowlist(): string[] | null {
  *  validatedManaged() precedence. Read from raw JSON because `allowedProviders` is a policy key, not a
  *  settings-schema key, and an explicit empty array is a deny-all policy. */
 export function getAllowedProviders(): string[] | null {
-  const admin = adminManagedContent()
+  const admin = settingsAuthorityStoreReader.adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
   return (
     (admin ? managedPolicyAuthority.parseAllowed(admin, 'admin') : null) ??
@@ -295,7 +198,7 @@ export function getAllowedProviders(): string[] | null {
 }
 
 export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
-  const admin = adminManagedContent()
+  const admin = settingsAuthorityStoreReader.adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
   return (
     (admin ? managedPolicyAuthority.parseLocalSpeechPack(admin, 'admin') : null) ??
@@ -562,16 +465,21 @@ interface SettingsCache {
   adminMtime: number
 }
 let _settingsCache: SettingsCache | null = null
-
-function publishManagedAuthority(
-  source: 'user' | 'admin',
-  sourceIdentity: string,
-  raw: string | null,
-  status: 'readable' | 'unreadable'
-): void {
-  if (commitManagedAuthorityDocument(source, sourceIdentity, raw, status)) _settingsCache = null
-  flushSettingsAuthorityInvalidations()
-}
+settingsAuthorityStoreReader = createSettingsAuthorityStoreReader({
+  freshUserRead: () => freshUserManagedRead,
+  freshAdminRead: () => freshAdminRead,
+  adminIdentity: adminPolicyIdentity,
+  adminPathState: () => adminPolicyPathState,
+  readAdminContent: () =>
+    managedPolicyAuthority.readAdminContent(
+      () => adminCache.read(),
+      () => adminPolicyPathState
+    ),
+  readFile: (path) => readFileSync(path, 'utf8'),
+  setUnreadable: (source) => managedPolicyAuthority.setUnreadable(source),
+  noteReadFailure: (source, error) => managedPolicyAuthority.noteReadFailure(source, error),
+  invalidateSettingsCache: () => (_settingsCache = null)
+})
 let _freshAsrEngine: FreshAsrEngine | null = null
 
 /** `os.totalmem()` is stable for this process lifetime. Read it once so settings hot paths never probe
@@ -634,7 +542,7 @@ export function readSettingsAtAuthorityBoundary(): Promise<SettingsPolicyAuthori
     }),
     readable: () => getPublishedSettingsObservation()?.readable === true,
     epoch: getSettingsObservationEpoch,
-    withReadFrame: withManagedAuthorityReadFrame
+    withReadFrame: settingsAuthorityStoreReader.withReadFrame
   })
 }
 
@@ -795,7 +703,7 @@ function getSettingsFromAuthorityFrame(): Settings {
 }
 
 export function getSettings(): Settings {
-  return withManagedAuthorityReadFrame(getSettingsFromAuthorityFrame)
+  return settingsAuthorityStoreReader.withReadFrame(getSettingsFromAuthorityFrame)
 }
 
 /**
