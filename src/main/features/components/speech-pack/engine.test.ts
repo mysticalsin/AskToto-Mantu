@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isSafeEntryName } from './archive'
 import { DISK_HEADROOM_BYTES, createSpeechPackEngine, type ActivationStep, type SpeechPackEngineOptions, type SpeechPackState } from './engine'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
-import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-server.fixture'
+import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-helpers/test-server.fixture'
 
 const WHISPER: SpeechPackComponentId = 'asr.whisper-base-q8'
 const PARAKEET: SpeechPackComponentId = 'asr.parakeet-tdt-0.6b-v3-int8'
