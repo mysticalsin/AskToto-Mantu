@@ -6,6 +6,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { bundleFromJSON, bundleToJSON } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
+import { assertRequiredFulcioClaims, FULCIO_OID } from './sigstore-identity-claims.mjs'
 
 const SOURCE_SHA = 'a78de2590a05c09ecc5198009c3509085a4f5053'
 const SOURCE_REF = 'refs/heads/m2/M2-0475-runtime-artifact-publisher'
@@ -14,16 +15,6 @@ const RUN_ID = '38594471312'
 const RUN_ATTEMPT = 1
 const REPOSITORY_URI = 'https://github.com/mysticalsin/AskToto-Mantu'
 const REPOSITORY_ID = '1282463398'
-const OID = {
-  issuer: '1.3.6.1.4.1.57264.1.8',
-  signerUri: '1.3.6.1.4.1.57264.1.9',
-  signerDigest: '1.3.6.1.4.1.57264.1.10',
-  runnerEnvironment: '1.3.6.1.4.1.57264.1.11',
-  repositoryUri: '1.3.6.1.4.1.57264.1.12',
-  sourceDigest: '1.3.6.1.4.1.57264.1.13',
-  sourceRef: '1.3.6.1.4.1.57264.1.14',
-  repositoryId: '1.3.6.1.4.1.57264.1.15'
-}
 const TARGETS = Object.freeze([
   { platform: 'darwin', arch: 'arm64', suffix: 'darwin-arm64' },
   { platform: 'darwin', arch: 'x64', suffix: 'darwin-x64' },
@@ -67,16 +58,6 @@ async function assertExactEntries(path, expected, directories, code) {
 
 function exactKeys(value, keys) {
   return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0')
-}
-
-function decodeClaim(value) {
-  if (!(value instanceof Uint8Array)) return null
-  try {
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(value)
-    return decoded.length > 0 && !/[\u0000-\u001f\u007f]/.test(decoded) ? decoded : null
-  } catch {
-    return null
-  }
 }
 
 async function readStable(path, maxBytes, code) {
@@ -226,34 +207,17 @@ function verifySigner(signer, inventory) {
     !Array.isArray(identity.oids)
   )
     fail('RUNTIME_READBACK_CERTIFICATE_IDENTITY_INVALID')
-  const claims = new Map()
-  for (const raw of identity.oids) {
-    const extension = record(raw)
-    const oid = extension && record(extension.oid)
-    if (
-      !extension ||
-      !oid ||
-      !Array.isArray(oid.id) ||
-      !oid.id.every((part) => Number.isInteger(part) && part >= 0 && part <= 4_294_967_295)
-    )
-      fail('RUNTIME_READBACK_CERTIFICATE_CLAIM_INVALID')
-    const id = oid.id.join('.')
-    const value = decodeClaim(extension.value)
-    if (!value || claims.has(id)) fail('RUNTIME_READBACK_CERTIFICATE_CLAIM_INVALID')
-    claims.set(id, value)
-  }
   const expected = new Map([
-    [OID.issuer, 'https://token.actions.githubusercontent.com'],
-    [OID.signerUri, expectedSignerUri],
-    [OID.signerDigest, inventory.source.workflowCommit],
-    [OID.runnerEnvironment, 'github-hosted'],
-    [OID.repositoryUri, REPOSITORY_URI],
-    [OID.sourceDigest, SOURCE_SHA],
-    [OID.sourceRef, SOURCE_REF],
-    [OID.repositoryId, REPOSITORY_ID]
+    [FULCIO_OID.issuer, 'https://token.actions.githubusercontent.com'],
+    [FULCIO_OID.signerUri, expectedSignerUri],
+    [FULCIO_OID.signerDigest, inventory.source.workflowCommit],
+    [FULCIO_OID.runnerEnvironment, 'github-hosted'],
+    [FULCIO_OID.repositoryUri, REPOSITORY_URI],
+    [FULCIO_OID.sourceDigest, SOURCE_SHA],
+    [FULCIO_OID.sourceRef, SOURCE_REF],
+    [FULCIO_OID.repositoryId, REPOSITORY_ID]
   ])
-  for (const [oid, value] of expected)
-    if (claims.get(oid) !== value) fail('RUNTIME_READBACK_CERTIFICATE_CLAIM_MISMATCH')
+  assertRequiredFulcioClaims(identity.oids, expected)
 }
 
 function dssePayload(bundle) {
