@@ -178,7 +178,12 @@ describe('verified Electron archive stream ownership', () => {
       for await (const chunk of source.stream(1, 3)) chunks.push(Buffer.from(chunk))
       expect(Buffer.concat(chunks)).toEqual(zip.subarray(1, 4))
       expect(() => source.stream(-1, 1)).toThrow(/invalid range/)
-      expect(() => source.stream(0, zip.length + 1)).toThrow(/invalid range/)
+      const paddedChunks: Buffer[] = []
+      for await (const chunk of source.stream(0, zip.length + 1_000)) paddedChunks.push(Buffer.from(chunk))
+      expect(Buffer.concat(paddedChunks)).toEqual(zip)
+      expect(() => source.stream(0, -1)).toThrow(/invalid range/)
+      expect(() => source.stream(0, Number.POSITIVE_INFINITY)).toThrow(/invalid range/)
+      expect(() => source.stream(zip.length + 1, 1)).toThrow(/invalid range/)
     } finally {
       closeSync(fd)
     }
