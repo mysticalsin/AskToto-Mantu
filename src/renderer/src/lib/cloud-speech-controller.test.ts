@@ -274,6 +274,50 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
+  it('joins a ceiling receipt to an already-started user Stop without sealing twice', async () => {
+    const next = controller()
+    next.finish.mockResolvedValue({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    let flushId = ''
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        flushId = (message as { requestId: string }).requestId
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000706',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    port.emit({ type: 'flush-ack', requestId: flushId, finalSequence: 0, finalSampleOffset: 0 })
+    await expect(stopping).resolves.toMatchObject({ ok: true, complete: true })
+    expect(port.sent).toHaveLength(1)
+    expect(next.acknowledgeCaptureCeiling).toHaveBeenCalledTimes(1)
+    expect(next.finish).toHaveBeenCalledTimes(1)
+    next.instance.dispose()
+  })
+
   it('converts each genuine Float32 frame once to explicit little-endian PCM and translates the capture offset', async () => {
     const { instance, frame } = controller()
     expect((await instance.start()).ok).toBe(true)
