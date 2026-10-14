@@ -56,6 +56,7 @@ import {
   publishSettingsSnapshot,
   type SettingsPolicyAuthoritySnapshot
 } from './settings-observation'
+import { commitManagedAuthorityDocument, flushSettingsAuthorityInvalidations } from './settings-authority-history'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -104,14 +105,23 @@ const adminCache = new AdminManagedCache({
   }
 })
 const adminManagedContent = (): string | null => {
+  const identity = adminPolicyIdentity()
   if (freshAdminRead?.status === 'invalid') {
     managedPolicyAuthority.setUnreadable('admin')
+    publishManagedAuthority('admin', identity.path, null, 'unreadable')
     return null
   }
-  return managedPolicyAuthority.readAdminContent(
+  const content = managedPolicyAuthority.readAdminContent(
     () => adminCache.read(),
     () => adminPolicyPathState
   )
+  publishManagedAuthority(
+    'admin',
+    identity.path,
+    content,
+    adminPolicyPathState === 'unknown' ? 'unreadable' : 'readable'
+  )
+  return content
 }
 export function resetAdminManagedCache(): void {
   adminCache.reset()
@@ -147,17 +157,39 @@ const shape = (): Shape => BaseSettingsSchema.shape as unknown as Shape
 
 function readPolicyFile<T>(path: string, source: 'user' | 'admin', fallback: T, parse: (raw: string) => T): T {
   if (source === 'user' && freshUserManagedRead) {
-    if (freshUserManagedRead.status === 'absent') return fallback
-    if (freshUserManagedRead.status !== 'present') {
-      managedPolicyAuthority.setUnreadable(source)
+    if (freshUserManagedRead.status === 'absent') {
+      publishManagedAuthority(source, path, null, 'readable')
       return fallback
     }
-    return parse(Buffer.from(freshUserManagedRead.bytes).toString('utf8'))
+    if (freshUserManagedRead.status !== 'present') {
+      managedPolicyAuthority.setUnreadable(source)
+      publishManagedAuthority(source, path, null, 'unreadable')
+      return fallback
+    }
+    const raw = Buffer.from(freshUserManagedRead.bytes).toString('utf8')
+    try {
+      const value = parse(raw)
+      publishManagedAuthority(source, path, raw, 'readable')
+      return value
+    } catch (error) {
+      managedPolicyAuthority.noteReadFailure(source, error)
+      publishManagedAuthority(source, path, null, 'unreadable')
+      return fallback
+    }
   }
   try {
-    return parse(readFileSync(path, 'utf8'))
+    const raw = readFileSync(path, 'utf8')
+    const value = parse(raw)
+    publishManagedAuthority(source, path, raw, 'readable')
+    return value
   } catch (error) {
     managedPolicyAuthority.noteReadFailure(source, error)
+    publishManagedAuthority(
+      source,
+      path,
+      null,
+      (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'readable' : 'unreadable'
+    )
     return fallback
   }
 }
@@ -485,6 +517,16 @@ interface SettingsCache {
   adminMtime: number
 }
 let _settingsCache: SettingsCache | null = null
+
+function publishManagedAuthority(
+  source: 'user' | 'admin',
+  sourceIdentity: string,
+  raw: string | null,
+  status: 'readable' | 'unreadable'
+): void {
+  if (commitManagedAuthorityDocument(source, sourceIdentity, raw, status)) _settingsCache = null
+  flushSettingsAuthorityInvalidations()
+}
 let _freshAsrEngine: FreshAsrEngine | null = null
 
 /** `os.totalmem()` is stable for this process lifetime. Read it once so settings hot paths never probe

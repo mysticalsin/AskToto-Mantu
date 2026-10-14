@@ -35,29 +35,17 @@ import {
   SpeechAuthLeaseController,
   type SpeechAuthLease,
   type SpeechAuthLeaseReaders,
-  type SpeechAuthSettingsObservation
+  type SpeechAuthSettingsObservation,
+  type MainPersistenceSessionBoundary
 } from './auth-speech-lease'
 
 export { tenantMatches } from './auth-session-policy'
-export type { SpeechAuthLease, SpeechAuthLeaseReaders, SpeechAuthSettingsObservation }
+export type { MainPersistenceSessionBoundary, SpeechAuthLease, SpeechAuthLeaseReaders, SpeechAuthSettingsObservation }
 
-// Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
-// extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
+// Identity and read-only calendar scopes keep later agenda reads free of another consent prompt.
 const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'openid', 'profile', 'email']
 
-/**
- * Azure AD (Microsoft Entra) sign-in gate.
- *
- * Goal (per Tony): Métis can only be used by someone signed in with a Mantu Microsoft account, so usage is attributable and tied to the user's Dust identity. Sign-in is locked to the org tenant AND the allowed email domain.
- *
- * Activation needs an Entra app registration ("Mobile and desktop applications" platform, redirect
- * `http://localhost`). Provide via env / managed-config:
- *   AZURE_CLIENT_ID        — Entra application (client) ID
- *   AZURE_TENANT_ID        — Mantu tenant ID (locks sign-in to the org)
- *   ASKTOTO_ALLOWED_DOMAIN — e.g. "mantu.com" (rejects accounts outside the domain)
- *
- * Until those are set, signIn() reports configured:false and the app proceeds (dev/single-user); validated identity is encrypted to survive restarts.
- */
+/** Microsoft Entra gate; configure AZURE_CLIENT_ID, AZURE_TENANT_ID and ASKTOTO_ALLOWED_DOMAIN through env/managed settings. */
 
 type Session = AuthSession
 
@@ -694,6 +682,19 @@ export function requireAuth(): boolean {
   return !s.configured || s.signedIn
 }
 export const captureAuthSessionBoundary = () => speechAuthLeaseController.captureSessionBoundary(requireAuth)
+export const capturePersistencePrincipalAssociation = () => speechAuthLeaseController.capturePersistencePrincipal()
+export const captureMainPersistenceSessionBoundary = (): MainPersistenceSessionBoundary => {
+  const status = authStatus(),
+    config = readConfig(),
+    sticky = isStickyConfigured()
+  return speechAuthLeaseController.captureMainPersistenceSessionBoundary({
+    config,
+    configured: !!config,
+    enforced: status.enforced === true,
+    sticky,
+    authorized: status.enforced === true ? status.signedIn : !status.configured || status.signedIn
+  })
+}
 speechAuthLeaseController = new SpeechAuthLeaseController({
   prepareSession: loadSession,
   readSession: () => session,
@@ -835,11 +836,9 @@ export async function signIn(): Promise<SignInResult> {
       }
     }
 
-    // Case-folded compare: Entra issues `tid` as a lowercase GUID, but the portal's "Directory (tenant)
-    // ID" is routinely pasted in uppercase. A raw !== turned that casing difference into a permanent
-    // lockout — the config still counts as configured, so the wall stays up and Settings stays locked
-    // while every retry denies again. expectedTenant is logged so the mismatch is diagnosable at all
-    // (the user-facing string is unchanged: SignInWall keys its friendlier copy off it).
+    // Case-folded compare: Entra issues `tid` as lowercase, while the portal's "Directory (tenant) ID" is often uppercase.
+    // A raw !== caused a permanent lockout; config still looked active, so every retry denied behind the wall.
+    // Log expectedTenant for diagnosis; SignInWall keeps its existing friendlier copy.
     if (!tenantMatches(tid, cfg.tenantId)) {
       await purgeRejected()
       auditLog('auth.denied', {

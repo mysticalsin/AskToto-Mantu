@@ -1,4 +1,5 @@
 import type { Settings } from '@shared/ipc'
+import { createHash } from 'node:crypto'
 
 export interface SpeechAuthSettingsObservation {
   readonly settings: Settings
@@ -48,6 +49,22 @@ export interface SpeechAuthLeaseDependencies {
 
 declare const speechAuthLeaseBrand: unique symbol
 export type SpeechAuthLease = { readonly [speechAuthLeaseBrand]: true }
+
+declare const mainPersistenceBoundaryBrand: unique symbol
+export interface MainPersistenceSessionBoundary {
+  readonly [mainPersistenceBoundaryBrand]: true
+  readonly principalAssociation: string | null
+  readonly configured: boolean
+  isCurrent(): boolean
+}
+
+export interface MainPersistenceSessionBoundaryInput {
+  readonly config: SpeechAuthConfig | null
+  readonly configured: boolean
+  readonly enforced: boolean
+  readonly sticky: boolean
+  readonly authorized: boolean
+}
 
 interface LeaseRecord {
   readonly config: SpeechAuthConfig | null
@@ -108,6 +125,72 @@ export class SpeechAuthLeaseController {
       this.dependencies.readSessionEpoch() === sessionEpoch &&
       this.dependencies.readSession() === session &&
       isAuthorized()
+  }
+
+  /** Hash the verified in-memory tenant/account association without exposing raw identity to callers. */
+  capturePersistencePrincipal(): string | null {
+    const session = this.dependencies.readSession()
+    if (!session) return null
+    const tenant = session.tid.trim().toLowerCase()
+    const email = session.email.trim().toLowerCase()
+    const domain = session.domain.trim().toLowerCase()
+    if (!tenant || !email || !domain || !email.endsWith(`@${domain}`)) return null
+    return createHash('sha256').update(`metis-persistence-principal/v1\n${tenant}\n${domain}\n${email}`).digest('hex')
+  }
+
+  /** Main-owned, no-I/O currentness for retained work; config is captured at the explicit action boundary. */
+  captureMainPersistenceSessionBoundary(input: MainPersistenceSessionBoundaryInput): MainPersistenceSessionBoundary {
+    const session = this.dependencies.readSession()
+    const sessionSnapshot = session ? { ...session } : null
+    const sessionEpoch = this.dependencies.readSessionEpoch()
+    const profilePath = this.dependencies.readProfilePath()
+    const authorityEpoch = this.authorityEpoch
+    const semanticEpoch = this.semanticEpoch
+    const config = input.config ? { ...input.config } : null
+    const principalAssociation = this.capturePersistencePrincipal()
+    let lastWallNow = Date.now()
+    let lastMonotonicNow = performance.now()
+    const boundary = Object.freeze({
+      principalAssociation,
+      configured: input.configured,
+      isCurrent: () => {
+        const wallNow = Date.now()
+        const monotonicNow = performance.now()
+        const currentSession = this.dependencies.readSession()
+        if (
+          !input.authorized ||
+          this.authorityEpoch !== authorityEpoch ||
+          this.semanticEpoch !== semanticEpoch ||
+          this.dependencies.readSessionEpoch() !== sessionEpoch ||
+          this.dependencies.readProfilePath() !== profilePath ||
+          currentSession !== session ||
+          !Number.isFinite(wallNow) ||
+          !Number.isFinite(monotonicNow) ||
+          wallNow < lastWallNow ||
+          monotonicNow < lastMonotonicNow
+        ) {
+          return false
+        }
+        if (sessionSnapshot) {
+          if (
+            !currentSession ||
+            currentSession.email !== sessionSnapshot.email ||
+            currentSession.domain !== sessionSnapshot.domain ||
+            currentSession.tid !== sessionSnapshot.tid ||
+            currentSession.at !== sessionSnapshot.at ||
+            !this.dependencies.sessionIsValid(currentSession, config, wallNow)
+          ) {
+            return false
+          }
+        } else if (currentSession !== null || input.enforced || input.sticky || (input.configured && config !== null)) {
+          return false
+        }
+        lastWallNow = wallNow
+        lastMonotonicNow = monotonicNow
+        return true
+      }
+    }) as MainPersistenceSessionBoundary
+    return boundary
   }
 
   private retire(): void {
