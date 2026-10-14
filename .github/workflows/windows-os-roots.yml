@@ -1,0 +1,68 @@
+name: Windows OS-root helper qualification
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - .github/workflows/windows-os-roots.yml
+      - electron-builder.yml
+      - native/win-os-roots/**
+      - native/win-supervise/supervise.c
+      - native/win-supervise/tests/job-tree-fixture.c
+      - scripts/build-win-os-roots.ps1
+      - scripts/check-win-os-roots-package.mjs
+      - package-lock.json
+      - scripts/qa/windows-os-roots-api.ps1
+      - scripts/qa/windows-os-roots-shutdown.ps1
+      - scripts/build-installers.mjs
+      - package.json
+  pull_request:
+    branches: [main, master]
+    paths:
+      - .github/workflows/windows-os-roots.yml
+      - electron-builder.yml
+      - native/win-os-roots/**
+      - native/win-supervise/supervise.c
+      - native/win-supervise/tests/job-tree-fixture.c
+      - scripts/build-win-os-roots.ps1
+      - scripts/check-win-os-roots-package.mjs
+      - package-lock.json
+      - scripts/qa/windows-os-roots-api.ps1
+      - scripts/qa/windows-os-roots-shutdown.ps1
+      - scripts/build-installers.mjs
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-os-roots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-native-authority:
+    name: Windows x64 helper and owned shutdown
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install the locked archive verifier without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and inventory the unsigned x64 helper with Visual Studio 2022
+        shell: pwsh
+        run: ./scripts/build-win-os-roots.ps1
+      - name: Compare helper output to independent Windows kernel API calls
+        shell: pwsh
+        run: ./scripts/qa/windows-os-roots-api.ps1
+      - name: Verify the helper inventory and real OS API answer under poisoned ambient variables
+        run: node scripts/check-win-os-roots-package.mjs resources --prepackage
+      - name: Prove Job Object shutdown closes its owned descendant tree
+        shell: pwsh
+        run: ./scripts/qa/windows-os-roots-shutdown.ps1
