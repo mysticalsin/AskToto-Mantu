@@ -7,8 +7,12 @@ import {
   CLOUD_SPEECH_MAX_PENDING_FRAMES,
   CloudSpeechCancelResultSchema,
   CloudSpeechCancelRequestSchema,
+  CloudSpeechCaptureCeilingAckResultSchema,
+  CloudSpeechCaptureCeilingAckSchema,
   CloudSpeechCapabilitySchema,
   CloudSpeechEventSchema,
+  CloudSpeechEpochTransitionAckSchema,
+  CloudSpeechEpochTransitionAckResultSchema,
   CloudSpeechFinishRequestSchema,
   CloudSpeechFrameSchema,
   CloudSpeechFrameResultSchema,
@@ -18,11 +22,26 @@ import {
   CloudSpeechStatusRequestSchema,
   CloudSpeechStatusResultSchema,
   type CloudSpeechEngine,
+  type CloudSpeechEvent,
+  type CloudSpeechFrame,
   type CloudSpeechFailure,
-  type CloudSpeechStartRequest
+  type CloudSpeechStartRequest,
+  type CloudSpeechEpochTransitionEvent
 } from '@shared/cloud-speech'
-import { SpeechBrokerClient, type SpeechBrokerClientOptions, type SpeechTrack } from '../cloud-stt/broker-client'
+import {
+  SpeechBrokerClient,
+  type SpeechBrokerClientOptions,
+  type SpeechBrokerOperation,
+  type SpeechTrack
+} from '../cloud-stt/broker-client'
 import { RelaySpeechSession, type RelaySpeechSessionOptions } from '../cloud-stt/relay-session'
+import {
+  CLOUD_SPEECH_CAPTURE_MAX_MS,
+  CLOUD_SPEECH_CAPTURE_MAX_SAMPLES,
+  CLOUD_SPEECH_HANDOFF_MAX_MS,
+  MainSpeechCaptureSession
+} from '../cloud-stt/capture-session'
+import { scheduleCaptureDeadline } from '../infra/scheduler/capture-deadline'
 import {
   IPC_CHANNELS,
   ROUTES,
@@ -57,17 +76,30 @@ export type CloudSpeechIpcRegistration = {
 
 export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpeechIpcRegistration {
   const now = options.now ?? Date.now
+  const monotonicNow = options.monotonicNow ?? (() => performance.now())
   const makeClient =
     options.clientFactory ?? ((credentials: SpeechBrokerClientOptions) => new SpeechBrokerClient(credentials))
   let current: Owner | null = null
   const owners = new Map<string, Owner>()
   let acceptingInput = true
   let shuttingDown = false
+  let authorityPreparationGeneration = 0
+  let capabilityPreparationGeneration = 0
 
   const currentAuthority = (owner: Owner, requireCapture: boolean): Authority | null => {
     if (!sameBinding(owner.binding) || shuttingDown || (requireCapture && !acceptingInput)) return null
     try {
-      const latest = options.readAuthority(owner.event, owner.request)
+      const latest = options.readAuthority(owner.event, owner.request, owner)
+      if (
+        owner.captureContext &&
+        (!latest.captureContext ||
+          latest.captureContext.webContents !== owner.captureContext.webContents ||
+          latest.captureContext.frame !== owner.captureContext.frame ||
+          latest.captureContext.navigationEpoch !== owner.captureContext.navigationEpoch ||
+          latest.captureContext.listenStartedAt !== owner.captureContext.listenStartedAt ||
+          (!requireCapture && latest.finishAllowed !== true))
+      )
+        return null
       if (
         !latest.enabled ||
         !latest.authenticated ||
@@ -88,6 +120,15 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
   })
   const ownerFor = (identity: { captureId: string; captureGeneration: number }): Owner | null =>
     owners.get(identityKey(identity.captureId, identity.captureGeneration)) ?? null
+  const releaseCaptureOwner = (owner: Owner): void => {
+    if (owner.finishContextReleased || owner.closureConfirmed !== true) return
+    owner.finishContextReleased = true
+    try {
+      options.releaseCaptureOwner?.(owner)
+    } catch {
+      /* A failed release cannot restore capture or invalidate a completed main-owned closure. */
+    }
+  }
 
   const sendEvent = (owner: Owner, value: unknown): boolean => {
     if (current !== owner || owner.phase === 'cancelled' || owner.phase === 'closed') return false
@@ -133,14 +174,28 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       return
     }
     const key = `${transcript.track}:${transcript.streamEpoch}`
-    const previousSequence = owner.eventFrontier.get(key) ?? 0
-    const expectedStreams = owner.session?.identity.tracks
+    const capture = owner.captureSession
+    const isCandidate =
+      owner.phase === 'rotating' &&
+      capture?.phase === 'opening-next' &&
+      owner.candidateAllocationId === context.sessionId
+    const currentIdentity = owner.session?.identity
+    const isCurrentRelay =
+      (owner.phase === 'starting' && owner.allocationId === context.sessionId) ||
+      (currentIdentity?.sessionId === context.sessionId && capture?.phase !== 'opening-next')
+    const expectedStreams = isCandidate ? currentIdentity?.tracks : owner.session?.identity.tracks
+    const lastSequence = isCandidate
+      ? (owner.candidateEventFrontier.get(key) ?? 0)
+      : (owner.eventFrontier.get(key) ?? 0)
     if (
+      (!isCandidate && !isCurrentRelay) ||
       (expectedStreams &&
         !expectedStreams.some(
-          (stream) => stream.track === transcript.track && stream.streamEpoch === transcript.streamEpoch
+          (stream) =>
+            stream.track === transcript.track &&
+            (isCandidate ? transcript.streamEpoch > stream.streamEpoch : transcript.streamEpoch === stream.streamEpoch)
         )) ||
-      transcript.sequence !== previousSequence + 1
+      transcript.sequence !== lastSequence + 1
     ) {
       owner.outputIntegrityFailure = true
       void retire(owner)
@@ -183,7 +238,24 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       void retire(owner)
       return
     }
-    if (sendEvent(owner, event)) owner.eventFrontier.set(key, transcript.sequence)
+    if (isCandidate) {
+      let bytes: number
+      try {
+        bytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
+      } catch {
+        owner.outputIntegrityFailure = true
+        void retire(owner)
+        return
+      }
+      if (owner.candidatePendingEvents.length >= 128 || owner.candidateEventBytes + bytes > 256 * 1024) {
+        owner.outputIntegrityFailure = true
+        void retire(owner)
+        return
+      }
+      owner.candidatePendingEvents.push(event as CloudSpeechEvent)
+      owner.candidateEventBytes += bytes
+      owner.candidateEventFrontier.set(key, transcript.sequence)
+    } else if (sendEvent(owner, event)) owner.eventFrontier.set(key, transcript.sequence)
     else owner.outputIntegrityFailure = true
   }
 
@@ -218,8 +290,420 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     }
   }
 
+  const schedule = options.scheduleCaptureDeadline ?? scheduleCaptureDeadline
+  const handoffDeadline = (owner: Owner): number => {
+    const proposed = monotonicNow() + CLOUD_SPEECH_HANDOFF_MAX_MS
+    owner.rotationDeadlineAt =
+      owner.rotationDeadlineAt === null ? proposed : Math.min(owner.rotationDeadlineAt, proposed)
+    return owner.rotationDeadlineAt
+  }
+  const failRotation = (owner: Owner): void => {
+    owner.outputIntegrityFailure = true
+    owner.rotationAbort?.abort()
+    owner.captureSession?.invalidate('cancelled', failure('TRANSPORT', identityOf(owner)))
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = null
+    owner.cancelCeilingSchedule?.()
+    owner.cancelCeilingSchedule = null
+    for (const item of owner.captureSession?.takePendingFrames() ?? [])
+      item.resolve(failure('TRANSPORT', identityOf(owner)))
+    if (current === owner) void retire(owner)
+  }
+
+  function publishTransition(
+    owner: Owner,
+    stage: 'closed',
+    streams: Array<{ track: SpeechTrack; previousEpoch: number; lastSequence: number }>
+  ): Promise<boolean>
+  function publishTransition(
+    owner: Owner,
+    stage: 'opened',
+    streams: Array<{ track: SpeechTrack; previousEpoch: number; nextEpoch: number; lastSequence: number }>
+  ): Promise<boolean>
+  async function publishTransition(
+    owner: Owner,
+    stage: 'closed' | 'opened',
+    streams:
+      | Array<{ track: SpeechTrack; previousEpoch: number; lastSequence: number }>
+      | Array<{ track: SpeechTrack; previousEpoch: number; nextEpoch: number; lastSequence: number }>
+  ): Promise<boolean> {
+    const capture = owner.captureSession
+    if (!capture || current !== owner || !currentAuthority(owner, false)) return false
+    const deadlineAt = handoffDeadline(owner)
+    let transition: { event: CloudSpeechEpochTransitionEvent; applied: Promise<boolean> }
+    try {
+      transition =
+        stage === 'closed'
+          ? capture.beginTransition(
+              'closed',
+              streams as Array<{ track: SpeechTrack; previousEpoch: number; lastSequence: number }>,
+              deadlineAt
+            )
+          : capture.beginTransition(
+              'opened',
+              streams as Array<{ track: SpeechTrack; previousEpoch: number; nextEpoch: number; lastSequence: number }>,
+              deadlineAt
+            )
+    } catch {
+      return false
+    }
+    capture.phase = stage === 'closed' ? 'awaiting-old-application' : 'awaiting-next-application'
+    if (!sendEvent(owner, transition.event)) return false
+    const applied = await transition.applied
+    if (!applied || current !== owner || !currentAuthority(owner, false)) return false
+    capture.completeTransition()
+    return true
+  }
+
+  const preflightRotation = async (owner: Owner, cutoffAt: number): Promise<void> => {
+    const session = owner.session
+    const client = owner.client
+    if (!session || !client || current !== owner || owner.phase !== 'active' || !currentAuthority(owner, true)) {
+      failRotation(owner)
+      return
+    }
+    const remaining = cutoffAt - monotonicNow()
+    if (remaining <= 0) {
+      void rotate(owner)
+      return
+    }
+    const controller = new AbortController()
+    owner.rotationAbort?.abort()
+    owner.rotationAbort = controller
+    try {
+      await options.prepareAuthority?.(owner.event, owner.request)
+    } catch {
+      failRotation(owner)
+      return
+    }
+    if (controller.signal.aborted || current !== owner || owner.phase !== 'active' || !sameBinding(owner.binding))
+      return
+    if (!currentAuthority(owner, true)) {
+      failRotation(owner)
+      return
+    }
+    if (monotonicNow() >= cutoffAt) {
+      void rotate(owner)
+      return
+    }
+    const operation: SpeechBrokerOperation = { signal: controller.signal, deadlineAt: cutoffAt }
+    const capability = await client
+      .capability(operation)
+      .catch(() => ({ ok: false as const, code: 'TRANSPORT' as const }))
+    if (controller.signal.aborted || current !== owner || owner.phase !== 'active') return
+    if (!capability.ok || !currentAuthority(owner, true)) {
+      failRotation(owner)
+      return
+    }
+    const currentSession = owner.session?.identity
+    const broker = capability.value
+    const expectedRoute = ROUTES[owner.engine]
+    if (
+      !currentSession ||
+      !broker.ready ||
+      broker.routeId !== expectedRoute.routeId ||
+      broker.modelId !== expectedRoute.modelId ||
+      broker.configVersion !== currentSession.configVersion ||
+      broker.policyVersion !== currentSession.policyVersion ||
+      broker.languages.includes(currentSession.language) === false ||
+      broker.validUntil <= now() ||
+      !broker.allowed.some(
+        (route) => route.routeId === expectedRoute.routeId && route.modelId === expectedRoute.modelId
+      )
+    ) {
+      failRotation(owner)
+      return
+    }
+    owner.preflightBinding = { configVersion: broker.configVersion, policyVersion: broker.policyVersion }
+    owner.rotationAbort = null
+    const delay = cutoffAt - monotonicNow()
+    owner.cancelRotationSchedule = schedule(() => void rotate(owner), delay)
+  }
+
+  const rotate = async (owner: Owner): Promise<void> => {
+    if (owner.rotationPromise) return owner.rotationPromise
+    const session = owner.session
+    const capture = owner.captureSession
+    if (
+      !session ||
+      !capture ||
+      current !== owner ||
+      owner.phase !== 'active' ||
+      !owner.preflightBinding ||
+      !currentAuthority(owner, true)
+    ) {
+      failRotation(owner)
+      return
+    }
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = null
+    owner.phase = 'rotating'
+    capture.phase = 'closing-old'
+    const controller = new AbortController()
+    owner.rotationAbort = controller
+    owner.rotationPromise = (async () => {
+      const previousIdentity = session.identity
+      const previous = await session.finish(Math.min(5_000, previousIdentity.limits.drainWindowMs)).catch(() => null)
+      if (!previous || current !== owner || controller.signal.aborted || !currentAuthority(owner, false)) {
+        failRotation(owner)
+        return
+      }
+      const previousTracks = previousIdentity.tracks
+      const validClose =
+        previous.complete &&
+        previous.tracks.length === owner.tracks.length &&
+        previousTracks.length === owner.tracks.length &&
+        owner.tracks.every((track, index) => {
+          const expected = previousTracks[index]
+          const closed = previous.tracks[index]
+          return (
+            expected?.track === track &&
+            closed?.track === track &&
+            expected.streamEpoch === closed.streamEpoch &&
+            closed.closeConfirmed &&
+            closed.tail === 'complete' &&
+            closed.lastSequence === (owner.eventFrontier.get(`${track}:${closed.streamEpoch}`) ?? 0)
+          )
+        })
+      setTerminal(owner, previous.tracks)
+      if (!validClose || owner.outputIntegrityFailure) {
+        failRotation(owner)
+        return
+      }
+      const closedStreams = previous.tracks.map((track) => ({
+        track: track.track,
+        previousEpoch: track.streamEpoch,
+        lastSequence: track.lastSequence
+      }))
+      if (!(await publishTransition(owner, 'closed', closedStreams))) {
+        failRotation(owner)
+        return
+      }
+      if (current !== owner || controller.signal.aborted || !currentAuthority(owner, false)) {
+        failRotation(owner)
+        return
+      }
+      const issuedAt = now()
+      const captureRemaining = Math.max(0, capture.deadlineAt - monotonicNow())
+      const expiresAt = Math.min(issuedAt + 120_000, issuedAt + captureRemaining)
+      if (expiresAt <= issuedAt) {
+        failRotation(owner)
+        return
+      }
+      const createRequest = {
+        operation: 'create-session' as const,
+        captureGeneration: owner.generation,
+        tracks: [...owner.tracks],
+        language: previousIdentity.language,
+        consent: {
+          accepted: true as const,
+          captureGeneration: owner.generation,
+          tracks: [...owner.tracks],
+          issuedAt,
+          expiresAt
+        }
+      }
+      const latest = currentAuthority(owner, false)
+      const preflightBinding = owner.preflightBinding
+      if (
+        !latest ||
+        latest.selectedEngine !== owner.engine ||
+        latest.credentialRevision === '' ||
+        latest.policyRevision === '' ||
+        !preflightBinding ||
+        preflightBinding.configVersion !== previousIdentity.configVersion ||
+        preflightBinding.policyVersion !== previousIdentity.policyVersion
+      ) {
+        failRotation(owner)
+        return
+      }
+      capture.phase = 'opening-next'
+      owner.candidateAllocationId = null
+      owner.candidateSession = null
+      owner.candidatePendingEvents = []
+      owner.candidateEventBytes = 0
+      owner.candidateEventFrontier.clear()
+      const operation: SpeechBrokerOperation = {
+        signal: controller.signal,
+        deadlineAt: handoffDeadline(owner)
+      }
+      const next = await session.renew(createRequest, operation)
+      if (!next.ok || current !== owner || controller.signal.aborted || !currentAuthority(owner, false)) {
+        failRotation(owner)
+        return
+      }
+      const nextIdentity = next.value.identity
+      const exactTracks =
+        nextIdentity.tracks.length === previousIdentity.tracks.length &&
+        previousIdentity.tracks.every((old, index) => {
+          const fresh = nextIdentity.tracks[index]
+          return fresh?.track === old.track && fresh.streamEpoch > old.streamEpoch
+        })
+      if (
+        !exactTracks ||
+        nextIdentity.captureGeneration !== owner.generation ||
+        nextIdentity.routeId !== previousIdentity.routeId ||
+        nextIdentity.model !== previousIdentity.model ||
+        nextIdentity.language !== previousIdentity.language ||
+        nextIdentity.configVersion !== previousIdentity.configVersion ||
+        nextIdentity.policyVersion !== previousIdentity.policyVersion ||
+        owner.candidateAllocationId !== nextIdentity.sessionId
+      ) {
+        await next.value.cancel().catch(() => undefined)
+        failRotation(owner)
+        return
+      }
+      owner.candidateSession = next.value
+      const openedStreams = previous.tracks.map((old) => {
+        const fresh = nextIdentity.tracks.find((item) => item.track === old.track)!
+        return {
+          track: old.track,
+          previousEpoch: old.streamEpoch,
+          nextEpoch: fresh.streamEpoch,
+          lastSequence: old.lastSequence
+        }
+      })
+      if (!(await publishTransition(owner, 'opened', openedStreams))) {
+        failRotation(owner)
+        return
+      }
+      if (current !== owner || controller.signal.aborted || !currentAuthority(owner, false)) {
+        failRotation(owner)
+        return
+      }
+      owner.session = next.value
+      owner.allocationId = nextIdentity.sessionId
+      owner.candidateAllocationId = null
+      for (const event of owner.candidatePendingEvents) {
+        if (!sendEvent(owner, event)) {
+          failRotation(owner)
+          return
+        }
+        if (event.type === 'segment')
+          owner.eventFrontier.set(`${event.segment.stream.track}:${event.segment.stream.epoch}`, event.sequence)
+      }
+      owner.candidatePendingEvents = []
+      owner.candidateEventBytes = 0
+      owner.candidateEventFrontier.clear()
+      owner.phase = 'active'
+      capture.phase = 'active'
+      owner.preflightBinding = null
+      owner.rotationDeadlineAt = null
+      owner.rotationAbort = null
+      const queued = capture.takePendingFrames()
+      for (const [index, item] of queued.entries()) {
+        const frame = item.frame as CloudSpeechFrame
+        if (item.deadlineAt <= monotonicNow()) {
+          item.resolve(failure('TIMEOUT', identityOf(owner)))
+          for (const waiting of queued.slice(index + 1)) waiting.resolve(failure('TIMEOUT', identityOf(owner)))
+          failRotation(owner)
+          return
+        }
+        const accepted = next.value.pushFrame(frame.track, {
+          sequence: frame.sequence,
+          sampleOffset: frame.sampleOffset,
+          pcm16le: new Uint8Array(frame.pcm16le)
+        })
+        if (!accepted.ok) {
+          item.resolve(failure(accepted.code === 'QUEUE_LIMIT' ? 'QUEUE_LIMIT' : 'TRANSPORT', identityOf(owner)))
+          for (const waiting of queued.slice(index + 1)) waiting.resolve(failure('TRANSPORT', identityOf(owner)))
+          failRotation(owner)
+          return
+        }
+        const frontier = owner.frontier.get(frame.track)
+        const nextSequence = frame.sequence + 1
+        const nextSampleOffset = frame.sampleOffset + frame.pcm16le.byteLength / 2
+        if (!frontier || frame.sequence !== frontier.nextSequence || !Number.isSafeInteger(nextSampleOffset)) {
+          item.resolve(failure('ORDER', identityOf(owner)))
+          for (const waiting of queued.slice(index + 1)) waiting.resolve(failure('ORDER', identityOf(owner)))
+          failRotation(owner)
+          return
+        }
+        owner.frontier.set(frame.track, { nextSequence, nextSampleOffset })
+        if (frame.kind === 'sealed-final') owner.sealedTracks.add(frame.track)
+        const response = {
+          ok: true as const,
+          ...identityOf(owner),
+          track: frame.track,
+          sequence: frame.sequence,
+          nextSequence,
+          nextSampleOffset
+        }
+        item.resolve(
+          CloudSpeechFrameResultSchema.safeParse(response).success ? response : failure('TRANSPORT', identityOf(owner))
+        )
+      }
+      if (
+        [...owner.frontier.values()].some((frontier) => frontier.nextSampleOffset === CLOUD_SPEECH_CAPTURE_MAX_SAMPLES)
+      )
+        startCaptureCeiling(owner)
+      else if (owner.finishAfterRotation === null) armRotation(owner)
+    })().finally(() => {
+      owner.rotationPromise = null
+    })
+    return owner.rotationPromise
+  }
+
+  function armRotation(owner: Owner): void {
+    const session = owner.session
+    if (!session || owner.phase !== 'active' || current !== owner) return
+    const identity = session.identity
+    // Broker lease timestamps are wall-clock values. Convert the remaining
+    // duration once, then keep coordinator deadlines on the monotonic clock.
+    const cutoffAt =
+      monotonicNow() + Math.max(0, identity.audioDeadlineAt - Math.min(identity.limits.drainWindowMs, 5_000) - now())
+    const prepareAt = cutoffAt - CLOUD_SPEECH_HANDOFF_MAX_MS
+    const delay = Math.max(0, prepareAt - monotonicNow())
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = schedule(() => void preflightRotation(owner, cutoffAt), delay)
+  }
+
+  const startCaptureCeiling = (owner: Owner): void => {
+    const capture = owner.captureSession
+    if (owner.ceilingRequested) return
+    if (
+      !capture ||
+      current !== owner ||
+      (owner.phase !== 'active' && !(owner.phase === 'finishing' && owner.finishPromise)) ||
+      !currentAuthority(owner, false)
+    ) {
+      if (current === owner) void retire(owner)
+      return
+    }
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = null
+    owner.ceilingRequested = true
+    const deadlineAt = monotonicNow() + 5_000
+    owner.ceilingFrameDeadlineAt = Math.min(deadlineAt, monotonicNow() + CLOUD_SPEECH_HANDOFF_MAX_MS)
+    let ceiling: ReturnType<MainSpeechCaptureSession['beginCeiling']>
+    try {
+      ceiling = capture.beginCeiling(CLOUD_SPEECH_CAPTURE_MAX_SAMPLES, deadlineAt)
+    } catch {
+      void retire(owner)
+      return
+    }
+    if (!sendEvent(owner, ceiling.event)) {
+      void retire(owner)
+      return
+    }
+    void ceiling.applied.then((ack) => {
+      if (ack !== null || current !== owner) return
+      owner.outputIntegrityFailure = true
+      void retire(owner)
+    })
+  }
+
+  const armCaptureCeiling = (owner: Owner): void => {
+    const capture = owner.captureSession
+    if (!capture || current !== owner || owner.phase !== 'active') return
+    owner.cancelCeilingSchedule?.()
+    const delay = Math.max(0, capture.deadlineAt - monotonicNow())
+    owner.cancelCeilingSchedule = schedule(() => startCaptureCeiling(owner), delay)
+  }
+
   const queryClosure = async (owner: Owner): Promise<'confirmed' | 'unknown'> => {
     if (!owner.allocationId) return owner.allocationAttempted ? 'unknown' : owner.startSettled ? 'confirmed' : 'unknown'
+    if (!owner.client) return 'unknown'
     const status = await owner.client
       .status(owner.allocationId, 1_000)
       .catch(() => ({ ok: false as const, code: 'TRANSPORT' as const }))
@@ -247,14 +731,26 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
           reason: status.value.status === 'expired' ? 'lease-expired' : 'cancelled'
         }))
       )
+      releaseCaptureOwner(owner)
     }
     return confirmed ? 'confirmed' : 'unknown'
   }
 
   const retire = async (owner: Owner): Promise<'confirmed' | 'unknown'> => {
-    if (owner.phase === 'closed') return owner.closureConfirmed === true ? 'confirmed' : queryClosure(owner)
+    if (owner.phase === 'closed') {
+      if (owner.closureConfirmed === true) releaseCaptureOwner(owner)
+      return owner.closureConfirmed === true ? 'confirmed' : queryClosure(owner)
+    }
+    if (current === owner) authorityPreparationGeneration += 1
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = null
+    owner.cancelCeilingSchedule?.()
+    owner.cancelCeilingSchedule = null
+    owner.rotationAbort?.abort()
+    owner.captureSession?.invalidate('cancelled', failure('CLOSED', identityOf(owner)))
     owner.phase = 'cancelled'
     if (current === owner) current = null
+    if (owner.candidateSession) await owner.candidateSession.cancel().catch(() => undefined)
     if (owner.session) {
       await owner.session.cancel().catch(() => undefined)
       return queryClosure(owner)
@@ -264,6 +760,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       if (confirmed) {
         owner.closureConfirmed = true
         owner.phase = 'closed'
+        releaseCaptureOwner(owner)
       }
       return confirmed ? 'confirmed' : 'unknown'
     }
@@ -279,35 +776,12 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     const request = parsed.data
     const identity = { captureId: request.captureId, captureGeneration: request.capture.generation }
     if (owners.has(identityKey(identity.captureId, identity.captureGeneration))) return failure('STALE', identity)
-    let authority: Authority
-    try {
-      authority = options.readAuthority(event, request)
-    } catch {
-      return failure('POLICY', identity)
-    }
-    if (!authority.enabled) return failure('DISABLED', identity)
-    if (!authority.authenticated) return failure('AUTH', identity)
-    if (!authority.policyReady) return failure('POLICY', identity)
-    if (!authority.captureAllowed || shuttingDown) return failure('CLOSED', identity)
+    if (shuttingDown) return failure('CLOSED', identity)
     // A new explicit, currently authorized Start reopens admission after a prior normal Stop.
     acceptingInput = true
-    const stableRevision = authorityRevision(authority)
-    if (!stableRevision) return failure('POLICY', identity)
     if (request.consent.disclosureVersion !== CLOUD_SPEECH_DISCLOSURE_VERSION) return failure('CONSENT', identity)
     const engine = request.capture.engine as CloudSpeechEngine
-    const selected = routeFor(engine)
-    if (authority.selectedEngine !== engine || !authority.allowedEngines.includes(engine))
-      return failure('POLICY', identity)
     if (!validTrackList(request.capture.capturedTracks as SpeechTrack[])) return failure('INVALID_REQUEST', identity)
-    if (request.language !== 'auto' && !authority.allowedLanguages.includes(request.language))
-      return failure('POLICY', identity)
-    if (!authority.credentials) return failure('NOT_CONFIGURED', identity)
-    let client: SpeechBrokerClient
-    try {
-      client = makeClient(authority.credentials!)
-    } catch {
-      return failure('NOT_CONFIGURED', identity)
-    }
 
     for (const [key, candidate] of owners) {
       if (candidate.phase === 'closed' && candidate.closureConfirmed === true && candidate.startSettled)
@@ -315,18 +789,30 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     }
     if (owners.size >= 2) return failure('CLOSURE_UNCONFIRMED', identity)
     const prior = current
+    const captureStartedAt = monotonicNow()
     const owner: Owner = {
       binding,
       captureId: request.captureId,
       generation: request.capture.generation,
       engine,
       tracks: [...request.capture.capturedTracks] as SpeechTrack[],
-      authorityRevision: stableRevision,
-      client,
+      authorityRevision: '',
+      captureContext: null,
+      client: null,
+      captureSession: new MainSpeechCaptureSession({
+        captureId: request.captureId,
+        captureGeneration: request.capture.generation,
+        tracks: request.capture.capturedTracks as SpeechTrack[],
+        startedAt: captureStartedAt,
+        maxDurationMs: CLOUD_SPEECH_CAPTURE_MAX_MS,
+        monotonicNow,
+        ...(options.scheduleCaptureDeadline ? { schedule: options.scheduleCaptureDeadline } : {})
+      }),
       phase: 'starting',
       allocationAttempted: false,
       allocationId: null,
       session: null,
+      candidateSession: null,
       finishPromise: null,
       finishCheckpoint: null,
       frontier: new Map(),
@@ -338,12 +824,28 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       pendingEventBytes: 0,
       eventOverflow: false,
       closureConfirmed: null,
+      finishContextReleased: false,
+      rotationPromise: null,
+      rotationAbort: null,
+      cancelRotationSchedule: null,
+      cancelCeilingSchedule: null,
+      ceilingRequested: false,
+      ceilingAcked: false,
+      ceilingFrameDeadlineAt: null,
+      preflightBinding: null,
+      rotationDeadlineAt: null,
+      candidateAllocationId: null,
+      candidatePendingEvents: [],
+      candidateEventBytes: 0,
+      candidateEventFrontier: new Map(),
+      finishAfterRotation: null,
       event,
       request
     }
     // Synchronous ownership precedes retirement/capability awaits so stop and replacement can tombstone this start.
     current = owner
     owners.set(identityKey(owner.captureId, owner.generation), owner)
+    let preparationGeneration = authorityPreparationGeneration
     const predecessors = [...owners.values()].filter(
       (candidate) =>
         candidate !== owner &&
@@ -359,7 +861,47 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
         return failure('CLOSURE_UNCONFIRMED', identity)
       }
     }
+    preparationGeneration = ++authorityPreparationGeneration
     try {
+      try {
+        await options.prepareAuthority?.(event, request)
+      } catch {
+        return failure('POLICY', identity)
+      }
+      if (
+        authorityPreparationGeneration !== preparationGeneration ||
+        current !== owner ||
+        owner.phase !== 'starting' ||
+        !sameBinding(owner.binding)
+      )
+        return failure('CLOSED', identity)
+      let authority: Authority
+      try {
+        authority = options.readAuthority(event, request, owner)
+      } catch {
+        return failure('POLICY', identity)
+      }
+      if (!authority.enabled) return failure('DISABLED', identity)
+      if (!authority.authenticated) return failure('AUTH', identity)
+      if (!authority.policyReady) return failure('POLICY', identity)
+      if (!authority.captureAllowed) return failure('CLOSED', identity)
+      const stableRevision = authorityRevision(authority)
+      if (!stableRevision) return failure('POLICY', identity)
+      owner.authorityRevision = stableRevision
+      owner.captureContext = authority.captureContext ?? null
+      if (authority.selectedEngine !== engine || !authority.allowedEngines.includes(engine))
+        return failure('POLICY', identity)
+      const selected = routeFor(engine)
+      if (request.language !== 'auto' && !authority.allowedLanguages.includes(request.language))
+        return failure('POLICY', identity)
+      if (!authority.credentials) return failure('NOT_CONFIGURED', identity)
+      let client: SpeechBrokerClient
+      try {
+        client = makeClient(authority.credentials)
+        owner.client = client
+      } catch {
+        return failure('NOT_CONFIGURED', identity)
+      }
       if (current !== owner || !currentAuthority(owner, true)) return failure('CLOSED', identity)
       const capability = await client.capability()
       if (current !== owner || !currentAuthority(owner, true)) return failure('CLOSED', identity)
@@ -408,17 +950,22 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       } = {
         expectedCapability: { configVersion: binding.configVersion, policyVersion: binding.policyVersion },
         client: bindCreateToCapability(client, binding, (id) => {
-          owner.allocationId = id
+          if (owner.phase === 'rotating') owner.candidateAllocationId = id
+          else owner.allocationId = id
         }),
         createRequest,
         expectedSelection: { routeId: route.routeId, modelId: route.modelId, language },
         isCurrent: () => {
           if (current !== owner) return false
           if (owner.phase === 'starting') return currentAuthority(owner, true) !== null
-          return (owner.phase === 'active' || owner.phase === 'finishing') && currentAuthority(owner, false) !== null
+          return (
+            (owner.phase === 'active' || owner.phase === 'rotating' || owner.phase === 'finishing') &&
+            currentAuthority(owner, false) !== null
+          )
         },
         onAllocated: (id) => {
-          owner.allocationId = id
+          if (owner.phase === 'rotating') owner.candidateAllocationId = id
+          else owner.allocationId = id
         },
         onTranscript: (transcript, context) => makeRelayTranscript(owner, transcript, context)
       }
@@ -484,6 +1031,8 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       owner.pendingEventBytes = 0
       for (const item of buffered) sendEvent(owner, item)
       if (current !== owner || owner.phase !== 'active') return failure('CLOSED', identity)
+      armCaptureCeiling(owner)
+      if (owner.finishAfterRotation === null) armRotation(owner)
       const parsedStart = CloudSpeechStartResultSchema.safeParse(startResult)
       return parsedStart.success ? parsedStart.data : failure('TRANSPORT', identity)
     } catch {
@@ -504,6 +1053,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
         owner.phase = 'closed'
         owner.closureConfirmed = true
       }
+      if (owner.phase === 'closed' && owner.closureConfirmed === true) releaseCaptureOwner(owner)
     }
   }
 
@@ -512,6 +1062,14 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
   handle(CLOUD_SPEECH_IPC.capability, async (event) => {
     const binding = getBinding(event, options.assertMainWindow)
     if (!binding) return refusedCapability('AUTH')
+    const preparationGeneration = ++capabilityPreparationGeneration
+    try {
+      await options.prepareAuthority?.(event)
+    } catch {
+      return refusedCapability('POLICY')
+    }
+    if (preparationGeneration !== capabilityPreparationGeneration || !sameBinding(binding))
+      return refusedCapability('STALE')
     let authority: Authority
     try {
       authority = options.readAuthority(event)
@@ -534,7 +1092,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     }
   })
   handle(CLOUD_SPEECH_IPC.start, safeStart)
-  handle(CLOUD_SPEECH_IPC.frame, (event, raw) => {
+  handle(CLOUD_SPEECH_IPC.frame, async (event, raw) => {
     const binding = getBinding(event, options.assertMainWindow)
     if (!binding) return failure('AUTH')
     const parsed = CloudSpeechFrameSchema.safeParse(raw)
@@ -545,7 +1103,9 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     if (
       !owner ||
       current !== owner ||
-      owner.phase !== 'active' ||
+      (owner.phase !== 'active' && owner.phase !== 'rotating') ||
+      owner.finishAfterRotation !== null ||
+      owner.ceilingAcked ||
       owner.binding.sender !== binding.sender ||
       owner.binding.frame !== binding.frame
     )
@@ -555,6 +1115,13 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       return failure('CLOSED', identity)
     }
     if (!owner.tracks.includes(frame.track)) return failure('INVALID_REQUEST', identity)
+    if (
+      owner.ceilingRequested &&
+      (owner.ceilingFrameDeadlineAt === null || monotonicNow() > owner.ceilingFrameDeadlineAt)
+    ) {
+      void retire(owner)
+      return failure('TIMEOUT', identity)
+    }
     if (owner.sealedTracks.has(frame.track)) return failure('ORDER', identity)
     const frontier = owner.frontier.get(frame.track)
     if (
@@ -567,9 +1134,43 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     const nextSampleOffset = frame.sampleOffset + frame.pcm16le.byteLength / 2
     if (!Number.isSafeInteger(nextSequence) || !Number.isSafeInteger(nextSampleOffset))
       return failure('ORDER', identity)
+    if (nextSampleOffset > CLOUD_SPEECH_CAPTURE_MAX_SAMPLES) {
+      if (owner.phase === 'active') startCaptureCeiling(owner)
+      return failure('ORDER', identity)
+    }
     const pcm16le = new Uint8Array(frame.pcm16le.byteLength)
     pcm16le.set(new Uint8Array(frame.pcm16le))
-    const admitted = owner.session?.pushFrame(frame.track, {
+    const activeSession = owner.session
+    if (owner.phase === 'active' && activeSession) {
+      const cutoffAt =
+        activeSession.identity.audioDeadlineAt - Math.min(activeSession.identity.limits.drainWindowMs, 5_000)
+      if (now() >= cutoffAt) void rotate(owner)
+    }
+    if (owner.phase !== 'rotating' && owner.phase !== 'active') return failure('TIMEOUT', identity)
+    if (owner.phase === 'rotating') {
+      if (!owner.preflightBinding || !owner.captureSession) {
+        failRotation(owner)
+        return failure('TIMEOUT', identity)
+      }
+      const deadlineAt = monotonicNow() + CLOUD_SPEECH_HANDOFF_MAX_MS
+      owner.rotationDeadlineAt =
+        owner.rotationDeadlineAt === null ? deadlineAt : Math.min(owner.rotationDeadlineAt, deadlineAt)
+      return await new Promise<unknown>((resolve) => {
+        const reserved = owner.captureSession!.reserveFrame(
+          frame.track,
+          frame,
+          deadlineAt,
+          resolve,
+          failure('TIMEOUT', identity),
+          () => failRotation(owner)
+        )
+        if (!reserved) {
+          resolve(failure('QUEUE_LIMIT', identity))
+          failRotation(owner)
+        }
+      })
+    }
+    const admitted = activeSession?.pushFrame(frame.track, {
       sequence: frame.sequence,
       sampleOffset: frame.sampleOffset,
       pcm16le
@@ -585,6 +1186,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       )
     owner.frontier.set(frame.track, { nextSequence, nextSampleOffset })
     if (frame.kind === 'sealed-final') owner.sealedTracks.add(frame.track)
+    if (nextSampleOffset === CLOUD_SPEECH_CAPTURE_MAX_SAMPLES) startCaptureCeiling(owner)
     const response = {
       ok: true as const,
       ...identity,
@@ -596,7 +1198,31 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     const parsedResponse = CloudSpeechFrameResultSchema.safeParse(response)
     return parsedResponse.success ? parsedResponse.data : failure('TRANSPORT', identity)
   })
-  handle(CLOUD_SPEECH_IPC.finish, async (event, raw) => {
+  handle(CLOUD_SPEECH_IPC.transitionAck, (event, raw) => {
+    const binding = getBinding(event, options.assertMainWindow)
+    if (!binding) return failure('AUTH')
+    const parsed = CloudSpeechEpochTransitionAckSchema.safeParse(raw)
+    if (!parsed.success) return failure('INVALID_REQUEST')
+    const ack = parsed.data
+    const owner = ownerFor(ack)
+    if (!owner || current !== owner || owner.binding.sender !== binding.sender || owner.binding.frame !== binding.frame)
+      return failure('STALE')
+    if (!currentAuthority(owner, false)) {
+      void retire(owner)
+      return failure('POLICY', ack)
+    }
+    if (!owner.captureSession?.acknowledge(ack)) return failure('ORDER', ack)
+    const response = {
+      ok: true as const,
+      captureId: ack.captureId,
+      captureGeneration: ack.captureGeneration,
+      transitionId: ack.transitionId,
+      handoffNonce: ack.handoffNonce,
+      stage: ack.stage
+    }
+    return CloudSpeechEpochTransitionAckResultSchema.safeParse(response).success ? response : failure('TRANSPORT', ack)
+  })
+  const finishCapture = async (event: SpeechIpcEvent, raw: unknown): Promise<unknown> => {
     const binding = getBinding(event, options.assertMainWindow)
     if (!binding) return failure('AUTH')
     const parsed = CloudSpeechFinishRequestSchema.safeParse(raw)
@@ -606,6 +1232,29 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     const identity = { captureId: request.captureId, captureGeneration: request.captureGeneration }
     if (!owner || owner.binding.sender !== binding.sender || owner.binding.frame !== binding.frame)
       return failure('STALE')
+    if (owner.phase === 'rotating') {
+      const frontierMatches =
+        request.tracks.length === owner.tracks.length &&
+        owner.tracks.every((track, index) => {
+          const requested = request.tracks[index]
+          const frontier = owner.frontier.get(track)
+          return (
+            requested?.track === track &&
+            frontier !== undefined &&
+            requested.finalSequence === frontier.nextSequence - 1 &&
+            requested.finalSampleOffset === (frontier.nextSampleOffset ?? 0)
+          )
+        })
+      if (!frontierMatches || owner.finishAfterRotation || !owner.rotationPromise) {
+        failRotation(owner)
+        return failure('ORDER', identity)
+      }
+      owner.finishAfterRotation = request
+      await owner.rotationPromise
+      if (current !== owner || (owner.phase as Owner['phase']) !== 'active') return failure('TRANSPORT', identity)
+      owner.finishAfterRotation = null
+      return finishCapture(event, request)
+    }
     if (owner.phase === 'starting') return failure('CLOSED', identity)
     const checkpoint = JSON.stringify(request.tracks)
     if (owner.finishPromise) {
@@ -632,6 +1281,10 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       })
     )
       return failure('ORDER', identity)
+    owner.cancelCeilingSchedule?.()
+    owner.cancelCeilingSchedule = null
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = null
     owner.phase = 'finishing'
     owner.finishCheckpoint = checkpoint
     const session = owner.session
@@ -669,6 +1322,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       owner.phase = 'closed'
       owner.closureConfirmed =
         result.tracks.length === owner.tracks.length && result.tracks.every((track) => track.closeConfirmed)
+      if (owner.closureConfirmed) releaseCaptureOwner(owner)
       if (current === owner) current = null
       const response = {
         ok: true,
@@ -687,6 +1341,155 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       return parsedResponse.success ? parsedResponse.data : failure('TRANSPORT', identity)
     })()
     return owner.finishPromise
+  }
+  handle(CLOUD_SPEECH_IPC.finish, finishCapture)
+  handle(CLOUD_SPEECH_IPC.ceilingAck, async (event, raw) => {
+    const binding = getBinding(event, options.assertMainWindow)
+    if (!binding) return failure('AUTH')
+    const parsed = CloudSpeechCaptureCeilingAckSchema.safeParse(raw)
+    if (!parsed.success) return failure('INVALID_REQUEST')
+    const ack = parsed.data
+    const owner = ownerFor(ack)
+    const identity = { captureId: ack.captureId, captureGeneration: ack.captureGeneration }
+    if (
+      owner &&
+      owner.binding.sender === binding.sender &&
+      owner.binding.frame === binding.frame &&
+      owner.ceilingAcked &&
+      owner.captureSession?.acknowledgeCeiling(ack)
+    ) {
+      const finished = await owner.finishPromise
+      if (finished && typeof finished === 'object' && 'complete' in finished && finished.complete === true) {
+        const response = {
+          ok: true as const,
+          captureId: ack.captureId,
+          captureGeneration: ack.captureGeneration,
+          ceilingId: ack.ceilingId,
+          tracks: ack.tracks
+        }
+        return CloudSpeechCaptureCeilingAckResultSchema.safeParse(response).success
+          ? response
+          : failure('TRANSPORT', identity)
+      }
+      return failure('TRANSPORT', identity)
+    }
+    if (
+      owner &&
+      owner.binding.sender === binding.sender &&
+      owner.binding.frame === binding.frame &&
+      owner.phase === 'closed' &&
+      owner.ceilingRequested &&
+      owner.captureSession &&
+      ack.tracks.length === owner.tracks.length &&
+      owner.tracks.every((track, index) => {
+        const row = ack.tracks[index]
+        const frontier = owner.frontier.get(track)
+        return (
+          row?.track === track &&
+          frontier !== undefined &&
+          row.finalSequence === frontier.nextSequence - 1 &&
+          row.finalSampleOffset === (frontier.nextSampleOffset ?? 0) &&
+          row.finalSampleOffset <= CLOUD_SPEECH_CAPTURE_MAX_SAMPLES
+        )
+      }) &&
+      owner.captureSession.acknowledgeCeiling(ack)
+    ) {
+      if (!owner.ceilingAcked) {
+        try {
+          owner.captureSession.completeCeiling()
+          owner.ceilingAcked = true
+        } catch {
+          return failure('TRANSPORT', identity)
+        }
+      }
+      const finished = await owner.finishPromise
+      if (finished && typeof finished === 'object' && 'complete' in finished && finished.complete === true) {
+        const response = {
+          ok: true as const,
+          captureId: ack.captureId,
+          captureGeneration: ack.captureGeneration,
+          ceilingId: ack.ceilingId,
+          tracks: ack.tracks
+        }
+        return CloudSpeechCaptureCeilingAckResultSchema.safeParse(response).success
+          ? response
+          : failure('TRANSPORT', identity)
+      }
+      return failure('TRANSPORT', identity)
+    }
+    if (
+      !owner ||
+      current !== owner ||
+      (owner.phase !== 'active' && owner.phase !== 'finishing') ||
+      !owner.ceilingRequested ||
+      owner.ceilingAcked ||
+      owner.binding.sender !== binding.sender ||
+      owner.binding.frame !== binding.frame ||
+      !owner.captureSession ||
+      !currentAuthority(owner, false)
+    )
+      return failure('STALE', identity)
+    const exactFrontier =
+      ack.tracks.length === owner.tracks.length &&
+      owner.tracks.every((track, index) => {
+        const row = ack.tracks[index]
+        const frontier = owner.frontier.get(track)
+        return (
+          row?.track === track &&
+          frontier !== undefined &&
+          row.finalSequence === frontier.nextSequence - 1 &&
+          row.finalSampleOffset === (frontier.nextSampleOffset ?? 0) &&
+          row.finalSampleOffset <= CLOUD_SPEECH_CAPTURE_MAX_SAMPLES
+        )
+      })
+    if (!exactFrontier || !owner.captureSession.acknowledgeCeiling(ack)) {
+      owner.outputIntegrityFailure = true
+      void retire(owner)
+      return failure('ORDER', identity)
+    }
+    if (current !== owner || !currentAuthority(owner, false)) {
+      void retire(owner)
+      return failure('TIMEOUT', identity)
+    }
+    try {
+      owner.captureSession.completeCeiling()
+    } catch {
+      void retire(owner)
+      return failure('TRANSPORT', identity)
+    }
+    owner.ceilingAcked = true
+    owner.cancelCeilingSchedule?.()
+    owner.cancelCeilingSchedule = null
+    const finishRequest = {
+      captureId: ack.captureId,
+      captureGeneration: ack.captureGeneration,
+      tracks: ack.tracks.map(({ track, finalSequence, finalSampleOffset }) => ({
+        track,
+        finalSequence,
+        finalSampleOffset
+      }))
+    }
+    const finished =
+      owner.phase === 'finishing' && owner.finishPromise
+        ? await owner.finishPromise
+        : await finishCapture(event, finishRequest)
+    if (
+      !finished ||
+      typeof finished !== 'object' ||
+      !('ok' in finished) ||
+      finished.ok !== true ||
+      !('complete' in finished) ||
+      finished.complete !== true
+    )
+      return failure('TRANSPORT', identity)
+    const result = {
+      ok: true as const,
+      captureId: ack.captureId,
+      captureGeneration: ack.captureGeneration,
+      ceilingId: ack.ceilingId,
+      tracks: ack.tracks
+    }
+    return CloudSpeechCaptureCeilingAckResultSchema.safeParse(result).success ? result : failure('TRANSPORT', identity)
   })
   handle(CLOUD_SPEECH_IPC.cancel, async (event, raw) => {
     const binding = getBinding(event, options.assertMainWindow)
@@ -711,7 +1514,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     if (!owner || owner.binding.sender !== binding.sender || owner.binding.frame !== binding.frame)
       return failure('STALE')
     const identity = identityOf(owner)
-    if (!owner.allocationId) return { ok: true, ...identity, state: 'unknown', tracks: [] }
+    if (!owner.allocationId || !owner.client) return { ok: true, ...identity, state: 'unknown', tracks: [] }
     const result = await owner.client
       .status(owner.allocationId, 1_000)
       .catch(() => ({ ok: false as const, code: 'TRANSPORT' as const }))
@@ -747,6 +1550,8 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
   })
 
   const invalidateCurrent = (): void => {
+    authorityPreparationGeneration += 1
+    capabilityPreparationGeneration += 1
     acceptingInput = false
     if (current) void retire(current)
   }
@@ -755,6 +1560,8 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
   }
   const shutdown = async (timeoutMs = 2_000): Promise<void> => {
     shuttingDown = true
+    authorityPreparationGeneration += 1
+    capabilityPreparationGeneration += 1
     acceptingInput = false
     if (current) current.phase = 'cancelled'
     const pending = [...owners.values()]

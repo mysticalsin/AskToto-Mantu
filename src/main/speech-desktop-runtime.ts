@@ -21,12 +21,13 @@ import {
 import type { SpeechIpcEvent, SpeechIpcMain } from './ipc/cloud-speech-ipc-support'
 import type { SpeechBrokerClient, SpeechBrokerClientOptions } from './cloud-stt/broker-client'
 import type { CloudSpeechStartRequest } from '@shared/cloud-speech'
+import type { CaptureDeadlineScheduler } from './infra/scheduler/capture-deadline'
 
 export const SPEECH_DESKTOP_LANGUAGES = ['multi', 'en', 'fr', 'fr-CA', 'pt-BR', 'es'] as const
 
 export type SpeechDesktopRuntimeState = {
   /** Main-process in-memory settings snapshot only. No synchronous store reads are allowed here. */
-  settings: Settings | null
+  settings: Pick<Settings, 'audioSource' | 'operatorUrl' | 'operatorLicenseToken' | 'brokerSpeech'> | null
   /** Value from the already-loaded durable identity cache; null while its refresh is unresolved. */
   durableDeviceId: string | null
   managedProviders: ManagedSpeechProviders
@@ -47,13 +48,20 @@ export type SpeechDesktopRuntimeOptions = {
   enabled: () => boolean
   readNativePermissions?: () => Pick<PlatformPermissions, 'microphone' | 'screenRecording'>
   readVerifiedPolicy?: () => VerifiedSpeechPolicy | null
+  prepareAuthority?: (event: SpeechIpcEvent, request?: CloudSpeechStartRequest) => Promise<void>
+  monotonicNow?: () => number
+  scheduleCaptureDeadline?: CaptureDeadlineScheduler
   clientFactory?: (credentials: SpeechBrokerClientOptions) => SpeechBrokerClient
   now?: () => number
 }
 
 export type SpeechDesktopRuntime = CloudSpeechIpcRegistration & {
   registration: CloudSpeechIpcRegistration
-  readAuthority: (event: SpeechIpcEvent, request?: CloudSpeechStartRequest) => CloudSpeechMainAuthority
+  readAuthority: (
+    event: SpeechIpcEvent,
+    request?: CloudSpeechStartRequest,
+    captureOwner?: object
+  ) => CloudSpeechMainAuthority
 }
 
 type Track = 'microphone' | 'system'
@@ -102,7 +110,9 @@ function authorityFromResolution(
   credentialRevision: string,
   policyRevision: string,
   policyReady: boolean,
-  captureAllowed: boolean
+  captureAllowed: boolean,
+  captureContext: SpeechCaptureContext | null,
+  finishAllowed: boolean
 ): CloudSpeechMainAuthority {
   return {
     enabled,
@@ -115,7 +125,9 @@ function authorityFromResolution(
     credentials: credential,
     credentialRevision,
     policyRevision,
-    egressAllowlist: state.egressAllowlist
+    egressAllowlist: state.egressAllowlist,
+    captureContext,
+    finishAllowed
   }
 }
 
@@ -155,14 +167,18 @@ function failedAuthority(enabled: boolean, authenticated: boolean): CloudSpeechM
 
 /**
  * Main-only composition of cached identity/policy, current native permissions, and an owned Listen grant.
- * It performs no store, userData, process, filesystem, or network reads.
+ * The built-in identity and policy resolution uses in-memory snapshots. The injected legacy authorization guard may still perform its existing reads.
  */
 export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions): SpeechDesktopRuntime {
   const now = options.now ?? Date.now
   const readNative = options.readNativePermissions ?? getNativeSpeechPermissions
   const readPolicy = options.readVerifiedPolicy ?? getVerifiedSpeechPolicySnapshot
 
-  const readAuthority = (event: SpeechIpcEvent, request?: CloudSpeechStartRequest): CloudSpeechMainAuthority => {
+  const readAuthority = (
+    event: SpeechIpcEvent,
+    request?: CloudSpeechStartRequest,
+    captureOwner?: object
+  ): CloudSpeechMainAuthority => {
     let enabled = false
     let authenticated = false
     try {
@@ -183,7 +199,6 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
         ? currentSpeechIdentity(
             {
               operatorUrl: state.settings.operatorUrl,
-              operatorIngestSecret: state.settings.operatorIngestSecret,
               operatorLicenseToken: state.settings.operatorLicenseToken
             },
             state.durableDeviceId,
@@ -210,6 +225,7 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
             }
           : null
       let captureAllowed = false
+      let authorizedCaptureContext: SpeechCaptureContext | null = null
       if (
         request &&
         enabled &&
@@ -240,8 +256,12 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
             screenDiagnosis: state.screenDiagnosisState ?? undefined
           })
           captureAllowed = admission.ok && permissionsReady
+          if (captureAllowed && captureOwner)
+            captureAllowed = options.grants.reserveFinishingOwner(context!, captureOwner)
+          if (captureAllowed) authorizedCaptureContext = context
         }
       }
+      const finishingContext = captureOwner ? options.grants.getFinishingOwnerContext(captureOwner) : null
       return authorityFromResolution(
         state,
         enabled,
@@ -250,8 +270,10 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
         credential,
         identity?.scopeKey ?? '',
         snapshot?.revision ?? '',
-        permissionsReady,
-        captureAllowed
+        state.metadataReady && snapshot !== null && resolution?.ok === true,
+        captureAllowed,
+        authorizedCaptureContext ?? finishingContext,
+        !!captureOwner && options.grants.canFinish(captureOwner)
       )
     } catch {
       return failedAuthority(enabled, authenticated)
@@ -262,6 +284,10 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
     ipcMain: options.ipcMain,
     assertMainWindow: options.assertMainWindow,
     readAuthority,
+    releaseCaptureOwner: (captureOwner) => options.grants.releaseFinishingOwner(captureOwner),
+    ...(options.prepareAuthority ? { prepareAuthority: options.prepareAuthority } : {}),
+    ...(options.monotonicNow ? { monotonicNow: options.monotonicNow } : {}),
+    ...(options.scheduleCaptureDeadline ? { scheduleCaptureDeadline: options.scheduleCaptureDeadline } : {}),
     ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
     now
   })

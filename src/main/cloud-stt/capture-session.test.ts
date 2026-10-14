@@ -15,18 +15,24 @@ function acknowledgement(event: CloudSpeechEpochTransitionEvent): CloudSpeechEpo
 describe('main speech capture transition owner', () => {
   it('requires the exact applied receipt, keeps one prior receipt for retries, and rejects conflicting receipts', async () => {
     const h = new MainSpeechCaptureSession({ captureId, captureGeneration: 7, tracks: ['microphone'], startedAt: 10 })
-    const { event: closed, applied: waiting } = h.beginTransition('closed', [
-      { track: 'microphone', previousEpoch: 3, lastSequence: 8 }
-    ], 20)
-    expect(h.acknowledge({ ...acknowledgement(closed), handoffNonce: '2d3c0b36-b0d1-40c6-8b13-a3b0239ca790' })).toBe(false)
+    const { event: closed, applied: waiting } = h.beginTransition(
+      'closed',
+      [{ track: 'microphone', previousEpoch: 3, lastSequence: 8 }],
+      20
+    )
+    expect(h.acknowledge({ ...acknowledgement(closed), handoffNonce: '2d3c0b36-b0d1-40c6-8b13-a3b0239ca790' })).toBe(
+      false
+    )
     expect(h.acknowledge(acknowledgement(closed))).toBe(true)
     await expect(waiting).resolves.toBe(true)
     h.completeTransition()
     expect(h.acknowledge(acknowledgement(closed))).toBe(true)
 
-    const { event: opened, applied: next } = h.beginTransition('opened', [
-      { track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 8 }
-    ], 20)
+    const { event: opened, applied: next } = h.beginTransition(
+      'opened',
+      [{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 8 }],
+      20
+    )
     expect(h.acknowledge({ ...acknowledgement(opened), streams: [] } as never)).toBe(false)
     expect(h.acknowledge(acknowledgement(opened))).toBe(true)
     await expect(next).resolves.toBe(true)
@@ -77,17 +83,21 @@ describe('main speech capture transition owner', () => {
       monotonicNow: () => now,
       schedule
     })
-    const { event, applied: waiting } = h.beginTransition('closed', [
-      { track: 'microphone', previousEpoch: 3, lastSequence: 8 }
-    ], 20)
+    const { event, applied: waiting } = h.beginTransition(
+      'closed',
+      [{ track: 'microphone', previousEpoch: 3, lastSequence: 8 }],
+      20
+    )
     now = 20
     expire()
     await expect(waiting).resolves.toBe(false)
     expect(h.acknowledge(acknowledgement(event))).toBe(false)
 
-    const { applied: second } = h.beginTransition('opened', [
-      { track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 8 }
-    ], 30)
+    const { applied: second } = h.beginTransition(
+      'opened',
+      [{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 8 }],
+      30
+    )
     h.invalidate()
     await expect(second).resolves.toBe(false)
     expect(h.phase).toBe('cancelled')
