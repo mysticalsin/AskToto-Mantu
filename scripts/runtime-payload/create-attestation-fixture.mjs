@@ -43,6 +43,7 @@ try {
     target: { platform: 'any', arch: 'any' },
     runtime: null,
     entrypoints: {},
+    directories: {},
     models: [{ id: 'speaker.embedding', root: 'model', members: ['model/fixture.onnx'] }],
     source: {
       repositoryUri: 'https://github.com/mysticalsin/AskToto-Mantu',

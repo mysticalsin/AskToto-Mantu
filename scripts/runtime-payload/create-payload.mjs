@@ -24,6 +24,7 @@ const ENTRYPOINT_ROLES = new Set([
   'speaker-embedding-host',
   'llama-server'
 ])
+const DIRECTORY_ROLES = new Set(['whisper-ort-wasm'])
 const MODEL_IDS = new Set([
   'asr.parakeet-tdt-0.6b-v3-int8',
   'asr.whisper-base-q8',
@@ -70,6 +71,7 @@ function validMetadata(value) {
       'target',
       'runtime',
       'entrypoints',
+      'directories',
       'models',
       'source',
       'builder',
@@ -121,6 +123,39 @@ function validMetadata(value) {
     Array.isArray(value.entrypoints) ||
     Object.keys(value.entrypoints).some((role) => !ENTRYPOINT_ROLES.has(role)) ||
     Object.entries(value.entrypoints).some(([role, path]) => !ENTRYPOINT_ROLES.has(role) || !safeRelativePath(path))
+  )
+    return false
+  if (
+    !value.directories ||
+    typeof value.directories !== 'object' ||
+    Array.isArray(value.directories) ||
+    Object.keys(value.directories).some((role) => !DIRECTORY_ROLES.has(role))
+  )
+    return false
+  const directoryMembers = new Set()
+  for (const [role, directory] of Object.entries(value.directories)) {
+    if (
+      !DIRECTORY_ROLES.has(role) ||
+      !exactKeys(directory, ['root', 'members']) ||
+      !safeRelativePath(directory.root) ||
+      !Array.isArray(directory.members) ||
+      directory.members.length < 1 ||
+      directory.members.length > 1000
+    )
+      return false
+    for (const member of directory.members) {
+      if (
+        !safeRelativePath(member) ||
+        !member.startsWith(`${directory.root}/`) ||
+        directoryMembers.has(member.toLowerCase())
+      )
+        return false
+      directoryMembers.add(member.toLowerCase())
+    }
+  }
+  if (
+    Object.hasOwn(value.directories, 'whisper-ort-wasm') &&
+    (value.kind !== 'runtime' || !Object.hasOwn(value.entrypoints, 'whisper-renderer-worker'))
   )
     return false
   if (!Array.isArray(value.models) || value.models.length > MODEL_IDS.size) return false
@@ -543,6 +578,23 @@ function validateMetadataRecords(metadata, fileMap) {
   for (const path of Object.values(metadata.entrypoints)) {
     if (!fileMap.has(path)) throw new Error('RUNTIME_PAYLOAD_ENTRYPOINT_FILE_MISSING')
   }
+  const directories = Object.fromEntries(
+    Object.entries(metadata.directories)
+      .map(([role, directory]) => {
+        const expected = new Set(directory.members)
+        const actual = [...fileMap.keys()].filter((path) => path.startsWith(`${directory.root}/`))
+        if (
+          fileMap.has(directory.root) ||
+          actual.length !== expected.size ||
+          actual.some((path) => !expected.has(path)) ||
+          directory.members.some((path) => !fileMap.has(path))
+        ) {
+          throw new Error('RUNTIME_PAYLOAD_DIRECTORY_CLOSURE_MISMATCH')
+        }
+        return [role, { root: directory.root, members: [...directory.members].sort() }]
+      })
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+  )
   const models = [...metadata.models]
     .map((model) => {
       for (const path of model.members) {
@@ -555,7 +607,7 @@ function validateMetadataRecords(metadata, fileMap) {
   const entrypoints = Object.fromEntries(
     Object.entries(metadata.entrypoints).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
   )
-  return { upstream, licenses, entrypoints, models }
+  return { upstream, licenses, entrypoints, directories, models }
 }
 
 async function run() {
@@ -627,6 +679,7 @@ async function run() {
     target: metadata.target,
     runtime: metadata.runtime,
     entrypoints: records.entrypoints,
+    directories: records.directories,
     models: records.models,
     source: metadata.source,
     builder: metadata.builder,
@@ -669,6 +722,7 @@ async function run() {
     artifactId: metadata.artifactId,
     target: metadata.target,
     runtime: metadata.runtime,
+    directories: records.directories,
     archive: { path: `${metadata.artifactId}.tar.gz`, bytes: archiveBytes, sha256: gzipHash.digest('hex') },
     inventory: {
       path: `${metadata.artifactId}.inventory.json`,

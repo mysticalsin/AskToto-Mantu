@@ -17,6 +17,10 @@ build/*.electron-builder.yml text eol=lf
 # Windows checkouts where core.autocrlf would otherwise rewrite it (LF->CRLF) and fail check:local-model.
 resources/local-llm/*.txt -text
 
+# Sigstore's app-owned trust snapshot and acquisition receipt are byte-pinned by the runtime catalog.
+# Preserve their exact signed/source bytes on Windows checkouts.
+resources/runtime-trust/*.json -text
+
 # Mode skills are hashed LF-only. Pin checkout so Windows CI does not rewrite them.
 skills/**/*.md text eol=lf
 

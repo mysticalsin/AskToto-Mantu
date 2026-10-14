@@ -329,6 +329,7 @@ async function main() {
       target: { platform, arch },
       runtime: runtimeFacts,
       entrypoints: { 'llama-server': `runtime/${binaryName}` },
+      directories: {},
       models: [],
       source: {
         repositoryUri: 'https://github.com/mysticalsin/AskToto-Mantu',

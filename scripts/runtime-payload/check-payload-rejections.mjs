@@ -42,6 +42,7 @@ function makeMetadata() {
     target: { platform: 'any', arch: 'any' },
     runtime: null,
     entrypoints: {},
+    directories: {},
     models: [{ id: 'speaker.embedding', root: 'model', members: ['model/file.bin'] }],
     source: {
       repositoryUri: 'https://github.com/mysticalsin/AskToto-Mantu',
@@ -180,6 +181,7 @@ async function positiveCandidate() {
       'payloadBytes',
       'payloadFiles',
       'runtime',
+      'directories',
       'schemaVersion',
       'target'
     ]
@@ -194,6 +196,7 @@ async function positiveCandidate() {
   assert.equal(inventory.source.ref, process.env.GITHUB_REF)
   assert.equal(inventory.source.runnerEnvironment, 'github-hosted')
   assert.deepEqual(inventory.models, [{ id: 'speaker.embedding', root: 'model', members: ['model/file.bin'] }])
+  assert.deepEqual(inventory.directories, {})
   assert.equal(candidate.archive.bytes, archiveBytes.length)
   assert.equal(candidate.archive.sha256, createHash('sha256').update(archiveBytes).digest('hex'))
   assert.equal(candidate.inventory.bytes, inventoryBytes.length)
@@ -264,6 +267,7 @@ async function positiveCandidate() {
       runnerEnvironment: 'github-hosted'
     },
     entrypoints: {},
+    directories: {},
     models: [{ id: 'speaker.embedding', root: 'model', members: ['model/file.bin'] }]
   }
   const catalogWithTarget = structuredClone(approvedCatalogShape)
