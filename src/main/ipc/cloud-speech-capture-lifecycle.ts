@@ -71,12 +71,14 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
     const capture = owner.captureSession
     const isCandidate =
       owner.phase === 'rotating' &&
-      capture?.phase === 'opening-next' &&
+      (capture?.phase === 'opening-next' || capture?.phase === 'awaiting-next-application') &&
       owner.candidateAllocation?.sessionId === context.sessionId
     const currentIdentity = owner.session?.identity
     const isCurrentRelay =
       (owner.phase === 'starting' && owner.primaryAllocation.sessionId === context.sessionId) ||
-      (currentIdentity?.sessionId === context.sessionId && capture?.phase !== 'opening-next')
+      (currentIdentity?.sessionId === context.sessionId &&
+        capture?.phase !== 'opening-next' &&
+        capture?.phase !== 'awaiting-next-application')
     const expectedStreams = isCandidate ? currentIdentity?.tracks : owner.session?.identity.tracks
     const lastSequence = isCandidate
       ? (owner.candidateEventFrontier.get(key) ?? 0)
@@ -377,12 +379,11 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
         return
       }
       const issuedAt = now()
-      const captureRemaining = Math.max(0, capture.deadlineAt - monotonicNow())
-      const expiresAt = Math.min(issuedAt + 120_000, issuedAt + captureRemaining)
-      if (expiresAt <= issuedAt) {
-        failRotation(owner)
-        return
-      }
+      // Consent stays a fresh, valid two-minute grant. The independent
+      // monotonic capture deadline bounds allocation and tears down every
+      // successor; capping this wall-clock timestamp would make the grant
+      // fractional or fail to increase during consecutive late renewals.
+      const expiresAt = issuedAt + 120_000
       const createRequest = {
         operation: 'create-session' as const,
         captureGeneration: owner.generation,
