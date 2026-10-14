@@ -26,6 +26,7 @@ import {
   requestOwnedAppQuit,
   strictLaunchEnvironment,
   waitFor,
+  waitForChildExit,
   withTimeout
 } from './app-driver.mjs'
 
@@ -1311,31 +1312,88 @@ describe('requestOwnedAppQuit', () => {
           child.exitCode = 0
           child.emit('exit', 0, null)
         })
-        return true
+        return 'accepted'
       },
       100
     )
 
-    await expect(pending).resolves.toBe(true)
+    await expect(pending).resolves.toEqual({ request: 'accepted', exit: 'zero', cleanShutdown: true })
     expect(child.exitCode).toBe(0)
   })
 
-  it('does not claim clean shutdown when the owned quit request is refused or rejects', async () => {
+  it('does not claim clean shutdown when the owned quit request is refused or rejected', async () => {
     const refusedChild = fakeOwnedProcess()
-    await expect(requestOwnedAppQuit(refusedChild, async () => false, 100)).resolves.toBe(false)
+    await expect(requestOwnedAppQuit(refusedChild, async () => false, 100)).resolves.toEqual({
+      request: 'refused',
+      exit: 'not-waited',
+      cleanShutdown: false
+    })
     expect(refusedChild.listenerCount('exit')).toBe(0)
 
     const rejectedChild = fakeOwnedProcess()
+    await expect(requestOwnedAppQuit(rejectedChild, async () => 'ipc-rejected', 100)).resolves.toEqual({
+      request: 'ipc-rejected',
+      exit: 'not-waited',
+      cleanShutdown: false
+    })
+    expect(rejectedChild.listenerCount('exit')).toBe(0)
+
+    const thrownChild = fakeOwnedProcess()
     await expect(
       requestOwnedAppQuit(
-        rejectedChild,
+        thrownChild,
         async () => {
-          throw new Error('quit request rejected')
+          throw new Error('private renderer error')
         },
         100
       )
-    ).resolves.toBe(false)
-    expect(rejectedChild.listenerCount('exit')).toBe(0)
+    ).resolves.toEqual({ request: 'evaluation-failed', exit: 'not-waited', cleanShutdown: false })
+    expect(thrownChild.listenerCount('exit')).toBe(0)
+  })
+
+  it('bounds a hung quit IPC request within the existing shutdown budget', async () => {
+    const child = fakeOwnedProcess()
+    await expect(requestOwnedAppQuit(child, () => new Promise(() => {}), 5)).resolves.toEqual({
+      request: 'timed-out',
+      exit: 'not-waited',
+      cleanShutdown: false
+    })
+    expect(child.listenerCount('exit')).toBe(0)
+  })
+
+  it('distinguishes an accepted quit request whose owned child does not exit before the deadline', async () => {
+    const child = fakeOwnedProcess()
+    await expect(requestOwnedAppQuit(child, async () => 'accepted', 5)).resolves.toEqual({
+      request: 'accepted',
+      exit: 'timed-out',
+      cleanShutdown: false
+    })
+    expect(child.listenerCount('exit')).toBe(0)
+  })
+
+  it('uses one total deadline for a delayed request and the remaining child-exit wait', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = fakeOwnedProcess()
+      const start = Date.now()
+      let settled = false
+      const pending = requestOwnedAppQuit(
+        child,
+        () => new Promise((resolve) => setTimeout(() => resolve('accepted'), 7)),
+        10
+      ).then((result) => {
+        settled = true
+        return result
+      })
+
+      await vi.advanceTimersByTimeAsync(10)
+      expect(settled).toBe(true)
+      await expect(pending).resolves.toEqual({ request: 'accepted', exit: 'timed-out', cleanShutdown: false })
+      expect(Date.now() - start).toBe(10)
+      expect(child.listenerCount('exit')).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not report a signaled or nonzero owned process exit as clean', async () => {
@@ -1347,11 +1405,11 @@ describe('requestOwnedAppQuit', () => {
           signalChild.signalCode = 'SIGTERM'
           signalChild.emit('exit', null, 'SIGTERM')
         })
-        return true
+        return 'accepted'
       },
       100
     )
-    await expect(signaled).resolves.toBe(false)
+    await expect(signaled).resolves.toEqual({ request: 'accepted', exit: 'signaled', cleanShutdown: false })
 
     const failedChild = fakeOwnedProcess()
     const failed = requestOwnedAppQuit(
@@ -1361,11 +1419,42 @@ describe('requestOwnedAppQuit', () => {
           failedChild.exitCode = 1
           failedChild.emit('exit', 1, null)
         })
-        return true
+        return 'accepted'
       },
       100
     )
-    await expect(failed).resolves.toBe(false)
+    await expect(failed).resolves.toEqual({ request: 'accepted', exit: 'nonzero', cleanShutdown: false })
+  })
+})
+
+describe('waitForChildExit', () => {
+  it('removes only its owned exit listener after timeout or observed exit', async () => {
+    vi.useFakeTimers()
+    try {
+      const timedOut = Object.assign(new EventEmitter(), {
+        exitCode: null as number | null,
+        signalCode: null as string | null
+      })
+      const timeoutResult = waitForChildExit(timedOut, 5)
+      expect(timedOut.listenerCount('exit')).toBe(1)
+      await vi.advanceTimersByTimeAsync(5)
+      await expect(timeoutResult).resolves.toBe(false)
+      expect(timedOut.listenerCount('exit')).toBe(0)
+
+      const exited = Object.assign(new EventEmitter(), {
+        exitCode: null as number | null,
+        signalCode: null as string | null
+      })
+      const exitResult = waitForChildExit(exited, 50)
+      expect(exited.listenerCount('exit')).toBe(1)
+      exited.exitCode = 0
+      exited.emit('exit', 0, null)
+      await expect(exitResult).resolves.toBe(true)
+      expect(exited.listenerCount('exit')).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -1385,7 +1474,7 @@ describe('quitOwnedAppBeforeAutomationClose', () => {
           child.emit('exit', 0, null)
           order.push('process-exit')
         })
-        return true
+        return 'accepted'
       },
       async () => {
         order.push('automation-close')
@@ -1393,7 +1482,7 @@ describe('quitOwnedAppBeforeAutomationClose', () => {
       100
     )
 
-    await expect(pending).resolves.toBe(true)
+    await expect(pending).resolves.toEqual({ request: 'accepted', exit: 'zero', cleanShutdown: true })
     expect(order).toEqual(['quit-request', 'process-exit', 'automation-close'])
   })
 
@@ -1405,15 +1494,8 @@ describe('quitOwnedAppBeforeAutomationClose', () => {
     const closeAutomation = vi.fn(async () => undefined)
 
     await expect(
-      quitOwnedAppBeforeAutomationClose(
-        child,
-        async () => {
-          throw new Error('quit request rejected')
-        },
-        closeAutomation,
-        100
-      )
-    ).resolves.toBe(false)
+      quitOwnedAppBeforeAutomationClose(child, async () => 'evaluation-failed', closeAutomation, 100)
+    ).resolves.toEqual({ request: 'evaluation-failed', exit: 'not-waited', cleanShutdown: false })
     expect(closeAutomation).toHaveBeenCalledOnce()
     expect(child.listenerCount('exit')).toBe(0)
   })
@@ -1425,7 +1507,9 @@ describe('quitOwnedAppBeforeAutomationClose', () => {
     })
     const closeAutomation = vi.fn(async () => undefined)
 
-    await expect(quitOwnedAppBeforeAutomationClose(child, async () => false, closeAutomation, 100)).resolves.toBe(false)
+    await expect(
+      quitOwnedAppBeforeAutomationClose(child, async () => 'page-unavailable', closeAutomation, 100)
+    ).resolves.toEqual({ request: 'page-unavailable', exit: 'not-waited', cleanShutdown: false })
     expect(closeAutomation).toHaveBeenCalledOnce()
     expect(child.listenerCount('exit')).toBe(0)
   })

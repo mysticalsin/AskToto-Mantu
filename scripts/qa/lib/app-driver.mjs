@@ -881,34 +881,55 @@ export function childHasExited(child) {
 export function waitForChildExit(child, timeoutMs) {
   if (childHasExited(child)) return Promise.resolve(true)
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(childHasExited(child)), timeoutMs)
-    child.once('exit', () => {
+    const onExit = () => {
       clearTimeout(timer)
+      child.removeListener('exit', onExit)
       resolve(true)
-    })
+    }
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit)
+      resolve(childHasExited(child))
+    }, timeoutMs)
+    child.once('exit', onExit)
   })
 }
 
-/** Request graceful quit through the app-owned control surface and report only an observed zero exit. */
+/** Request graceful quit and report fixed request/exit states without exposing renderer or IPC errors. */
 export async function requestOwnedAppQuit(child, requestQuit, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let request
   try {
-    if ((await requestQuit()) !== true) return false
-  } catch {
-    return false
+    request = await withTimeout(Promise.resolve().then(requestQuit), timeoutMs, 'owned-quit-request-timeout')
+  } catch (error) {
+    const timedOut = error instanceof Error && error.message === 'owned-quit-request-timeout'
+    return {
+      request: timedOut ? 'timed-out' : 'evaluation-failed',
+      exit: 'not-waited',
+      cleanShutdown: false
+    }
   }
-  const exited = await waitForChildExit(child, timeoutMs)
-  return exited && child.exitCode === 0 && child.signalCode === null
+  if (!['accepted', 'page-unavailable', 'bridge-unavailable', 'ipc-rejected', 'evaluation-failed'].includes(request)) {
+    return { request: 'refused', exit: 'not-waited', cleanShutdown: false }
+  }
+  if (request !== 'accepted') return { request, exit: 'not-waited', cleanShutdown: false }
+
+  const remainingMs = Math.max(0, deadline - Date.now())
+  const exited = await waitForChildExit(child, remainingMs)
+  if (!exited) return { request, exit: 'timed-out', cleanShutdown: false }
+  if (child.signalCode !== null) return { request, exit: 'signaled', cleanShutdown: false }
+  if (child.exitCode !== 0) return { request, exit: 'nonzero', cleanShutdown: false }
+  return { request, exit: 'zero', cleanShutdown: true }
 }
 
 /** Keep automation transports alive through the owned quit request and exit observation. */
 export async function quitOwnedAppBeforeAutomationClose(child, requestQuit, closeAutomation, timeoutMs) {
-  let cleanShutdown = false
+  let result = { request: 'not-attempted', exit: 'not-waited', cleanShutdown: false }
   try {
-    cleanShutdown = await requestOwnedAppQuit(child, requestQuit, timeoutMs)
+    result = await requestOwnedAppQuit(child, requestQuit, timeoutMs)
   } finally {
     await closeAutomation()
   }
-  return cleanShutdown
+  return result
 }
 
 /**
