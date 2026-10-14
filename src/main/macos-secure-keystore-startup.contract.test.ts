@@ -9,6 +9,7 @@ const store = readFileSync(join(root, 'src/main/store.ts'), 'utf8')
 const auth = readFileSync(join(root, 'src/main/auth.ts'), 'utf8')
 const app = readFileSync(join(root, 'src/renderer/src/App.tsx'), 'utf8')
 const state = readFileSync(join(root, 'src/renderer/src/state.ts'), 'utf8')
+const recovery = readFileSync(join(root, 'src/shared/encrypted-profile-recovery.ts'), 'utf8')
 
 describe('packaged macOS secure-keystore startup', () => {
   it('does not force the raw file keystore for Darwin', () => {
@@ -113,10 +114,26 @@ describe('packaged macOS secure-keystore startup', () => {
       }
       expect(reader).toContain('e instanceof KeychainKeyRecoveryError) throw e')
     }
+    expect(apiKeyReader).toContain('rethrowMacKeychainDecryptFailure(e)')
+    expect(dustTokenReader).toContain('rethrowMacKeychainDecryptFailure(e)')
+    expect(sonioxReader).toContain('rethrowMacKeychainDecryptFailure(e)')
+    expect(store).toMatch(/function rethrowMacKeychainDecryptFailure\(error: unknown\): void \{[\s\S]*?if \(app\.isPackaged && process\.platform === 'darwin'\) throw new MacKeychainUnlockRequiredError\(\)/)
     expect(apiKeyReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(apiKeyReader.indexOf('_apiKeyCache.has(provider)'))
     expect(sonioxReader.indexOf('requireMacKeychainUnlock()')).toBeLessThan(sonioxReader.indexOf('_sonioxKeyCache !== undefined'))
     expect(store).toContain('export function resetCredentialReadCachesAfterProfileUnlock(): void')
     expect(store).toContain('_apiKeyCache.clear()\n  _sonioxKeyCache = undefined')
     expect(main).toContain('resetCredentialReadCachesAfterProfileUnlock()')
+  })
+
+  it('routes ordinary Keychain decrypt denial back to the visible retry surface', () => {
+    expect(recovery).toContain('export function isMacKeychainUnlockMessage(message: string): boolean')
+    expect(recovery).toContain('message.startsWith(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)')
+    expect(main).toMatch(/ipcMain\.handle\(IPC\.settingsUnlockProfile,[\s\S]*?error instanceof KeychainKeyRecoveryError\)[\s\S]*?throw new MacKeychainUnlockRequiredError\(\)/)
+    expect(main).toContain('void hasKeysMap()\n      void getDustRefreshToken()')
+    expect(main).toContain('resetMacKeychainUnlockAuthorization()\n      resetCredentialReadCachesAfterProfileUnlock()')
+    expect(state).toContain('if (isMacKeychainUnlockMessage(message)) {\n            if (!cancelled) setBootError(message)')
+    expect(state).toContain('setBootError(message)\n      throw e')
+    expect(app).toContain("if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError))")
+    expect(app).toContain(".finally(() => setUnlockingEncryptedProfile(false))")
   })
 })

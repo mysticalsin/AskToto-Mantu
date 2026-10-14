@@ -34,6 +34,7 @@ import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
 import { mainLog } from './logger'
 import {
   KeychainKeyRecoveryError,
+  MacKeychainUnlockRequiredError,
   decryptSecret,
   encryptSecret,
   requireMacKeychainUnlock,
@@ -57,6 +58,12 @@ import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
 const keyPath = (provider: ProviderId) => join(dir(), `key-${provider}.bin`)
+
+/** safeStorage can reject a Keychain item with an ordinary Error. Keep packaged Mac reads fail-closed. */
+function rethrowMacKeychainDecryptFailure(error: unknown): void {
+  if (error instanceof KeychainKeyRecoveryError) throw error
+  if (app.isPackaged && process.platform === 'darwin') throw new MacKeychainUnlockRequiredError()
+}
 
 const PROFILE_RECOVERY_FIXED_FILES = new Set([
   'secret-key.bin',
@@ -1176,14 +1183,18 @@ export function getApiKey(provider: ProviderId): string {
         mainLog.warn('[store] key file undecryptable for', provider, e)
         key = '' // Corrupt or key rotated
       }
-    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
+    } else if (
+      (!process.env.ASKTOTO_LOCAL_KEYSTORE || (app.isPackaged && process.platform === 'darwin')) &&
+      ((app.isPackaged && process.platform === 'darwin') || safeStorage.isEncryptionAvailable())
+    ) {
       // ── Legacy safeStorage blob (no marker) — migrate to current backend ────
       try {
         const plain = safeStorage.decryptString(buf)
         // Best-effort migration: re-save with the current backend so future reads don't need keychain.
         try { setApiKey(provider, plain) } catch { /* keep the old blob; key still works */ }
         key = plain
-      } catch {
+      } catch (e) {
+        rethrowMacKeychainDecryptFailure(e)
         /* not a safeStorage blob for this OS user — unreadable */
       }
     }
@@ -1254,11 +1265,14 @@ export function getDustRefreshToken(): string {
     if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
       return decryptSecret(buf.subarray(AES_KEY_MARKER.length))
     }
-    if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
+    if (
+      (!process.env.ASKTOTO_LOCAL_KEYSTORE || (app.isPackaged && process.platform === 'darwin')) &&
+      ((app.isPackaged && process.platform === 'darwin') || safeStorage.isEncryptionAvailable())
+    ) {
       try {
         return safeStorage.decryptString(buf)
       } catch (e) {
-        if (e instanceof KeychainKeyRecoveryError) throw e
+        rethrowMacKeychainDecryptFailure(e)
         return ''
       }
     }
@@ -1363,8 +1377,12 @@ export function getSonioxApiKeyStored(): string {
     const buf = readFileSync(path)
     if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
       key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    } else if (safeStorage.isEncryptionAvailable()) {
-      key = safeStorage.decryptString(buf)
+    } else if ((app.isPackaged && process.platform === 'darwin') || safeStorage.isEncryptionAvailable()) {
+      try {
+        key = safeStorage.decryptString(buf)
+      } catch (e) {
+        rethrowMacKeychainDecryptFailure(e)
+      }
     }
   } catch (e) {
     if (e instanceof KeychainKeyRecoveryError) throw e

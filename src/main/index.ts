@@ -123,6 +123,7 @@ import {
   setApiKey,
   clearApiKey,
   clearDustRefreshToken,
+  getDustRefreshToken,
   testApiKey,
   hasApiKey,
   hasKeysMap,
@@ -5334,6 +5335,11 @@ function registerIpc(): void {
       prepareFileKeyForWrite()
       reloadSessionAfterProfileUnlock()
       resetCredentialReadCachesAfterProfileUnlock()
+      // Validate/migrate stored legacy safeStorage credentials while the visible unlock action is
+      // still pending. A Keychain denial must keep the secure-storage card up, not return settings
+      // and let later startup/background readers misreport valid credentials as absent.
+      void hasKeysMap()
+      void getDustRefreshToken()
       const settings = publicSettingsWithSpeakerPolicy()
       if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
       releaseStartupBootWorkIfReady()
@@ -5341,6 +5347,7 @@ function registerIpc(): void {
       return settings
     } catch (error) {
       resetMacKeychainUnlockAuthorization()
+      resetCredentialReadCachesAfterProfileUnlock()
       if (app.isPackaged && process.platform === 'darwin' && error instanceof KeychainKeyRecoveryError) {
         throw new MacKeychainUnlockRequiredError()
       }
