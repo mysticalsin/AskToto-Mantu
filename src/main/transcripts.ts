@@ -22,11 +22,18 @@ import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
-import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
+import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { recordLocalWrite } from './infra/storage/local-writes'
 import type { FileClass } from './infra/storage/gateway'
-import { formatTranscript, speakerLabel } from './features/meetings/transcript-format'
+import { speakerLabel } from './features/meetings/transcript-format'
+import { renderMeetingTranscript } from './features/meetings/meeting-speech'
+import {
+  escapeSpeechMarkers,
+  meetingSpeechTailOffset,
+  refuseReservedSpeechProse
+} from './features/meetings/speech-provenance'
+import { buildMeetingSaveDocument } from './features/meetings/meeting-save-document'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -635,6 +642,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const recapParsed = m.recap ? parseRecapMarkdown(m.recap) : null
   const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
   const tags = recapParsed?.tags || []
+  refuseReservedSpeechProse(title, m.mode, ...tags)
 
   // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
   const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
@@ -648,35 +656,20 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
 
   // Enterprise-live SUMMARY_ONLY: omit fresh Full transcript section. Never rewrite/delete older files.
   const summaryOnly = isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))
-  const transcript = summaryOnly ? '' : formatTranscript(m.lines)
+  const transcript = summaryOnly ? '' : renderMeetingTranscript(m.lines)
 
-  const frontmatter = [
-    '---',
-    summaryOnly ? 'type: meeting-summary' : 'type: meeting-transcript',
-    'source: Métis',
-    `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
-    `date: ${new Date(started).toISOString()}`,
-    `title: "${yamlSafeTitle(title)}"`,
-    `participants: [${participants.join(', ')}]`,
-    `duration_min: ${durMin}`,
-    ...(measuredDurationMs(m.durationMs) !== undefined ? [`duration_ms: ${measuredDurationMs(m.durationMs)}`] : []),
-    `lines: ${summaryOnly ? 0 : m.lines.length}`,
-    ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
-    ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
-    ...(summaryOnly ? ['retention: summary-only'] : []),
-    'status: ready-for-followup',
-    '---',
-    ''
-  ].join('\n')
-
-  const body =
-    `# ${title}\n\n_${new Date(started).toLocaleString()} · ${m.mode} · ${durMin} min · Métis_\n\n` +
-    (m.recap ? `## Notes & follow-ups\n\n${m.recap}\n\n` : '') +
-    (summaryOnly
-      ? `## Retention\n\n_Summary/action record — full transcript not retained under managed enterprise profile._\n`
-      : `## Full transcript\n\n${transcript || '_No speech captured._'}\n`)
-
-  await writeSaved(file, frontmatter + body, settings.encryptTranscripts) // atomic; encrypted at rest when on
+  const document = buildMeetingSaveDocument({
+    meeting: m,
+    title,
+    mode: cleanTitle(m.mode),
+    started,
+    durationMin: durMin,
+    participants,
+    tags,
+    summaryOnly,
+    transcript
+  })
+  await writeSaved(file, document, settings.encryptTranscripts)
 
   if (!settings.encryptTranscripts) {
     const di = new Date(started)
@@ -733,11 +726,11 @@ export async function appendDebrief(
   const md = decodeSaved(read.bytes)
   if (!md) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
-  const safeText = escapeHeadingLines(text.trim())
+  const safeText = escapeSpeechMarkers(escapeHeadingLines(text.trim()))
   const section =
     `${DEBRIEF_HEADING}\n\n_Captured right after the meeting — impressions, not transcript._\n\n` +
     `${safeText}\n${DEBRIEF_END_MARKER}\n`
-  const start = md.indexOf(DEBRIEF_HEADING)
+  const start = md.indexOf(DEBRIEF_HEADING, meetingSpeechTailOffset(md))
   let updated: string
   if (start < 0) {
     updated = md.trimEnd() + '\n\n' + section
@@ -794,7 +787,8 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-    const transcript = formatTranscript(m.lines)
+    refuseReservedSpeechProse(title, m.mode)
+    const transcript = renderMeetingTranscript(m.lines)
     // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
     // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
     // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
@@ -919,6 +913,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         const promoted = text
           .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
           .replace('status: interrupted', 'status: recovered')
+          .replace(/^## Transcript so far$/m, '## Full transcript')
           .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
         let out = primaryOut
         for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)

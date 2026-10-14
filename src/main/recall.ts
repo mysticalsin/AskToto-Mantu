@@ -11,13 +11,22 @@ import {
   setMeetingField
 } from './features/meetings/meeting-document'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, DEBRIEF_HEADING } from './transcripts'
-import { formatTranscript } from './features/meetings/transcript-format'
+import {
+  decodeStoredMeetingSpeech,
+  renderMeetingTranscript,
+  rewriteStoredSpeechTranscript
+} from './features/meetings/meeting-speech'
+import {
+  meetingSpeechPrefix,
+  rewriteMeetingSpeechRecap,
+  refuseReservedSpeechProse
+} from './features/meetings/speech-provenance'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
-import { detectLanguage } from '@shared/lang-id'
+import { readLegacyTranscript } from './features/meetings/legacy-transcript'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
 import type { RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
@@ -154,7 +163,7 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
 export async function recallRead(
   file: string,
   { hydrate = false, onProgress }: { hydrate?: boolean; onProgress?: (progress: HydrationProgress) => void } = {}
-): Promise<RecallReadResult> {
+): Promise<RecallReadResult & { speechProvenance?: 'valid' | 'unavailable' | 'absent' }> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
   const safeName = safeMeetingBasename(file)
@@ -178,7 +187,10 @@ export async function recallRead(
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
-  const text = decodeSaved(read.bytes)
+  const completeText = decodeSaved(read.bytes)
+  const speech = decodeStoredMeetingSpeech(completeText)
+  if (!speech.ok) return { ok: false, error: 'Meeting text could not be projected safely.' }
+  const text = speech.publicMarkdown
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
   const fm = frontmatter(text)
@@ -202,67 +214,21 @@ export async function recallRead(
   // a second, END-only regex rather than one combined lookahead: with the /m flag (needed for the "^"
   // start anchors), "$" matches before ANY newline, not just end-of-string, so a "\s*$" fallback inside
   // the same lookahead stops at the end of the first line too — the exact bug this replaces.
+  let recapText = text
+  try {
+    if (speech.status === 'valid') recapText = meetingSpeechPrefix(completeText) ?? text
+  } catch {
+    return { ok: false, error: 'Meeting text could not be projected safely.' }
+  }
   let recap = ''
-  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
+  const startMatch = recapText.match(/^## Notes & follow-ups[\r\n]+/m)
   if (startMatch) {
-    const afterStart = text.slice(startMatch.index! + startMatch[0].length)
+    const afterStart = recapText.slice(startMatch.index! + startMatch[0].length)
     const endIdx = recapSectionEndIndex(afterStart, fm.type)
     recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
   }
 
-  // Parse transcript lines from the ## Full transcript section.
-  // Format written by saveMeeting: **[HH:MM:SS] Them:**, **You:**, or an imported recording's **Speaker:**.
-  const lines: TranscriptLine[] = []
-  const transcriptMatch = text.match(/^## Full transcript[\r\n]+([\s\S]*)$/m)
-  if (transcriptMatch) {
-    const body = transcriptMatch[1]
-    // Use the ISO date from frontmatter to reconstruct absolute timestamps (same calendar day).
-    // When startedAt is missing (unparsable/absent date field), fall back to an arbitrary fixed
-    // anchor (read time) so every line still gets a real, monotonically increasing timestamp instead
-    // of collapsing to 0 — the parsed HH:MM:SS is real elapsed-time data even without a calendar date.
-    const baseDate = startedAt ? new Date(startedAt) : new Date()
-    // Optional group 5 captures a Speaker Intelligence display name — "Them (Jane Doe):**" — written by
-    // transcript-format.ts's formatTranscriptLine once one has been resolved; absent on every meeting saved
-    // before that feature existed, and on any line no name was ever resolved for.
-    // MQA-245: `Speaker 1` (a diarization cluster label standing alone) joins the accepted label set.
-    // Older files wrote it as `Speaker (Speaker 1)` and still parse through the optional paren group
-    // below — this only ADDS a form, so no previously-saved meeting changes meaning.
-    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker(?: \d+)?)(?: \(([^)]*)\))?:\*\* (.+)$/gm
-    let m: RegExpExecArray | null
-    // Seeded at the SAME resolution the comparison runs at: the frontmatter `date` keeps milliseconds
-    // while every reconstructed time below is floored to the whole second, so an unfloored seed reads a
-    // first line inside the start's own second as a midnight crossing and pushes it — and, via prevT,
-    // every line after it — a full day forward. Imported recordings hit that on almost every file: their
-    // startedAt is a raw mtime and line 0 sits exactly on it (see import-jobs.ts).
-    let prevT: number | undefined = startedAt !== undefined ? Math.floor(startedAt / 1000) * 1000 : undefined
-    while ((m = lineRe.exec(body)) !== null) {
-      const [, hh, mm, ss, speakerLabel, name, lineText] = m
-      const d = new Date(baseDate)
-      d.setHours(Number(hh), Number(mm), Number(ss), 0)
-      // If the reconstructed time is before the previous line's timestamp (midnight crossing), push
-      // to the next day — compares against the previous line rather than startedAt so this still
-      // works when startedAt is unavailable.
-      if (prevT !== undefined && d.getTime() < prevT) d.setDate(d.getDate() + 1)
-      const t = d.getTime()
-      prevT = t
-      const line: TranscriptLine = {
-        speaker: speakerLabel === 'Them' ? 'them' : speakerLabel === 'You' ? 'you' : 'unknown',
-        text: lineText.trim(),
-        t
-      }
-      // A bare cluster label carries the identity in the label slot, not the paren slot.
-      if (name) line.name = name.trim()
-      else if (/^Speaker \d+$/.test(speakerLabel)) line.name = speakerLabel
-      // Re-derive the spoken-language tag the same way the live path does (commitLine). The saved file
-      // carries language only as "_[conversation switches to …]_" marker PROSE, which this line regex
-      // rightly skips — without re-tagging, a Speaker Intelligence backfill rewrite (updateMeetingNames
-      // → formatTranscript over these reparsed lines) would silently strip every marker, and a
-      // retroactive "Generate recap" on a reopened meeting would see no switches at all.
-      const lang = detectLanguage(line.text).lang
-      if (lang) line.lang = lang
-      lines.push(line)
-    }
-  }
+  const lines = speech.status === 'valid' ? speech.lines : readLegacyTranscript(text, startedAt)
 
   return {
     ok: true,
@@ -272,7 +238,8 @@ export async function recallRead(
     durationMs: fm.duration_ms ? measuredDurationMs(Number(fm.duration_ms)) : undefined,
     recap,
     recapStatus: readRecapStatus(fm.recap_status),
-    lines,
+    lines: fm.type === 'meeting-summary' ? [] : lines,
+    speechProvenance: speech.status,
     confidential: fm.confidential === 'true',
     // MQA-092 — the CRM payload fingerprint of the last push that this meeting's CRM connection
     // accepted, so re-opening it after a relaunch does not re-arm "Push to CRM" and file a duplicate.
@@ -352,6 +319,11 @@ export async function renameMeeting(
   }
   const title = sanitizeRenameTitle(newTitle)
   if (!title) return { ok: false, error: 'Enter a title.' }
+  try {
+    refuseReservedSpeechProse(title)
+  } catch {
+    return { ok: false, error: 'Meeting text contains reserved storage syntax.' }
+  }
 
   const fullPath = join(folder, safeName)
   const read = await readMeetingText(folder, safeName)
@@ -472,29 +444,38 @@ export async function updateMeetingRecap(
   }
 
   let updated: string
-  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
-  if (startMatch) {
-    // Existing section: replace its body only. `head` runs up to and including the heading + the newlines
-    // saveMeeting wrote after it; `tail` is the untouched transcript/retention sibling remainder (or
-    // '' when, defensively, no such section exists). The rebuilt "\n\n" restores the single blank line
-    // before the next section so the markdown — and recallRead's slice — stay well-formed.
-    const bodyStart = startMatch.index! + startMatch[0].length
-    const afterStart = text.slice(bodyStart)
-    const endIdx = recapSectionEndIndex(afterStart, type)
-    const head = text.slice(0, bodyStart)
-    const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
-    updated = tail ? `${head}${body}${body ? '\n\n' : ''}${tail}` : `${head}${body}${body ? '\n' : ''}`
-  } else {
-    // No notes section yet (meeting saved with an empty recap). Insert one immediately before its
-    // transcript/retention sibling so recallRead parses it exactly as it would a normally-saved recap.
-    const sectionMatch = text.match(recapEndRe)
-    if (!sectionMatch) return { ok: false, error: 'This does not look like a meeting file.' }
-    if (!body) {
-      if (recapStatus === undefined) return { ok: true }
-      updated = text // An empty failed attempt still has a durable outcome, without an empty section.
+  let framed: string | null
+  try {
+    framed = rewriteMeetingSpeechRecap(text, body)
+  } catch {
+    return { ok: false, error: 'Could not save your changes.' }
+  }
+  if (framed !== null) updated = framed
+  else {
+    const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
+    if (startMatch) {
+      // Existing section: replace its body only. `head` runs up to and including the heading + the newlines
+      // saveMeeting wrote after it; `tail` is the untouched transcript/retention sibling remainder (or
+      // '' when, defensively, no such section exists). The rebuilt "\n\n" restores the single blank line
+      // before the next section so the markdown — and recallRead's slice — stay well-formed.
+      const bodyStart = startMatch.index! + startMatch[0].length
+      const afterStart = text.slice(bodyStart)
+      const endIdx = recapSectionEndIndex(afterStart, type)
+      const head = text.slice(0, bodyStart)
+      const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
+      updated = tail ? `${head}${body}${body ? '\n\n' : ''}${tail}` : `${head}${body}${body ? '\n' : ''}`
     } else {
-      const at = sectionMatch.index!
-      updated = `${text.slice(0, at)}## Notes & follow-ups\n\n${body}\n\n${text.slice(at)}`
+      // No notes section yet (meeting saved with an empty recap). Insert one immediately before its
+      // transcript/retention sibling so recallRead parses it exactly as it would a normally-saved recap.
+      const sectionMatch = text.match(recapEndRe)
+      if (!sectionMatch) return { ok: false, error: 'This does not look like a meeting file.' }
+      if (!body) {
+        if (recapStatus === undefined) return { ok: true }
+        updated = text // An empty failed attempt still has a durable outcome, without an empty section.
+      } else {
+        const at = sectionMatch.index!
+        updated = `${text.slice(0, at)}## Notes & follow-ups\n\n${body}\n\n${text.slice(at)}`
+      }
     }
   }
 
@@ -537,6 +518,16 @@ export async function updateMeetingTranscript(
   if (!read.ok) return read
   const { text, encrypted: wasEncrypted } = read
 
+  try {
+    const framed = rewriteStoredSpeechTranscript(text, lines)
+    if (framed !== null) {
+      await writeSaved(fullPath, framed, wasEncrypted)
+      return { ok: true }
+    }
+  } catch {
+    return { ok: false, error: 'Could not save the updated transcript.' }
+  }
+
   const startMatch = text.match(/^## Full transcript[\r\n]+/m)
   if (!startMatch) return { ok: false, error: 'This does not look like a meeting file.' }
 
@@ -549,7 +540,7 @@ export async function updateMeetingTranscript(
   const debriefIdx = afterStart.search(debriefRe)
   const tail = debriefIdx === -1 ? '' : afterStart.slice(debriefIdx)
   const head = text.slice(0, bodyStart)
-  const rendered = formatTranscript(lines) || '_No speech captured._'
+  const rendered = renderMeetingTranscript(lines) || '_No speech captured._'
   const updated = tail ? `${head}${rendered}\n\n${tail}` : `${head}${rendered}\n`
 
   try {
@@ -659,7 +650,10 @@ export async function isMeetingConfidentialOnDisk(settings: Settings, file: stri
   const folder = resolveMeetingsFolder(settings)
   const read = await storageAt(folder).read(safeName)
   if (read.status !== 'ok') return true // missing / unreadable — fail closed
-  const text = decodeSaved(read.bytes)
+  const completeText = decodeSaved(read.bytes)
+  const speech = decodeStoredMeetingSpeech(completeText)
+  if (!speech.ok) return true
+  const text = speech.publicMarkdown
   if (!text) return true
   if (!parse(text)) return true
   return hasMeetingFlag(text, 'confidential')

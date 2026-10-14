@@ -4,6 +4,7 @@
  * Listing/classification is metadata-only. Transcript bytes are opened only by readSourceText(), after
  * the storage gateway has classified the file as local.
  */
+import { publicMeetingText } from '../features/meetings/meeting-speech'
 import { basename, dirname, join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import type { BrainIndex } from '@shared/brain'
@@ -33,7 +34,11 @@ export interface SourceFolder {
 }
 
 export type SourceScan = readonly SourceFolder[]
-export type SourceText = { status: 'ok'; text: string; observation: SourceObservation } | { status: 'missing' } | { status: 'not-on-device'; observation: SourceObservation } | { status: 'unreadable'; error: unknown; observation: SourceObservation }
+export type SourceText =
+  | { status: 'ok'; text: string; observation: SourceObservation }
+  | { status: 'missing' }
+  | { status: 'not-on-device'; observation: SourceObservation }
+  | { status: 'unreadable'; error: unknown; observation: SourceObservation }
 export type SourceObservation = { version?: string; changedAtMs?: number }
 
 export function isMeetingTranscriptFile(name: string): boolean {
@@ -130,10 +135,20 @@ export function countUnextracted(scan: SourceScan, idx: BrainIndex): number {
 export async function readSourceText(file: string): Promise<SourceText> {
   const read = await storageAt(dirname(file)).read(basename(file))
   const observation = 'version' in read ? observationOf(read.version) : {}
-  if (read.status === 'ok') return { status: 'ok', text: decodeSaved(read.bytes), observation }
+  if (read.status === 'ok') {
+    try {
+      return { status: 'ok', text: publicMeetingText(decodeSaved(read.bytes)), observation }
+    } catch {
+      return { status: 'unreadable', error: new Error('Meeting text could not be projected safely.'), observation }
+    }
+  }
   if (read.status === 'missing') return { status: 'missing' }
   if (read.status === 'dataless' || read.status === 'unknown') return { status: 'not-on-device', observation }
-  return { status: 'unreadable', error: new Error(read.status === 'unavailable' ? read.code : read.status), observation }
+  return {
+    status: 'unreadable',
+    error: new Error(read.status === 'unavailable' ? read.code : read.status),
+    observation
+  }
 }
 
 export async function sourceFileObservation(file: string): Promise<SourceObservation> {
@@ -156,7 +171,10 @@ async function mergeInputs(gateway: StorageGateway): Promise<string[] | null> {
   for (const [i, listing] of listings.entries()) {
     if (listing.status === 'missing') continue
     if (listing.status !== 'ok') return null
-    const wanted = i === 0 ? (name: string) => name === 'graph.json' || isJournalFile(name) : (name: string) => name.endsWith('.json')
+    const wanted =
+      i === 0
+        ? (name: string) => name === 'graph.json' || isJournalFile(name)
+        : (name: string) => name.endsWith('.json')
     for (const name of listing.names) if (wanted(name)) paths.push(join(dirs[i], name))
   }
   return paths
@@ -165,7 +183,11 @@ async function mergeInputs(gateway: StorageGateway): Promise<string[] | null> {
 export async function brainInputsLocal(s: Settings, scan?: SourceScan): Promise<boolean> {
   const gateway = storageAt(resolveMeetingsFolder(s))
   const inputs = await mergeInputs(gateway)
-  let local = inputs !== null && [...(await classifyAll(gateway, inputs)).values()].every((fileClass) => fileClass.status === 'ok' || fileClass.status === 'missing')
+  let local =
+    inputs !== null &&
+    [...(await classifyAll(gateway, inputs)).values()].every(
+      (fileClass) => fileClass.status === 'ok' || fileClass.status === 'missing'
+    )
   if (local && s.publishBrainPages) {
     const folders = scan ?? (await scanMeetingSources(s))
     local = folders.every((folder) => folder.status !== 'failed' && folder.sources.every((source) => source.local))
@@ -189,7 +211,15 @@ export function extractionSlug(key: string): string {
   return key.includes('/') ? `${slugify(key)}-${fnv1a(key).toString(16)}` : slugify(key)
 }
 
-export function hasSavedReconciliationCandidate(scan: SourceScan, idx: BrainIndex, extracted: ReadonlySet<string>): boolean {
+export function hasSavedReconciliationCandidate(
+  scan: SourceScan,
+  idx: BrainIndex,
+  extracted: ReadonlySet<string>
+): boolean {
   const own = scan.find((folder) => folder.source === 'meetings')
-  return own?.status === 'ok' && own.sources.some((source) => !idx.ingested[source.key]?.ok && extracted.has(extractionSlug(source.key))) || false
+  return (
+    (own?.status === 'ok' &&
+      own.sources.some((source) => !idx.ingested[source.key]?.ok && extracted.has(extractionSlug(source.key)))) ||
+    false
+  )
 }

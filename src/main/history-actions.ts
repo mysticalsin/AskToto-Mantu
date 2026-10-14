@@ -7,6 +7,7 @@
  *   - `safeName` is a basename already checked by safeMeetingBasename; these helpers never build a path
  *     from anything else.
  */
+import { publicMeetingText } from './features/meetings/meeting-speech'
 import { join } from 'node:path'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { ReadOptions } from './infra/storage/gateway'
@@ -30,10 +31,12 @@ export async function meetingOpenTarget(
   // A FIFO, socket or device is refused before any read: a plain gateway read would still open it once
   // the detector answers. Classify's other verdicts never skip the read below.
   const fileClass = (await gateway.classify([safeName])).get(safeName)
-  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: MEETING_NOT_READABLE_MSG }
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular)
+    return { ok: false, error: MEETING_NOT_READABLE_MSG }
   let read = await gateway.read(safeName)
   // The user's explicit Open hydrates this one cloud-only file (under a content permit, with progress).
-  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate, onProgress })
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown'))
+    read = await gateway.read(safeName, { hydrate, onProgress })
   if (read.status === 'missing') return { ok: true, path, encrypted: false }
   if (read.status !== 'ok') return { ok: false, error: MEETING_NOT_READABLE_MSG }
   if (!isEncryptedBytes(read.bytes)) return { ok: true, path, encrypted: false }
@@ -45,7 +48,7 @@ export async function meetingOpenTarget(
  *  callers keep readSavedFile's error handling. */
 export async function readSavedMeeting(folder: string, safeName: string): Promise<string> {
   const read = await storageAt(folder).read(safeName)
-  if (read.status === 'ok') return decodeSaved(read.bytes)
+  if (read.status === 'ok') return publicMeetingText(decodeSaved(read.bytes))
   const error = new Error(`meeting file ${read.status}`) as NodeJS.ErrnoException
   if (read.status === 'missing') error.code = 'ENOENT'
   throw error

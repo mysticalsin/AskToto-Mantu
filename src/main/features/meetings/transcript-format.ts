@@ -12,7 +12,7 @@ const isClusterLabel = (name: string): boolean => CLUSTER_LABEL_RE.test(name)
 
 // Names can come from a third-party Teams VTT transcript. Keep the display-line delimiter intact,
 // strip controls/newlines and cap length before rendering saved Markdown.
-function sanitizeSpeakerName(name: string | undefined): string {
+export function sanitizeSpeakerName(name: string | undefined): string {
   if (!name) return ''
   return name
     .replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ')
@@ -23,9 +23,9 @@ function sanitizeSpeakerName(name: string | undefined): string {
 }
 
 /** The display-line shape recall.ts reads back, with an optional resolved speaker name. */
-function formatTranscriptLine(l: TranscriptLine): string {
+function formatTranscriptLine(l: TranscriptLine, clock?: string): string {
   const d = new Date(l.t)
-  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  const t = clock ?? `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   const name = sanitizeSpeakerName(l.name)
   // A diarization cluster label carries the identity itself; a real name still qualifies the role.
   const label =
@@ -40,12 +40,17 @@ function formatTranscriptLine(l: TranscriptLine): string {
 /** Shared display projection for final saves, autosaves and speaker-name rewrites. Language-switch
  * marker paragraphs deliberately do not match recall.ts's saved-line regex. */
 export function formatTranscript(lines: TranscriptLine[]): string {
+  return formatTranscriptWithClocks(lines)
+}
+
+/** Explicit saved clocks reproduce the original display across timezone and DST changes. */
+export function formatTranscriptWithClocks(lines: TranscriptLine[], clocks?: readonly string[]): string {
   const parts: string[] = []
   let prevLang: string | undefined
-  for (const l of lines) {
+  for (const [index, l] of lines.entries()) {
     if (l.lang && prevLang && l.lang !== prevLang) parts.push(`_[conversation switches to ${l.lang}]_`)
     if (l.lang) prevLang = l.lang
-    parts.push(formatTranscriptLine(l))
+    parts.push(formatTranscriptLine(l, clocks?.[index]))
   }
   return parts.join('\n\n')
 }
