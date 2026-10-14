@@ -33,7 +33,23 @@ const LEAN_EXCLUDES = [
 
 function appendExcludes(config, key) {
   const current = Array.isArray(config[key]) ? config[key] : config[key] == null ? [] : [config[key]]
-  config[key] = [...current, ...LEAN_EXCLUDES]
+  if (current.length === 0) return
+  if (current.every((entry) => typeof entry === 'string')) {
+    config[key] = [...current, ...LEAN_EXCLUDES]
+    return
+  }
+  if (!current.every((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))) {
+    throw new Error('Lean package file patterns must use a consistent electron-builder file-set shape')
+  }
+  // Builder normalizes the root YAML strings into FileSet.filter before this hook. Exclusions in
+  // a separate string matcher do not constrain that original positive file set.
+  config[key] = current.map((entry) => {
+    const filters = entry.filter == null ? [] : Array.isArray(entry.filter) ? entry.filter : [entry.filter]
+    if (!filters.every((filter) => typeof filter === 'string')) {
+      throw new Error('Lean package file-set filters must be strings')
+    }
+    return { ...entry, filter: [...filters, ...LEAN_EXCLUDES] }
+  })
 }
 
 function configureLeanBuilder(context, stageRoot) {
