@@ -106,6 +106,18 @@ describe('cloud speech preload boundary', () => {
       ok: false,
       code: 'TRANSPORT'
     })
+
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: event.ceilingId,
+      tracks: [{ track: 'microphone', finalSequence: 20, finalSampleOffset: 32_002 }]
+    })
+    await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toMatchObject({
+      ok: false,
+      code: 'TRANSPORT'
+    })
   })
 
   it('does not invoke main for an invalid request and validates successful responses', async () => {
