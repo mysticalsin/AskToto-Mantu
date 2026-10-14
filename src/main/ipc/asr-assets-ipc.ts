@@ -69,15 +69,19 @@ export function registerAsrAssetsIpc(options: {
     cleanup(): void {
       if (cleaned) return
       cleaned = true
+      let cleanupFailed = false
       let cleanupError: unknown
       for (const channel of channels) {
         try {
           options.ipcMain.removeHandler(channel)
         } catch (error) {
-          cleanupError ??= error
+          if (!cleanupFailed) {
+            cleanupFailed = true
+            cleanupError = error
+          }
         }
       }
-      if (cleanupError !== undefined) throw cleanupError
+      if (cleanupFailed) throw cleanupError
     }
   }
 }

@@ -46,19 +46,24 @@ export function registerSpeechPackIpc(options: {
   return () => {
     if (cleaned) return
     cleaned = true
+    let cleanupFailed = false
     let cleanupError: unknown
     try {
       unsubscribe?.()
     } catch (error) {
+      cleanupFailed = true
       cleanupError = error
     }
     for (const channel of channels) {
       try {
         options.ipcMain.removeHandler(channel)
       } catch (error) {
-        cleanupError ??= error
+        if (!cleanupFailed) {
+          cleanupFailed = true
+          cleanupError = error
+        }
       }
     }
-    if (cleanupError !== undefined) throw cleanupError
+    if (cleanupFailed) throw cleanupError
   }
 }
