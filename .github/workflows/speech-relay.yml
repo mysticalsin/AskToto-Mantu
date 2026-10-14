@@ -54,7 +54,7 @@ jobs:
         run: |
           node -e "require('node:fs').rmSync(process.env.METIS_CI_OPERATOR_REPORT, { force: true })"
           node ../node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
-            --reporter=json \
+            --reporter=default --reporter=github-actions --reporter=json \
             --outputFile="$METIS_CI_OPERATOR_REPORT" \
             src/speech/grants.test.ts \
             src/speech/policy.test.ts \
