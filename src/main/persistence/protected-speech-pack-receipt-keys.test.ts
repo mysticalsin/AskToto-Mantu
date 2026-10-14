@@ -24,6 +24,7 @@ function fixture() {
   let workerDecryptCalls = 0
   let workerEncryptCalls = 0
   let nativeUnwrapCalls = 0
+  let authenticatedLeaseAdmissions = 0
   let holdNextEncrypt = false
   let notifyEncryptHeld: (() => void) | undefined
   let releaseEncrypt: (() => void) | undefined
@@ -69,6 +70,12 @@ function fixture() {
           })
         }
         if (disposed || !anchor?.equals(owned)) throw new Error('ANCHOR_CHANGED')
+      },
+      admitAuthenticated: async (keyId, authenticatedBytes) => {
+        if (disposed || !anchor?.equals(owned) || !Buffer.from(authenticatedBytes).equals(owned))
+          throw new Error('ANCHOR_AUTHENTICATION_CHANGED')
+        if (!/^[a-f0-9]{32}$/.test(keyId)) throw new Error('ANCHOR_KEY_ID_INVALID')
+        authenticatedLeaseAdmissions += 1
       },
       dispose: async () => {
         disposed = true
@@ -176,6 +183,7 @@ function fixture() {
     workerEncryptCalls: () => workerEncryptCalls,
     nativeUnwrapCalls: () => nativeUnwrapCalls,
     decryptCalls: () => workerDecryptCalls,
+    authenticatedLeaseAdmissions: () => authenticatedLeaseAdmissions,
     readAnchor: () => (anchor ? Buffer.from(anchor) : undefined)
   }
 }
@@ -192,6 +200,7 @@ describe('ProtectedSpeechPackReceiptKeys', () => {
     const created = await f.service.createForExplicitInstall(f.scope, f.root)
     expect(created.keyId).toMatch(/^[a-f0-9]{32}$/)
     expect(created.expectedKLocal.startsWith('S:')).toBe(true)
+    expect(f.authenticatedLeaseAdmissions()).toBe(1)
 
     let storedEnvelope: Buffer | undefined
     await created.withKeyUse(async (keyUse) => {
@@ -204,6 +213,7 @@ describe('ProtectedSpeechPackReceiptKeys', () => {
 
     const reopened = await f.service.openExistingForRecovery(f.scope, f.root)
     expect(reopened.keyId).toBe(created.keyId)
+    expect(f.authenticatedLeaseAdmissions()).toBe(2)
     await expect(reopened.withKeyUse((keyUse) => keyUse.decrypt(storedEnvelope!))).resolves.toBe(
       '{"schema":1,"owned":true}'
     )
