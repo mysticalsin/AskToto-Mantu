@@ -83,6 +83,10 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
   `src/main/features/meetings/transcript-format.ts` owns the pure display projection;
   `src/main/features/meetings/meeting-document.ts` owns frontmatter and recap-section boundaries;
   `src/main/recall.ts` owns typed History reads and edits.
+- Recording imports → `src/main/import-retention-policy.ts` resolves trusted retention policy;
+  `src/main/import-job-retention-coordinator.ts` owns bounded checkpoint inventory, explicit Resume, and
+  owner-bound checkpoint writes; `src/main/import-job-store.ts` owns encrypted checkpoints and content-free
+  hold markers; `src/main/import-job-pipelines.ts` owns VAD consumption and save/recap finalization.
 - Optional speech models → `src/main/features/components/index.ts` (public service API),
   `src/main/features/components/speech-pack/**` (pinned transfer, activation and readiness),
   `src/main/infra/process/speech-pack-host.ts` (owned utility process), and

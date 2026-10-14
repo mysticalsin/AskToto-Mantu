@@ -43,7 +43,9 @@ vi.mock('../llm/local-routing', () => ({
 
 // The sidecar's live state plus its attached-stream count — the two things brain ingest now reads before
 // it is willing to occupy a local slot (MQA-048). Everything else stays real.
-const localRuntimeStateMock = vi.hoisted(() => vi.fn<() => 'stopped' | 'starting' | 'running' | 'unavailable'>(() => 'stopped'))
+const localRuntimeStateMock = vi.hoisted(() =>
+  vi.fn<() => 'stopped' | 'starting' | 'running' | 'unavailable'>(() => 'stopped')
+)
 const activeStreamsMock = vi.hoisted(() => vi.fn<() => number>(() => 0))
 vi.mock('../llm/local-runtime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../llm/local-runtime')>()),
@@ -84,19 +86,24 @@ describe('brain ingest — audited fixes', () => {
   let meetingsFolder: string
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
-  const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => {
-      opts.handlers.onDelta(json)
-      opts.handlers.onDone({})
-    })
-    return { abort: () => {} }
-  }
+  const respondJson =
+    (json = '{}') =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta(json)
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    }
 
   // Streams that stay open until the test decides — the only way to observe how many extractions are
   // actually in flight at once, and to hold jobs while the world changes underneath them.
@@ -213,6 +220,22 @@ describe('brain ingest — audited fixes', () => {
     releaseHeld()
     await vi.waitFor(() => expect(okCount()).toBe(1), { timeout: 10_000 })
     await settleBrainWritesForTests()
+  })
+
+  it('does not queue an import after its owner is held during source observation', async () => {
+    const file = writeMeeting('held-before-brain-queue.md')
+    const refusal = new Error('import attempt is no longer current')
+    const assertAdmission = vi.fn()
+    assertAdmission
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw refusal
+      })
+
+    await expect(enqueueIngest(file, {}, assertAdmission)).rejects.toBe(refusal)
+    expect(assertAdmission).toHaveBeenCalledTimes(2)
+    expect(readIndex(getSettings()).ingested['held-before-brain-queue.md']).toBeUndefined()
+    expect(brainBackfillProgress().running).toBe(false)
   })
 
   // ── MQA-085 ────────────────────────────────────────────────────────────────
@@ -341,7 +364,12 @@ describe('brain ingest — audited fixes', () => {
 
     // The ~1h OAuth token lapsed mid-backfill; dust.ts calls this on the pre-token auth failure and
     // replays the request once with what it returns.
-    refreshDustCliSessionMock.mockResolvedValue({ ok: true, token: 'fresh-token', workspaceId: 'ws-new', baseUrl: 'https://eu.dust.tt' })
+    refreshDustCliSessionMock.mockResolvedValue({
+      ok: true,
+      token: 'fresh-token',
+      workspaceId: 'ws-new',
+      baseUrl: 'https://eu.dust.tt'
+    })
     await expect(opts.refreshDustAuth?.()).resolves.toEqual({
       apiKey: 'fresh-token',
       workspaceId: 'ws-new',
@@ -501,7 +529,9 @@ describe('brain ingest — audited fixes', () => {
     // The frozen readout: 3 of 4, still "running", yet nothing is in flight and nothing can restart it.
     // Waited for on the progress counter rather than the index, because finishJob bumps `done` AFTER the
     // ok record lands — an okCount()-based wait can observe the batch one job earlier than the readout.
-    await vi.waitFor(() => expect(brainBackfillProgress()).toMatchObject({ total: 4, done: 3, running: true }), { timeout: 10_000 })
+    await vi.waitFor(() => expect(brainBackfillProgress()).toMatchObject({ total: 4, done: 3, running: true }), {
+      timeout: 10_000
+    })
     expect(okCount()).toBe(3)
     expect(createStreamMock).toHaveBeenCalledTimes(3)
 

@@ -27,7 +27,9 @@ describe('import recap prefix and tier', () => {
   it('keeps a byte-stable cached system prefix with no Date.now', () => {
     expect(IMPORT_RECAP_SYSTEM_PREFIX.includes('Date.now')).toBe(false)
     expect(IMPORT_RECAP_SYSTEM_PREFIX).not.toMatch(/\d{13}/)
-    expect(importRecapSystem(true)).toBe(IMPORT_RECAP_SYSTEM_PREFIX + importRecapSystem(true).slice(IMPORT_RECAP_SYSTEM_PREFIX.length))
+    expect(importRecapSystem(true)).toBe(
+      IMPORT_RECAP_SYSTEM_PREFIX + importRecapSystem(true).slice(IMPORT_RECAP_SYSTEM_PREFIX.length)
+    )
     expect(importRecapSystem(false)).toBe(importRecapSystem(false))
     expect(importRecapSystem(true)).not.toBe(importRecapSystem(false))
     const a = IMPORT_RECAP_SYSTEM_PREFIX
@@ -80,7 +82,11 @@ describe('runImportedRecap critical path', () => {
 
     await expect(
       runImportedRecap(
-        { jobId: 'j1', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+        {
+          jobId: 'j1',
+          lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }],
+          mode: 'meeting'
+        },
         {
           getSettings: () => settings(),
           getApiKey: () => 'sk-test',
@@ -94,20 +100,26 @@ describe('runImportedRecap critical path', () => {
   })
 
   it('rejects text when the provider says the output token limit stopped completion', async () => {
-    const createStream = vi.fn((opts: {
-      handlers: {
-        onDelta: (d: string) => void
-        onDone: (usage: object, completion?: { status: 'complete' | 'incomplete'; reason?: string }) => void
+    const createStream = vi.fn(
+      (opts: {
+        handlers: {
+          onDelta: (d: string) => void
+          onDone: (usage: object, completion?: { status: 'complete' | 'incomplete'; reason?: string }) => void
+        }
+      }) => {
+        opts.handlers.onDelta('## Overview\nA useful but truncated recap')
+        opts.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
+        return { abort: () => {} }
       }
-    }) => {
-      opts.handlers.onDelta('## Overview\nA useful but truncated recap')
-      opts.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
-      return { abort: () => {} }
-    })
+    )
 
     await expect(
       runImportedRecap(
-        { jobId: 'j2', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+        {
+          jobId: 'j2',
+          lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }],
+          mode: 'meeting'
+        },
         {
           getSettings: () => settings(),
           getApiKey: () => 'sk-test',
@@ -121,19 +133,21 @@ describe('runImportedRecap critical path', () => {
   })
 
   it('sends the selected summary language without changing the cached prefix', async () => {
-    const createStream = vi.fn((opts: {
-      system: string
-      systemParts?: { cachedPrefix: string; volatile: string }
-      handlers: { onDelta: (d: string) => void; onDone: (usage: object) => void }
-    }) => {
-      expect(opts.system.startsWith(IMPORT_RECAP_SYSTEM_PREFIX)).toBe(true)
-      expect(opts.system).toContain('Always respond in French')
-      expect(opts.systemParts?.cachedPrefix).toBe(IMPORT_RECAP_SYSTEM_PREFIX)
-      expect(opts.systemParts?.volatile).toContain('Always respond in French')
-      opts.handlers.onDelta('## Overview\nLivraison approuvée.')
-      opts.handlers.onDone({})
-      return { abort: () => {} }
-    })
+    const createStream = vi.fn(
+      (opts: {
+        system: string
+        systemParts?: { cachedPrefix: string; volatile: string }
+        handlers: { onDelta: (d: string) => void; onDone: (usage: object) => void }
+      }) => {
+        expect(opts.system.startsWith(IMPORT_RECAP_SYSTEM_PREFIX)).toBe(true)
+        expect(opts.system).toContain('Always respond in French')
+        expect(opts.systemParts?.cachedPrefix).toBe(IMPORT_RECAP_SYSTEM_PREFIX)
+        expect(opts.systemParts?.volatile).toContain('Always respond in French')
+        opts.handlers.onDelta('## Overview\nLivraison approuvée.')
+        opts.handlers.onDone({})
+        return { abort: () => {} }
+      }
+    )
     const recap = await runImportedRecap(
       { jobId: 'j3', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
       {
@@ -147,7 +161,11 @@ describe('runImportedRecap critical path', () => {
     )
     expect(recap).toBe('## Overview\nLivraison approuvée.')
     expect(createStream).toHaveBeenCalled()
-    const arg = createStream.mock.calls[0][0] as { promptCacheKey?: string; systemCacheTtl?: string; reasoningEffort?: unknown }
+    const arg = createStream.mock.calls[0][0] as {
+      promptCacheKey?: string
+      systemCacheTtl?: string
+      reasoningEffort?: unknown
+    }
     expect(arg.promptCacheKey).toBe(IMPORT_RECAP_CACHE_KEY)
     expect(arg.systemCacheTtl).toBe('1h')
   })
@@ -155,11 +173,12 @@ describe('runImportedRecap critical path', () => {
 
 describe('import recap is not polish-first', () => {
   it('import-jobs finalize recaps before any polish pass', () => {
-    const src = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
-    const finalize = src.slice(src.indexOf('private async finalize'), src.indexOf('async failDecoder'))
+    const manager = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
+    const src = readFileSync(join(__dirname, 'import-job-pipelines.ts'), 'utf8')
+    const finalize = src.slice(src.indexOf('export async function finalizeImportJob'), src.indexOf('function terminal'))
     expect(finalize.indexOf('generateRecap')).toBeGreaterThan(-1)
-    expect(finalize.indexOf('generateRecap')).toBeLessThan(finalize.indexOf('if (this.deps.polish)'))
-    expect(src).toMatch(/Polish is not on the import critical path/)
+    expect(finalize.indexOf('generateRecap')).toBeLessThan(finalize.indexOf('if (host.deps.polish)'))
+    expect(manager).toMatch(/return finalizeImportJob\(this\.pipelineHost\(\), job, attempt\)/)
   })
 
   it('index.ts does not wire polish on import jobs', () => {

@@ -51,9 +51,7 @@ describe('import queue helpers', () => {
   })
 
   it('headline is friendly for one, several, mixed, and attention', () => {
-    expect(importQueueHeadline([job({ jobId: '1', state: 'decoding', title: 'Standup' })])).toBe(
-      'Importing Standup'
-    )
+    expect(importQueueHeadline([job({ jobId: '1', state: 'decoding', title: 'Standup' })])).toBe('Importing Standup')
     expect(
       importQueueHeadline([
         job({ jobId: '1', state: 'queued', title: 'A' }),
@@ -73,9 +71,7 @@ describe('import queue helpers', () => {
         job({ jobId: '2', state: 'transcribing', title: 'B' })
       ])
     ).toBe('1 of 2 ready')
-    expect(importQueueHeadline([job({ jobId: '1', state: 'failed', title: 'A' })])).toBe(
-      '1 meeting needs attention'
-    )
+    expect(importQueueHeadline([job({ jobId: '1', state: 'failed', title: 'A' })])).toBe('1 meeting needs attention')
   })
 
   it('drop filter accepts recordings by mime or extension', () => {
@@ -98,6 +94,8 @@ describe('import queue helpers', () => {
 describe('import queue layout', () => {
   const queue = readFileSync(join(__dirname, 'ImportQueue.tsx'), 'utf8')
   const recall = readFileSync(join(__dirname, 'RecallView.tsx'), 'utf8')
+  const queueActions = readFileSync(join(__dirname, 'useImportQueue.ts'), 'utf8')
+  const retentionPanel = readFileSync(join(__dirname, 'ImportQueueSection.tsx'), 'utf8')
 
   it('queue cards name the meeting and expose resume, cancel, and done', () => {
     expect(queue).toMatch(/job\.title/)
@@ -111,11 +109,12 @@ describe('import queue layout', () => {
 
   it('Recall offers several meetings via picker and drop, never a raw path', () => {
     expect(recall).toMatch(/Import meetings/)
-    expect(recall).toMatch(/importAudioStartBatch/)
-    expect(recall).toMatch(/importAudioDrop/)
     expect(recall).toMatch(/onDrop/)
-    expect(recall).toMatch(/<ImportQueue/)
-    expect(recall).not.toMatch(/webUtils\.getPathForFile/)
-    expect(recall).not.toMatch(/file\.path/)
+    expect(recall).toMatch(/<ImportQueueSection/)
+    expect(queueActions).toMatch(/importAudioStartBatch/)
+    expect(queueActions).toMatch(/importAudioDrop/)
+    expect(retentionPanel).toMatch(/resumeDisabled={policyBlocked}/)
+    expect(`${recall}\n${queueActions}\n${retentionPanel}`).not.toMatch(/webUtils\.getPathForFile/)
+    expect(`${recall}\n${queueActions}\n${retentionPanel}`).not.toMatch(/file\.path/)
   })
 })

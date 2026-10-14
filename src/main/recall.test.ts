@@ -555,6 +555,33 @@ describe('recall — updateMeetingRecap', () => {
     }
   })
 
+  it('refuses a recap replace when the final writer admission callback rejects it', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const original = readFileSync(file, 'utf8')
+    const refusal = new Error('held import')
+    const beforeReplace = vi.fn(() => {
+      throw refusal
+    })
+
+    await expect(
+      updateMeetingRecap(testSettings, file, 'A replacement recap.', 'complete', beforeReplace)
+    ).rejects.toBe(refusal)
+    expect(beforeReplace).toHaveBeenCalledTimes(1)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+  })
+
+  it.each([null, undefined])('preserves a falsy final writer refusal (%s)', async (refusal) => {
+    const file = await saveMeeting(testSettings, meeting)
+    const original = readFileSync(file, 'utf8')
+
+    await expect(
+      updateMeetingRecap(testSettings, file, 'A replacement recap.', 'complete', () => {
+        throw refusal
+      })
+    ).rejects.toBe(refusal)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+  })
+
   it('preserves a transcript recap that uses a Retention heading', async () => {
     const recap =
       '## Retention\n\nKeep the approved decision record for two years.\n\n## Action items:\n- Confirm policy owner'

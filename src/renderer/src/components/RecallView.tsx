@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search,
   FolderOpen,
@@ -23,22 +23,14 @@ import { beginHistoryRequest, type HistoryRequest } from '../lib/history-trace'
 import { brainStatusError, brainStatusIsWorking } from './brain-status-refresh'
 import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
-import { ImportQueue } from './ImportQueue'
+import { ImportQueueSection } from './ImportQueueSection'
 import { UpcomingSection } from './UpcomingSection'
-import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
+import { useImportQueue } from './useImportQueue'
 import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from './history/RowStatusChip'
 import { openOnRow, type RowHydration } from './history/hydration'
 import { DegradedBanner } from './history/DegradedBanner'
 import { armSlowNotice, degradedBanner, listBody, nextListPhase, type ListPhase } from './history/list-status'
-import type {
-  MeetingSummary,
-  RecallHit,
-  GraphStatus,
-  GraphRelated,
-  ImportAudioPickResult,
-  ImportAssetsProgress,
-  ImportJobView
-} from '@shared/ipc'
+import type { MeetingSummary, RecallHit, GraphStatus, GraphRelated } from '@shared/ipc'
 
 // ---------------------------------------------------------------------------
 // Helpers duplicated from Review.tsx — DO NOT edit Review.tsx; it owns these.
@@ -76,9 +68,7 @@ export function localDateKey(dateStr: string): string {
 }
 
 /** Group meetings by their LOCAL calendar day. Exported for unit testing. */
-export function groupByLocalDate(
-  meetings: (MeetingSummary | RecallHit)[]
-): [string, (MeetingSummary | RecallHit)[]][] {
+export function groupByLocalDate(meetings: (MeetingSummary | RecallHit)[]): [string, (MeetingSummary | RecallHit)[]][] {
   const map = new Map<string, (MeetingSummary | RecallHit)[]>()
   for (const m of meetings) {
     const d = localDateKey(m.date)
@@ -178,12 +168,15 @@ function GraphBar({
   const preparing = !!brain?.backfill?.preparing
   const brainWorking = brainStatusIsWorking(brain) || busy
   useEffect(() => {
-    const iv = setInterval(() => {
-      void window.toto
-        .brainStatus()
-        .then(applyStatus)
-        .catch(() => setStatusError(INTELLIGENCE_STATUS_UNAVAILABLE))
-    }, brainWorking ? 1000 : 5000)
+    const iv = setInterval(
+      () => {
+        void window.toto
+          .brainStatus()
+          .then(applyStatus)
+          .catch(() => setStatusError(INTELLIGENCE_STATUS_UNAVAILABLE))
+      },
+      brainWorking ? 1000 : 5000
+    )
     return () => clearInterval(iv)
   }, [brainWorking])
 
@@ -241,8 +234,8 @@ function GraphBar({
               </span>
             ) : brain && brain.meetings > 0 ? (
               <>
-                Intelligence · {countLabel(brain.meetings, 'meeting')} · {countLabel(brain.people, 'person', 'people')} ·{' '}
-                {countLabel(brain.accounts, 'account')}
+                Intelligence · {countLabel(brain.meetings, 'meeting')} · {countLabel(brain.people, 'person', 'people')}{' '}
+                · {countLabel(brain.accounts, 'account')}
                 {brain.deals > 0 ? ` · ${countLabel(brain.deals, 'deal')}` : ''}
               </>
             ) : (
@@ -288,13 +281,7 @@ function GraphBar({
 // Inline connections panel — unchanged from original
 // ---------------------------------------------------------------------------
 
-function Related({
-  file,
-  onOpen
-}: {
-  file: string
-  onOpen: (file: string) => void
-}): JSX.Element {
+function Related({ file, onOpen }: { file: string; onOpen: (file: string) => void }): JSX.Element {
   const [data, setData] = useState<GraphRelated | null>(null)
   useEffect(() => {
     let alive = true
@@ -307,24 +294,11 @@ function Related({
     }
   }, [file])
 
-  if (!data)
-    return (
-      <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">
-        Loading connections…
-      </div>
-    )
+  if (!data) return <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">Loading connections…</div>
   if (!data.ok)
-    return (
-      <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">
-        {data.error || 'No graph yet.'}
-      </div>
-    )
+    return <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">{data.error || 'No graph yet.'}</div>
   if (data.topics.length === 0 && data.notes.length === 0)
-    return (
-      <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">
-        No connections found yet.
-      </div>
-    )
+    return <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">No connections found yet.</div>
 
   return (
     <div className="flex flex-col gap-1.5 px-2 py-1.5">
@@ -349,9 +323,7 @@ function Related({
         >
           <span className="truncate text-[12px] text-[color:var(--color-ink)]">{n.title}</span>
           {n.via.length > 0 && (
-            <span className="truncate text-[10px] text-[color:var(--color-ink-3)]">
-              via {n.via.join(', ')}
-            </span>
+            <span className="truncate text-[10px] text-[color:var(--color-ink-3)]">via {n.via.join(', ')}</span>
           )}
         </button>
       ))}
@@ -531,9 +503,7 @@ export const MeetingRow = memo(function MeetingRow({
                     {m.durationMin > 0 ? formatDurationMin(m.durationMin) : '<1m'}
                   </span>
                 )}
-                <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">
-                  {meetingTime(m.date)}
-                </span>
+                <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">{meetingTime(m.date)}</span>
               </div>
             </button>
 
@@ -595,9 +565,7 @@ export const MeetingRow = memo(function MeetingRow({
 
       {/* Search snippet (RecallHit only) */}
       {hit?.snippet && (
-        <div className="line-clamp-2 px-7 pb-1 text-[11px] text-[color:var(--color-ink-2)]">
-          …{hit.snippet}…
-        </div>
+        <div className="line-clamp-2 px-7 pb-1 text-[11px] text-[color:var(--color-ink-2)]">…{hit.snippet}…</div>
       )}
 
       {/* Topic chips — up to 3, derived from the recap's "## Tags" section (see saveMeeting). */}
@@ -707,11 +675,6 @@ export function RecallView({
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
    *  keyboard user's focus doesn't fall through to <body> when the focused Delete button is removed. */
   const listRef = useRef<HTMLDivElement>(null)
-  /** Main-owned jobs survive navigation and overlay closure; this component only renders their live state. */
-  const [importJobs, setImportJobs] = useState<ImportJobView[]>([])
-  const [importError, setImportError] = useState<string | null>(null)
-  const [importAssets, setImportAssets] = useState<ImportAssetsProgress | null>(null)
-  const [importDragOver, setImportDragOver] = useState(false)
   /** T6 6d: per-meeting Mantu Intelligence status feed — indexed/failed filename sets plus whether a
    *  backfill is currently requested, everything meetingIndexStatus needs for the row dot. A separate
    *  poll from GraphBar's own brainStatus fetch below (that bar's busy/error/backfill-run state is local
@@ -767,49 +730,53 @@ export function RecallView({
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
   // register?" two-click pattern), then removes the .md + its index row.
-  const onTrash = useCallback(async (file: string, title: string): Promise<void> => {
-    setDeletingFiles((s) => (s.has(file) ? s : new Set(s).add(file)))
-    const r = await window.toto
-      .recallDelete(file, title)
-      .catch((e): { ok: boolean; error?: string } => ({
+  const onTrash = useCallback(
+    async (file: string, title: string): Promise<void> => {
+      setDeletingFiles((s) => (s.has(file) ? s : new Set(s).add(file)))
+      const r = await window.toto.recallDelete(file, title).catch((e): { ok: boolean; error?: string } => ({
         ok: false,
         error: e instanceof Error ? e.message : String(e)
       }))
-    setDeletingFiles((s) => {
-      if (!s.has(file)) return s
-      const next = new Set(s)
-      next.delete(file)
-      return next
-    })
-    if (r.ok) {
-      listRef.current?.focus()
-      setItems((xs) => xs.filter((x) => x.file !== file))
-      setSelectedFile((s) => (s === file ? null : s))
-      setOpen((o) => (o === file ? null : o))
-    } else if (r.error !== 'cancelled') {
-      flagRowError(file, r.error || 'Could not delete meeting.')
-    }
-  }, [flagRowError])
+      setDeletingFiles((s) => {
+        if (!s.has(file)) return s
+        const next = new Set(s)
+        next.delete(file)
+        return next
+      })
+      if (r.ok) {
+        listRef.current?.focus()
+        setItems((xs) => xs.filter((x) => x.file !== file))
+        setSelectedFile((s) => (s === file ? null : s))
+        setOpen((o) => (o === file ? null : o))
+      } else if (r.error !== 'cancelled') {
+        flagRowError(file, r.error || 'Could not delete meeting.')
+      }
+    },
+    [flagRowError]
+  )
   // Fire-and-forget wrapper matching MeetingRow's sync onTrash prop — kept stable via useCallback so the
   // memoized row doesn't re-render just because this component re-rendered.
-  const trashMeeting = useCallback((file: string, title: string): void => {
-    void onTrash(file, title)
-  }, [onTrash])
+  const trashMeeting = useCallback(
+    (file: string, title: string): void => {
+      void onTrash(file, title)
+    },
+    [onTrash]
+  )
   // Export a decrypted .md copy: the save dialog in main IS the interaction — only a real failure needs
   // inline surfacing here (a cancelled dialog is a non-event, same contract as recallDelete's confirm).
-  const exportMeeting = useCallback((file: string): void => {
-    void window.toto
-      .recallExportPlain(file)
-      .then((r) => {
-        if (!r.ok && !r.cancelled) flagRowError(file, r.error || 'Could not export the meeting.')
-      })
-      .catch((e) => flagRowError(file, e instanceof Error ? e.message : String(e)))
-  }, [flagRowError])
-  const selectFile = useCallback((file: string): void => setSelectedFile(file), [])
-  const toggleConnections = useCallback(
-    (file: string): void => setOpen((o) => (o === file ? null : file)),
-    []
+  const exportMeeting = useCallback(
+    (file: string): void => {
+      void window.toto
+        .recallExportPlain(file)
+        .then((r) => {
+          if (!r.ok && !r.cancelled) flagRowError(file, r.error || 'Could not export the meeting.')
+        })
+        .catch((e) => flagRowError(file, e instanceof Error ? e.message : String(e)))
+    },
+    [flagRowError]
   )
+  const selectFile = useCallback((file: string): void => setSelectedFile(file), [])
+  const toggleConnections = useCallback((file: string): void => setOpen((o) => (o === file ? null : file)), [])
 
   // Rename: fix an auto-generated title after the fact. Opens an inline input pre-filled with the
   // current title; Enter/blur commits, Escape cancels (mirrors Settings.tsx's mode-rename idiom).
@@ -818,12 +785,15 @@ export function RecallView({
   // reference for these props, so a keystroke in one row's rename input only re-renders that row (the
   // memoized rows compare props shallowly; a changing callback identity would defeat that for all of them).
   const editingRef = useRef<{ file: string | null; value: string }>({ file: null, value: '' })
-  const startEdit = useCallback((file: string, title: string): void => {
-    editingRef.current = { file, value: title }
-    setEditingFile(file)
-    setEditingValue(title)
-    clearRowError(file)
-  }, [clearRowError])
+  const startEdit = useCallback(
+    (file: string, title: string): void => {
+      editingRef.current = { file, value: title }
+      setEditingFile(file)
+      setEditingValue(title)
+      clearRowError(file)
+    },
+    [clearRowError]
+  )
   const changeEditValue = useCallback((value: string): void => {
     editingRef.current.value = value
     setEditingValue(value)
@@ -888,117 +858,23 @@ export function RecallView({
   }, [])
   const hydrations = useRecallHydration(refreshList) // a finished download re-lists, so its row shows the meeting
 
-  const upsertImportJob = useCallback((job: ImportJobView): void => {
-    setImportJobs((jobs) => [job, ...jobs.filter((existing) => existing.jobId !== job.jobId)])
-  }, [])
-
-  useEffect(() => {
-    let stale = false
-    window.toto.importJobsList().then((jobs) => {
-      if (!stale) setImportJobs(jobs)
-    }).catch(() => {})
-    const unsub = window.toto.onImportAudioProgress(({ job }) => {
-      if (stale) return
-      upsertImportJob(job)
-      if (job.state === 'done') refreshList()
-    })
-    const unsubAssets = window.toto.onImportAssetsProgress((progress) => {
-      if (!stale) setImportAssets(progress)
-    })
-    return () => {
-      stale = true
-      unsub()
-      unsubAssets()
-    }
-  }, [refreshList, upsertImportJob])
-
-  const startPickedImports = useCallback(
-    async (picked: ImportAudioPickResult): Promise<void> => {
-      const files = pickedFiles(picked)
-      const skip = skippedImportMessage(picked)
-      if (skip) setImportError(skip)
-      if (!files.length) {
-        if (!skip) setImportError(picked.error || 'Could not prepare the selected recordings.')
-        return
-      }
-      try {
-        const started = await window.toto.importAudioStartBatch(files.map((file) => file.token))
-        for (const job of started) upsertImportJob(job)
-      } catch (e) {
-        setImportError(e instanceof Error ? e.message : 'Could not start the imports.')
-      }
-    },
-    [upsertImportJob]
-  )
-
-  // Pick only creates single-use capabilities. The main process owns decoding, transcription,
-  // checkpointing, saving, and recap generation after this call returns.
-  const importAudio = useCallback(async (): Promise<void> => {
-    setImportError(null)
-    let picked: ImportAudioPickResult
-    try {
-      picked = await window.toto.importAudioPick()
-    } catch (e) {
-      setImportError(e instanceof Error ? e.message : 'Could not open the file picker.')
-      return
-    }
-    if (picked.cancelled) return
-    await startPickedImports(picked)
-  }, [startPickedImports])
-
-  const onImportDragOver = useCallback((e: DragEvent): void => {
-    if (![...e.dataTransfer.types].includes('Files')) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-    setImportDragOver(true)
-  }, [])
-
-  const onImportDragLeave = useCallback((e: DragEvent): void => {
-    if (e.currentTarget.contains(e.relatedTarget as Node)) return
-    setImportDragOver(false)
-  }, [])
-
-  const onImportDrop = useCallback(
-    async (e: DragEvent): Promise<void> => {
-      e.preventDefault()
-      setImportDragOver(false)
-      const files = [...e.dataTransfer.files].filter(isImportDropFile)
-      if (!files.length) {
-        setImportError('Drop audio or video recordings to import them.')
-        return
-      }
-      setImportError(null)
-      try {
-        await startPickedImports(await window.toto.importAudioDrop(files))
-      } catch (err) {
-        setImportError(err instanceof Error ? err.message : 'Could not import the dropped recordings.')
-      }
-    },
-    [startPickedImports]
-  )
-
-  const cancelImport = useCallback((jobId: string): void => {
-    void window.toto.importJobCancel(jobId).catch((error) => {
-      setImportError(error instanceof Error ? error.message : 'Could not cancel the import.')
-    })
-  }, [])
-
-  const resumeImport = useCallback((jobId: string): void => {
-    void window.toto.importJobResume(jobId).then(upsertImportJob).catch((error) => {
-      setImportError(error instanceof Error ? error.message : 'Could not resume the import.')
-    })
-  }, [upsertImportJob])
-
-  // Permanently dismisses a failed import. Unlike cancel/resume, there is no further job state to push
-  // back from main (the job is gone), so this is the one action here that updates `importJobs` itself
-  // instead of waiting on onImportAudioProgress.
-  const dismissImport = useCallback((jobId: string): void => {
-    void window.toto.importJobRemove(jobId).then(() => {
-      setImportJobs((jobs) => jobs.filter((job) => job.jobId !== jobId))
-    }).catch((error) => {
-      setImportError(error instanceof Error ? error.message : 'Could not dismiss the import.')
-    })
-  }, [])
+  const {
+    jobs: importJobs,
+    policyBlocked: importPolicyBlocked,
+    policyHeldJobIds: policyHeldImportIds,
+    inventoryOverflow: importInventoryOverflow,
+    policyHoldOverflow,
+    error: importError,
+    assets: importAssets,
+    dragOver: importDragOver,
+    importAudio,
+    onDragOver: onImportDragOver,
+    onDragLeave: onImportDragLeave,
+    onDrop: onImportDrop,
+    cancel: cancelImport,
+    resume: resumeImport,
+    dismiss: dismissImport
+  } = useImportQueue(refreshList)
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -1158,16 +1034,25 @@ export function RecallView({
         <TextButton
           icon={Upload}
           onClick={() => void importAudio()}
-          title="Import one or more recordings. They keep processing in the background while you navigate."
+          disabled={importPolicyBlocked}
+          title={
+            importPolicyBlocked
+              ? 'Your organization’s summary-only policy prevents recording import.'
+              : 'Import one or more recordings. They keep processing in the background while you navigate.'
+          }
         >
           Import meetings
         </TextButton>
       </div>
-      <ImportQueue
+      <ImportQueueSection
         jobs={importJobs}
+        policyBlocked={importPolicyBlocked}
+        policyHeldJobIds={policyHeldImportIds}
+        inventoryOverflow={importInventoryOverflow}
+        policyHoldOverflow={policyHoldOverflow}
+        error={importError}
         assets={importAssets}
         dragOver={importDragOver}
-        error={importError}
         onCancel={cancelImport}
         onResume={resumeImport}
         onDismiss={dismissImport}
@@ -1192,18 +1077,14 @@ export function RecallView({
           </div>
         ) : body === 'blank' ? null : body === 'empty' ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
-            {q.trim()
-              ? 'No matching meetings.'
-              : 'No meetings saved yet. Finish one with End & review.'}
+            {q.trim() ? 'No matching meetings.' : 'No meetings saved yet. Finish one with End & review.'}
           </div>
         ) : (
           <>
             {groups.map(([date, meetingsForDate]) => (
               <div key={date}>
                 {/* Date group header */}
-                <div className="cl-eyebrow px-1 pb-1 pt-2 text-[color:var(--color-ink-3)]">
-                  {friendlyDate(date)}
-                </div>
+                <div className="cl-eyebrow px-1 pb-1 pt-2 text-[color:var(--color-ink-3)]">{friendlyDate(date)}</div>
 
                 {meetingsForDate.map((m) => (
                   <MeetingRow
@@ -1252,9 +1133,13 @@ export function RecallView({
         <div className="flex items-center gap-1.5">
           <TextButton onClick={openSelected} disabled={items.length === 0}>
             Open
-            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">{accelLabel('Return')}</kbd>
+            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
+              {accelLabel('Return')}
+            </kbd>
           </TextButton>
-          <TextButton icon={FolderOpen} onClick={onOpenFolder}>Open folder</TextButton>
+          <TextButton icon={FolderOpen} onClick={onOpenFolder}>
+            Open folder
+          </TextButton>
           {onIntelligence && (
             <button
               type="button"
@@ -1270,7 +1155,9 @@ export function RecallView({
         {onNewChat && (
           <TextButton onClick={onNewChat}>
             New chat
-            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">{accelLabel('CommandOrControl+R')}</kbd>
+            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
+              {accelLabel('CommandOrControl+R')}
+            </kbd>
           </TextButton>
         )}
       </div>
