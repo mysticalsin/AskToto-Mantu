@@ -1,0 +1,194 @@
+name: Speech foundation validation
+
+on:
+  push:
+    paths:
+      - .github/workflows/speech-foundations.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - operator/vitest.config.ts
+      - src/shared/contracts/speech/**
+      - src/shared/contracts/capability/**
+      - src/main/features/components/speech-pack/**
+      - operator/src/speech/**
+      - operator/src/routes/speech-session.ts
+      - operator/src/routes/speech-session.test.ts
+      - operator/src/migrate.contract.test.ts
+      - operator/scripts/migrate-runner.contract.test.ts
+      - operator/schema.sql
+      - operator/schema-alter.sql
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-foundations-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shared-speech:
+    name: Shared speech contracts and pack (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the shared speech contract and speech-pack tests
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-foundations-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })"
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
+            src/shared/contracts/speech/speech.contract.test.ts \
+            src/shared/contracts/capability/capability.contract.test.ts \
+            src/main/features/components/speech-pack/engine.test.ts \
+            src/main/features/components/speech-pack/download.test.ts \
+            src/main/features/components/speech-pack/manifest.test.ts \
+            src/main/features/components/speech-pack/isolation.contract.test.ts \
+            src/main/features/components/speech-pack/flag.test.ts
+      - name: Verify and summarize the actual shared test report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/speech-foundations-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const reportPath = process.env.REPORT
+          if (!fs.existsSync(reportPath)) {
+            console.error('Speech foundation Vitest report is missing.')
+            process.exit(1)
+          }
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+          const passed = report.numPassedTests
+          const failed = report.numFailedTests
+          const pending = report.numPendingTests ?? 0
+          const todo = report.numTodoTests ?? 0
+          const skipped = pending + todo
+          const total = report.numTotalTests
+          const counts = [total, passed, failed, pending, todo]
+          const results = report.testResults ?? []
+          const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
+          const required = [
+            'src/shared/contracts/speech/speech.contract.test.ts',
+            'src/shared/contracts/capability/capability.contract.test.ts',
+            'src/main/features/components/speech-pack/engine.test.ts',
+            'src/main/features/components/speech-pack/download.test.ts',
+            'src/main/features/components/speech-pack/manifest.test.ts',
+            'src/main/features/components/speech-pack/isolation.contract.test.ts',
+            'src/main/features/components/speech-pack/flag.test.ts'
+          ]
+          const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
+          console.log(`Shared speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}`)
+          if (!counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
+              results.length !== required.length || missing.length > 0 || total < 1 ||
+              total !== passed + failed + skipped || failed > 0 || skipped > 0) {
+            console.error('Shared speech test report is incomplete or contains failures/skips.')
+            process.exit(1)
+          }
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: speech-foundations-shared-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speech-foundations-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  operator-speech:
+    name: Operator speech broker contracts and migrations (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the scoped Operator speech and migration tests
+        working-directory: operator
+        env:
+          METIS_CI_OPERATOR_REPORT: ${{ runner.temp }}/speech-foundations-operator-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_OPERATOR_REPORT, { force: true })"
+          node ../node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
+            --reporter=json \
+            --outputFile="$METIS_CI_OPERATOR_REPORT" \
+            src/speech/grants.test.ts \
+            src/speech/policy.test.ts \
+            src/speech/contracts.test.ts \
+            src/routes/speech-session.test.ts \
+            src/migrate.contract.test.ts \
+            scripts/migrate-runner.contract.test.ts
+      - name: Verify and summarize the actual Operator test report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/speech-foundations-operator-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const reportPath = process.env.REPORT
+          if (!fs.existsSync(reportPath)) {
+            console.error('Operator speech Vitest report is missing.')
+            process.exit(1)
+          }
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+          const passed = report.numPassedTests
+          const failed = report.numFailedTests
+          const pending = report.numPendingTests ?? 0
+          const todo = report.numTodoTests ?? 0
+          const skipped = pending + todo
+          const total = report.numTotalTests
+          const counts = [total, passed, failed, pending, todo]
+          const results = report.testResults ?? []
+          const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
+          const required = [
+            'src/speech/grants.test.ts',
+            'src/speech/policy.test.ts',
+            'src/speech/contracts.test.ts',
+            'src/routes/speech-session.test.ts',
+            'src/migrate.contract.test.ts',
+            'scripts/migrate-runner.contract.test.ts'
+          ]
+          const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
+          console.log(`Operator speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}`)
+          if (!counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
+              results.length !== required.length || missing.length > 0 || total < 1 ||
+              total !== passed + failed + skipped || failed > 0 || skipped > 0) {
+            console.error('Operator speech test report is incomplete or contains failures/skips.')
+            process.exit(1)
+          }
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: speech-foundations-operator-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speech-foundations-operator-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          if-no-files-found: error
+          retention-days: 14
