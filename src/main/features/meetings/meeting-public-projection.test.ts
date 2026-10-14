@@ -25,10 +25,16 @@ function authority(overrides: Partial<MeetingProjectionAuthority> = {}): Meeting
 }
 
 function fakeGateway(
-  options: { fileClass?: FileClass; streamResult?: StorageStreamResult; source?: Uint8Array } = {}
+  options: {
+    fileClass?: FileClass
+    streamResult?: StorageStreamResult
+    source?: Uint8Array
+    streamVersion?: typeof version
+  } = {}
 ): StorageGateway {
   const source = options.source ?? new TextEncoder().encode('ordinary md')
   const sourceVersion = { ...version, size: source.byteLength }
+  const streamedVersion = options.streamVersion ?? sourceVersion
   return {
     list: async () => ({ status: 'unavailable', code: 'NOT_USED' }),
     classify: async (paths) =>
@@ -42,7 +48,7 @@ function fakeGateway(
       }
       return {
         status: 'ok',
-        version: sourceVersion,
+        version: streamedVersion,
         bytesRead: source.byteLength,
         chunksRead: Math.ceil(source.byteLength / streamLimits.maxChunkBytes)
       }
@@ -57,11 +63,18 @@ function reader(
     streamResult?: StorageStreamResult
     current?: () => boolean
     rootIdentity?: string
+    streamVersion?: typeof version
+    publicLimit?: number
   } = {}
 ) {
   const gateway = fakeGateway(options)
   const readAuthority = () =>
-    options.current?.() === false ? undefined : authority({ rootIdentity: options.rootIdentity })
+    options.current?.() === false
+      ? undefined
+      : authority({
+          rootIdentity: options.rootIdentity,
+          limits: { ...limits, maxPublicBytes: options.publicLimit ?? limits.maxPublicBytes }
+        })
   return createMeetingPublicProjectionReader({
     readAuthority: (token) => (token === owner ? readAuthority() : undefined),
     gatewayForRoot: () => gateway
@@ -85,7 +98,7 @@ describe('owned meeting public projection reader', () => {
       ok: true,
       metadata: {
         logicalPath: candidate.logicalPath,
-        sourceKind: 'meeting',
+        sourceKind: 'ordinary',
         sourceVersion: version,
         confidentialDisposition: 'clear',
         sourceBytes: 11,
@@ -96,17 +109,17 @@ describe('owned meeting public projection reader', () => {
     expect(new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))))).toBe('ordinary md')
   })
 
-  it('rejects unsafe paths, duplicate source identities, and stale classifications', async () => {
+  it('rejects unsafe paths, duplicate source identities, and unavailable classifications', async () => {
     const service = reader({ fileClass: { status: 'dataless', version } })
     expect(await service.admit(owner, [{ ...candidate, logicalPath: '../private.md' }])).toEqual({
       ok: false,
       reason: 'UNAVAILABLE'
     })
     expect(await service.admit(owner, [candidate, candidate])).toEqual({ ok: false, reason: 'UNAVAILABLE' })
-    expect(await service.admit(owner, [candidate])).toEqual({ ok: false, reason: 'SOURCE_CHANGED' })
+    expect(await service.admit(owner, [candidate])).toEqual({ ok: false, reason: 'UNAVAILABLE' })
   })
 
-  it('emits no bytes after owner revocation or a post-admission source-version change', async () => {
+  it('emits no bytes after owner revocation', async () => {
     let current = true
     const service = reader({ current: () => current })
     const admitted = await service.admit(owner, [candidate])
@@ -119,6 +132,26 @@ describe('owned meeting public projection reader', () => {
       reason: 'STALE_OWNER'
     })
     expect(chunks).toEqual([])
+  })
+
+  it('refuses output when the streamed source version changed after admission', async () => {
+    const service = reader({ streamVersion: { ...version, mtimeMs: version.mtimeMs + 1 } })
+    const admitted = await service.admit(owner, [candidate])
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    const sink = vi.fn()
+    expect(await service.project(owner, admitted.handles[0], sink)).toEqual({ ok: false, reason: 'SOURCE_CHANGED' })
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('applies the admitted public byte budget before any sink output', async () => {
+    const service = reader({ publicLimit: 5 })
+    const admitted = await service.admit(owner, [candidate])
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    const sink = vi.fn()
+    expect(await service.project(owner, admitted.handles[0], sink)).toEqual({ ok: false, reason: 'LIMIT' })
+    expect(sink).not.toHaveBeenCalled()
   })
 
   it('returns confidential disposition without invoking the staged sink', async () => {
