@@ -93,7 +93,12 @@ describe('speech-pack desktop lifecycle', () => {
 
   it('holds repeated quit requests until service shutdown settles', async () => {
     let finish: () => void = () => {}
-    mocks.service.shutdown.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    mocks.service.shutdown.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        })
+    )
     const desktop = startSpeechPackDesktop(options())
     const event = { preventDefault: vi.fn() }
     const quit = vi.fn()
@@ -107,5 +112,16 @@ describe('speech-pack desktop lifecycle', () => {
     event.preventDefault.mockClear()
     desktop.beforeQuit(event, quit)
     expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('preserves the existing meeting flush window even when model shutdown finishes immediately', async () => {
+    vi.useFakeTimers()
+    const desktop = startSpeechPackDesktop(options())
+    const quit = vi.fn()
+    desktop.beforeQuit({ preventDefault: vi.fn() }, quit, true)
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(quit).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(quit).toHaveBeenCalledOnce()
   })
 })
