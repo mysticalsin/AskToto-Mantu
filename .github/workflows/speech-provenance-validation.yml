@@ -57,7 +57,8 @@ jobs:
           node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
             src/main/transcripts.speech-provenance.test.ts \
             src/main/features/meetings/speech-provenance.test.ts \
-            src/main/transcripts.speech-resources.test.ts
+            src/main/transcripts.speech-resources.test.ts \
+            src/main/transcripts.test.ts
       - name: Verify actual nonempty test results
         env:
           METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
@@ -65,7 +66,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs'
           const report = JSON.parse(readFileSync(process.env.METIS_CI_ROOT_REPORT, 'utf8'))
-          const required = ['src/main/transcripts.speech-provenance.test.ts', 'src/main/features/meetings/speech-provenance.test.ts', 'src/main/transcripts.speech-resources.test.ts']
+          const required = ['src/main/transcripts.speech-provenance.test.ts', 'src/main/features/meetings/speech-provenance.test.ts', 'src/main/transcripts.speech-resources.test.ts', 'src/main/transcripts.test.ts']
           const counts = [
             'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests',
             'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites'
