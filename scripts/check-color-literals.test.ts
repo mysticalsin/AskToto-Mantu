@@ -15,7 +15,10 @@ import { readAppCss } from './lib/read-app-css.mjs'
 const rendererSrc = resolve(__dirname, '../src/renderer/src')
 const stylesDir = join(rendererSrc, 'styles')
 const entry = readFileSync(join(rendererSrc, 'styles.css'), 'utf8')
-const baseline = JSON.parse(readFileSync(join(__dirname, 'color-literal-baseline.json'), 'utf8')) as Record<string, number>
+const baseline = JSON.parse(readFileSync(join(__dirname, 'color-literal-baseline.json'), 'utf8')) as Record<
+  string,
+  number
+>
 
 describe('colour literal ratchet', () => {
   it('counts lines that carry a hex colour literal', () => {
@@ -24,7 +27,9 @@ describe('colour literal ratchet', () => {
   })
 
   it('finds design-token declarations but not their uses', () => {
-    expect(tokenDeclarationLines('.a {\n  --color-x: red;\n  color: var(--color-x);\n  --orb-size: 4px;\n}')).toEqual([2])
+    expect(tokenDeclarationLines('.a {\n  --color-x: red;\n  color: var(--color-x);\n  --orb-size: 4px;\n}')).toEqual([
+      2
+    ])
   })
 
   it('rejects a new hex literal, a token declared outside tokens.css and a stale baseline', () => {
@@ -40,9 +45,14 @@ describe('colour literal ratchet', () => {
         'src/renderer/src/styles/a.css': 1
       })
     ).toEqual([expect.stringContaining('lower it')])
-    expect(findViolations([], { 'src/renderer/src/gone.css': 1 })).toEqual([expect.stringContaining('no longer exists')])
+    expect(findViolations([], { 'src/renderer/src/gone.css': 1 })).toEqual([
+      expect.stringContaining('no longer exists')
+    ])
     expect(
-      findViolations([css('src/renderer/src/styles/big.css', `${'a { top: 0; }\n'.repeat(MAX_STYLESHEET_LINES + 1)}`)], {})
+      findViolations(
+        [css('src/renderer/src/styles/big.css', `${'a { top: 0; }\n'.repeat(MAX_STYLESHEET_LINES + 1)}`)],
+        {}
+      )
     ).toEqual([expect.stringContaining('stylesheet limit')])
   })
 
@@ -62,7 +72,11 @@ describe('styles.css split', () => {
     const local = [...entry.matchAll(/^@import '(\.[^']+)';$/gm)].map((m) => m[1])
     expect(local[0]).toBe('./tokens.css')
     expect(new Set(imports).size).toBe(imports.length)
-    expect([...imports].sort()).toEqual(readdirSync(stylesDir).map((name) => `styles/${name}`).sort())
+    expect([...imports].sort()).toEqual(
+      readdirSync(stylesDir)
+        .map((name) => `styles/${name}`)
+        .sort()
+    )
   })
 
   it('keeps every stylesheet within the line limit', () => {
@@ -193,10 +207,16 @@ describe('rendered parity with the pre-split stylesheet (Playwright Chromium)', 
   const git = (...args: string[]) =>
     execFileSync('git', args, { cwd: resolve(__dirname, '..'), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   const flatten = (css: string) =>
-    css.replace(/^@import .*$/gm, '').replace(/^@(source|custom-variant) .*$/gm, '').replace('@theme {', ':root {')
+    css
+      .replace(/^@import .*$/gm, '')
+      .replace(/^@(source|custom-variant) .*$/gm, '')
+      .replace('@theme {', ':root {')
 
   it('paints the same pixels as the pre-split stylesheet under dark and light emulation', async () => {
-    const splitCommit = git('log', '--diff-filter=A', '--format=%H', '--', 'src/renderer/src/tokens.css').trim().split('\n').pop()
+    const splitCommit = git('log', '--diff-filter=A', '--format=%H', '--', 'src/renderer/src/tokens.css')
+      .trim()
+      .split('\n')
+      .pop()
     expect(splitCommit, 'full git history is required to find the pre-split stylesheet').toBeTruthy()
     const before = flatten(git('show', `${splitCommit}^:src/renderer/src/styles.css`).replace(/\r\n/g, '\n'))
     const after = flatten(readAppCss())
