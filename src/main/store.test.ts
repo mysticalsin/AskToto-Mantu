@@ -129,6 +129,40 @@ describe('store', () => {
     vi.restoreAllMocks()
   })
 
+  it('rejects explicit malformed broker writes before changing persisted settings', () => {
+    setSettings({ askFollowUpMemory: true })
+    const path = join(userData, 'settings.json')
+    const before = readFileSync(path)
+    for (const brokerSpeech of [undefined, null, { transport: 'broker-v1', engine: 'soniox' },
+      { transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' }]) {
+      expect(() => setSettings({ askFollowUpMemory: false, brokerSpeech } as never)).toThrow('INVALID_PROFILE')
+      expect(readFileSync(path)).toEqual(before)
+      expect(getSettings().askFollowUpMemory).toBe(true)
+    }
+  })
+
+  it('keeps a bounded broker refusal through fallback and unrelated saves', () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({
+      provider: 'custom', customBaseUrl: 'http://unsafe.example.test',
+      brokerSpeech: { transport: 'broker-v1', engine: 'soniox', arbitrary: 'x'.repeat(8192) }
+    }))
+    const refusal = { transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' }
+    expect(getSettings().brokerSpeech).toEqual(refusal)
+    setSettings({ askFollowUpMemory: true })
+    expect(readPersisted(join(userData, 'settings.json')).brokerSpeech).toEqual(refusal)
+    expect(getSettings().brokerSpeech).toEqual(refusal)
+  })
+
+  it('keeps a managed locked broker refusal authoritative over valid user selection', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({
+      brokerSpeech: { transport: 'broker-v1', engine: 'unknown' }, lockedKeys: ['brokerSpeech']
+    }))
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({
+      brokerSpeech: { transport: 'broker-v1', engine: 'deepgram-nova3' }
+    }))
+    expect(getSettings().brokerSpeech).toEqual({ transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' })
+  })
+
   it('recordMeetingSummarized bumps the durable time-saved counters once per meeting', () => {
     expect(getSettings().usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })
 

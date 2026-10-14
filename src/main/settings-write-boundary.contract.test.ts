@@ -32,6 +32,12 @@ function strippedKeys(): string[] {
 }
 
 describe('settings:set — main-owned keys are not renderer-writable', () => {
+  it('rejects an explicit invalid broker profile before authentication or persistence effects', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.settingsSet')
+    const body = indexSrc.slice(start, indexSrc.indexOf('const p = patch ?? {}', start))
+    expect(body.indexOf('assertBrokerSpeechSettingsPatch(patch)')).toBeGreaterThan(body.indexOf('assertMainWindow(e)'))
+    expect(body.indexOf('assertBrokerSpeechSettingsPatch(patch)')).toBeLessThan(body.indexOf('if (!requireAuth())'))
+  })
   // M2-0429: the Screen Recording diagnosis reads this history to decide whether a capture may reach macOS.
   it('strips the Screen Recording permission history', () => {
     expect(strippedKeys()).toContain('permissionState')
