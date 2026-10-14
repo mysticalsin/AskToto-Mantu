@@ -1,4 +1,13 @@
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -206,6 +215,48 @@ describe('readManagedSpeechPolicy', () => {
       state: 'valid',
       providers: { state: 'absent' },
       egressAllowlist: []
+    })
+  })
+
+  it('awaits an asynchronous trusted byte read before validating the same admin file snapshot', async () => {
+    const { userPath, adminPath } = policyFiles()
+    const content = Buffer.from(JSON.stringify({ allowedProviders: ['deepgram-nova3'] }))
+    writeFileSync(adminPath, content)
+    let release: ((bytes: Uint8Array) => void) | undefined
+    const readTrustedAdminBytes = vi.fn(() => new Promise<Uint8Array>((resolve) => (release = resolve)))
+
+    const result = readManagedSpeechProviders(userPath, adminPath, readTrustedAdminBytes)
+    expect(readTrustedAdminBytes).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(readTrustedAdminBytes).toHaveBeenCalledWith(adminPath))
+    release?.(content)
+    await expect(result).resolves.toEqual({ state: 'valid', providers: ['deepgram-nova3'] })
+  })
+
+  it('refuses invalid UTF-8 bytes from an async trusted reader instead of decoding replacement text', async () => {
+    const { userPath, adminPath } = policyFiles()
+    const invalidUtf8 = Buffer.from([0x7b, 0xff, 0x7d])
+    writeFileSync(adminPath, invalidUtf8)
+
+    await expect(readManagedSpeechProviders(userPath, adminPath, async () => invalidUtf8)).resolves.toEqual({
+      state: 'invalid'
+    })
+  })
+
+  it('rejects an admin file that changes while the asynchronous trusted read is pending', async () => {
+    const { userPath, adminPath } = policyFiles()
+    const content = Buffer.from(JSON.stringify({ allowedProviders: ['deepgram-nova3'] }))
+    writeFileSync(adminPath, content)
+    const replacement = `${adminPath}.replacement`
+    const changed = Buffer.from(JSON.stringify({ allowedProviders: ['cloudflare-nova3'] }))
+    writeFileSync(replacement, changed)
+    const readTrustedAdminBytes = vi.fn(async () => {
+      unlinkSync(adminPath)
+      renameSync(replacement, adminPath)
+      return content
+    })
+
+    await expect(readManagedSpeechProviders(userPath, adminPath, readTrustedAdminBytes)).resolves.toEqual({
+      state: 'invalid'
     })
   })
 })

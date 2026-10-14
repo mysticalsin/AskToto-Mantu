@@ -37,7 +37,7 @@ const INVALID_POLICY: ParsedPolicy = {
   egressAllowlist: { state: 'invalid' }
 }
 
-export type ReadTrustedAdminBytes = (path: string) => Uint8Array | null
+export type ReadTrustedAdminBytes = (path: string) => Uint8Array | null | Promise<Uint8Array | null>
 
 function errorCode(error: unknown): string | null {
   if (!error || typeof error !== 'object' || !('code' in error)) return null
@@ -251,7 +251,7 @@ async function readEffectivePolicy(
 
   let trustedBytes: Uint8Array | null
   try {
-    trustedBytes = readTrustedAdminBytes(adminPolicyPath)
+    trustedBytes = await readTrustedAdminBytes(adminPolicyPath)
   } catch {
     return INVALID_POLICY
   }
