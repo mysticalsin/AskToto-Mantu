@@ -95,6 +95,22 @@ function preflight(
   }
 }
 
+/** Reapplies the worker's full one-record input budget to data crossing the receipt boundary. */
+export function fitsIncrementalMeetingRecordPreflight(
+  record: IncrementalMeetingRecord,
+  limits: SpeechProvenanceLimits,
+  maxInputBytes: number
+): boolean {
+  if (!validLimits(limits) || !Number.isSafeInteger(maxInputBytes) || maxInputBytes <= 0) return false
+  try {
+    preflight(record.line, limits)
+    preflight(record.identity, { ...limits, maxRecordBytes: maxInputBytes })
+    return (record.line.speech?.words?.length ?? 0) <= limits.maxWords
+  } catch {
+    return false
+  }
+}
+
 /** Worker-side canonicalization for one record; it never builds or returns a meeting-sized collection. */
 export function canonicalizeIncrementalMeetingRecord(
   input: unknown,

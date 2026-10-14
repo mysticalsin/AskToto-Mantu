@@ -87,37 +87,50 @@ function activeCheck(base: () => boolean, request: () => boolean): () => boolean
 export function createIncrementalMeetingJournalFileStorage(
   options: IncrementalMeetingJournalFileStorageOptions
 ): IncrementalMeetingJournalFileStorage | undefined {
+  const rootInput = options.root
+  const meetingId = options.meetingId
+  const isCurrent = options.isCurrent
+  const maxJournalBytes = options.maxJournalBytes
+  const maxPhysicalRecordBytes = options.maxPhysicalRecordBytes
+  const maxChunkBytes = options.maxChunkBytes
+  const maxPageRecords = options.maxPageRecords
+  const maxPageBytes = options.maxPageBytes
+  const gateway = options.gateway
+  const classify = gateway?.classify.bind(gateway)
+  const streamFile = gateway?.stream.bind(gateway)
+  const list = gateway?.list.bind(gateway)
   const key = exactKey(options.key)
-  const root = resolve(options.root)
+  const root = resolve(rootInput)
   if (
     !key ||
-    !UUID.test(options.meetingId) ||
-    !options.root ||
-    !options.isCurrent ||
-    !options.gateway ||
-    !Number.isSafeInteger(options.maxJournalBytes) ||
-    options.maxJournalBytes <= 0 ||
-    !Number.isSafeInteger(options.maxPhysicalRecordBytes) ||
-    options.maxPhysicalRecordBytes <= 0 ||
-    options.maxPhysicalRecordBytes > options.maxJournalBytes ||
-    !Number.isSafeInteger(options.maxChunkBytes) ||
-    options.maxChunkBytes <= 0 ||
-    options.maxChunkBytes > Math.min(options.maxJournalBytes, options.maxPhysicalRecordBytes) ||
-    !Number.isSafeInteger(options.maxPageRecords) ||
-    options.maxPageRecords <= 0 ||
-    !Number.isSafeInteger(options.maxPageBytes) ||
-    options.maxPageBytes <= 0 ||
-    options.maxPageBytes > options.maxJournalBytes
+    !UUID.test(meetingId) ||
+    !rootInput ||
+    typeof isCurrent !== 'function' ||
+    typeof classify !== 'function' ||
+    typeof streamFile !== 'function' ||
+    typeof list !== 'function' ||
+    !Number.isSafeInteger(maxJournalBytes) ||
+    maxJournalBytes <= 0 ||
+    !Number.isSafeInteger(maxPhysicalRecordBytes) ||
+    maxPhysicalRecordBytes <= 0 ||
+    maxPhysicalRecordBytes > maxJournalBytes ||
+    !Number.isSafeInteger(maxChunkBytes) ||
+    maxChunkBytes <= 0 ||
+    maxChunkBytes > Math.min(maxJournalBytes, maxPhysicalRecordBytes) ||
+    !Number.isSafeInteger(maxPageRecords) ||
+    maxPageRecords <= 0 ||
+    !Number.isSafeInteger(maxPageBytes) ||
+    maxPageBytes <= 0 ||
+    maxPageBytes > maxJournalBytes
   ) {
     key?.fill(0)
     return undefined
   }
-  const meetingId = options.meetingId
   const mutationKey = `${root}\0${meetingId}`
   const manifestName = 'manifest.v1'
   const manifestPath = join(root, manifestName)
   let disposed = false
-  const baseCurrent = (): boolean => !disposed && safeCurrent(options.isCurrent)
+  const baseCurrent = (): boolean => !disposed && safeCurrent(isCurrent)
   const recordName = (hash: string): string => `record-${hash}.v1`
   const identityIndexName = (hash: string): string => `identity-${hash}.v1`
   const indexName = (revision: number): string => `index-${String(revision).padStart(12, '0')}.v1`
@@ -127,7 +140,7 @@ export function createIncrementalMeetingJournalFileStorage(
     if (!baseCurrent() || !requestCurrent()) return { status: 'unavailable' }
     let classification: Awaited<ReturnType<StorageGateway['classify']>>
     try {
-      classification = await options.gateway.classify([name])
+      classification = await classify!([name])
     } catch {
       return { status: 'unavailable' }
     }
@@ -141,7 +154,7 @@ export function createIncrementalMeetingJournalFileStorage(
     let collectedBytes = 0
     let stream: Awaited<ReturnType<StorageGateway['stream']>>
     try {
-      stream = await options.gateway.stream(
+      stream = await streamFile!(
         name,
         (chunk) => {
           if (!baseCurrent() || !requestCurrent()) throw new Error('STALE_OWNER')
@@ -152,7 +165,7 @@ export function createIncrementalMeetingJournalFileStorage(
           collectedBytes += length
           parts.push(owned)
         },
-        { maxBytes, maxChunkBytes: Math.min(options.maxChunkBytes, maxBytes) }
+        { maxBytes, maxChunkBytes: Math.min(maxChunkBytes, maxBytes) }
       )
     } catch {
       for (const part of parts) part.fill(0)
@@ -194,7 +207,7 @@ export function createIncrementalMeetingJournalFileStorage(
       bytes.fill(0)
       return false
     }
-    const chunkSize = Math.min(options.maxChunkBytes, maxBytes)
+    const chunkSize = Math.min(maxChunkBytes, maxBytes)
     async function* one(): AsyncGenerator<Uint8Array> {
       for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
         const chunk = ownedBytes(bytes.subarray(offset, Math.min(bytes.byteLength, offset + chunkSize)))
@@ -241,7 +254,7 @@ export function createIncrementalMeetingJournalFileStorage(
           return { status: 'ok', snapshot: snapshotFrom(current.core) }
         }
         if (current.status !== 'missing') return { status: 'unavailable' }
-        const entries = await options.gateway.list('.')
+        const entries = await list!('.')
         if (!baseCurrent() || entries.status !== 'ok' || entries.names.length !== 0) return { status: 'unavailable' }
         const core: ManifestCore = {
           version: 1,
@@ -257,7 +270,7 @@ export function createIncrementalMeetingJournalFileStorage(
           pending: null
         }
         const encoded = setManifestStoredBytes(core, 0, key!)
-        if (encoded.byteLength > options.maxJournalBytes) {
+        if (encoded.byteLength > maxJournalBytes) {
           encoded.fill(0)
           return { status: 'unavailable' }
         }
@@ -317,7 +330,7 @@ export function createIncrementalMeetingJournalFileStorage(
         read.bytes.fill(0)
         return { status: 'absent' }
       }
-      if (location.recordBytes > options.maxPhysicalRecordBytes) {
+      if (location.recordBytes > maxPhysicalRecordBytes) {
         read.bytes.fill(0)
         return { status: 'unavailable' }
       }
@@ -366,7 +379,7 @@ export function createIncrementalMeetingJournalFileStorage(
       }
       const hash = identityHash(request.identityKey, key!)
       if (
-        request.maxJournalBytes !== options.maxJournalBytes ||
+        request.maxJournalBytes !== maxJournalBytes ||
         !Number.isSafeInteger(request.expectedRevision) ||
         request.expectedRevision < 0 ||
         request.nextRevision !== request.expectedRevision + 1 ||
@@ -384,7 +397,7 @@ export function createIncrementalMeetingJournalFileStorage(
       if (
         !canonical ||
         request.receiptBinding.meetingId !== meetingId ||
-        request.receiptBinding.maxCanonicalBytes > options.maxJournalBytes ||
+        request.receiptBinding.maxCanonicalBytes > maxJournalBytes ||
         request.receiptBinding.isCurrent !== isCurrent ||
         canonical.identityKey !== request.identityKey ||
         canonical.sha256 !== request.sha256 ||
@@ -400,7 +413,7 @@ export function createIncrementalMeetingJournalFileStorage(
       }
       let encrypted: Buffer
       try {
-        encrypted = encodeRecord(request, canonical.canonicalBytes, key!, options.maxPhysicalRecordBytes)
+        encrypted = encodeRecord(request, canonical.canonicalBytes, key!, maxPhysicalRecordBytes)
       } catch {
         canonical.canonicalBytes.fill(0)
         oldManifestBytes.fill(0)
@@ -419,7 +432,7 @@ export function createIncrementalMeetingJournalFileStorage(
         key!
       )
       const identityIndexBuffer = Buffer.from(indexBuffer)
-      if (encrypted.byteLength > options.maxPhysicalRecordBytes) {
+      if (encrypted.byteLength > maxPhysicalRecordBytes) {
         encrypted.fill(0)
         indexBuffer.fill(0)
         identityIndexBuffer.fill(0)
@@ -496,7 +509,7 @@ export function createIncrementalMeetingJournalFileStorage(
 
       const pendingPath = recordName(hash)
       let recordExists = false
-      const classified = await options.gateway.classify([pendingPath])
+      const classified = await classify!([pendingPath])
       if (!requestCurrent()) {
         encrypted.fill(0)
         indexBuffer.fill(0)
@@ -517,7 +530,7 @@ export function createIncrementalMeetingJournalFileStorage(
           identityIndexBuffer.fill(0)
           return { status: 'unavailable' }
         }
-        const existing = await readBytes(pendingPath, options.maxPhysicalRecordBytes, requestCurrent)
+        const existing = await readBytes(pendingPath, maxPhysicalRecordBytes, requestCurrent)
         const oldRecord =
           existing.status === 'ok' ? decodeRecord(existing.bytes, key!, meetingId, hash, request.nextRevision) : null
         if (existing.status === 'ok') existing.bytes.fill(0)
@@ -541,7 +554,7 @@ export function createIncrementalMeetingJournalFileStorage(
         return { status: 'unavailable' }
       }
       if (!recordExists) {
-        const wrote = await writeAtomic(pendingPath, encrypted, requestCurrent, options.maxPhysicalRecordBytes)
+        const wrote = await writeAtomic(pendingPath, encrypted, requestCurrent, maxPhysicalRecordBytes)
         if (!wrote || !requestCurrent()) {
           indexBuffer.fill(0)
           identityIndexBuffer.fill(0)
@@ -550,7 +563,7 @@ export function createIncrementalMeetingJournalFileStorage(
       } else encrypted.fill(0)
 
       const indexPath = indexName(request.nextRevision)
-      const indexClass = (await options.gateway.classify([indexPath])).get(indexPath)
+      const indexClass = (await classify!([indexPath])).get(indexPath)
       if (!requestCurrent()) {
         indexBuffer.fill(0)
         identityIndexBuffer.fill(0)
@@ -591,7 +604,7 @@ export function createIncrementalMeetingJournalFileStorage(
       }
 
       const identityPath = identityIndexName(hash)
-      const identityClass = (await options.gateway.classify([identityPath])).get(identityPath)
+      const identityClass = (await classify!([identityPath])).get(identityPath)
       if (!requestCurrent()) {
         identityIndexBuffer.fill(0)
         return { status: 'stale-owner' }
@@ -665,12 +678,12 @@ export function createIncrementalMeetingJournalFileStorage(
       if (
         !Number.isSafeInteger(afterRevision) ||
         afterRevision < 0 ||
-        afterRevision > Number.MAX_SAFE_INTEGER - options.maxPageRecords ||
+        afterRevision > Number.MAX_SAFE_INTEGER - maxPageRecords ||
         !Number.isSafeInteger(expectedRevision) ||
         expectedRevision < afterRevision ||
         !Number.isSafeInteger(maxRecords) ||
         maxRecords <= 0 ||
-        maxRecords > options.maxPageRecords ||
+        maxRecords > maxPageRecords ||
         typeof sink !== 'function'
       )
         return { status: 'unavailable' }
@@ -691,8 +704,8 @@ export function createIncrementalMeetingJournalFileStorage(
         if (encodedIndex.status === 'ok') encodedIndex.bytes.fill(0)
         if (!index || !requestCurrent()) return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
         if (
-          index.recordBytes > options.maxPhysicalRecordBytes ||
-          pageBytes > options.maxPageBytes - indexByteLength - index.recordBytes
+          index.recordBytes > maxPhysicalRecordBytes ||
+          pageBytes > maxPageBytes - indexByteLength - index.recordBytes
         )
           return { status: 'unavailable' }
         const recordRead = await readBytes(recordName(index.identityHash), index.recordBytes, requestCurrent)
@@ -743,11 +756,11 @@ export function createIncrementalMeetingJournalFileStorage(
         bytes.fill(0)
         return 'stale-owner'
       }
-      if (core.storedBytes > options.maxJournalBytes) {
+      if (core.storedBytes > maxJournalBytes) {
         bytes.fill(0)
         return 'unavailable'
       }
-      const wrote = await writeAtomic(manifestName, bytes, requestCurrent, options.maxJournalBytes)
+      const wrote = await writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
       return wrote ? 'committed' : requestCurrent() ? 'unavailable' : 'stale-owner'
     },
 

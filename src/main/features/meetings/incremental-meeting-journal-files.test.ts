@@ -383,6 +383,90 @@ describe('encrypted incremental meeting journal files', () => {
     bounded.dispose()
   })
 
+  it('snapshots page limits and gateway methods before the caller can mutate its options', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-option-snapshot-'))
+    roots.push(root)
+    const initial = await store(root)
+    await initial.initialize()
+    await appender(initial).append(recordJson, 0)
+    initial.dispose()
+
+    const indexBytes = (await readFile(join(root, 'index-000000000001.v1'))).byteLength
+    const recordName = (await readdir(root)).find((name) => name.startsWith('record-'))!
+    const recordBytes = (await readFile(join(root, recordName))).byteLength
+    const base = createStorageGateway({ root: () => root, detector: detector() })
+    let originalStreamCalls = 0
+    const gateway: StorageGateway = {
+      ...base,
+      stream(relPath, sink, streamOptions) {
+        originalStreamCalls++
+        return base.stream(relPath, sink, streamOptions)
+      }
+    }
+    const mutableOptions = {
+      root,
+      meetingId,
+      key: Uint8Array.from(key),
+      maxJournalBytes: limits.maxJournalBytes,
+      maxPhysicalRecordBytes: 16_384,
+      maxChunkBytes: 1_024,
+      maxPageRecords: 4,
+      maxPageBytes: indexBytes + recordBytes - 1,
+      isCurrent: () => true,
+      gateway
+    }
+    const bounded = createIncrementalMeetingJournalFileStorage(mutableOptions)
+    expect(bounded).toBeDefined()
+    mutableOptions.maxPageBytes = limits.maxJournalBytes
+    gateway.stream = async () => ({ status: 'unavailable', code: 'REPLACED' })
+    await expect(
+      bounded!.readPage(
+        0,
+        1,
+        1,
+        () => undefined,
+        () => true
+      )
+    ).resolves.toEqual({
+      status: 'unavailable'
+    })
+    expect(originalStreamCalls).toBe(2)
+    bounded!.dispose()
+
+    let adequateOriginalStreamCalls = 0
+    const adequateGateway: StorageGateway = {
+      ...base,
+      stream(relPath, sink, streamOptions) {
+        adequateOriginalStreamCalls++
+        return base.stream(relPath, sink, streamOptions)
+      }
+    }
+    const adequateOptions = {
+      ...mutableOptions,
+      key: Uint8Array.from(key),
+      gateway: adequateGateway,
+      maxPageBytes: limits.maxJournalBytes
+    }
+    const adequate = createIncrementalMeetingJournalFileStorage(adequateOptions)
+    expect(adequate).toBeDefined()
+    adequateOptions.maxPageBytes = 1
+    adequateGateway.stream = async () => ({ status: 'unavailable', code: 'REPLACED' })
+    await expect(
+      adequate!.readPage(
+        0,
+        1,
+        1,
+        () => undefined,
+        () => true
+      )
+    ).resolves.toMatchObject({
+      status: 'ok',
+      nextRevision: 1
+    })
+    expect(adequateOriginalStreamCalls).toBe(3)
+    adequate!.dispose()
+  })
+
   it('refuses an authenticated over-cap physical record before opening its payload', async () => {
     const root = await mkdtemp(join(tmpdir(), 'metis-incremental-record-bound-'))
     roots.push(root)

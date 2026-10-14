@@ -223,6 +223,22 @@ function snapshotMatchesCommit(
 export function createIncrementalMeetingAppender(
   options: IncrementalMeetingAppenderOptions
 ): IncrementalMeetingAppender {
+  const meetingId = options.meetingId
+  const readLimits = options.readLimits
+  const isCurrent = options.isCurrent
+  const canonicalizeRecord = options.canonicalizeRecord
+  const configuredStorage = options.storage
+  const readSnapshot = configuredStorage?.readSnapshot
+  const lookupIdentity = configuredStorage?.lookupIdentity
+  const commitAppend = configuredStorage?.commitAppend
+  const storage: IncrementalMeetingJournalStorage | undefined =
+    configuredStorage && readSnapshot && lookupIdentity && commitAppend
+      ? {
+          readSnapshot: (...args) => readSnapshot.apply(configuredStorage, args),
+          lookupIdentity: (...args) => lookupIdentity.apply(configuredStorage, args),
+          commitAppend: (...args) => commitAppend.apply(configuredStorage, args)
+        }
+      : undefined
   let active = false
   let loadedSnapshot: IncrementalJournalSnapshot | undefined
 
@@ -232,15 +248,15 @@ export function createIncrementalMeetingAppender(
       active = true
       let receipt: IncrementalRecordReceipt | undefined
       try {
-        if (!options.storage || !options.isCurrent || !options.readLimits || !options.canonicalizeRecord)
+        if (!storage || !isCurrent || !readLimits || !canonicalizeRecord)
           return { status: 'refused', reason: 'UNCONFIGURED' }
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.meetingId))
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(meetingId))
           return { status: 'refused', reason: 'UNCONFIGURED' }
-        if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+        if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
         if (!validCounter(expectedRevision)) return { status: 'refused', reason: 'INVALID_RECORD' }
         let rawLimits: IncrementalJournalLimits | undefined
         try {
-          const configured = options.readLimits()
+          const configured = readLimits()
           rawLimits = configured ? Object.freeze({ ...configured }) : undefined
         } catch {
           return { status: 'refused', reason: 'INVALID_LIMITS' }
@@ -249,21 +265,21 @@ export function createIncrementalMeetingAppender(
         const limits = rawLimits
 
         if (!loadedSnapshot) {
-          const loaded = await options.storage.readSnapshot(options.meetingId, options.isCurrent)
-          if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+          const loaded = await storage.readSnapshot(meetingId, isCurrent)
+          if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
           if (loaded.status !== 'ok' || !validSnapshot(loaded.snapshot, limits))
             return { status: 'refused', reason: 'UNAVAILABLE' }
           loadedSnapshot = Object.freeze({ ...loaded.snapshot })
         }
         const current = loadedSnapshot
         if (current.state !== 'active') return { status: 'refused', reason: 'UNAVAILABLE' }
-        if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+        if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
 
         const ownerToken = Object.freeze(Object.create(null) as object)
         const binding: IncrementalRecordReceiptBinding = Object.freeze({
           ownerToken,
-          meetingId: options.meetingId,
-          isCurrent: options.isCurrent,
+          meetingId,
+          isCurrent,
           limits: Object.freeze({
             maxFieldBytes: limits.maxFieldBytes,
             maxPayloadBytes: limits.maxPayloadBytes,
@@ -273,8 +289,8 @@ export function createIncrementalMeetingAppender(
           }),
           maxCanonicalBytes: limits.maxJournalBytes
         })
-        receipt = await options.canonicalizeRecord(recordJson, binding)
-        if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+        receipt = await canonicalizeRecord(recordJson, binding)
+        if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
         const canonical = inspectIncrementalRecordReceipt(receipt, binding)
         if (
           !canonical ||
@@ -288,12 +304,8 @@ export function createIncrementalMeetingAppender(
         )
           return { status: 'refused', reason: 'INVALID_RECORD' }
 
-        const existing = await options.storage.lookupIdentity(
-          options.meetingId,
-          canonical.identityKey,
-          options.isCurrent
-        )
-        if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+        const existing = await storage.lookupIdentity(meetingId, canonical.identityKey, isCurrent)
+        if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
         if (existing.status === 'unavailable') return { status: 'refused', reason: 'UNAVAILABLE' }
         if (existing.status === 'found') {
           if (
@@ -323,7 +335,7 @@ export function createIncrementalMeetingAppender(
           return { status: 'refused', reason: 'LIMIT' }
 
         const request: IncrementalAppendCommit = {
-          meetingId: options.meetingId,
+          meetingId,
           expectedRevision,
           nextRevision,
           identityKey: canonical.identityKey,
@@ -340,10 +352,10 @@ export function createIncrementalMeetingAppender(
           provenancePayloadBytes: provenancePayloadBytes(recordCount, linePayloadBytes),
           maxJournalBytes: limits.maxJournalBytes
         }
-        if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+        if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
         let committed: IncrementalAppendCommitResult
         try {
-          committed = await options.storage.commitAppend(request, options.isCurrent)
+          committed = await storage.commitAppend(request, isCurrent)
         } catch {
           loadedSnapshot = undefined
           return { status: 'refused', reason: 'UNAVAILABLE' }
@@ -365,7 +377,7 @@ export function createIncrementalMeetingAppender(
           return { status: 'refused', reason: 'UNAVAILABLE' }
         }
         loadedSnapshot = Object.freeze({ ...committed.snapshot })
-        if (!readCurrent(options.isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
+        if (!readCurrent(isCurrent)) return { status: 'refused', reason: 'STALE_OWNER' }
         return { status: 'durable', revision: nextRevision, duplicate: false }
       } catch {
         return { status: 'refused', reason: 'UNAVAILABLE' }

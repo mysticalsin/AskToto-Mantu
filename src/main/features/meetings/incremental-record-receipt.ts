@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import { IncrementalMeetingRecordSchema, type CanonicalIncrementalRecord } from '@shared/incremental-meeting'
+import { fitsIncrementalMeetingRecordPreflight } from './incremental-record-canonical'
 
 export interface IncrementalRecordReceiptBinding {
   readonly ownerToken: object
@@ -117,8 +118,16 @@ export function issueIncrementalRecordReceipt(
   binding: IncrementalRecordReceiptBinding
 ): IncrementalRecordReceipt | null {
   if (!safeBinding(binding) || !dataObject(value) || Object.keys(value).sort().join(',') !== receiptKeys) return null
+  const capturedBinding: IncrementalRecordReceiptBinding = Object.freeze({
+    ownerToken: binding.ownerToken,
+    meetingId: binding.meetingId,
+    limits: Object.freeze({ ...binding.limits }),
+    maxCanonicalBytes: binding.maxCanonicalBytes,
+    isCurrent: binding.isCurrent
+  })
+  if (!safeBinding(capturedBinding)) return null
   const candidate = value as Partial<CanonicalIncrementalRecord>
-  const bytes = fixedByteCopy(candidate.canonicalBytes, binding.maxCanonicalBytes)
+  const bytes = fixedByteCopy(candidate.canonicalBytes, capturedBinding.maxCanonicalBytes)
   if (
     !bytes ||
     typeof candidate.identityKey !== 'string' ||
@@ -126,10 +135,10 @@ export function issueIncrementalRecordReceipt(
     !/^[a-f0-9]{64}$/.test(candidate.sha256) ||
     !Number.isSafeInteger(candidate.wordCount) ||
     candidate.wordCount! < 0 ||
-    candidate.wordCount! > binding.limits.maxWords ||
+    candidate.wordCount! > capturedBinding.limits.maxWords ||
     !Number.isSafeInteger(candidate.linePayloadBytes) ||
     candidate.linePayloadBytes! <= 0 ||
-    candidate.linePayloadBytes! > binding.limits.maxRecordBytes ||
+    candidate.linePayloadBytes! > capturedBinding.limits.maxRecordBytes ||
     candidate.canonicalByteLength !== bytes.byteLength ||
     typeof candidate.clock !== 'string' ||
     !/^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(candidate.clock)
@@ -143,6 +152,8 @@ export function issueIncrementalRecordReceipt(
     const parsed = IncrementalMeetingRecordSchema.safeParse(JSON.parse(text))
     if (!parsed.success) return null
     const record = parsed.data
+    if (!fitsIncrementalMeetingRecordPreflight(record, capturedBinding.limits, capturedBinding.maxCanonicalBytes))
+      return null
     const identityKey = canonicalJson(record.identity)
     const expected = Buffer.from(canonicalJson(record), 'utf8')
     try {
@@ -176,9 +187,9 @@ export function issueIncrementalRecordReceipt(
         clock: candidate.clock
       })
       issued.set(receipt, {
-        binding: bindingKey(binding),
-        ownerToken: binding.ownerToken,
-        isCurrent: binding.isCurrent,
+        binding: bindingKey(capturedBinding),
+        ownerToken: capturedBinding.ownerToken,
+        isCurrent: capturedBinding.isCurrent,
         body
       })
       stored = true

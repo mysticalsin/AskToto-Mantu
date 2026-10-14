@@ -163,6 +163,19 @@ function fixture(
 }
 
 describe('bounded incremental meeting append journal', () => {
+  it('does not issue a receipt for schema-valid canonical data over the worker field budget', () => {
+    const candidate = canonical('x'.repeat(limits.maxFieldBytes + 1))
+    expect(
+      issueIncrementalRecordReceipt(candidate, {
+        ownerToken: Object.freeze(Object.create(null) as object),
+        meetingId,
+        limits,
+        maxCanonicalBytes: limits.maxJournalBytes,
+        isCurrent: () => true
+      })
+    ).toBeNull()
+  })
+
   it('computes the exact v1 payload overhead from record count and canonical line bytes', () => {
     const one = provenancePayloadBytes(1, 100)
     const two = provenancePayloadBytes(2, 200)
@@ -179,6 +192,51 @@ describe('bounded incremental meeting append journal', () => {
     await expect(appender.append(recordJson, 0)).resolves.toEqual({ status: 'durable', revision: 1, duplicate: false })
     expect(readSnapshot()).toMatchObject({ acceptedRevision: 1, durableRevision: 1, recordCount: 1, wordCount: 0 })
     expect(commitCalls()).toBe(1)
+  })
+
+  it('captures appender callbacks and storage method identities at construction', async () => {
+    let currentSnapshot = snapshot()
+    let commits = 0
+    const storage: IncrementalMeetingJournalStorage = {
+      readSnapshot: async () => ({ status: 'ok', snapshot: currentSnapshot }),
+      lookupIdentity: async () => ({ status: 'absent' }),
+      commitAppend: async (request) => {
+        commits++
+        currentSnapshot = {
+          ...currentSnapshot,
+          acceptedRevision: request.nextRevision,
+          durableRevision: request.nextRevision,
+          recordCount: request.recordCount,
+          wordCount: request.wordCount,
+          linePayloadBytes: request.linePayloadBytes,
+          storedBytes: currentSnapshot.storedBytes + request.canonicalByteLength
+        }
+        return { status: 'committed', snapshot: currentSnapshot }
+      }
+    }
+    const options = {
+      meetingId,
+      readLimits: () => limits,
+      isCurrent: () => true,
+      canonicalizeRecord: async (_bytes: Uint8Array, binding: Parameters<typeof issueIncrementalRecordReceipt>[1]) => {
+        const receipt = issueIncrementalRecordReceipt(canonical(), binding)
+        if (!receipt) throw new Error('test worker canonicalization should produce a valid receipt')
+        return receipt
+      },
+      storage
+    }
+    const appender = createIncrementalMeetingAppender(options)
+    options.isCurrent = () => false
+    options.canonicalizeRecord = async () => {
+      throw new Error('replaced callback must not run')
+    }
+    storage.commitAppend = async () => ({ status: 'unavailable' })
+    await expect(appender.append(recordJson, 0)).resolves.toEqual({
+      status: 'durable',
+      revision: 1,
+      duplicate: false
+    })
+    expect(commits).toBe(1)
   })
 
   it('refuses a structurally copied worker record before storage commit', async () => {
