@@ -38,6 +38,9 @@ function fixture() {
     else listener?.({ settings, readable: true, epoch })
     return settings
   })
+  const authentication = vi.fn(async () => {})
+  const verifiedPolicy = vi.fn(async () => {})
+  let revokeAuthentication: (() => void) | null = null
   const bootstrap = startSpeechDesktopBootstrap({
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
     assertMainWindow: () => {},
@@ -62,12 +65,42 @@ function fixture() {
     },
     invalidatePolicyProof: vi.fn(),
     observePolicyRevocations: vi.fn(),
-    refreshVerifiedPolicy: vi.fn(async () => {})
+    refreshVerifiedPolicy: verifiedPolicy,
+    prepareAuthentication: authentication,
+    observeAuthenticationSettings: vi.fn(),
+    observeAuthenticationRevocations: (next) => {
+      revokeAuthentication = next
+      return () => { revokeAuthentication = null }
+    },
+    releaseAuthentication: vi.fn()
   })
-  return { bootstrap, metadata, readSettings, publish, settings: () => settings, identity: () => identityReader?.() }
+  return { bootstrap, metadata, readSettings, authentication, verifiedPolicy, revokeAuthentication: () => revokeAuthentication?.(), publish, settings: () => settings, identity: () => identityReader?.() }
 }
 
 describe('actual speech bootstrap composition', () => {
+  it('prepares fresh authentication and metadata before signed policy at real IPC boundaries', async () => {
+    const f = fixture()
+    try {
+      await f.bootstrap.prime
+      const order: string[] = []
+      f.authentication.mockImplementationOnce(async () => { order.push('authentication') })
+      f.metadata.mockImplementationOnce(async () => {
+        order.push('metadata')
+        return { durableDeviceId: 'synthetic-persisted-device', managedPolicy: { state: 'absent' }, screenDiagnosisState: 'granted' }
+      })
+      f.verifiedPolicy.mockImplementationOnce(async () => { order.push('signed-policy') })
+      await desktop.options?.prepareAuthority?.({} as never)
+      expect(order).toEqual(['authentication', 'metadata', 'signed-policy'])
+      const boundaryReads = f.authentication.mock.calls.length
+      for (let index = 0; index < 600; index += 1) desktop.options?.readState()
+      expect(f.authentication).toHaveBeenCalledTimes(boundaryReads)
+      f.revokeAuthentication()
+      expect(desktop.options?.readState().metadataReady).toBe(false)
+      expect(desktop.invalidate).toHaveBeenCalled()
+    } finally {
+      await f.bootstrap.dispose()
+    }
+  })
   it('keeps repeated cached-state reads on memory and preserves legacy ingest policy identity', async () => {
     const f = fixture()
     try {
