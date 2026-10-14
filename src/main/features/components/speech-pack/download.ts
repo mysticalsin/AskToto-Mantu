@@ -99,24 +99,42 @@ export async function reuseVerifiedFiles(options: {
       let sourceHandle: Awaited<ReturnType<typeof open>> | undefined
       let targetHandle: Awaited<ReturnType<typeof open>> | undefined
       let verified = false
+      let targetVersion: Awaited<ReturnType<NonNullable<typeof targetHandle>['stat']>> | undefined
+      let writtenBytes = 0
+      const writtenHash = createHash('sha256')
       try {
         await assertContainedDirectory(candidate, dirname(source))
+        if (!options.validateCurrent()) return false
+        if (!(await options.authorize()) || !options.validateCurrent()) return false
         const before = await lstat(source)
+        if (!options.validateCurrent()) return false
         if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== file.bytes)
           return false
         sourceHandle = await open(
           source,
           fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
         )
+        if (!options.validateCurrent()) return false
         const heldBefore = await sourceHandle.stat()
+        if (!options.validateCurrent()) return false
         if (!sameFileVersion(before, heldBefore) || !heldBefore.isFile() || heldBefore.nlink !== 1) return false
         await ensureContainedDirectory(options.destination, dirname(target))
-        targetHandle = await open(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600)
+        if (!options.validateCurrent()) return false
+        targetHandle = await open(target, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600)
+        if (!options.validateCurrent()) return false
+        targetVersion = await targetHandle.stat()
+        if (!options.validateCurrent()) return false
+        const targetCreated = await lstat(target)
+        if (!options.validateCurrent()) return false
+        if (!targetVersion.isFile() || !sameFileVersion(targetVersion, targetCreated) || targetVersion.size !== 0)
+          return false
         const hash = createHash('sha256')
         const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, file.bytes + 1))
         let copied = 0
         while (copied <= file.bytes) {
+          if (!options.validateCurrent()) return false
           const read = await sourceHandle.read(buffer, 0, Math.min(buffer.length, file.bytes + 1 - copied), copied)
+          if (!options.validateCurrent()) return false
           if (read.bytesRead === 0) break
           copied += read.bytesRead
           if (copied > file.bytes) return false
@@ -124,23 +142,37 @@ export async function reuseVerifiedFiles(options: {
           hash.update(chunk)
           let offset = 0
           while (offset < chunk.length) {
+            if (!options.validateCurrent()) return false
             const written = await targetHandle.write(
               chunk,
               offset,
               chunk.length - offset,
               copied - read.bytesRead + offset
             )
+            if (!options.validateCurrent()) return false
             if (written.bytesWritten <= 0) throw new Error('verified-file copy made no progress')
             offset += written.bytesWritten
           }
+          writtenHash.update(chunk)
+          writtenBytes += chunk.length
+          targetVersion = await targetHandle.stat()
+          if (!options.validateCurrent()) return false
+          const targetPathVersion = await lstat(target)
+          if (!options.validateCurrent() || !sameFileVersion(targetVersion, targetPathVersion)) return false
         }
         const heldAfter = await sourceHandle.stat()
+        if (!options.validateCurrent()) return false
         const pathAfter = await lstat(source)
+        if (!options.validateCurrent()) return false
         const targetHeld = await targetHandle.stat()
+        if (!options.validateCurrent()) return false
         const targetPath = await lstat(target)
+        if (!options.validateCurrent()) return false
         if (
           copied !== file.bytes ||
           hash.digest('hex') !== file.sha256 ||
+          writtenBytes !== file.bytes ||
+          writtenHash.copy().digest('hex') !== file.sha256 ||
           !sameFileVersion(heldBefore, heldAfter) ||
           !sameFileVersion(heldAfter, pathAfter) ||
           heldAfter.nlink !== 1 ||
@@ -153,20 +185,62 @@ export async function reuseVerifiedFiles(options: {
         )
           return false
         await targetHandle.sync()
+        if (!options.validateCurrent()) return false
         verified = true
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
         throw error
       } finally {
-        await targetHandle?.close().catch(() => undefined)
         await sourceHandle?.close().catch(() => undefined)
         if (targetHandle && !verified) {
           try {
-            await unlink(target)
+            if (options.validateCurrent()) {
+              const beforeCleanup = await targetHandle.stat()
+              if (options.validateCurrent()) {
+                const pathTarget = await lstat(target)
+                if (options.validateCurrent()) {
+                  const cleanupHash = createHash('sha256')
+                  const cleanupBuffer = Buffer.allocUnsafe(Math.min(64 * 1024, writtenBytes + 1))
+                  let cleanupBytes = 0
+                  while (cleanupBytes < writtenBytes && options.validateCurrent()) {
+                    const read = await targetHandle.read(
+                      cleanupBuffer,
+                      0,
+                      Math.min(cleanupBuffer.length, writtenBytes - cleanupBytes),
+                      cleanupBytes
+                    )
+                    if (!options.validateCurrent() || read.bytesRead === 0) break
+                    cleanupBytes += read.bytesRead
+                    cleanupHash.update(cleanupBuffer.subarray(0, read.bytesRead))
+                  }
+                  if (options.validateCurrent()) {
+                    const afterCleanup = await targetHandle.stat()
+                    if (options.validateCurrent()) {
+                      const finalPath = await lstat(target)
+                      if (
+                        options.validateCurrent() &&
+                        targetVersion &&
+                        sameFileVersion(beforeCleanup, targetVersion) &&
+                        sameFileVersion(beforeCleanup, pathTarget) &&
+                        sameFileVersion(beforeCleanup, afterCleanup) &&
+                        sameFileVersion(afterCleanup, finalPath) &&
+                        afterCleanup.size === writtenBytes &&
+                        cleanupBytes === writtenBytes &&
+                        cleanupHash.digest('hex') === writtenHash.copy().digest('hex')
+                      ) {
+                        await unlink(target)
+                        options.validateCurrent()
+                      }
+                    }
+                  }
+                }
+              }
+            }
           } catch {
             // A failed copy leaves no trusted destination; the caller's staging verifier rejects it.
           }
         }
+        await targetHandle?.close().catch(() => undefined)
       }
     }
   }
@@ -212,12 +286,19 @@ function sameFileVersion(
   a: {
     dev: number | bigint
     ino: number | bigint
-    nlink: number
-    size: number
-    mtimeMs: number
-    ctimeMs: number
+    nlink: number | bigint
+    size: number | bigint
+    mtimeMs: number | bigint
+    ctimeMs: number | bigint
   },
-  b: { dev: number | bigint; ino: number | bigint; nlink: number; size: number; mtimeMs: number; ctimeMs: number }
+  b: {
+    dev: number | bigint
+    ino: number | bigint
+    nlink: number | bigint
+    size: number | bigint
+    mtimeMs: number | bigint
+    ctimeMs: number | bigint
+  }
 ): boolean {
   return (
     a.dev === b.dev &&

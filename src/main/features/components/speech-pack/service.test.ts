@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -558,6 +558,109 @@ describe('explicit speech-pack service boundary', () => {
     service.captureActivityChanged(true)
     expect(admittedOptions.authorizeRollbackCurrent?.(WHISPER_BASE_Q8.id, marker, nextTransaction)).toBe(false)
     await service.shutdown()
+  })
+
+  it('keeps the real engine transaction busy until ready-listener cancel rollback settles', async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'speech-pack-service-rollback-'))
+    const bytes = Buffer.from('tiny pinned pack')
+    const file = { path: 'weights.bin', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    const component: SpeechPackComponent = {
+      ...WHISPER_BASE_Q8,
+      version: 'integration-test',
+      files: [file],
+      source: { kind: 'files', baseUrl: `https://example.test/resolve/${'a'.repeat(40)}` }
+    }
+    const fixtureWavPath = join(__dirname, '../../../../../resources/speech-pack-fixtures/en.wav')
+    let engine: SpeechPackEngine | null = null
+    const activeEngine = (): SpeechPackEngine | null => engine
+    let cancelResult: Promise<unknown> | null = null
+    let signalRollback!: () => void
+    const rollbackEntered = new Promise<void>((resolve) => {
+      signalRollback = resolve
+    })
+    let releaseRollback!: (allowed: boolean) => void
+    const heldRollback = new Promise<boolean>((resolve) => {
+      releaseRollback = resolve
+    })
+    const service = createSpeechPackService({
+      resourcesRoot: '/missing-resources',
+      packaged: false,
+      rootDir,
+      selectedEngine: () => 'whisper',
+      selectionIdentity: () => 'engine:1:whisper',
+      policyAllowsTransfer: () => true,
+      policyIdentity: () => 'policy:1:unmanaged',
+      refreshAuthority: () => true,
+      refreshRollbackAuthority: async () => {
+        signalRollback()
+        return heldRollback
+      },
+      rollbackAuthorityCurrent: () => true,
+      captureActive: () => false,
+      captureIdentity: () => 'capture:0',
+      featureEnabled: () => true,
+      fixtureWavPath,
+      components: [component],
+      packageRuntimeContract: async () => ({ status: 'development', profile: 'development', inventory: null }),
+      engineRuntimeReady: () => true,
+      engineModelReady: () => true,
+      createEngine: (options) => {
+        engine = createSpeechPackEngine({
+          ...options,
+          emitIntervalMs: 0,
+          freeBytes: () => Number.MAX_SAFE_INTEGER,
+          fetch: async () =>
+            new Response(bytes, {
+              headers: { 'content-length': String(bytes.length), etag: '"pinned"' }
+            }),
+          selfTest: async () => 'fixture decoded'
+        })
+        return engine
+      }
+    })
+    service.subscribe((progress) => {
+      if (progress.state === 'ready' && cancelResult === null) {
+        cancelResult = service.action({
+          componentId: component.id,
+          manifestIdentity: componentManifestIdentity(component),
+          action: 'cancel'
+        })
+      }
+    })
+    try {
+      const preview = await service.planPreview({
+        componentId: component.id,
+        action: 'install',
+        manifestIdentity: componentManifestIdentity(component)
+      })
+      expect(preview.ok).toBe(true)
+      if (!preview.ok) throw new Error('expected an install plan')
+      await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toMatchObject({
+        ok: true
+      })
+      const runningEngine = activeEngine()
+      if (!runningEngine) throw new Error('expected the production engine adapter')
+      await rollbackEntered
+      const successor = await service.planPreview({
+        componentId: component.id,
+        manifestIdentity: componentManifestIdentity(component),
+        action: 'repair'
+      })
+      expect(successor.ok).toBe(true)
+      if (!successor.ok) throw new Error('expected a repair plan while rollback is held')
+      await expect(service.installWithPlan({ planId: successor.plan.planId, action: 'repair' })).resolves.toMatchObject(
+        { ok: false, reason: 'busy' }
+      )
+      releaseRollback(true)
+      await runningEngine.whenIdle()
+      await expect(cancelResult).resolves.toMatchObject({ ok: true })
+      expect(existsSync(join(rootDir, component.id, component.version))).toBe(false)
+      expect(existsSync(join(rootDir, component.id, 'active.json'))).toBe(false)
+    } finally {
+      releaseRollback(true)
+      await service.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
   })
 
   it('does not admit a transfer after shutdown has started', async () => {

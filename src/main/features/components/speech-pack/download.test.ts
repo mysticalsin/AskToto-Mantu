@@ -1,5 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { open as openAsync, rm as rmAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -610,5 +619,41 @@ describe('reuseVerifiedFiles', () => {
     ).resolves.toBe(false)
     expect(existsSync(join(destination, 'weights.bin'))).toBe(false)
     expect(readFileSync(outside, 'utf8')).toBe('changed bytes')
+  })
+
+  it.each([
+    ['held read', 12],
+    ['partial write', 14]
+  ] as const)('stops after a revoked %s and preserves a foreign destination replacement', async (_step, revokeAt) => {
+    const source = join(dir, 'source')
+    const destination = join(dir, 'destination')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const bytes = Buffer.from('pinned copied model data')
+    const target = join(destination, 'weights.bin')
+    const moved = join(destination, 'owned-copy-moved-aside')
+    writeFileSync(join(source, 'weights.bin'), bytes)
+    let checks = 0
+    let revoked = false
+    const copied = await reuseVerifiedFiles({
+      candidates: [source],
+      destination,
+      files: [{ path: 'weights.bin', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }],
+      authorize: () => true,
+      validateCurrent: () => {
+        checks++
+        if (!revoked && checks === revokeAt) {
+          revoked = true
+          renameSync(target, moved)
+          writeFileSync(target, 'foreign replacement')
+          return false
+        }
+        return true
+      }
+    })
+    expect(copied).toBe(false)
+    expect(revoked).toBe(true)
+    expect(readFileSync(target, 'utf8')).toBe('foreign replacement')
+    expect(existsSync(moved)).toBe(true)
   })
 })

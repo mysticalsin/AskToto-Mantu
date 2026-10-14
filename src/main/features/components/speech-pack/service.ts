@@ -271,7 +271,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       authorizeRollbackCurrent: (id, marker, transaction) =>
         rollbackTicket(id, marker, transaction) !== null && (options.rollbackAuthorityCurrent?.() ?? true),
       onTransactionSettled: (id, transaction) => {
-        if (rollbackAuthority.get(id)?.transaction === transaction) rollbackAuthority.delete(id)
+        if (rollbackAuthority.get(id)?.transaction !== transaction) return
+        rollbackAuthority.delete(id)
+        activity.delete(id)
+        activeAuthority.delete(id)
       }
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
@@ -302,10 +305,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (state.status === 'error' || state.status === 'paused') {
         repairVerified.delete(id)
       }
-      if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') {
-        activity.delete(id)
-        activeAuthority.delete(id)
-      }
+      // Terminal progress can precede awaited rollback/cleanup. The engine settlement callback owns
+      // releasing the activity lease so a successor cannot replace its transaction authority.
     })
     return engine
   }
@@ -627,7 +628,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (isCaptureActive()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     if (request.action === 'install' && readiness.status === 'ready')
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
-    if (pendingAdmissions.has(component.id) || activity.has(component.id)) {
+    if (pendingAdmissions.has(component.id) || activity.has(component.id) || rollbackAuthority.has(component.id)) {
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     }
     if (!(await refreshAuthority())) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
@@ -640,6 +641,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       isCaptureActive()
     )
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    if (pendingAdmissions.has(component.id) || activity.has(component.id) || rollbackAuthority.has(component.id))
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     const instance = getEngine()
     const state = instance.getState(component.id)
     if (
@@ -695,8 +698,6 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       if (!engine) return result({ ok: true })
       if (request.action === 'pause') engine.pause(component.id)
       else engine.cancel(component.id)
-      activity.delete(component.id)
-      activeAuthority.delete(component.id)
       return result({ ok: true })
     }
     return result({ ok: false, reason: 'unavailable' })
