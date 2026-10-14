@@ -5,7 +5,13 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isSafeEntryName } from './archive'
-import { DISK_HEADROOM_BYTES, createSpeechPackEngine, type ActivationStep, type SpeechPackEngineOptions, type SpeechPackState } from './engine'
+import {
+  DISK_HEADROOM_BYTES,
+  createSpeechPackEngine,
+  type ActivationStep,
+  type SpeechPackEngineOptions,
+  type SpeechPackState
+} from './engine'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
 import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-helpers/test-server.fixture'
 
@@ -379,56 +385,64 @@ describe('speech-pack engine', () => {
   })
 
   describe('activation kill points', () => {
-    const STEPS: ActivationStep[] = ['staged-verified', 'self-tested', 'renamed', 'marker-tmp-written', 'marker-written']
+    const STEPS: ActivationStep[] = [
+      'staged-verified',
+      'self-tested',
+      'renamed',
+      'marker-tmp-written',
+      'marker-written'
+    ]
     const asideDirs = (): string[] => readdirSync(join(root, WHISPER)).filter((name) => name.includes('.old-'))
 
-    it.each([...STEPS, 'old-moved-aside' as const])(
-      'killed after %s while replacing an existing pack: no marker over a missing or partial pack, and the next start recovers',
-      async (step) => {
-        server = await serveFiles()
-        const c = whisper(server.base)
-        const first = make([c])
-        first.enqueue([WHISPER])
-        await first.whenIdle()
-        // An unmarked pack directory forces the next install to replace it.
-        rmSync(marker(WHISPER))
+    it.each([
+      ...STEPS,
+      'old-moved-aside' as const
+    ])('killed after %s while replacing an existing pack: no marker over a missing or partial pack, and the next start recovers', async (step) => {
+      server = await serveFiles()
+      const c = whisper(server.base)
+      const first = make([c])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      // An unmarked pack directory forces the next install to replace it.
+      rmSync(marker(WHISPER))
 
-        const killed = make([c], {
-          onActivationStep: (at) => {
-            if (at === step) throw new Error('killed')
-          }
-        })
-        killed.enqueue([WHISPER])
-        await killed.whenIdle()
-
-        const active = join(root, WHISPER, '1')
-        if (existsSync(marker(WHISPER))) expect(packMatches(c, active)).toBe(true)
-        if (existsSync(active)) expect(packMatches(c, active)).toBe(true)
-        if (step === 'old-moved-aside') {
-          expect(existsSync(active)).toBe(false)
-          expect(asideDirs()).toHaveLength(1)
+      const killed = make([c], {
+        onActivationStep: (at) => {
+          if (at === step) throw new Error('killed')
         }
-        if (step !== 'marker-written') expect(existsSync(marker(WHISPER))).toBe(false)
+      })
+      killed.enqueue([WHISPER])
+      await killed.whenIdle()
 
-        const before = server.requests.length
-        const next = make([c])
-        await next.initialise()
-        expect(asideDirs()).toEqual([])
-        if (step === 'old-moved-aside') {
-          expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
-          expect(packMatches(c, active)).toBe(true)
-        }
-        next.enqueue([WHISPER])
-        await next.whenIdle()
+      const active = join(root, WHISPER, '1')
+      if (existsSync(marker(WHISPER))) expect(packMatches(c, active)).toBe(true)
+      if (existsSync(active)) expect(packMatches(c, active)).toBe(true)
+      if (step === 'old-moved-aside') {
+        expect(existsSync(active)).toBe(false)
+        expect(asideDirs()).toHaveLength(1)
+      }
+      if (step !== 'marker-written') expect(existsSync(marker(WHISPER))).toBe(false)
+
+      const before = server.requests.length
+      const next = make([c])
+      await next.initialise()
+      expect(asideDirs()).toEqual([])
+      if (step === 'old-moved-aside') {
         expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
         expect(packMatches(c, active)).toBe(true)
-        expect(existsSync(marker(WHISPER))).toBe(true)
-        expect(asideDirs()).toEqual([])
-        expect(server.requests.length).toBe(before)
       }
-    )
+      next.enqueue([WHISPER])
+      await next.whenIdle()
+      expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+      expect(packMatches(c, active)).toBe(true)
+      expect(existsSync(marker(WHISPER))).toBe(true)
+      expect(asideDirs()).toEqual([])
+      expect(server.requests.length).toBe(before)
+    })
 
-    it.each(STEPS)('killed after %s: no marker without a whole pack, no half-filled pack, and the next start recovers without refetching', async (step) => {
+    it.each(
+      STEPS
+    )('killed after %s: no marker without a whole pack, no half-filled pack, and the next start recovers without refetching', async (step) => {
       server = await serveFiles()
       const c = whisper(server.base)
       const killed = make([c], {
@@ -461,109 +475,109 @@ describe('speech-pack engine', () => {
       expect(server.requests.length).toBe(before)
     })
 
-  describe('component version transitions', () => {
-    it('preserves a valid prior-version marker without declaring that version ready', async () => {
-      server = await serveFiles()
-      const previous = whisper(server.base)
-      const first = make([previous])
-      first.enqueue([WHISPER])
-      await first.whenIdle()
-      const previousMarker = readFileSync(marker(WHISPER))
+    describe('component version transitions', () => {
+      it('preserves a valid prior-version marker without declaring that version ready', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
 
-      const nextVersion = { ...previous, version: '2' }
-      const next = make([nextVersion])
-      await next.initialise()
-      expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
-      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
-      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
-      expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
-    })
-
-    it('does not preserve a prior marker with an unsafe version path', async () => {
-      server = await serveFiles()
-      const previous = whisper(server.base)
-      const first = make([previous])
-      first.enqueue([WHISPER])
-      await first.whenIdle()
-      writeFileSync(marker(WHISPER), JSON.stringify({ schema: 1, component: WHISPER, version: '../en.wav' }))
-      const outsideBefore = readFileSync(join(dir, 'en.wav'))
-
-      const next = make([{ ...previous, version: '2' }])
-      await next.initialise()
-      expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
-      expect(existsSync(marker(WHISPER))).toBe(false)
-      expect(readFileSync(join(dir, 'en.wav'))).toEqual(outsideBefore)
-    })
-
-    it('preserves the prior-version marker and directory when preflight refuses an update', async () => {
-      server = await serveFiles()
-      const previous = whisper(server.base)
-      const first = make([previous])
-      first.enqueue([WHISPER])
-      await first.whenIdle()
-      const previousMarker = readFileSync(marker(WHISPER))
-
-      const nextVersion = { ...previous, version: '2' }
-      const next = make([nextVersion], { freeBytes: () => 0 })
-      next.enqueue([WHISPER])
-      await next.whenIdle()
-      expect(next.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'disk' })
-      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
-      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
-      expect(server.requests).toHaveLength(previous.files.length)
-    })
-
-    it('restores the prior-version marker and directory when cancellation lands after activation', async () => {
-      server = await serveFiles()
-      const previous = whisper(server.base)
-      const first = make([previous])
-      first.enqueue([WHISPER])
-      await first.whenIdle()
-      const previousMarker = readFileSync(marker(WHISPER))
-
-      const nextVersion = { ...previous, version: '2' }
-      let next!: ReturnType<typeof make>
-      next = make([nextVersion], {
-        onActivationStep: (step) => {
-          if (step === 'marker-written') next.cancel(WHISPER)
-        }
+        const nextVersion = { ...previous, version: '2' }
+        const next = make([nextVersion])
+        await next.initialise()
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
       })
-      next.enqueue([WHISPER])
-      await next.whenIdle()
-      expect(next.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
-      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
-      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
-      expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
-    })
 
-    it('keeps the prior marker through a kill before the new marker switch', async () => {
-      server = await serveFiles()
-      const previous = whisper(server.base)
-      const first = make([previous])
-      first.enqueue([WHISPER])
-      await first.whenIdle()
-      const previousMarker = readFileSync(marker(WHISPER))
+      it('does not preserve a prior marker with an unsafe version path', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        writeFileSync(marker(WHISPER), JSON.stringify({ schema: 1, component: WHISPER, version: '../en.wav' }))
+        const outsideBefore = readFileSync(join(dir, 'en.wav'))
 
-      const nextVersion = { ...previous, version: '2' }
-      const killed = make([nextVersion], {
-        onActivationStep: (step) => {
-          if (step === 'marker-tmp-written') throw new Error('killed')
-        }
+        const next = make([{ ...previous, version: '2' }])
+        await next.initialise()
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(existsSync(marker(WHISPER))).toBe(false)
+        expect(readFileSync(join(dir, 'en.wav'))).toEqual(outsideBefore)
       })
-      killed.enqueue([WHISPER])
-      await killed.whenIdle()
-      expect(killed.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'http' })
-      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
-      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
-      expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
 
-      const recovered = make([nextVersion])
-      await recovered.initialise()
-      expect(recovered.getState(WHISPER)).toEqual({ status: 'ready' })
-      expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).version).toBe('2')
-      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+      it('preserves the prior-version marker and directory when preflight refuses an update', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
+
+        const nextVersion = { ...previous, version: '2' }
+        const next = make([nextVersion], { freeBytes: () => 0 })
+        next.enqueue([WHISPER])
+        await next.whenIdle()
+        expect(next.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'disk' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(server.requests).toHaveLength(previous.files.length)
+      })
+
+      it('restores the prior-version marker and directory when cancellation lands after activation', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
+
+        const nextVersion = { ...previous, version: '2' }
+        let next!: ReturnType<typeof make>
+        next = make([nextVersion], {
+          onActivationStep: (step) => {
+            if (step === 'marker-written') next.cancel(WHISPER)
+          }
+        })
+        next.enqueue([WHISPER])
+        await next.whenIdle()
+        expect(next.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
+      })
+
+      it('keeps the prior marker through a kill before the new marker switch', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
+
+        const nextVersion = { ...previous, version: '2' }
+        const killed = make([nextVersion], {
+          onActivationStep: (step) => {
+            if (step === 'marker-tmp-written') throw new Error('killed')
+          }
+        })
+        killed.enqueue([WHISPER])
+        await killed.whenIdle()
+        expect(killed.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'http' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
+
+        const recovered = make([nextVersion])
+        await recovered.initialise()
+        expect(recovered.getState(WHISPER)).toEqual({ status: 'ready' })
+        expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).version).toBe('2')
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+      })
     })
-  })
 
     it('removes a corrupt pack found on start instead of adopting it', async () => {
       server = await serveFiles()
@@ -801,7 +815,12 @@ describe('speech-pack engine', () => {
       const engine = make([c], { freeBytes: () => need - 1, extractArchive: async () => undefined })
       engine.enqueue([PARAKEET])
       await engine.whenIdle()
-      expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'disk', requiredBytes: need, freeBytes: need - 1 })
+      expect(engine.getState(PARAKEET)).toEqual({
+        status: 'error',
+        kind: 'disk',
+        requiredBytes: need,
+        freeBytes: need - 1
+      })
       expect(server.requests).toHaveLength(0)
     })
 
@@ -828,7 +847,10 @@ describe('speech-pack engine', () => {
     })
 
     it('refuses an archive pack without a recorded archive pin', async () => {
-      const c: SpeechPackComponent = { ...archiveComponent('http://127.0.0.1:1'), source: { kind: 'archive', archive: null, entryPrefix: prefix, extractCapBytes: 1 } }
+      const c: SpeechPackComponent = {
+        ...archiveComponent('http://127.0.0.1:1'),
+        source: { kind: 'archive', archive: null, entryPrefix: prefix, extractCapBytes: 1 }
+      }
       const engine = make([c])
       engine.enqueue([PARAKEET])
       await engine.whenIdle()

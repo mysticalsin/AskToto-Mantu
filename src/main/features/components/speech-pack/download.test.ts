@@ -162,7 +162,9 @@ describe('downloadVerified', () => {
       calls++
       throw new TypeError('fetch failed')
     }) as unknown as typeof globalThis.fetch
-    const err = await failure(downloadVerified(request('http://127.0.0.1:1/pin/model.bin'), deps({ fetch }, { maxAttempts: 3 })))
+    const err = await failure(
+      downloadVerified(request('http://127.0.0.1:1/pin/model.bin'), deps({ fetch }, { maxAttempts: 3 }))
+    )
     expect(err.kind).toBe('offline')
     expect(calls).toBe(3)
     expect(sleeps).toHaveLength(2)
@@ -198,7 +200,10 @@ describe('downloadVerified', () => {
       res.end()
     })
     const err = await failure(
-      downloadVerified(request(`${server.base}/pin/model.bin`), deps({}, { maxAttempts: 6, backoffBaseMs: 1000, backoffCapMs: 4000 }))
+      downloadVerified(
+        request(`${server.base}/pin/model.bin`),
+        deps({}, { maxAttempts: 6, backoffBaseMs: 1000, backoffCapMs: 4000 })
+      )
     )
     expect(err.kind).toBe('http')
     // random() = 0.5 -> factor 0.75 of min(cap, base * 2^n)
@@ -265,7 +270,15 @@ describe('downloadVerified', () => {
           bytes: 1,
           sha256: sha256Hex(Buffer.from('x'))
         },
-        deps({ fetch, openFile: async (..._args: Parameters<typeof openAsync>) => { throw new Error('disk failure') } }, { maxAttempts: 1 })
+        deps(
+          {
+            fetch,
+            openFile: async (..._args: Parameters<typeof openAsync>) => {
+              throw new Error('disk failure')
+            }
+          },
+          { maxAttempts: 1 }
+        )
       )
     )
     expect(err.kind).toBe('offline')
@@ -340,7 +353,10 @@ describe('downloadVerified', () => {
         ),
         { status: 200 }
       )) as typeof globalThis.fetch
-    await downloadVerified(request('https://models.example.test/resolve/0123456789abcdef0123456789abcdef01234567/model.bin'), deps({ fetch }))
+    await downloadVerified(
+      request('https://models.example.test/resolve/0123456789abcdef0123456789abcdef01234567/model.bin'),
+      deps({ fetch })
+    )
     expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
     expect(existsSync(join(dir, 'model.bin.partial'))).toBe(false)
   })
@@ -374,11 +390,14 @@ describe('downloadVerified', () => {
     }) as typeof rmAsync
     const fetch = (async () =>
       new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            controller.enqueue(Buffer.from('123456'))
-          }
-        }, { highWaterMark: 0 }),
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              controller.enqueue(Buffer.from('123456'))
+            }
+          },
+          { highWaterMark: 0 }
+        ),
         { status: 200 }
       )) as typeof globalThis.fetch
     const operation = downloadVerified(
@@ -443,7 +462,13 @@ describe('downloadVerified', () => {
       res.write(body.subarray(0, 40_000))
     })
     const ctrl = new AbortController()
-    const run = downloadVerified({ ...request(`${server.base}/pin/model.bin`, ctrl.signal), onProgress: (n) => n >= 40_000 && ctrl.abort('pause') }, deps())
+    const run = downloadVerified(
+      {
+        ...request(`${server.base}/pin/model.bin`, ctrl.signal),
+        onProgress: (n) => n >= 40_000 && ctrl.abort('pause')
+      },
+      deps()
+    )
     await expect(run).rejects.toBe('pause')
     expect(existsSync(join(dir, 'model.bin.partial'))).toBe(true)
     expect(existsSync(join(dir, 'model.bin'))).toBe(false)

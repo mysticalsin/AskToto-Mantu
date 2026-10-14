@@ -17,7 +17,9 @@ interface Pin {
   bytes: number
   sha256: string
 }
-const runtime = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', '..', '..', 'resources', 'runtime-assets-manifest.json'), 'utf8')) as {
+const runtime = JSON.parse(
+  readFileSync(join(__dirname, '..', '..', '..', '..', '..', 'resources', 'runtime-assets-manifest.json'), 'utf8')
+) as {
   assets: Record<string, Pin>
 }
 const WHISPER_PREFIX = 'resources/models/Xenova/whisper-base/'
@@ -33,7 +35,12 @@ describe('speech-pack manifest pins', () => {
   })
 
   it('parakeet is encoder, decoder, joiner and tokens, 670,478,772 bytes, matching the runtime assets manifest exactly', () => {
-    expect(PARAKEET_TDT_V3_INT8.files.map((f) => f.path).sort()).toEqual(['decoder.int8.onnx', 'encoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'])
+    expect(PARAKEET_TDT_V3_INT8.files.map((f) => f.path).sort()).toEqual([
+      'decoder.int8.onnx',
+      'encoder.int8.onnx',
+      'joiner.int8.onnx',
+      'tokens.txt'
+    ])
     expect(componentBytes(PARAKEET_TDT_V3_INT8)).toBe(670_478_772)
     for (const file of PARAKEET_TDT_V3_INT8.files) {
       expect(runtime.assets[PARAKEET_PREFIX + file.path], file.path).toEqual({ bytes: file.bytes, sha256: file.sha256 })
@@ -41,7 +48,10 @@ describe('speech-pack manifest pins', () => {
   })
 
   it('the self-test fixture is the pinned 184,608-byte en.wav', () => {
-    expect(runtime.assets[`${PARAKEET_PREFIX}test_wavs/en.wav`]).toEqual({ bytes: SELF_TEST_FIXTURE.bytes, sha256: SELF_TEST_FIXTURE.sha256 })
+    expect(runtime.assets[`${PARAKEET_PREFIX}test_wavs/en.wav`]).toEqual({
+      bytes: SELF_TEST_FIXTURE.bytes,
+      sha256: SELF_TEST_FIXTURE.sha256
+    })
     expect(SELF_TEST_FIXTURE.bytes).toBe(184_608)
   })
 
@@ -66,7 +76,9 @@ describe('speech-pack sources are immutable', () => {
     expect(isImmutableUrl('https://example.test/repo/refs/heads/dev/file')).toBe(false)
     expect(isImmutableUrl('https://raw.githubusercontent.com/org/repo/main/model.onnx')).toBe(false)
     expect(isImmutableUrl('https://github.com/org/repo/raw/feature-branch/model.onnx')).toBe(false)
-    expect(isImmutableUrl(`https://huggingface.co/Xenova/whisper-base/resolve/${'a'.repeat(40)}/config.json`)).toBe(true)
+    expect(isImmutableUrl(`https://huggingface.co/Xenova/whisper-base/resolve/${'a'.repeat(40)}/config.json`)).toBe(
+      true
+    )
     expect(isImmutableUrl(`https://raw.githubusercontent.com/org/repo/${'b'.repeat(40)}/model.onnx`)).toBe(true)
     expect(isImmutableUrl(`https://github.com/org/repo/raw/${'c'.repeat(40)}/model.onnx`)).toBe(true)
   })
