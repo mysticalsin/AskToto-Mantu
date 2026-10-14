@@ -6,27 +6,14 @@ import { access, lstat, readFile, readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
+import { isForbiddenInferencePath } from './lib/forbidden-inference-path.mjs'
+import { assertMachOArchitectures } from './lib/macho-architecture.mjs'
+import { parseLeanCheckerArgs } from './lib/lean-checker-args.mjs'
 import { constants as fsConstants } from 'node:fs'
 import { packageInventoryIdentity, validatePackageInventory } from './lib/package-inventory.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const argv = process.argv.slice(2)
-const target = argv.shift()
-const resourcesArg = argv.shift()
-let arch
-let postSign = false
-let executableName = 'Metis.exe'
-for (const item of argv) {
-  if (item === '--post-sign') postSign = true
-  else if (item.startsWith('--arch=')) arch = item.slice('--arch='.length)
-  else if (item.startsWith('--executable=')) executableName = item.slice('--executable='.length)
-  else throw new Error(`Unknown option: ${item}`)
-}
-if (!['mac', 'win'].includes(target) || !resourcesArg || !['arm64', 'x64'].includes(arch)) {
-  throw new Error('Usage: node scripts/check-lean-package.mjs <mac|win> <resources-directory> --arch=<arm64|x64> [--post-sign]')
-}
-const platform = target === 'mac' ? 'darwin' : 'win32'
-if (platform === 'win32' && arch !== 'x64') throw new Error('Lean Windows packages support x64 only')
+const { target, resourcesArg, arch, executableName, platform } = parseLeanCheckerArgs(process.argv.slice(2))
 const resourcesRoot = resolve(resourcesArg)
 const appRoot = platform === 'darwin' ? dirname(dirname(resourcesRoot)) : dirname(resourcesRoot)
 const asarPath = join(resourcesRoot, 'app.asar')
@@ -192,13 +179,11 @@ for (const path of packagedResourceFiles) {
 for (const path of inventoryPaths) {
   if (!packagedResourcePaths.has(path)) throw new Error(`Package inventory names a missing core resource: ${path}`)
 }
-if (!postSign) {
-  for (const relativePath of signedPayloads) {
-    const packagedBytes = await readFile(join(resourcesRoot, relativePath))
-    const stagedBytes = await readFile(join(ROOT, 'build/lean-stage/resources', relativePath))
-    if (createHash('sha256').update(packagedBytes).digest('hex') !== createHash('sha256').update(stagedBytes).digest('hex')) {
-      throw new Error(`Unsigned packaged executable differs from its staged source: ${relativePath}`)
-    }
+for (const relativePath of signedPayloads) {
+  const packagedBytes = await readFile(join(resourcesRoot, relativePath))
+  const stagedBytes = await readFile(join(ROOT, 'build/lean-stage/resources', relativePath))
+  if (createHash('sha256').update(packagedBytes).digest('hex') !== createHash('sha256').update(stagedBytes).digest('hex')) {
+    throw new Error(`Unsigned packaged executable differs from its staged source: ${relativePath}`)
   }
 }
 
@@ -212,19 +197,8 @@ const profileMarker = '/* metis-package-profile:lean */'
 if (!rendererScripts.some((entry) => extractFile(asarPath, entry.replace(/^[\\/]+/, '')).subarray(0, 512).toString('utf8').includes(profileMarker))) {
   throw new Error('Compiled renderer bundle does not carry the lean build-profile marker')
 }
-const forbiddenAsar = [
-  /^\/node_modules\/@huggingface\/transformers(?:\/|$)/,
-  /^\/node_modules\/@xenova\/transformers(?:\/|$)/,
-  /^\/node_modules\/onnxruntime-(?:common|node|web)(?:\/|$)/,
-  /^\/node_modules\/sherpa-onnx-(?:node|darwin-|win-|linux-)/,
-  /^\/node_modules\/(?:sharp|@img)(?:\/|$)/,
-  /^\/out\/main\/(?:whisper-asr-host|parakeet-asr-host|parakeet-extract-host|speaker-embedding-host)\.(?:js|jsc)$/,
-  /^\/out\/renderer\/.*whisper\.worker/i,
-  /\.(?:onnx|gguf|ggml|safetensors|tflite|pt|pth|npy|npz)$/i,
-  /(?:^|\/)(?:pytorch_model|model|weights|encoder|decoder|joiner)\.(?:bin|pt|pth)$/i
-]
 for (const entry of asarEntries) {
-  if (forbiddenAsar.some((pattern) => pattern.test(entry))) throw new Error(`Inference runtime/worker payload is present inside app.asar: ${entry}`)
+  if (isForbiddenInferencePath(entry)) throw new Error(`Inference runtime/worker payload is present inside app.asar: ${entry}`)
 }
 
 const unpackedRoot = join(resourcesRoot, 'app.asar.unpacked')
@@ -236,11 +210,7 @@ try {
 }
 for (const path of unpackedEntries) {
   const relativePath = path.slice(unpackedRoot.length + 1).split('\\').join('/')
-  if (
-    /(?:^|\/)(?:@huggingface\/transformers|@xenova\/transformers|onnxruntime-(?:common|node|web)|sherpa-onnx-(?:node|darwin-|win-|linux-)|sharp|@img)(?:\/|$)/i.test(relativePath) ||
-    /\.(?:onnx|gguf|ggml|safetensors|tflite|pt|pth|npy|npz)$/i.test(relativePath) ||
-    /(?:^|\/)(?:pytorch_model|model|weights|encoder|decoder|joiner)\.(?:bin|pt|pth)$/i.test(relativePath)
-  ) {
+  if (isForbiddenInferencePath(relativePath)) {
     throw new Error(`Inference runtime/weight payload is present in app.asar.unpacked: ${relativePath}`)
   }
 }
@@ -257,11 +227,9 @@ for (const forbiddenRoot of ['asr', 'models', 'ort', 'llama', 'local-llm']) {
   }
 }
 for (const path of await treeFiles(resourcesRoot)) {
-  if (
-    /\.(?:onnx|gguf|ggml|safetensors|tflite|pt|pth|npy|npz)$/i.test(path) ||
-    /(?:^|\/)(?:pytorch_model|model|weights|encoder|decoder|joiner)\.(?:bin|pt|pth)$/i.test(path)
-  ) {
-    throw new Error(`Lean package contains an inference weight outside app.asar: ${path.slice(resourcesRoot.length + 1)}`)
+  const relativePath = path.slice(resourcesRoot.length + 1).split('\\').join('/')
+  if (isForbiddenInferencePath(relativePath)) {
+    throw new Error(`Lean package contains an inference runtime/weight outside app.asar: ${relativePath}`)
   }
 }
 
@@ -279,15 +247,32 @@ const ffmpegManifest = await readJson(join(ROOT, 'resources/ffmpeg/manifest.json
 const ffmpegRel = `${archFolder}/${platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'}`
 const ffmpegPin = ffmpegManifest.binaries?.[`${platform}-${arch}/${platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'}`]?.sha256
 if (!HASH.test(ffmpegPin ?? '')) throw new Error(`No reviewed FFmpeg hash exists for ${platform}/${arch}`)
-if (!postSign) {
-  const ffmpegBytes = await readFile(join(resourcesRoot, 'ffmpeg', ffmpegRel))
-  if (createHash('sha256').update(ffmpegBytes).digest('hex') !== ffmpegPin) {
-    throw new Error(`Packaged FFmpeg bytes differ from the reviewed ${platform}/${arch} manifest entry`)
-  }
+const ffmpegBytes = await readFile(join(resourcesRoot, 'ffmpeg', ffmpegRel))
+if (createHash('sha256').update(ffmpegBytes).digest('hex') !== ffmpegPin) {
+  throw new Error(`Packaged FFmpeg bytes differ from the reviewed ${platform}/${arch} manifest entry`)
 }
 if (platform === 'darwin') {
-  const infoPlist = await readFile(join(dirname(resourcesRoot), 'Info.plist'), 'utf8')
-  if (!infoPlist.includes('com.mantu.asktoto')) throw new Error('macOS bundle identity does not contain the established com.mantu.asktoto id')
+  const infoPlistPath = join(dirname(resourcesRoot), 'Info.plist')
+  const bundleIdentifier = execFileSync('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', infoPlistPath], {
+    encoding: 'utf8'
+  }).trim()
+  if (bundleIdentifier !== 'com.mantu.asktoto') {
+    throw new Error(`macOS bundle identifier must remain com.mantu.asktoto, got ${JSON.stringify(bundleIdentifier)}`)
+  }
+  const expectedAppArch = arch === 'x64' ? 'x64' : 'arm64'
+  const appExecutable = join(appRoot, 'Contents', 'MacOS', 'Metis')
+  assertMachOArchitectures(await readFile(appExecutable), [expectedAppArch], 'Metis application executable')
+  const electronFramework = join(
+    appRoot,
+    'Contents',
+    'Frameworks',
+    'Electron Framework.framework',
+    'Versions',
+    'A',
+    'Electron Framework'
+  )
+  await requireFile(electronFramework, 'Electron Framework executable')
+  assertMachOArchitectures(await readFile(electronFramework), [expectedAppArch], 'Electron Framework executable')
   const helperPath = join(resourcesRoot, 'mac-helper', 'metis-mac-helper')
   const helperArches = execFileSync('lipo', ['-archs', helperPath], { encoding: 'utf8' }).trim().split(/\s+/)
   const expectedHelperArches = ['arm64', 'x86_64']
@@ -316,4 +301,4 @@ const asarBytes = (await lstat(asarPath)).size
 const unpackedBytes = (await Promise.all(unpackedEntries.map((path) => lstat(path)))).reduce((sum, stat) => sum + stat.size, 0)
 console.log(`[check-lean-package] PASS profile=lean platform=${platform} arch=${arch} source=${inventory.sourceCommit}`)
 console.log(`[check-lean-package] inventory=${inventory.identity} coreFiles=${inventory.coreFiles.length}; inventory scope excludes signed executables, app.asar and the complete app tree`)
-console.log(`[check-lean-package] measured appTreeBytes=${appBytes} appAsarBytes=${asarBytes} appAsarUnpackedBytes=${unpackedBytes} postSign=${postSign}`)
+console.log(`[check-lean-package] measured appTreeBytes=${appBytes} appAsarBytes=${asarBytes} appAsarUnpackedBytes=${unpackedBytes}`)

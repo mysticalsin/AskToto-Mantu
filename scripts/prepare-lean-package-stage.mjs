@@ -4,6 +4,7 @@ import { cp, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/prom
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { inventoryCoreFiles, packageInventoryIdentity, validatePackageInventory } from './lib/package-inventory.mjs'
+import { copyContainedTree } from './lib/contained-tree-copy.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PROFILE = process.env.METIS_PACKAGE_PROFILE ?? 'full'
@@ -74,7 +75,11 @@ await copyTree('resources/license-lease', 'license-lease')
 await copyTree(`resources/ffmpeg/${targetFolder}`, `ffmpeg/${targetFolder}`)
 await copyTree('resources/ffmpeg/manifest.json', 'ffmpeg/manifest.json')
 await copyTree('resources/ffmpeg/LICENSE.LGPL-2.1.txt', 'ffmpeg/LICENSE.LGPL-2.1.txt')
-await copyTree(`resources/managed-node/${managedNodeFolder}`, `managed-node/${managedNodeFolder}`)
+await copyContainedTree(
+  join(ROOT, 'resources', 'managed-node', managedNodeFolder),
+  join(resourcesRoot, 'managed-node', managedNodeFolder),
+  { allowSymlinkTargetsWithin: join(ROOT, 'resources', 'managed-node', managedNodeFolder) }
+)
 if (platform === 'darwin') {
   await copyTree('resources/mac-helper', 'mac-helper')
 } else {

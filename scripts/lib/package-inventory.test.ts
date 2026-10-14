@@ -65,6 +65,13 @@ describe('lean package inventory contract', () => {
     expect(() => validatePackageInventory(windowsArm)).toThrow(/Windows inventory/)
   })
 
+  it('rejects package inventory paths that escape the package resource root', () => {
+    const escaped = inventory()
+    escaped.coreFiles[0].path = '../outside.json'
+    escaped.identity = packageInventoryIdentity(escaped)
+    expect(() => validatePackageInventory(escaped)).toThrow(/path is invalid/)
+  })
+
   it('hashes every staged regular file in canonical path order and excludes only the inventory itself', async () => {
     const root = await mkdtemp(join(tmpdir(), 'metis-package-inventory-'))
     try {
