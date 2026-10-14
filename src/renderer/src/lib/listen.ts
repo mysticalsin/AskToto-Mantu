@@ -2084,10 +2084,6 @@ export function useListen(
         if (!listenSpeechEngine(engine, cloudProvider)) {
           setState((s) => ({
             ...s,
-            listening: false,
-            capturing: false,
-            loading: false,
-            ready: false,
             error: 'The selected speech engine is not configured.'
           }))
           return
@@ -2658,7 +2654,11 @@ export function useListen(
   )
   captureStateFailureRef.current = (epoch): void => {
     if (!captureAdmissionIsOpen(epoch)) return
-    failAdmittedCapture('Capture state could not be validated; Listen stopped.')
+    const cloudCaptureId = cloudCaptureIdRef.current
+    failAdmittedCapture('Capture state could not be validated; Listen stopped.', {
+      forceCloudStop: engineRef.current === 'cloud',
+      cloudCaptureId: engineRef.current === 'cloud' ? (cloudCaptureId ?? undefined) : undefined
+    })
   }
 
   // Suspending each open channel's AudioContext (rather than closing it) halts the worklet's audio-render
