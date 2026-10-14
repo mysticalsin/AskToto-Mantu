@@ -10,6 +10,7 @@ interface Job {
   concurrency: { group: string; cancelInProgress: boolean } | null
   uploads: string[]
   downloads: string[]
+  commands: string[]
 }
 
 interface WorkflowModel {
@@ -106,7 +107,7 @@ function parseWorkflow(source: string): WorkflowModel {
     const jobHeader = line.match(/^  ([a-z][a-z0-9-]*):$/)
     if (jobHeader) {
       currentJob = jobHeader[1]
-      jobs[currentJob] = { condition: null, needs: [], concurrency: null, uploads: [], downloads: [] }
+      jobs[currentJob] = { condition: null, needs: [], concurrency: null, uploads: [], downloads: [], commands: [] }
       currentAction = null
       waitingForArtifactName = false
       continue
@@ -130,6 +131,9 @@ function parseWorkflow(source: string): WorkflowModel {
       waitingForArtifactName = false
       continue
     }
+
+    const command = line.match(/^        run:\s*(.*)$/)
+    if (command) jobs[currentJob].commands.push(command[1].trim())
 
     if (line.match(/^      - uses:\s*actions\/upload-artifact@/)) {
       currentAction = 'upload'
@@ -247,6 +251,9 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
     expect(jobs['release-decision'].condition).toBe("github.event_name == 'push'")
     expect(jobs['release-decision'].needs).toEqual([])
     expect(jobs['release-decision'].uploads).toEqual(['release-decision'])
+    expect(jobs['release-decision'].commands).toContain(
+      'node scripts/release/decide.mjs --commit "$GITHUB_SHA" --ledger program/ledger/tickets.json --matrix program/traceability/matrix.json --out out/release-decision'
+    )
     expect(jobs['publish-macos'].needs).toContain('release-decision')
     expect(jobs['publish-windows'].needs).toContain('release-decision')
     for (const name of ['release-quality', 'release-macos', 'release-windows']) {
