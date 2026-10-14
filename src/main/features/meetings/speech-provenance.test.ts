@@ -167,4 +167,21 @@ describe('bounded meeting speech codec', () => {
     )
     expect(projectMeetingSpeech(malformed)).toEqual({ ok: false, reason: 'FRAME_AMBIGUOUS' })
   })
+
+  it('retains a dense maximum-sized valid event under an explicit test-only budget', () => {
+    const text = 'x'.repeat(8192)
+    const words = Array.from({ length: 256 }, () => ({ text: 'dense', startMs: 0, endMs: 1000, language: 'fr' }))
+    const dense = { ...line, text, speech: { ...line.speech!, words, segment: { ...line.speech!.segment, text } } }
+    const denseLimits = {
+      maxRecords: 1,
+      maxWords: 256,
+      maxFieldBytes: 8192,
+      maxRecordBytes: 100000,
+      maxPayloadBytes: 200000
+    }
+    const decoded = decodeMeetingSpeech(encodeSpeechTranscript([dense], denseLimits), denseLimits)
+    expect(decoded.ok && decoded.status).toBe('valid')
+    if (decoded.ok && decoded.status === 'valid') expect(decoded.lines).toEqual([dense])
+    expect(() => encodeSpeechTranscript([dense], { ...denseLimits, maxWords: 255 })).toThrow()
+  })
 })

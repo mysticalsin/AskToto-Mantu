@@ -13,8 +13,8 @@ import {
   readSavedFile
 } from './transcripts'
 import { configureMeetingSpeechLimits } from './features/meetings/meeting-speech'
-import { recallRead, updateMeetingTranscript, searchMeetings } from './recall'
-import { readSavedMeeting } from './history-actions'
+import { recallRead, updateMeetingTranscript, updateMeetingRecap, searchMeetings } from './recall'
+import { readSavedMeeting, meetingOpenTarget } from './history-actions'
 import { readSourceText } from './brain/inputs'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
@@ -174,5 +174,72 @@ describe('actual saved final speech provenance', () => {
   it('refuses metadata save without a trusted main budget rather than losing the event', async () => {
     configureMeetingSpeechLimits(undefined)
     await expect(saveMeeting(settings, meeting())).rejects.toThrow('Speech metadata could not be retained.')
+  })
+
+  it.each([false, true])('keeps complete original Open semantics with encryption=%s', async (encrypted) => {
+    settings.encryptTranscripts = encrypted
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    const target = await meetingOpenTarget(folder, basename(file))
+    expect(target.ok).toBe(true)
+    if (target.ok) {
+      expect(target.encrypted).toBe(encrypted)
+      if (!encrypted) expect(target.path).toBe(file)
+      expect(readFileSync(target.path, 'utf8')).toContain(input.lines[0].speech!.captureId)
+    }
+  })
+
+  it('does not retain raw line or word metadata under summary-only final save or autosave', async () => {
+    settings.enterpriseLive = {
+      managed: true,
+      inferenceMode: 'cloud-only',
+      summaryOnly: true
+    } as Settings['enterpriseLive']
+    configureMeetingSpeechLimits(undefined)
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    await saveDraftTranscript(settings, input)
+    const document = readSavedFile(file)
+    expect(document).toContain('retention: summary-only')
+    expect(document).not.toContain(input.lines[0].text)
+    expect(document).not.toContain(input.lines[0].speech!.captureId)
+    expect(readdirSync(folder).some((name) => name.startsWith('.autosave-draft-'))).toBe(false)
+  })
+
+  it('preserves the last complete draft when the next snapshot exceeds the trusted budget', async () => {
+    const input = meeting()
+    await saveDraftTranscript(settings, input)
+    const draft = readdirSync(folder).find((name) => name.startsWith('.autosave-draft-'))!
+    const before = readFileSync(join(folder, draft))
+    configureMeetingSpeechLimits({
+      maxRecords: 1,
+      maxWords: 1000,
+      maxFieldBytes: 10000,
+      maxRecordBytes: 50000,
+      maxPayloadBytes: 1000000
+    })
+    await saveDraftTranscript(settings, { ...input, lines: [input.lines[0], input.lines[0]] })
+    expect(readFileSync(join(folder, draft))).toEqual(before)
+  })
+
+  it('updates a real empty recap without treating a spoken Notes heading as its document section', async () => {
+    const input = meeting(finalLine('Bonjour team.\n## Notes & follow-ups\nSpoken notes heading, not saved recap.'))
+    const file = await saveMeeting(settings, input)
+    expect(await updateMeetingRecap(settings, basename(file), 'Synthetic edited recap')).toEqual({ ok: true })
+    const recalled = await recallRead(basename(file))
+    expect(recalled.recap).toBe('Synthetic edited recap')
+    expect(recalled.lines).toEqual(input.lines)
+  })
+
+  it('escapes reserved delimiter text in recap edits while retaining exact speech records', async () => {
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    expect(
+      await updateMeetingRecap(settings, basename(file), 'Synthetic recap\n<!-- /metis-speech-provenance -->')
+    ).toEqual({ ok: true })
+    const recalled = await recallRead(basename(file))
+    expect(recalled.ok).toBe(true)
+    expect(recalled.recap).toContain('&lt;!-- /metis-speech-provenance -->')
+    expect(recalled.lines).toEqual(input.lines)
   })
 })
