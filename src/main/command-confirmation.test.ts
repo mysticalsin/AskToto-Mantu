@@ -32,25 +32,27 @@ function createConfirmation() {
   }
   const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const }))
   const sendCommandState = vi.fn()
+  const getOwner = vi.fn(() => {
+    const owner = state.owner
+    return owner
+      ? {
+          isDestroyed: () => owner.destroyed,
+          isVisible: () => owner.visible,
+          isFocused: () => owner.focused,
+          webContents: { send: sendCommandState }
+        }
+      : null
+  })
+  const audit = vi.fn()
   const confirmation = new CommandConfirmation({
     execute,
     isAuthenticated: () => state.authenticated,
     hasListenEntitlement: () => state.listenEntitled,
-    getOwner: () => {
-      const owner = state.owner
-      return owner
-        ? {
-            isDestroyed: () => owner.destroyed,
-            isVisible: () => owner.visible,
-            isFocused: () => owner.focused,
-            webContents: { send: sendCommandState }
-          }
-        : null
-    },
+    getOwner,
     isOnboardingExclusive: () => state.onboardingExclusive,
-    audit: vi.fn()
+    audit
   })
-  return { confirmation, execute, sendCommandState, state }
+  return { confirmation, execute, sendCommandState, getOwner, audit, state }
 }
 
 function proposalFor(confirmation: CommandConfirmation) {
@@ -136,17 +138,80 @@ describe('CommandConfirmation lifecycle policy', () => {
 
   it.each(['auth_session_cleared', 'app_quit'] as const)('revokes a pending proposal on %s', async (reason) => {
     const { confirmation, execute } = createConfirmation()
-    const handler = vi.fn()
+    const result = { closed: true }
+    const handler = vi.fn((..._args: [string, { sequence: number }]) => result)
     const proposal = proposalFor(confirmation)
+    const wrapped = confirmation.wrapLifecycleListener(reason, handler)
 
-    confirmation.wrapLifecycleListener(reason, handler)()
+    expect(wrapped('signout', { sequence: 7 })).toBe(result)
 
-    expect(handler).toHaveBeenCalledOnce()
+    expect(handler).toHaveBeenCalledExactlyOnceWith('signout', { sequence: 7 })
     expect(await confirmation.confirm({ ...proposal, webContentsId: 17 })).toEqual({
       ok: false,
       reason: 'proposal_missing'
     })
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'onState',
+    'owner',
+    'audit'
+  ] as const)('still runs the %s lifecycle listener once and rethrows its revocation error', async (seam) => {
+    const { confirmation, sendCommandState, getOwner, audit } = createConfirmation()
+    const proposal = proposalFor(confirmation)
+    const error = new Error(`${seam} failed`)
+    if (seam === 'onState')
+      sendCommandState.mockImplementationOnce(() => {
+        throw error
+      })
+    if (seam === 'owner')
+      getOwner.mockImplementationOnce(() => {
+        throw error
+      })
+    if (seam === 'audit')
+      audit.mockImplementationOnce(() => {
+        throw error
+      })
+    const listener = vi.fn((..._args: [string, number]) => 'listener-result')
+    const wrapped = confirmation.wrapLifecycleListener('auth_session_cleared', listener)
+
+    let caught: unknown
+    try {
+      wrapped('auth', 3)
+    } catch (thrown) {
+      caught = thrown
+    }
+    expect(caught).toBe(error)
+    expect(listener).toHaveBeenCalledExactlyOnceWith('auth', 3)
+    expect(await confirmation.confirm({ ...proposal, webContentsId: 17 })).toEqual({
+      ok: false,
+      reason: 'proposal_missing'
+    })
+  })
+
+  it('runs the current-window blur action and preserves the revocation error when reporting throws', async () => {
+    const { confirmation, sendCommandState } = createConfirmation()
+    initialize(confirmation, new FakePowerMonitor())
+    const proposal = proposalFor(confirmation)
+    const error = new Error('window blur state reporting failed')
+    sendCommandState.mockImplementationOnce(() => {
+      throw error
+    })
+    const onCurrentBlur = vi.fn()
+
+    let caught: unknown
+    try {
+      confirmation.onWindowBlurred(true, onCurrentBlur)
+    } catch (thrown) {
+      caught = thrown
+    }
+    expect(caught).toBe(error)
+    expect(onCurrentBlur).toHaveBeenCalledOnce()
+    expect(await confirmation.confirm({ ...proposal, webContentsId: 17 })).toEqual({
+      ok: false,
+      reason: 'proposal_missing'
+    })
   })
 
   it('only revokes and parks the current owner on blur, and revokes the current owner on hide', async () => {
