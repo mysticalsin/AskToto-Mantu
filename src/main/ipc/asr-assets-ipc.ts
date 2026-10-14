@@ -1,10 +1,7 @@
 import { IPC, type AsrAssetsStatus, type ImportAssetsProgress } from '@shared/ipc'
 
-type AsrAssetsIpcEvent = { sender: unknown }
-type AsrAssetsIpcMain = {
-  handle(channel: string, listener: (event: AsrAssetsIpcEvent, request?: unknown) => unknown): void
-  removeHandler(channel: string): void
-}
+type AsrAssetsIpcEvent = Electron.IpcMainInvokeEvent
+type AsrAssetsIpcMain = Pick<Electron.IpcMain, 'handle' | 'removeHandler'>
 
 /** Register the ASR asset IPC handlers. Registration itself performs no probing or transfer work. */
 export function registerAsrAssetsIpc(options: {
