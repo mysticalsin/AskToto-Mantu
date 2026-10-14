@@ -208,15 +208,19 @@ async function captureMovedTree(
         ? [...expectedSourceNames, destinationName]
         : [...destinationParent.children, destinationName]
     const sourceParentNames = await readExactDirectoryNames(oldParent, sourceParent.children.length)
-    const destinationParentNames =
-      newParent === oldParent
-        ? sourceParentNames
-        : await readExactDirectoryNames(newParent, destinationParent.children.length + 1)
-    if (
-      [...sourceParentNames].sort().join('\0') !== [...expectedSourceNames].sort().join('\0') ||
-      [...destinationParentNames].sort().join('\0') !== [...expectedDestinationNames].sort().join('\0')
-    )
-      return null
+    let destinationParentNames: string[]
+    if (newParent === oldParent) {
+      destinationParentNames = sourceParentNames
+      if ([...sourceParentNames].sort().join('\0') !== [...expectedDestinationNames].sort().join('\0')) return null
+    } else {
+      destinationParentNames = await readExactDirectoryNames(newParent, destinationParent.children.length + 1)
+      if (
+        [...sourceParentNames].sort().join('\0') !== [...expectedSourceNames].sort().join('\0') ||
+        [...destinationParentNames].sort().join('\0') !== [...expectedDestinationNames].sort().join('\0')
+      ) {
+        return null
+      }
+    }
     directories.push({
       path: oldParent,
       version: await lstat(oldParent, { bigint: true }),
@@ -336,3 +340,5 @@ async function disposeRuntimeOwnedTreeMove(capability: RuntimeOwnedTreeMoveAdmis
   state.disposed = true
   await state.admission.dispose()
 }
+
+export { recoverRuntimeOwnedTreeMove } from './runtime-owned-tree-recovery'
