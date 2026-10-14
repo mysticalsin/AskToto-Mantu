@@ -1,7 +1,8 @@
+import * as fs from 'node:fs'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SPEECH_PACK_COMPONENTS, type SpeechPackComponent } from './manifest'
 import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 
@@ -38,6 +39,30 @@ describe('speech-pack resolver', () => {
       status: 'ready',
       manifestIdentity: componentManifestIdentity(c)
     })
+  })
+
+  it('reads only the activation marker during cold resolution and never opens a model weight', () => {
+    const c = component()
+    const pack = join(root, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    const marker = join(root, c.id, 'active.json')
+    writeFileSync(
+      marker,
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    const readSpy = vi.spyOn(fs, 'readFileSync')
+    try {
+      expect(resolveSpeechPack(root, c).status).toBe('ready')
+      expect(readSpy.mock.calls.map(([path]) => String(path))).toEqual([marker])
+    } finally {
+      readSpy.mockRestore()
+    }
   })
 
   it('requires explicit repair for legacy, unknown-field, wrong-manifest, wrong-size and symlink markers or files', () => {
@@ -104,6 +129,41 @@ describe('speech-pack resolver', () => {
     )
     symlinkSync(actual, linked, process.platform === 'win32' ? 'junction' : 'dir')
     expect(resolveSpeechPack(linked, c).status).toBe('repair-needed')
+  })
+
+  it('rejects linked component and version directories', () => {
+    const c = component()
+    const outside = join(root, 'outside')
+    const outsidePack = join(outside, c.version)
+    mkdirSync(outsidePack, { recursive: true })
+    writeFileSync(join(outsidePack, 'model.bin'), 'abcdef')
+    writeFileSync(
+      join(outside, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    const componentDir = join(root, c.id)
+    symlinkSync(outside, componentDir, process.platform === 'win32' ? 'junction' : 'dir')
+    expect(resolveSpeechPack(root, c).status).toBe('repair-needed')
+    rmSync(componentDir, { recursive: true, force: true })
+
+    mkdirSync(componentDir)
+    const linkedVersion = join(componentDir, c.version)
+    symlinkSync(outsidePack, linkedVersion, process.platform === 'win32' ? 'junction' : 'dir')
+    writeFileSync(
+      join(componentDir, 'active.json'),
+      JSON.stringify({
+        schema: 2,
+        component: c.id,
+        version: c.version,
+        manifestIdentity: componentManifestIdentity(c)
+      })
+    )
+    expect(resolveSpeechPack(root, c).status).toBe('repair-needed')
   })
 
   it('derives identities from pinned manifest content, not object key order', () => {

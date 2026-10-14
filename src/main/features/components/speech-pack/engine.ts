@@ -107,7 +107,9 @@ export interface SpeechPackEngine {
   initialise(): Promise<void>
   getState(id: SpeechPackComponentId): SpeechPackState
   states(): Record<SpeechPackComponentId, SpeechPackState>
-  subscribe(listener: (event: { id: SpeechPackComponentId; state: SpeechPackState }) => void): () => void
+  subscribe(
+    listener: (event: { id: SpeechPackComponentId; state: SpeechPackState; freshlyVerified?: boolean }) => void
+  ): () => void
   /** Queue installs; `selected` (the engine chosen for this machine) goes first. */
   enqueue(ids: readonly SpeechPackComponentId[], selected?: SpeechPackComponentId): void
   /** Force a fresh staged transfer, hash verification and isolated self-test before promotion. */
@@ -178,7 +180,10 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const states = new Map<SpeechPackComponentId, SpeechPackState>(
     components.map((c) => [c.id, { status: 'not-installed' }])
   )
-  const listeners = new Set<(event: { id: SpeechPackComponentId; state: SpeechPackState }) => void>()
+  const freshVerification = new Set<SpeechPackComponentId>()
+  const listeners = new Set<
+    (event: { id: SpeechPackComponentId; state: SpeechPackState; freshlyVerified?: boolean }) => void
+  >()
   const queue: SpeechPackComponentId[] = []
   const forcedRepairs = new Set<SpeechPackComponentId>()
   const controllers = new Map<SpeechPackComponentId, AbortController>()
@@ -192,7 +197,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const deliver = (id: SpeechPackComponentId): void => {
     lastSent.set(id, Date.now())
     const state = states.get(id) as SpeechPackState
-    for (const listener of listeners) listener({ id, state })
+    for (const listener of listeners) listener({ id, state, freshlyVerified: freshVerification.has(id) })
   }
   const schedule = (id: SpeechPackComponentId): void => {
     if (timers.has(id)) return
@@ -205,7 +210,18 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     timer.unref?.()
     timers.set(id, timer)
   }
-  const set = (id: SpeechPackComponentId, state: SpeechPackState): void => {
+  const set = (id: SpeechPackComponentId, state: SpeechPackState, freshlyVerified = false): void => {
+    if (state.status === 'ready') {
+      if (freshlyVerified) freshVerification.add(id)
+      else freshVerification.delete(id)
+    } else if (
+      state.status === 'queued' ||
+      state.status === 'downloading' ||
+      state.status === 'error' ||
+      state.status === 'paused'
+    ) {
+      freshVerification.delete(id)
+    }
     states.set(id, state)
     schedule(id)
   }
@@ -434,7 +450,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         if (!(await selfTestDirectory(c, dir))) continue
         await writeMarker(c)
       }
-      set(c.id, { status: 'ready' })
+      set(c.id, { status: 'ready' }, !alreadyActivated)
       // Keep the old complete directory until a verified current directory and its marker both exist.
       await removeAsideDirs(c)
     }
@@ -456,7 +472,6 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       await restoreMarkerSnapshot(c, previousMarker)
     } else {
       await rm(markerPath(c), { force: true })
-      if (!previousMarker && restoredCurrent) await writeMarker(c)
     }
   }
 
@@ -524,6 +539,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
             sha256: file.sha256,
             signal,
             resumeScope: options.resumeScope,
+            trustedRoot: rootDir,
             authorize: () => options.authorizeTransfer?.(c.id) !== false,
             onProgress: (onDisk) => set(c.id, { status: 'downloading', bytesDone: done + onDisk, bytesTotal })
           },
@@ -542,6 +558,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
           sha256: archive.sha256,
           signal,
           resumeScope: options.resumeScope,
+          trustedRoot: rootDir,
           authorize: () => options.authorizeTransfer?.(c.id) !== false,
           onProgress: (onDisk) => set(c.id, { status: 'downloading', bytesDone: onDisk, bytesTotal })
         },
@@ -597,40 +614,33 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     const dest = finalDir(c)
     const aside = `${dest}.old-${Date.now()}`
     const previousMarker = await readMarkerSnapshot(c)
-    await mkdir(dirname(dest), { recursive: true })
-    if (!previousMarker) await rm(markerPath(c), { force: true })
-    // An existing pack is renamed aside, never deleted first, so the swap has no moment without a whole directory.
-    if (await exists(dest)) {
-      await rename(dest, aside)
-      await options.onActivationStep?.('old-moved-aside')
+    let movedAside = false
+    let promoted = false
+    try {
+      await mkdir(dirname(dest), { recursive: true })
+      if (!previousMarker) await rm(markerPath(c), { force: true })
+      // An existing pack is renamed aside, never deleted first, so the swap has no moment without a whole directory.
+      if (await exists(dest)) {
+        await rename(dest, aside)
+        movedAside = true
+        await options.onActivationStep?.('old-moved-aside')
+        assertAuthorized(c, signal)
+      }
+      await rename(staging, dest)
+      promoted = true
+      await options.onActivationStep?.('renamed')
       assertAuthorized(c, signal)
-    }
-    await rename(staging, dest)
-    await options.onActivationStep?.('renamed')
-    assertAuthorized(c, signal)
-    await writeMarker(c)
-    // A cancel that arrived after the last check above has no step left to stop, so it takes the pack back out.
-    if (signal.aborted && signal.reason === 'cancel') {
-      await deactivate(c, previousMarker)
-      throw signal.reason
-    }
-    if (options.authorizeTransfer?.(c.id) === false) {
-      await deactivate(c, previousMarker)
-      throw new SpeechPackError('policy', 'speech-pack action is no longer authorized')
-    }
-    await options.onActivationStep?.('ready-check')
-    if (signal.aborted && signal.reason === 'cancel') {
-      await deactivate(c, previousMarker)
-      throw signal.reason
-    }
-    if (options.authorizeTransfer?.(c.id) === false) {
-      await deactivate(c, previousMarker)
-      throw new SpeechPackError('policy', 'speech-pack action is no longer authorized')
-    }
-    set(c.id, { status: 'ready' })
-    if (signal.aborted && signal.reason === 'cancel') {
-      await deactivate(c, previousMarker)
-      throw signal.reason
+      await writeMarker(c)
+      // Every failure after the first activation rename restores the exact prior marker and complete directory.
+      assertAuthorized(c, signal)
+      await options.onActivationStep?.('ready-check')
+      assertAuthorized(c, signal)
+      set(c.id, { status: 'ready' }, true)
+      // The service clears its activity lease on the ready event; only a user cancellation can still win here.
+      if (signal.aborted && signal.reason === 'cancel') throw signal.reason
+    } catch (error) {
+      if (movedAside || promoted) await deactivate(c, previousMarker)
+      throw error
     }
   }
 

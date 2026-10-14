@@ -1,19 +1,40 @@
+import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import type { SpeechPackEngine, SpeechPackState } from './engine'
-import { SPEECH_PACK_COMPONENTS, WHISPER_BASE_Q8, type SpeechPackComponentId } from './manifest'
+import { createSpeechPackEngine, type SpeechPackEngine, type SpeechPackState } from './engine'
+import {
+  SPEECH_PACK_COMPONENTS,
+  WHISPER_BASE_Q8,
+  type SpeechPackComponent,
+  type SpeechPackComponentId
+} from './manifest'
+import * as Resolver from './resolver'
 import { componentManifestIdentity } from './resolver'
 import { createSpeechPackService } from './service'
 
-function fakeEngine(): SpeechPackEngine {
+function fakeEngine(): {
+  engine: SpeechPackEngine
+  update: (id: SpeechPackComponentId, state: SpeechPackState, freshlyVerified?: boolean) => void
+} {
   const states = new Map(
     SPEECH_PACK_COMPONENTS.map((component) => [component.id, { status: 'not-installed' } as SpeechPackState])
   )
   const listeners = new Set<
-    (event: { id: (typeof SPEECH_PACK_COMPONENTS)[number]['id']; state: SpeechPackState }) => void
+    (event: {
+      id: (typeof SPEECH_PACK_COMPONENTS)[number]['id']
+      state: SpeechPackState
+      freshlyVerified?: boolean
+    }) => void
   >()
-  const update = (id: (typeof SPEECH_PACK_COMPONENTS)[number]['id'], state: SpeechPackState): void => {
+  const update = (
+    id: (typeof SPEECH_PACK_COMPONENTS)[number]['id'],
+    state: SpeechPackState,
+    freshlyVerified = false
+  ): void => {
     states.set(id, state)
-    for (const listener of listeners) listener({ id, state })
+    for (const listener of listeners) listener({ id, state, freshlyVerified })
   }
   const enqueue = vi.fn((ids: readonly SpeechPackComponentId[], _selected?: SpeechPackComponentId) => {
     for (const id of ids) update(id, { status: 'queued' })
@@ -33,11 +54,11 @@ function fakeEngine(): SpeechPackEngine {
     cancel: vi.fn((id) => update(id, { status: 'error', kind: 'cancelled' })),
     whenIdle: async () => undefined
   }
-  return engine
+  return { engine, update }
 }
 
 function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]> = {}) {
-  const engine = fakeEngine()
+  const { engine, update } = fakeEngine()
   const createEngine = vi.fn(() => engine)
   const options: Parameters<typeof createSpeechPackService>[0] = {
     resourcesRoot: '/missing-resources',
@@ -50,7 +71,7 @@ function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]>
     createEngine: createEngine as never,
     ...overrides
   }
-  return { service: createSpeechPackService(options), engine, createEngine }
+  return { service: createSpeechPackService(options), engine, createEngine, update }
 }
 
 describe('explicit speech-pack service boundary', () => {
@@ -76,6 +97,65 @@ describe('explicit speech-pack service boundary', () => {
     expect(createEngine).toHaveBeenCalledTimes(1)
     expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id)
     expect(service.snapshot().progress?.componentId).toBe(WHISPER_BASE_Q8.id)
+  })
+
+  it('completes a real engine activation after its ready event clears the service activity lease', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'speech-pack-service-engine-'))
+    const fixturePath = join(root, 'fixture.wav')
+    const fixture = Buffer.from('synthetic pinned fixture for this engine/service boundary test')
+    writeFileSync(fixturePath, fixture)
+    const model = Buffer.from('verified model file')
+    const component: SpeechPackComponent = {
+      ...WHISPER_BASE_Q8,
+      files: [
+        {
+          path: 'model.bin',
+          bytes: model.length,
+          sha256: createHash('sha256').update(model).digest('hex')
+        }
+      ],
+      source: { kind: 'files', baseUrl: `https://huggingface.co/test/resolve/${'b'.repeat(40)}` }
+    }
+    let createdEngine: SpeechPackEngine | null = null
+    const currentEngine = (): SpeechPackEngine | null => createdEngine
+    const service = createSpeechPackService({
+      resourcesRoot: join(root, 'resources'),
+      packaged: false,
+      rootDir: join(root, 'speech-packs'),
+      selectedEngine: () => 'whisper',
+      policyAllowsTransfer: () => true,
+      fixtureWavPath: fixturePath,
+      components: [component],
+      createEngine: (options) => {
+        createdEngine = createSpeechPackEngine({
+          ...options,
+          fixture: { bytes: fixture.length, sha256: createHash('sha256').update(fixture).digest('hex') },
+          freeBytes: () => Number.MAX_SAFE_INTEGER,
+          fetch: async () => new Response(model),
+          selfTest: async () => 'Ask not what your country can do for you, ask what you can do for your country.'
+        })
+        return createdEngine
+      }
+    })
+    try {
+      expect(
+        service.action({
+          componentId: component.id,
+          action: 'download',
+          manifestIdentity: componentManifestIdentity(component)
+        })
+      ).toEqual({ ok: true })
+      const activeEngine = currentEngine()
+      if (!activeEngine) throw new Error('expected service to create its engine after explicit consent')
+      await activeEngine.whenIdle()
+      expect(service.snapshot().components[0]).toMatchObject({
+        state: 'ready',
+        integrity: 'freshly-hash-verified-and-self-tested'
+      })
+    } finally {
+      await service.shutdown()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('rejects stale, unselected, disabled and policy-blocked requests before constructing the engine', () => {
@@ -132,6 +212,40 @@ describe('explicit speech-pack service boundary', () => {
       })
     ).toEqual({ ok: false, reason: 'busy' })
     expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('does not claim fresh hash and self-test evidence for a ready shortcut, and clears it after repair failure', () => {
+    const c = WHISPER_BASE_Q8
+    const readiness: Resolver.SpeechPackReadiness = {
+      status: 'ready',
+      componentId: c.id,
+      version: c.version,
+      manifestIdentity: componentManifestIdentity(c),
+      evidence: 'prior-activation-and-size-checked'
+    }
+    const resolve = vi.spyOn(Resolver, 'resolveSpeechPack').mockReturnValue(readiness)
+    try {
+      const { service, update } = setup()
+      service.action({ componentId: c.id, action: 'download', manifestIdentity: componentManifestIdentity(c) })
+      update(c.id, { status: 'ready' }) // existing-install shortcut, with no self-test event
+      expect(service.snapshot().components.find((item) => item.componentId === c.id)?.integrity).toBe(
+        'prior-activation-and-size-checked'
+      )
+
+      update(c.id, { status: 'self-testing' })
+      update(c.id, { status: 'ready' }, true)
+      expect(service.snapshot().components.find((item) => item.componentId === c.id)?.integrity).toBe(
+        'freshly-hash-verified-and-self-tested'
+      )
+
+      update(c.id, { status: 'self-testing' })
+      update(c.id, { status: 'error', kind: 'tamper' })
+      expect(service.snapshot().components.find((item) => item.componentId === c.id)?.integrity).toBe(
+        'prior-activation-and-size-checked'
+      )
+    } finally {
+      resolve.mockRestore()
+    }
   })
 
   it('reports malformed action payloads with a finite result and no side effects', () => {

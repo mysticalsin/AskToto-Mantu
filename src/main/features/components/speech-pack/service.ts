@@ -74,7 +74,6 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   let captureActive = false
   const listeners = new Set<(progress: SpeechPackProgress) => void>()
   const repairVerified = new Set<SpeechPackComponentId>()
-  const selfTestObserved = new Set<SpeechPackComponentId>()
   const resumeScope = randomUUID()
 
   const getEngine = (): SpeechPackEngine => {
@@ -89,7 +88,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       authorizeTransfer: (id) =>
         activity.has(id) && options.policyAllowsTransfer() && selectedId(options.selectedEngine()) === id
     })
-    unsubscribe = engine.subscribe(({ id, state }) => {
+    unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
       const progress: SpeechPackProgress =
         state.status === 'downloading'
@@ -110,12 +109,11 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       currentProgress = progress
       const validatedProgress = SpeechPackProgressSchema.parse(progress)
       for (const listener of listeners) listener(validatedProgress)
-      if (state.status === 'self-testing') selfTestObserved.add(id)
       if (state.status === 'ready') {
-        if (selfTestObserved.delete(id)) repairVerified.add(id)
+        if (freshlyVerified) repairVerified.add(id)
+        else repairVerified.delete(id)
       }
       if (state.status === 'error' || state.status === 'paused') {
-        selfTestObserved.delete(id)
         repairVerified.delete(id)
       }
       if (state.status === 'ready' || state.status === 'error' || state.status === 'paused') activity.delete(id)

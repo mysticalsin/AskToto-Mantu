@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { open as openAsync, rm as rmAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_TIMING, downloadVerified, type DownloadDeps } from './download'
 import { SpeechPackError } from './errors'
 import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-helpers/test-server.fixture'
@@ -58,6 +58,41 @@ describe('downloadVerified', () => {
     await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
     expect(readFileSync(join(dir, 'model.bin')).equals(body)).toBe(true)
     expect(existsSync(join(dir, 'model.bin.partial'))).toBe(false)
+  })
+
+  it('rejects linked parents and partial leaves before fetching or changing outside content', async () => {
+    const outside = join(dir, 'outside')
+    const owned = join(dir, 'owned')
+    mkdirSync(outside)
+    mkdirSync(owned)
+    const outsideSentinel = join(outside, 'sentinel.bin')
+    writeFileSync(outsideSentinel, 'keep this exact outside file')
+    const linkedParent = join(owned, 'linked')
+    symlinkSync(outside, linkedParent, process.platform === 'win32' ? 'junction' : 'dir')
+    const fetch = vi.fn(async () => {
+      throw new Error('must not fetch through a linked parent')
+    }) as unknown as typeof globalThis.fetch
+    const pinnedUrl = `https://huggingface.co/model/resolve/${'a'.repeat(40)}/model.bin`
+    const parentFailure = failure(
+      downloadVerified(
+        { ...request(pinnedUrl), dest: join(linkedParent, 'model.bin'), trustedRoot: owned },
+        deps({ fetch })
+      )
+    )
+    await expect(parentFailure).resolves.toMatchObject({ kind: 'tamper' })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(readFileSync(outsideSentinel, 'utf8')).toBe('keep this exact outside file')
+
+    const target = join(outside, 'target.partial')
+    writeFileSync(target, 'protected partial target')
+    const partial = join(owned, 'model.bin.partial')
+    symlinkSync(target, partial, process.platform === 'win32' ? 'file' : undefined)
+    const leafFailure = failure(
+      downloadVerified({ ...request(pinnedUrl), dest: join(owned, 'model.bin'), trustedRoot: owned }, deps({ fetch }))
+    )
+    await expect(leafFailure).resolves.toMatchObject({ kind: 'tamper' })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(readFileSync(target, 'utf8')).toBe('protected partial target')
   })
 
   it('resumes a transfer cut at 30% with a guarded Range request', async () => {

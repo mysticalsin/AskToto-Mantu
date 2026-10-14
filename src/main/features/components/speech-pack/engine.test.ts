@@ -1,5 +1,15 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -125,6 +135,22 @@ describe('speech-pack engine', () => {
     })
     expect(server.requests).toHaveLength(0)
     expect(existsSync(root)).toBe(false)
+  })
+
+  it('rejects a linked model root before fetching or changing files outside the owned root', async () => {
+    server = await serveFiles()
+    const c = whisper(server.base)
+    const outside = join(dir, 'outside')
+    mkdirSync(outside)
+    const sentinel = join(outside, 'sentinel.bin')
+    writeFileSync(sentinel, 'keep outside data')
+    symlinkSync(outside, root, process.platform === 'win32' ? 'junction' : 'dir')
+    const engine = make([c])
+    engine.enqueue([WHISPER])
+    await engine.whenIdle()
+    expect(engine.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'tamper' })
+    expect(server.requests).toHaveLength(0)
+    expect(readFileSync(sentinel, 'utf8')).toBe('keep outside data')
   })
 
   it('needs exactly the remaining bytes plus 512 MB of headroom', async () => {
@@ -349,7 +375,37 @@ describe('speech-pack engine', () => {
 
         expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
         expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
-        expect(existsSync(marker(WHISPER))).toBe(true)
+        expect(existsSync(marker(WHISPER))).toBe(false)
+      })
+
+      it.each([
+        ['cancel', 'old-moved-aside'],
+        ['policy', 'old-moved-aside'],
+        ['cancel', 'renamed'],
+        ['policy', 'renamed']
+      ] as const)('restores the existing ready pack after a same-version repair %s at %s', async (mode, step) => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const initial = make([c])
+        initial.enqueue([WHISPER])
+        await initial.whenIdle()
+        const priorMarker = readFileSync(marker(WHISPER))
+        let allowed = true
+        let replacing!: ReturnType<typeof make>
+        replacing = make([c], {
+          authorizeTransfer: () => allowed,
+          onActivationStep: (at) => {
+            if (at !== step) return
+            if (mode === 'cancel') replacing.cancel(WHISPER)
+            else allowed = false
+          }
+        })
+        replacing.repair(WHISPER)
+        await replacing.whenIdle()
+
+        expect(replacing.getState(WHISPER).status).toBe('error')
+        expect(readFileSync(marker(WHISPER))).toEqual(priorMarker)
+        expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
       })
 
       it('keeps the previous directory available for cancellation after the marker check', async () => {
@@ -384,7 +440,7 @@ describe('speech-pack engine', () => {
         await replacing.whenIdle()
         expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
         expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
-        expect(existsSync(marker(WHISPER))).toBe(true)
+        expect(existsSync(marker(WHISPER))).toBe(false)
         expect(readdirSync(join(root, WHISPER)).some((name) => name.includes('.old-'))).toBe(false)
       })
     })

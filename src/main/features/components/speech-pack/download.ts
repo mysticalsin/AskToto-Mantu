@@ -14,7 +14,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, parse, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
 import { isImmutableUrl } from './manifest'
@@ -58,23 +58,35 @@ export interface DownloadRequest {
   authorize?: () => boolean
   /** A service-process nonce; partial bytes from a prior process cannot resume silently. */
   resumeScope?: string
+  /** Owned model root; descendants are checked before any temporary path is created or opened. */
+  trustedRoot?: string
   /** Bytes of this file on disk so far (resumed bytes included). */
   onProgress: (bytesOnDisk: number) => void
 }
 
 const MAX_REDIRECTS = 5
 
-async function assertSafeDownloadPaths(dest: string): Promise<void> {
+async function assertSafeDownloadPaths(dest: string, trustedRoot?: string): Promise<void> {
+  const boundary = resolve(trustedRoot ?? dirname(dest))
   const parent = resolve(dirname(dest))
-  await mkdir(parent, { recursive: true })
-  const root = parse(parent).root
-  let current = root
-  for (const part of parent.slice(root.length).split(/[\\/]/).filter(Boolean)) {
+  const rel = relative(boundary, parent)
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+    throw new SpeechPackError('tamper', 'download parent escapes its owned root')
+  const boundaryStat = await lstat(boundary)
+  if (!boundaryStat.isDirectory() || boundaryStat.isSymbolicLink())
+    throw new SpeechPackError('tamper', 'download root is unsafe')
+  let current = boundary
+  for (const part of rel.split(sep).filter(Boolean)) {
     current = resolve(current, part)
+    try {
+      await mkdir(current)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
     const item = await lstat(current)
     if (!item.isDirectory() || item.isSymbolicLink()) throw new SpeechPackError('tamper', 'download parent is unsafe')
   }
-  for (const leaf of [`${dest}.partial`, `${dest}.partial.json`]) {
+  for (const leaf of [dest, `${dest}.partial`, `${dest}.partial.json`]) {
     try {
       const item = await lstat(leaf)
       if (!item.isFile() || item.isSymbolicLink() || item.nlink !== 1)
@@ -173,7 +185,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     await removeFile(meta, { force: true })
   }
 
-  await assertSafeDownloadPaths(req.dest)
+  await assertSafeDownloadPaths(req.dest, req.trustedRoot)
 
   let offset = await sizeOf(partial)
   let validator: string | null = null
@@ -274,7 +286,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     }
     if (!res.body) throw new SpeechPackError('http', 'response carried no body')
 
-    await assertSafeDownloadPaths(req.dest)
+    await assertSafeDownloadPaths(req.dest, req.trustedRoot)
     const fresh = validatorOf(res.headers)
     if (!append && fresh)
       await writeFile(
@@ -357,6 +369,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
  */
 export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps): Promise<void> {
   if (!isImmutableUrl(req.url)) throw new SpeechPackError('http', 'source is not pinned to an immutable reference')
+  await assertSafeDownloadPaths(req.dest, req.trustedRoot)
   if ((await sizeOf(req.dest)) === req.bytes) {
     try {
       if ((await sha256File(req.dest)) === req.sha256) {
