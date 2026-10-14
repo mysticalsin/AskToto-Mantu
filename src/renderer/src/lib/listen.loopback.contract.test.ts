@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const SRC = readFileSync(join(__dirname, 'listen.ts'), 'utf8')
+const CHANNELS_SRC = readFileSync(join(__dirname, 'listen-audio-channels.ts'), 'utf8')
+const RECOVERY_SRC = readFileSync(join(__dirname, 'listen-audio-recovery.ts'), 'utf8')
 
 /**
  * MQA-267 — the 'them' channel was being fed through an echo canceller whose job is to delete it.
@@ -27,9 +29,9 @@ const SRC = readFileSync(join(__dirname, 'listen.ts'), 'utf8')
  */
 describe('MQA-267 — voice processing stays OFF on the loopback, ON on the mic', () => {
   it('declares the loopback constraint set with all three processors disabled', () => {
-    const at = SRC.indexOf('const LOOPBACK_AUDIO')
+    const at = RECOVERY_SRC.indexOf('const LOOPBACK_AUDIO')
     expect(at).toBeGreaterThan(-1)
-    const decl = SRC.slice(at, at + 220)
+    const decl = RECOVERY_SRC.slice(at, at + 220)
     expect(decl).toMatch(/echoCancellation: false/)
     expect(decl).toMatch(/noiseSuppression: false/)
     expect(decl).toMatch(/autoGainControl: false/)
@@ -37,40 +39,46 @@ describe('MQA-267 — voice processing stays OFF on the loopback, ON on the mic'
 
   it('every getDisplayMedia call passes the loopback constraints — none requests bare audio', () => {
     // A bare `audio: true` reintroduces the default-on processing this exists to remove.
-    expect(SRC).not.toMatch(/getDisplayMedia\(\{ audio: true \}\)/)
-    expect(SRC).not.toMatch(/getDisplayMedia\(\{ video: \{ frameRate: 1 \}, audio: true \}\)/)
+    expect(RECOVERY_SRC).not.toMatch(/getDisplayMedia\(\{ audio: true \}\)/)
+    expect(RECOVERY_SRC).not.toMatch(/getDisplayMedia\(\{ video: \{ frameRate: 1 \}, audio: true \}\)/)
     // [^)]* not [^}]* — the video-bound form is `{ video: { frameRate: 1 }, audio: LOOPBACK_AUDIO }`,
     // and a character class stopping at the first `}` never reaches its audio key.
-    const calls = SRC.match(/getDisplayMedia\(\{[^)]*audio: LOOPBACK_AUDIO/g) ?? []
+    const calls = RECOVERY_SRC.match(/getDisplayMedia\(\{[^)]*audio: LOOPBACK_AUDIO/g) ?? []
     expect(calls.length).toBeGreaterThanOrEqual(3)
   })
 
   it('acquisition flows through the single acquireLoopback helper at both call sites', () => {
     // Two sites drifted apart once already (the recovery path predates the start path). One helper
     // means the next constraint change cannot half-land.
-    const uses = SRC.match(/await acquireLoopback\(\)/g) ?? []
-    expect(uses.length).toBeGreaterThanOrEqual(2)
+    expect(SRC).toMatch(/sys = await acquireLoopback\(\)/)
+    expect(RECOVERY_SRC).toMatch(/stream = await host\(\)\.acquireLoopback\(\)/)
   })
 
   it('re-applies the constraints to the LIVE track after the grant', () => {
     // getDisplayMedia audio constraints are not reliably honored across Chromium versions;
     // applyConstraints on the live track is the belt-and-braces that holds either way.
-    expect(SRC).toMatch(/applyConstraints\(LOOPBACK_AUDIO\)/)
+    expect(RECOVERY_SRC).toMatch(/applyConstraints\(LOOPBACK_AUDIO\)/)
     // A track that refuses must not fail the capture — degraded beats absent.
-    expect(SRC).toMatch(/a processed 'them' is still better than none/)
+    expect(RECOVERY_SRC).toMatch(/a processed 'them' is still better than none/)
   })
 
   it('the MIC keeps echo cancellation — the asymmetry is the design', () => {
     // AEC on the mic is what stops the speakers bleeding the other person's words into the 'you'
     // channel as duplicates. Removing it there "for symmetry" recreates the opposite corruption.
-    const mic = SRC.slice(SRC.indexOf('async function acquireMic'), SRC.indexOf('async function acquireMic') + 400)
+    const mic = RECOVERY_SRC.slice(
+      RECOVERY_SRC.indexOf('async function acquireMic'),
+      RECOVERY_SRC.indexOf('async function acquireMic') + 400
+    )
     expect(mic).toMatch(/echoCancellation: true/)
   })
 
   it('acquireLoopback never stops a track — the macOS SCStream contract holds', () => {
     // Stopping the bound video track before the worklet connects kills the shared SCStream and leaves
     // the audio track 'ended' but present. closeChannel owns the stop, at Listen end.
-    const fn = SRC.slice(SRC.indexOf('async function acquireLoopback'), SRC.indexOf('export function useListen'))
+    const fn = RECOVERY_SRC.slice(
+      RECOVERY_SRC.indexOf('export async function acquireLoopback'),
+      RECOVERY_SRC.indexOf('export interface ListenAudioRecoveryHost')
+    )
     expect(fn).not.toMatch(/\.stop\(\)/)
   })
 })
@@ -80,15 +88,18 @@ describe('MQA-267 — the boost cannot clip now that processing is off', () => {
     // The 3.0x gain was sized while default-on AGC held the loopback small. Un-processed loopback peaks
     // near full scale; 3.0x that is +-3.0 in the float graph, surviving unclamped to the ASR's [-1,1]
     // conversion where it hard-clips. The limiter keeps the lift for quiet signals, flattens the overs.
-    expect(SRC).toMatch(/createDynamicsCompressor\(\)/)
-    expect(SRC).toMatch(/gain\.connect\(limiter\)/)
-    expect(SRC).toMatch(/limiter\.connect\(worklet\)/)
-    // And it must be AFTER the gain — upstream it would do nothing.
-    expect(SRC).toMatch(/The limiter must sit AFTER the gain/)
+    expect(CHANNELS_SRC).toMatch(/createDynamicsCompressor\(\)/)
+    expect(CHANNELS_SRC).toMatch(/gain\.connect\(limiter\)/)
+    expect(CHANNELS_SRC).toMatch(/limiter\.connect\(processor\)/)
+    expect(CHANNELS_SRC).toMatch(/processor\.connect\(context\.destination\)/)
+    // The exact processing path is source → gain → limiter → worklet → destination.
+    expect(CHANNELS_SRC).toMatch(
+      /source\.connect\(gain\)[\s\S]*?gain\.connect\(limiter\)[\s\S]*?limiter\.connect\(processor\)[\s\S]*?processor\.connect\(context\.destination\)/
+    )
   })
 
   it('is torn down with the channel like every other node', () => {
-    expect(SRC).toMatch(/ch\.limiter\?\.disconnect\(\)/)
+    expect(CHANNELS_SRC).toMatch(/channel\.limiter\?\.disconnect\(\)/)
   })
 })
 
@@ -108,22 +119,22 @@ describe('MQA-267 — the boost cannot clip now that processing is off', () => {
  */
 describe('MQA-268 — channel opens are serialized per speaker', () => {
   it('openChannel chains onto the previous open for the same speaker', () => {
-    expect(SRC).toMatch(/const openSeqRef = useRef/)
-    expect(SRC).toMatch(
-      /const run = prev\s*\.catch\(\(\) => \{\}\)\s*\.then\(\(\) => \{[\s\S]*?return open\(sp, stream, admissionEpoch, micCapture\)/
-    )
-    expect(SRC).toMatch(
-      /const openChannelNowRef = useRef<\s*\(\(sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture\?: MicCapture\) => Promise<boolean>\) \| null/
+    expect(CHANNELS_SRC).toMatch(/const openSequence: Partial<Record<ListenSpeaker, Promise<unknown>>> = \{\}/)
+    expect(SRC).toMatch(/createListenAudioChannels\([\s\S]*?audioChannels\.open\(speaker, stream, epoch, micCapture\)/)
+    expect(CHANNELS_SRC).toMatch(/rememberPending\(speaker, pending\)/)
+    expect(CHANNELS_SRC).toMatch(
+      /\.then\(\(\) => \(pending\.cancelled \? false : openNow\(speaker, pending, micCapture\)\)\)/
     )
   })
 
   it('a failed open cannot wedge the chain for every later one', () => {
-    expect(SRC).toMatch(/keep the chain alive past a failure/)
+    expect(CHANNELS_SRC).toMatch(/openSequence\[speaker\] = run\.catch\(\(\) => \{\}\)/)
   })
 
-  it('the serialized wrapper always calls the CURRENT implementation, not a stale render', () => {
-    // openChannelNow's identity changes with pushAudio; a wrapper closing over one render's copy would
-    // silently pump audio into a torn-down queue after the next re-render.
-    expect(SRC).toMatch(/openChannelNowRef\.current = openChannelNow/)
+  it('the manager reads the current host for async admission and callbacks', () => {
+    expect(CHANNELS_SRC).toMatch(/let deps = host\(\)/)
+    expect(CHANNELS_SRC).toMatch(
+      /await context\.audioWorklet\.addModule[\s\S]*?deps = host\(\)[\s\S]*?deps\.isAdmissionOpen\(admissionEpoch\)/
+    )
   })
 })
