@@ -23,6 +23,7 @@ export class BoundedRelayPcmQueue {
   private sealed = false
   private failed = false
   private draining: Promise<RelayQueueResult> | null = null
+  private drainAgain = false
 
   get pendingBytes(): number {
     return this.bytes
@@ -91,9 +92,12 @@ export class BoundedRelayPcmQueue {
     send: (pcm16le: Uint8Array, sequence: number, sampleOffset: number) => Promise<void> | void,
     now = Date.now()
   ): Promise<RelayQueueResult> {
-    if (this.draining) return this.draining
+    if (this.draining) {
+      this.drainAgain = true
+      return this.draining
+    }
     if (this.failed) return Promise.resolve({ ok: false, code: 'CLOSED' })
-    this.draining = this.drainQueue(send, now).finally(() => {
+    this.draining = this.drainUntilStable(send, now).finally(() => {
       this.draining = null
     })
     return this.draining
@@ -123,6 +127,17 @@ export class BoundedRelayPcmQueue {
       }
     }
     return this.failed ? { ok: false, code: 'CLOSED' } : { ok: true }
+  }
+
+  private async drainUntilStable(
+    send: (pcm16le: Uint8Array, sequence: number, sampleOffset: number) => Promise<void> | void,
+    now: number
+  ): Promise<RelayQueueResult> {
+    for (;;) {
+      this.drainAgain = false
+      const result = await this.drainQueue(send, now)
+      if (!result.ok || (this.queue.length === 0 && !this.drainAgain)) return result
+    }
   }
 
   private fail(): void {
