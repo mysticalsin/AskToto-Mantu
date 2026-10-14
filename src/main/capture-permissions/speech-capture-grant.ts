@@ -73,7 +73,7 @@ export class SpeechCaptureGrantRegistry {
   private pending: PendingGrantState | null = null
   private issuedContext: SpeechCaptureContext | null = null
   private admittedContext: SpeechCaptureContext | null = null
-  private readonly finishOwners: FinishOwner[] = []
+  private finishOwner: FinishOwner | null = null
 
   /** A new accepted Listen context invalidates pending, issued, and prior finishing facts. */
   acceptListenContext(context: SpeechCaptureContext): boolean {
@@ -161,9 +161,9 @@ export class SpeechCaptureGrantRegistry {
       return { ok: false, code: 'PERMISSION_DENIED' }
     if (tracks.includes('system')) {
       if (!this.hasIssuedLoopbackGrant(input.context)) return { ok: false, code: 'LOOPBACK_GRANT_REQUIRED' }
-      if (input.screenPermission === 'denied') return { ok: false, code: 'PERMISSION_DENIED' }
       if (input.platform === 'darwin' && (input.screenPermission !== 'granted' || input.screenDiagnosis !== 'granted'))
         return { ok: false, code: 'PERMISSION_DENIED' }
+      // Windows has no equivalent queryable loopback/TCC status; a screenshot permission probe is unrelated.
       if (input.platform !== 'darwin' && input.platform !== 'win32' && input.screenPermission !== 'granted')
         return { ok: false, code: 'PERMISSION_DENIED' }
     }
@@ -181,11 +181,11 @@ export class SpeechCaptureGrantRegistry {
       !validContext(context) ||
       !sameContext(this.acceptedContext, context) ||
       !sameContext(this.admittedContext, context) ||
-      !owner ||
-      this.finishOwners.some((item) => item.owner === owner)
+      !owner
     )
       return false
-    this.finishOwners.push({ owner, context: copyContext(context) })
+    if (this.finishOwner) return this.finishOwner.owner === owner && sameContext(this.finishOwner.context, context)
+    this.finishOwner = { owner, context: copyContext(context) }
     return true
   }
 
@@ -201,12 +201,11 @@ export class SpeechCaptureGrantRegistry {
   }
 
   canFinish(owner: object): boolean {
-    return this.finishOwners.some((item) => item.owner === owner)
+    return this.finishOwner?.owner === owner
   }
 
   releaseFinishingOwner(owner: object): void {
-    const index = this.finishOwners.findIndex((item) => item.owner === owner)
-    if (index >= 0) this.finishOwners.splice(index, 1)
+    if (this.finishOwner?.owner === owner) this.finishOwner = null
   }
 
   /** Permission, navigation, renderer, identity, consent, or auth revocation clears every fact. */
@@ -216,6 +215,6 @@ export class SpeechCaptureGrantRegistry {
     this.pending = null
     this.issuedContext = null
     this.admittedContext = null
-    this.finishOwners.splice(0)
+    this.finishOwner = null
   }
 }
