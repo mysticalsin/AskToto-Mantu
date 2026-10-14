@@ -143,31 +143,28 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
     expect(block).toContain('$report.artifact_sha256 -ne $asset.sha256')
   })
 
-  it(
-    'runs real Whisper and Parakeet decode from both installed Windows executables and binds each report to provenance',
-    () => {
-      const block = job('smoke-win')
-      expect(block).toContain('npm ci')
-      expect(block).toContain('node scripts/check-packaged-asr.mjs $launch.Exe')
-      for (const flag of ['--report', '--installer', '--artifact-sha256', '--candidate-run']) {
-        expect(block, flag).toContain(`${flag} `)
-      }
-      expect(block).toContain("$report.verdict -ne 'PASS'")
-      expect(block).toContain('$report.artifact_sha256 -ne $asset.sha256')
-      expect(block).toContain("$report.engines.whisper.job_state -ne 'done'")
-      expect(block).toContain("$report.engines.parakeet.job_state -ne 'done'")
-      expect(block).toContain('$report.engines.whisper.readback_ok -ne $true')
-      expect(block).toContain('$report.engines.parakeet.readback_ok -ne $true')
-      expect(block).toContain('name: candidate-asr-win')
-      expect(block).toContain('path: asr-reports/')
-      expect(packagedAsr).toMatch(/importJobsList\(\)\)\.jobs\.find\(/)
-      expect(packagedAsr).toMatch(/job_state: job\.state/)
-      expect(packagedAsr).toMatch(/readback_ok: meeting\.ok/)
-      expect(packagedAsr).toMatch(/transcript_sha256:/)
-      expect(packagedAsr).toMatch(/writeAcceptanceReport\('PASS'\)/)
-      expect(packagedAsr).not.toMatch(/transcript: transcript/)
+  it('runs real Whisper and Parakeet decode from both installed Windows executables and binds each report to provenance', () => {
+    const block = job('smoke-win')
+    expect(block).toContain('npm ci')
+    expect(block).toContain('node scripts/check-packaged-asr.mjs $launch.Exe')
+    for (const flag of ['--report', '--installer', '--artifact-sha256', '--candidate-run']) {
+      expect(block, flag).toContain(`${flag} `)
     }
-  )
+    expect(block).toContain("$report.verdict -ne 'PASS'")
+    expect(block).toContain('$report.artifact_sha256 -ne $asset.sha256')
+    expect(block).toContain("$report.engines.whisper.job_state -ne 'done'")
+    expect(block).toContain("$report.engines.parakeet.job_state -ne 'done'")
+    expect(block).toContain('$report.engines.whisper.readback_ok -ne $true')
+    expect(block).toContain('$report.engines.parakeet.readback_ok -ne $true')
+    expect(block).toContain('name: candidate-asr-win')
+    expect(block).toContain('path: asr-reports/')
+    expect(packagedAsr).toMatch(/importJobsList\(\)\)\.jobs\.find\(/)
+    expect(packagedAsr).toMatch(/job_state: job\.state/)
+    expect(packagedAsr).toMatch(/readback_ok: meeting\.ok/)
+    expect(packagedAsr).toMatch(/transcript_sha256:/)
+    expect(packagedAsr).toMatch(/writeAcceptanceReport\('PASS'\)/)
+    expect(packagedAsr).not.toMatch(/transcript: transcript/)
+  })
 })
 
 const jobsStart = workflow.indexOf('\njobs:\n')

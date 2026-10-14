@@ -9145,7 +9145,6 @@ function registerIpc(): void {
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
     void recordOperatorRating(getSettings(), rating)
   })
-
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
   ipcMain.handle(IPC.importAudioPick, async (e) => {
     assertMainWindow(e)
@@ -9185,7 +9184,8 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.importJobsList, async (e) => {
     assertMainWindow(e)
-    const snapshot = requireAuth() ? await getImportJobs().snapshot() : emptyImportJobsSnapshot()
+    if (!requireAuth()) return emptyImportJobsSnapshot()
+    const snapshot = await getImportJobs().snapshot()
     return { ...snapshot, jobs: snapshot.jobs.map(importJobView) }
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
