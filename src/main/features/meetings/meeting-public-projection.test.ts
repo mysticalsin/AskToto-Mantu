@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FileClass, StorageGateway, StorageStreamResult } from '../../infra/storage/gateway'
 import {
+  configureMeetingPublicProjectionReader,
   createMeetingPublicProjectionReader,
+  meetingPublicProjectionReader,
   type MeetingProjectionAuthority,
   type MeetingProjectionCandidate
 } from './meeting-public-projection'
@@ -82,9 +84,37 @@ function reader(
 }
 
 describe('owned meeting public projection reader', () => {
+  afterEach(() => configureMeetingPublicProjectionReader(undefined))
+
   it('keeps the process singleton closed until root installs an authority reader', async () => {
-    const { meetingPublicProjectionReader } = await import('./meeting-public-projection')
+    configureMeetingPublicProjectionReader(undefined)
     expect(await meetingPublicProjectionReader.admit(owner, [candidate])).toEqual({ ok: false, reason: 'UNAVAILABLE' })
+  })
+
+  it('retires an in-flight handle when the root replaces its authority adapter', async () => {
+    configureMeetingPublicProjectionReader({
+      readAuthority: (token) => (token === owner ? authority() : undefined),
+      gatewayForRoot: () => fakeGateway()
+    })
+    const admitted = await meetingPublicProjectionReader.admit(owner, [candidate])
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    let signalStarted!: () => void
+    let release!: () => void
+    const sinkStarted = new Promise<void>((resolve) => {
+      signalStarted = resolve
+    })
+    const blockedSink = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const pending = meetingPublicProjectionReader.project(owner, admitted.handles[0], async () => {
+      signalStarted()
+      await blockedSink
+    })
+    await sinkStarted
+    configureMeetingPublicProjectionReader(undefined)
+    release()
+    expect(await pending).toEqual({ ok: false, reason: 'STALE_OWNER' })
   })
 
   it('pins the exact admitted source version and emits bounded public chunks only after validation', async () => {
