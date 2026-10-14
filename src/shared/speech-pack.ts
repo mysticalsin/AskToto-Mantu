@@ -101,19 +101,23 @@ export const SpeechPackSnapshotSchema = z
         identity: identity.nullable(),
         platform: z.enum(['darwin', 'win32']).nullable(),
         arch: z.enum(['arm64', 'x64', 'universal']).nullable(),
-        reason: z.enum([
-          'profile-invalid',
-          'profile-mismatch',
-          'inventory-invalid',
-          'target-mismatch',
-          'inventory-missing'
-        ]).nullable()
+        reason: z
+          .enum(['profile-invalid', 'profile-mismatch', 'inventory-invalid', 'target-mismatch', 'inventory-missing'])
+          .nullable()
       })
       .strict(),
     engineReadiness: z
       .object({
         engine: z.enum(['whisper', 'parakeet', 'apple']),
-        state: z.enum(['ready', 'model-needed', 'runtime-needed', 'not-configured', 'incompatible', 'repair-needed', 'unavailable']),
+        state: z.enum([
+          'ready',
+          'model-needed',
+          'runtime-needed',
+          'not-configured',
+          'incompatible',
+          'repair-needed',
+          'unavailable'
+        ]),
         modelComponentId: SpeechPackComponentIdSchema.nullable(),
         runtimeComponentIds: z.array(SpeechRuntimeComponentIdSchema).max(4)
       })
@@ -146,7 +150,11 @@ export const SpeechPackSnapshotSchema = z
     if (value.engineReadiness.engine !== value.selectedEngine)
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['engineReadiness'], message: 'Readiness engine mismatch' })
     if (value.engineReadiness.modelComponentId !== expected)
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['engineReadiness', 'modelComponentId'], message: 'Readiness component mismatch' })
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['engineReadiness', 'modelComponentId'],
+        message: 'Readiness component mismatch'
+      })
     if (
       value.progress &&
       !value.components.some(

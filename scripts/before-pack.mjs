@@ -54,11 +54,14 @@ export default async function beforePack(context) {
     throw new Error(`METIS_PACKAGE_PROFILE must be exactly "full" or "lean"; got ${JSON.stringify(profile)}`)
   }
   if (profile === 'lean') {
-    if (!context || !Number.isInteger(context.arch)) throw new Error('Lean package selection requires the exact electron-builder architecture')
+    if (!context || !Number.isInteger(context.arch))
+      throw new Error('Lean package selection requires the exact electron-builder architecture')
     const platform = context.electronPlatformName
     const arch = ARCH_NAMES[context.arch]
     if (!['darwin', 'win32'].includes(platform) || !['arm64', 'x64'].includes(arch)) {
-      throw new Error(`Lean candidates require a separate macOS arm64/x64 or Windows x64 build, got ${platform}/${arch}`)
+      throw new Error(
+        `Lean candidates require a separate macOS arm64/x64 or Windows x64 build, got ${platform}/${arch}`
+      )
     }
     const expectedArch = process.env.METIS_PACKAGE_ARCH
     if (expectedArch !== arch) {
@@ -75,18 +78,26 @@ export default async function beforePack(context) {
     } else if (process.env.METIS_PACKAGE_ARCH !== arch) {
       throw new Error('One lean build invocation cannot mix package architectures')
     }
-    console.log(`[before-pack] lean package profile selected for ${platform}/${arch}; strict lean staged-inventory and artifact checks are active.`)
+    console.log(
+      `[before-pack] lean package profile selected for ${platform}/${arch}; strict lean staged-inventory and artifact checks are active.`
+    )
     return
   }
 
   if (context?.packager?.config) {
     let marker
     try {
-      marker = JSON.parse(await (await import('node:fs/promises')).readFile(join(REPO_ROOT, 'build', 'speech-pack-profile.json'), 'utf8'))
+      marker = JSON.parse(
+        await (await import('node:fs/promises')).readFile(join(REPO_ROOT, 'build', 'speech-pack-profile.json'), 'utf8')
+      )
     } catch {
       throw new Error('Full packages require the tracked build/speech-pack-profile.json marker')
     }
-    if (marker?.schema !== 1 || marker.profile !== 'full' || Object.keys(marker).sort().join(',') !== 'profile,schema') {
+    if (
+      marker?.schema !== 1 ||
+      marker.profile !== 'full' ||
+      Object.keys(marker).sort().join(',') !== 'profile,schema'
+    ) {
       throw new Error('The tracked full package profile marker must remain exactly {"schema":1,"profile":"full"}')
     }
   }

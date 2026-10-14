@@ -87,5 +87,4 @@ describe('lean package inventory contract', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
-
 })

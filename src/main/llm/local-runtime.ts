@@ -180,26 +180,37 @@ export function inferenceThreads(logicalCores = availableParallelism()): number 
 export function buildSpawnArgs(input: SpawnArgsInput, threads = inferenceThreads()): string[] {
   const t = threads
   return [
-    '-m', input.gguf,
+    '-m',
+    input.gguf,
     // MQA-270 (B1): the projector is start-up-loaded, never lazy, so --no-mmproj is the only way to not
     // pay its 1.03 GB when no vision surface is live. --no-mmproj-offload does NOT free it (measured
     // 5589 vs 5614 MB); both flags verified against the pinned b9957 binary's --help.
     ...(input.vision ? ['--mmproj', input.mmproj] : ['--no-mmproj']),
-    '--host', '127.0.0.1',
-    '--port', '0',
-    '-c', String(input.ctxSize),
-    '--parallel', String(input.parallel),
-    '--cache-ram', '128',
-    '-ngl', String(input.gpuLayers),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0',
+    '-c',
+    String(input.ctxSize),
+    '--parallel',
+    String(input.parallel),
+    '--cache-ram',
+    '128',
+    '-ngl',
+    String(input.gpuLayers),
     // MQA-270 (B5): cap generation (-t) and batch (-tb) threads, and the HTTP pool. All three flags
     // verified against the pinned b9957 binary's --help. Costs some throughput on big machines; buys
     // back the renderer and ASR worker on small ones, which is where the lag lived.
-    '-t', String(t),
-    '-tb', String(t),
-    '--threads-http', '2',
+    '-t',
+    String(t),
+    '-tb',
+    String(t),
+    '--threads-http',
+    '2',
     '--no-ui',
     '--jinja',
-    '--reasoning', 'off'
+    '--reasoning',
+    'off'
   ]
 }
 
@@ -372,13 +383,22 @@ function spawnAndWaitHealthy(
       // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
       // table can see the flag list of every local process but not another process's environment.
       recordSidecarIntent('llama-server', args)
-      const launched = spawnSidecarProcess('llama-server', binaryPath, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-        env: { ...process.env, LLAMA_API_KEY: apiKey }
-      }, auditLog, process.env, process.platform, {
-        onUnsupervisedFallbackSpawned: (fallback) => recordSidecarSpawned('llama-server', fallback, binaryPath, args)
-      })
+      const launched = spawnSidecarProcess(
+        'llama-server',
+        binaryPath,
+        args,
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+          env: { ...process.env, LLAMA_API_KEY: apiKey }
+        },
+        auditLog,
+        process.env,
+        process.platform,
+        {
+          onUnsupervisedFallbackSpawned: (fallback) => recordSidecarSpawned('llama-server', fallback, binaryPath, args)
+        }
+      )
       proc = launched.child
       if (launched.supervised) {
         // Both the wrapper and the sidecar it spawns are registered, so the next-launch reaper still finds

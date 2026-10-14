@@ -20,7 +20,9 @@ async function copyEntry(source, destination, boundary, activeDirectories) {
     try {
       resolvedTarget = await realpath(source)
     } catch (error) {
-      throw new Error(`Staged source contains a dangling or invalid symbolic link ${source}: ${error.code ?? error.message}`)
+      throw new Error(
+        `Staged source contains a dangling or invalid symbolic link ${source}: ${error.code ?? error.message}`
+      )
     }
     if (resolvedTarget === boundary || !isInside(boundary, resolvedTarget)) {
       throw new Error(`Staged source symbolic link escapes its approved tree: ${source}`)

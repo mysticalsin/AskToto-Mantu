@@ -138,7 +138,9 @@ function terminateGeneration(generation: Generation, error: Error): Promise<void
   generation.exitTimer = setTimeout(() => {
     if (generation.state !== 'releasing') return
     generation.state = 'blocked'
-    const failure = new Error('Could not confirm that the speaker embedding helper exited; restart is blocked to prevent overlapping native extractors.')
+    const failure = new Error(
+      'Could not confirm that the speaker embedding helper exited; restart is blocked to prevent overlapping native extractors.'
+    )
     blockedRelease = { generation, error: failure }
     if (releaseGate === generation.termination) releaseGate = null
     generation.rejectTermination?.(failure)
@@ -196,14 +198,20 @@ async function requestHost(
   })
 }
 
-async function admitted<T>(owner: SpeakerEmbeddingOwner, bytes: number, run: (epoch: number) => Promise<T>): Promise<T> {
+async function admitted<T>(
+  owner: SpeakerEmbeddingOwner,
+  bytes: number,
+  run: (epoch: number) => Promise<T>
+): Promise<T> {
   if (admittedRequests >= MAX_PENDING_REQUESTS || admittedPcmBytes + bytes > MAX_QUEUED_PCM_BYTES) {
     throw new SpeakerEmbeddingBusyError()
   }
   const epoch = ownerEpoch[owner]
   let finishWork = (): void => {}
   const work: AdmittedWork = {
-    done: new Promise<void>((resolve) => { finishWork = resolve }),
+    done: new Promise<void>((resolve) => {
+      finishWork = resolve
+    }),
     finish: () => finishWork()
   }
   admittedRequests++

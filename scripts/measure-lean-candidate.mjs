@@ -41,12 +41,18 @@ if (target === 'mac') {
       if (error.code !== 'ENOENT') throw error
     }
   }
-  if (existingApps.length !== 1) throw new Error(`Expected exactly one unpacked macOS app, found ${existingApps.length}`)
+  if (existingApps.length !== 1)
+    throw new Error(`Expected exactly one unpacked macOS app, found ${existingApps.length}`)
   appDirectory = existingApps[0]
 }
-const resourcesDirectory = target === 'mac' ? join(appDirectory, 'Contents', 'Resources') : join(appDirectory, 'resources')
+const resourcesDirectory =
+  target === 'mac' ? join(appDirectory, 'Contents', 'Resources') : join(appDirectory, 'resources')
 const inventory = JSON.parse(await readFile(join(resourcesDirectory, 'package-inventory.json'), 'utf8'))
-if (inventory.profile !== 'lean' || inventory.arch !== arch || inventory.platform !== (target === 'mac' ? 'darwin' : 'win32')) {
+if (
+  inventory.profile !== 'lean' ||
+  inventory.arch !== arch ||
+  inventory.platform !== (target === 'mac' ? 'darwin' : 'win32')
+) {
   throw new Error('Packaged inventory does not match the requested candidate measurement target')
 }
 

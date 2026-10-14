@@ -35,7 +35,11 @@ describe('speech-pack preload boundary', () => {
   })
 
   it('uses separate fixed plan-preview and affirmative-execution channels', async () => {
-    const previewRequest = { componentId: request.componentId, manifestIdentity: request.manifestIdentity, action: 'install' as const }
+    const previewRequest = {
+      componentId: request.componentId,
+      manifestIdentity: request.manifestIdentity,
+      action: 'install' as const
+    }
     const previewResponse = {
       ok: true,
       plan: {
@@ -63,9 +67,9 @@ describe('speech-pack preload boundary', () => {
     const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
     expect(await bridge.speechPackPlanPreview(previewRequest)).toEqual(previewResponse)
     expect(invoke).toHaveBeenNthCalledWith(1, IPC.speechPackPlanPreview, previewRequest)
-    expect(
-      await bridge.speechPackInstallWithPlan({ planId: previewResponse.plan.planId, action: 'install' })
-    ).toEqual({ ok: true })
+    expect(await bridge.speechPackInstallWithPlan({ planId: previewResponse.plan.planId, action: 'install' })).toEqual({
+      ok: true
+    })
     expect(invoke).toHaveBeenNthCalledWith(2, IPC.speechPackInstallWithPlan, {
       planId: previewResponse.plan.planId,
       action: 'install'
@@ -75,9 +79,10 @@ describe('speech-pack preload boundary', () => {
   it('rejects plan inputs before they reach main', async () => {
     const invoke = vi.fn()
     const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
-    expect(
-      await bridge.speechPackInstallWithPlan({ planId: 'invalid', action: 'install' } as never)
-    ).toEqual({ ok: false, reason: 'invalid-request' })
+    expect(await bridge.speechPackInstallWithPlan({ planId: 'invalid', action: 'install' } as never)).toEqual({
+      ok: false,
+      reason: 'invalid-request'
+    })
     expect(invoke).not.toHaveBeenCalled()
   })
 

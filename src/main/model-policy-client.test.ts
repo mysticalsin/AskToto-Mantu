@@ -319,7 +319,7 @@ describe('verified speech policy authority', () => {
 
     const nowSeconds = Math.floor(Date.now() / 1000)
     const invalidSettings = [
-      { ...SPEECH_SETTINGS, operatorLicenseToken: 'METIS-OP-1.invalid' },
+      { ...SPEECH_SETTINGS, operatorLicenseToken: 'invalid' },
       {
         ...SPEECH_SETTINGS,
         operatorLicenseToken: `METIS-OP-1.2123456789abcdef.-1.${nowSeconds + 3600}.CCCCCCCCCCCCCCCCCCCC`

@@ -18,7 +18,12 @@ export function assertMachOArchitectures(bytes, expectedArchitectures, label = '
   } else {
     throw new Error(`${label}: not a 64-bit Mach-O image (magic=0x${thinMagic.toString(16)})`)
   }
-  const actual = cpuTypes.map((cpuType) => Object.keys(CPU_TYPES).find((arch) => CPU_TYPES[arch] === cpuType) ?? `unknown(0x${cpuType.toString(16)})`).sort()
+  const actual = cpuTypes
+    .map(
+      (cpuType) =>
+        Object.keys(CPU_TYPES).find((arch) => CPU_TYPES[arch] === cpuType) ?? `unknown(0x${cpuType.toString(16)})`
+    )
+    .sort()
   const expected = [...expectedArchitectures].sort()
   if (actual.length !== expected.length || actual.some((arch, index) => arch !== expected[index])) {
     throw new Error(`${label}: expected Mach-O arches [${expected.join(', ')}], got [${actual.join(', ')}]`)

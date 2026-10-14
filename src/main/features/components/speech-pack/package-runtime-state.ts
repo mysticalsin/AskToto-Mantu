@@ -5,7 +5,8 @@ let loadContract: (() => Promise<PackageRuntimeContract>) | null = null
 
 /** Installed by the main startup boundary before ASR/LLM consumers can run. */
 export function configurePackageRuntimeContractProvider(provider: () => Promise<PackageRuntimeContract>): void {
-  if (loadContract && loadContract !== provider) throw new Error('Package runtime contract provider is already configured.')
+  if (loadContract && loadContract !== provider)
+    throw new Error('Package runtime contract provider is already configured.')
   loadContract = provider
 }
 

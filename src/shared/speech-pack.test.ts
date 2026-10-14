@@ -77,11 +77,13 @@ describe('speech pack boundary', () => {
   it('binds plan preview and execution to opaque main-owned plan identities', () => {
     expect(SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity }).success).toBe(true)
     expect(
-      SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity, action: 'repair' }).success
+      SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity, action: 'repair' })
+        .success
     ).toBe(true)
-    expect(SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity, url: 'https://x' }).success).toBe(
-      false
-    )
+    expect(
+      SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity, url: 'https://x' })
+        .success
+    ).toBe(false)
     expect(SpeechPackInstallWithPlanRequestSchema.safeParse({ planId: 'not-a-uuid', action: 'install' }).success).toBe(
       false
     )

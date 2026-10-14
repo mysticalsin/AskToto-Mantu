@@ -32,21 +32,24 @@ describe('contained staged-resource copying', () => {
       await mkdir(outside)
       await writeFile(join(outside, 'outside.txt'), 'outside')
       await symlink(outside, join(source, 'external'), linkKind)
-      await expect(copyContainedTree(source, join(root, 'external-output'), { allowSymlinkTargetsWithin: source }))
-        .rejects.toThrow(/escapes/)
+      await expect(
+        copyContainedTree(source, join(root, 'external-output'), { allowSymlinkTargetsWithin: source })
+      ).rejects.toThrow(/escapes/)
 
       await rm(join(source, 'external'), { recursive: true, force: true })
       await mkdir(join(source, 'dangling-target'))
       await symlink(join(source, 'dangling-target'), join(source, 'dangling'), linkKind)
       await rm(join(source, 'dangling-target'), { recursive: true, force: true })
-      await expect(copyContainedTree(source, join(root, 'dangling-output'), { allowSymlinkTargetsWithin: source }))
-        .rejects.toThrow(/dangling or invalid/)
+      await expect(
+        copyContainedTree(source, join(root, 'dangling-output'), { allowSymlinkTargetsWithin: source })
+      ).rejects.toThrow(/dangling or invalid/)
 
       await rm(join(source, 'dangling'), { recursive: true, force: true })
       const linkedRoot = join(root, 'linked-root')
       await symlink(outside, linkedRoot, linkKind)
-      await expect(copyContainedTree(linkedRoot, join(root, 'root-output'), { allowSymlinkTargetsWithin: linkedRoot }))
-        .rejects.toThrow(/source root must be a real directory/)
+      await expect(
+        copyContainedTree(linkedRoot, join(root, 'root-output'), { allowSymlinkTargetsWithin: linkedRoot })
+      ).rejects.toThrow(/source root must be a real directory/)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

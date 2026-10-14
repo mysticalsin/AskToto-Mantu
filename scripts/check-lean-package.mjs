@@ -85,10 +85,13 @@ const inventoryPath = join(resourcesRoot, 'package-inventory.json')
 await requireFile(inventoryPath, 'package-inventory.json')
 const inventory = validatePackageInventory(await readJson(inventoryPath, 'package-inventory.json'))
 if (inventory.profile !== 'lean' || inventory.platform !== platform || inventory.arch !== arch) {
-  throw new Error(`Package inventory target/profile mismatch: expected lean ${platform}/${arch}, got ${inventory.profile} ${inventory.platform}/${inventory.arch}`)
+  throw new Error(
+    `Package inventory target/profile mismatch: expected lean ${platform}/${arch}, got ${inventory.profile} ${inventory.platform}/${inventory.arch}`
+  )
 }
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim()
-if (inventory.sourceCommit !== sourceCommit) throw new Error('Package inventory source commit differs from the checked-out build source')
+if (inventory.sourceCommit !== sourceCommit)
+  throw new Error('Package inventory source commit differs from the checked-out build source')
 const packageJson = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
 const lock = JSON.parse(await readFile(join(ROOT, 'package-lock.json'), 'utf8'))
 const electronVersion = lock.packages?.['node_modules/electron']?.version
@@ -146,7 +149,8 @@ for (const relativePath of ['operator', 'license-lease', 'cloudflare-embed', 'sk
   } catch {
     throw new Error(`Required core resource directory is missing: ${relativePath}`)
   }
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Required core resource directory is invalid: ${relativePath}`)
+  if (stat.isSymbolicLink() || !stat.isDirectory())
+    throw new Error(`Required core resource directory is invalid: ${relativePath}`)
 }
 
 // The inventory must cover every staged regular file except the named executables whose bytes are
@@ -165,7 +169,10 @@ const builderGeneratedResources = new Set([
 const packagedResourceFiles = await treeFiles(resourcesRoot)
 const packagedResourcePaths = new Set()
 for (const path of packagedResourceFiles) {
-  const relativePath = path.slice(resourcesRoot.length + 1).split('\\').join('/')
+  const relativePath = path
+    .slice(resourcesRoot.length + 1)
+    .split('\\')
+    .join('/')
   packagedResourcePaths.add(relativePath)
   if (
     relativePath === 'package-inventory.json' ||
@@ -173,8 +180,10 @@ for (const path of packagedResourceFiles) {
     relativePath.startsWith('app.asar.unpacked/') ||
     builderGeneratedResources.has(relativePath) ||
     signedPayloads.has(relativePath)
-  ) continue
-  if (!inventoryPaths.has(relativePath)) throw new Error(`Core resource is omitted from package inventory: ${relativePath}`)
+  )
+    continue
+  if (!inventoryPaths.has(relativePath))
+    throw new Error(`Core resource is omitted from package inventory: ${relativePath}`)
 }
 for (const path of inventoryPaths) {
   if (!packagedResourcePaths.has(path)) throw new Error(`Package inventory names a missing core resource: ${path}`)
@@ -182,7 +191,9 @@ for (const path of inventoryPaths) {
 for (const relativePath of signedPayloads) {
   const packagedBytes = await readFile(join(resourcesRoot, relativePath))
   const stagedBytes = await readFile(join(ROOT, 'build/lean-stage/resources', relativePath))
-  if (createHash('sha256').update(packagedBytes).digest('hex') !== createHash('sha256').update(stagedBytes).digest('hex')) {
+  if (
+    createHash('sha256').update(packagedBytes).digest('hex') !== createHash('sha256').update(stagedBytes).digest('hex')
+  ) {
     throw new Error(`Unsigned packaged executable differs from its staged source: ${relativePath}`)
   }
 }
@@ -194,11 +205,19 @@ const rendererScripts = rawAsarEntries.filter((entry) => {
   return normalized.startsWith('/out/renderer/') && /\.(?:js|mjs)$/.test(normalized)
 })
 const profileMarker = '/* metis-package-profile:lean */'
-if (!rendererScripts.some((entry) => extractFile(asarPath, entry.replace(/^[\\/]+/, '')).subarray(0, 512).toString('utf8').includes(profileMarker))) {
+if (
+  !rendererScripts.some((entry) =>
+    extractFile(asarPath, entry.replace(/^[\\/]+/, ''))
+      .subarray(0, 512)
+      .toString('utf8')
+      .includes(profileMarker)
+  )
+) {
   throw new Error('Compiled renderer bundle does not carry the lean build-profile marker')
 }
 for (const entry of asarEntries) {
-  if (isForbiddenInferencePath(entry)) throw new Error(`Inference runtime/worker payload is present inside app.asar: ${entry}`)
+  if (isForbiddenInferencePath(entry))
+    throw new Error(`Inference runtime/worker payload is present inside app.asar: ${entry}`)
 }
 
 const unpackedRoot = join(resourcesRoot, 'app.asar.unpacked')
@@ -209,7 +228,10 @@ try {
   if (error.code !== 'ENOENT') throw error
 }
 for (const path of unpackedEntries) {
-  const relativePath = path.slice(unpackedRoot.length + 1).split('\\').join('/')
+  const relativePath = path
+    .slice(unpackedRoot.length + 1)
+    .split('\\')
+    .join('/')
   if (isForbiddenInferencePath(relativePath)) {
     throw new Error(`Inference runtime/weight payload is present in app.asar.unpacked: ${relativePath}`)
   }
@@ -227,7 +249,10 @@ for (const forbiddenRoot of ['asr', 'models', 'ort', 'llama', 'local-llm']) {
   }
 }
 for (const path of await treeFiles(resourcesRoot)) {
-  const relativePath = path.slice(resourcesRoot.length + 1).split('\\').join('/')
+  const relativePath = path
+    .slice(resourcesRoot.length + 1)
+    .split('\\')
+    .join('/')
   if (isForbiddenInferencePath(relativePath)) {
     throw new Error(`Lean package contains an inference runtime/weight outside app.asar: ${relativePath}`)
   }
@@ -245,7 +270,8 @@ if (!asarEntries.includes('/node_modules/@dust-tt/client/package.json')) {
 }
 const ffmpegManifest = await readJson(join(ROOT, 'resources/ffmpeg/manifest.json'), 'reviewed FFmpeg source manifest')
 const ffmpegRel = `${archFolder}/${platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'}`
-const ffmpegPin = ffmpegManifest.binaries?.[`${platform}-${arch}/${platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'}`]?.sha256
+const ffmpegPin =
+  ffmpegManifest.binaries?.[`${platform}-${arch}/${platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'}`]?.sha256
 if (!HASH.test(ffmpegPin ?? '')) throw new Error(`No reviewed FFmpeg hash exists for ${platform}/${arch}`)
 const ffmpegBytes = await readFile(join(resourcesRoot, 'ffmpeg', ffmpegRel))
 if (createHash('sha256').update(ffmpegBytes).digest('hex') !== ffmpegPin) {
@@ -284,7 +310,8 @@ if (platform === 'darwin') {
   if (executableName !== 'Metis.exe') throw new Error(`Unexpected Windows executable identity: ${executableName}`)
   const exePath = join(appRoot, executableName)
   const exeBytes = await readFile(exePath)
-  if (exeBytes[0] !== 0x4d || exeBytes[1] !== 0x5a) throw new Error('Windows application executable is missing its PE header')
+  if (exeBytes[0] !== 0x4d || exeBytes[1] !== 0x5a)
+    throw new Error('Windows application executable is missing its PE header')
   const peOffset = exeBytes.readUInt32LE(0x3c)
   if (exeBytes.readUInt32LE(peOffset) !== 0x00004550 || exeBytes.readUInt16LE(peOffset + 4) !== 0x8664) {
     throw new Error('Windows application executable is not an x64 PE image')
@@ -298,7 +325,14 @@ if (platform === 'darwin') {
 
 const appBytes = await treeBytes(appRoot)
 const asarBytes = (await lstat(asarPath)).size
-const unpackedBytes = (await Promise.all(unpackedEntries.map((path) => lstat(path)))).reduce((sum, stat) => sum + stat.size, 0)
+const unpackedBytes = (await Promise.all(unpackedEntries.map((path) => lstat(path)))).reduce(
+  (sum, stat) => sum + stat.size,
+  0
+)
 console.log(`[check-lean-package] PASS profile=lean platform=${platform} arch=${arch} source=${inventory.sourceCommit}`)
-console.log(`[check-lean-package] inventory=${inventory.identity} coreFiles=${inventory.coreFiles.length}; inventory scope excludes signed executables, app.asar and the complete app tree`)
-console.log(`[check-lean-package] measured appTreeBytes=${appBytes} appAsarBytes=${asarBytes} appAsarUnpackedBytes=${unpackedBytes}`)
+console.log(
+  `[check-lean-package] inventory=${inventory.identity} coreFiles=${inventory.coreFiles.length}; inventory scope excludes signed executables, app.asar and the complete app tree`
+)
+console.log(
+  `[check-lean-package] measured appTreeBytes=${appBytes} appAsarBytes=${asarBytes} appAsarUnpackedBytes=${unpackedBytes}`
+)

@@ -17,7 +17,8 @@ function fail(message) {
 }
 
 if (PROFILE !== 'lean') fail('this staging command only accepts METIS_PACKAGE_PROFILE=lean')
-if (!platform || !Object.hasOwn(PLATFORM_ARCHES, platform)) fail('usage: METIS_PACKAGE_PROFILE=lean node scripts/prepare-lean-package-stage.mjs <darwin|win32> <arm64|x64>')
+if (!platform || !Object.hasOwn(PLATFORM_ARCHES, platform))
+  fail('usage: METIS_PACKAGE_PROFILE=lean node scripts/prepare-lean-package-stage.mjs <darwin|win32> <arm64|x64>')
 if (!PLATFORM_ARCHES[platform].includes(arch)) fail(`unsupported architecture ${arch} for ${platform}`)
 
 const packageJson = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
@@ -28,8 +29,12 @@ if (!electronVersion || electronVersion !== packageJson.devDependencies?.electro
 }
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim()
 if (!/^[a-f0-9]{40}$/.test(sourceCommit)) fail('git did not return a full source commit')
-const sourceChanges = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: ROOT, encoding: 'utf8' }).trim()
-if (sourceChanges) fail('candidate inventory requires a clean source checkout so sourceCommit identifies the built source')
+const sourceChanges = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], {
+  cwd: ROOT,
+  encoding: 'utf8'
+}).trim()
+if (sourceChanges)
+  fail('candidate inventory requires a clean source checkout so sourceCommit identifies the built source')
 
 const stageRoot = join(ROOT, 'build', 'lean-stage')
 const resourcesRoot = join(stageRoot, 'resources')
@@ -110,7 +115,10 @@ const inventory = {
 }
 inventory.identity = packageInventoryIdentity(inventory)
 validatePackageInventory(inventory)
-await writeFile(join(resourcesRoot, 'package-inventory.json'), `${JSON.stringify(inventory)}\n`, { flag: 'wx', mode: 0o644 })
+await writeFile(join(resourcesRoot, 'package-inventory.json'), `${JSON.stringify(inventory)}\n`, {
+  flag: 'wx',
+  mode: 0o644
+})
 
 // Build-time self-check: every inventory path is inside the dedicated stage and matches its claimed bytes.
 for (const file of coreFiles) {
@@ -122,5 +130,7 @@ for (const file of coreFiles) {
 }
 
 const relStageRoot = relative(ROOT, stageRoot).split(sep).join('/')
-console.log(`[prepare-lean-package-stage] profile=lean platform=${platform} arch=${arch} coreFiles=${coreFiles.length} inventory=${inventory.identity}`)
+console.log(
+  `[prepare-lean-package-stage] profile=lean platform=${platform} arch=${arch} coreFiles=${coreFiles.length} inventory=${inventory.identity}`
+)
 console.log(`[prepare-lean-package-stage] staged resources at ${relStageRoot}/resources`)

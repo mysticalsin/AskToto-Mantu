@@ -65,7 +65,10 @@ describe('registerSpeechPackIpc', () => {
     await expect(handlers.get(IPC.speechPackAction)?.(trusted, request)).resolves.toEqual({ request })
     expect(action).toHaveBeenCalledWith(request)
     await expect(handlers.get(IPC.speechPackPlanPreview)?.(trusted, request)).resolves.toEqual({ request, plan: true })
-    await expect(handlers.get(IPC.speechPackInstallWithPlan)?.(trusted, request)).resolves.toEqual({ request, installed: true })
+    await expect(handlers.get(IPC.speechPackInstallWithPlan)?.(trusted, request)).resolves.toEqual({
+      request,
+      installed: true
+    })
     expect(planPreview).toHaveBeenCalledWith(request)
     expect(installWithPlan).toHaveBeenCalledWith(request)
     expect(assertMainWindow).toHaveBeenCalledTimes(8)

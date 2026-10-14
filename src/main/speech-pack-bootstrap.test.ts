@@ -13,7 +13,11 @@ const mocks = vi.hoisted(() => {
     service,
     unregister,
     createSpeechPackService: vi.fn((_options: unknown) => service),
-    createPackageRuntimeContractProvider: vi.fn(() => async () => ({ status: 'legacy-full', profile: 'full', inventory: null })),
+    createPackageRuntimeContractProvider: vi.fn(() => async () => ({
+      status: 'legacy-full',
+      profile: 'full',
+      inventory: null
+    })),
     configurePackageRuntimeContractProvider: vi.fn(),
     registerSpeechPackIpc: vi.fn(() => unregister)
   }
