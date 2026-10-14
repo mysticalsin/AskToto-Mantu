@@ -135,7 +135,7 @@ extraResources:
     to: ort
   - from: resources/runtime-assets-manifest.json
     to: runtime-assets-manifest.json
-  # App-owned Sigstore trust snapshot and acquisition receipt. The signed runtime catalog pins the
+  # App-owned Sigstore trust snapshot and acquisition receipt. The reviewed runtime catalog pins the
   # exact root bytes/source; candidate runtime rows remain empty until native payload promotion is reviewed.
   - from: resources/runtime-catalog.json
     to: runtime-catalog.json
