@@ -47,7 +47,7 @@ describe('cloud speech shared wire contracts', () => {
       captureId: start.captureId,
       captureGeneration: capture.generation,
       transitionId: 4,
-      handoffNonce: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      handoffNonce: '00000000-0000-4000-8000-000000000701',
       stage: 'closed',
       streams: [
         { track: 'microphone', previousEpoch: 11, lastSequence: 200 },
@@ -65,10 +65,12 @@ describe('cloud speech shared wire contracts', () => {
     expect(CloudSpeechEpochTransitionEventSchema.safeParse(closed).success).toBe(true)
     expect(CloudSpeechEpochTransitionEventSchema.safeParse(opened).success).toBe(true)
     expect(CloudSpeechEventSchema.safeParse(closed).success).toBe(true)
-    expect(CloudSpeechEpochTransitionAckSchema.safeParse({
-      ...closed,
-      type: 'epoch-transition-ack'
-    }).success).toBe(true)
+    expect(
+      CloudSpeechEpochTransitionAckSchema.safeParse({
+        ...closed,
+        type: 'epoch-transition-ack'
+      }).success
+    ).toBe(true)
 
     for (const invalid of [
       { ...closed, streams: [...closed.streams, closed.streams[0]] },
