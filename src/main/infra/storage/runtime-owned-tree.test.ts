@@ -47,7 +47,7 @@ describe('runtime owned tree capabilities', () => {
     try {
       await writer.createRoot()
       await writer.createDirectory('model')
-      const sink = await writer.createFile('model/model.partial', 32)
+      const sink = await writer.createFile('model/model.partial', 11)
       await sink.write(Buffer.from('model-bytes'))
       await sink.sync()
       const closed = await sink.close()
@@ -78,7 +78,7 @@ describe('runtime owned tree capabilities', () => {
     let receipt: Awaited<ReturnType<typeof writer.seal>> | undefined
     try {
       await writer.createRoot()
-      const sink = await writer.createFile('notice.txt', 32)
+      const sink = await writer.createFile('notice.txt', 6)
       await sink.write(Buffer.from('notice'))
       await sink.close()
       receipt = await writer.seal()

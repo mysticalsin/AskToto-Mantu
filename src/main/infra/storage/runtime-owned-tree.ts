@@ -2,7 +2,7 @@ import { createHash, type Hash } from 'node:crypto'
 import { type BigIntStats } from 'node:fs'
 import { lstat, opendir } from 'node:fs/promises'
 import { dirname, resolve, sep } from 'node:path'
-import { MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES } from './runtime-exclusive-file-sink'
+import { MAX_RUNTIME_EXCLUSIVE_FILE_BYTES, MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES } from './runtime-exclusive-file-sink'
 import {
   createRuntimeDirectoryAfterAdmission,
   createRuntimeExclusiveFileAfterAdmission,
@@ -58,6 +58,7 @@ interface TreeDirectory {
 
 interface TreeFile {
   readonly path: string
+  readonly expectedByteLength: number
   version: BigIntStats | null
   sink: RuntimeExclusiveFileSink | null
   sha256: string | null
@@ -257,9 +258,16 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         return result
       })
     },
-    createFile(relativePath: string, maximumBytes: number): Promise<RuntimeOwnedTreeFileSink> {
+    createFile(relativePath: string, expectedByteLength: number): Promise<RuntimeOwnedTreeFileSink> {
       return queueMutation(state, async () => {
         assertTreeReady(state)
+        if (
+          !Number.isSafeInteger(expectedByteLength) ||
+          expectedByteLength < 0 ||
+          expectedByteLength > MAX_RUNTIME_EXCLUSIVE_FILE_BYTES
+        ) {
+          throw new Error('RUNTIME_TREE_FILE_SIZE_INVALID')
+        }
         const path = ensureContained(rootPath, relativePath)
         const parentPath = dirname(path)
         const parent = state.directories.get(parentPath)
@@ -272,11 +280,12 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         })
         const creation: RuntimeExclusiveFileCreation = await createRuntimeExclusiveFileAfterAdmission(
           admission,
-          maximumBytes,
+          expectedByteLength,
           input.assertCurrentSync
         )
         const file: TreeFile = {
           path,
+          expectedByteLength,
           version: creation.receipt.status === 'created' ? creation.receipt.version : null,
           sink: creation.sink,
           sha256: null
@@ -315,6 +324,9 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
                 const receipt = await creation.sink.close()
                 state.sinks.delete(wrapped)
                 if (receipt.status !== 'created') throw new Error('RUNTIME_TREE_FILE_UNCONFIRMED')
+                if (receipt.version.size !== BigInt(file.expectedByteLength)) {
+                  throw new Error('RUNTIME_TREE_FILE_SIZE_MISMATCH')
+                }
                 file.version = receipt.version
                 file.sink = null
                 const sha256 = hash.digest('hex')
@@ -425,7 +437,13 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           }
           replaceTrackedNode(state, source, destination, movedVersion)
           state.files.delete(source)
-          state.files.set(destination, { path: destination, version: movedVersion, sink: null, sha256: file.sha256 })
+          state.files.set(destination, {
+            path: destination,
+            expectedByteLength: file.expectedByteLength,
+            version: movedVersion,
+            sink: null,
+            sha256: file.sha256
+          })
           const entry = Object.freeze({
             path: destination
               .slice(rootPath.length + 1)
