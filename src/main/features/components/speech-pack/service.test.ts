@@ -12,6 +12,7 @@ import {
 } from './manifest'
 import * as Resolver from './resolver'
 import { componentManifestIdentity } from './resolver'
+import * as Profile from './profile'
 import { createSpeechPackService } from './service'
 
 vi.mock('electron', () => ({
@@ -83,9 +84,9 @@ function setup(overrides: Partial<Parameters<typeof createSpeechPackService>[0]>
 }
 
 describe('explicit speech-pack service boundary', () => {
-  it('keeps boot/status cold: no engine, downloads or self-test are constructed', () => {
+  it('keeps boot/status cold: no engine, downloads or self-test are constructed', async () => {
     const { service, createEngine } = setup()
-    const state = service.snapshot()
+    const state = await service.snapshot()
     expect(state.profile).toBe('development')
     expect(state.selectedComponent).toBe(WHISPER_BASE_Q8.id)
     expect(state.components).toHaveLength(2)
@@ -94,9 +95,9 @@ describe('explicit speech-pack service boundary', () => {
     expect(service.hasEngine()).toBe(false)
   })
 
-  it('starts exactly the selected component only after an explicit current-manifest action', () => {
+  it('starts exactly the selected component only after an explicit current-manifest action', async () => {
     const { service, engine, createEngine } = setup()
-    const result = service.action({
+    const result = await service.action({
       componentId: WHISPER_BASE_Q8.id,
       action: 'download',
       manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
@@ -104,7 +105,7 @@ describe('explicit speech-pack service boundary', () => {
     expect(result).toEqual({ ok: true })
     expect(createEngine).toHaveBeenCalledTimes(1)
     expect(engine.enqueue).toHaveBeenCalledWith([WHISPER_BASE_Q8.id], WHISPER_BASE_Q8.id)
-    expect(service.snapshot().progress?.componentId).toBe(WHISPER_BASE_Q8.id)
+    expect((await service.snapshot()).progress?.componentId).toBe(WHISPER_BASE_Q8.id)
   })
 
   it('completes a real engine activation after its ready event clears the service activity lease', async () => {
@@ -148,17 +149,17 @@ describe('explicit speech-pack service boundary', () => {
       }
     })
     try {
-      expect(
+      await expect(
         service.action({
           componentId: component.id,
           action: 'download',
           manifestIdentity: componentManifestIdentity(component)
         })
-      ).toEqual({ ok: true })
+      ).resolves.toEqual({ ok: true })
       const activeEngine = currentEngine()
       if (!activeEngine) throw new Error('expected service to create its engine after explicit consent')
       await activeEngine.whenIdle()
-      expect(service.snapshot().components[0]).toMatchObject({
+      expect((await service.snapshot()).components[0]).toMatchObject({
         state: 'ready',
         integrity: 'freshly-hash-verified-and-self-tested'
       })
@@ -168,63 +169,66 @@ describe('explicit speech-pack service boundary', () => {
     }
   })
 
-  it('rejects stale, unselected, disabled and policy-blocked requests before constructing the engine', () => {
+  it('rejects stale, unselected, disabled and policy-blocked requests before constructing the engine', async () => {
     const { service, createEngine } = setup({
       featureEnabled: () => false,
       policyAllowsTransfer: () => false
     })
     const identity = componentManifestIdentity(WHISPER_BASE_Q8)
-    expect(
+    await expect(
       service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: '0'.repeat(64) })
-    ).toEqual({ ok: false, reason: 'stale-manifest' })
-    expect(service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })).toEqual(
-      { ok: false, reason: 'disabled' }
-    )
+    ).resolves.toEqual({ ok: false, reason: 'stale-manifest' })
+    await expect(
+      service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+    ).resolves.toEqual({ ok: false, reason: 'disabled' })
     expect(createEngine).not.toHaveBeenCalled()
 
     const { service: blocked, createEngine: blockedCreate } = setup({ policyAllowsTransfer: () => false })
-    expect(blocked.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })).toEqual(
-      { ok: false, reason: 'policy-blocked' }
-    )
+    await expect(
+      blocked.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+    ).resolves.toEqual({ ok: false, reason: 'policy-blocked' })
     expect(blockedCreate).not.toHaveBeenCalled()
 
     const { service: other, createEngine: otherCreate } = setup({ selectedEngine: () => 'parakeet' })
-    expect(other.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })).toEqual({
-      ok: false,
-      reason: 'not-selected'
-    })
+    await expect(
+      other.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+    ).resolves.toEqual({ ok: false, reason: 'not-selected' })
     expect(otherCreate).not.toHaveBeenCalled()
   })
 
-  it('can pause or cancel an existing selected-only transfer without making a new one', () => {
+  it('can pause or cancel an existing selected-only transfer without making a new one', async () => {
     const { service, engine } = setup()
     const identity = componentManifestIdentity(WHISPER_BASE_Q8)
-    service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
-    expect(service.action({ componentId: WHISPER_BASE_Q8.id, action: 'pause', manifestIdentity: identity })).toEqual({
+    await service.action({ componentId: WHISPER_BASE_Q8.id, action: 'download', manifestIdentity: identity })
+    await expect(
+      service.action({ componentId: WHISPER_BASE_Q8.id, action: 'pause', manifestIdentity: identity })
+    ).resolves.toEqual({
       ok: true
     })
     expect(engine.pause).toHaveBeenCalledWith(WHISPER_BASE_Q8.id)
-    expect(service.action({ componentId: WHISPER_BASE_Q8.id, action: 'cancel', manifestIdentity: identity })).toEqual({
+    await expect(
+      service.action({ componentId: WHISPER_BASE_Q8.id, action: 'cancel', manifestIdentity: identity })
+    ).resolves.toEqual({
       ok: true
     })
     expect(engine.cancel).toHaveBeenCalledWith(WHISPER_BASE_Q8.id)
     expect(engine.enqueue).toHaveBeenCalledTimes(1)
   })
 
-  it('refuses a newly requested pack while capture is already active', () => {
+  it('refuses a newly requested pack while capture is already active', async () => {
     const { service, createEngine } = setup()
     service.captureActivityChanged(true)
-    expect(
+    await expect(
       service.action({
         componentId: WHISPER_BASE_Q8.id,
         action: 'download',
         manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
       })
-    ).toEqual({ ok: false, reason: 'busy' })
+    ).resolves.toEqual({ ok: false, reason: 'busy' })
     expect(createEngine).not.toHaveBeenCalled()
   })
 
-  it('uses live capture authority for each action and fails closed when that getter throws', () => {
+  it('uses live capture authority for each action and fails closed when that getter throws', async () => {
     let active = false
     const { service, createEngine } = setup({ captureActive: () => active })
     const request = {
@@ -233,7 +237,7 @@ describe('explicit speech-pack service boundary', () => {
       manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
     }
     active = true
-    expect(service.action(request)).toEqual({ ok: false, reason: 'busy' })
+    await expect(service.action(request)).resolves.toEqual({ ok: false, reason: 'busy' })
     expect(createEngine).not.toHaveBeenCalled()
 
     const failClosed = setup({
@@ -241,11 +245,98 @@ describe('explicit speech-pack service boundary', () => {
         throw new Error('capture state unavailable')
       }
     })
-    expect(failClosed.service.action(request)).toEqual({ ok: false, reason: 'busy' })
+    await expect(failClosed.service.action(request)).resolves.toEqual({ ok: false, reason: 'busy' })
     expect(failClosed.createEngine).not.toHaveBeenCalled()
   })
 
-  it('does not claim fresh hash and self-test evidence for a ready shortcut, and clears it after repair failure', () => {
+  it('invalidates an action whose async profile admission is pending when the user cancels', async () => {
+    let releaseProfile!: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
+    const profileRead = new Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>((resolve) => {
+      releaseProfile = resolve
+    })
+    const read = vi.spyOn(Profile, 'readSpeechPackProfile').mockReturnValue(profileRead)
+    try {
+      const { service, createEngine } = setup()
+      const request = {
+        componentId: WHISPER_BASE_Q8.id,
+        action: 'download' as const,
+        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+      }
+      const pending = service.action(request)
+      await expect(service.action({ ...request, action: 'cancel' })).resolves.toEqual({ ok: true })
+      releaseProfile({ profile: 'development' })
+      await expect(pending).resolves.toEqual({ ok: false, reason: 'busy' })
+      expect(createEngine).not.toHaveBeenCalled()
+    } finally {
+      read.mockRestore()
+    }
+  })
+
+  it('rechecks selection, policy, capture and shutdown after async profile admission', async () => {
+    const identity = componentManifestIdentity(WHISPER_BASE_Q8)
+    const run = async (
+      invalidate: (
+        service: ReturnType<typeof createSpeechPackService>,
+        state: { selected: 'whisper' | 'parakeet'; policy: boolean; capture: boolean }
+      ) => void | Promise<void>,
+      expected: 'busy' | 'not-selected'
+    ): Promise<void> => {
+      let releaseProfile!: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
+      const profileRead = new Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>((resolve) => {
+        releaseProfile = resolve
+      })
+      const read = vi.spyOn(Profile, 'readSpeechPackProfile').mockReturnValue(profileRead)
+      try {
+        const pendingState = { selected: 'whisper' as 'whisper' | 'parakeet', policy: true, capture: false }
+        const { service, createEngine } = setup({
+          selectedEngine: () => pendingState.selected,
+          policyAllowsTransfer: () => pendingState.policy,
+          captureActive: () => pendingState.capture
+        })
+        const pending = service.action({
+          componentId: WHISPER_BASE_Q8.id,
+          action: 'download',
+          manifestIdentity: identity
+        })
+        await Promise.resolve()
+        await invalidate(service, pendingState)
+        releaseProfile({ profile: 'development' })
+        await expect(pending).resolves.toEqual({ ok: false, reason: expected })
+        expect(createEngine).not.toHaveBeenCalled()
+      } finally {
+        read.mockRestore()
+      }
+    }
+
+    await run((service, state) => {
+      state.selected = 'parakeet'
+      service.selectionChanged()
+    }, 'not-selected')
+    await run((service, state) => {
+      state.policy = false
+      service.policyChanged()
+    }, 'busy')
+    await run((service, state) => {
+      state.capture = true
+      service.captureActivityChanged(true)
+    }, 'busy')
+    await run((service) => service.shutdown(), 'busy')
+  })
+
+  it('does not admit a transfer after shutdown has started', async () => {
+    const { service, createEngine } = setup()
+    await service.shutdown()
+    await expect(
+      service.action({
+        componentId: WHISPER_BASE_Q8.id,
+        action: 'download',
+        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+      })
+    ).resolves.toEqual({ ok: false, reason: 'busy' })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('does not claim fresh hash and self-test evidence for a ready shortcut, and clears it after repair failure', async () => {
     const c = WHISPER_BASE_Q8
     const readiness: Resolver.SpeechPackReadiness = {
       status: 'ready',
@@ -254,24 +345,24 @@ describe('explicit speech-pack service boundary', () => {
       manifestIdentity: componentManifestIdentity(c),
       evidence: 'prior-activation-and-size-checked'
     }
-    const resolve = vi.spyOn(Resolver, 'resolveSpeechPack').mockReturnValue(readiness)
+    const resolve = vi.spyOn(Resolver, 'resolveSpeechPack').mockResolvedValue(readiness)
     try {
       const { service, update } = setup()
-      service.action({ componentId: c.id, action: 'download', manifestIdentity: componentManifestIdentity(c) })
+      await service.action({ componentId: c.id, action: 'download', manifestIdentity: componentManifestIdentity(c) })
       update(c.id, { status: 'ready' }) // existing-install shortcut, with no self-test event
-      expect(service.snapshot().components.find((item) => item.componentId === c.id)?.integrity).toBe(
+      expect((await service.snapshot()).components.find((item) => item.componentId === c.id)?.integrity).toBe(
         'prior-activation-and-size-checked'
       )
 
       update(c.id, { status: 'self-testing' })
       update(c.id, { status: 'ready' }, true)
-      expect(service.snapshot().components.find((item) => item.componentId === c.id)?.integrity).toBe(
+      expect((await service.snapshot()).components.find((item) => item.componentId === c.id)?.integrity).toBe(
         'freshly-hash-verified-and-self-tested'
       )
 
       update(c.id, { status: 'self-testing' })
       update(c.id, { status: 'error', kind: 'tamper' })
-      expect(service.snapshot().components.find((item) => item.componentId === c.id)?.integrity).toBe(
+      expect((await service.snapshot()).components.find((item) => item.componentId === c.id)?.integrity).toBe(
         'prior-activation-and-size-checked'
       )
     } finally {
@@ -279,35 +370,35 @@ describe('explicit speech-pack service boundary', () => {
     }
   })
 
-  it('reports malformed action payloads with a finite result and no side effects', () => {
+  it('reports malformed action payloads with a finite result and no side effects', async () => {
     const { service, createEngine } = setup()
-    expect(
+    await expect(
       service.action({
         componentId: WHISPER_BASE_Q8.id,
         action: 'download',
         manifestIdentity: 'x',
         url: 'https://attacker.invalid'
       })
-    ).toEqual({ ok: false, reason: 'invalid-request' })
+    ).resolves.toEqual({ ok: false, reason: 'invalid-request' })
     expect(createEngine).not.toHaveBeenCalled()
   })
 
-  it('shows and refuses a component whose immutable source has not been configured', () => {
+  it('shows and refuses a component whose immutable source has not been configured', async () => {
     const component = { ...WHISPER_BASE_Q8, source: { kind: 'files' as const, baseUrl: null } }
     const { service, createEngine } = setup({ components: [component] })
-    const snapshot = service.snapshot()
+    const snapshot = await service.snapshot()
     expect(snapshot.components[0]).toMatchObject({
       state: 'not-configured',
       sourceHost: null,
       downloadBytes: component.files.reduce((sum, file) => sum + file.bytes, 0)
     })
-    expect(
+    await expect(
       service.action({
         componentId: component.id,
         action: 'download',
         manifestIdentity: componentManifestIdentity(component)
       })
-    ).toEqual({ ok: false, reason: 'not-configured' })
+    ).resolves.toEqual({ ok: false, reason: 'not-configured' })
     expect(createEngine).not.toHaveBeenCalled()
   })
 })

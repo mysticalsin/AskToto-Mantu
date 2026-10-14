@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { utilityProcess, type UtilityProcess } from 'electron'
+import {
+  acquireManagedUtilityHost,
+  type UtilityHostFork,
+  type UtilityHostPort
+} from '../../../infra/process/speech-pack-host'
 import { PARAKEET_TDT_V3_INT8, SELF_TEST_FIXTURE, WHISPER_BASE_Q8, type SpeechPackComponentId } from './manifest'
 
 const START_TIMEOUT_MS = 30_000
@@ -11,12 +15,6 @@ const MAX_FIXTURE_SAMPLES = 16_000 * 30
 // Published output for the exact sherpa-onnx Parakeet v3 test_wavs/en.wav fixture.
 // Source: k2-fsa/sherpa-onnx docs commit c02f72ca1540163a54019e845127fa52d5de175b.
 const FIXTURE_TRANSCRIPT = 'ask not what your country can do for you ask what you can do for your country'
-
-let activeSelfTestHost: HostPort | null = null
-let stoppingSelfTestHost: HostPort | null = null
-let stopBarrier: Promise<void> | null = null
-let resolveStopBarrier: (() => void) | null = null
-let hostSlotClaimed = false
 
 export function recognitionMatchesFixture(value: string): boolean {
   if (value.length > 1024) return false
@@ -35,20 +33,8 @@ export function recognitionMatchesFixture(value: string): boolean {
   return previous[expected.length] === expected.length
 }
 
-interface HostPort {
-  on(event: 'message', listener: (message: unknown) => void): unknown
-  on(event: 'exit', listener: (code: number | null) => void): unknown
-  postMessage(message: Record<string, unknown>): void
-  kill(): void
-  stderr?: { on(event: 'data', listener: (chunk: unknown) => void): unknown } | null
-  stdout?: { on(event: 'data', listener: (chunk: unknown) => void): unknown } | null
-}
-
-export type SpeechPackHostFork = (
-  path: string,
-  args: string[],
-  options: { serviceName: string; stdio: 'pipe' }
-) => HostPort
+type HostPort = UtilityHostPort
+export type SpeechPackHostFork = UtilityHostFork
 
 function parseFixturePcm(bytes: Buffer): ArrayBuffer {
   if (bytes.length < 44 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WAVE') {
@@ -112,10 +98,6 @@ function parseFixturePcm(bytes: Buffer): ArrayBuffer {
   return samples.buffer
 }
 
-function defaultFork(path: string, args: string[], options: { serviceName: string; stdio: 'pipe' }): UtilityProcess {
-  return utilityProcess.fork(path, args, options)
-}
-
 function withTimeout<T>(promise: Promise<T>, ms: number, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false
@@ -148,76 +130,6 @@ export function speechPackHostEntryPath(mainOutputDirectory: string, componentId
   return join(mainOutputDirectory, componentId === WHISPER_BASE_Q8.id ? 'whisper-asr-host.js' : 'parakeet-asr-host.js')
 }
 
-async function acquireHostSlot(timeoutMs: number): Promise<void> {
-  if (hostSlotClaimed)
-    throw new Error(
-      stoppingSelfTestHost
-        ? 'Previous speech-pack utility host is still stopping.'
-        : 'A speech-pack self-test is already running.'
-    )
-  if (activeSelfTestHost && !stoppingSelfTestHost) throw new Error('A speech-pack self-test is already running.')
-  if (!stopBarrier) {
-    hostSlotClaimed = true
-    return
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const released = await Promise.race([
-    stopBarrier.then(() => true),
-    new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs)
-    })
-  ])
-  clearTimeout(timer)
-  if (!released) throw new Error('Previous speech-pack utility host is still stopping.')
-  if (hostSlotClaimed || activeSelfTestHost) throw new Error('A speech-pack self-test is already running.')
-  hostSlotClaimed = true
-}
-
-function hostExited(host: HostPort): void {
-  if (activeSelfTestHost === host) {
-    activeSelfTestHost = null
-    hostSlotClaimed = false
-  }
-  if (stoppingSelfTestHost !== host) return
-  const resolve = resolveStopBarrier
-  stoppingSelfTestHost = null
-  hostSlotClaimed = false
-  stopBarrier = null
-  resolveStopBarrier = null
-  resolve?.()
-}
-
-async function stopHost(host: HostPort, didExit: () => boolean, timeoutMs: number): Promise<void> {
-  if (didExit()) {
-    hostExited(host)
-    return
-  }
-  if (!(stoppingSelfTestHost === host && stopBarrier)) {
-    stoppingSelfTestHost = host
-    stopBarrier = new Promise<void>((resolve) => {
-      resolveStopBarrier = resolve
-    })
-  }
-  const barrier = stopBarrier as Promise<void>
-  try {
-    host.kill()
-  } catch {
-    if (didExit()) {
-      hostExited(host)
-      return
-    }
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const stopped = await Promise.race([
-    barrier.then(() => true),
-    new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs)
-    })
-  ])
-  clearTimeout(timer)
-  if (!stopped || !didExit()) throw new Error('Speech-pack utility host did not stop within the teardown bound.')
-}
-
 /** Internal protocol seam for lifecycle tests; production verifies the pinned fixture first. */
 export async function runSpeechPackHostProtocol(input: {
   componentId: SpeechPackComponentId
@@ -231,23 +143,15 @@ export async function runSpeechPackHostProtocol(input: {
 }): Promise<string> {
   const whisper = input.componentId === WHISPER_BASE_Q8.id
   const teardownTimeoutMs = input.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS
-  await acquireHostSlot(teardownTimeoutMs)
-  if (input.signal.aborted) {
-    hostSlotClaimed = false
-    throw new Error('Speech-pack self-test was cancelled.')
-  }
   const entry = speechPackHostEntryPath(__dirname, input.componentId)
-  let host: HostPort
-  try {
-    host = (input.fork ?? defaultFork)(entry, [], {
-      serviceName: `metis-speech-pack-check-${input.componentId.replace(/[^a-z0-9-]/gi, '-')}`,
-      stdio: 'pipe'
-    })
-  } catch (error) {
-    hostSlotClaimed = false
-    throw error
-  }
-  activeSelfTestHost = host
+  const lease = await acquireManagedUtilityHost({
+    path: entry,
+    serviceName: `metis-speech-pack-check-${input.componentId.replace(/[^a-z0-9-]/gi, '-')}`,
+    fork: input.fork,
+    signal: input.signal,
+    waitForExitMs: teardownTimeoutMs
+  })
+  const host = lease.host
   host.stderr?.on('data', () => undefined)
   host.stdout?.on('data', () => undefined)
   let exitError: Error | null = null
@@ -256,7 +160,6 @@ export async function runSpeechPackHostProtocol(input: {
   let startupTimer: ReturnType<typeof setTimeout> | undefined
   host.on('exit', (code) => {
     didExit = true
-    hostExited(host)
     if (code !== 0) exitError = new Error('Speech-pack utility host exited before the self-test completed.')
     rejectResult?.(exitError ?? new Error('Speech-pack utility host exited before the self-test completed.'))
   })
@@ -351,7 +254,7 @@ export async function runSpeechPackHostProtocol(input: {
   } finally {
     clearTimeout(startupTimer)
     try {
-      await stopHost(host, () => didExit, teardownTimeoutMs)
+      await lease.stop(teardownTimeoutMs)
     } catch (stopError) {
       if (!failure) failure = stopError
     }

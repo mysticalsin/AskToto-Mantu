@@ -1,4 +1,5 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs'
+import { constants } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 export type SpeechPackBuildProfile = 'full' | 'lean' | 'development'
@@ -7,16 +8,31 @@ export type SpeechPackProfileRead = { profile: SpeechPackBuildProfile } | { prof
 const PROFILE_FILE = 'speech-pack-profile.json'
 const MAX_PROFILE_BYTES = 128
 
+async function readBounded(handle: Awaited<ReturnType<typeof open>>, maxBytes: number): Promise<Buffer | null> {
+  const bytes = Buffer.alloc(maxBytes + 1)
+  let offset = 0
+  while (offset < bytes.length) {
+    const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, null)
+    if (bytesRead === 0) break
+    offset += bytesRead
+  }
+  if (offset > maxBytes) return null
+  return bytes.subarray(0, offset)
+}
+
 /**
  * Read only the package-owned profile resource. A runtime setting never selects lean. In development,
  * the caller's explicit `app.isPackaged` fact selects the development path without reading a file.
  */
-export function readSpeechPackProfile(resourcesRoot: string, isPackaged: boolean): SpeechPackProfileRead {
+export async function readSpeechPackProfile(
+  resourcesRoot: string,
+  isPackaged: boolean
+): Promise<SpeechPackProfileRead> {
   if (!isPackaged) return { profile: 'development' }
   const path = resolve(resourcesRoot, PROFILE_FILE)
-  let stat: ReturnType<typeof lstatSync>
+  let stat: Awaited<ReturnType<typeof lstat>>
   try {
-    stat = lstatSync(path)
+    stat = await lstat(path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { profile: 'full' }
     return { profile: null, error: 'invalid-profile' }
@@ -24,10 +40,10 @@ export function readSpeechPackProfile(resourcesRoot: string, isPackaged: boolean
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > MAX_PROFILE_BYTES) {
     return { profile: null, error: 'invalid-profile' }
   }
-  let fd = -1
+  let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-    const opened = fstatSync(fd)
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const opened = await handle.stat()
     if (
       !opened.isFile() ||
       opened.nlink !== 1 ||
@@ -37,7 +53,21 @@ export function readSpeechPackProfile(resourcesRoot: string, isPackaged: boolean
     ) {
       return { profile: null, error: 'invalid-profile' }
     }
-    const parsed = JSON.parse(readFileSync(fd, 'utf8')) as unknown
+    const bytes = await readBounded(handle, MAX_PROFILE_BYTES)
+    const afterRead = await handle.stat()
+    const afterPath = await lstat(path)
+    if (
+      !bytes ||
+      afterRead.dev !== opened.dev ||
+      afterRead.ino !== opened.ino ||
+      afterRead.size !== opened.size ||
+      afterPath.dev !== opened.dev ||
+      afterPath.ino !== opened.ino ||
+      afterPath.size !== opened.size
+    ) {
+      return { profile: null, error: 'invalid-profile' }
+    }
+    const parsed = JSON.parse(bytes.toString('utf8')) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
       return { profile: null, error: 'invalid-profile' }
     const record = parsed as Record<string, unknown>
@@ -49,6 +79,6 @@ export function readSpeechPackProfile(resourcesRoot: string, isPackaged: boolean
   } catch {
     return { profile: null, error: 'invalid-profile' }
   } finally {
-    if (fd >= 0) closeSync(fd)
+    await handle?.close().catch(() => undefined)
   }
 }

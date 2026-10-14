@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
+import { constants } from 'node:fs'
+import { lstat, open, realpath } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
 
@@ -42,15 +43,6 @@ function isInside(base: string, target: string): boolean {
   return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
 }
 
-function lstatRegularFile(path: string, bytes?: number): boolean {
-  try {
-    const item = lstatSync(path)
-    return item.isFile() && item.nlink === 1 && (bytes === undefined || item.size === bytes)
-  } catch {
-    return false
-  }
-}
-
 function componentPathValid(component: SpeechPackComponent): boolean {
   if (!/^[a-z0-9][a-z0-9.-]{1,95}$/.test(component.id)) return false
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(component.version)) return false
@@ -91,11 +83,55 @@ function notReady(
   }
 }
 
+async function boundedFileBytes(
+  path: string,
+  maxBytes: number,
+  expected: Awaited<ReturnType<typeof lstat>>
+): Promise<Buffer | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const opened = await handle.stat()
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      opened.size > maxBytes ||
+      opened.dev !== expected.dev ||
+      opened.ino !== expected.ino
+    )
+      return null
+    const bytes = Buffer.alloc(maxBytes + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, null)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > maxBytes) return null
+    const after = await handle.stat()
+    const pathAfter = await lstat(path)
+    if (
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size ||
+      pathAfter.dev !== opened.dev ||
+      pathAfter.ino !== opened.ino ||
+      pathAfter.size !== opened.size
+    )
+      return null
+    return bytes.subarray(0, offset)
+  } catch {
+    return null
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
 /**
  * Resolve one activated component without opening model weights. The marker is a prior activation receipt;
  * matching sizes and regular paths keep it usable for boot/status without rereading gigabytes.
  */
-export function resolveSpeechPack(rootDir: string, component: SpeechPackComponent): SpeechPackReadiness {
+export async function resolveSpeechPack(rootDir: string, component: SpeechPackComponent): Promise<SpeechPackReadiness> {
   const manifestIdentity = componentManifestIdentity(component)
   if (!componentPathValid(component)) return notReady(component, manifestIdentity, 'repair-needed', 'path')
 
@@ -103,15 +139,15 @@ export function resolveSpeechPack(rootDir: string, component: SpeechPackComponen
   const markerPath = resolve(componentDir, 'active.json')
   let rootReal: string
   let componentReal: string
-  let rootStat: ReturnType<typeof lstatSync>
-  let componentStat: ReturnType<typeof lstatSync>
-  let markerStat: ReturnType<typeof lstatSync>
+  let rootStat: Awaited<ReturnType<typeof lstat>>
+  let componentStat: Awaited<ReturnType<typeof lstat>>
+  let markerStat: Awaited<ReturnType<typeof lstat>>
   try {
-    rootStat = lstatSync(rootDir)
-    rootReal = realpathSync(rootDir)
-    componentStat = lstatSync(componentDir)
-    componentReal = realpathSync(componentDir)
-    markerStat = lstatSync(markerPath)
+    rootStat = await lstat(rootDir)
+    rootReal = await realpath(rootDir)
+    componentStat = await lstat(componentDir)
+    componentReal = await realpath(componentDir)
+    markerStat = await lstat(markerPath)
   } catch {
     return notReady(component, manifestIdentity, 'not-installed', 'marker')
   }
@@ -130,25 +166,13 @@ export function resolveSpeechPack(rootDir: string, component: SpeechPackComponen
     return notReady(component, manifestIdentity, 'repair-needed', 'marker')
   }
 
+  const bytes = await boundedFileBytes(markerPath, MAX_MARKER_BYTES, markerStat)
+  if (!bytes) return notReady(component, manifestIdentity, 'repair-needed', 'marker')
   let marker: unknown
-  let markerFd = -1
   try {
-    markerFd = openSync(markerPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-    const opened = fstatSync(markerFd)
-    if (
-      !opened.isFile() ||
-      opened.nlink !== 1 ||
-      opened.size > MAX_MARKER_BYTES ||
-      opened.dev !== markerStat.dev ||
-      opened.ino !== markerStat.ino
-    ) {
-      return notReady(component, manifestIdentity, 'repair-needed', 'marker')
-    }
-    marker = JSON.parse(readFileSync(markerFd, 'utf8'))
+    marker = JSON.parse(bytes.toString('utf8'))
   } catch {
     return notReady(component, manifestIdentity, 'repair-needed', 'marker')
-  } finally {
-    if (markerFd >= 0) closeSync(markerFd)
   }
   if (!marker || typeof marker !== 'object' || Array.isArray(marker))
     return notReady(component, manifestIdentity, 'repair-needed', 'marker')
@@ -165,11 +189,11 @@ export function resolveSpeechPack(rootDir: string, component: SpeechPackComponen
     return notReady(component, manifestIdentity, 'repair-needed', 'manifest')
 
   const packDir = resolve(componentDir, component.version)
-  let packStat: ReturnType<typeof lstatSync>
+  let packStat: Awaited<ReturnType<typeof lstat>>
   let packReal: string
   try {
-    packStat = lstatSync(packDir)
-    packReal = realpathSync(packDir)
+    packStat = await lstat(packDir)
+    packReal = await realpath(packDir)
   } catch {
     return notReady(component, manifestIdentity, 'repair-needed', 'path')
   }
@@ -184,23 +208,24 @@ export function resolveSpeechPack(rootDir: string, component: SpeechPackComponen
     for (const part of file.path.split('/')) {
       current = resolve(current, part)
       try {
-        const item = lstatSync(current)
+        const item = await lstat(current)
         if (item.isSymbolicLink()) return notReady(component, manifestIdentity, 'repair-needed', 'path')
         if (current !== target && !item.isDirectory())
           return notReady(component, manifestIdentity, 'repair-needed', 'file')
+        if (current === target && (!item.isFile() || item.nlink !== 1 || item.size !== file.bytes)) {
+          return notReady(component, manifestIdentity, 'repair-needed', 'size')
+        }
       } catch {
         return notReady(component, manifestIdentity, 'repair-needed', 'file')
       }
     }
     let targetReal: string
     try {
-      targetReal = realpathSync(target)
+      targetReal = await realpath(target)
     } catch {
       return notReady(component, manifestIdentity, 'repair-needed', 'file')
     }
-    if (!isInside(packReal, targetReal) || !lstatRegularFile(target, file.bytes)) {
-      return notReady(component, manifestIdentity, 'repair-needed', 'size')
-    }
+    if (!isInside(packReal, targetReal)) return notReady(component, manifestIdentity, 'repair-needed', 'size')
   }
 
   return {

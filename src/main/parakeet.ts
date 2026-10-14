@@ -3,7 +3,7 @@
  * parakeet-asr-host.ts so model construction and decode cannot stall Electron's
  * main loop or collide with another native ONNX runtime on Windows.
  */
-import { existsSync, statSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { mainLog } from './logger'
@@ -12,6 +12,7 @@ import {
   PARAKEET_MODEL_NAME,
   ensureParakeetAssets,
   parakeetFilesReady,
+  parakeetModelMetadataReady,
   resolveParakeetDir
 } from './asr-bundled-ensure'
 
@@ -72,12 +73,11 @@ let nextGeneration = 1
 let nextRequest = 1
 let admittedPcmBytes = 0
 
-function modelDir(): string {
+function modelDir(): Promise<string> {
   return resolveParakeetDir()
 }
 
-function modelFiles(): ModelFiles {
-  const dir = modelDir()
+function modelFiles(dir: string): ModelFiles {
   return {
     encoder: join(dir, 'encoder.int8.onnx'),
     decoder: join(dir, 'decoder.int8.onnx'),
@@ -151,17 +151,26 @@ function spawnGeneration(): HostGeneration {
   return generation
 }
 
-async function activeGeneration(): Promise<HostGeneration> {
-  const blockedBeforeWait = blockedRelease?.error
-  if (blockedBeforeWait) throw blockedBeforeWait
-  const gate = releaseGate
-  if (gate) await gate
-  // Read through a function so TypeScript does not incorrectly preserve its pre-await narrowing of
-  // mutable process state. The exit-timeout callback can set this while the gate is being awaited.
-  const blockedAfterWait = (() => blockedRelease?.error)()
-  if (blockedAfterWait) throw blockedAfterWait
-  if (current?.state === 'active') return current
-  return spawnGeneration()
+async function activeGeneration(prepareBeforeSpawn?: () => Promise<void>): Promise<HostGeneration> {
+  for (;;) {
+    const blockedBeforeWait = blockedRelease?.error
+    if (blockedBeforeWait) throw blockedBeforeWait
+    const gate = releaseGate
+    if (gate) await gate
+    // Read through a function so TypeScript does not incorrectly preserve its pre-await narrowing of
+    // mutable process state. The exit-timeout callback can set this while the gate is being awaited.
+    const blockedAfterWait = (() => blockedRelease?.error)()
+    if (blockedAfterWait) throw blockedAfterWait
+    const currentBeforePrepare = (() => current)()
+    if (currentBeforePrepare?.state === 'active') return currentBeforePrepare
+    // If a previous helper was exiting, re-resolve the current lean selection after its exit and
+    // before creating a replacement. No helper starts while fresh path admission is pending.
+    await prepareBeforeSpawn?.()
+    if (releaseGate || blockedRelease) continue
+    const currentAfterPrepare = (() => current)()
+    if (currentAfterPrepare?.state === 'active') return currentAfterPrepare
+    return spawnGeneration()
+  }
 }
 
 function terminateGeneration(generation: HostGeneration, pendingError: Error): Promise<void> {
@@ -176,7 +185,9 @@ function terminateGeneration(generation: HostGeneration, pendingError: Error): P
   generation.exitTimer = setTimeout(() => {
     if (generation.state !== 'releasing') return
     generation.state = 'blocked'
-    const error = new Error('Could not confirm that the Parakeet helper exited; restart is blocked to prevent overlapping native recognizers.')
+    const error = new Error(
+      'Could not confirm that the Parakeet helper exited; restart is blocked to prevent overlapping native recognizers.'
+    )
     blockedRelease = { generation, error }
     if (releaseGate === generation.termination) releaseGate = null
     generation.rejectTermination?.(error)
@@ -192,18 +203,28 @@ function terminateGeneration(generation: HostGeneration, pendingError: Error): P
 }
 
 async function requestHost(
-  request: { type: 'probe' } | { type: 'warmup'; files: ModelFiles } | { type: 'transcribe'; files: ModelFiles; pcm: ArrayBuffer }
+  request:
+    | { type: 'probe' }
+    | { type: 'warmup'; files: ModelFiles }
+    | { type: 'transcribe'; files: ModelFiles; pcm: ArrayBuffer }
 ): Promise<HostResponse> {
-  let generation = await activeGeneration()
+  let requestForHost = request
+  const prepareBeforeSpawn =
+    request.type === 'probe'
+      ? undefined
+      : async (): Promise<void> => {
+          requestForHost = { ...request, files: modelFiles(await modelDir()) }
+        }
+  let generation = await activeGeneration(prepareBeforeSpawn)
   // activeGeneration crosses an async boundary. A release can begin before this continuation resumes;
   // never enqueue into that dying generation. Waiting on its exact exit also prevents two recognizers.
-  while (generation.state !== 'active') generation = await activeGeneration()
+  while (generation.state !== 'active') generation = await activeGeneration(prepareBeforeSpawn)
   if (generation.pending.size >= MAX_PENDING_REQUESTS) throw new ParakeetBusyError()
   const id = `g${generation.number}:r${nextRequest++}`
   return new Promise<HostResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
       generation.pending.delete(id)
-      const error = new Error(`Parakeet ${request.type} timed out.`)
+      const error = new Error(`Parakeet ${requestForHost.type} timed out.`)
       reject(error)
       void terminateGeneration(generation, error).catch((terminationError) => {
         mainLog.error('[parakeet] timed-out helper did not exit:', asError(terminationError).message)
@@ -211,7 +232,7 @@ async function requestHost(
     }, DEFAULT_REQUEST_TIMEOUT_MS)
     generation.pending.set(id, { resolve, reject, timer })
     try {
-      generation.child.postMessage({ ...request, id })
+      generation.child.postMessage({ ...requestForHost, id })
     } catch (error) {
       generation.pending.delete(id)
       clearTimeout(timer)
@@ -225,8 +246,8 @@ async function requestHost(
 }
 
 /** True when all model files are present and are real weights, not an HTML error page. */
-export function parakeetModelReady(): boolean {
-  return parakeetFilesReady(modelDir())
+export async function parakeetModelReady(): Promise<boolean> {
+  return parakeetModelMetadataReady()
 }
 
 /** Probe native addon availability in the helper without constructing model weights. */
@@ -241,13 +262,16 @@ export async function parakeetAddonError(): Promise<string | null> {
 
 /** Ensure model assets and prewarm genuine weights in the isolated helper. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
-  if (!parakeetModelReady()) await ensureParakeetAssets(onProgress)
-  if (!parakeetModelReady()) throw new Error(ASR_ASSETS_MISSING)
+  if (!(await parakeetFilesReady(await modelDir()))) await ensureParakeetAssets(onProgress)
+  const dir = await modelDir()
+  if (!(await parakeetFilesReady(dir))) throw new Error(ASR_ASSETS_MISSING)
+  const files = modelFiles(dir)
   // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
   // treats malformed protobufs as a process-fatal error in some builds.
-  const encoder = modelFiles().encoder
-  if (existsSync(encoder) && statSync(encoder).size > 1_024) {
-    await requestHost({ type: 'warmup', files: modelFiles() })
+  try {
+    if ((await stat(files.encoder)).size > 1_024) await requestHost({ type: 'warmup', files })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
 }
 
@@ -269,7 +293,8 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
     // Reserve first, then clone. Rejected callers never allocate a second PCM buffer and are never
     // parked in an await queue that would retain their original audio indefinitely.
     const pcm = new Float32Array(samples).buffer
-    const response = await requestHost({ type: 'transcribe', files: modelFiles(), pcm })
+    const files = modelFiles(await modelDir())
+    const response = await requestHost({ type: 'transcribe', files, pcm })
     return String(response.text ?? '').trim()
   } finally {
     admittedPcmBytes -= admittedBytes

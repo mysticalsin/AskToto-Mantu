@@ -57,35 +57,39 @@ describe('bundled Parakeet runtime', () => {
 
   it('an unprovisioned development checkout fetches into userData', async () => {
     const progressSpy = vi.fn()
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async (dest, onProgress) => {
-        writeParakeet(dest)
-        onProgress?.(40)
-        onProgress?.(100)
-      }
-    }))
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async (dest, onProgress) => {
+          writeParakeet(dest)
+          onProgress?.(40)
+          onProgress?.(100)
+        }
+      })
+    )
 
-    expect(parakeetModelReady()).toBe(false)
+    await expect(parakeetModelReady()).resolves.toBe(false)
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
-    expect(parakeetModelReady()).toBe(true)
+    await expect(parakeetModelReady()).resolves.toBe(true)
     expect(progressSpy).toHaveBeenCalled()
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
   })
 
-  it('Access login HTML on disk is not a ready Parakeet model', () => {
+  it('Access login HTML on disk is not a ready Parakeet model', async () => {
     const dir = join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
     mkdirSync(dir, { recursive: true })
     const html = '<!DOCTYPE html><html><body>cloudflareaccess.com Sign in</body></html>'
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
-    expect(parakeetModelReady()).toBe(false)
+    await expect(parakeetModelReady()).resolves.toBe(false)
   })
 
   it('a development fetch failure stays an honest connection error', async () => {
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async () => {
-        throw new Error('network down')
-      }
-    }))
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async () => {
+          throw new Error('network down')
+        }
+      })
+    )
     await expect(ensureParakeetModel()).rejects.toThrow(/network down/)
   })
 

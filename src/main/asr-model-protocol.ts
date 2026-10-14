@@ -11,10 +11,10 @@ export interface AsrModelProtocolOptions {
   /** True only for the explicit package-owned lean profile, even when its selected pack is missing. */
   useOnlySpeechPackModels?: boolean
   /** Optional resolver is evaluated per request so successful activation is visible without reload. */
-  resolveSpeechPackModels?: () => {
+  resolveSpeechPackModels?: () => Promise<{
     useOnlySpeechPackModels: boolean
     speechPackModelsRoot?: string
-  }
+  }>
   readLocal: (fileUrl: string) => Promise<Response>
 }
 
@@ -37,9 +37,6 @@ export function createAsrModelProtocolHandler(
       return respond(null, { status: 400 })
     }
     try {
-      const speechPack = options.resolveSpeechPackModels?.()
-      const onlySpeechPackModels = speechPack?.useOnlySpeechPackModels ?? options.useOnlySpeechPackModels
-      const speechPackRoot = speechPack?.speechPackModelsRoot ?? options.speechPackModelsRoot
       if (
         url.protocol !== 'asr-model:' ||
         (url.host !== 'models' && url.host !== 'ort') ||
@@ -51,6 +48,12 @@ export function createAsrModelProtocolHandler(
       // Reject cross-platform path syntax before resolving. URL normalization alone does not catch
       // encoded separators, and a parent resources-root check would permit sibling app source files.
       if (isAbsolute(rel) || /[\\:\0]/.test(rel) || rel.split('/').includes('..')) return respond(null, { status: 403 })
+      const speechPack = options.resolveSpeechPackModels ? await options.resolveSpeechPackModels() : undefined
+      // An explicit dynamic denial must never revive a stale root captured when the handler was built.
+      const onlySpeechPackModels = speechPack?.useOnlySpeechPackModels ?? options.useOnlySpeechPackModels
+      const speechPackRoot = options.resolveSpeechPackModels
+        ? speechPack?.speechPackModelsRoot
+        : options.speechPackModelsRoot
       const roots =
         url.host === 'models'
           ? onlySpeechPackModels
