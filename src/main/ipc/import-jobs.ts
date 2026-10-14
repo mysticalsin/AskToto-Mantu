@@ -63,7 +63,17 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     await assertImportAdmissionAllowed()
     const jobs = getImportJobs()
     await assertImportAdmissionAllowed()
-    return importJobView(await jobs.start(consumeAudioToken(parsed.token)))
+    assertMainWindow(event)
+    assertImportAdmissionCurrent()
+    const source = consumeAudioToken(parsed.token)
+    const started = await jobs.start(source)
+    assertMainWindow(event)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    await assertImportAdmissionAllowed()
+    assertMainWindow(event)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    assertImportAdmissionCurrent()
+    return importJobView(started)
   })
   ipcMain.handle(IPC.importAudioStartBatch, async (event, raw) => {
     assertMainWindow(event)
@@ -77,6 +87,7 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     const sources = []
     const errors: string[] = []
     for (const token of parsed.tokens) {
+      assertMainWindow(event)
       assertImportAdmissionCurrent()
       try {
         sources.push(consumeAudioToken(token))
@@ -86,7 +97,14 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     }
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
     assertImportAdmissionCurrent()
-    return (await jobs.startMany(sources)).map(importJobView)
+    const started = await jobs.startMany(sources)
+    assertMainWindow(event)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    await assertImportAdmissionAllowed()
+    assertMainWindow(event)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    assertImportAdmissionCurrent()
+    return started.map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, async (event) => {
     assertMainWindow(event)
@@ -94,8 +112,10 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     try {
       await refreshImportAuthority()
       const snapshot = await getImportJobs().snapshot()
+      assertMainWindow(event)
       if (!requireAuth()) return unavailableSnapshot()
       await refreshImportAuthority()
+      assertMainWindow(event)
       if (!requireAuth()) return unavailableSnapshot()
       const currentPolicyState = currentImportRetentionState()
       return {
@@ -121,8 +141,12 @@ export function registerImportJobsIpc(options: ImportJobsIpcOptions): void {
     const parsed = ImportJobIdSchema.parse(raw)
     await assertImportAdmissionAllowed()
     const resumed = await getImportJobs().resume(parsed.jobId)
+    assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     await assertImportAdmissionAllowed()
+    assertMainWindow(event)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    assertImportAdmissionCurrent()
     return importJobView(resumed)
   })
   ipcMain.handle(IPC.importJobRemove, async (event, raw) => {

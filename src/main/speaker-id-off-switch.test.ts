@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from 'electron'
 import { getSettings, setSettings } from './store'
 import { createSpeakerId, type SpeakerId, type SpeakerIdDeps, type SpeakerLabel } from './speaker-id'
+import { createImportAsrAdmission } from './import-asr-admission'
 
 vi.mock('electron')
 
@@ -75,9 +76,29 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
   const finalizeImportSpeakers = vi.fn(() =>
     settings.speakerId.enabled ? new Map([['Speaker 1', 'Speaker 1']]) : null
   )
+  const asrAdmission = createImportAsrAdmission({
+    captureAdmission: () => ({
+      settings: { asrLanguage: 'auto', asrEngine: 'parakeet' },
+      assertCurrent: noop
+    }),
+    capabilityState: () => 'available',
+    isAdmissionRefusal: () => false,
+    hasHighMemoryHeadroom: () => false,
+    isHighTierModelReady: async () => false,
+    setWhisperTierAdmission: async () => {},
+    ensureParakeetModel: async () => {},
+    parakeetTranscribe: async () => '',
+    whisperImportTranscribe: async () => '',
+    detectImportLanguage: () => null
+  })
   actualFunction('initializeImportJobs', {
     importJobs: null,
     wireIntelligenceIndexWork: noop,
+    createImportAsrAdmission: () => asrAdmission,
+    captureImportAsrAdmission: async () => ({
+      settings: { asrLanguage: 'auto', asrEngine: 'parakeet' },
+      assertCurrent: noop
+    }),
     ImportJobManager: class {
       constructor(deps: Record<string, any>) {
         captured = deps
@@ -86,7 +107,19 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
     EncryptedImportJobStore: class {},
     getSettings: () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
     currentImportSettings: () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
+    refreshImportSettings: async () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
     currentImportRetentionState: () => 'allowed',
+    refreshImportRetentionState: async () => 'allowed',
+    refreshImportCapabilityState: async () => 'available',
+    assertImportAdmissionAllowed: async () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet' }),
+    assertImportAdmissionCurrent: noop,
+    prepareImportReplacement: async () => noop,
+    requireAuth: () => true,
+    ImportRetentionBlockedError: Error,
+    ImportRetentionAuthorityUnavailableError: Error,
+    hasHighMemoryWhisperImportHeadroom: () => false,
+    isHighTierAsrModelReady: async () => false,
+    setWhisperImportTierAdmission: async () => {},
     validateImportJobSource: noop,
     randomUUID: () => '00000000-0000-4000-8000-000000000000',
     getSpeakerId: () => speakerId,
@@ -105,7 +138,7 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
     }),
     resetImportLanguageFollow: noop,
     startImportDecoder: noop,
-    parakeetTranscribe: noop,
+    parakeetTranscribe: async () => '',
     whisperImportTranscribe: noop,
     detectImportLanguage: noop,
     ensureParakeetModel: noop,

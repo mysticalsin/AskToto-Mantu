@@ -29,6 +29,7 @@ import {
 } from './features/meetings/speech-provenance'
 import { storageAt } from './infra/storage/meetings-storage'
 import { writeWithAdmission } from './infra/storage/write-with-admission'
+import type { PrepareSavedReplacement } from './infra/storage/atomic-saved-write'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
 import { FILENAME_TIMESTAMP, isMeetingConfidentialOnDisk, isOwnedMeetingFile } from './meeting-privacy'
@@ -430,7 +431,8 @@ export async function updateMeetingRecap(
   file: string,
   newRecap: string,
   recapStatus?: RecapStatus,
-  beforeReplace?: () => void
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
 ): Promise<{ ok: boolean; error?: string }> {
   const statusError = recapStatusValidationError(newRecap, recapStatus)
   if (statusError) return { ok: false, error: statusError }
@@ -500,7 +502,11 @@ export async function updateMeetingRecap(
     updated = serialize(setMeetingField(doc, 'recap_status', recapStatus))
   }
 
-  const write = await writeWithAdmission(beforeReplace, (guard) => writeSaved(fullPath, updated, wasEncrypted, guard))
+  const write = await writeWithAdmission(
+    beforeReplace,
+    (guard, prepare) => writeSaved(fullPath, updated, wasEncrypted, guard, prepare),
+    prepareReplace
+  )
   if (write.kind === 'admission-refused') throw write.error
   if (write.kind === 'write-failed') return { ok: false, error: 'Could not save your changes.' }
   return { ok: true }

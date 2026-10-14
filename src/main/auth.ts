@@ -304,6 +304,11 @@ let speechAuthSessionEpoch = 0
 let speechAuthLeaseController: SpeechAuthLeaseController
 let suspendedSpeechAuthProfilePath: string | null = null
 
+/** Main-only monotonic identity for sign-out, expiry and profile transitions. */
+export function getSpeechAuthSessionEpoch(): number {
+  return speechAuthSessionEpoch
+}
+
 export function invalidateSpeechAuthLease(): void {
   speechAuthLeaseController.invalidate()
 }

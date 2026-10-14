@@ -36,7 +36,7 @@ export interface ImportJobPipelineHost {
   refreshRetention(): Promise<void>
   assertJobWriteAllowed(job: ImportJob, attempt?: ImportJobPipelineAttempt): void
   stopIfPolicyHeld(job: ImportJob, attempt?: ImportJobPipelineAttempt): Promise<boolean>
-  holdForPolicy(job: ImportJob): Promise<void>
+  holdForPolicy(job: ImportJob, reason?: 'policy' | 'restart'): Promise<void>
   isCurrentJob(job: ImportJob, attempt?: ImportJobPipelineAttempt): boolean
   abandonIfCancelled(job: ImportJob, file: string): Promise<boolean>
   removeCheckpoint(jobId: string): Promise<void>
@@ -49,7 +49,7 @@ export interface ImportJobPipelineHost {
 export interface ImportProgressHost {
   retentionAllowed(): boolean
   attemptAccepts(): boolean
-  holdForPolicy(job: ImportJob): Promise<void>
+  holdForPolicy(job: ImportJob, reason?: 'policy' | 'restart'): Promise<void>
   persist(job: ImportJob): Promise<void>
   isTerminal(state: ImportJob['state']): boolean
 }
@@ -309,7 +309,7 @@ export async function finalizeImportJob(
   } catch (error) {
     if (error instanceof StaleImportJobWriteError) return
     if (job.state === 'policy-held' || isImportRetentionRefusal(error)) {
-      if (job.state !== 'policy-held') await host.holdForPolicy(job)
+      if (job.state !== 'policy-held') await host.holdForPolicy(job, 'policy')
     } else if (job.state !== 'cancelled') await host.fail(job, message(error))
   } finally {
     if (host.isCurrentJob(job, attempt)) {

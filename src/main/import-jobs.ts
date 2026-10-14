@@ -416,7 +416,8 @@ export class ImportJobManager {
       await this.persist(job)
     } catch (error) {
       if (terminal(job.state)) return
-      await this.fail(job, message(error))
+      if (ImportRetention.isImportRetentionRefusal(error)) await this.holdForPolicy(job, 'policy')
+      else await this.fail(job, message(error))
       throw error
     } finally {
       if (ownsRetainedPcm) this.retainedPcmConsumerIds.delete(job.jobId)
@@ -596,6 +597,10 @@ export class ImportJobManager {
 
   async failDecoder(jobId: string, error: unknown): Promise<void> {
     const job = this.requireJob(jobId)
+    if (ImportRetention.isImportRetentionRefusal(error)) {
+      await this.holdForPolicy(job, 'policy')
+      return
+    }
     if (!this.retentionPolicy.allowed()) {
       await this.holdForPolicy(job)
       return
@@ -629,6 +634,7 @@ export class ImportJobManager {
           return text
         } catch (error) {
           if (error === ATTEMPT_STOPPED || !stillCurrent()) throw ATTEMPT_STOPPED
+          if (ImportRetention.isImportRetentionRefusal(error)) throw error
           last = error
         }
       }
@@ -689,7 +695,7 @@ export class ImportJobManager {
       } catch (error) {
         if (this.isCurrentDecodeAttempt(job, attempt)) {
           if (ImportRetention.isImportRetentionRefusal(error)) {
-            await this.holdForPolicy(job)
+            await this.holdForPolicy(job, 'policy')
           } else await this.fail(job, message(error))
         }
         continue
@@ -700,7 +706,10 @@ export class ImportJobManager {
       try {
         await this.deps.decode(copy(job))
       } catch (error) {
-        if (this.isCurrentDecodeAttempt(job, attempt)) await this.fail(job, message(error))
+        if (this.isCurrentDecodeAttempt(job, attempt)) {
+          if (ImportRetention.isImportRetentionRefusal(error)) await this.holdForPolicy(job, 'policy')
+          else await this.fail(job, message(error))
+        }
       }
       if (await this.stopIfPolicyHeld(job)) continue
       // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Admission stays
@@ -825,8 +834,7 @@ export class ImportJobManager {
     }
   }
 
-  private async holdForPolicy(job: ImportJob): Promise<void> {
-    const reason = this.retentionPolicy.holdReason()
+  private async holdForPolicy(job: ImportJob, reason = this.retentionPolicy.holdReason()): Promise<void> {
     await this.retention.hold(job, this.retentionHost(), this.deps.store, reason)
   }
 
@@ -928,7 +936,7 @@ export class ImportJobManager {
       },
       assertJobWriteAllowed: (job, attempt) => this.assertJobWriteAllowed(job, attempt),
       stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt),
-      holdForPolicy: (job) => this.holdForPolicy(job),
+      holdForPolicy: (job, reason) => this.holdForPolicy(job, reason),
       isCurrentJob: (job, attempt) => this.jobs.get(job.jobId) === job && (!attempt || this.attemptCanFinish(attempt)),
       abandonIfCancelled: (job, file) => this.abandonIfCancelled(job, file),
       removeCheckpoint: (jobId) => this.removeCheckpoint(jobId),

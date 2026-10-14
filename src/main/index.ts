@@ -726,6 +726,7 @@ import {
   signIn as authSignIn,
   signOut as authSignOut,
   requireAuth,
+  getSpeechAuthSessionEpoch,
   setSessionClearedHandler,
   resetSpeechAuthProfile,
   completeSpeechAuthProfileReset,
@@ -770,6 +771,7 @@ import { registerListenDisplayMedia } from './capture-permissions/listen-display
 import { startSpeechDesktopBootstrap } from './speech-desktop-bootstrap'
 import { speechDesktopBoundaryOptions } from './speech-desktop-boundary'
 import { validateImportJobSource } from './import-audio'
+import { createImportJobAuthority } from './import-job-authority'
 import { registerImportJobsIpc } from './ipc/import-jobs'
 import { createImportAsrAdmission } from './import-asr-admission'
 import {
@@ -812,12 +814,7 @@ import {
   asrModelProtocolSpeechPackOptions
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
-import {
-  ImportRetentionAuthorityUnavailableError,
-  ImportRetentionBlockedError,
-  canRetainImportedTranscript,
-  type ImportRetentionState
-} from './import-retention-policy'
+import { ImportRetentionAuthorityUnavailableError, ImportRetentionBlockedError } from './import-retention-policy'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
@@ -1423,106 +1420,23 @@ function importJobView(job: ImportJob): ImportJobView {
   }
 }
 
-/** Import admission uses a fresh main-process policy snapshot. `readable` is supplied by the store's
- * authority observation and includes managed/admin-file validity, so a fallback settings object never
- * becomes permission to retain transcript text. */
-function currentImportSettings(): Settings {
-  if (!requireAuth()) throw new ImportRetentionAuthorityUnavailableError()
-  const observation = getPublishedSettingsObservation()
-  if (!observation?.readable) {
-    throw new ImportRetentionAuthorityUnavailableError()
-  }
-  return observation.settings
-}
-
-async function refreshImportSettings(): Promise<Settings> {
-  if (!requireAuth()) throw new ImportRetentionAuthorityUnavailableError()
-  const authority = await readSettingsAtAuthorityBoundary()
-  const current = getPublishedSettingsObservation()
-  if (
-    !requireAuth() ||
-    !authority.readable ||
-    !current?.readable ||
-    current.epoch !== authority.epoch ||
-    current.settings !== authority.settings
-  ) {
-    throw new ImportRetentionAuthorityUnavailableError()
-  }
-  return authority.settings
-}
-
-async function refreshImportRetentionState(): Promise<ImportRetentionState> {
-  if (!requireAuth()) return 'unavailable'
-  try {
-    const settings = await refreshImportSettings()
-    if (!requireAuth()) return 'unavailable'
-    return canRetainImportedTranscript(settings) ? 'allowed' : 'summary-only'
-  } catch {
-    return 'unavailable'
-  }
-}
-
-function currentImportRetentionState(): ImportRetentionState {
-  if (!requireAuth()) return 'unavailable'
-  try {
-    return canRetainImportedTranscript(currentImportSettings()) ? 'allowed' : 'summary-only'
-  } catch {
-    return 'unavailable'
-  }
-}
-
-function assertImportWriteAllowed(): void {
-  if (!requireAuth()) throw new Error('Not signed in.')
-  const state = currentImportRetentionState()
-  if (state === 'unavailable') throw new ImportRetentionAuthorityUnavailableError()
-  if (state !== 'allowed') throw new ImportRetentionBlockedError()
-}
-
-function assertImportAdmissionCurrent(): void {
-  assertImportWriteAllowed()
-  const capability = currentImportCapabilityState()
-  if (capability === 'unavailable') throw new ImportRetentionAuthorityUnavailableError()
-  if (capability !== 'available') {
-    throw new Error('Recording import is unavailable in the managed cloud-only speech profile.')
-  }
-}
-
-type ImportCapabilityState = 'available' | 'cloud-only-unsupported' | 'unavailable'
-
-function currentImportCapabilityState(): ImportCapabilityState {
-  if (!requireAuth()) return 'unavailable'
-  try {
-    return isCloudOnlyProfile(resolveEnterpriseLiveProfile(currentImportSettings().enterpriseLive))
-      ? 'cloud-only-unsupported'
-      : 'available'
-  } catch {
-    return 'unavailable'
-  }
-}
-
-async function refreshImportCapabilityState(): Promise<ImportCapabilityState> {
-  if (!requireAuth()) return 'unavailable'
-  try {
-    const settings = await refreshImportSettings()
-    if (!requireAuth()) return 'unavailable'
-    return isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive))
-      ? 'cloud-only-unsupported'
-      : 'available'
-  } catch {
-    return 'unavailable'
-  }
-}
-
-async function assertImportAdmissionAllowed(): Promise<Settings> {
-  if (!requireAuth()) throw new Error('Not signed in.')
-  const settings = await refreshImportSettings()
-  if (!requireAuth()) throw new Error('Not signed in.')
-  if (!canRetainImportedTranscript(settings)) throw new ImportRetentionBlockedError()
-  if (isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive))) {
-    throw new Error('Recording import is unavailable in the managed cloud-only speech profile.')
-  }
-  return settings
-}
+const importJobAuthority = createImportJobAuthority({
+  requireAuth,
+  authGeneration: getSpeechAuthSessionEpoch,
+  readAuthority: readSettingsAtAuthorityBoundary,
+  currentObservation: getPublishedSettingsObservation
+})
+const currentImportSettings = importJobAuthority.currentSettings
+const refreshImportSettings = importJobAuthority.refreshSettings
+const refreshImportRetentionState = importJobAuthority.refreshRetentionState
+const currentImportRetentionState = importJobAuthority.currentRetentionState
+const assertImportWriteAllowed = importJobAuthority.assertRetentionAllowed
+const assertImportAdmissionCurrent = importJobAuthority.assertAdmissionCurrent
+const currentImportCapabilityState = importJobAuthority.currentCapabilityState
+const refreshImportCapabilityState = importJobAuthority.refreshCapabilityState
+const assertImportAdmissionAllowed = importJobAuthority.assertAdmissionAllowed
+const captureImportAsrAdmission = importJobAuthority.captureAsrAdmission
+const prepareImportReplacement = (settings?: Settings) => importJobAuthority.prepareReplacement(settings)
 
 function publishAsrAssetsProgress(progress = asrAssetsProgress()): void {
   if (win && !win.isDestroyed()) {
@@ -1993,8 +1907,7 @@ function initializeImportJobs(): void {
   if (importJobs) return
   wireIntelligenceIndexWork()
   const asrAdmission = createImportAsrAdmission({
-    currentSettings: async () => refreshImportSettings(),
-    assertAdmissionAllowed: async () => assertImportAdmissionAllowed(),
+    captureAdmission: captureImportAsrAdmission,
     capabilityState: refreshImportCapabilityState,
     isAdmissionRefusal: (error) =>
       error instanceof ImportRetentionBlockedError || error instanceof ImportRetentionAuthorityUnavailableError,
@@ -2011,7 +1924,8 @@ function initializeImportJobs(): void {
       currentImportSettings,
       undefined,
       currentImportRetentionState,
-      refreshImportRetentionState
+      refreshImportRetentionState,
+      prepareImportReplacement
     ),
     retentionStatus: currentImportRetentionState,
     refreshRetentionStatus: refreshImportRetentionState,
@@ -2063,23 +1977,31 @@ function initializeImportJobs(): void {
     },
     saveMeeting: async (meeting, beforeReplace) => {
       const settings = await refreshImportSettings()
-      if (!canRetainImportedTranscript(settings)) throw new ImportRetentionBlockedError()
-      return saveMeeting(settings, meeting, () => {
-        assertImportWriteAllowed()
-        beforeReplace?.()
-      })
+      assertImportAdmissionCurrent()
+      const prepareReplacement = prepareImportReplacement(settings)
+      return saveMeeting(
+        settings,
+        meeting,
+        () => {
+          assertImportWriteAllowed()
+          beforeReplace?.()
+        },
+        prepareReplacement
+      )
     },
     deleteMeeting,
     enqueueIngest: async (file, options, beforeReplace) => {
       const settings = await refreshImportSettings()
-      if (!canRetainImportedTranscript(settings)) throw new ImportRetentionBlockedError()
-      if (isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive))) {
-        throw new Error('Recording import is unavailable in the managed cloud-only speech profile.')
-      }
-      return enqueueIngest(file, options, () => {
-        assertImportWriteAllowed()
-        beforeReplace?.()
-      })
+      assertImportAdmissionCurrent()
+      return enqueueIngest(
+        file,
+        options,
+        () => {
+          assertImportWriteAllowed()
+          beforeReplace?.()
+        },
+        prepareImportReplacement(settings)
+      )
     },
     recordMeetingSummarized,
     recordTimeSavedNote: (words, file) => {
@@ -2089,11 +2011,19 @@ function initializeImportJobs(): void {
     generateRecap: runImportedRecap,
     updateRecap: async (file, recap, status, beforeReplace) => {
       const settings = await refreshImportSettings()
-      if (!canRetainImportedTranscript(settings)) throw new ImportRetentionBlockedError()
-      const result = await updateMeetingRecap(settings, file, recap, status, () => {
-        assertImportWriteAllowed()
-        beforeReplace?.()
-      })
+      assertImportAdmissionCurrent()
+      const prepareReplacement = prepareImportReplacement(settings)
+      const result = await updateMeetingRecap(
+        settings,
+        file,
+        recap,
+        status,
+        () => {
+          assertImportWriteAllowed()
+          beforeReplace?.()
+        },
+        prepareReplacement
+      )
       if (!result.ok) throw new Error(result.error || 'Could not save the imported summary.')
     },
     onChange: publishImportJob,

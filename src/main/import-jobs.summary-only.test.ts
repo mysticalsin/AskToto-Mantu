@@ -167,6 +167,28 @@ describe('ImportJobManager summary-only retention boundary', () => {
     expect(decode).not.toHaveBeenCalled()
   })
 
+  it('does not retry a typed transcription refusal after policy restores and holds the exact job', async () => {
+    let canRetain = true
+    const store = new RetentionStore()
+    const refused = new ImportRetentionAuthorityUnavailableError()
+    const transcribe = vi.fn(async () => {
+      canRetain = true
+      throw refused
+    })
+    const { manager } = createManager(store, () => canRetain, {
+      freeMemoryBytes: () => 1,
+      transcribe
+    })
+    const job = await manager.start(source)
+
+    await expect(manager.acceptDecodedChunk(job.jobId, 0, 1, new Float32Array(1_600).fill(0.1))).rejects.toBe(refused)
+
+    expect(transcribe).toHaveBeenCalledOnce()
+    expect(manager.get(job.jobId)).toBeUndefined()
+    expect(store.held.has(job.jobId)).toBe(true)
+    expect(store.jobs.get(job.jobId)?.state).not.toBe('failed')
+  })
+
   it('holds existing checkpoints at boot without listing or recovering their transcript payloads', async () => {
     const store = new RetentionStore()
     store.jobs.set('job-1', {

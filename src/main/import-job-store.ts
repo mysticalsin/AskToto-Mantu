@@ -10,6 +10,7 @@ import {
   type ImportRetentionState
 } from './import-retention-policy'
 import { decodeSaved, writeSaved } from './transcripts'
+import type { PrepareSavedReplacement } from './infra/storage/atomic-saved-write'
 import type { ImportHoldInventory, ImportJob, ImportJobStore } from './import-job-types'
 
 const MAX_HELD_JOB_IDS = 1_024
@@ -49,19 +50,32 @@ export class EncryptedImportJobStore implements ImportJobStore {
     private readonly getSettings: () => Settings,
     private readonly root = join(app.getPath('userData'), 'import-jobs'),
     private readonly retentionStatus?: () => ImportRetentionState,
-    private readonly refreshRetentionStatus?: () => Promise<ImportRetentionState>
+    private readonly refreshRetentionStatus?: () => Promise<ImportRetentionState>,
+    private readonly prepareReplacement?: (settings: Settings) => PrepareSavedReplacement
   ) {}
 
   async save(job: ImportJob, beforeReplace?: () => void): Promise<void> {
     await this.refreshAndAssertRetentionAllowed()
     this.assertRetentionAllowed()
+    const operationSettings = this.getSettings()
+    const prepareReplacement = this.prepareReplacement?.(operationSettings)
     const rootIdentity = await this.ensureRoot()
     await this.refreshAndAssertRetentionAllowed()
-    await writeSaved(this.path(job.jobId), JSON.stringify(job), this.getSettings().encryptTranscripts, () => {
-      this.assertRootIdentityBeforeReplace(rootIdentity)
-      this.assertRetentionAllowed()
-      beforeReplace?.()
-    })
+    await writeSaved(
+      this.path(job.jobId),
+      JSON.stringify(job),
+      operationSettings.encryptTranscripts,
+      () => {
+        this.assertRootIdentityBeforeReplace(rootIdentity)
+        this.assertRetentionAllowed()
+        beforeReplace?.()
+      },
+      async () => {
+        await this.refreshAndAssertRetentionAllowed()
+        this.assertRetentionAllowed()
+        return prepareReplacement?.()
+      }
+    )
   }
 
   async list(): Promise<ImportJob[]> {

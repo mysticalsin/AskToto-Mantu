@@ -1106,6 +1106,35 @@ describe('writeSaved', () => {
     }
   })
 
+  it('refreshes authority after temp I/O and refuses a rename retry after trust is revoked', async () => {
+    const target = join(folder, 'held.md')
+    writeFileSync(target, 'durable original')
+    let trustRevoked = false
+    let renameCalls = 0
+    const prepareReplace = vi.fn(async () => {
+      if (trustRevoked) throw new Error('authority is no longer trusted')
+      return () => {
+        if (trustRevoked) throw new Error('captured authority epoch changed')
+      }
+    })
+    vi.mocked(renameAsync).mockImplementationOnce(async () => {
+      renameCalls += 1
+      trustRevoked = true
+      const err = new Error('EPERM: operation not permitted, rename') as NodeJS.ErrnoException
+      err.code = 'EPERM'
+      throw err
+    })
+
+    await expect(writeSaved(target, 'must not replace', false, undefined, prepareReplace)).rejects.toThrow(
+      'authority is no longer trusted'
+    )
+
+    expect(prepareReplace).toHaveBeenCalledTimes(2)
+    expect(renameCalls).toBe(1)
+    expect(readFileSync(target, 'utf8')).toBe('durable original')
+    expect(readdirSync(folder).some((name) => name.endsWith('.tmp'))).toBe(false)
+  })
+
   it('does not retry and rethrows on a non-transient error', async () => {
     const target = join(folder, 'note.md')
     vi.mocked(renameAsync).mockImplementation(async () => {

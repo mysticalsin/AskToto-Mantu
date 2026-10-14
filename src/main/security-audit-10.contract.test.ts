@@ -290,5 +290,7 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
       'ipcMain.on(IPC.importDecoderReady'
     )
     expect(wiring).toMatch(/registerImportJobsIpc\(/)
+    expect(wiring).not.toMatch(/shell\.openPath/)
+    expect(wiring).not.toMatch(/execFile|execSync/)
   })
 })
