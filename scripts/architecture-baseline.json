@@ -45,8 +45,8 @@
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 999,
-    "src/main/index.ts": 10384,
-    "src/main/store.ts": 1362,
+    "src/main/index.ts": 10373,
+    "src/main/store.ts": 1361,
     "src/main/transcripts.ts": 1086,
     "src/renderer/src/App.tsx": 4794,
     "src/renderer/src/components/Bar.tsx": 962,
@@ -116,7 +116,7 @@
     "src/main/secrets.ts": 13,
     "src/main/selftest.ts": 16,
     "src/main/speaker-id.ts": 6,
-    "src/main/store.ts": 42,
+    "src/main/store.ts": 40,
     "src/main/time-saved-log.ts": 4,
     "src/main/transcripts.ts": 26,
     "src/main/updater.ts": 1,
@@ -315,7 +315,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 163
+    "src/main/index.ts": 161
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,
