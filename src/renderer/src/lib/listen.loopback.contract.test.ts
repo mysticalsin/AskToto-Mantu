@@ -1,140 +1,480 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ListenAudioChannelsHost } from './listen-audio-channels'
+import { createListenAudioChannels } from './listen-audio-channels'
+import type { ListenAudioRecovery, ListenAudioRecoveryHost } from './listen-audio-recovery'
+import { failBrokerCaptureRecovery, themDeviceChangeAction, themTracksLookDead } from './listen-audio-recovery'
 
-const SRC = readFileSync(join(__dirname, 'listen.ts'), 'utf8')
-const CHANNELS_SRC = readFileSync(join(__dirname, 'listen-audio-channels.ts'), 'utf8')
-const RECOVERY_SRC = readFileSync(join(__dirname, 'listen-audio-recovery.ts'), 'utf8')
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
 
-/**
- * MQA-267 — the 'them' channel was being fed through an echo canceller whose job is to delete it.
- *
- * Both loopback acquisition sites requested bare `getDisplayMedia({ audio: true })`. Probed on real
- * Windows hardware (the setDisplayMediaRequestHandler CAVEAT admitted the path was never validated),
- * the granted track reported echoCancellation:true, noiseSuppression:true, autoGainControl:true.
- *
- * AEC subtracts the far-end audio playing through the speakers — which on a loopback capture IS the
- * signal. With the mic channel open beside it the reference lines up and the other person's speech is
- * partially or wholly cancelled before ASR ever sees it: the main speaker transcribes, the other side
- * intermittently vanishes, the transcript breaks. NS and AGC compound it; both are tuned for a mouth
- * near a microphone, and they pump and gate clean rendered playout.
- *
- * Verified fixed on the shipping Electron build: requesting with the constraints yields a grant with
- * all three processing flags false, applyConstraints holds them false, and the track still carries
- * real audio (peak RMS 0.16 while SAPI speech played through the default output).
- *
- * For the record: the reference implementations the owner pointed at (free-cluely, OpenCluely) never
- * capture system audio at all — both are mic-only. Métis's loopback channel is the stronger design;
- * this was its one wrong default.
- */
-describe('MQA-267 — voice processing stays OFF on the loopback, ON on the mic', () => {
-  it('declares the loopback constraint set with all three processors disabled', () => {
-    const at = RECOVERY_SRC.indexOf('const LOOPBACK_AUDIO')
-    expect(at).toBeGreaterThan(-1)
-    const decl = RECOVERY_SRC.slice(at, at + 220)
-    expect(decl).toMatch(/echoCancellation: false/)
-    expect(decl).toMatch(/noiseSuppression: false/)
-    expect(decl).toMatch(/autoGainControl: false/)
+function fakeTrack(): MediaStreamTrack & {
+  applyConstraints: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+} {
+  return {
+    kind: 'audio',
+    readyState: 'live',
+    muted: false,
+    onended: null,
+    applyConstraints: vi.fn(async () => {}),
+    stop: vi.fn(),
+    getSettings: () => ({ sampleRate: 48000, channelCount: 1 })
+  } as unknown as MediaStreamTrack & {
+    applyConstraints: ReturnType<typeof vi.fn>
+    stop: ReturnType<typeof vi.fn>
+  }
+}
+
+function fakeStream(...tracks: MediaStreamTrack[]): MediaStream {
+  return {
+    getTracks: () => tracks,
+    getAudioTracks: () => tracks.filter((track) => track.kind === 'audio')
+  } as unknown as MediaStream
+}
+
+type FakeNode = { connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }
+
+function fakeNode(): FakeNode {
+  return { connect: vi.fn(), disconnect: vi.fn() }
+}
+
+class FakeAudioContext {
+  static instances: FakeAudioContext[] = []
+  static addModule: () => Promise<void> = async () => {}
+
+  readonly sampleRate = 16000
+  readonly destination = {}
+  readonly audioWorklet = { addModule: (): Promise<void> => FakeAudioContext.addModule() }
+  readonly source = fakeNode()
+  readonly gain = { ...fakeNode(), gain: { value: 1 } }
+  readonly limiter = {
+    ...fakeNode(),
+    threshold: { value: 0 },
+    knee: { value: 0 },
+    ratio: { value: 0 },
+    attack: { value: 0 },
+    release: { value: 0 }
+  }
+  readonly close = vi.fn(async () => {})
+  readonly suspend = vi.fn(async () => {})
+  readonly resume = vi.fn(async () => {})
+  state = 'running'
+  onstatechange: (() => void) | null = null
+
+  constructor() {
+    FakeAudioContext.instances.push(this)
+  }
+
+  createMediaStreamSource(): FakeNode {
+    return this.source
+  }
+
+  createGain(): typeof this.gain {
+    return this.gain
+  }
+
+  createDynamicsCompressor(): typeof this.limiter {
+    return this.limiter
+  }
+}
+
+class FakeAudioWorkletNode {
+  readonly port = { onmessage: null as ((event: MessageEvent) => void) | null, close: vi.fn() }
+  readonly connect = vi.fn()
+  readonly disconnect = vi.fn()
+
+  constructor(
+    _context: AudioContext,
+    readonly processorName: string,
+    readonly options: AudioWorkletNodeOptions
+  ) {}
+}
+
+function channelHost(overrides: Partial<ListenAudioChannelsHost> = {}): ListenAudioChannelsHost {
+  return {
+    isAdmissionOpen: () => true,
+    isLive: () => true,
+    isStopping: () => false,
+    isPaused: () => false,
+    isBrokerCapture: () => false,
+    currentEpoch: () => 1,
+    startedAt: () => 10,
+    updateCaptureTrack: vi.fn(() => true),
+    publishMicCapture: vi.fn(),
+    armNoSpeechWarning: vi.fn(),
+    clearNoSpeechWarning: vi.fn(),
+    clearThemProbation: vi.fn(),
+    onThemChannelOpened: vi.fn(),
+    themHeard: () => false,
+    themWatchdogDelay: () => 1000,
+    onThemWatchdogExpired: vi.fn(),
+    onFlushAck: vi.fn(),
+    onAudio: vi.fn(),
+    onThemWindow: vi.fn(),
+    onUnexpectedTrackEnd: vi.fn(),
+    onContextState: vi.fn(),
+    whisperWorkletUrl: () => 'whisper-worklet.js',
+    cloudWorkletUrl: () => 'cloud-worklet.js',
+    ...overrides
+  }
+}
+
+function recoveryHost(overrides: Partial<ListenAudioRecoveryHost> = {}): ListenAudioRecoveryHost {
+  return {
+    currentEpoch: () => 1,
+    admissionOpen: () => true,
+    wantsSystemAudio: () => true,
+    micDeviceId: () => '',
+    acquireMic: vi.fn(async () => ({ stream: fakeStream(fakeTrack()), track: fakeTrack(), health: {} as never })),
+    acquireLoopback: vi.fn(async () => fakeStream(fakeTrack())),
+    armAudio: vi.fn(async () => {}),
+    openChannel: vi.fn(async () => true),
+    hasChannel: () => false,
+    stopStream: vi.fn(),
+    publishMicRecoveryFailure: vi.fn(),
+    micRecoverySucceeded: vi.fn(),
+    micRecoveryFailed: vi.fn(),
+    systemRecoverySucceeded: vi.fn(),
+    systemRecoveryFailed: vi.fn(),
+    isLive: () => true,
+    isStopping: () => false,
+    isPaused: () => false,
+    isListening: () => true,
+    scheduleThemProbation: vi.fn(),
+    themChannel: () => undefined,
+    themHeard: () => false,
+    themWindowSeen: () => false,
+    setThemWindowSeen: vi.fn(),
+    onThemProbationRecycle: vi.fn(),
+    themProbationDuration: () => 20_000,
+    themDeviceChangeAction,
+    recoverMicNow: vi.fn(),
+    recoverSystemNow: vi.fn(),
+    setSystemPermissionNote: vi.fn(),
+    getPermissions: vi.fn(async () => ({ screenRecording: 'granted' })),
+    deviceChangeTarget: () => ({ addEventListener: vi.fn(), removeEventListener: vi.fn() }),
+    isWindows: () => false,
+    ...overrides
+  }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+  FakeAudioContext.instances = []
+  FakeAudioContext.addModule = async () => {}
+  vi.resetModules()
+})
+
+describe('loopback acquisition keeps rendered system audio unprocessed', () => {
+  it('uses non-processing constraints for both Windows acquisition attempts and keeps the granted track', async () => {
+    const track = fakeTrack()
+    const stream = fakeStream(track)
+    const getDisplayMedia = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('audio-only unavailable'))
+      .mockResolvedValueOnce(stream)
+    vi.stubGlobal('navigator', { platform: 'Win32', mediaDevices: { getDisplayMedia } })
+    vi.resetModules()
+    const { acquireLoopback } = await import('./listen-audio-recovery')
+
+    await expect(acquireLoopback()).resolves.toBe(stream)
+
+    expect(getDisplayMedia).toHaveBeenCalledTimes(2)
+    expect(getDisplayMedia.mock.calls[0]?.[0]).toMatchObject({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    })
+    expect(getDisplayMedia.mock.calls[0]?.[0]).not.toHaveProperty('video')
+    expect(getDisplayMedia.mock.calls[1]?.[0]).toMatchObject({
+      video: { frameRate: 1 },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    })
+    expect(track.applyConstraints).toHaveBeenCalledWith({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    })
+    expect(track.stop).not.toHaveBeenCalled()
   })
 
-  it('every getDisplayMedia call passes the loopback constraints — none requests bare audio', () => {
-    // A bare `audio: true` reintroduces the default-on processing this exists to remove.
-    expect(RECOVERY_SRC).not.toMatch(/getDisplayMedia\(\{ audio: true \}\)/)
-    expect(RECOVERY_SRC).not.toMatch(/getDisplayMedia\(\{ video: \{ frameRate: 1 \}, audio: true \}\)/)
-    // [^)]* not [^}]* — the video-bound form is `{ video: { frameRate: 1 }, audio: LOOPBACK_AUDIO }`,
-    // and a character class stopping at the first `}` never reaches its audio key.
-    const calls = RECOVERY_SRC.match(/getDisplayMedia\(\{[^)]*audio: LOOPBACK_AUDIO/g) ?? []
-    expect(calls.length).toBeGreaterThanOrEqual(3)
-  })
+  it('uses a video-bound system stream on macOS and keeps mic echo cancellation enabled', async () => {
+    const track = fakeTrack()
+    track.applyConstraints.mockRejectedValueOnce(new Error('live constraints unsupported'))
+    const videoTrack = { ...fakeTrack(), kind: 'video' } as unknown as MediaStreamTrack & {
+      stop: ReturnType<typeof vi.fn>
+    }
+    const stream = fakeStream(track, videoTrack)
+    const getDisplayMedia = vi.fn(async () => stream)
+    const getUserMedia = vi.fn(async () => stream)
+    vi.stubGlobal('navigator', {
+      platform: 'MacIntel',
+      mediaDevices: { getDisplayMedia, getUserMedia }
+    })
+    vi.resetModules()
+    const { acquireLoopback, acquireMic } = await import('./listen-audio-recovery')
 
-  it('acquisition flows through the single acquireLoopback helper at both call sites', () => {
-    // Two sites drifted apart once already (the recovery path predates the start path). One helper
-    // means the next constraint change cannot half-land.
-    expect(SRC).toMatch(/sys = await acquireLoopback\(\)/)
-    expect(RECOVERY_SRC).toMatch(/stream = await host\(\)\.acquireLoopback\(\)/)
-  })
+    await expect(acquireLoopback()).resolves.toBe(stream)
+    await acquireMic('')
 
-  it('re-applies the constraints to the LIVE track after the grant', () => {
-    // getDisplayMedia audio constraints are not reliably honored across Chromium versions;
-    // applyConstraints on the live track is the belt-and-braces that holds either way.
-    expect(RECOVERY_SRC).toMatch(/applyConstraints\(LOOPBACK_AUDIO\)/)
-    // A track that refuses must not fail the capture — degraded beats absent.
-    expect(RECOVERY_SRC).toMatch(/a processed 'them' is still better than none/)
-  })
-
-  it('the MIC keeps echo cancellation — the asymmetry is the design', () => {
-    // AEC on the mic is what stops the speakers bleeding the other person's words into the 'you'
-    // channel as duplicates. Removing it there "for symmetry" recreates the opposite corruption.
-    const mic = RECOVERY_SRC.slice(
-      RECOVERY_SRC.indexOf('async function acquireMic'),
-      RECOVERY_SRC.indexOf('async function acquireMic') + 400
-    )
-    expect(mic).toMatch(/echoCancellation: true/)
-  })
-
-  it('acquireLoopback never stops a track — the macOS SCStream contract holds', () => {
-    // Stopping the bound video track before the worklet connects kills the shared SCStream and leaves
-    // the audio track 'ended' but present. closeChannel owns the stop, at Listen end.
-    const fn = RECOVERY_SRC.slice(
-      RECOVERY_SRC.indexOf('export async function acquireLoopback'),
-      RECOVERY_SRC.indexOf('export interface ListenAudioRecoveryHost')
-    )
-    expect(fn).not.toMatch(/\.stop\(\)/)
+    expect(getDisplayMedia).toHaveBeenCalledTimes(1)
+    expect(getDisplayMedia.mock.calls[0]?.[0]).toMatchObject({
+      video: { frameRate: 1 },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    })
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    })
+    expect(track.stop).not.toHaveBeenCalled()
+    expect(videoTrack.stop).not.toHaveBeenCalled()
   })
 })
 
-describe('MQA-267 — the boost cannot clip now that processing is off', () => {
-  it('a limiter sits between the them boost and the worklet', () => {
-    // The 3.0x gain was sized while default-on AGC held the loopback small. Un-processed loopback peaks
-    // near full scale; 3.0x that is +-3.0 in the float graph, surviving unclamped to the ASR's [-1,1]
-    // conversion where it hard-clips. The limiter keeps the lift for quiet signals, flattens the overs.
-    expect(CHANNELS_SRC).toMatch(/createDynamicsCompressor\(\)/)
-    expect(CHANNELS_SRC).toMatch(/gain\.connect\(limiter\)/)
-    expect(CHANNELS_SRC).toMatch(/limiter\.connect\(processor\)/)
-    expect(CHANNELS_SRC).toMatch(/processor\.connect\(context\.destination\)/)
-    // The exact processing path is source → gain → limiter → worklet → destination.
-    expect(CHANNELS_SRC).toMatch(
-      /source\.connect\(gain\)[\s\S]*?gain\.connect\(limiter\)[\s\S]*?limiter\.connect\(processor\)[\s\S]*?processor\.connect\(context\.destination\)/
-    )
+describe('owned audio channels preserve the limiter graph and serialized recovery', () => {
+  it('connects the system boost through the limiter and disconnects it with the channel', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const host = channelHost()
+    const channels = createListenAudioChannels(() => host)
+    const stream = fakeStream(fakeTrack())
+
+    await expect(channels.open('them', stream, 1)).resolves.toBe(true)
+
+    const context = FakeAudioContext.instances[0]
+    expect(context?.source.connect).toHaveBeenCalledWith(context?.gain)
+    expect(context?.gain.connect).toHaveBeenCalledWith(context?.limiter)
+    expect(context?.limiter.connect).toHaveBeenCalledWith(expect.any(FakeAudioWorkletNode))
+    expect(channels.current.them?.worklet.connect).toHaveBeenCalledWith(context?.destination)
+    channels.close('them')
+    expect(context?.limiter.disconnect).toHaveBeenCalledTimes(1)
   })
 
-  it('is torn down with the channel like every other node', () => {
-    expect(CHANNELS_SRC).toMatch(/channel\.limiter\?\.disconnect\(\)/)
+  it('serializes same-speaker opens and recovers after a failed module load', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const host = channelHost()
+    const channels = createListenAudioChannels(() => host)
+    const gate = deferred<void>()
+    let loads = 0
+    FakeAudioContext.addModule = () => {
+      loads += 1
+      return loads === 1 ? gate.promise : Promise.resolve()
+    }
+    const firstStream = fakeStream(fakeTrack())
+    const secondStream = fakeStream(fakeTrack())
+    const first = channels.open('them', firstStream, 1)
+    const second = channels.open('them', secondStream, 1)
+    await Promise.resolve()
+
+    expect(FakeAudioContext.instances).toHaveLength(1)
+    gate.resolve()
+    await expect(first).resolves.toBe(true)
+    await expect(second).resolves.toBe(true)
+    expect(channels.current.them?.stream).toBe(secondStream)
+    expect(firstStream.getTracks()[0]?.stop).toHaveBeenCalledTimes(1)
+
+    channels.close('them')
+    FakeAudioContext.instances = []
+    loads = 0
+    FakeAudioContext.addModule = () => {
+      loads += 1
+      return loads === 1 ? Promise.reject(new Error('worklet load failed')) : Promise.resolve()
+    }
+    const failed = channels.open('them', fakeStream(fakeTrack()), 1)
+    const recovered = channels.open('them', secondStream, 1)
+    await expect(failed).rejects.toThrow('worklet load failed')
+    await expect(recovered).resolves.toBe(true)
+    expect(channels.current.them?.stream).toBe(secondStream)
+  })
+
+  it('re-reads the current host after module load before admitting or publishing a channel', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const gate = deferred<void>()
+    FakeAudioContext.addModule = () => gate.promise
+    const oldHost = channelHost()
+    const latestAdmission = vi.fn(() => false)
+    let currentHost = oldHost
+    const channels = createListenAudioChannels(() => currentHost)
+    const stream = fakeStream(fakeTrack())
+    const opening = channels.open('you', stream, 1)
+    await Promise.resolve()
+    currentHost = channelHost({ isAdmissionOpen: latestAdmission })
+    gate.resolve()
+
+    await expect(opening).resolves.toBe(false)
+    expect(latestAdmission).toHaveBeenCalledWith(1)
+    expect(stream.getTracks()[0]?.stop).toHaveBeenCalledTimes(1)
+    expect(channels.current.you).toBeUndefined()
   })
 })
 
-/**
- * MQA-268 — every utterance transcribed twice: two live worklets on one system-audio stream.
- *
- * openChannel stores the channel record only AFTER its internal `await addModule(...)`. The Windows
- * paced retry guards on `if (channels.current.them) return` — which reads undefined while the first
- * open is still in flight. Recovery slips past, opens a second channel, and ITS entry closeChannel
- * closes nothing because the first record is not stored yet. Both worklets stay live on the same
- * loopback, each with an independent VAD clock: identical duplicate lines when sentence pauses align
- * the cuts, offset overlapping fragments when they do not.
- *
- * Observed verbatim on packaged 1.6.5: a five-sentence call where every line appeared exactly twice.
- * The MAX_CONSECUTIVE_DUPES guard cannot catch it — it tolerates one repeat by design, so a single
- * systematic duplicate walks straight through.
- */
-describe('MQA-268 — channel opens are serialized per speaker', () => {
-  it('openChannel chains onto the previous open for the same speaker', () => {
-    expect(CHANNELS_SRC).toMatch(/const openSequence: Partial<Record<ListenSpeaker, Promise<unknown>>> = \{\}/)
-    expect(SRC).toMatch(/createListenAudioChannels\([\s\S]*?audioChannels\.open\(speaker, stream, epoch, micCapture\)/)
-    expect(CHANNELS_SRC).toMatch(/rememberPending\(speaker, pending\)/)
-    expect(CHANNELS_SRC).toMatch(
-      /\.then\(\(\) => \(pending\.cancelled \? false : openNow\(speaker, pending, micCapture\)\)\)/
-    )
+describe('device recovery uses current ownership and positive death evidence', () => {
+  it('recovers a missing microphone and schedules system probation on a real device change', async () => {
+    vi.useFakeTimers()
+    const listener = { current: (() => {}) as () => void }
+    const probation = { current: (() => {}) as () => void }
+    let systemPresent = true
+    const host = recoveryHost({
+      hasChannel: (speaker) => speaker === 'you' || systemPresent,
+      deviceChangeTarget: () => ({
+        addEventListener: (_name: string, callback: EventListenerOrEventListenerObject) => {
+          listener.current = callback as () => void
+        },
+        removeEventListener: vi.fn()
+      }),
+      scheduleThemProbation: (callback) => {
+        probation.current = callback
+      }
+    })
+    const { createListenAudioRecovery } = await import('./listen-audio-recovery')
+    const recovery = createListenAudioRecovery(() => host)
+    const unsubscribe = recovery.watchDeviceChanges()
+
+    listener.current()
+    await vi.advanceTimersByTimeAsync(800)
+
+    expect(host.recoverMicNow).toHaveBeenCalledTimes(1)
+    expect(probation.current).toBeTypeOf('function')
+    systemPresent = false
+    listener.current()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(host.recoverSystemNow).toHaveBeenCalledTimes(1)
+    unsubscribe()
   })
 
-  it('a failed open cannot wedge the chain for every later one', () => {
-    expect(CHANNELS_SRC).toMatch(/openSequence\[speaker\] = run\.catch\(\(\) => \{\}\)/)
+  it('recycles only the same admitted, dead channel after its probation window', async () => {
+    vi.useFakeTimers()
+    let epoch = 4
+    let windowSeen = false
+    let dead = true
+    let heard = false
+    const host = recoveryHost({
+      currentEpoch: () => epoch,
+      admissionOpen: (candidate) => candidate === epoch,
+      themChannel: () =>
+        ({
+          stream: fakeStream({
+            kind: 'audio',
+            readyState: dead ? 'ended' : 'live',
+            muted: false
+          } as MediaStreamTrack)
+        }) as never,
+      themHeard: () => heard,
+      themWindowSeen: () => windowSeen,
+      themDeviceChangeAction: themDeviceChangeAction
+    })
+    const { createListenAudioRecovery } = await import('./listen-audio-recovery')
+    const recovery = createListenAudioRecovery(() => host)
+    const scheduled: Array<() => void> = []
+    host.scheduleThemProbation = (callback) => scheduled.push(callback)
+    recovery.armThemProbation()
+    const callback = scheduled[0]
+    expect(callback).toBeTypeOf('function')
+    callback?.()
+    expect(host.onThemProbationRecycle).toHaveBeenCalledTimes(1)
+
+    vi.mocked(host.onThemProbationRecycle).mockClear()
+    heard = true
+    dead = false
+    windowSeen = false
+    recovery.armThemProbation()
+    scheduled[1]?.()
+    expect(host.onThemProbationRecycle).not.toHaveBeenCalled()
+
+    recovery.armThemProbation()
+    epoch += 1
+    scheduled[2]?.()
+    expect(host.onThemProbationRecycle).not.toHaveBeenCalled()
   })
 
-  it('the manager reads the current host for async admission and callbacks', () => {
-    expect(CHANNELS_SRC).toMatch(/let deps = host\(\)/)
-    expect(CHANNELS_SRC).toMatch(
-      /await context\.audioWorklet\.addModule[\s\S]*?deps = host\(\)[\s\S]*?deps\.isAdmissionOpen\(admissionEpoch\)/
-    )
+  it('paces Windows permission retries and resets the schedule after recovery succeeds', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const recoveryTimes: number[] = []
+    let channelOpen = false
+    let openCalls = 0
+    let recovery: ListenAudioRecovery | undefined
+    const host = recoveryHost({
+      isWindows: () => true,
+      hasChannel: (speaker) => speaker === 'them' && channelOpen,
+      recoverSystemNow: () => {
+        recoveryTimes.push(Date.now())
+        void recovery?.recoverSystemAudio()
+      },
+      openChannel: vi.fn(async () => {
+        openCalls += 1
+        channelOpen = openCalls > 1
+        return channelOpen
+      })
+    })
+    const { createListenAudioRecovery } = await import('./listen-audio-recovery')
+    recovery = createListenAudioRecovery(() => host)
+    const stopWatching = recovery.watchSystemPermission()
+
+    await vi.advanceTimersByTimeAsync(7000)
+    expect(recoveryTimes).toEqual([3000, 6000])
+    channelOpen = false // the successfully recovered track later disappears
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(recoveryTimes).toEqual([3000, 6000, 9000])
+    expect(host.systemRecoverySucceeded).toHaveBeenCalledTimes(2)
+    stopWatching()
+  })
+
+  it('resets retry backoff on a new session and immediately after a device change', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const attempts: number[] = []
+    let deviceChange: (() => void) | undefined
+    const host = recoveryHost({
+      isWindows: () => true,
+      recoverSystemNow: () => attempts.push(Date.now()),
+      deviceChangeTarget: () => ({
+        addEventListener: (_name: string, listener: EventListenerOrEventListenerObject) => {
+          deviceChange = listener as () => void
+        },
+        removeEventListener: vi.fn()
+      })
+    })
+    const { createListenAudioRecovery } = await import('./listen-audio-recovery')
+    const recovery = createListenAudioRecovery(() => host)
+    const stopPolling = recovery.watchSystemPermission()
+    const stopWatching = recovery.watchDeviceChanges()
+
+    await vi.advanceTimersByTimeAsync(7000)
+    expect(attempts).toEqual([3000, 6000])
+    recovery.resetSystemRetry() // new session clears the previous session's capped delay
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(attempts).toEqual([3000, 6000, 9000])
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(attempts).toEqual([3000, 6000, 9000, 12000])
+    deviceChange?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(attempts.at(-1)).toBe(12800) // the real device change resets pacing for an immediate attempt
+    await vi.advanceTimersByTimeAsync(2200)
+    expect(attempts.at(-1)).toBe(15000) // reset also makes the next watcher tick immediately eligible
+
+    stopWatching()
+    stopPolling()
+  })
+
+  it('fails a broker recovery closed without replacing its capture and exposes the fixed failure source', () => {
+    const failCapture = vi.fn()
+    expect(failBrokerCaptureRecovery('broker-v1', 'capture-1', 'microphone', failCapture)).toBe(true)
+    expect(failCapture).toHaveBeenCalledWith(expect.stringContaining('microphone'), {
+      cloudCaptureId: 'capture-1'
+    })
+    expect(failBrokerCaptureRecovery('legacy', null, 'system', failCapture)).toBe(false)
+    expect(themDeviceChangeAction(false, true, false, true)).toBe('ignore')
+    expect(themDeviceChangeAction(true, true, false, false)).toBe('ignore')
+    expect(themDeviceChangeAction(true, true, false, true)).toBe('recycle')
+    expect(themTracksLookDead([{ readyState: 'live', muted: false }])).toBe(false)
+    expect(themTracksLookDead([{ readyState: 'ended', muted: false }])).toBe(true)
   })
 })

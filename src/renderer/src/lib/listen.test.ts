@@ -24,7 +24,6 @@ import type { TranscriptLine } from '@shared/ipc'
 // Normalize CRLF → LF (same rationale as App.mic-only-visibility.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
 const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
-const recoverySrc = readFileSync(join(__dirname, 'listen-audio-recovery.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 // Guards the auto-answer trigger. The live VAD endpoint is a snappy 0.6s (vad.ts), which can split a
 // hesitated question across two transcription windows. isQuestion must NOT fire on the truncated first
@@ -133,16 +132,10 @@ describe('themDeviceChangeAction — them-side silent-death recovery (MQA-011)',
   })
 
   it('is wired into the devicechange handler, the probation timer, and the them audio callback', () => {
-    // The helper owns the devicechange subscription; Listen supplies the actual per-session recoveries.
-    expect(recoverySrc).toMatch(/if \(latest\.hasChannel\('you'\)\) latest\.recoverMicNow\(\)/)
-    expect(recoverySrc).toMatch(
-      /latest\.themDeviceChangeAction\(latest\.wantsSystemAudio\(\), latest\.hasChannel\('them'\), null\)/
-    )
-    expect(recoverySrc).toMatch(/if \(action === 'watch'\) armThemProbation\(\)/)
+    // The recovery helper's devicechange/probation effects are exercised through a fake media host in
+    // listen.loopback.contract.test.ts; retain the actual Listen callback wiring checks here.
     expect(listenSrc).toMatch(/recoverMicNow: \(\) => void recoverMicRef\.current\?\.\(\)/)
     expect(listenSrc).toMatch(/scheduleThemProbation: \(callback, delay\) => \{\s*audioChannels\.clearThemWatchdog\(\)/)
-    // The recycle must close the channel first — recoverSystemAudio returns early while one is registered.
-    expect(recoverySrc).toMatch(/if \(verdict === 'recycle'\) latest\.onThemProbationRecycle\(\)/)
     expect(listenSrc).toMatch(/audioChannels\.close\('them'\)[\s\S]{0,240}recoverSystemAudioRef\.current/)
     // Proof-of-life is recorded per window; nothing heavier than a boolean store on the capture path.
     expect(listenSrc).toMatch(/themWindowSeenRef\.current = true/)
@@ -197,16 +190,6 @@ describe('themTracksLookDead — positive death evidence for an already-healthy 
 
   it('treats an empty track list (channel already torn down) as dead so recovery still fires', () => {
     expect(themTracksLookDead([])).toBe(true)
-  })
-
-  it('the probation timer gates recycle on positive death evidence, not bare silence (MQA-109 wiring)', () => {
-    // themHeardRef (already-confirmed-healthy) OR a real track anomaly must gate the recycle.
-    expect(recoverySrc).toMatch(
-      /const hasDeathEvidence = !latest\.themHeard\(\) \|\| themTracksLookDead\(channel\?\.stream\.getAudioTracks\(\) \?\? \[\]\)/
-    )
-    expect(recoverySrc).toMatch(
-      /latest\.themDeviceChangeAction\(\s*latest\.wantsSystemAudio\(\),\s*!!channel,\s*latest\.themWindowSeen\(\),\s*hasDeathEvidence\s*\)/
-    )
   })
 })
 
@@ -381,18 +364,6 @@ describe('sysRetryDelayMs — the Windows loopback retry is paced, never abandon
     expect(meetingMs - fires[fires.length - 1]).toBeLessThanOrEqual(30_000)
     // The opening blip — the case the watcher was written for — is still caught in the first seconds.
     expect(fires[0]).toBe(3000)
-  })
-
-  it('MQA-163 — is what the Windows branch of the watcher actually runs', () => {
-    // The pre-fix shape: an unconditional re-acquire on every tick.
-    expect(recoverySrc).not.toMatch(
-      /if \(isWindows\) \{\n {8}void recoverSystemAudioRef\.current\?\.\(\)\n {8}return\n {6}\}/
-    )
-    expect(recoverySrc).toMatch(/if \(now < retryNextAt\) return/)
-    expect(recoverySrc).toMatch(/retryNextAt = now \+ sysRetryDelayMs\(retryAttempts\+\+\)/)
-    // Reset in all three places recovery becomes plausible again: a new session, a successful re-acquire,
-    // and a real device change (which must get an immediate attempt, not wait out the backoff).
-    expect(recoverySrc.match(/retryAttempts = 0/g)).toHaveLength(3)
   })
 })
 
