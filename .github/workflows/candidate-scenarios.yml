@@ -18,6 +18,8 @@ name: Candidate scenarios
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-lifecycle \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-restart-recovery \
+#     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
@@ -45,6 +47,7 @@ on:
           - idle-soak
           - sidecar-boot-reaper
           - packaged-lifecycle
+          - packaged-restart-recovery
           - renderer-kill
           - fresh-onboarding-baseline
           - hosted-startup-tls
