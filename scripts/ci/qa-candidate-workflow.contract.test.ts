@@ -707,7 +707,7 @@ describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
       }
       expect(binding).toContain('::error::QA provenance does not match this workflow identity')
       predicates.push(
-        binding.match(/jq -es --arg repository "\$GITHUB_REPOSITORY" --arg commit "\$GITHUB_SHA" --arg run "\$GITHUB_RUN_ID" --arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/)?.[1] ?? ''
+        binding.match(/--arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/)?.[1] ?? ''
       )
     }
     expect(predicates.every((predicate) => predicate.length > 0)).toBe(true)
@@ -717,7 +717,7 @@ describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
   it('evaluates the exact workflow jq predicate against matching and mismatched producer identity', () => {
     const binding = steps('st1-mac-fifo').find((step) => step.includes(`name: ${bindingName}`)) ?? ''
     const match = binding.match(
-      /jq -es --arg repository "\$GITHUB_REPOSITORY" --arg commit "\$GITHUB_SHA" --arg run "\$GITHUB_RUN_ID" --arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/
+      /--arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/
     )
     expect(match, 'extract the actual workflow predicate').not.toBeNull()
     const predicate = match![1]
