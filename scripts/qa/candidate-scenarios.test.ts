@@ -379,6 +379,7 @@ describe('fresh onboarding fixed-schema support evidence', () => {
 
 const successfulDispatch = {
   id: 4242,
+  run_attempt: 1,
   path: '.github/workflows/qa-candidate.yml',
   event: 'workflow_dispatch',
   head_branch: 'main',
@@ -392,6 +393,15 @@ describe('candidateRunProblems (the run guard)', () => {
     expect(
       candidateRunProblems({ ...successfulDispatch, path: '.github/workflows/qa-candidate.yml@refs/heads/main' }, 4242)
     ).toEqual([])
+  })
+
+  it('requires a positive integer attempt from the Actions API', () => {
+    expect(candidateRunProblems({ ...successfulDispatch, run_attempt: 0 }, 4242)).toContain(
+      'Run 4242 has no valid run_attempt in the API response.'
+    )
+    expect(candidateRunProblems({ ...successfulDispatch, run_attempt: undefined }, 4242)).toContain(
+      'Run 4242 has no valid run_attempt in the API response.'
+    )
   })
 
   it('accepts a completed, successful workflow_dispatch run of qa-candidate.yml on release/1.9.x', () => {
@@ -932,13 +942,18 @@ describe('the scenario registry', () => {
 })
 
 describe('hosted startup TLS support-only lane', () => {
-  const env = { GITHUB_SHA: 'b'.repeat(40), GITHUB_RUN_ID: '99', METIS_CANDIDATE_COMMIT: COMMIT }
+  const env = {
+    GITHUB_SHA: 'b'.repeat(40),
+    GITHUB_RUN_ID: '99',
+    METIS_CANDIDATE_COMMIT: COMMIT,
+    METIS_CANDIDATE_RUN_ATTEMPT: '1'
+  }
   const provenance = {
-    schema: 1,
+    schema: 2,
     repository: 'mysticalsin/AskToto-Mantu',
     commit: COMMIT,
     version: '1.9.7',
-    run: { id: 4242 },
+    run: { id: 4242, attempt: 1 },
     builds: [
       {
         variant: 'mac-qa-identity',
@@ -970,11 +985,14 @@ describe('hosted startup TLS support-only lane', () => {
       app: 'candidate-install/Metis QA.app',
       provenancePath: 'provenance/provenance.json',
       candidateRun: '4242',
+      candidateAttempt: 1,
       harnessCommit: env.GITHUB_SHA,
       producerCommit: COMMIT
     })
     expect(argv).toContain('--producer-commit')
     expect(argv).toContain(COMMIT)
+    expect(argv).toContain('--candidate-attempt')
+    expect(argv).toContain('1')
     expect(argv).not.toContain('--platform')
   })
 
@@ -999,6 +1017,9 @@ describe('hosted startup TLS support-only lane', () => {
       expect(scanHostedTlsOutput(dir, { ...context, laneWritten: false })).not.toEqual([])
       expect(
         hostedTlsScanContext({ ...input, env: { ...env, METIS_CANDIDATE_COMMIT: 'e'.repeat(40) }, laneWritten: true })
+      ).toBeUndefined()
+      expect(
+        hostedTlsScanContext({ ...input, env: { ...env, METIS_CANDIDATE_RUN_ATTEMPT: '2' }, laneWritten: true })
       ).toBeUndefined()
       writeFileSync(join(dir, 'audit.log'), 'private')
       expect(scanHostedTlsOutput(dir, context)).toEqual(['output-file-list-invalid'])
@@ -1811,6 +1832,12 @@ describe('lane.json', () => {
 
   it('refuses a provenance from another run than candidate_run', () => {
     expect(() => assertCandidateProvenance(provenance, '4243')).toThrow(/not the candidate run 4243/)
+    expect(() => assertCandidateProvenance({ run: { id: 4242, attempt: 2 } }, '4242', 1)).toThrow(
+      /does not match the candidate Actions API attempt/
+    )
+    expect(() => assertCandidateProvenance({ run: { id: 4242 } }, '4242', 1)).toThrow(
+      /provenance run attempt is missing or invalid/
+    )
     expect(() =>
       laneRecord({
         scenario: 'fault-fatal-relaunch',
@@ -1837,7 +1864,10 @@ describe('candidate-scenarios.mjs run', () => {
   it('runs the scenario, maps its PRECONDITION exit and writes lane.json with the reason', () => {
     mkdirSync(join(root, scratch, 'assets'), { recursive: true })
     writeFileSync(join(root, scratch, 'assets', 'Metis-QA-1.0.0.zip'), 'qa zip bytes')
-    writeFileSync(join(root, scratch, 'provenance.json'), JSON.stringify({ commit: COMMIT, run: { id: 4242 } }))
+    writeFileSync(
+      join(root, scratch, 'provenance.json'),
+      JSON.stringify({ schema: 2, commit: COMMIT, run: { id: 4242, attempt: 1 } })
+    )
     const outDir = `${scratch}/report`.replaceAll('\\', '/')
     // The named sha256 differs from the zip, so the proof stops at a precondition on every host: off macOS
     // before anything else, and on macOS at its own sha256 check. It never launches the app.
@@ -1861,7 +1891,16 @@ describe('candidate-scenarios.mjs run', () => {
         '--out',
         outDir
       ],
-      { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_STEP_SUMMARY: '', GITHUB_RUN_ID: '5151' } }
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GITHUB_STEP_SUMMARY: '',
+          GITHUB_RUN_ID: '5151',
+          METIS_CANDIDATE_RUN_ATTEMPT: '1'
+        }
+      }
     )
     expect(child.status).toBe(1)
     const lane = JSON.parse(readFileSync(join(root, outDir, 'lane.json'), 'utf8'))
@@ -1878,7 +1917,10 @@ describe('candidate-scenarios.mjs run', () => {
 
   it('passes ex-suite the installed app relative to the checkout and records its PRECONDITION report', () => {
     mkdirSync(join(root, scratch), { recursive: true })
-    writeFileSync(join(root, scratch, 'provenance.json'), JSON.stringify({ commit: COMMIT, run: { id: 4242 } }))
+    writeFileSync(
+      join(root, scratch, 'provenance.json'),
+      JSON.stringify({ schema: 2, commit: COMMIT, run: { id: 4242, attempt: 1 } })
+    )
     const outDir = `${scratch}/report`.replaceAll('\\', '/')
     // The installed app does not exist, so ex-suite stops at a precondition on every host (off macOS first,
     // on macOS at the bundle check) and never launches anything; it still writes its report.
@@ -1907,7 +1949,13 @@ describe('candidate-scenarios.mjs run', () => {
       {
         cwd: root,
         encoding: 'utf8',
-        env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: '', GITHUB_RUN_ID: '5151' }
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: 'true',
+          GITHUB_STEP_SUMMARY: '',
+          GITHUB_RUN_ID: '5151',
+          METIS_CANDIDATE_RUN_ATTEMPT: '1'
+        }
       }
     )
     expect(child.status).toBe(1)

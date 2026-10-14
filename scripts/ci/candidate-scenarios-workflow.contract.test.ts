@@ -109,6 +109,9 @@ describe('candidate-scenarios.yml', () => {
     const runGuard = guardSteps[stepIndex(guardSteps, 'candidate-scenarios.mjs guard')]
     expect(runGuard).toContain('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN"')
     expect(runGuard).toContain('node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"')
+    expect(runGuard).toContain('candidate_run_attempt=$(jq -er')
+    expect(runGuard).toContain('.run_attempt | select(type == "number" and . >= 1 and floor == .)')
+    expect(guard.join('\n')).toContain('candidate_run_attempt: ${{ steps.candidate.outputs.candidate_run_attempt }}')
     expect(guard.join('\n')).toContain('qa-candidate.yml dispatch on main or release/1.9.x')
   })
 
@@ -130,6 +133,9 @@ describe('candidate-scenarios.yml', () => {
       )
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(
         `${platform}_step_timeout_minutes: \${{ steps.resolve.outputs.${platform}_step_timeout_minutes }}`
+      )
+      expect(body).toContain(
+        '      METIS_CANDIDATE_RUN_ATTEMPT: \${{ needs.guard.outputs.candidate_run_attempt }}'
       )
     }
   })
