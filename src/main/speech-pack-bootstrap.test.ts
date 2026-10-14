@@ -16,7 +16,8 @@ const mocks = vi.hoisted(() => {
     registerSpeechPackIpc: vi.fn(() => unregister)
   }
 })
-vi.mock('./features/components', () => mocks)
+vi.mock('./features/components', () => ({ createSpeechPackService: mocks.createSpeechPackService }))
+vi.mock('./ipc/speech-pack-ipc', () => ({ registerSpeechPackIpc: mocks.registerSpeechPackIpc }))
 
 afterEach(() => {
   vi.useRealTimers()
