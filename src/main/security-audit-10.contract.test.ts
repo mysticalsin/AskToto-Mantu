@@ -295,13 +295,8 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
 
     const listAndMutations = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.on(IPC.importDecoderReady')
     expect(listAndMutations).toMatch(
-      /if \(!requireAuth\(\)\) \{[\s\S]*return \{[\s\S]*jobs: \[\][\s\S]*policyBlocked: false/
+      /const snapshot = requireAuth\(\) \? await getImportJobs\(\)\.snapshot\(\) : emptyImportJobsSnapshot\(\)/
     )
-    expect(listAndMutations).toMatch(/heldJobIds: \[\]/)
-    expect(listAndMutations).toMatch(/policyHeldJobIds: \[\]/)
-    expect(listAndMutations).toMatch(/inventoryOverflow: false/)
-    expect(listAndMutations).toMatch(/policyHoldOverflow: false/)
-    expect(listAndMutations).toMatch(/const snapshot = await getImportJobs\(\)\.snapshot\(\)/)
     expect(listAndMutations).toMatch(/jobs: snapshot\.jobs\.map\(importJobView\)/)
     expect(listAndMutations).not.toMatch(/getImportJobs\(\)\.list\(\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.cancel\(parsed\.jobId\)/)

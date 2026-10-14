@@ -87,6 +87,7 @@ import {
   ImportAudioStartSchema,
   ImportAudioStartBatchSchema,
   ImportAudioOfferSchema,
+  emptyImportJobsSnapshot,
   ImportJobIdSchema,
   ImportDecoderChunkSchema,
   ImportDecoderCompleteSchema,
@@ -9184,17 +9185,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.importJobsList, async (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) {
-      return {
-        jobs: [],
-        policyBlocked: false,
-        heldJobIds: [],
-        policyHeldJobIds: [],
-        inventoryOverflow: false,
-        policyHoldOverflow: false
-      }
-    }
-    const snapshot = await getImportJobs().snapshot()
+    const snapshot = requireAuth() ? await getImportJobs().snapshot() : emptyImportJobsSnapshot()
     return { ...snapshot, jobs: snapshot.jobs.map(importJobView) }
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
@@ -9215,7 +9206,6 @@ function registerIpc(): void {
     const parsed = ImportJobIdSchema.parse(raw)
     await getImportJobs().remove(parsed.jobId)
   })
-
   ipcMain.on(IPC.importDecoderReady, (e) => {
     if (!isDecoderSender(e)) {
       mainLog.warn('[import-decoder] rejected importDecoderReady from an unauthorized sender')
