@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
-import { METIS_PACKAGE_PROFILE } from '@shared/package-profile'
+import { ensureWhisperWorkerProfile } from './whisper-profile-admission'
 import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
 import { detectLanguage, detectLanguages } from '@shared/lang-id'
 import {
@@ -46,6 +46,7 @@ import {
   listenSpeechEngine,
   micSelectionOutcome,
   sameCaptureHealth,
+  speakerEmbedResultIsStale,
   shouldShowNoSpeechWarning,
   themRecoveryFailureIsNoop
 } from './listen-capture-state'
@@ -66,6 +67,7 @@ export {
   captureHealthIfCurrent,
   degradedAfterMicRecovery,
   micSelectionOutcome,
+  speakerEmbedResultIsStale,
   shouldShowNoSpeechWarning,
   themRecoveryFailureIsNoop
 } from './listen-capture-state'
@@ -322,11 +324,6 @@ export function probeResultIsStale(
   language: string
 ): boolean {
   return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
-}
-
-/** A speaker label belongs only to the meeting epoch that dispatched its async embedding request. */
-export function speakerEmbedResultIsStale(requestEpoch: number, currentEpoch: number): boolean {
-  return requestEpoch !== currentEpoch
 }
 
 export type AudioSource = 'mic' | 'system' | 'both'
@@ -1202,9 +1199,7 @@ export function useListen(
 
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
-    if (METIS_PACKAGE_PROFILE === 'lean') {
-      throw new Error('The optional Whisper runtime is not configured for this package.')
-    }
+    ensureWhisperWorkerProfile()
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     readyRef.current = false
     w.onmessage = (e: MessageEvent): void => {
