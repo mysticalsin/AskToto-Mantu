@@ -515,6 +515,89 @@ describe('cloud speech main IPC authority boundary', () => {
     expect(h.client.capability).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a candidate allocation owned when the old allocation is closed but the candidate is still open', async () => {
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    const releaseCaptureOwner = vi.fn()
+    const h = makeHarness(
+      undefined,
+      undefined,
+      (callback, delay) => {
+        timers.push({ callback, delay })
+        return () => undefined
+      },
+      releaseCaptureOwner
+    )
+    const oldSession = readyRelay()
+    const candidateId = 'c3d23d44-347e-490c-841b-0ff31facbc7e'
+    let relayOptions: { client: SpeechBrokerClient } | null = null
+    relayHarness.create.mockImplementation(
+      async (options: { client: SpeechBrokerClient; onAllocated?: (id: string) => void }) => {
+        relayOptions = options
+        options.onAllocated?.(oldSession.identity.sessionId)
+        return { ok: true, value: oldSession }
+      }
+    )
+    const candidateAllocation = createdSession()
+    candidateAllocation.value.sessionId = candidateId
+    h.client.createSession = vi.fn(async () => candidateAllocation) as FakeClient['createSession']
+    h.client.status = vi.fn(async (sessionId: string) => ({
+      ok: true as const,
+      value: {
+        captureGeneration: 7,
+        status: sessionId === candidateId ? ('active' as const) : ('cancelled' as const),
+        tracks: [
+          {
+            track: 'microphone' as const,
+            streamEpoch: sessionId === candidateId ? 4 : 3,
+            phase: sessionId === candidateId ? ('open' as const) : ('closed' as const),
+            closeConfirmed: sessionId !== candidateId,
+            tail: sessionId === candidateId ? null : ('complete' as const),
+            lastSequence: 0
+          }
+        ]
+      }
+    })) as FakeClient['status']
+    const renewalPending = new Promise<never>(() => undefined)
+    ;(oldSession as unknown as { renew: () => Promise<never> }).renew = vi.fn(async () => {
+      const created = await relayOptions!.client.createSession({ operation: 'create-session' })
+      if (!created.ok) throw new Error('candidate allocation failed')
+      return renewalPending
+    })
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
+    expect(timers.length).toBeGreaterThanOrEqual(2)
+    timers[0]!.callback()
+    await vi.waitFor(() => expect(timers.length).toBeGreaterThanOrEqual(3))
+    timers[timers.length - 1]!.callback()
+    await vi.waitFor(() =>
+      expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'epoch-transition')).toBe(
+        true
+      )
+    )
+    const closed = h.sender.send.mock.calls
+      .map((call) => call[1] as Record<string, unknown>)
+      .find((value) => value.type === 'epoch-transition')!
+    await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
+    await vi.waitFor(() => expect(h.client.createSession).toHaveBeenCalledTimes(1))
+    await expect(h.invoke(CLOUD_SPEECH_IPC.cancel, [{ captureId, captureGeneration: 7 }])).resolves.toMatchObject({
+      ok: true,
+      closure: 'unknown'
+    })
+    expect(h.client.cancel).toHaveBeenCalledWith(candidateId, 1_000)
+    expect(releaseCaptureOwner).not.toHaveBeenCalled()
+
+    const successor: CloudSpeechStartRequest = {
+      ...request,
+      captureId: otherCaptureId,
+      capture: { ...request.capture, generation: 8 }
+    }
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [successor])).resolves.toMatchObject({
+      ok: false,
+      code: 'CLOSURE_UNCONFIRMED',
+      captureId: otherCaptureId
+    })
+    expect(releaseCaptureOwner).not.toHaveBeenCalledWith(expect.objectContaining({ captureId }))
+  })
+
   it('bounds overlapping start records while predecessor closure is unresolved', async () => {
     const h = makeHarness()
     const session = readyRelay()
