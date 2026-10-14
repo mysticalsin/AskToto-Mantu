@@ -742,9 +742,13 @@ export function useAuth(): {
       }
     })()
     const stop = startAuthRefreshLoop(() => void refresh())
+    // Profile unlock can make a previously inaccessible encrypted auth cache readable in this process.
+    // Main emits settingsChanged after successful Keychain access so authStatus refreshes immediately.
+    const unsubscribeSettings = window.toto.onSettingsChanged(() => void refresh())
     return () => {
       cancelled = true
       stop()
+      unsubscribeSettings()
     }
   }, [refresh])
   const signIn = useCallback(async () => {

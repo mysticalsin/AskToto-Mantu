@@ -4053,12 +4053,12 @@ export function App(): JSX.Element {
         <Panel>
           <div className="m-auto flex max-w-sm flex-col items-center gap-3 px-4 py-5 text-center">
             <h1 className="m-0 text-[18px] font-semibold text-[color:var(--color-ink)]">
-              Unlock your encrypted profile
+              Unlock secure storage
             </h1>
             <p className="m-0 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-              Your existing settings and encrypted data are still in place. Continue to let Métis request
-              access to the original macOS Keychain. If macOS asks, approve access for Métis. Nothing is
-              changed if access is denied.
+              Métis needs macOS secure storage before it can open or create this profile. Continue to let
+              Métis request access to the Keychain. If macOS asks, approve access for Métis. Denying access
+              leaves your files unchanged.
             </p>
             <button
               type="button"

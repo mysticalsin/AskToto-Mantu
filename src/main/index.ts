@@ -140,7 +140,9 @@ import {
   authorizeMacKeychainUnlock,
   KeychainKeyRecoveryError,
   MacKeychainUnlockRequiredError,
+  isMacKeychainUnlockAuthorized,
   prepareFileKeyForWrite,
+  requireMacKeychainUnlock,
   resetMacKeychainUnlockAuthorization
 } from './secrets'
 import { createStream } from './llm'
@@ -733,6 +735,7 @@ import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifec
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
+  reloadSessionAfterProfileUnlock,
   signIn as authSignIn,
   signOut as authSignOut,
   requireAuth,
@@ -2273,6 +2276,45 @@ let emittedAppStarted = false
 // on it, and it is meaningless before that first createWindow() has run.
 let observability: RunObservability | null = null
 let bootWorkGate: BootWork | null = null
+let startupBootWork: BootWork | null = null
+let startupBootWorkReleaseWindow: BrowserWindow | null = null
+let startupBootWorkReleaseRequested = false
+let startupBootWorkReleased = false
+let startupBootInitializationComplete = false
+const deferredMacProfileBootSteps = new Map<string, () => void>()
+
+function macProfileUnlockRequired(): boolean {
+  return app.isPackaged && process.platform === 'darwin' && !isMacKeychainUnlockAuthorized()
+}
+
+function isMacProfileUnlockError(error: unknown): boolean {
+  return macProfileUnlockRequired() && error instanceof KeychainKeyRecoveryError
+}
+
+function deferMacProfileBootStep(name: string, run: () => void): void {
+  deferredMacProfileBootSteps.set(name, run)
+  mainLog.info(`[boot] ${name} deferred until the encrypted profile is unlocked`)
+}
+
+function resumeDeferredMacProfileBootSteps(): void {
+  if (!startupBootInitializationComplete || macProfileUnlockRequired()) return
+  const steps = [...deferredMacProfileBootSteps.entries()]
+  deferredMacProfileBootSteps.clear()
+  for (const [name, run] of steps) {
+    try {
+      run()
+    } catch (error) {
+      mainLog.error(`[boot] deferred ${name} failed:`, error)
+      auditLog('app.error.boot_step', { step: name, message: error, recoveryStatus: 'continued' })
+    }
+  }
+}
+
+function releaseStartupBootWorkIfReady(): void {
+  if (!startupBootWorkReleaseRequested || startupBootWorkReleased || macProfileUnlockRequired()) return
+  startupBootWorkReleased = true
+  startupBootWork?.releaseAfterFirstShow(startupBootWorkReleaseWindow)
+}
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -5289,7 +5331,12 @@ function registerIpc(): void {
       // Legacy raw file keys use secrets.ts's atomic tmp+rename migration. Wrapped keys are only
       // unwrapped after this user action, so macOS never shows a Keychain dialog behind first paint.
       prepareFileKeyForWrite()
-      return publicSettingsWithSpeakerPolicy()
+      reloadSessionAfterProfileUnlock()
+      const settings = publicSettingsWithSpeakerPolicy()
+      if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
+      releaseStartupBootWorkIfReady()
+      resumeDeferredMacProfileBootSteps()
+      return settings
     } catch (error) {
       resetMacKeychainUnlockAuthorization()
       if (app.isPackaged && process.platform === 'darwin' && error instanceof KeychainKeyRecoveryError) {
@@ -5300,6 +5347,10 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
+    // Fresh and existing packaged Mac profiles both begin at the visible unlock surface. This
+    // prevents a first settings read from silently allowing onboarding defaults or prompting behind
+    // the window before the user has accepted the Keychain action.
+    if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     const s = publicSettingsWithSpeakerPolicy()
     // Re-apply the live side effects of a managed-config change (content protection / shortcuts / tray)
     // if the relevant values drifted since we last applied them — but only then, so a plain settings poll
@@ -9652,6 +9703,7 @@ if (!app.requestSingleInstanceLock()) {
       commandControl.initialize(powerMonitor, initLogging, mainLog)
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
+      startupBootWork = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
       // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
       bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
@@ -9712,16 +9764,24 @@ if (!app.requestSingleInstanceLock()) {
       })
       {
         setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
-        const boot = getSettings()
-        if (
-          !boot.operatorUrl &&
-          process.env.METIS_OPERATOR_URL &&
-          /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)
-        ) {
-          setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+        const applyOperatorBootstrapSettings = (): void => {
+          const boot = getSettings()
+          if (
+            !boot.operatorUrl &&
+            process.env.METIS_OPERATOR_URL &&
+            /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)
+          ) {
+            setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+          }
+          if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
+            setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+          }
         }
-        if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
-          setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+        try {
+          applyOperatorBootstrapSettings()
+        } catch (e) {
+          if (!isMacProfileUnlockError(e)) throw e
+          deferMacProfileBootStep('applyOperatorBootstrapSettings', applyOperatorBootstrapSettings)
         }
       }
       // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
@@ -9756,7 +9816,7 @@ if (!app.requestSingleInstanceLock()) {
             })
             .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
         )
-        void runAsMaintenance(warmLocalIfReady)
+        bootWork.run('warmLocalIfReady', () => runAsMaintenance(warmLocalIfReady))
       }
       // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
       // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
@@ -9914,6 +9974,15 @@ if (!app.requestSingleInstanceLock()) {
           try {
             fn()
           } catch (e) {
+            if (isMacProfileUnlockError(e)) {
+              deferMacProfileBootStep(name, () => runStep(name, fn))
+              auditLog('app.error.boot_step', {
+                step: name,
+                message: e,
+                recoveryStatus: 'retry_pending'
+              })
+              return
+            }
             // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
             // boot-step failure is actually diagnosable and shows up in the audit trail.
             mainLog.error(`[boot] ${name} failed:`, e)
@@ -10158,21 +10227,20 @@ if (!app.requestSingleInstanceLock()) {
       // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
       // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
       // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
-      trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
+      runStep('registerSettingsIntervals', () => {
+        trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
 
-      // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
-      // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
-      // build (the shipped default) never touches the network here. For an always-on machine that's
-      // offline for days, this is what lands a revocation within half a day instead of waiting for the
-      // renderer's own once-per-launch check (which only runs at the next relaunch).
-      trackTimer(
-        setInterval(
-          () => {
-            if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
-          },
-          12 * 60 * 60 * 1000
+        // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above:
+        // skips entirely unless the gate is on and this device is activated.
+        trackTimer(
+          setInterval(
+            () => {
+              if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
+            },
+            12 * 60 * 60 * 1000
+          )
         )
-      )
+      })
 
       // Catch the case where encryption was already on (managed-config or a previous run) with a stale
       // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
@@ -10189,7 +10257,9 @@ if (!app.requestSingleInstanceLock()) {
       await yieldBeforeBootWindow() // M2-0422: window construction is its own task
       withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
       scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
-      bootWork.releaseAfterFirstShow(win)
+      startupBootWorkReleaseWindow = win
+      startupBootWorkReleaseRequested = true
+      releaseStartupBootWorkIfReady()
       revealController.markBootComplete()
       // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
       clearBootWatchOnce('createWindow')
@@ -10216,8 +10286,8 @@ if (!app.requestSingleInstanceLock()) {
         runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
       )
       runStep('initializeImportJobs', initializeImportJobs)
-      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
-      startOperatorOverlayPoll(() => getSettings())
+      runStep('startOperatorRuntime', () => startOperatorRuntime(() => getSettings(), operatorRuntimeHooks()))
+      runStep('startOperatorOverlayPoll', () => startOperatorOverlayPoll(() => getSettings()))
       // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
       // can safely report chunks as soon as it starts, without delaying first paint.
       const recoverImports = (): Promise<unknown> | undefined => {
@@ -10249,7 +10319,15 @@ if (!app.requestSingleInstanceLock()) {
       // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
       // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
       const BRAIN_RECONCILE_MS = 60 * 1000
-      setTimeout(() => {
+      const runDelayedBrainStartup = (): void => {
+        if (macProfileUnlockRequired()) {
+          // Keep first paint and ordinary boot initialization independent from the profile lock. The
+          // one-shot brain startup resumes after unlock; release the boot blocker while waiting.
+          setBootPowerSaveBlock(false)
+          clearBootWatchOnce('profile-unlock-deferred')
+          deferMacProfileBootStep('runDelayedBrainStartup', runDelayedBrainStartup)
+          return
+        }
         // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
         // launch that decrypts index.json. When the previous run died before boot completed, this launch
         // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
@@ -10323,7 +10401,8 @@ if (!app.requestSingleInstanceLock()) {
           setBootPowerSaveBlock(false)
           clearBootWatchOnce('mqa-175')
         }
-      }, 15_000)
+      }
+      setTimeout(runDelayedBrainStartup, 15_000)
 
       app.on('activate', () => {
         reveal('activate', { focus: true })
@@ -10337,6 +10416,9 @@ if (!app.requestSingleInstanceLock()) {
           /* settings store not ready */
         }
       })
+      startupBootInitializationComplete = true
+      releaseStartupBootWorkIfReady()
+      resumeDeferredMacProfileBootSteps()
     })
     .catch((e) => {
       // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same

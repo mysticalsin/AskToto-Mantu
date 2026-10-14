@@ -6,6 +6,7 @@ const root = join(__dirname, '..', '..')
 const main = readFileSync(join(root, 'src/main/index.ts'), 'utf8')
 const secrets = readFileSync(join(root, 'src/main/secrets.ts'), 'utf8')
 const store = readFileSync(join(root, 'src/main/store.ts'), 'utf8')
+const auth = readFileSync(join(root, 'src/main/auth.ts'), 'utf8')
 const app = readFileSync(join(root, 'src/renderer/src/App.tsx'), 'utf8')
 const state = readFileSync(join(root, 'src/renderer/src/state.ts'), 'utf8')
 
@@ -19,10 +20,11 @@ describe('packaged macOS secure-keystore startup', () => {
   it('shows an explicit unlock action before retrying a locked encrypted profile', () => {
     expect(state).toContain('if (isMacKeychainUnlockMessage(message))')
     expect(app).toContain("isMacKeychainUnlockMessage(settingsBootError)")
-    expect(app).toContain('Unlock your encrypted profile')
+    expect(app).toContain('Unlock secure storage')
     expect(app).toContain('Continue to Keychain')
     expect(app).toContain('unlockEncryptedProfile()')
-    expect(app).toContain('Nothing is changed if access is denied.')
+    expect(app).toContain('Denying access')
+    expect(app).toContain('leaves your files unchanged.')
   })
 
   it('can paint the locked-profile surface without reading profile settings', () => {
@@ -45,6 +47,37 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(settingsReadPath).not.toContain('serializeUserRaw(')
     expect(settingsReadPath).not.toContain('encryptSecret(')
     expect(rawReadPath).not.toContain('encryptSecret(')
+  })
+
+  it('completes boot setup while locked and resumes deferred startup work once after unlock', () => {
+    expect(main).toContain('deferredMacProfileBootSteps.set(name, run)')
+    expect(main).toContain('deferredMacProfileBootSteps.clear()')
+    expect(main).toContain('startupBootInitializationComplete = true')
+    expect(main).toContain('deferMacProfileBootStep(name, () => runStep(name, fn))')
+    expect(main).toContain("deferMacProfileBootStep('applyOperatorBootstrapSettings', applyOperatorBootstrapSettings)")
+    expect(main).toContain('startupBootWorkReleased = true')
+    expect(main).toContain('releaseStartupBootWorkIfReady()')
+    expect(main).toContain('resumeDeferredMacProfileBootSteps()')
+    expect(main).toContain('if (!isMacProfileUnlockError(e)) throw e')
+    expect(main).toContain('if (isMacProfileUnlockError(e)) {\n              deferMacProfileBootStep(name, () => runStep(name, fn))')
+    expect(auth).toContain('json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()')
+    expect(auth).toContain('export function reloadSessionAfterProfileUnlock(): void')
+  })
+
+  it('does not probe safeStorage or allow a raw-key override before the explicit Mac unlock', () => {
+    expect(secrets).toMatch(/if \(packagedMacRequiresKeychain\(\) && !_macKeychainUnlockConfirmed\) return true/)
+    expect(secrets).toMatch(/function packagedMacRequiresKeychain\(\): boolean \{[\s\S]*?return app\.isPackaged && process\.platform === 'darwin'/)
+    expect(secrets).toMatch(/requireMacKeychainUnlock\(\)\s+const keychainAvailable = !localKeystoreForced && isKeychainAvailable\(\)/)
+    expect(main).toContain("if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()")
+    expect(main).toContain('error instanceof KeychainKeyRecoveryError) {\n        throw new MacKeychainUnlockRequiredError()')
+    expect(main).toContain('reloadSessionAfterProfileUnlock()')
+    expect(main).toContain('prepareFileKeyForWrite()')
+    const settingsGetStart = main.indexOf('ipcMain.handle(IPC.settingsGet')
+    const unlockGate = main.indexOf('requireMacKeychainUnlock()', settingsGetStart)
+    const settingsRead = main.indexOf('publicSettingsWithSpeakerPolicy()', settingsGetStart)
+    expect(settingsGetStart).toBeGreaterThanOrEqual(0)
+    expect(unlockGate).toBeGreaterThan(settingsGetStart)
+    expect(settingsRead).toBeGreaterThan(unlockGate)
   })
 
   it('keeps denial fail-closed without onboarding or profile replacement', () => {

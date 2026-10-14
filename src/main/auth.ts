@@ -386,6 +386,14 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
 let session: Session | null = null
 let loaded = false
 
+/** A pre-consent authStatus may have treated a locked encrypted cache as absent. Re-read it only after
+ *  the profile's explicit Keychain unlock succeeds, so a stored session is not presented as signed out. */
+export function reloadSessionAfterProfileUnlock(): void {
+  session = null
+  loaded = false
+  loadSession()
+}
+
 // Single-flight guard for interactive sign-in. signIn() binds a loopback HTTP server, opens an external
 // browser, and races to write the session — so concurrent/looping calls (double-clicks, or a misbehaving
 // renderer spamming the IPC) would spawn multiple servers/browser windows and two writers racing on the
@@ -587,7 +595,7 @@ function loadSession(): void {
     // Fallback / migration: try safeStorage only when this build did not explicitly opt out of
     // Keychain. The unsigned package sets ASKTOTO_LOCAL_KEYSTORE so an old auth-session.bin can never
     // place a hidden Keychain dialog in front of onboarding; it is treated as an expired local cache.
-    if (json === null && !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
+    if (json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()) {
       try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob */ }
       // Migrate to file backend if we're now in file-backend mode (best-effort).
       if (json !== null && useFileBackend()) {

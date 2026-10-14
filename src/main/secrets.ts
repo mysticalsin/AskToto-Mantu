@@ -86,7 +86,9 @@ let _key: Buffer | null = null
 let _macKeychainUnlockConfirmed = false
 
 function packagedMacRequiresKeychain(): boolean {
-  return app.isPackaged && process.platform === 'darwin' && !process.env.ASKTOTO_LOCAL_KEYSTORE
+  // The packaged macOS product never permits a raw-key fallback. The environment override remains
+  // useful for dev/QA elsewhere, but cannot weaken at-rest protection in a shipped Mac build.
+  return app.isPackaged && process.platform === 'darwin'
 }
 
 /** Called only by the main-process IPC invoked from the visible secure-storage screen. */
@@ -109,8 +111,12 @@ export function isMacKeychainUnlockAuthorized(): boolean {
  * without restarting the process.
  */
 export function useFileBackend(): boolean {
+  // Do not touch safeStorage before the visible unlock action. Packaged macOS always uses the
+  // encrypted file format; the file key itself is wrapped only after the explicit consent gate.
+  if (packagedMacRequiresKeychain() && !_macKeychainUnlockConfirmed) return true
   try {
-    return !app.isPackaged || !!process.env.ASKTOTO_LOCAL_KEYSTORE || !safeStorage.isEncryptionAvailable()
+    const localKeystoreForced = !!process.env.ASKTOTO_LOCAL_KEYSTORE && !packagedMacRequiresKeychain()
+    return !app.isPackaged || localKeystoreForced || !safeStorage.isEncryptionAvailable()
   } catch {
     // app not ready (test environment) — default to file backend
     return true
@@ -195,10 +201,13 @@ function loadKey({
   // `ASKTOTO_LOCAL_KEYSTORE` is an explicit opt-out of macOS Keychain / Windows DPAPI. It is used
   // for isolated packaged QA and recovery environments specifically so first-run settings writes
   // cannot trigger a platform credential prompt. Availability alone is not consent to use it.
-  const localKeystoreForced = !!process.env.ASKTOTO_LOCAL_KEYSTORE
+  const localKeystoreForced = !!process.env.ASKTOTO_LOCAL_KEYSTORE && !packagedMacRequiresKeychain()
   // Do not even probe Keychain when the file backend is forced. On macOS that synchronous probe can
   // display a credential dialog behind onboarding and block the first settings save before the UI can
   // explain what happened. The forced local keystore is deliberately independent of that OS service.
+  // Existing and fresh packaged Mac profiles both cross the visible consent surface first. This
+  // guard must precede even safeStorage.isEncryptionAvailable(), which can itself raise a prompt.
+  requireMacKeychainUnlock()
   const keychainAvailable = !localKeystoreForced && isKeychainAvailable()
   // Packaged macOS must not silently fall back to persisting a raw AES key when Keychain is absent.
   // In particular, do not replace an existing wrapped key or create a new key under this condition.
