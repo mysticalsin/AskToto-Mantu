@@ -569,3 +569,82 @@ describe('downloadVerified', () => {
     expect(cancelled).toBe(true)
   })
 })
+
+describe('reuseVerifiedFiles', () => {
+  it('copies only pinned bytes from a held regular file and rechecks content after copy', async () => {
+    const source = join(dir, 'source')
+    const destination = join(dir, 'destination')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const pinned = Buffer.from('previously verified model bytes')
+    writeFileSync(join(source, 'weights.bin'), pinned)
+    const authorize = vi.fn(() => true)
+    const copied = await reuseVerifiedFiles({
+      candidates: [source],
+      destination,
+      files: [{ path: 'weights.bin', bytes: pinned.length, sha256: createHash('sha256').update(pinned).digest('hex') }],
+      authorize,
+      validateCurrent: () => true
+    })
+    expect(copied).toBe(true)
+    expect(readFileSync(join(destination, 'weights.bin'))).toEqual(pinned)
+    expect(authorize).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a changed or linked candidate without leaving copied data', async () => {
+    const source = join(dir, 'source')
+    const destination = join(dir, 'destination')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const outside = join(dir, 'outside.bin')
+    writeFileSync(outside, 'changed bytes')
+    symlinkSync(outside, join(source, 'weights.bin'))
+    await expect(
+      reuseVerifiedFiles({
+        candidates: [source],
+        destination,
+        files: [{ path: 'weights.bin', bytes: 13, sha256: createHash('sha256').update('changed bytes').digest('hex') }],
+        authorize: () => true,
+        validateCurrent: () => true
+      })
+    ).resolves.toBe(false)
+    expect(existsSync(join(destination, 'weights.bin'))).toBe(false)
+    expect(readFileSync(outside, 'utf8')).toBe('changed bytes')
+  })
+
+  it.each([
+    ['held read', 12],
+    ['partial write', 14]
+  ] as const)('stops after a revoked %s and preserves a foreign destination replacement', async (_step, revokeAt) => {
+    const source = join(dir, 'source')
+    const destination = join(dir, 'destination')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const bytes = Buffer.from('pinned copied model data')
+    const target = join(destination, 'weights.bin')
+    const moved = join(destination, 'owned-copy-moved-aside')
+    writeFileSync(join(source, 'weights.bin'), bytes)
+    let checks = 0
+    let revoked = false
+    const copied = await reuseVerifiedFiles({
+      candidates: [source],
+      destination,
+      files: [{ path: 'weights.bin', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }],
+      authorize: () => true,
+      validateCurrent: () => {
+        checks++
+        if (!revoked && checks === revokeAt) {
+          revoked = true
+          renameSync(target, moved)
+          writeFileSync(target, 'foreign replacement')
+          return false
+        }
+        return true
+      }
+    })
+    expect(copied).toBe(false)
+    expect(revoked).toBe(true)
+    expect(readFileSync(target, 'utf8')).toBe('foreign replacement')
+    expect(existsSync(moved)).toBe(true)
+  })
+})
