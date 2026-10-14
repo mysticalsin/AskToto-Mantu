@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest'
-import { buildCloudSpeechStartRequest, cloudSpeechTranscriptSegment } from './cloud-speech-listen'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  buildCloudSpeechStartRequest,
+  cloudSpeechListenOwnerCallbacks,
+  cloudSpeechListenStopped,
+  cloudSpeechTranscriptSegment
+} from './cloud-speech-listen'
 
 const capture = {
   generation: 3,
@@ -108,5 +113,45 @@ describe('cloudSpeechTranscriptSegment', () => {
       segmentId: '3:system:4:5'
     })
     expect(cloudSpeechTranscriptSegment(mixed)?.providerLanguage).toBeUndefined()
+  })
+})
+
+describe('cloudSpeechListenStopped', () => {
+  const identity = { epoch: 9, captureId: '7eb44d11-8d93-4c87-a83d-9299a1e1f2d4' }
+
+  it('tears down only the current admitted broker ceiling and reports tail completeness', () => {
+    const fail = vi.fn()
+    cloudSpeechListenStopped(identity, 'ceiling', true, true, fail)
+    expect(fail).toHaveBeenCalledWith('Cloud speech reached the four-hour capture limit. Listen has stopped.', {
+      cloudCaptureId: identity.captureId
+    })
+
+    fail.mockClear()
+    cloudSpeechListenStopped(identity, 'ceiling', false, true, fail)
+    expect(fail).toHaveBeenCalledWith(
+      'Cloud speech reached the four-hour capture limit, but the final transcript could not be confirmed. Listen has stopped.',
+      { cloudCaptureId: identity.captureId }
+    )
+  })
+
+  it('ignores user Stop/Pause and stale, replaced, or non-admitted owners', () => {
+    const fail = vi.fn()
+    cloudSpeechListenStopped(identity, 'user', true, true, fail)
+    cloudSpeechListenStopped(identity, 'ceiling', true, false, fail)
+    expect(fail).not.toHaveBeenCalled()
+  })
+
+  it('ignores a ceiling callback after a successor capture replaces its owner', () => {
+    let current = identity
+    const fail = vi.fn()
+    const callbacks = cloudSpeechListenOwnerCallbacks(
+      (candidate, reason) =>
+        reason !== 'failure' && candidate.epoch === current.epoch && candidate.captureId === current.captureId,
+      fail
+    )
+    current = { ...identity, epoch: identity.epoch + 1, captureId: '00e7f7c6-1490-4b18-83d3-8bcd9f7fc2b9' }
+
+    callbacks.onStopped(identity, 'ceiling', true)
+    expect(fail).not.toHaveBeenCalled()
   })
 })

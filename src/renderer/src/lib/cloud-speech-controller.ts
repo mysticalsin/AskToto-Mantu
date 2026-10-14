@@ -70,7 +70,11 @@ export interface CloudSpeechControllerOptions {
   request: CloudSpeechStartRequest
   applyEvent(event: CloudSpeechEvent): void | Promise<void>
   onFailure(code: CloudSpeechFailure['code']): void
-  onStopped?(identity: { captureId: string; captureGeneration: number }, reason: 'user' | 'ceiling'): void
+  onStopped?(
+    identity: { captureId: string; captureGeneration: number },
+    reason: 'user' | 'ceiling',
+    complete: boolean
+  ): void
   now?: () => number
   deadlineMs?: number
 }
@@ -445,7 +449,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     discardStartupSubscription()
     for (const input of inputs.values()) detachInput(input, true)
     try {
-      options.onStopped?.(identity(), captureCeiling ? 'ceiling' : 'user')
+      options.onStopped?.(identity(), captureCeiling ? 'ceiling' : 'user', false)
     } catch {
       // Owner teardown is observational and cannot change the recovered result.
     }
@@ -749,7 +753,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       discardStartupSubscription()
       for (const input of inputs.values()) detachInput(input, true)
       try {
-        options.onStopped?.(identity(), captureCeiling ? 'ceiling' : 'user')
+        options.onStopped?.(identity(), captureCeiling ? 'ceiling' : 'user', finishResult.complete)
       } catch {
         // Owner teardown is observational and cannot change the validated finish result.
       }

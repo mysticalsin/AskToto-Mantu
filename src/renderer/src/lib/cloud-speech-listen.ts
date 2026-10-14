@@ -44,9 +44,43 @@ export interface CloudSpeechSessionStartHost {
     identity: { epoch: number; captureId: string },
     controller: CloudSpeechController
   ): void
+  onStopped(identity: { epoch: number; captureId: string }, reason: 'user' | 'ceiling', complete: boolean): void
   attachTrack(track: Track, controller: CloudSpeechController): Promise<boolean>
   fail(error: string): void
   setReady(): void
+}
+
+export function cloudSpeechListenStopped(
+  identity: { epoch: number; captureId: string },
+  reason: 'user' | 'ceiling',
+  complete: boolean,
+  ownerCurrent: boolean,
+  fail: (error: string, options?: { cloudCaptureId?: string }) => void
+): void {
+  if (reason !== 'ceiling' || !ownerCurrent) return
+  fail(cloudSpeechCaptureLimitMessage(complete), { cloudCaptureId: identity.captureId })
+}
+
+export function cloudSpeechCaptureLimitMessage(complete: boolean): string {
+  return complete
+    ? 'Cloud speech reached the four-hour capture limit. Listen has stopped.'
+    : 'Cloud speech reached the four-hour capture limit, but the final transcript could not be confirmed. Listen has stopped.'
+}
+
+export function cloudSpeechListenOwnerCallbacks(
+  shouldHandle: (identity: { epoch: number; captureId: string }, reason: 'failure' | 'user' | 'ceiling') => boolean,
+  fail: (error: string, options?: { cloudCaptureId?: string }) => void
+): Pick<CloudSpeechSessionStartHost, 'onFailure' | 'onStopped'> {
+  return {
+    onFailure: (code, identity) => {
+      if (!shouldHandle(identity, 'failure')) return
+      fail(`Cloud speech stopped safely (${code}).`, { cloudCaptureId: identity.captureId })
+    },
+    onStopped: (identity, reason, complete) => {
+      if (!shouldHandle(identity, reason)) return
+      cloudSpeechListenStopped(identity, reason, complete, true, fail)
+    }
+  }
 }
 
 export async function startCloudSpeechSession(
@@ -64,7 +98,9 @@ export async function startCloudSpeechSession(
     bridge: host.bridge,
     request,
     applyEvent: (event) => host.applyEvent(event, epoch),
-    onFailure: (code) => host.onFailure(code, { epoch, captureId }, controller)
+    onFailure: (code) => host.onFailure(code, { epoch, captureId }, controller),
+    onStopped: (identity, reason, complete) =>
+      host.onStopped({ epoch: identity.captureGeneration, captureId: identity.captureId }, reason, complete)
   })
   host.setController(controller)
   host.setCaptureId(captureId)
