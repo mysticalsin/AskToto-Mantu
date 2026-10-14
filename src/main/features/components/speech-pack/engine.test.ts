@@ -505,12 +505,15 @@ describe('speech-pack engine', () => {
         const first = make([previous])
         first.enqueue([WHISPER])
         await first.whenIdle()
-        writeFileSync(marker(WHISPER), JSON.stringify({
-          schema: 2,
-          component: WHISPER,
-          version: '../en.wav',
-          manifestIdentity: componentManifestIdentity(c)
-        }))
+        writeFileSync(
+          marker(WHISPER),
+          JSON.stringify({
+            schema: 2,
+            component: WHISPER,
+            version: '../en.wav',
+            manifestIdentity: componentManifestIdentity(previous)
+          })
+        )
         const outsideBefore = readFileSync(join(dir, 'en.wav'))
 
         const next = make([{ ...previous, version: '2' }])

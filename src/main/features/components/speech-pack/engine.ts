@@ -26,7 +26,8 @@
  * State and events carry component ids, byte counts and error kinds only — no path, transcript, audio or
  * user text ever enters a state, an event or a log line.
  */
-import { lstat, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { adoptExtracted, createArchiveSink, isSafeEntryName, type ExtractArchive } from './archive'
 import {
@@ -46,9 +47,11 @@ import {
   type SpeechPackComponent,
   type SpeechPackComponentId
 } from './manifest'
+import { componentManifestIdentity } from './resolver'
 
 export const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
 export const EMIT_INTERVAL_MS = 250
+const MAX_MARKER_BYTES = 4096
 
 export type SpeechPackState =
   | { status: 'not-installed' }
@@ -76,7 +79,12 @@ export interface SpeechPackEngineOptions {
   /** Length and digest `fixtureWavPath` must match; defaults to SELF_TEST_FIXTURE. */
   fixture?: { readonly bytes: number; readonly sha256: string }
   /** Decodes the wav with the staged pack and returns the text. Must not log or persist it. */
-  selfTest: (input: { componentId: SpeechPackComponentId; packDir: string; wavPath: string }) => Promise<string>
+  selfTest: (input: {
+    componentId: SpeechPackComponentId
+    packDir: string
+    wavPath: string
+    signal: AbortSignal
+  }) => Promise<string>
   components?: readonly SpeechPackComponent[]
   /** Required for archive-sourced components. */
   extractArchive?: ExtractArchive
@@ -88,6 +96,10 @@ export interface SpeechPackEngineOptions {
   emitIntervalMs?: number
   /** Test seam: called after each activation step, so a test can stop the process there. */
   onActivationStep?: (step: ActivationStep) => void | Promise<void>
+  /** Rechecked between streamed chunks to stop after a consent or local-policy change. */
+  authorizeTransfer?: (componentId: SpeechPackComponentId) => boolean
+  /** Distinguishes an in-process pause/resume from stale partial data left by a prior launch. */
+  resumeScope?: string
 }
 
 export interface SpeechPackEngine {
@@ -98,6 +110,8 @@ export interface SpeechPackEngine {
   subscribe(listener: (event: { id: SpeechPackComponentId; state: SpeechPackState }) => void): () => void
   /** Queue installs; `selected` (the engine chosen for this machine) goes first. */
   enqueue(ids: readonly SpeechPackComponentId[], selected?: SpeechPackComponentId): void
+  /** Force a fresh staged transfer, hash verification and isolated self-test before promotion. */
+  repair(id: SpeechPackComponentId): void
   pause(id: SpeechPackComponentId): void
   cancel(id: SpeechPackComponentId): void
   /** Resolves when nothing is queued or running. */
@@ -105,9 +119,10 @@ export interface SpeechPackEngine {
 }
 
 interface Marker {
-  schema: 1
+  schema: 2
   component: SpeechPackComponentId
   version: string
+  manifestIdentity: string
 }
 
 interface MarkerSnapshot {
@@ -153,11 +168,19 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const { rootDir } = options
   const fixture = options.fixture ?? SELF_TEST_FIXTURE
 
+  function assertAuthorized(c: SpeechPackComponent, signal: AbortSignal): void {
+    throwIfAborted(signal)
+    if (options.authorizeTransfer?.(c.id) === false) {
+      throw new SpeechPackError('policy', 'speech-pack action is no longer authorized')
+    }
+  }
+
   const states = new Map<SpeechPackComponentId, SpeechPackState>(
     components.map((c) => [c.id, { status: 'not-installed' }])
   )
   const listeners = new Set<(event: { id: SpeechPackComponentId; state: SpeechPackState }) => void>()
   const queue: SpeechPackComponentId[] = []
+  const forcedRepairs = new Set<SpeechPackComponentId>()
   const controllers = new Map<SpeechPackComponentId, AbortController>()
   const cleanups = new Map<SpeechPackComponentId, Promise<void>>()
   let running: SpeechPackComponentId | null = null
@@ -197,13 +220,38 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   async function dirVerified(c: SpeechPackComponent, dir: string): Promise<boolean> {
     for (const file of c.files) {
       const path = fileAt(dir, file.path)
+      if (!(await filePathIsRegular(dir, file.path))) return false
       if ((await sizeOf(path)) !== file.bytes || (await sha256File(path)) !== file.sha256) return false
     }
     return true
   }
 
+  async function filePathIsRegular(dir: string, relativePath: string): Promise<boolean> {
+    let current = dir
+    const parts = relativePath.split('/')
+    for (let index = 0; index < parts.length; index++) {
+      current = join(current, parts[index])
+      try {
+        const item = await lstat(current)
+        if (item.isSymbolicLink()) return false
+        if (index === parts.length - 1) {
+          if (!item.isFile() || item.nlink !== 1) return false
+        } else if (!item.isDirectory()) return false
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+        throw error
+      }
+    }
+    return true
+  }
+
   async function writeMarker(c: SpeechPackComponent): Promise<void> {
-    const marker: Marker = { schema: 1, component: c.id, version: c.version }
+    const marker: Marker = {
+      schema: 2,
+      component: c.id,
+      version: c.version,
+      manifestIdentity: componentManifestIdentity(c)
+    }
     await mkdir(dirname(markerPath(c)), { recursive: true })
     await writeFile(`${markerPath(c)}.tmp`, JSON.stringify(marker))
     await options.onActivationStep?.('marker-tmp-written')
@@ -226,14 +274,31 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       if (!componentDir.isDirectory()) return null
       const markerFile = markerPath(c)
       const markerStat = await lstat(markerFile)
-      if (!markerStat.isFile() || markerStat.nlink !== 1) return null
-      const bytes = await readFile(markerFile)
+      if (!markerStat.isFile() || markerStat.nlink !== 1 || markerStat.size > MAX_MARKER_BYTES) return null
+      const handle = await open(markerFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      let bytes: Buffer
+      try {
+        const opened = await handle.stat()
+        if (
+          !opened.isFile() ||
+          opened.nlink !== 1 ||
+          opened.size > MAX_MARKER_BYTES ||
+          opened.dev !== markerStat.dev ||
+          opened.ino !== markerStat.ino
+        )
+          return null
+        bytes = await handle.readFile()
+      } finally {
+        await handle.close()
+      }
       const marker = JSON.parse(bytes.toString('utf8')) as Partial<Marker>
       if (
-        Object.keys(marker).length !== 3 ||
-        marker.schema !== 1 ||
+        Object.keys(marker).length !== 4 ||
+        marker.schema !== 2 ||
         marker.component !== c.id ||
-        !validVersion(marker.version)
+        !validVersion(marker.version) ||
+        typeof marker.manifestIdentity !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(marker.manifestIdentity)
       ) {
         return null
       }
@@ -246,7 +311,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   }
 
   async function hasMarker(c: SpeechPackComponent): Promise<boolean> {
-    return (await readMarkerSnapshot(c))?.marker.version === c.version
+    const marker = (await readMarkerSnapshot(c))?.marker
+    return marker?.version === c.version && marker.manifestIdentity === componentManifestIdentity(c)
   }
 
   async function restoreMarkerSnapshot(c: SpeechPackComponent, snapshot: MarkerSnapshot): Promise<boolean> {
@@ -301,21 +367,73 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     const candidates = await verifiedAsideDirs(c)
     if (candidates.length === 0) return false
     const dest = finalDir(c)
-    if (await exists(dest)) await rm(dest, { recursive: true, force: true })
+    if (await exists(dest)) return false
     await rename(candidates[0], dest)
     return true
   }
 
+  async function selfTestDirectory(c: SpeechPackComponent, dir: string): Promise<boolean> {
+    try {
+      if (
+        (await sizeOf(options.fixtureWavPath)) !== fixture.bytes ||
+        (await sha256File(options.fixtureWavPath)) !== fixture.sha256
+      )
+        return false
+      const decoded = await options.selfTest({
+        componentId: c.id,
+        packDir: dir,
+        wavPath: options.fixtureWavPath,
+        signal: new AbortController().signal
+      })
+      return decoded.trim().length > 0
+    } catch {
+      return false
+    }
+  }
+
+  async function ensureOwnedDirectory(path: string, create: boolean): Promise<void> {
+    if (create) {
+      try {
+        await mkdir(path)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
+    const item = await lstat(path)
+    if (!item.isDirectory() || item.isSymbolicLink()) throw new SpeechPackError('tamper', 'pack directory is unsafe')
+  }
+
+  async function prepareComponentPaths(c: SpeechPackComponent): Promise<void> {
+    await ensureOwnedDirectory(rootDir, true)
+    await ensureOwnedDirectory(join(rootDir, '.staging'), true)
+    await ensureOwnedDirectory(join(rootDir, '.staging', c.id), true)
+    await ensureOwnedDirectory(join(rootDir, c.id), true)
+    await ensureOwnedDirectory(stagingDir(c), true)
+    await ensureOwnedDirectory(workDir(c), true)
+  }
+
   async function initialise(): Promise<void> {
     for (const c of components) {
-      const dir = finalDir(c)
-      const marker = await readMarkerSnapshot(c)
-      if (!(await exists(dir)) || !(await dirVerified(c, dir))) {
-        if (!marker || marker.marker.version === c.version) await rm(markerPath(c), { force: true })
-        if (await exists(dir)) await rm(dir, { recursive: true, force: true })
-        if (!(await restoreAside(c))) continue
+      try {
+        await prepareComponentPaths(c)
+      } catch {
+        continue
       }
-      if (marker?.marker.version !== c.version) await writeMarker(c)
+      const dir = finalDir(c)
+      let marker = await readMarkerSnapshot(c)
+      if (!(await exists(dir))) {
+        if (!(await restoreAside(c))) continue
+        marker = await readMarkerSnapshot(c)
+      }
+      if (!(await dirVerified(c, dir))) continue
+      const alreadyActivated =
+        marker?.marker.version === c.version && marker.marker.manifestIdentity === componentManifestIdentity(c)
+      if (!alreadyActivated) {
+        // An unmarked complete directory can be a process-kill recovery point. Re-run the pinned fixture
+        // in an isolated host before publishing a marker; a size/hash pass alone is not activation proof.
+        if (!(await selfTestDirectory(c, dir))) continue
+        await writeMarker(c)
+      }
       set(c.id, { status: 'ready' })
       // Keep the old complete directory until a verified current directory and its marker both exist.
       await removeAsideDirs(c)
@@ -343,14 +461,14 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   }
 
   // --- one install ---
-  async function install(c: SpeechPackComponent, signal: AbortSignal): Promise<void> {
-    if ((await hasMarker(c)) && (await exists(finalDir(c)))) {
+  async function install(c: SpeechPackComponent, signal: AbortSignal, forceRepair: boolean): Promise<void> {
+    await prepareComponentPaths(c)
+    if (!forceRepair && (await hasMarker(c)) && (await exists(finalDir(c)))) {
       if (await dirVerified(c, finalDir(c))) {
         set(c.id, { status: 'ready' })
         return
       }
-      await rm(markerPath(c), { force: true })
-      await rm(finalDir(c), { recursive: true, force: true })
+      // The old activated directory remains in place until its verified replacement is ready to swap in.
     }
     const staging = stagingDir(c)
     const work = workDir(c)
@@ -359,6 +477,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     const missing: SpeechPackComponent['files'][number][] = []
     for (const f of c.files) {
       const path = fileAt(staging, f.path)
+      if (!(await filePathIsRegular(staging, f.path))) throw new SpeechPackError('tamper', 'staged path is unsafe')
       if ((await sizeOf(path)) !== f.bytes || (await sha256File(path)) !== f.sha256) missing.push(f)
     }
 
@@ -404,6 +523,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
             bytes: file.bytes,
             sha256: file.sha256,
             signal,
+            resumeScope: options.resumeScope,
+            authorize: () => options.authorizeTransfer?.(c.id) !== false,
             onProgress: (onDisk) => set(c.id, { status: 'downloading', bytesDone: done + onDisk, bytesTotal })
           },
           deps
@@ -420,6 +541,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
           bytes: archive.bytes,
           sha256: archive.sha256,
           signal,
+          resumeScope: options.resumeScope,
+          authorize: () => options.authorizeTransfer?.(c.id) !== false,
           onProgress: (onDisk) => set(c.id, { status: 'downloading', bytesDone: onDisk, bytesTotal })
         },
         deps
@@ -440,6 +563,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     set(c.id, { status: 'verifying' })
     for (const file of c.files) {
       const path = fileAt(staging, file.path)
+      if (!(await filePathIsRegular(staging, file.path))) throw new SpeechPackError('tamper', 'staged path is unsafe')
       if ((await sizeOf(path)) !== file.bytes || (await sha256File(path)) !== file.sha256) {
         await rm(path, { force: true })
         throw new SpeechPackError('tamper', 'staged file does not match its pin')
@@ -448,7 +572,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     await options.onActivationStep?.('staged-verified')
 
     // Cancel wins at every step: it is checked again before the self-test and before the activation rename.
-    throwIfAborted(signal)
+    assertAuthorized(c, signal)
     set(c.id, { status: 'self-testing' })
     if (
       (await sizeOf(options.fixtureWavPath)) !== fixture.bytes ||
@@ -458,16 +582,18 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     }
     let decoded = ''
     try {
-      decoded = await options.selfTest({ componentId: c.id, packDir: staging, wavPath: options.fixtureWavPath })
+      decoded = (
+        await options.selfTest({ componentId: c.id, packDir: staging, wavPath: options.fixtureWavPath, signal })
+      ).trim()
     } catch {
       decoded = ''
     }
-    throwIfAborted(signal)
+    assertAuthorized(c, signal)
     // A verified set that cannot decode the fixture is not a usable pack.
     if (decoded.trim() === '') throw new SpeechPackError('tamper', 'self-test decoded no text')
     await options.onActivationStep?.('self-tested')
 
-    throwIfAborted(signal)
+    assertAuthorized(c, signal)
     const dest = finalDir(c)
     const aside = `${dest}.old-${Date.now()}`
     const previousMarker = await readMarkerSnapshot(c)
@@ -477,19 +603,29 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     if (await exists(dest)) {
       await rename(dest, aside)
       await options.onActivationStep?.('old-moved-aside')
+      assertAuthorized(c, signal)
     }
     await rename(staging, dest)
     await options.onActivationStep?.('renamed')
+    assertAuthorized(c, signal)
     await writeMarker(c)
     // A cancel that arrived after the last check above has no step left to stop, so it takes the pack back out.
     if (signal.aborted && signal.reason === 'cancel') {
       await deactivate(c, previousMarker)
       throw signal.reason
     }
+    if (options.authorizeTransfer?.(c.id) === false) {
+      await deactivate(c, previousMarker)
+      throw new SpeechPackError('policy', 'speech-pack action is no longer authorized')
+    }
     await options.onActivationStep?.('ready-check')
     if (signal.aborted && signal.reason === 'cancel') {
       await deactivate(c, previousMarker)
       throw signal.reason
+    }
+    if (options.authorizeTransfer?.(c.id) === false) {
+      await deactivate(c, previousMarker)
+      throw new SpeechPackError('policy', 'speech-pack action is no longer authorized')
     }
     set(c.id, { status: 'ready' })
     if (signal.aborted && signal.reason === 'cancel') {
@@ -498,7 +634,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     }
   }
 
-  async function run(id: SpeechPackComponentId): Promise<void> {
+  async function run(id: SpeechPackComponentId, forceRepair: boolean): Promise<void> {
     const c = byId.get(id) as SpeechPackComponent
     const controller = new AbortController()
     controllers.set(id, controller)
@@ -506,7 +642,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     try {
       // A cancel of this pack's previous run may still be deleting its staging directory.
       await cleanups.get(id)
-      await install(c, controller.signal)
+      await install(c, controller.signal, forceRepair)
     } catch (err) {
       if (controller.signal.aborted) {
         if (controller.signal.reason === 'cancel') {
@@ -535,7 +671,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       return
     }
     running = next
-    void run(next).finally(() => {
+    void run(next, forcedRepairs.delete(next)).finally(() => {
       running = null
       pump()
     })
@@ -562,10 +698,20 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         if (!status || status === 'ready' || id === running) continue
         if (status === 'queued' && id !== selected) continue
         dequeue(id)
+        forcedRepairs.delete(id)
         if (id === selected) queue.unshift(id)
         else queue.push(id)
         set(id, { status: 'queued' })
       }
+      pump()
+    },
+    repair(id) {
+      const status = states.get(id)?.status
+      if (!status || id === running || status === 'queued') return
+      dequeue(id)
+      forcedRepairs.add(id)
+      queue.unshift(id)
+      set(id, { status: 'queued' })
       pump()
     },
     pause(id) {

@@ -15,8 +15,10 @@
 export type SpeechPackComponentId = 'asr.whisper-base-q8' | 'asr.parakeet-tdt-0.6b-v3-int8'
 
 export interface SpeechPackFile {
-  /** Path relative to the pack directory, forward slashes. */
+  /** Installed path relative to the pack directory, forward slashes. */
   readonly path: string
+  /** Immutable upstream path when the installed model layout differs from the source repository layout. */
+  readonly sourcePath?: string
   readonly bytes: number
   readonly sha256: string
 }
@@ -45,7 +47,7 @@ export type SpeechPackSource =
 
 export interface SpeechPackComponent {
   readonly id: SpeechPackComponentId
-  /** Directory name under userData/speech-packs/<id>/. */
+  /** Pack-layout revision directory under userData/speech-packs/<id>/, not the upstream model version. */
   readonly version: string
   readonly files: readonly SpeechPackFile[]
   readonly source: SpeechPackSource
@@ -71,55 +73,80 @@ const PARAKEET_DIR = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
 
 export const WHISPER_BASE_Q8: SpeechPackComponent = {
   id: 'asr.whisper-base-q8',
-  version: '1',
+  // Revision 2 stores the immutable model under transformers.js' expected Xenova/whisper-base path.
+  // The prior flat revision and its marker remain intact until an explicit verified repair succeeds.
+  version: '2',
   source: {
     kind: 'files',
     baseUrl: `https://huggingface.co/Xenova/whisper-base/resolve/${WHISPER_BASE_REVISION}`
   },
   files: [
-    { path: 'config.json', bytes: 2248, sha256: 'd1d347fdb422e6347c2f843a90d375aa67ea3f4b3e20d2c3075f9a9f6243685b' },
     {
-      path: 'generation_config.json',
+      path: 'Xenova/whisper-base/config.json',
+      sourcePath: 'config.json',
+      bytes: 2248,
+      sha256: 'd1d347fdb422e6347c2f843a90d375aa67ea3f4b3e20d2c3075f9a9f6243685b'
+    },
+    {
+      path: 'Xenova/whisper-base/generation_config.json',
+      sourcePath: 'generation_config.json',
       bytes: 3776,
       sha256: '3bba359e33fdd6dc1c10f71846a477d339b0242f462f70ea1dd73274caa38d05'
     },
-    { path: 'merges.txt', bytes: 493869, sha256: '2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6' },
     {
-      path: 'normalizer.json',
+      path: 'Xenova/whisper-base/merges.txt',
+      sourcePath: 'merges.txt',
+      bytes: 493869,
+      sha256: '2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6'
+    },
+    {
+      path: 'Xenova/whisper-base/normalizer.json',
+      sourcePath: 'normalizer.json',
       bytes: 52666,
       sha256: 'bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd'
     },
     {
-      path: 'onnx/decoder_model_merged_quantized.onnx',
+      path: 'Xenova/whisper-base/onnx/decoder_model_merged_quantized.onnx',
+      sourcePath: 'onnx/decoder_model_merged_quantized.onnx',
       bytes: 53707539,
       sha256: 'a6beb6baabb66f00b6a686d828c95ffca6146d51900cbad0266cad38f64cf861'
     },
     {
-      path: 'onnx/encoder_model_quantized.onnx',
+      path: 'Xenova/whisper-base/onnx/encoder_model_quantized.onnx',
+      sourcePath: 'onnx/encoder_model_quantized.onnx',
       bytes: 23200850,
       sha256: '3e345e977b55620a37c0c2b2af0644e019afdfad562dcf71eb929bb7274285f9'
     },
     {
-      path: 'preprocessor_config.json',
+      path: 'Xenova/whisper-base/preprocessor_config.json',
+      sourcePath: 'preprocessor_config.json',
       bytes: 339,
       sha256: 'a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d'
     },
     {
-      path: 'special_tokens_map.json',
+      path: 'Xenova/whisper-base/special_tokens_map.json',
+      sourcePath: 'special_tokens_map.json',
       bytes: 2194,
       sha256: 'e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691'
     },
     {
-      path: 'tokenizer.json',
+      path: 'Xenova/whisper-base/tokenizer.json',
+      sourcePath: 'tokenizer.json',
       bytes: 2480466,
       sha256: '27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566'
     },
     {
-      path: 'tokenizer_config.json',
+      path: 'Xenova/whisper-base/tokenizer_config.json',
+      sourcePath: 'tokenizer_config.json',
       bytes: 282683,
       sha256: '2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce'
     },
-    { path: 'vocab.json', bytes: 1036584, sha256: '50d6a919f0a0601d56a04eb583c780d18553aa388254ba3158eb6a00f13e2c1a' }
+    {
+      path: 'Xenova/whisper-base/vocab.json',
+      sourcePath: 'vocab.json',
+      bytes: 1036584,
+      sha256: '50d6a919f0a0601d56a04eb583c780d18553aa388254ba3158eb6a00f13e2c1a'
+    }
   ]
 }
 
@@ -156,6 +183,13 @@ export function componentBytes(component: SpeechPackComponent): number {
   return component.files.reduce((n, f) => n + f.bytes, 0)
 }
 
+/** Actual network bytes for the manifest source; archive packs report archive bytes, not extracted size. */
+export function componentDownloadBytes(component: SpeechPackComponent): number {
+  return component.source.kind === 'archive'
+    ? (component.source.archive?.bytes ?? componentBytes(component))
+    : componentBytes(component)
+}
+
 /** A URL that names a branch can serve different bytes tomorrow; refuse it before the network is touched. */
 export function isImmutableUrl(url: string): boolean {
   let parsed: URL
@@ -177,5 +211,5 @@ export function isImmutableUrl(url: string): boolean {
 export function speechPackFileUrl(component: SpeechPackComponent, file: SpeechPackFile): string | null {
   const source = component.source
   if (source.kind !== 'files' || source.baseUrl === null) return null
-  return `${source.baseUrl}/${file.path}`
+  return `${source.baseUrl}/${file.sourcePath ?? file.path}`
 }

@@ -1,4 +1,4 @@
-export type SpeechPackErrorKind = 'offline' | 'disk' | 'tamper' | 'captive' | 'http' | 'cancelled'
+export type SpeechPackErrorKind = 'offline' | 'disk' | 'tamper' | 'captive' | 'http' | 'cancelled' | 'policy'
 
 /** A terminal failure. Carries a kind and byte counts only — never a path, URL body or user content. */
 export class SpeechPackError extends Error {

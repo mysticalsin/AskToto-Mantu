@@ -6,11 +6,22 @@ import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 export interface AsrModelProtocolOptions {
   resourcesRoot: string
   userModelsRoot?: string
+  /** Approved selected Whisper pack root in lean profile. No bundled/user fallback is permitted there. */
+  speechPackModelsRoot?: string
+  /** True only for the explicit package-owned lean profile, even when its selected pack is missing. */
+  useOnlySpeechPackModels?: boolean
+  /** Optional resolver is evaluated per request so successful activation is visible without reload. */
+  resolveSpeechPackModels?: () => {
+    useOnlySpeechPackModels: boolean
+    speechPackModelsRoot?: string
+  }
   readLocal: (fileUrl: string) => Promise<Response>
 }
 
 /** Local asset protocol used by the renderer Whisper worker. */
-export function createAsrModelProtocolHandler(options: AsrModelProtocolOptions): (request: { url: string }) => Promise<Response> {
+export function createAsrModelProtocolHandler(
+  options: AsrModelProtocolOptions
+): (request: { url: string }) => Promise<Response> {
   return async (request) => {
     const respond = (body: ConstructorParameters<typeof Response>[0], init: ResponseInit = {}): Response => {
       const headers = new Headers(init.headers)
@@ -26,15 +37,28 @@ export function createAsrModelProtocolHandler(options: AsrModelProtocolOptions):
       return respond(null, { status: 400 })
     }
     try {
-      if (url.protocol !== 'asr-model:' || (url.host !== 'models' && url.host !== 'ort') || url.username || url.password) {
+      const speechPack = options.resolveSpeechPackModels?.()
+      const onlySpeechPackModels = speechPack?.useOnlySpeechPackModels ?? options.useOnlySpeechPackModels
+      const speechPackRoot = speechPack?.speechPackModelsRoot ?? options.speechPackModelsRoot
+      if (
+        url.protocol !== 'asr-model:' ||
+        (url.host !== 'models' && url.host !== 'ort') ||
+        url.username ||
+        url.password
+      ) {
         return respond(null, { status: 403 })
       }
       // Reject cross-platform path syntax before resolving. URL normalization alone does not catch
       // encoded separators, and a parent resources-root check would permit sibling app source files.
       if (isAbsolute(rel) || /[\\:\0]/.test(rel) || rel.split('/').includes('..')) return respond(null, { status: 403 })
-      const roots = url.host === 'models'
-        ? [join(options.resourcesRoot, 'models'), ...(options.userModelsRoot ? [options.userModelsRoot] : [])]
-        : [join(options.resourcesRoot, 'ort')]
+      const roots =
+        url.host === 'models'
+          ? onlySpeechPackModels
+            ? speechPackRoot
+              ? [speechPackRoot]
+              : []
+            : [join(options.resourcesRoot, 'models'), ...(options.userModelsRoot ? [options.userModelsRoot] : [])]
+          : [join(options.resourcesRoot, 'ort')]
       let real: string | undefined
       for (const root of roots) {
         try {
@@ -50,8 +74,12 @@ export function createAsrModelProtocolHandler(options: AsrModelProtocolOptions):
       if (!real) return respond(null, { status: 404 })
       const response = await options.readLocal(pathToFileURL(real).toString())
       const types: Record<string, string> = {
-        '.mjs': 'text/javascript', '.js': 'text/javascript', '.wasm': 'application/wasm',
-        '.json': 'application/json', '.onnx': 'application/octet-stream', '.txt': 'text/plain'
+        '.mjs': 'text/javascript',
+        '.js': 'text/javascript',
+        '.wasm': 'application/wasm',
+        '.json': 'application/json',
+        '.onnx': 'application/octet-stream',
+        '.txt': 'text/plain'
       }
       const headers = new Headers(response.headers)
       const mime = types[extname(real).toLowerCase()]

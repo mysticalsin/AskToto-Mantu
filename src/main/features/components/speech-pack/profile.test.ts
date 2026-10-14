@@ -46,5 +46,8 @@ describe('speech-pack build profile', () => {
     rmSync(path)
     mkdirSync(path)
     expect(readSpeechPackProfile(resources, true)).toEqual({ profile: null, error: 'invalid-profile' })
+    rmSync(path, { recursive: true })
+    writeFileSync(path, ' '.repeat(129))
+    expect(readSpeechPackProfile(resources, true)).toEqual({ profile: null, error: 'invalid-profile' })
   })
 })

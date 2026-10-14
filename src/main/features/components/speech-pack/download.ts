@@ -13,8 +13,8 @@
  */
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, parse, resolve } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
 import { isImmutableUrl } from './manifest'
@@ -54,11 +54,36 @@ export interface DownloadRequest {
   bytes: number
   sha256: string
   signal: AbortSignal
+  /** Rechecked before reads and writes so a revoked local policy stops the transfer promptly. */
+  authorize?: () => boolean
+  /** A service-process nonce; partial bytes from a prior process cannot resume silently. */
+  resumeScope?: string
   /** Bytes of this file on disk so far (resumed bytes included). */
   onProgress: (bytesOnDisk: number) => void
 }
 
 const MAX_REDIRECTS = 5
+
+async function assertSafeDownloadPaths(dest: string): Promise<void> {
+  const parent = resolve(dirname(dest))
+  await mkdir(parent, { recursive: true })
+  const root = parse(parent).root
+  let current = root
+  for (const part of parent.slice(root.length).split(/[\\/]/).filter(Boolean)) {
+    current = resolve(current, part)
+    const item = await lstat(current)
+    if (!item.isDirectory() || item.isSymbolicLink()) throw new SpeechPackError('tamper', 'download parent is unsafe')
+  }
+  for (const leaf of [`${dest}.partial`, `${dest}.partial.json`]) {
+    try {
+      const item = await lstat(leaf)
+      if (!item.isFile() || item.isSymbolicLink() || item.nlink !== 1)
+        throw new SpeechPackError('tamper', 'download temporary file is unsafe')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+}
 
 /** A failure worth another attempt. `restart` means the partial was discarded and no delay is needed. */
 class Transient extends Error {
@@ -148,14 +173,22 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     await removeFile(meta, { force: true })
   }
 
+  await assertSafeDownloadPaths(req.dest)
+
   let offset = await sizeOf(partial)
   let validator: string | null = null
+  let storedScope: string | undefined
   try {
-    validator = (JSON.parse(await readFile(meta, 'utf8')) as { validator?: string }).validator ?? null
+    const metadata = JSON.parse(await readFile(meta, 'utf8')) as { validator?: string; scope?: string }
+    validator = metadata.validator ?? null
+    storedScope = metadata.scope
   } catch {
     validator = null
   }
-  if (offset > req.bytes || (offset > 0 && !validator)) {
+  if (
+    offset > req.bytes ||
+    (offset > 0 && (!validator || (req.resumeScope !== undefined && storedScope !== req.resumeScope)))
+  ) {
     await discard()
     offset = 0
   }
@@ -241,9 +274,13 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     }
     if (!res.body) throw new SpeechPackError('http', 'response carried no body')
 
-    await mkdir(dirname(req.dest), { recursive: true })
+    await assertSafeDownloadPaths(req.dest)
     const fresh = validatorOf(res.headers)
-    if (!append && fresh) await writeFile(meta, JSON.stringify({ validator: fresh }))
+    if (!append && fresh)
+      await writeFile(
+        meta,
+        JSON.stringify({ validator: fresh, ...(req.resumeScope ? { scope: req.resumeScope } : {}) })
+      )
     if (!append && !fresh) await rm(meta, { force: true })
 
     const reader = res.body.getReader()
@@ -257,12 +294,14 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       let first = true
       arm(timing.idleTimeoutMs)
       for (;;) {
+        if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
         const { done, value } = await reader.read()
         if (done) {
           bodyDone = true
           break
         }
         if (!value || value.byteLength === 0) continue
+        if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
         if (first) {
           first = false
           if (looksLikeHtmlBytes(value)) throw new SpeechPackError('captive', 'received a web page instead of the file')
@@ -336,6 +375,7 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
 
   for (;;) {
     if (req.signal.aborted) throw req.signal.reason
+    if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
     let before = await sizeOf(partial)
     if (before > req.bytes) {
       await removeFile(partial, { force: true })

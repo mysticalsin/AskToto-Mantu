@@ -13,6 +13,7 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { AsrModelRow, CoreAsrAssetsRow, WhisperQualityRow } from './AiSection'
+import { SpeechPackSection, type SpeechPackBridge } from './SpeechPackSection'
 
 export { LazyTextarea } from '../../ui/LazyText'
 // Local extension until PublicSettings exposes the WebGPU-to-WASM ASR downgrade marker.
@@ -547,6 +548,8 @@ export function AudioTab({
   refreshSettings: () => Promise<void>
   tapControl: ReactNode
 }): JSX.Element {
+  // Root wires these methods through the validated preload API; keep the local feature contract narrow.
+  const speechPackBridge: SpeechPackBridge = window.toto
   // Match the worker's fail-closed source selection. A failed/absent probe cannot expose a development
   // preference that has no effect in a production build.
   const [asrBundled, setAsrBundled] = useState(true)
@@ -652,6 +655,7 @@ export function AudioTab({
                   {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
                     <>
                       <CoreAsrAssetsRow />
+                      <SpeechPackSection bridge={speechPackBridge} selectedEngine={settings.asrEngine} />
                       <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
                     </>
                   )}
