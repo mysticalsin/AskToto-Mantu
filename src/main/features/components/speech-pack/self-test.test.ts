@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PARAKEET_TDT_V3_INT8, WHISPER_BASE_Q8 } from './manifest'
 import {
   recognitionMatchesFixture,
+  readPinnedFixtureFile,
   runSpeechPackHostProtocol,
   speechPackHostEntryPath,
   type SpeechPackHostFork
@@ -67,6 +72,28 @@ const run = (
   })
 
 describe('speech-pack utility host protocol', () => {
+  it('reads a pinned fixture within its exact byte bound and rejects oversized files before opening', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'speech-pack-fixture-'))
+    const validPath = join(root, 'valid.wav')
+    const oversizedPath = join(root, 'oversized.wav')
+    const bytes = Buffer.from('small deterministic WAV fixture')
+    const pin = { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    writeFileSync(validPath, bytes)
+    writeFileSync(oversizedPath, Buffer.concat([bytes, Buffer.alloc(1_000_000)]))
+    try {
+      await expect(readPinnedFixtureFile(validPath, pin)).resolves.toEqual(bytes)
+      const open = vi.spyOn(fsPromises, 'open')
+      try {
+        await expect(readPinnedFixtureFile(oversizedPath, pin)).rejects.toThrow('does not match its pin')
+        expect(open).not.toHaveBeenCalled()
+      } finally {
+        open.mockRestore()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     'Ask not what your country can do for you, ask what you can do for your country.',
     'ASK NOT WHAT YOUR COUNTRY CAN DO FOR YOU—ASK WHAT YOU CAN DO FOR YOUR COUNTRY!',

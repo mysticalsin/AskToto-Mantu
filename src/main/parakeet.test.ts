@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 const paths = vi.hoisted(() => ({ resources: '', userData: '', isPackaged: false }))
 const network = vi.hoisted(() => ({ httpsGet: vi.fn(), execFile: vi.fn(), fetch: vi.fn() }))
+const nativeHost = vi.hoisted(() => ({ fork: vi.fn() }))
 
 vi.mock('electron', () => ({
   app: {
@@ -13,14 +14,21 @@ vi.mock('electron', () => ({
     },
     getPath: () => paths.userData
   },
-  net: { fetch: network.fetch }
+  net: { fetch: network.fetch },
+  utilityProcess: { fork: nativeHost.fork }
 }))
 vi.mock('node:https', () => ({ get: network.httpsGet }))
 vi.mock('node:child_process', () => ({ execFile: network.execFile }))
 vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
-import { ensureParakeetModel, parakeetModelReady } from './parakeet'
-import { PARAKEET_REQUIRED_FILES, setAsrEnsureTestHooks, type AsrEnsureTestHooks } from './asr-bundled-ensure'
+import { ensureParakeetModel, parakeetModelReady, parakeetRelease, parakeetTranscribe } from './parakeet'
+import * as AsrEnsure from './asr-bundled-ensure'
+import {
+  PARAKEET_REQUIRED_FILES,
+  parakeetFilesReady,
+  setAsrEnsureTestHooks,
+  type AsrEnsureTestHooks
+} from './asr-bundled-ensure'
 
 function withTestResources(hooks: Omit<AsrEnsureTestHooks, 'bundledResourceRoot'> = {}): AsrEnsureTestHooks {
   return { ...hooks, bundledResourceRoot: () => paths.resources }
@@ -43,6 +51,7 @@ describe('bundled Parakeet runtime', () => {
     network.httpsGet.mockClear()
     network.execFile.mockClear()
     network.fetch.mockClear()
+    nativeHost.fork.mockClear()
     setAsrEnsureTestHooks(withTestResources())
   })
 
@@ -74,12 +83,37 @@ describe('bundled Parakeet runtime', () => {
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
   })
 
-  it('Access login HTML on disk is not a ready Parakeet model', async () => {
+  it('rejects Access login HTML at the content validation gate before model use', async () => {
     const dir = join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
     mkdirSync(dir, { recursive: true })
     const html = '<!DOCTYPE html><html><body>cloudflareaccess.com Sign in</body></html>'
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
-    await expect(parakeetModelReady()).resolves.toBe(false)
+    await expect(parakeetFilesReady(dir)).resolves.toBe(false)
+  })
+
+  it('does not start a helper when release wins during async model-path resolution', async () => {
+    let releasePath!: (path: string) => void
+    let reportPathStart!: () => void
+    const pathPending = new Promise<string>((resolve) => {
+      releasePath = resolve
+    })
+    const pathStarted = new Promise<void>((resolve) => {
+      reportPathStart = resolve
+    })
+    const resolvePath = vi.spyOn(AsrEnsure, 'resolveParakeetDir').mockImplementation(() => {
+      reportPathStart()
+      return pathPending
+    })
+    try {
+      const pending = parakeetTranscribe(new Float32Array(16))
+      await pathStarted
+      await parakeetRelease()
+      releasePath('/tmp/obsolete-model-path')
+      await expect(pending).rejects.toThrow('cancelled')
+      expect(nativeHost.fork).not.toHaveBeenCalled()
+    } finally {
+      resolvePath.mockRestore()
+    }
   })
 
   it('a development fetch failure stays an honest connection error', async () => {

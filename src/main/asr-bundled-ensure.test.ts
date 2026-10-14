@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
 import * as fsPromises from 'node:fs/promises'
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -369,12 +370,17 @@ describe('asr-bundled-ensure', () => {
       writeFileSync(file, 'model')
     }
     const open = vi.spyOn(fsPromises, 'open').mockRejectedValue(new Error('status unexpectedly opened a file'))
+    const openSync = vi.spyOn(fs, 'openSync').mockImplementation(() => {
+      throw new Error('status unexpectedly opened a model file')
+    })
     try {
       await expect(importAsrAssetsReady()).resolves.toBe(true)
       await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: true, status: 'ready' })
       expect(open).not.toHaveBeenCalled()
+      expect(openSync).not.toHaveBeenCalled()
     } finally {
       open.mockRestore()
+      openSync.mockRestore()
     }
   })
 

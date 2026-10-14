@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   acquireManagedUtilityHost,
@@ -128,6 +129,61 @@ function withTimeout<T>(promise: Promise<T>, ms: number, signal: AbortSignal): P
 
 export function speechPackHostEntryPath(mainOutputDirectory: string, componentId: SpeechPackComponentId): string {
   return join(mainOutputDirectory, componentId === WHISPER_BASE_Q8.id ? 'whisper-asr-host.js' : 'parakeet-asr-host.js')
+}
+
+export async function readPinnedFixtureFile(path: string, pin: { bytes: number; sha256: string }): Promise<Buffer> {
+  let before: Awaited<ReturnType<typeof lstat>>
+  try {
+    before = await lstat(path)
+  } catch {
+    throw new Error('Speech-pack self-test fixture does not match its pin.')
+  }
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== pin.bytes) {
+    throw new Error('Speech-pack self-test fixture does not match its pin.')
+  }
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const opened = await handle.stat()
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      opened.size !== pin.bytes ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    ) {
+      throw new Error('Speech-pack self-test fixture does not match its pin.')
+    }
+    const bytes = Buffer.alloc(pin.bytes + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, null)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat()
+    const afterPath = await lstat(path)
+    if (
+      offset !== pin.bytes ||
+      after.size !== pin.bytes ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      afterPath.dev !== opened.dev ||
+      afterPath.ino !== opened.ino ||
+      afterPath.size !== pin.bytes
+    ) {
+      throw new Error('Speech-pack self-test fixture does not match its pin.')
+    }
+    const result = bytes.subarray(0, offset)
+    if (createHash('sha256').update(result).digest('hex') !== pin.sha256) {
+      throw new Error('Speech-pack self-test fixture does not match its pin.')
+    }
+    return result
+  } catch {
+    throw new Error('Speech-pack self-test fixture does not match its pin.')
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
 }
 
 /** Internal protocol seam for lifecycle tests; production verifies the pinned fixture first. */
@@ -272,12 +328,7 @@ export async function runSpeechPackSelfTest(input: {
   signal: AbortSignal
   fork?: SpeechPackHostFork
 }): Promise<string> {
-  const wav = await readFile(input.wavPath)
-  if (
-    wav.length !== SELF_TEST_FIXTURE.bytes ||
-    createHash('sha256').update(wav).digest('hex') !== SELF_TEST_FIXTURE.sha256
-  )
-    throw new Error('Speech-pack self-test fixture does not match its pin.')
+  const wav = await readPinnedFixtureFile(input.wavPath, SELF_TEST_FIXTURE)
   return runSpeechPackHostProtocol({
     componentId: input.componentId,
     packDir: input.packDir,

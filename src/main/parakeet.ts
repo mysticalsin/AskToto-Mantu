@@ -72,6 +72,7 @@ let blockedRelease: { generation: HostGeneration; error: Error } | null = null
 let nextGeneration = 1
 let nextRequest = 1
 let admittedPcmBytes = 0
+let operationRevision = 0
 
 function modelDir(): Promise<string> {
   return resolveParakeetDir()
@@ -84,6 +85,10 @@ function modelFiles(dir: string): ModelFiles {
     joiner: join(dir, 'joiner.int8.onnx'),
     tokens: join(dir, 'tokens.txt')
   }
+}
+
+function assertCurrentOperation(revision: number): void {
+  if (revision !== operationRevision) throw new Error('Parakeet processing was cancelled.')
 }
 
 function asError(error: unknown): Error {
@@ -151,12 +156,17 @@ function spawnGeneration(): HostGeneration {
   return generation
 }
 
-async function activeGeneration(prepareBeforeSpawn?: () => Promise<void>): Promise<HostGeneration> {
+async function activeGeneration(
+  prepareBeforeSpawn: (() => Promise<void>) | undefined,
+  revision: number
+): Promise<HostGeneration> {
   for (;;) {
+    assertCurrentOperation(revision)
     const blockedBeforeWait = blockedRelease?.error
     if (blockedBeforeWait) throw blockedBeforeWait
     const gate = releaseGate
     if (gate) await gate
+    assertCurrentOperation(revision)
     // Read through a function so TypeScript does not incorrectly preserve its pre-await narrowing of
     // mutable process state. The exit-timeout callback can set this while the gate is being awaited.
     const blockedAfterWait = (() => blockedRelease?.error)()
@@ -166,9 +176,11 @@ async function activeGeneration(prepareBeforeSpawn?: () => Promise<void>): Promi
     // If a previous helper was exiting, re-resolve the current lean selection after its exit and
     // before creating a replacement. No helper starts while fresh path admission is pending.
     await prepareBeforeSpawn?.()
+    assertCurrentOperation(revision)
     if (releaseGate || blockedRelease) continue
     const currentAfterPrepare = (() => current)()
     if (currentAfterPrepare?.state === 'active') return currentAfterPrepare
+    assertCurrentOperation(revision)
     return spawnGeneration()
   }
 }
@@ -206,19 +218,27 @@ async function requestHost(
   request:
     | { type: 'probe' }
     | { type: 'warmup'; files: ModelFiles }
-    | { type: 'transcribe'; files: ModelFiles; pcm: ArrayBuffer }
+    | { type: 'transcribe'; files: ModelFiles; pcm: ArrayBuffer },
+  revision = operationRevision
 ): Promise<HostResponse> {
+  assertCurrentOperation(revision)
   let requestForHost = request
   const prepareBeforeSpawn =
     request.type === 'probe'
       ? undefined
       : async (): Promise<void> => {
-          requestForHost = { ...request, files: modelFiles(await modelDir()) }
+          const dir = await modelDir()
+          assertCurrentOperation(revision)
+          requestForHost = { ...request, files: modelFiles(dir) }
         }
-  let generation = await activeGeneration(prepareBeforeSpawn)
+  let generation = await activeGeneration(prepareBeforeSpawn, revision)
+  assertCurrentOperation(revision)
   // activeGeneration crosses an async boundary. A release can begin before this continuation resumes;
   // never enqueue into that dying generation. Waiting on its exact exit also prevents two recognizers.
-  while (generation.state !== 'active') generation = await activeGeneration(prepareBeforeSpawn)
+  while (generation.state !== 'active') {
+    generation = await activeGeneration(prepareBeforeSpawn, revision)
+    assertCurrentOperation(revision)
+  }
   if (generation.pending.size >= MAX_PENDING_REQUESTS) throw new ParakeetBusyError()
   const id = `g${generation.number}:r${nextRequest++}`
   return new Promise<HostResponse>((resolve, reject) => {
@@ -262,14 +282,24 @@ export async function parakeetAddonError(): Promise<string | null> {
 
 /** Ensure model assets and prewarm genuine weights in the isolated helper. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
-  if (!(await parakeetFilesReady(await modelDir()))) await ensureParakeetAssets(onProgress)
+  const revision = operationRevision
+  const initialDir = await modelDir()
+  assertCurrentOperation(revision)
+  if (!(await parakeetFilesReady(initialDir))) {
+    await ensureParakeetAssets(onProgress)
+    assertCurrentOperation(revision)
+  }
   const dir = await modelDir()
+  assertCurrentOperation(revision)
   if (!(await parakeetFilesReady(dir))) throw new Error(ASR_ASSETS_MISSING)
   const files = modelFiles(dir)
   // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
   // treats malformed protobufs as a process-fatal error in some builds.
   try {
-    if ((await stat(files.encoder)).size > 1_024) await requestHost({ type: 'warmup', files })
+    if ((await stat(files.encoder)).size > 1_024) {
+      assertCurrentOperation(revision)
+      await requestHost({ type: 'warmup', files }, revision)
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
@@ -289,12 +319,15 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
     throw new ParakeetBusyError()
   }
   admittedPcmBytes += admittedBytes
+  const revision = operationRevision
   try {
     // Reserve first, then clone. Rejected callers never allocate a second PCM buffer and are never
     // parked in an await queue that would retain their original audio indefinitely.
     const pcm = new Float32Array(samples).buffer
-    const files = modelFiles(await modelDir())
-    const response = await requestHost({ type: 'transcribe', files, pcm })
+    const dir = await modelDir()
+    assertCurrentOperation(revision)
+    const files = modelFiles(dir)
+    const response = await requestHost({ type: 'transcribe', files, pcm }, revision)
     return String(response.text ?? '').trim()
   } finally {
     admittedPcmBytes -= admittedBytes
@@ -303,6 +336,7 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
 
 /** Kill the exact helper generation and resolve only after Electron reports its exit. */
 export async function parakeetRelease(): Promise<void> {
+  operationRevision += 1
   if (blockedRelease) throw blockedRelease.error
   if (releaseGate) return releaseGate
   if (!current) return
@@ -313,6 +347,7 @@ export async function parakeetRelease(): Promise<void> {
  *  blockedRelease bookkeeping (nothing else needs that state once the app is exiting). Signal-only,
  *  never waits; safe when idle. */
 export function killParakeetHostForQuit(): void {
+  operationRevision += 1
   try {
     current?.child.kill()
   } catch (error) {

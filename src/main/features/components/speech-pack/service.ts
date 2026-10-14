@@ -72,7 +72,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   let unsubscribe: (() => void) | null = null
   let currentProgress: SpeechPackProgress | null = null
   const activity = new Set<SpeechPackComponentId>()
-  const pendingAdmissions = new Set<SpeechPackComponentId>()
+  const pendingAdmissions = new Map<SpeechPackComponentId, symbol>()
   let authorityRevision = 0
   let captureActive = false
   let closing = false
@@ -204,15 +204,16 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (!options.policyAllowsTransfer()) return result({ ok: false, reason: 'policy-blocked' })
     if (isCaptureActive()) return result({ ok: false, reason: 'busy' })
     const revision = authorityRevision
-    pendingAdmissions.add(component.id)
+    const admissionToken = Symbol('speech-pack-admission')
+    pendingAdmissions.set(component.id, admissionToken)
     let profileRead: Awaited<ReturnType<typeof readSpeechPackProfile>>
     try {
       profileRead = await readSpeechPackProfile(options.resourcesRoot, options.packaged)
     } catch {
-      pendingAdmissions.delete(component.id)
+      if (pendingAdmissions.get(component.id) === admissionToken) pendingAdmissions.delete(component.id)
       return result({ ok: false, reason: 'profile-invalid' })
     }
-    pendingAdmissions.delete(component.id)
+    if (pendingAdmissions.get(component.id) === admissionToken) pendingAdmissions.delete(component.id)
     if (revision !== authorityRevision || closing || !featureEnabled()) return result({ ok: false, reason: 'busy' })
     if (profileRead.profile === null) return result({ ok: false, reason: 'profile-invalid' })
     if (selectedId(options.selectedEngine()) !== component.id) return result({ ok: false, reason: 'not-selected' })
