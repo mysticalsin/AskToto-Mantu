@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "source": "https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json",
+  "verifiedBy": {
+    "package": "@sigstore/tuf",
+    "version": "5.0.0"
+  },
+  "sourceCommit": "258c49995a4b271e1601b6d1bda5d470f5132bdd",
+  "workflowRef": "mysticalsin/AskToto-Mantu/.github/workflows/runtime-trust-root.yml@refs/heads/m2/M2-0475-runtime-trust-root",
+  "workflowCommit": "258c49995a4b271e1601b6d1bda5d470f5132bdd",
+  "runId": "38568649353",
+  "attempt": 1,
+  "lockSha256": "c0ae5e4e4bf5cad2525c979f5201e6f4fad1dbc5a33543d867109eb4eaa83c73",
+  "rootBytes": 6787,
+  "rootSha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66"
+}

@@ -414,6 +414,42 @@ const runtimeManifest = JSON.parse(readFileSync(runtimeManifestSource, 'utf8'))
 if (runtimeManifest.schemaVersion !== 1 || !runtimeManifest.assets || typeof runtimeManifest.assets !== 'object') {
   throw new Error(`Invalid reviewed runtime manifest: ${runtimeManifestSource}`)
 }
+// The app-owned catalog is the only trust-root selector. Verify its closed empty-target shape and
+// each pinned snapshot/receipt before checking the exact copies in the packaged Resources directory.
+const runtimeCatalogSource = join(REPO_ROOT, 'resources', 'runtime-catalog.json')
+await requireSameFile(runtimeCatalogSource, join(resourcesRoot, 'runtime-catalog.json'))
+const runtimeCatalog = JSON.parse(readFileSync(runtimeCatalogSource, 'utf8'))
+const expectedRootPin = {
+  path: 'runtime-trust/sigstore-trusted-root.json',
+  bytes: 6787,
+  sha256: '6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66',
+  source: 'https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json',
+  receipt: {
+    path: 'runtime-trust/acquisition-receipt.json',
+    bytes: 663,
+    sha256: '1ad8c2f7d308b9c2a76cbbc48c8880c338a8f89f44f9ce7427ecf99acc6ec456'
+  }
+}
+if (
+  Object.keys(runtimeCatalog).sort().join(',') !== 'catalogId,protocolVersion,schemaVersion,targets,trustRoot' ||
+  runtimeCatalog.schemaVersion !== 1 ||
+  runtimeCatalog.protocolVersion !== 1 ||
+  runtimeCatalog.catalogId !== 'metis-runtime-catalog-v1' ||
+  !Array.isArray(runtimeCatalog.targets) ||
+  runtimeCatalog.targets.length !== 0 ||
+  JSON.stringify(runtimeCatalog.trustRoot) !== JSON.stringify(expectedRootPin)
+) {
+  throw new Error('The app-owned runtime catalog differs from the reviewed empty-target trust-root pin.')
+}
+for (const [relativePath, expected] of [
+  [expectedRootPin.path, { bytes: expectedRootPin.bytes, sha256: expectedRootPin.sha256 }],
+  [expectedRootPin.receipt.path, { bytes: expectedRootPin.receipt.bytes, sha256: expectedRootPin.receipt.sha256 }]
+]) {
+  const source = join(REPO_ROOT, 'resources', relativePath)
+  const packaged = join(resourcesRoot, relativePath)
+  await requireAsset(source, expected)
+  await requireSameFile(source, packaged)
+}
 await requireSameFile(
   join(REPO_ROOT, 'build', 'speech-pack-profile.json'),
   join(resourcesRoot, 'speech-pack-profile.json')
