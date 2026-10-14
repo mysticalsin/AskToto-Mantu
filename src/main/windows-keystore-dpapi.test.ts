@@ -117,6 +117,7 @@ describe('packaged macOS keystore — local override cannot create a raw AES key
 
   it('keeps the visible consent gate and wraps the key even when the local override is set', async () => {
     const electron = await boot({ packaged: true, forceLocalKeystore: true, dpapi: 'ok' })
+    const startupSource = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     ;(electron.safeStorage.isEncryptionAvailable as Mock).mockClear()
     ;(electron.safeStorage.encryptString as Mock).mockClear()
     const {
@@ -128,6 +129,7 @@ describe('packaged macOS keystore — local override cannot create a raw AES key
     } = await import('./secrets')
 
     expect(process.env.ASKTOTO_LOCAL_KEYSTORE).toBe('1')
+    expect(startupSource).not.toMatch(/process\.env\.ASKTOTO_LOCAL_KEYSTORE\s*=/)
     expect(useFileBackend()).toBe(true)
     expect(electron.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled()
     expect(() => encryptSecret('profile data')).toThrow(MacKeychainUnlockRequiredError)
