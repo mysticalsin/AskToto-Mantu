@@ -60,7 +60,7 @@ window.__onboardingWelcome = {
   },
   counts() { return { loadCalls, playCalls, pauseCalls, videoStartDelay, fallbackDelay } },
   startVideo() { releaseVideoStart?.(); releaseVideoStart = null },
-  triggerReadyFallback() { releaseReadyFallback?.(); releaseReadyFallback = null }
+  triggerReadyFallback() { flushSync(() => releaseReadyFallback?.()); releaseReadyFallback = null }
 }
 `
 
