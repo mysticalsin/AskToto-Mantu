@@ -15,6 +15,7 @@ const LanguageSchema = z
   .string()
   .regex(/^(?:multi|[a-z]{2}(?:-[A-Z]{2})?)$/)
   .max(5)
+const DeploymentVersionSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/)
 const TimestampSchema = z.number().int().positive().safe()
 const LimitsSchema = z
   .object({
@@ -37,6 +38,8 @@ const ReadyCapabilitySchema = z
     ready: z.literal(true),
     routeId: RouteSchema,
     modelId: ModelSchema,
+    configVersion: DeploymentVersionSchema,
+    policyVersion: DeploymentVersionSchema,
     languages: z.array(LanguageSchema).min(1).max(32),
     format: z
       .object({ encoding: z.literal('pcm_s16le'), sampleRate: z.literal(16_000), channels: z.literal(1) })
@@ -127,8 +130,8 @@ const CreatedSessionSchema = z
     sessionId: z.string().uuid(),
     routeId: RouteSchema,
     model: ModelSchema,
-    configVersion: z.string().min(1).max(128),
-    policyVersion: z.string().min(1).max(128),
+    configVersion: DeploymentVersionSchema,
+    policyVersion: DeploymentVersionSchema,
     language: LanguageSchema,
     captureGeneration: z.number().int().positive().safe(),
     grantExpiresAt: TimestampSchema,
@@ -180,6 +183,7 @@ const CancelSchema = z
 
 export type SpeechTrack = z.infer<typeof TrackSchema>
 export type SpeechCapability = z.infer<typeof CapabilitySchema>
+export type ReadySpeechCapability = z.infer<typeof ReadyCapabilitySchema>
 export type SpeechCreateRequest = z.input<typeof CreateRequestSchema>
 export type CreatedSpeechSession = z.infer<typeof CreatedSessionSchema>
 export type SpeechSessionStatus = z.infer<typeof StatusSchema>

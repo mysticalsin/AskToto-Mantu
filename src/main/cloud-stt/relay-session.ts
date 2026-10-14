@@ -38,6 +38,10 @@ export type RelaySpeechSessionOptions = {
     modelId: CreatedSpeechSession['model']
     language: string
   }
+  expectedCapability: {
+    configVersion: string
+    policyVersion: string
+  }
   expectedContinuation?: {
     configVersion: string
     policyVersion: string
@@ -188,6 +192,8 @@ export class RelaySpeechSession {
       created.value.routeId !== options.expectedSelection.routeId ||
       created.value.model !== options.expectedSelection.modelId ||
       created.value.language !== options.expectedSelection.language ||
+      created.value.configVersion !== options.expectedCapability.configVersion ||
+      created.value.policyVersion !== options.expectedCapability.policyVersion ||
       (options.expectedContinuation !== undefined &&
         (created.value.configVersion !== options.expectedContinuation.configVersion ||
           created.value.policyVersion !== options.expectedContinuation.policyVersion ||
@@ -354,6 +360,7 @@ export class RelaySpeechSession {
         policyVersion: this.policyVersion,
         epochs: Object.fromEntries([...this.tracks].map(([track, runtime]) => [track, runtime.streamEpoch]))
       },
+      expectedCapability: { configVersion: this.configVersion, policyVersion: this.policyVersion },
       initialFrontiers,
       isCurrent: this.isCurrent,
       onAllocated: this.onAllocated,
