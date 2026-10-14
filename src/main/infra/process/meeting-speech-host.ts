@@ -3,6 +3,12 @@ import { performance } from 'node:perf_hooks'
 import { join } from 'node:path'
 import type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import type { TranscriptLine } from '@shared/transcript-line'
+import { IncrementalMeetingIdentitySchema, type CanonicalIncrementalRecord } from '@shared/incremental-meeting'
+import {
+  issueIncrementalRecordReceipt,
+  type IncrementalRecordReceipt,
+  type IncrementalRecordReceiptBinding
+} from '../../features/meetings/incremental-record-receipt'
 import {
   isMeetingSpeechReply,
   type MeetingSpeechFailureCode,
@@ -71,6 +77,10 @@ export interface MeetingSpeechPersistenceService {
   ): Promise<Buffer>
   decryptEnvelopeV2(envelopeJson: Uint8Array, contentKey: Uint8Array, kLocal: string): Promise<string>
   rewrapEnvelopeV2(envelopeJson: Uint8Array, kLocal: string): Promise<Buffer>
+  canonicalizeIncrementalRecord(
+    recordJson: Uint8Array,
+    binding: IncrementalRecordReceiptBinding
+  ): Promise<IncrementalRecordReceipt>
   /** Rejects pending callers immediately and waits for an invalidated worker's exact exit. */
   invalidateCurrent(): Promise<void>
   /** Refuses future work and waits for the child to report its own exit. */
@@ -173,7 +183,37 @@ function defaultWorker(entryPath: string): Worker {
   return new Worker(entryPath)
 }
 
-function validValue(operation: MeetingSpeechOperation, value: unknown, maxOutputBytes: number): boolean {
+function exactOwnedUint8Length(value: unknown): number | null {
+  if (!(value instanceof Uint8Array)) return null
+  const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object
+  const byteLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')?.get
+  const byteOffsetGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset')?.get
+  const bufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer')?.get
+  const arrayBufferLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get
+  if (!byteLengthGetter || !byteOffsetGetter || !bufferGetter || !arrayBufferLengthGetter) return null
+  try {
+    const byteLength = byteLengthGetter.call(value) as number
+    const byteOffset = byteOffsetGetter.call(value) as number
+    const buffer = bufferGetter.call(value) as unknown
+    if (!(buffer instanceof ArrayBuffer)) return null
+    const bufferLength = arrayBufferLengthGetter.call(buffer) as number
+    if (byteOffset !== 0 || byteLength !== bufferLength || !Number.isSafeInteger(byteLength) || byteLength <= 0)
+      return null
+    const resizableGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get
+    if (resizableGetter?.call(buffer) === true) return null
+    return byteLength
+  } catch {
+    return null
+  }
+}
+
+function validValue(
+  operation: MeetingSpeechOperation,
+  value: unknown,
+  maxOutputBytes: number,
+  maxWords: number,
+  maxRecordBytes: number
+): boolean {
   if (operation === 'render' || operation === 'project' || operation === 'decrypt-v2')
     return typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= maxOutputBytes
   if (operation === 'rewrite')
@@ -182,6 +222,40 @@ function validValue(operation: MeetingSpeechOperation, value: unknown, maxOutput
     return value instanceof Uint8Array && value.byteLength >= 8 && value.byteLength <= maxOutputBytes
   if (operation === 'rewrap-v2')
     return value instanceof Uint8Array && value.byteLength > 0 && value.byteLength <= maxOutputBytes
+  if (operation === 'canonical-record') {
+    if (!value || typeof value !== 'object') return false
+    const canonical = value as Partial<CanonicalIncrementalRecord>
+    if (
+      Object.keys(value).sort().join(',') !==
+        'canonicalByteLength,canonicalBytes,clock,identityKey,linePayloadBytes,sha256,wordCount' ||
+      typeof canonical.identityKey !== 'string' ||
+      canonical.identityKey.length > maxOutputBytes ||
+      typeof canonical.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(canonical.sha256) ||
+      typeof canonical.clock !== 'string' ||
+      !/^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(canonical.clock) ||
+      !Number.isSafeInteger(canonical.wordCount) ||
+      canonical.wordCount! < 0 ||
+      canonical.wordCount! > maxWords ||
+      !Number.isSafeInteger(canonical.linePayloadBytes) ||
+      canonical.linePayloadBytes! <= 0 ||
+      canonical.linePayloadBytes! > maxRecordBytes ||
+      !Number.isSafeInteger(canonical.canonicalByteLength) ||
+      !(canonical.canonicalBytes instanceof Uint8Array) ||
+      canonical.canonicalBytes.byteOffset !== 0 ||
+      canonical.canonicalBytes.byteLength !== canonical.canonicalByteLength ||
+      canonical.canonicalBytes.buffer.byteLength !== canonical.canonicalByteLength ||
+      canonical.canonicalByteLength! > maxOutputBytes
+    )
+      return false
+    try {
+      const identity = JSON.parse(canonical.identityKey) as unknown
+      const parsed = IncrementalMeetingIdentitySchema.safeParse(identity)
+      return parsed.success && JSON.stringify(parsed.data) === canonical.identityKey
+    } catch {
+      return false
+    }
+  }
   if (!value || typeof value !== 'object') return false
   const decoded = value as {
     ok?: unknown
@@ -268,12 +342,32 @@ export function createMeetingSpeechPersistenceService(
         reportTiming('worker-round-trip', performance.now() - completed.dispatchedAt)
       }
       if (reply.workerDurationMs !== undefined) reportTiming('worker-execution', reply.workerDurationMs)
-      if (completed.request.generation !== generation || !isOwnerCurrent()) settle(completed, failure('CANCELLED'))
-      else if (!reply.result.ok) {
+      const wipeCanonicalOutput = (): void => {
+        if (
+          reply.result.ok &&
+          completed.request.operation === 'canonical-record' &&
+          reply.result.value &&
+          typeof reply.result.value === 'object' &&
+          'canonicalBytes' in reply.result.value &&
+          reply.result.value.canonicalBytes instanceof Uint8Array
+        )
+          reply.result.value.canonicalBytes.fill(0)
+      }
+      if (completed.request.generation !== generation || !isOwnerCurrent()) {
+        wipeCanonicalOutput()
+        settle(completed, failure('CANCELLED'))
+      } else if (!reply.result.ok) {
         settle(completed, failure(reply.result.code === 'RESOURCE_LIMIT' ? 'RESOURCE_LIMIT' : 'WORKER_FAILED'))
       } else if (
-        !validValue(completed.request.operation, reply.result.value, completed.request.policy.maxOutputBytes)
+        !validValue(
+          completed.request.operation,
+          reply.result.value,
+          completed.request.policy.maxOutputBytes,
+          completed.request.policy.limits.maxWords,
+          completed.request.policy.limits.maxRecordBytes
+        )
       ) {
+        wipeCanonicalOutput()
         settle(completed, failure('WORKER_FAILED'))
         stopAfterFailure(state)
       } else settle(completed, undefined, reply.result.value)
@@ -419,7 +513,11 @@ export function createMeetingSpeechPersistenceService(
     const admissionStartedAt = performance.now()
     let inputBytes: number
     try {
-      inputBytes = estimatedBytes(input, policy.maxInputBytes, policy.limits)
+      if (operation === 'canonical-record') {
+        const recordJson = input && typeof input === 'object' ? (input as { recordJson?: unknown }).recordJson : null
+        const recordByteLength = exactOwnedUint8Length(recordJson)
+        inputBytes = recordByteLength === null ? policy.maxInputBytes + 1 : recordByteLength
+      } else inputBytes = estimatedBytes(input, policy.maxInputBytes, policy.limits)
     } catch {
       wipeInput()
       return Promise.reject(failure('RESOURCE_LIMIT'))
@@ -456,7 +554,14 @@ export function createMeetingSpeechPersistenceService(
     const snapshotMs = performance.now() - snapshotStartedAt
     let snapshotBytes: number
     try {
-      snapshotBytes = estimatedBytes(inputSnapshot, policy.maxInputBytes, policy.limits)
+      if (operation === 'canonical-record') {
+        const recordJson =
+          inputSnapshot && typeof inputSnapshot === 'object'
+            ? (inputSnapshot as { recordJson?: unknown }).recordJson
+            : null
+        const byteLength = exactOwnedUint8Length(recordJson)
+        snapshotBytes = byteLength === null ? policy.maxInputBytes + 1 : byteLength
+      } else snapshotBytes = estimatedBytes(inputSnapshot, policy.maxInputBytes, policy.limits)
     } catch {
       for (const buffer of transfers) new Uint8Array(buffer).fill(0)
       return Promise.reject(failure('RESOURCE_LIMIT'))
@@ -508,6 +613,43 @@ export function createMeetingSpeechPersistenceService(
     decode: (text) => submit('decode', text),
     rewrite: (text, lines) => submit('rewrite', { text, lines }),
     project: (text) => submit('project', text),
+    canonicalizeIncrementalRecord(recordJson, binding) {
+      if (!options.isCurrent) return Promise.reject(failure('UNCONFIGURED'))
+      if (exactOwnedUint8Length(recordJson) === null) return Promise.reject(failure('RESOURCE_LIMIT'))
+      if (binding.meetingId.length > 64 || !options.isCurrent()) return Promise.reject(failure('CANCELLED'))
+      const capturedPolicy = readPolicy()
+      if (!capturedPolicy) return Promise.reject(failure('UNCONFIGURED'))
+      if (
+        Object.keys(binding.limits).sort().join(',') !== Object.keys(capturedPolicy.limits).sort().join(',') ||
+        Object.keys(binding.limits).some(
+          (key) =>
+            binding.limits[key as keyof SpeechProvenanceLimits] !==
+            capturedPolicy.limits[key as keyof SpeechProvenanceLimits]
+        )
+      )
+        return Promise.reject(failure('CANCELLED'))
+      return submit<CanonicalIncrementalRecord>(
+        'canonical-record',
+        { recordJson },
+        ['recordJson'],
+        capturedPolicy
+      ).then((canonical) => {
+        const currentPolicy = readPolicy()
+        if (
+          !options.isCurrent?.() ||
+          !currentPolicy ||
+          Object.keys(capturedPolicy.limits).some(
+            (key) =>
+              currentPolicy.limits[key as keyof SpeechProvenanceLimits] !==
+              capturedPolicy.limits[key as keyof SpeechProvenanceLimits]
+          )
+        )
+          throw failure('CANCELLED')
+        const receipt = issueIncrementalRecordReceipt(canonical, binding)
+        if (!receipt) throw failure('WORKER_FAILED')
+        return receipt
+      })
+    },
     encryptEnvelopeV2(content, contentKey, iv, kLocal, kEscrow) {
       const ownedKey = Uint8Array.from(contentKey)
       const ownedIv = Uint8Array.from(iv)
