@@ -72,10 +72,16 @@ describe('bounded storage streams', () => {
     const gateway = createStorageGateway({ root: () => root, detector: localDetector() })
     const chunks: Uint8Array[] = []
 
-    const result = await gateway.stream('linked.md', async (chunk) => chunks.push(chunk), {
-      maxBytes: 100,
-      maxChunkBytes: 10
-    })
+    const result = await gateway.stream(
+      'linked.md',
+      async (chunk) => {
+        chunks.push(chunk)
+      },
+      {
+        maxBytes: 100,
+        maxChunkBytes: 10
+      }
+    )
 
     expect(result).toMatchObject({ status: 'unavailable', code: 'SYMLINK' })
     expect(chunks).toEqual([])

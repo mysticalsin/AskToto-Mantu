@@ -1,4 +1,4 @@
-import { unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, openSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -228,14 +228,71 @@ describe('atomic streamed saved write', () => {
     await expect(
       atomicSavedWriteStream(target, byteChunks('new'), {
         ...bounds,
-        beforeReplace: () => {
-          unlinkSync(temp)
-          writeFileSync(temp, 'foreign replacement')
-        }
+        beforeChunk: (() => {
+          let checks = 0
+          return () => {
+            checks += 1
+            if (checks !== 12) return
+            unlinkSync(temp)
+            writeFileSync(temp, 'foreign replacement')
+          }
+        })()
       })
     ).rejects.toMatchObject({ name: 'TEMP_OWNERSHIP' })
 
     expect(await readFile(target, 'utf8')).toBe('old')
     expect(await readFile(temp, 'utf8')).toBe('foreign replacement')
+  })
+
+  it.each(['append', 'same-size overwrite'] as const)('refuses same-inode %s before promotion', async (mutation) => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    const temp = `${target}.${'ab'.repeat(12)}.tmp`
+    await writeFile(target, 'old')
+
+    await expect(
+      atomicSavedWriteStream(target, byteChunks('new'), {
+        ...bounds,
+        beforeChunk: (() => {
+          let checks = 0
+          return () => {
+            checks += 1
+            if (checks !== 12) return
+            if (mutation === 'append') appendFileSync(temp, '!')
+            else {
+              const descriptor = openSync(temp, 'r+')
+              try {
+                writeSync(descriptor, Buffer.from('bad'), 0, 3, 0)
+              } finally {
+                closeSync(descriptor)
+              }
+            }
+          }
+        })()
+      })
+    ).rejects.toMatchObject({ name: 'TEMP_OWNERSHIP' })
+
+    expect(await readFile(target, 'utf8')).toBe('old')
+    expect(await readFile(temp, 'utf8')).toBe(mutation === 'append' ? 'new!' : 'bad')
+  })
+
+  it('rejects asynchronous owner checks before any replacement', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    await writeFile(target, 'old')
+    let release!: () => void
+    const delayed = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    await expect(
+      atomicSavedWriteStream(target, byteChunks('new'), {
+        ...bounds,
+        beforeReplace: async () => delayed
+      })
+    ).rejects.toMatchObject({ name: 'ASYNC_ADMISSION' })
+    release()
+    expect(await readFile(target, 'utf8')).toBe('old')
+    expect(await readdir(root)).toEqual([basename(target)])
   })
 })
