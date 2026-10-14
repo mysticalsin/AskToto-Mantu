@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   CloudSpeechCancelResult,
+  CloudSpeechCaptureCeilingEvent,
   CloudSpeechEvent,
   CloudSpeechFailure,
   CloudSpeechFinishRequest,
@@ -86,12 +87,23 @@ function fakeBridge() {
         stage: value.stage
       })
   )
+  const acknowledgeCaptureCeiling = vi.fn(
+    (value: Parameters<CloudSpeechControllerBridge['cloudSpeechAckCaptureCeiling']>[0]) =>
+      Promise.resolve({
+        ok: true as const,
+        captureId: value.captureId,
+        captureGeneration: value.captureGeneration,
+        ceilingId: value.ceilingId,
+        tracks: value.tracks
+      })
+  )
   const bridge: CloudSpeechControllerBridge = {
     cloudSpeechCapability: vi.fn(() => Promise.resolve(readyCapability)),
     cloudSpeechStart: vi.fn(() => Promise.resolve(started())),
     cloudSpeechFrame: frame,
     cloudSpeechFinish: finish,
     cloudSpeechAckEpochTransition: acknowledgeEpochTransition,
+    cloudSpeechAckCaptureCeiling: acknowledgeCaptureCeiling,
     cloudSpeechCancel: vi.fn(
       (): Promise<CloudSpeechCancelResult> =>
         Promise.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
@@ -105,7 +117,7 @@ function fakeBridge() {
       return () => events.delete(listener)
     })
   }
-  return { bridge, events, frame, finish, acknowledgeEpochTransition }
+  return { bridge, events, frame, finish, acknowledgeEpochTransition, acknowledgeCaptureCeiling }
 }
 
 class FakePort {
@@ -163,6 +175,7 @@ function controller(
     bridge?: CloudSpeechControllerBridge
     onFailure?: (code: CloudSpeechFailure['code']) => void
     applyEvent?: (event: CloudSpeechEvent) => Promise<void>
+    onStopped?: (identity: { captureId: string; captureGeneration: number }, reason: 'user' | 'ceiling') => void
     now?: () => number
     deadlineMs?: number
   } = {}
@@ -173,6 +186,7 @@ function controller(
     request,
     applyEvent: options.applyEvent ?? (() => Promise.resolve()),
     onFailure: options.onFailure ?? vi.fn(),
+    onStopped: options.onStopped,
     now: options.now,
     deadlineMs: options.deadlineMs
   })
@@ -182,6 +196,84 @@ function controller(
 afterEach(() => vi.useRealTimers())
 
 describe('cloud speech capture controller', () => {
+  it('seals once at capture ceiling, ACKs the exact frontier, and tears down the current identity', async () => {
+    const stopped = vi.fn()
+    const next = controller({ onStopped: stopped })
+    next.finish.mockResolvedValue({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000704',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(next.acknowledgeCaptureCeiling).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(next.finish).toHaveBeenCalledTimes(1))
+    expect(port.sent).toEqual([{ type: 'seal-and-flush', requestId: expect.any(String) }])
+    expect(next.acknowledgeCaptureCeiling).toHaveBeenCalledWith({
+      type: 'capture-ceiling-ack',
+      captureId,
+      captureGeneration,
+      ceilingId: ceiling.ceilingId,
+      tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 0 }]
+    })
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling'))
+    next.instance.dispose()
+  })
+
+  it('refuses ceiling acknowledgement instead of trimming a final frontier past the sample cap', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 1, finalSampleOffset: 1_600 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 230_400_000 - 1_599)).toBe(true)
+    port.emit(pcmFrame(1, 0))
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000705',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalled())
+    expect(next.acknowledgeCaptureCeiling).not.toHaveBeenCalled()
+    expect(next.finish).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
   it('converts each genuine Float32 frame once to explicit little-endian PCM and translates the capture offset', async () => {
     const { instance, frame } = controller()
     expect((await instance.start()).ok).toBe(true)
