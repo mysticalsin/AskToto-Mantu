@@ -144,11 +144,20 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
     expect(block).toContain('$report.candidate_run -ne [string]$provenance.run.id')
   })
 
-  it('runs real Whisper and Parakeet decode from both installed Windows executables and binds each report to provenance', () => {
+  it('runs real Whisper and Parakeet decode from Setup and the exact Portable payload and binds each report to provenance', () => {
     const block = job('smoke-win')
     expect(block).toContain('npm ci')
-    expect(block).toContain('node scripts/check-packaged-asr.mjs $launch.Exe')
-    for (const flag of ['--report', '--installer', '--artifact-sha256', '--candidate-run']) {
+    expect(block).toContain("Get-ChildItem $portableArchive -Recurse -Filter 'app-*.7z'")
+    expect(block).toContain('Get-ChildItem $portablePayload -Recurse -Filter Metis.exe')
+    expect(block).toContain('node scripts/check-packaged-asr.mjs $launch.AsrExe')
+    expect(block).toContain("Source = 'portable-payload'")
+    for (const flag of [
+      '--report',
+      '--installer',
+      '--artifact-sha256',
+      '--candidate-run',
+      '--executable-source'
+    ]) {
       expect(block, flag).toContain(`${flag} `)
     }
     expect(block).toContain("$report.verdict -ne 'PASS'")
@@ -163,6 +172,7 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
     expect(packagedAsr).toMatch(/job_state: job\.state/)
     expect(packagedAsr).toMatch(/readback_ok: meeting\.ok/)
     expect(packagedAsr).toMatch(/transcript_sha256:/)
+    expect(packagedAsr).toMatch(/executable_source: executableSource/)
     expect(packagedAsr).toMatch(/writeAcceptanceReport\('PASS'\)/)
     expect(packagedAsr).not.toMatch(/transcript: transcript/)
   })

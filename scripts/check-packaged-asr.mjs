@@ -73,6 +73,7 @@ const reportPath = flag('--report')
 const installer = flag('--installer')
 const artifactSha256 = flag('--artifact-sha256')
 const candidateRun = flag('--candidate-run')
+const executableSource = flag('--executable-source')
 const startedAt = Date.now()
 const engineReports = {}
 const SAPI_SYNTH_TIMEOUT_MS = 180_000
@@ -172,6 +173,9 @@ function writeAcceptanceReport(verdict, failure = null) {
     throw new Error('--report requires a 64-character --artifact-sha256')
   }
   if (!/^\d+$/.test(candidateRun ?? '')) throw new Error('--report requires a numeric --candidate-run')
+  if (!['installed-setup', 'portable-payload'].includes(executableSource ?? '')) {
+    throw new Error('--report requires a recognized --executable-source')
+  }
   writeFileSync(
     reportPath,
     `${JSON.stringify(
@@ -182,6 +186,7 @@ function writeAcceptanceReport(verdict, failure = null) {
         artifact_sha256: artifactSha256.toLowerCase(),
         candidate_run: candidateRun,
         executable: basename(target),
+        executable_source: executableSource,
         engines: engineReports,
         failure,
         elapsed_ms: Date.now() - startedAt
@@ -375,9 +380,7 @@ async function main() {
   try {
     writeAcceptanceReport('PASS')
   } catch (error) {
-    return fail(
-      `could not write the acceptance report: ${error instanceof Error ? error.message : String(error)}`
-    )
+    return fail(`could not write the acceptance report: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   try {
