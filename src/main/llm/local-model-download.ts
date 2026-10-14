@@ -142,6 +142,8 @@ async function downloadOne(
   }
   arm(REQUEST_TIMEOUT_MS, `${file}: request timeout for ${spec.url}`)
 
+  let output: ReturnType<typeof createWriteStream> | undefined
+  let outputClosed: Promise<void> | undefined
   try {
     const res = await fetchFollowingRedirects(spec.url, ctrl.signal)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
@@ -163,6 +165,11 @@ async function downloadOne(
     const reader = res.body.getReader()
     let receivedBytes = 0
     let completed = false
+    const writer = createWriteStream(partial, { autoClose: true, emitClose: true })
+    output = writer
+    // Install this before pipeline starts: it may reject on a source error before the async fs.open
+    // behind WriteStream completes. Removing the partial before 'close' can let that late open recreate it.
+    outputClosed = new Promise<void>((resolve) => writer.once('close', resolve))
     arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
     await pipeline(
       (async function* () {
@@ -189,8 +196,9 @@ async function downloadOne(
           reader.releaseLock()
         }
       })(),
-      createWriteStream(partial)
+      writer
     )
+    await outputClosed
 
     const size = statSync(partial).size
     if (size !== spec.bytes) throw new Error(`${file}: got ${size} bytes, expected ${spec.bytes}`)
@@ -202,6 +210,10 @@ async function downloadOne(
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
+    if (output && outputClosed) {
+      output.destroy()
+      await outputClosed
+    }
     rmSync(partial, { force: true })
     throw err
   } finally {

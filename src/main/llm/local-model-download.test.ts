@@ -1,8 +1,19 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Writable } from 'node:stream'
 
 vi.mock('electron')
 vi.mock('../logger', () => ({ auditLog: vi.fn(), mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
@@ -11,10 +22,22 @@ const ramState = vi.hoisted(() => ({ totalMemBytes: 64 * 1024 ** 3 }))
 // Free disk space is steerable the same way RAM is. Default is deliberately huge so every existing
 // test behaves as before; only the preflight test lowers it.
 const diskState = vi.hoisted(() => ({ freeBytes: 512 * 1024 ** 3 }))
+const writeStreamState = vi.hoisted(() => ({
+  factory: null as null | ((path: string) => unknown),
+  onRemove: null as null | ((path: string) => void)
+}))
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
     ...actual,
+    createWriteStream: (path: string, options?: Parameters<typeof actual.createWriteStream>[1]) => {
+      const custom = writeStreamState.factory?.(path)
+      return custom ? (custom as ReturnType<typeof actual.createWriteStream>) : actual.createWriteStream(path, options)
+    },
+    rmSync: (path: Parameters<typeof actual.rmSync>[0], options?: Parameters<typeof actual.rmSync>[1]) => {
+      writeStreamState.onRemove?.(String(path))
+      return actual.rmSync(path, options)
+    },
     statfsSync: () => ({ bsize: 4096, bavail: Math.floor(diskState.freeBytes / 4096) })
   }
 })
@@ -107,6 +130,55 @@ const GGUF = Buffer.concat([CHUNK_A, CHUNK_B])
 const MMPROJ = Buffer.from('mmproj-bytes')
 const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
 
+class DelayedOpenWriteStream extends Writable {
+  private fd: number | undefined
+
+  constructor(
+    private readonly filePath: string,
+    private readonly openGate: Promise<void>,
+    private readonly onConstruct: () => void
+  ) {
+    super({ autoDestroy: true, emitClose: true })
+  }
+
+  override _construct(callback: (error?: Error | null) => void): void {
+    this.onConstruct()
+    void this.openGate.then(
+      () => {
+        try {
+          this.fd = openSync(this.filePath, 'w')
+          callback()
+        } catch (error) {
+          callback(error instanceof Error ? error : new Error(String(error)))
+        }
+      },
+      (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)))
+    )
+  }
+
+  override _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    try {
+      if (this.fd === undefined) throw new Error('write started before delayed open completed')
+      writeSync(this.fd, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, _encoding))
+      callback()
+    } catch (error) {
+      callback(error instanceof Error ? error : new Error(String(error)))
+    }
+  }
+
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    try {
+      if (this.fd !== undefined) {
+        closeSync(this.fd)
+        this.fd = undefined
+      }
+      callback(error)
+    } catch (closeError) {
+      callback(closeError instanceof Error ? closeError : new Error(String(closeError)))
+    }
+  }
+}
+
 const TEST_ENTRY: LocalModelEntry = {
   id: 'qwen3.5-0.8b',
   label: 'Qwen3.5 0.8B',
@@ -151,6 +223,8 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     ramState.totalMemBytes = 64 * 1024 ** 3
     // Reset per test: the preflight test lowers this and must not leak into its neighbours.
     diskState.freeBytes = 512 * 1024 ** 3
+    writeStreamState.factory = null
+    writeStreamState.onRemove = null
     mockFetch.mockReset()
   })
 
@@ -426,5 +500,96 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     expect(readFileSync(paths.gguf)).toEqual(GGUF)
     expect(readFileSync(paths.mmproj)).toEqual(MMPROJ)
     expect(existsSync(`${paths.gguf}.partial`)).toBe(false)
+  })
+
+  it('waits for an asynchronously opening writer to close before cleaning an overrun partial', async () => {
+    const paths = modelPaths('qwen3.5-0.8b')
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(paths.gguf, GGUF)
+
+    let beginOpen: () => void = () => {}
+    const openStarted = new Promise<void>((resolve) => {
+      beginOpen = resolve
+    })
+    let releaseOpen: () => void = () => {}
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve
+    })
+    let cancelBody: () => void = () => {}
+    const bodyCancelled = new Promise<void>((resolve) => {
+      cancelBody = resolve
+    })
+    let bodyIndex = 0
+    const oversizedBody = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const chunks = [Buffer.alloc(MMPROJ.length - 1, 1), Buffer.from('cd')]
+          if (bodyIndex < chunks.length) controller.enqueue(new Uint8Array(chunks[bodyIndex++]))
+          else controller.close()
+        },
+        cancel() {
+          cancelBody()
+        }
+      },
+      { highWaterMark: 0 }
+    )
+    let mmprojRequests = 0
+    mockFetch.mockImplementation((url: string) =>
+      url.endsWith('model.gguf')
+        ? Promise.resolve(responseOf([CHUNK_A, CHUNK_B], GGUF.length))
+        : ++mmprojRequests === 1
+          ? Promise.resolve({
+              ok: true,
+              status: 200,
+              headers: new Headers({ 'content-length': String(MMPROJ.length) }),
+              body: oversizedBody
+            })
+          : Promise.reject(new Error('retry stopped for delayed-open test'))
+    )
+
+    let writerCreated = false
+    let writerClosed = false
+    let delayedWriter: DelayedOpenWriteStream | undefined
+    let resolveWriterClosed: () => void = () => {}
+    const delayedWriterClosed = new Promise<void>((resolve) => {
+      resolveWriterClosed = resolve
+    })
+    const partialRemovalsWriterClosed: boolean[] = []
+    writeStreamState.onRemove = (path) => {
+      if (writerCreated && path === `${paths.mmproj}.partial`) partialRemovalsWriterClosed.push(writerClosed)
+    }
+    let firstWriter = true
+    writeStreamState.factory = (path) => {
+      if (!firstWriter) return undefined
+      firstWriter = false
+      writerCreated = true
+      delayedWriter = new DelayedOpenWriteStream(path, openGate, beginOpen)
+      delayedWriter.once('close', () => {
+        writerClosed = true
+        resolveWriterClosed()
+      })
+      return delayedWriter as unknown as ReturnType<typeof import('node:fs').createWriteStream>
+    }
+
+    const download = ensureLocalModel('qwen3.5-0.8b')
+    try {
+      await openStarted
+      await bodyCancelled
+      // Flush pipeline's nextTick error delivery while the fake fs.open remains gated. A premature
+      // cleanup is recorded before release; the fixed path waits for this writer's close first.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(partialRemovalsWriterClosed).toEqual([])
+      releaseOpen()
+      await expect(download).resolves.toBe(false)
+      await delayedWriterClosed
+    } finally {
+      releaseOpen()
+      if (delayedWriter) await delayedWriterClosed
+      await download
+    }
+
+    expect(partialRemovalsWriterClosed.length).toBeGreaterThan(0)
+    expect(partialRemovalsWriterClosed).not.toContain(false)
+    expect(existsSync(`${paths.mmproj}.partial`)).toBe(false)
   })
 })
