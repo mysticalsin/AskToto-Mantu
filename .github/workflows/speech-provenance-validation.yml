@@ -114,7 +114,15 @@ jobs:
               'rssBefore', 'rssAfter', 'heapBefore', 'heapAfter', 'processMaxRssKiB', 'eventLoopMaxMs', 'eventLoopP99Ms']
             if (numbers.some((key) => typeof entry[key] !== 'number' || !Number.isFinite(entry[key]) || entry[key] < 0) || entry.privatePayloadBytes <= 0 || entry.storedBytes <= 0)
               throw new Error('Resource counters missing, negative or nonfinite.')
-            console.log(JSON.stringify(entry))
+            const integers = ['privatePayloadBytes', 'encodedTranscriptBytes', 'documentBytes', 'storedBytes', 'rssBefore', 'rssAfter', 'heapBefore', 'heapAfter', 'processMaxRssKiB']
+            if (integers.some((key) => !Number.isSafeInteger(entry[key])) ||
+                entry.privatePayloadBytes >= entry.encodedTranscriptBytes || entry.encodedTranscriptBytes > entry.documentBytes ||
+                (encrypted ? entry.storedBytes <= entry.documentBytes : entry.storedBytes !== entry.documentBytes))
+              throw new Error('Resource sizes are unsafe or inconsistent with actual storage.')
+            const safe = { host: process.platform, encrypted, manifest: expected, memoryScope: 'worker-process-cumulative',
+              ...Object.fromEntries(numbers.map((key) => [key, entry[key]])) }
+            const message = JSON.stringify(safe).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')
+            console.log(`::notice title=Declared speech workload resource metrics::${message}`)
           }
           NODE
       - name: Retain actual test report
