@@ -41,12 +41,7 @@ function provenanceFixture() {
       assets: config.assets(TARGET_VERSION).map((name, assetIndex) => ({
         name,
         size: 100 + index + assetIndex,
-        sha256:
-          variant === 'win'
-            ? WIN_SHA
-            : variant === 'mac' && name.endsWith('.dmg')
-              ? MAC_SHA
-              : `${index + 1}`.repeat(64)
+        sha256: variant === 'win' ? WIN_SHA : variant === 'mac' && name.endsWith('.dmg') ? MAC_SHA : `${index + 1}`.repeat(64)
       }))
     }))
   }
@@ -112,9 +107,9 @@ describe('manual rollback provenance and report contracts', () => {
   it('rejects run, attempt, repository, commit, provenance, and installer mismatches', () => {
     const run = runFixture()
     const provenance = provenanceFixture()
-    expect(
-      candidateBindingProblems({ ...run, run_attempt: ATTEMPT - 1 }, provenance, expected)
-    ).toContain('run-attempt-mismatch')
+    expect(candidateBindingProblems({ ...run, run_attempt: ATTEMPT - 1 }, provenance, expected)).toContain(
+      'run-attempt-mismatch'
+    )
     expect(
       candidateBindingProblems(run, { ...provenance, run: { id: RUN_ID, attempt: ATTEMPT - 1 } }, expected)
     ).toContain('candidate-provenance-mismatch')
@@ -125,9 +120,9 @@ describe('manual rollback provenance and report contracts', () => {
       'candidate-provenance-mismatch'
     )
     expect(candidateBindingProblems({ ...run, event: 'push' }, provenance, expected)).toContain('run-ref-mismatch')
-    expect(
-      candidateBindingProblems({ ...run, conclusion: 'failure' }, provenance, expected)
-    ).toContain('run-not-successful')
+    expect(candidateBindingProblems({ ...run, conclusion: 'failure' }, provenance, expected)).toContain(
+      'run-not-successful'
+    )
     expect(candidateBindingProblems(run, provenance, { ...expected, sha256: 'e'.repeat(64) })).toContain(
       'candidate-windows-asset-mismatch'
     )
@@ -169,7 +164,7 @@ describe('manual rollback provenance and report contracts', () => {
     expect(manualRollbackReportProblems(missing, expected)).toContain('rows-incomplete')
 
     const wrongArtifact = structuredClone(report)
-    wrongArtifact.identity.windows_installer_sha256 = 'e'.repeat(64)
+    wrongArtifact.identity!.windows_installer_sha256 = 'e'.repeat(64)
     wrongArtifact.windows.candidate_installer_sha256 = 'e'.repeat(64)
     expect(manualRollbackReportProblems(wrongArtifact, expected)).toContain('identity-windows-sha-mismatch')
 
@@ -280,7 +275,10 @@ describe('manual rollback provenance and report contracts', () => {
   it('captures launch-time process identities and checks survivors through teardown before cleanup', () => {
     const runner = readFileSync(new URL('./manual-rollback.mjs', import.meta.url), 'utf8')
     const launchIndex = runner.indexOf('const launched = launchPackagedCdp')
-    const captureIndex = runner.indexOf('rememberOwnedProcesses(registry, launched.child.pid, installRoot)', launchIndex)
+    const captureIndex = runner.indexOf(
+      'rememberOwnedProcesses(registry, launched.child.pid, installRoot)',
+      launchIndex
+    )
     const attachIndex = runner.indexOf('attachment = await attachOwnedCdp', launchIndex)
     expect(launchIndex).toBeGreaterThanOrEqual(0)
     expect(captureIndex).toBeGreaterThan(launchIndex)

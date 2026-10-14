@@ -5,15 +5,7 @@
 // deliberately BLOCKED/NEVER_RUN until unsigned-build Keychain identity continuity is proven.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -88,6 +80,18 @@ const MACOS_UNBLOCK =
   'Resolve and independently verify safeStorage/Keychain identity continuity for exact unsigned ' +
   '1.9.7-to-1.9.6 DMG reinstall on a disposable hosted Mac; confirm existing encrypted data remains ' +
   'readable or provide an explicit recovery path.'
+
+/**
+ * @typedef {{
+ *   run_id: number,
+ *   attempt: number,
+ *   commit: string,
+ *   version: string,
+ *   windows_installer_sha256: string,
+ *   macos_dmg_sha256: string
+ * }} ManualRollbackIdentity
+ */
+/** @typedef {{ id: string, status: string, code: string | null }} ManualRollbackRow */
 
 /** Return stable, content-free failure codes for candidate run + provenance binding. */
 export function candidateBindingProblems(run, provenance, input) {
@@ -182,7 +186,9 @@ export function baselineReleaseProblems(installerBytes, sumsText) {
 
 export function baselineChecksumProblems(sumsText) {
   const problems = []
-  const lines = String(sumsText ?? '').split(/\r?\n/).filter(Boolean)
+  const lines = String(sumsText ?? '')
+    .split(/\r?\n/)
+    .filter(Boolean)
   const entries = lines.flatMap((line) => {
     const match = /^([a-f0-9]{64})\s+\*?(.+)$/.exec(line.trim())
     return match ? [{ sha256: match[1], name: match[2] }] : []
@@ -194,12 +200,15 @@ export function baselineChecksumProblems(sumsText) {
   return problems
 }
 
+/** @param {ManualRollbackIdentity | null} identity */
 export function createManualRollbackReport(identity = null) {
+  /** @type {ManualRollbackRow[]} */
+  const rows = RECOVERY_ROWS.map((id) => ({ id, status: 'NOT_RUN', code: 'not-run' }))
   return {
     schema: 'metis.manual-rollback.v1',
     outcome: 'FAIL',
     identity,
-    rows: RECOVERY_ROWS.map((id) => ({ id, status: 'NOT_RUN', code: 'not-run' })),
+    rows,
     windows: {
       status: 'NOT_RUN',
       baseline_installer: BASELINE_WINDOWS_INSTALLER,
@@ -279,16 +288,7 @@ export function manualRollbackReportProblems(report, expected = {}) {
     return ['report-shape-invalid']
   }
   if (report.schema !== 'metis.manual-rollback.v1') problems.push('report-schema-invalid')
-  if (
-    !exact(report.identity, [
-      'run_id',
-      'attempt',
-      'commit',
-      'version',
-      'windows_installer_sha256',
-      'macos_dmg_sha256'
-    ])
-  ) {
+  if (!exact(report.identity, ['run_id', 'attempt', 'commit', 'version', 'windows_installer_sha256', 'macos_dmg_sha256'])) {
     problems.push('identity-shape-invalid')
   } else {
     if (!isPositive(report.identity.run_id) || report.identity.run_id !== Number(expected.runId)) {
@@ -370,19 +370,21 @@ export function manualRollbackReportProblems(report, expected = {}) {
       }
     }
   }
-  if (!exact(report.macos, [
-    'status',
-    'execution',
-    'attempted',
-    'candidate_dmg',
-    'baseline_dmg',
-    'candidate_dmg_sha256',
-    'baseline_dmg_sha256',
-    'candidate_bytes_verified',
-    'baseline_bytes_verified',
-    'reason',
-    'unblock'
-  ])) {
+  if (
+    !exact(report.macos, [
+      'status',
+      'execution',
+      'attempted',
+      'candidate_dmg',
+      'baseline_dmg',
+      'candidate_dmg_sha256',
+      'baseline_dmg_sha256',
+      'candidate_bytes_verified',
+      'baseline_bytes_verified',
+      'reason',
+      'unblock'
+    ])
+  ) {
     problems.push('macos-shape-invalid')
   } else if (
     report.macos.status !== 'BLOCKED' ||
@@ -455,9 +457,7 @@ export function cleanShutdownAcknowledged({
 
 export function finalizeManualRollbackResult(report, executionFailed) {
   report.windows.status =
-    !executionFailed &&
-    report.rows.every((row) => row.status === 'PASS') &&
-    report.cleanup.status === 'ACKNOWLEDGED'
+    !executionFailed && report.rows.every((row) => row.status === 'PASS') && report.cleanup.status === 'ACKNOWLEDGED'
       ? 'PASS'
       : 'FAIL'
   report.outcome = report.windows.status === 'PASS' ? 'PARTIAL_BLOCKED' : 'FAIL'
@@ -690,8 +690,7 @@ async function openPackagedApp(exe, env, installRoot, userData, registry, attach
       timeoutMs: 90_000
     })
     attachmentReceipt.attachment = attachment
-    attachmentReceipt.transportClosed =
-      attachment.browser == null && attachment.transportUncertain !== true
+    attachmentReceipt.transportClosed = attachment.browser == null && attachment.transportUncertain !== true
     if (attachment.transportUncertain === true || !attachment.browser || attachment.failure) {
       fail('app-attach-failed')
     }
@@ -854,14 +853,15 @@ async function verifyApplicationState(session, { meetingsFolder, userData, file,
       history: Array.isArray(history)
         ? history.map((row) => ({ file: row.file, title: row.title, locked: row.locked === true }))
         : null,
-      meeting: meeting && typeof meeting === 'object'
-        ? {
-            ok: meeting.ok === true,
-            title: meeting.title,
-            recap: meeting.recap,
-            lines: Array.isArray(meeting.lines) ? meeting.lines.map((line) => line.text) : null
-          }
-        : null
+      meeting:
+        meeting && typeof meeting === 'object'
+          ? {
+              ok: meeting.ok === true,
+              title: meeting.title,
+              recap: meeting.recap,
+              lines: Array.isArray(meeting.lines) ? meeting.lines.map((line) => line.text) : null
+            }
+          : null
     }
   }, file)
   if (
@@ -1185,11 +1185,7 @@ async function runManualRollback(args) {
     }
     report.cleanup = {
       status:
-        profileRemoved &&
-        installRootRemoved &&
-        inputRemoved &&
-        attachmentsReleased &&
-        ownedProcessesGone
+        profileRemoved && installRootRemoved && inputRemoved && attachmentsReleased && ownedProcessesGone
           ? 'ACKNOWLEDGED'
           : 'NOT_ACKNOWLEDGED',
       isolated_profile_removed: profileRemoved,
@@ -1228,10 +1224,7 @@ function parseFlags(argv) {
 }
 
 function readRunArgs(flags) {
-  if (
-    !RUN_ID.test(flags['candidate-run'] ?? '') ||
-    !RUN_ID.test(flags['candidate-attempt'] ?? '')
-  ) {
+  if (!RUN_ID.test(flags['candidate-run'] ?? '') || !RUN_ID.test(flags['candidate-attempt'] ?? '')) {
     fail('candidate-run-input-invalid')
   }
   if (!HASH64.test((flags['candidate-sha256'] ?? '').toLowerCase())) fail('candidate-sha-input-invalid')
@@ -1263,10 +1256,7 @@ function readRunArgs(flags) {
 }
 
 function readVerifyArgs(flags) {
-  if (
-    !RUN_ID.test(flags['candidate-run'] ?? '') ||
-    !RUN_ID.test(flags['candidate-attempt'] ?? '')
-  ) {
+  if (!RUN_ID.test(flags['candidate-run'] ?? '') || !RUN_ID.test(flags['candidate-attempt'] ?? '')) {
     fail('candidate-run-input-invalid')
   }
   if (!HASH64.test((flags['candidate-sha256'] ?? '').toLowerCase()) || !flags.report) fail('report-input-invalid')
@@ -1291,9 +1281,7 @@ async function cli(argv) {
         return
       }
       const report = result.report
-      console.log(
-        `Windows manual rollback PASS; macOS ${report.macos.status}; outcome ${report.outcome}.`
-      )
+      console.log(`Windows manual rollback PASS; macOS ${report.macos.status}; outcome ${report.outcome}.`)
       return
     }
     if (mode === 'verify') {
