@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 import { PARAKEET_TDT_V3_INT8, WHISPER_BASE_Q8 } from './manifest'
 import {
   recognitionMatchesFixture,
@@ -86,8 +87,12 @@ describe('speech-pack utility host protocol', () => {
 
   it('uses the packaged sibling host, sends fixture audio, accepts the correlated result and waits for exit', async () => {
     const host = new MockHost()
-    expect(speechPackHostEntryPath('/app/out/main', WHISPER_BASE_Q8.id)).toBe('/app/out/main/whisper-asr-host.js')
-    expect(speechPackHostEntryPath('/app/out/main', PARAKEET_TDT_V3_INT8.id)).toBe('/app/out/main/parakeet-asr-host.js')
+    expect(speechPackHostEntryPath('/app/out/main', WHISPER_BASE_Q8.id)).toBe(
+      join('/app/out/main', 'whisper-asr-host.js')
+    )
+    expect(speechPackHostEntryPath('/app/out/main', PARAKEET_TDT_V3_INT8.id)).toBe(
+      join('/app/out/main', 'parakeet-asr-host.js')
+    )
     const result = run(host)
     await host.waitForMessages(1)
     expect(host.messages[0]).toMatchObject({ type: 'init', modelsPath: '/pack' })

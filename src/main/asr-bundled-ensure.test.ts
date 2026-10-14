@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as fsPromises from 'node:fs/promises'
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +20,9 @@ vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.
 import { net } from 'electron'
 import { BUNDLE_GOT_LOGIN_HTML } from '@shared/bundle-response'
 import { ASR_REQUIRED_FILES } from './asr-manifest'
+import * as SpeechPackResolver from './features/components/speech-pack/resolver'
+import { WHISPER_BASE_Q8 } from './features/components/speech-pack/manifest'
+import { componentManifestIdentity } from './features/components/speech-pack/resolver'
 import {
   ASR_ASSETS_MISSING,
   ASR_PACKAGED_ASSETS_MISSING,
@@ -67,7 +71,7 @@ describe('asr-bundled-ensure', () => {
   })
 
   it('treats an empty resources dir as not ready and copies via the ensure hooks', async () => {
-    expect(importAsrAssetsReady()).toBe(false)
+    await expect(importAsrAssetsReady()).resolves.toBe(false)
     const progress: number[] = []
     setAsrEnsureTestHooks(
       withTestResources({
@@ -88,14 +92,14 @@ describe('asr-bundled-ensure', () => {
       })
     )
     await ensureImportAsrAssets((pct) => progress.push(pct))
-    expect(parakeetFilesReady(join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))).toBe(
-      true
-    )
-    expect(whisperFloorReady(join(paths.userData, 'asr-models'))).toBe(true)
-    expect(importAsrAssetsReady()).toBe(true)
+    await expect(
+      parakeetFilesReady(join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))
+    ).resolves.toBe(true)
+    await expect(whisperFloorReady(join(paths.userData, 'asr-models'))).resolves.toBe(true)
+    await expect(importAsrAssetsReady()).resolves.toBe(true)
     expect(progress.some((n) => n > 0)).toBe(true)
     expect(ASR_ASSETS_MISSING).not.toMatch(/[Rr]einstall/)
-    const snap = asrAssetsStatusSnapshot()
+    const snap = await asrAssetsStatusSnapshot()
     expect(snap.ready).toBe(true)
     expect(snap.status).toBe('ready')
     expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
@@ -116,12 +120,12 @@ describe('asr-bundled-ensure', () => {
     const fetchWhisperFloor = vi.fn()
     setAsrEnsureTestHooks(withTestResources({ fetchParakeet, fetchWhisperFloor }))
 
-    expect(importAsrAssetsReady()).toBe(false)
+    await expect(importAsrAssetsReady()).resolves.toBe(false)
     await expect(ensureImportAsrAssets()).rejects.toThrow(ASR_PACKAGED_ASSETS_MISSING)
     expect(fetchParakeet).not.toHaveBeenCalled()
     expect(fetchWhisperFloor).not.toHaveBeenCalled()
     expect(net.fetch).not.toHaveBeenCalled()
-    expect(asrAssetsStatusSnapshot()).toMatchObject({
+    await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({
       ready: false,
       status: 'error',
       error: ASR_PACKAGED_ASSETS_MISSING
@@ -133,7 +137,7 @@ describe('asr-bundled-ensure', () => {
     const fetchParakeet = vi.fn()
     const fetchWhisperFloor = vi.fn()
     setAsrEnsureTestHooks(withTestResources({ fetchParakeet, fetchWhisperFloor, selectedAsrEngine: () => 'whisper' }))
-    expect(asrAssetsStatusSnapshot()).toMatchObject({
+    await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({
       ready: false,
       status: 'error',
       error: ASR_PACKAGED_ASSETS_MISSING
@@ -143,12 +147,12 @@ describe('asr-bundled-ensure', () => {
     expect(net.fetch).not.toHaveBeenCalled()
 
     writeFileSync(join(paths.resources, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }))
-    expect(asrAssetsStatusSnapshot()).toMatchObject({
+    await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({
       ready: false,
       status: 'error',
       reason: 'lean-pack-not-installed'
     })
-    expect(asrModelProtocolSpeechPackOptions()).toEqual({ useOnlySpeechPackModels: true })
+    await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
     await expect(ensureImportAsrAssets()).rejects.toMatchObject({ code: 'ASR_SPEECH_PACK_NOT_READY' })
     await expect(ensureWhisperFloorAssets()).rejects.toMatchObject({ code: 'ASR_SPEECH_PACK_NOT_READY' })
     expect(fetchParakeet).not.toHaveBeenCalled()
@@ -163,10 +167,36 @@ describe('asr-bundled-ensure', () => {
       JSON.stringify({ schema: 1, profile: 'lean', extra: true })
     )
     setAsrEnsureTestHooks(withTestResources({ selectedAsrEngine: () => 'whisper' }))
-    expect(asrAssetsStatusSnapshot()).toMatchObject({ ready: false, reason: 'invalid-profile' })
-    expect(asrModelProtocolSpeechPackOptions()).toEqual({ useOnlySpeechPackModels: true })
+    await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: false, reason: 'invalid-profile' })
+    await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
     await expect(ensureImportAsrAssets()).rejects.toMatchObject({ reason: 'invalid-profile' })
     expect(net.fetch).not.toHaveBeenCalled()
+  })
+
+  it('re-resolves the selected Whisper pack on each protocol admission after engine selection changes', async () => {
+    paths.isPackaged = true
+    writeFileSync(join(paths.resources, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }))
+    let selected: 'whisper' | 'parakeet' | 'apple' = 'parakeet'
+    setAsrEnsureTestHooks(withTestResources({ selectedAsrEngine: () => selected }))
+    const readiness: SpeechPackResolver.SpeechPackReadiness = {
+      status: 'ready',
+      componentId: WHISPER_BASE_Q8.id,
+      version: WHISPER_BASE_Q8.version,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8),
+      evidence: 'prior-activation-and-size-checked'
+    }
+    const resolve = vi.spyOn(SpeechPackResolver, 'resolveSpeechPack').mockResolvedValue(readiness)
+    try {
+      await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
+      selected = 'whisper'
+      await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({
+        useOnlySpeechPackModels: true,
+        speechPackModelsRoot: join(paths.userData, 'speech-packs', WHISPER_BASE_Q8.id, WHISPER_BASE_Q8.version)
+      })
+      expect(resolve).toHaveBeenCalledTimes(1)
+    } finally {
+      resolve.mockRestore()
+    }
   })
 
   it('does not report a packaged ASR bundle ready when a required runtime manifest file is missing', async () => {
@@ -182,12 +212,12 @@ describe('asr-bundled-ensure', () => {
       writeFileSync(file, 'bundled')
     }
 
-    expect(importAsrAssetsReady()).toBe(false)
-    expect(asrAssetsStatusSnapshot()).toMatchObject({ ready: false, error: ASR_PACKAGED_ASSETS_MISSING })
+    await expect(importAsrAssetsReady()).resolves.toBe(false)
+    await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: false, error: ASR_PACKAGED_ASSETS_MISSING })
     await expect(ensureImportAsrAssets()).rejects.toThrow(ASR_PACKAGED_ASSETS_MISSING)
   })
 
-  it('reports a packaged ASR bundle ready only when Parakeet and the complete runtime manifest are present', () => {
+  it('reports a packaged ASR bundle ready only when Parakeet and the complete runtime manifest are present', async () => {
     paths.isPackaged = true
     const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
     mkdirSync(parakeet, { recursive: true })
@@ -199,12 +229,12 @@ describe('asr-bundled-ensure', () => {
       writeFileSync(file, 'bundled')
     }
 
-    expect(importAsrAssetsReady()).toBe(true)
-    expect(asrAssetsStatusSnapshot()).toMatchObject({ ready: true, status: 'ready' })
+    await expect(importAsrAssetsReady()).resolves.toBe(true)
+    await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: true, status: 'ready' })
   })
 
   it('keeps the extraction phase visible at the 69% onboarding handoff', async () => {
-    let duringExtraction: ReturnType<typeof asrAssetsStatusSnapshot> | undefined
+    let duringExtraction: Awaited<ReturnType<typeof asrAssetsStatusSnapshot>> | undefined
     setAsrEnsureTestHooks(
       withTestResources({
         fetchParakeet: async (dest, onProgress) => {
@@ -215,7 +245,7 @@ describe('asr-bundled-ensure', () => {
             92,
             'Preparing transcription files…'
           )
-          duringExtraction = asrAssetsStatusSnapshot()
+          duringExtraction = await asrAssetsStatusSnapshot()
           mkdirSync(dest, { recursive: true })
           for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
         },
@@ -279,25 +309,83 @@ describe('asr-bundled-ensure', () => {
     releaseFetch()
     await Promise.all([direct, aggregate])
     expect(parakeetFetches).toBe(1)
-    expect(importAsrAssetsReady()).toBe(true)
+    await expect(importAsrAssetsReady()).resolves.toBe(true)
   })
 
-  it('status snapshot is not ready and never says reinstall when resources are empty', () => {
-    const snap = asrAssetsStatusSnapshot()
+  it('single-flights Whisper recovery across direct callers', async () => {
+    let releaseFetch!: () => void
+    let startedFetch!: () => void
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve
+    })
+    const fetchStarted = new Promise<void>((resolve) => {
+      startedFetch = resolve
+    })
+    let whisperFetches = 0
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchWhisperFloor: async (dest) => {
+          whisperFetches += 1
+          startedFetch()
+          await fetchGate
+          const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
+          for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+            const file = join(dir, rel)
+            mkdirSync(join(file, '..'), { recursive: true })
+            writeFileSync(file, 'w')
+          }
+        }
+      })
+    )
+
+    const first = ensureWhisperFloorAssets()
+    await fetchStarted
+    const second = ensureWhisperFloorAssets()
+    await Promise.resolve()
+    expect(whisperFetches).toBe(1)
+
+    releaseFetch()
+    await Promise.all([first, second])
+    expect(whisperFetches).toBe(1)
+    await expect(whisperFloorReady(join(paths.userData, 'asr-models'))).resolves.toBe(true)
+  })
+
+  it('status snapshot is not ready and never says reinstall when resources are empty', async () => {
+    const snap = await asrAssetsStatusSnapshot()
     expect(snap.ready).toBe(false)
     expect(snap.status).not.toBe('ready')
     expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
     expect(snap.label).toMatch(/transcription files/i)
   })
 
-  it('does not treat Access login HTML on disk as a ready Parakeet bundle', () => {
+  it('keeps bundled boot status to metadata checks without opening model files', async () => {
+    paths.isPackaged = true
+    const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
+    mkdirSync(parakeet, { recursive: true })
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'model')
+    for (const parts of ASR_REQUIRED_FILES) {
+      const file = join(paths.resources, ...parts)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, 'model')
+    }
+    const open = vi.spyOn(fsPromises, 'open').mockRejectedValue(new Error('status unexpectedly opened a file'))
+    try {
+      await expect(importAsrAssetsReady()).resolves.toBe(true)
+      await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: true, status: 'ready' })
+      expect(open).not.toHaveBeenCalled()
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('does not treat Access login HTML on disk as a ready Parakeet bundle', async () => {
     const dir = join(paths.userData, 'asr-models', PARAKEET_MODEL_NAME)
     mkdirSync(dir, { recursive: true })
     const html =
       '<!DOCTYPE html><html><body>Sign in · Cloudflare Access https://team.cloudflareaccess.com</body></html>'
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
-    expect(parakeetFilesReady(dir)).toBe(false)
-    expect(importAsrAssetsReady()).toBe(false)
+    await expect(parakeetFilesReady(dir)).resolves.toBe(false)
+    await expect(importAsrAssetsReady()).resolves.toBe(false)
   })
 
   it('follows a https CDN hop and refuses an Access 302', async () => {
@@ -351,8 +439,8 @@ describe('asr-bundled-ensure', () => {
 
     await expect(ensureImportAsrAssets()).rejects.toThrow(/login page|files/)
     const dest = join(parakeetUserDir(), 'encoder.int8.onnx')
-    expect(parakeetFilesReady(parakeetUserDir())).toBe(false)
-    const snap = asrAssetsStatusSnapshot()
+    await expect(parakeetFilesReady(parakeetUserDir())).resolves.toBe(false)
+    const snap = await asrAssetsStatusSnapshot()
     expect(snap.ready).toBe(false)
     expect(snap.status).toBe('error')
     expect(snap.error).toMatch(/login page|connection|files/)

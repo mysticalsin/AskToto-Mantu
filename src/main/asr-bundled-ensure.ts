@@ -17,6 +17,7 @@ import {
   rmSync,
   statSync
 } from 'node:fs'
+import { lstat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pipeline } from 'node:stream/promises'
@@ -38,10 +39,11 @@ import { getSettings } from './store'
 import {
   PARAKEET_TDT_V3_INT8,
   WHISPER_BASE_Q8,
-  type SpeechPackComponentId
-} from './features/components/speech-pack/manifest'
-import { readSpeechPackProfile } from './features/components/speech-pack/profile'
-import { resolveSpeechPack, type SpeechPackReadiness } from './features/components/speech-pack/resolver'
+  readSpeechPackProfile,
+  resolveSpeechPack,
+  type SpeechPackComponentId,
+  type SpeechPackReadiness
+} from './features/components'
 
 const execFileAsync = promisify(execFile)
 
@@ -129,9 +131,16 @@ interface ParakeetEnsureOperation {
   reporters: Set<AsrProgressReporter>
 }
 
+interface WhisperEnsureOperation {
+  promise: Promise<void>
+  progress: { pct: number; label?: string }
+  reporters: Set<AsrProgressReporter>
+}
+
 let testHooks: AsrEnsureTestHooks | null = null
 let inFlight: Promise<void> | null = null
 let parakeetInFlight: ParakeetEnsureOperation | null = null
+let whisperInFlight: WhisperEnsureOperation | null = null
 let state: AsrAssetsProgress = { status: 'idle', progress: 0, label: '' }
 
 export function setAsrEnsureTestHooks(hooks: AsrEnsureTestHooks | null): void {
@@ -141,6 +150,7 @@ export function setAsrEnsureTestHooks(hooks: AsrEnsureTestHooks | null): void {
 export function resetAsrEnsureStateForTests(): void {
   inFlight = null
   parakeetInFlight = null
+  whisperInFlight = null
   state = { status: 'idle', progress: 0, label: '' }
 }
 
@@ -166,15 +176,17 @@ export function userDataSpeechPackRoot(): string {
   return join(app.getPath('userData'), 'speech-packs')
 }
 
-export function resolveSelectedSpeechPack(engine = selectedAsrEngine()): {
+export async function resolveSelectedSpeechPack(engine = selectedAsrEngine()): Promise<{
   componentId: SpeechPackComponentId | null
   readiness: SpeechPackReadiness | null
   path: string | null
-} {
+}> {
+  if (selectedAsrEngine() !== engine) return { componentId: null, readiness: null, path: null }
   const component = engine === 'whisper' ? WHISPER_BASE_Q8 : engine === 'parakeet' ? PARAKEET_TDT_V3_INT8 : null
   if (!component) return { componentId: null, readiness: null, path: null }
   const root = userDataSpeechPackRoot()
-  const readiness = resolveSpeechPack(root, component)
+  const readiness = await resolveSpeechPack(root, component)
+  if (selectedAsrEngine() !== engine) return { componentId: null, readiness: null, path: null }
   return {
     componentId: component.id,
     readiness,
@@ -182,14 +194,16 @@ export function resolveSelectedSpeechPack(engine = selectedAsrEngine()): {
   }
 }
 
-function requireLeanSpeechPack(engine: 'whisper' | 'parakeet'): string {
-  const profile = speechPackBuildProfile()
+async function requireLeanSpeechPack(
+  engine: 'whisper' | 'parakeet',
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<string> {
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
   if (profile.profile !== 'lean' || selectedAsrEngine() !== engine) {
     throw new AsrSpeechPackNotReadyError('lean-pack-not-installed')
   }
-  const pack = resolveSelectedSpeechPack(engine)
-  if (pack.readiness?.status !== 'ready' || !pack.path) {
+  const pack = await resolveSelectedSpeechPack(engine)
+  if (selectedAsrEngine() !== engine || pack.readiness?.status !== 'ready' || !pack.path) {
     throw new AsrSpeechPackNotReadyError('lean-pack-not-installed')
   }
   return pack.path
@@ -229,21 +243,37 @@ export function filePresent(path: string): boolean {
   }
 }
 
-export function parakeetFilesReady(dir: string): boolean {
-  const profile = speechPackBuildProfile()
+async function parakeetFilesReadyForProfile(
+  dir: string,
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<boolean> {
   if (profile.profile === null) return false
   if (profile.profile === 'lean')
-    return selectedAsrEngine() === 'parakeet' && resolveSelectedSpeechPack('parakeet').readiness?.status === 'ready'
+    return (
+      selectedAsrEngine() === 'parakeet' && (await resolveSelectedSpeechPack('parakeet')).readiness?.status === 'ready'
+    )
   return PARAKEET_REQUIRED_FILES.every((name) => filePresent(join(dir, name)))
 }
 
-export function whisperFloorReady(modelsRoot: string): boolean {
-  const profile = speechPackBuildProfile()
+export async function parakeetFilesReady(dir: string): Promise<boolean> {
+  return parakeetFilesReadyForProfile(dir, await speechPackBuildProfile())
+}
+
+async function whisperFloorReadyForProfile(
+  modelsRoot: string,
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<boolean> {
   if (profile.profile === null) return false
   if (profile.profile === 'lean')
-    return selectedAsrEngine() === 'whisper' && resolveSelectedSpeechPack('whisper').readiness?.status === 'ready'
+    return (
+      selectedAsrEngine() === 'whisper' && (await resolveSelectedSpeechPack('whisper')).readiness?.status === 'ready'
+    )
   const dir = join(modelsRoot, ...WHISPER_FLOOR_ID.split('/'))
   return WHISPER_FLOOR_REQUIRED_FILES.every((name) => filePresent(join(dir, name)))
+}
+
+export async function whisperFloorReady(modelsRoot: string): Promise<boolean> {
+  return whisperFloorReadyForProfile(modelsRoot, await speechPackBuildProfile())
 }
 
 export function parakeetBundledDir(): string {
@@ -255,61 +285,153 @@ export function parakeetUserDir(): string {
 }
 
 /** Installed builds never use a userData copy to mask a damaged bundled payload. */
-export function resolveParakeetDir(): string {
-  const profile = speechPackBuildProfile()
+async function resolveParakeetDirForProfile(
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<string> {
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
-  if (profile.profile === 'lean') return requireLeanSpeechPack('parakeet')
+  if (profile.profile === 'lean') return requireLeanSpeechPack('parakeet', profile)
   const bundled = parakeetBundledDir()
-  if (app.isPackaged || parakeetFilesReady(bundled)) return bundled
-  if (parakeetFilesReady(parakeetUserDir())) return parakeetUserDir()
+  if (app.isPackaged || (await parakeetFilesReadyForProfile(bundled, profile))) return bundled
+  if (await parakeetFilesReadyForProfile(parakeetUserDir(), profile)) return parakeetUserDir()
   return bundled
+}
+
+export async function resolveParakeetDir(): Promise<string> {
+  return resolveParakeetDirForProfile(await speechPackBuildProfile())
+}
+
+/** Cheap status probe: checks metadata only and never opens model weights. */
+export async function parakeetModelMetadataReady(): Promise<boolean> {
+  const profile = await speechPackBuildProfile()
+  if (profile.profile === null) return false
+  if (profile.profile === 'lean') return parakeetMetadataReadyForProfile('', profile)
+  if (app.isPackaged) return parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)
+  if (await parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)) return true
+  return parakeetMetadataReadyForProfile(parakeetUserDir(), profile)
 }
 
 /** Installed builds never use a userData copy to mask a damaged bundled payload. */
-export function resolveWhisperModelsRoot(): string {
-  const profile = speechPackBuildProfile()
+async function resolveWhisperModelsRootForProfile(
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<string> {
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
-  if (profile.profile === 'lean') return requireLeanSpeechPack('whisper')
+  if (profile.profile === 'lean') return requireLeanSpeechPack('whisper', profile)
   const bundled = join(bundledResourceRoot(), 'models')
-  if (app.isPackaged || whisperFloorReady(bundled)) return bundled
-  if (whisperFloorReady(userDataAsrRoot())) return userDataAsrRoot()
+  if (app.isPackaged || (await whisperFloorReadyForProfile(bundled, profile))) return bundled
+  if (await whisperFloorReadyForProfile(userDataAsrRoot(), profile)) return userDataAsrRoot()
   return bundled
 }
 
+export async function resolveWhisperModelsRoot(): Promise<string> {
+  return resolveWhisperModelsRootForProfile(await speechPackBuildProfile())
+}
+
 /** Protocol adapter for main/index: lean is strict even before the selected pack exists. */
-export function asrModelProtocolSpeechPackOptions(): {
+export async function asrModelProtocolSpeechPackOptions(): Promise<{
   useOnlySpeechPackModels: boolean
   speechPackModelsRoot?: string
-} {
-  const profile = speechPackBuildProfile()
+}> {
+  const profile = await speechPackBuildProfile()
   if (profile.profile === 'full' || profile.profile === 'development') return { useOnlySpeechPackModels: false }
   if (profile.profile === null) return { useOnlySpeechPackModels: true }
   const selected = selectedAsrEngine()
   if (selected !== 'whisper') return { useOnlySpeechPackModels: true }
-  const pack = resolveSelectedSpeechPack('whisper')
+  const pack = await resolveSelectedSpeechPack('whisper')
   return {
     useOnlySpeechPackModels: true,
     ...(pack.readiness?.status === 'ready' && pack.path ? { speechPackModelsRoot: pack.path } : {})
   }
 }
 
-export function importAsrAssetsReady(): boolean {
-  const profile = speechPackBuildProfile()
+async function importAsrAssetsReadyForProfile(
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<boolean> {
   if (profile.profile === null) return false
   if (profile.profile === 'lean') {
     const engine = selectedAsrEngine()
     if (engine === 'apple') return true
-    return resolveSelectedSpeechPack(engine).readiness?.status === 'ready'
+    return (await resolveSelectedSpeechPack(engine)).readiness?.status === 'ready'
   }
   if (app.isPackaged) {
-    return parakeetFilesReady(parakeetBundledDir()) && asrManifestComplete(bundledResourceRoot())
+    return (
+      (await parakeetFilesReadyForProfile(parakeetBundledDir(), profile)) && asrManifestComplete(bundledResourceRoot())
+    )
   }
-  return parakeetFilesReady(resolveParakeetDir()) && whisperFloorReady(resolveWhisperModelsRoot())
+  const parakeetDir = await resolveParakeetDirForProfile(profile)
+  const whisperRoot = await resolveWhisperModelsRootForProfile(profile)
+  return (
+    (await parakeetFilesReadyForProfile(parakeetDir, profile)) &&
+    (await whisperFloorReadyForProfile(whisperRoot, profile))
+  )
+}
+
+export async function importAsrAssetsReady(): Promise<boolean> {
+  return importAsrAssetsMetadataReadyForProfile(await speechPackBuildProfile())
+}
+
+async function metadataFilePresent(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path)
+    return info.isFile() && info.nlink === 1 && info.size > 0
+  } catch {
+    return false
+  }
+}
+
+async function parakeetMetadataReadyForProfile(
+  dir: string,
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<boolean> {
+  if (profile.profile === null) return false
+  if (profile.profile === 'lean') {
+    return (
+      selectedAsrEngine() === 'parakeet' && (await resolveSelectedSpeechPack('parakeet')).readiness?.status === 'ready'
+    )
+  }
+  return (await Promise.all(PARAKEET_REQUIRED_FILES.map((name) => metadataFilePresent(join(dir, name))))).every(Boolean)
+}
+
+async function whisperFloorMetadataReadyForProfile(
+  modelsRoot: string,
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<boolean> {
+  if (profile.profile === null) return false
+  if (profile.profile === 'lean') {
+    return (
+      selectedAsrEngine() === 'whisper' && (await resolveSelectedSpeechPack('whisper')).readiness?.status === 'ready'
+    )
+  }
+  const dir = join(modelsRoot, ...WHISPER_FLOOR_ID.split('/'))
+  return (await Promise.all(WHISPER_FLOOR_REQUIRED_FILES.map((name) => metadataFilePresent(join(dir, name))))).every(
+    Boolean
+  )
+}
+
+async function importAsrAssetsMetadataReadyForProfile(
+  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
+): Promise<boolean> {
+  if (profile.profile === null) return false
+  if (profile.profile === 'lean') return importAsrAssetsReadyForProfile(profile)
+  if (app.isPackaged) {
+    return (
+      (await parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)) &&
+      asrManifestComplete(bundledResourceRoot())
+    )
+  }
+  const bundledParakeetReady = await parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)
+  const parakeetDir = bundledParakeetReady ? parakeetBundledDir() : parakeetUserDir()
+  const bundledModelsRoot = join(bundledResourceRoot(), 'models')
+  const bundledWhisperReady = await whisperFloorMetadataReadyForProfile(bundledModelsRoot, profile)
+  const whisperRoot = bundledWhisperReady ? bundledModelsRoot : userDataAsrRoot()
+  return (
+    (await parakeetMetadataReadyForProfile(parakeetDir, profile)) &&
+    (await whisperFloorMetadataReadyForProfile(whisperRoot, profile))
+  )
 }
 
 /** Renderer-safe snapshot. An installed app must report a missing bundled payload explicitly. */
-export function asrAssetsStatusSnapshot(): AsrAssetsProgress & { ready: boolean } {
-  const profile = speechPackBuildProfile()
+export async function asrAssetsStatusSnapshot(): Promise<AsrAssetsProgress & { ready: boolean }> {
+  const profile = await speechPackBuildProfile()
   if (profile.profile === null) {
     return {
       ready: false,
@@ -320,7 +442,8 @@ export function asrAssetsStatusSnapshot(): AsrAssetsProgress & { ready: boolean 
       reason: 'invalid-profile'
     }
   }
-  if (profile.profile === 'lean' && !importAsrAssetsReady()) {
+  const ready = await importAsrAssetsMetadataReadyForProfile(profile)
+  if (profile.profile === 'lean' && !ready) {
     return {
       ready: false,
       status: 'error',
@@ -330,7 +453,7 @@ export function asrAssetsStatusSnapshot(): AsrAssetsProgress & { ready: boolean 
       reason: 'lean-pack-not-installed'
     }
   }
-  if (importAsrAssetsReady()) {
+  if (ready) {
     return { ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' }
   }
   if (app.isPackaged) {
@@ -436,9 +559,10 @@ async function extractTarBz2(archive: string, destDir: string): Promise<void> {
 
 async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promise<void> {
   const destDir = parakeetUserDir()
-  if (parakeetFilesReady(destDir)) return
+  if (await parakeetFilesReady(destDir)) return
   if (testHooks?.fetchParakeet) {
     await testHooks.fetchParakeet(destDir, onProgress)
+    if (!(await parakeetFilesReady(destDir))) throw new Error(ASR_ASSETS_MISSING)
     return
   }
 
@@ -455,7 +579,7 @@ async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promis
   rmSync(stagingRoot, { recursive: true, force: true })
   try {
     await extractTarBz2(archive, stagingRoot)
-    if (!parakeetFilesReady(stagedModelDir)) throw new Error(ASR_ASSETS_MISSING)
+    if (!(await parakeetFilesReady(stagedModelDir))) throw new Error(ASR_ASSETS_MISSING)
     // Only replace the incomplete fallback after the complete staged model passes the same readiness
     // predicate as the live engine. A stalled/corrupt archive can never become a half-ready model.
     rmSync(destDir, { recursive: true, force: true })
@@ -464,14 +588,15 @@ async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promis
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true })
   }
-  if (!parakeetFilesReady(destDir)) throw new Error(ASR_ASSETS_MISSING)
+  if (!(await parakeetFilesReady(destDir))) throw new Error(ASR_ASSETS_MISSING)
 }
 
 async function fetchWhisperFloorToUserData(onProgress?: AsrProgressReporter): Promise<void> {
   const destRoot = userDataAsrRoot()
-  if (whisperFloorReady(destRoot)) return
+  if (await whisperFloorReady(destRoot)) return
   if (testHooks?.fetchWhisperFloor) {
     await testHooks.fetchWhisperFloor(destRoot, onProgress)
+    if (!(await whisperFloorReady(destRoot))) throw new Error(ASR_ASSETS_MISSING)
     return
   }
 
@@ -500,7 +625,7 @@ async function fetchWhisperFloorToUserData(onProgress?: AsrProgressReporter): Pr
     done += 1
     publish({ status: 'downloading', progress: done / total, label: 'Getting transcription files…' }, onProgress)
   }
-  if (!whisperFloorReady(destRoot)) throw new Error(ASR_ASSETS_MISSING)
+  if (!(await whisperFloorReady(destRoot))) throw new Error(ASR_ASSETS_MISSING)
 }
 
 function reportParakeetEnsure(operation: ParakeetEnsureOperation, pct: number, label?: string): void {
@@ -515,25 +640,32 @@ function observeParakeetEnsure(operation: ParakeetEnsureOperation, onProgress?: 
   return operation.promise.finally(() => operation.reporters.delete(onProgress))
 }
 
-export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<void> {
-  const profile = speechPackBuildProfile()
-  if (profile.profile === null) return Promise.reject(new AsrSpeechPackNotReadyError('invalid-profile'))
+async function runParakeetEnsure(operation: ParakeetEnsureOperation, onProgress?: AsrProgressReporter): Promise<void> {
+  const profile = await speechPackBuildProfile()
+  if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
   if (profile.profile === 'lean') {
-    if (selectedAsrEngine() !== 'parakeet' || resolveSelectedSpeechPack('parakeet').readiness?.status !== 'ready') {
-      return Promise.reject(new AsrSpeechPackNotReadyError('lean-pack-not-installed'))
+    if (
+      selectedAsrEngine() !== 'parakeet' ||
+      (await resolveSelectedSpeechPack('parakeet')).readiness?.status !== 'ready'
+    ) {
+      throw new AsrSpeechPackNotReadyError('lean-pack-not-installed')
     }
     onProgress?.(100)
-    return Promise.resolve()
+    return
   }
-  if (parakeetFilesReady(parakeetBundledDir())) {
+  if (await parakeetFilesReadyForProfile(parakeetBundledDir(), profile)) {
     onProgress?.(100)
-    return Promise.resolve()
+    return
   }
-  if (app.isPackaged) return Promise.reject(new Error(ASR_PACKAGED_ASSETS_MISSING))
-  if (parakeetFilesReady(parakeetUserDir())) {
+  if (app.isPackaged) throw new Error(ASR_PACKAGED_ASSETS_MISSING)
+  if (await parakeetFilesReadyForProfile(parakeetUserDir(), profile)) {
     onProgress?.(100)
-    return Promise.resolve()
+    return
   }
+  await fetchParakeetToUserData((pct, label) => reportParakeetEnsure(operation, pct, label))
+}
+
+export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<void> {
   if (!parakeetInFlight) {
     let resolveOperation!: () => void
     let rejectOperation!: (error: unknown) => void
@@ -547,7 +679,7 @@ export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<
     }
     parakeetInFlight = operation
     const observed = observeParakeetEnsure(operation, onProgress)
-    void fetchParakeetToUserData((pct, label) => reportParakeetEnsure(operation, pct, label))
+    void runParakeetEnsure(operation, onProgress)
       .then(() => {
         reportParakeetEnsure(operation, 100)
         resolveOperation()
@@ -560,27 +692,69 @@ export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<
   return observeParakeetEnsure(parakeetInFlight, onProgress)
 }
 
-export async function ensureWhisperFloorAssets(onProgress?: AsrProgressReporter): Promise<void> {
-  const profile = speechPackBuildProfile()
+function reportWhisperEnsure(operation: WhisperEnsureOperation, pct: number, label?: string): void {
+  operation.progress = { pct, label }
+  for (const reporter of operation.reporters) reporter(pct, label)
+}
+
+function observeWhisperEnsure(operation: WhisperEnsureOperation, onProgress?: AsrProgressReporter): Promise<void> {
+  if (!onProgress) return operation.promise
+  operation.reporters.add(onProgress)
+  onProgress(operation.progress.pct, operation.progress.label)
+  return operation.promise.finally(() => operation.reporters.delete(onProgress))
+}
+
+async function runWhisperEnsure(operation: WhisperEnsureOperation): Promise<void> {
+  const profile = await speechPackBuildProfile()
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
   if (profile.profile === 'lean') {
-    if (selectedAsrEngine() !== 'whisper' || resolveSelectedSpeechPack('whisper').readiness?.status !== 'ready') {
+    if (
+      selectedAsrEngine() !== 'whisper' ||
+      (await resolveSelectedSpeechPack('whisper')).readiness?.status !== 'ready'
+    ) {
       throw new AsrSpeechPackNotReadyError('lean-pack-not-installed')
     }
-    onProgress?.(100)
+    reportWhisperEnsure(operation, 100)
     return
   }
   const bundled = join(bundledResourceRoot(), 'models')
-  if (whisperFloorReady(bundled)) {
-    onProgress?.(100)
+  if (await whisperFloorReadyForProfile(bundled, profile)) {
+    reportWhisperEnsure(operation, 100)
     return
   }
   if (app.isPackaged) throw new Error(ASR_PACKAGED_ASSETS_MISSING)
-  if (whisperFloorReady(userDataAsrRoot())) {
-    onProgress?.(100)
+  if (await whisperFloorReadyForProfile(userDataAsrRoot(), profile)) {
+    reportWhisperEnsure(operation, 100)
     return
   }
-  await fetchWhisperFloorToUserData(onProgress)
+  await fetchWhisperFloorToUserData((pct, label) => reportWhisperEnsure(operation, pct, label))
+}
+
+export function ensureWhisperFloorAssets(onProgress?: AsrProgressReporter): Promise<void> {
+  if (!whisperInFlight) {
+    let resolveOperation!: () => void
+    let rejectOperation!: (error: unknown) => void
+    const operation: WhisperEnsureOperation = {
+      promise: new Promise<void>((resolve, reject) => {
+        resolveOperation = resolve
+        rejectOperation = reject
+      }),
+      progress: { pct: 0 },
+      reporters: new Set()
+    }
+    whisperInFlight = operation
+    const observed = observeWhisperEnsure(operation, onProgress)
+    void runWhisperEnsure(operation)
+      .then(() => {
+        reportWhisperEnsure(operation, 100)
+        resolveOperation()
+      }, rejectOperation)
+      .finally(() => {
+        if (whisperInFlight === operation) whisperInFlight = null
+      })
+    return observed
+  }
+  return observeWhisperEnsure(whisperInFlight, onProgress)
 }
 
 /** One shared ensure for import + live Parakeet. Concurrent callers share the transfer. */
@@ -593,15 +767,17 @@ export function ensureImportAsrAssets(onProgress?: (pct: number) => void): Promi
 }
 
 async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
-  const profile = speechPackBuildProfile()
+  const profile = await speechPackBuildProfile()
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
   if (profile.profile === 'lean') {
-    if (!importAsrAssetsReady()) throw new AsrSpeechPackNotReadyError('lean-pack-not-installed')
+    if (!(await importAsrAssetsReadyForProfile(profile)))
+      throw new AsrSpeechPackNotReadyError('lean-pack-not-installed')
     publish({ status: 'ready', progress: 1, label: 'Transcription files ready' }, onProgress)
     return
   }
-  if (app.isPackaged && !importAsrAssetsReady()) throw new Error(ASR_PACKAGED_ASSETS_MISSING)
-  if (importAsrAssetsReady()) {
+  const initiallyReady = await importAsrAssetsReadyForProfile(profile)
+  if (app.isPackaged && !initiallyReady) throw new Error(ASR_PACKAGED_ASSETS_MISSING)
+  if (initiallyReady) {
     publish({ status: 'ready', progress: 1, label: 'Transcription files ready' }, onProgress)
     return
   }
@@ -619,7 +795,7 @@ async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
         onProgress
       )
     })
-    if (!importAsrAssetsReady()) throw new Error(ASR_ASSETS_MISSING)
+    if (!(await importAsrAssetsReadyForProfile(await speechPackBuildProfile()))) throw new Error(ASR_ASSETS_MISSING)
     publish({ status: 'ready', progress: 1, label: 'Transcription files ready' }, onProgress)
     mainLog.info('[asr-assets] Parakeet and Whisper floor ready')
   } catch (e) {

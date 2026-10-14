@@ -73,7 +73,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   let unsubscribe: (() => void) | null = null
   let currentProgress: SpeechPackProgress | null = null
   const activity = new Set<SpeechPackComponentId>()
+  const pendingAdmissions = new Set<SpeechPackComponentId>()
+  let authorityRevision = 0
   let captureActive = false
+  let closing = false
   const listeners = new Set<(progress: SpeechPackProgress) => void>()
   const repairVerified = new Set<SpeechPackComponentId>()
   const resumeScope = randomUUID()
@@ -135,31 +138,34 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     return engine
   }
 
-  const snapshot = (): SpeechPackSnapshot => {
-    const profileRead = readSpeechPackProfile(options.resourcesRoot, options.packaged)
+  const snapshot = async (): Promise<SpeechPackSnapshot> => {
+    const profileRead = await readSpeechPackProfile(options.resourcesRoot, options.packaged)
+    const profile = profileRead.profile
+    const rows = await Promise.all(
+      components.map(async (component): Promise<SpeechPackComponentSnapshot> => {
+        const resolved = await resolveSpeechPack(options.rootDir, component)
+        if (resolved.status !== 'ready') repairVerified.delete(component.id)
+        const state = engine?.getState(component.id)
+        const transient = state && state.status !== 'not-installed' && state.status !== 'ready'
+        return {
+          componentId: component.id,
+          manifestIdentity: componentManifestIdentity(component),
+          version: component.version,
+          state: sourceHost(component) === null ? 'not-configured' : transient ? finiteState(state) : resolved.status,
+          downloadBytes: componentDownloadBytes(component),
+          installedBytes: component.files.reduce((sum, file) => sum + file.bytes, 0),
+          sourceHost: sourceHost(component),
+          integrity: repairVerified.has(component.id) ? 'freshly-hash-verified-and-self-tested' : resolved.evidence,
+          ...(state?.status === 'error' && state.requiredBytes !== undefined
+            ? { requiredBytes: state.requiredBytes }
+            : {}),
+          ...(state?.status === 'error' && state.freeBytes !== undefined ? { freeBytes: state.freeBytes } : {})
+        }
+      })
+    )
+    // Read selection only after metadata I/O so a slow result cannot pair old engine state with new progress.
     const selectedEngine = options.selectedEngine()
     const selectedComponent = selectedId(selectedEngine)
-    const profile = profileRead.profile
-    const rows = components.map((component): SpeechPackComponentSnapshot => {
-      const resolved = resolveSpeechPack(options.rootDir, component)
-      if (resolved.status !== 'ready') repairVerified.delete(component.id)
-      const state = engine?.getState(component.id)
-      const transient = state && state.status !== 'not-installed' && state.status !== 'ready'
-      return {
-        componentId: component.id,
-        manifestIdentity: componentManifestIdentity(component),
-        version: component.version,
-        state: sourceHost(component) === null ? 'not-configured' : transient ? finiteState(state) : resolved.status,
-        downloadBytes: componentDownloadBytes(component),
-        installedBytes: component.files.reduce((sum, file) => sum + file.bytes, 0),
-        sourceHost: sourceHost(component),
-        integrity: repairVerified.has(component.id) ? 'freshly-hash-verified-and-self-tested' : resolved.evidence,
-        ...(state?.status === 'error' && state.requiredBytes !== undefined
-          ? { requiredBytes: state.requiredBytes }
-          : {}),
-        ...(state?.status === 'error' && state.freeBytes !== undefined ? { freeBytes: state.freeBytes } : {})
-      }
-    })
     return SpeechPackSnapshotSchema.parse({
       featureEnabled: featureEnabled(),
       profile,
@@ -171,7 +177,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     })
   }
 
-  const action = (value: unknown): SpeechPackActionResult => {
+  const action = async (value: unknown): Promise<SpeechPackActionResult> => {
     const parsedRequest = SpeechPackActionRequestSchema.safeParse(value)
     if (!parsedRequest.success) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'invalid-request' })
     const request: SpeechPackActionRequest = parsedRequest.data
@@ -184,16 +190,33 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (sourceHost(component) === null) return result({ ok: false, reason: 'not-configured' })
     const currentEngine = options.selectedEngine()
     if (request.action === 'pause' || request.action === 'cancel') {
+      authorityRevision += 1
+      pendingAdmissions.delete(component.id)
       if (!engine) return result({ ok: true })
       if (request.action === 'pause') engine.pause(component.id)
       else engine.cancel(component.id)
       activity.delete(component.id)
       return result({ ok: true })
     }
+    if (closing) return result({ ok: false, reason: 'busy' })
     if (!featureEnabled()) return result({ ok: false, reason: 'disabled' })
-    const profileRead = readSpeechPackProfile(options.resourcesRoot, options.packaged)
-    if (profileRead.profile === null) return result({ ok: false, reason: 'profile-invalid' })
+    if (pendingAdmissions.has(component.id) || activity.has(component.id)) return result({ ok: false, reason: 'busy' })
     if (selectedId(currentEngine) !== component.id) return result({ ok: false, reason: 'not-selected' })
+    if (!options.policyAllowsTransfer()) return result({ ok: false, reason: 'policy-blocked' })
+    if (isCaptureActive()) return result({ ok: false, reason: 'busy' })
+    const revision = authorityRevision
+    pendingAdmissions.add(component.id)
+    let profileRead: Awaited<ReturnType<typeof readSpeechPackProfile>>
+    try {
+      profileRead = await readSpeechPackProfile(options.resourcesRoot, options.packaged)
+    } catch {
+      pendingAdmissions.delete(component.id)
+      return result({ ok: false, reason: 'profile-invalid' })
+    }
+    pendingAdmissions.delete(component.id)
+    if (revision !== authorityRevision || closing || !featureEnabled()) return result({ ok: false, reason: 'busy' })
+    if (profileRead.profile === null) return result({ ok: false, reason: 'profile-invalid' })
+    if (selectedId(options.selectedEngine()) !== component.id) return result({ ok: false, reason: 'not-selected' })
     if (!options.policyAllowsTransfer()) return result({ ok: false, reason: 'policy-blocked' })
     if (isCaptureActive()) return result({ ok: false, reason: 'busy' })
     const instance = getEngine()
@@ -228,21 +251,27 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     },
     policyChanged(): void {
       if (options.policyAllowsTransfer()) return
+      authorityRevision += 1
       for (const id of activity) engine?.cancel(id)
       activity.clear()
     },
     selectionChanged(): void {
+      authorityRevision += 1
       const selected = selectedId(options.selectedEngine())
       for (const id of activity) {
         if (id !== selected) engine?.cancel(id)
       }
     },
     captureActivityChanged(active: boolean): void {
+      if (captureActive !== active) authorityRevision += 1
       captureActive = active
       if (!active) return
       for (const id of activity) engine?.pause(id)
     },
     async shutdown(): Promise<void> {
+      closing = true
+      authorityRevision += 1
+      pendingAdmissions.clear()
       if (engine) for (const component of components) engine.cancel(component.id)
       activity.clear()
       if (engine) {

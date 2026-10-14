@@ -41,7 +41,7 @@ vi.mock('./asr-model-download', () => ({
 }))
 vi.mock('./asr-bundled-ensure', () => ({
   ensureWhisperFloorAssets: vi.fn(async () => undefined),
-  resolveWhisperModelsRoot: () => '/tmp/metis-test-models'
+  resolveWhisperModelsRoot: async () => '/tmp/metis-test-models'
 }))
 
 import {
@@ -63,7 +63,9 @@ import {
  *  takes a couple of microtask ticks, not zero. */
 async function waitForRequest(child: FakeChild, type: string): Promise<{ id: number; [key: string]: unknown }> {
   for (let i = 0; i < 50; i++) {
-    const found = child.postMessage.mock.calls.map(([m]) => m as { type: string; id: number }).find((m) => m.type === type)
+    const found = child.postMessage.mock.calls
+      .map(([m]) => m as { type: string; id: number })
+      .find((m) => m.type === type)
     if (found) return found
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
@@ -471,24 +473,21 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
     ['below the 5 GiB free-memory floor', 16 * 1024 ** 3, 5 * 1024 ** 3 - 1, true, false],
     ['without the complete downloaded model files', 16 * 1024 ** 3, 5 * 1024 ** 3, false, false],
     ['at both memory floors with complete downloaded files', 16 * 1024 ** 3, 5 * 1024 ** 3, true, true]
-  ] as const)(
-    'admits the optional high-memory tier at host start only %s',
-    async (_label, totalMemoryBytes, freeMemoryBytes, filesReady, expected) => {
-      hardware.totalmem.mockReturnValue(totalMemoryBytes)
-      hardware.freemem.mockReturnValue(freeMemoryBytes)
-      highTierFiles.ready.mockResolvedValue(filesReady)
-      await setWhisperImportTierAdmission(totalMemoryBytes, freeMemoryBytes, filesReady)
+  ] as const)('admits the optional high-memory tier at host start only %s', async (_label, totalMemoryBytes, freeMemoryBytes, filesReady, expected) => {
+    hardware.totalmem.mockReturnValue(totalMemoryBytes)
+    hardware.freemem.mockReturnValue(freeMemoryBytes)
+    highTierFiles.ready.mockResolvedValue(filesReady)
+    await setWhisperImportTierAdmission(totalMemoryBytes, freeMemoryBytes, filesReady)
 
-      const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
-      const init = await waitForInit(child)
-      expect(init.allowHighMemoryTier).toBe(expected)
-      expect('fetchedModelsPath' in init).toBe(expected)
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const init = await waitForInit(child)
+    expect(init.allowHighMemoryTier).toBe(expected)
+    expect('fetchedModelsPath' in init).toBe(expected)
 
-      const req = await waitForRequest(child, 'transcribe')
-      child.emit('message', { type: 'result', id: req.id, text: 'done' })
-      await expect(pending).resolves.toBe('done')
-    }
-  )
+    const req = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: req.id, text: 'done' })
+    await expect(pending).resolves.toBe('done')
+  })
 
   it('restarts a previously admitted high-memory host before a new low-memory import can use it', async () => {
     const first = whisperImportTranscribe(new Float32Array(16), 'auto')

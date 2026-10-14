@@ -72,13 +72,27 @@ describe('real ASR model protocol response boundary', () => {
     expect(readLocal).not.toHaveBeenCalled()
   })
 
+  it('does not revive a static speech-pack root when the current async resolver denies it', async () => {
+    const stalePack = join(root, 'speech-packs', 'asr.whisper-base-q8', '2')
+    put(join(stalePack, 'config.json'), 'stale activation')
+    const dynamicHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      speechPackModelsRoot: stalePack,
+      useOnlySpeechPackModels: true,
+      resolveSpeechPackModels: async () => ({ useOnlySpeechPackModels: true }),
+      readLocal
+    })
+    expect((await dynamicHandler({ url: 'asr-model://models/config.json' })).status).toBe(404)
+    expect(readLocal).not.toHaveBeenCalled()
+  })
+
   it('fails closed for an invalid package profile instead of using full or lean roots', async () => {
     put(join(resources, 'models', 'config.json'), 'bundled must not be used')
     put(join(userModels, 'config.json'), 'user must not be used')
     const invalidHandler = createAsrModelProtocolHandler({
       resourcesRoot: resources,
       userModelsRoot: userModels,
-      resolveSpeechPackModels: () => ({ useOnlySpeechPackModels: true }),
+      resolveSpeechPackModels: async () => ({ useOnlySpeechPackModels: true }),
       readLocal
     })
     expect((await invalidHandler({ url: 'asr-model://models/config.json' })).status).toBe(404)
@@ -93,7 +107,7 @@ describe('real ASR model protocol response boundary', () => {
     const dynamicHandler = createAsrModelProtocolHandler({
       resourcesRoot: resources,
       readLocal,
-      resolveSpeechPackModels: () => ({
+      resolveSpeechPackModels: async () => ({
         useOnlySpeechPackModels: true,
         ...(ready ? { speechPackModelsRoot: pack } : {})
       })
