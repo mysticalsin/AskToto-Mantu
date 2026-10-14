@@ -17,6 +17,7 @@ import { redactSecrets } from '@shared/redact'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
 import { crashDetail } from './infra/observability/crash-taxonomy'
+import { getSpeechPolicyAuthorityStatus } from './model-policy-client'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -180,16 +181,18 @@ function realSpeakerId(
 function feedHandler(
   channel: 'parakeetFeed' | 'appleSpeechFeed' | 'speakerEmbed',
   api: SessionApi,
-  transcribe: (samples: Float32Array) => Promise<string> = async () => 'transcribed'
+  transcribe: (samples: Float32Array) => Promise<string> = async () => 'transcribed',
+  settings: () => { asrEngine: string; asrLanguage: string } = () => ({ asrEngine: 'parakeet', asrLanguage: 'auto' })
 ): (...args: any[]) => Promise<any> {
   return actualIpcHandler(channel, {
     assertMainWindow: vi.fn(),
     requireAuth: () => true,
     takeHotPath: () => true,
+    getSpeechPolicyAuthorityStatus,
     parakeetTranscribe: transcribe,
     appleSpeechTranscribe: transcribe,
     appleSpeechLocale: () => 'en-US',
-    getSettings: () => ({ asrLanguage: 'auto' }),
+    getSettings: settings,
     captureLiveSpeakerKey: api.captureLiveSpeakerKey,
     labelThemAudio: api.labelThemAudio,
     observeOperatorAudio: api.observeOperatorAudio
@@ -325,6 +328,23 @@ describe('authoritative live speaker identity', () => {
 })
 
 describe('live feed identity routing', () => {
+  it('drops the stale feed when the validated speech-policy authority changes during transcription', async () => {
+    const id = realSpeakerId()
+    const api = sessionApi({ id })
+    api.acceptLiveSpeakerTransition({ on: true, startedAt: 250 })
+    const label = vi.spyOn(api, 'labelThemAudio')
+    let asrEngine = 'parakeet'
+    const transcribe = vi.fn(async () => {
+      asrEngine = 'whisper'
+      return 'old-authority transcript'
+    })
+    const handler = feedHandler('parakeetFeed', api, transcribe, () => ({ asrEngine, asrLanguage: 'auto' }))
+
+    await expect(handler({}, { samples: windowFor(0), speaker: 'them', startedAt: 250 })).resolves.toBe('')
+    expect(transcribe).toHaveBeenCalledOnce()
+    expect(label).not.toHaveBeenCalled()
+  })
+
   it.each([
     'parakeetFeed',
     'appleSpeechFeed'

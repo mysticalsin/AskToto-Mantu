@@ -68,7 +68,14 @@ vi.mock('node:child_process', async () => {
 
 import { start, stop, isRunning, baseURL, beginStream, endStream, getState } from './local-runtime'
 import { auditLog, mainLog } from '../logger'
-import type { RuntimeFeatureLease } from '../features/components/speech-pack/runtime-lease'
+import type {
+  RuntimeEntryRole,
+  RuntimeFeatureLease,
+  RuntimeModelId,
+  VerifiedRuntimeResourcePin
+} from '../features/components/speech-pack/runtime-lease'
+import type { OptionalRuntimeTarget } from '../features/components/speech-pack/runtime-components'
+import type { RuntimePhysicalAdmission } from '../infra/storage/runtime-owned-files'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
@@ -106,26 +113,63 @@ async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
 function testLease(
   generationIdentity: string,
   releaseLease: () => Promise<void> = async () => undefined,
-  verifyCurrentBytes: () => Promise<void> = async () => undefined
-): { lease: RuntimeFeatureLease; release: ReturnType<typeof vi.fn> } {
+  prepareAdmission: () => Promise<RuntimePhysicalAdmission> = async () => ({
+    assertCurrentSync: vi.fn(),
+    dispose: vi.fn(async () => undefined)
+  })
+): {
+  lease: RuntimeFeatureLease
+  release: ReturnType<typeof vi.fn>
+  preparePhysicalAdmission: ReturnType<typeof vi.fn>
+} {
   const release = vi.fn(releaseLease)
-  const lease = {
+  const preparePhysicalAdmission = vi.fn(prepareAdmission)
+  const target: OptionalRuntimeTarget = {
+    packageProfileIdentity: 'fixture-profile',
+    packagePlatform: 'darwin',
+    packageArch: 'arm64',
+    runningPlatform: 'darwin',
+    runningArch: 'arm64',
+    appVersion: '1.0.0',
+    electronVersion: '43.6.0',
+    nodeAbi: '136',
+    napiVersion: '10',
+    chromiumVersion: '143.0.0.0'
+  }
+  const lease: RuntimeFeatureLease = {
+    feature: 'local-llm',
     generationIdentity,
-    entry: vi.fn(() => '/managed/llama-server'),
-    modelFile: vi.fn((_, member: string) => `/managed/model/${member}`),
-    verifyCurrentBytes: vi.fn(verifyCurrentBytes),
+    catalogIdentity: 'c'.repeat(64),
+    target,
+    verifyCurrentBytes: vi.fn(async () => undefined),
+    preparePhysicalAdmission,
+    loaderDirectories: vi.fn(() => []),
+    entry: vi.fn((role: RuntimeEntryRole) => `/managed/${role}`),
+    model: vi.fn((id: RuntimeModelId) => `/managed/model/${id}`),
+    modelFile: vi.fn((_id: RuntimeModelId, member: string) => `/managed/model/${member}`),
+    rendererFile: vi.fn((relativePath: string) => `/managed/${relativePath}`),
+    rendererRolePath: vi.fn((role: RuntimeEntryRole) => `/managed/${role}`),
+    rendererModelRoot: vi.fn((id: RuntimeModelId) => `/managed/model/${id}`),
+    rendererResource: vi.fn(
+      (relativePath: string): VerifiedRuntimeResourcePin => ({
+        path: relativePath,
+        bytes: 1,
+        sha256: 'a'.repeat(64)
+      })
+    ),
+    rendererResources: vi.fn(() => new Map<string, string>()),
     release
-  } as unknown as RuntimeFeatureLease
-  return { lease, release }
+  }
+  return { lease, release, preparePhysicalAdmission }
 }
 
 describe('F1 — concurrent start() calls share one in-flight start', () => {
   it('holds native launch until the leased physical closure has been reverified', async () => {
-    let finishVerification!: () => void
+    let finishAdmission!: (admission: RuntimePhysicalAdmission) => void
     const lease = testLease(
       'managed-physical-gate',
       async () => undefined,
-      () => new Promise<void>((resolve) => (finishVerification = resolve))
+      () => new Promise<RuntimePhysicalAdmission>((resolve) => (finishAdmission = resolve))
     )
     const started = start(
       {
@@ -137,15 +181,54 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
       },
       'mac'
     )
-    await Promise.resolve()
-    expect(lease.lease.verifyCurrentBytes).toHaveBeenCalledOnce()
+    await waitUntil(() => lease.preparePhysicalAdmission.mock.calls.length === 1)
     expect(spawnState.calls).toHaveLength(0)
-    finishVerification()
+    const admission: RuntimePhysicalAdmission = {
+      assertCurrentSync: vi.fn(),
+      dispose: vi.fn(async () => undefined)
+    }
+    finishAdmission(admission)
     await waitUntil(() => spawnState.calls.length === 1)
     emitListening(0, 55129)
     await started
     expect(spawnState.calls).toHaveLength(1)
+    expect(admission.assertCurrentSync).toHaveBeenCalledOnce()
+    expect(admission.dispose).toHaveBeenCalledOnce()
     await stop()
+  })
+
+  it('does not spawn when the held physical admission is no longer current at the synchronous launch guard', async () => {
+    let finishAdmission!: (admission: RuntimePhysicalAdmission) => void
+    const lease = testLease(
+      'managed-stale-physical-gate',
+      async () => undefined,
+      () => new Promise<RuntimePhysicalAdmission>((resolve) => (finishAdmission = resolve))
+    )
+    const started = start(
+      {
+        gguf: '/managed/model/model.gguf',
+        mmproj: '/managed/model/mmproj.gguf',
+        ...SPAWN_PROFILE,
+        runtimeLease: lease.lease,
+        runtimeBinary: '/managed/llama-server'
+      },
+      'mac'
+    )
+    await waitUntil(() => lease.preparePhysicalAdmission.mock.calls.length === 1)
+    expect(spawnState.calls).toHaveLength(0)
+    let authorityCurrent = true
+    const admission: RuntimePhysicalAdmission = {
+      assertCurrentSync: vi.fn(() => {
+        if (!authorityCurrent) throw new Error('physical admission became stale')
+      }),
+      dispose: vi.fn(async () => undefined)
+    }
+    authorityCurrent = false
+    finishAdmission(admission)
+    await expect(started).rejects.toThrow('physical admission became stale')
+    expect(admission.assertCurrentSync).toHaveBeenCalledOnce()
+    expect(admission.dispose).toHaveBeenCalledOnce()
+    expect(spawnState.calls).toHaveLength(0)
   })
 
   it('a second concurrent start() call for the SAME model spawns only once, and neither caller resolves before health actually completes', async () => {

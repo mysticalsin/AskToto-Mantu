@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import type { OptionalRuntimeTarget } from './features/components/speech-pack/runtime-components'
+import type {
+  RuntimeEntryRole,
+  RuntimeFeatureLease,
+  RuntimeModelId,
+  VerifiedRuntimeResourcePin
+} from './features/components/speech-pack/runtime-lease'
+import type { RuntimePhysicalAdmission } from './infra/storage/runtime-owned-files'
 
 // MQA-234: the transformers/onnxruntime-node stack no longer loads in this process at all — it runs in an
 // isolated Electron utilityProcess (whisper-asr-host.ts, see whisper-asr-host.test.ts for that seam's own
@@ -67,6 +75,61 @@ import {
   whisperImportTranscribe
 } from './whisper-import'
 
+function runtimeLeaseFixture(
+  prepareAdmission: () => Promise<RuntimePhysicalAdmission> = async () => ({
+    assertCurrentSync: vi.fn(),
+    dispose: vi.fn(async () => undefined)
+  })
+): {
+  lease: RuntimeFeatureLease
+  release: ReturnType<typeof vi.fn>
+  verifyCurrentBytes: ReturnType<typeof vi.fn>
+  preparePhysicalAdmission: ReturnType<typeof vi.fn>
+} {
+  const release = vi.fn(async () => undefined)
+  const verifyCurrentBytes = vi.fn(async () => undefined)
+  const preparePhysicalAdmission = vi.fn(prepareAdmission)
+  const target: OptionalRuntimeTarget = {
+    packageProfileIdentity: 'fixture-profile',
+    packagePlatform: 'win32',
+    packageArch: 'x64',
+    runningPlatform: 'win32',
+    runningArch: 'x64',
+    appVersion: '1.0.0',
+    electronVersion: '43.6.0',
+    nodeAbi: '136',
+    napiVersion: '10',
+    chromiumVersion: '143.0.0.0'
+  }
+  const lease: RuntimeFeatureLease = {
+    feature: 'offline-asr',
+    generationIdentity: 'a'.repeat(64),
+    catalogIdentity: 'b'.repeat(64),
+    target,
+    verifyCurrentBytes,
+    preparePhysicalAdmission,
+    loaderDirectories: vi.fn(() => []),
+    entry: vi.fn((role: RuntimeEntryRole) => `/verified/${role}`),
+    model: vi.fn((id: RuntimeModelId) =>
+      id === 'asr.whisper-base-q8' ? '/verified/generation/models/whisper-base' : `/verified/generation/models/${id}`
+    ),
+    modelFile: vi.fn((_id: RuntimeModelId, member: string) => `/verified/generation/${member}`),
+    rendererFile: vi.fn((relativePath: string) => `/verified/${relativePath}`),
+    rendererRolePath: vi.fn((role: RuntimeEntryRole) => `/verified/${role}`),
+    rendererModelRoot: vi.fn((id: RuntimeModelId) => `/verified/generation/models/${id}`),
+    rendererResource: vi.fn(
+      (relativePath: string): VerifiedRuntimeResourcePin => ({
+        path: relativePath,
+        bytes: 1,
+        sha256: 'c'.repeat(64)
+      })
+    ),
+    rendererResources: vi.fn(() => new Map<string, string>()),
+    release
+  }
+  return { lease, release, verifyCurrentBytes, preparePhysicalAdmission }
+}
+
 /** Waits for the fake child's postMessage spy to have recorded a request of the given type, and returns
  *  it — transcribeRemote() posts synchronously once whisperImportTranscribe's two no-op probe awaits
  *  (probeLanguage/reprobeForSwitch, both immediate no-ops with no probe supplied) have flushed, which
@@ -89,6 +152,14 @@ async function waitForInit(child: FakeChild): Promise<Record<string, unknown>> {
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
   throw new Error("fake child never received an 'init' postMessage")
+}
+
+async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('waitUntil timed out')
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  }
 }
 
 // Mirrors the essential cases from renderer/src/lib/whisper.worker.test.ts (PR #29) against the ported
@@ -450,26 +521,83 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
   })
 
   it('transcribes from the exact leased Whisper model without requiring model-only floor readiness', async () => {
-    const lease = {
-      generationIdentity: 'a'.repeat(64),
-      entry: vi.fn(() => '/verified/whisper-import-host'),
-      model: vi.fn(() => '/verified/generation/models/whisper-base'),
-      release: vi.fn(async () => undefined)
-    }
-    runtimeAdmission.acquire.mockResolvedValueOnce(lease)
+    const fixture = runtimeLeaseFixture()
+    runtimeAdmission.acquire.mockResolvedValueOnce(fixture.lease)
     floorAssets.ensure.mockClear()
 
     const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
     const init = await waitForInit(child)
     expect(electron.utilityProcess.fork.mock.calls[0]?.[0]).toBe('/verified/whisper-import-host')
     expect(init.modelsPath).toBe('/verified/generation/models/whisper-base')
+    expect(fixture.lease.model).toHaveBeenCalledWith('asr.whisper-base-q8')
     expect(floorAssets.ensure).not.toHaveBeenCalled()
+    expect(fixture.verifyCurrentBytes).toHaveBeenCalledOnce()
+    expect(fixture.preparePhysicalAdmission).toHaveBeenCalledOnce()
 
     const req = await waitForRequest(child, 'transcribe')
     child.emit('message', { type: 'result', id: req.id, text: 'leased compact model' })
     await expect(pending).resolves.toBe('leased compact model')
     await stopWhisperHost()
-    expect(lease.release).toHaveBeenCalledOnce()
+    expect(fixture.release).toHaveBeenCalledOnce()
+  })
+
+  it('does not fork when currentness changes before the held physical admission is committed', async () => {
+    let authorityCurrent = true
+    let finishAdmission!: (admission: RuntimePhysicalAdmission) => void
+    const heldAdmission = new Promise<RuntimePhysicalAdmission>((resolve) => {
+      finishAdmission = resolve
+    })
+    const admission: RuntimePhysicalAdmission = {
+      assertCurrentSync: vi.fn(() => {
+        if (!authorityCurrent) throw new Error('runtime physical admission became stale')
+      }),
+      dispose: vi.fn(async () => undefined)
+    }
+    const fixture = runtimeLeaseFixture(() => heldAdmission)
+    runtimeAdmission.acquire.mockResolvedValueOnce(fixture.lease)
+
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    await waitUntil(() => fixture.preparePhysicalAdmission.mock.calls.length === 1)
+    expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    authorityCurrent = false
+    finishAdmission(admission)
+    await expect(pending).rejects.toThrow('runtime physical admission became stale')
+    expect(fixture.verifyCurrentBytes).toHaveBeenCalledOnce()
+    expect(fixture.preparePhysicalAdmission).toHaveBeenCalledOnce()
+    expect(admission.assertCurrentSync).toHaveBeenCalledOnce()
+    expect(admission.dispose).toHaveBeenCalledOnce()
+    expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    expect(fixture.release).toHaveBeenCalledOnce()
+  })
+
+  it('holds Whisper launch until the exact leased physical admission is current and disposes it afterward', async () => {
+    let finishAdmission!: (admission: RuntimePhysicalAdmission) => void
+    const admission = new Promise<RuntimePhysicalAdmission>((resolve) => {
+      finishAdmission = resolve
+    })
+    const fixture = runtimeLeaseFixture(() => admission)
+    runtimeAdmission.acquire.mockResolvedValueOnce(fixture.lease)
+
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    await waitUntil(() => fixture.preparePhysicalAdmission.mock.calls.length === 1)
+    expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    const currentAdmission: RuntimePhysicalAdmission = {
+      assertCurrentSync: vi.fn(),
+      dispose: vi.fn(async () => undefined)
+    }
+    finishAdmission(currentAdmission)
+    const init = await waitForInit(child)
+    expect(electron.utilityProcess.fork.mock.calls[0]?.[0]).toBe('/verified/whisper-import-host')
+    expect(init.modelsPath).toBe('/verified/generation/models/whisper-base')
+    expect(fixture.lease.model).toHaveBeenCalledWith('asr.whisper-base-q8')
+    expect(currentAdmission.assertCurrentSync).toHaveBeenCalledOnce()
+    expect(currentAdmission.dispose).toHaveBeenCalledOnce()
+
+    const req = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: req.id, text: 'held leased model' })
+    await expect(pending).resolves.toBe('held leased model')
+    await stopWhisperHost()
+    expect(fixture.release).toHaveBeenCalledOnce()
   })
 
   it('rejects every in-flight call when the child exits mid-request', async () => {
