@@ -149,6 +149,7 @@ export function useFileBackend(): boolean {
  *   that archives them and starts a fresh local profile without deleting anything.
  */
 export function isKeychainAvailable(): boolean {
+  if (packagedMacRequiresKeychain() && !_macKeychainUnlockConfirmed) return false
   try {
     return safeStorage.isEncryptionAvailable()
   } catch {
@@ -302,7 +303,8 @@ function loadKey({
   _key = randomBytes(32)
   if (canWrap) {
     try {
-      writeFileSync(p, safeStorage.encryptString(_key.toString('base64')), { mode: 0o600 })
+      const wrappedKey = safeStorage.encryptString(_key.toString('base64'))
+      persistKeyFileAtomically(p, wrappedKey)
     } catch (e) {
       _key = null
       if (packagedMacRequiresKeychain()) throw new KeychainKeyRecoveryError()

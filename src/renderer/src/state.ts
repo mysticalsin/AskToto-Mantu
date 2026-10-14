@@ -16,6 +16,9 @@ import type {
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { isEncryptedProfileRecoveryMessage, isMacKeychainUnlockMessage } from '@shared/encrypted-profile-recovery'
+import { useEncryptedProfileUnlock } from './hooks/use-encrypted-profile-unlock'
+import { BOOT_DEADLINE_MS, withBootIpcTimeout, useSettingsBoot } from './settings-boot'
+export { BOOT_DEADLINE_MS, BOOT_IPC_TIMEOUT_MS, withBootIpcTimeout } from './settings-boot'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -519,28 +522,8 @@ export function useAsk(): {
   )
 }
 
-/** Bound a boot IPC so a hung invoke (never settles) advances retries instead of spinning forever. */
-export const BOOT_IPC_TIMEOUT_MS = 2000
-/** Wall-clock budget for first-paint getSettings/authStatus before surfacing bootError. */
-export const BOOT_DEADLINE_MS = 15_000
 /** FITO-185-X: show Reload on the Loading strip after this wait — never spin with zero escape. */
 export const BOOT_SOFT_RETRY_MS = 5_000
-
-export function withBootIpcTimeout<T>(promise: Promise<T>, label: string, ms = BOOT_IPC_TIMEOUT_MS): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-    promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (err) => {
-        clearTimeout(timer)
-        reject(err)
-      }
-    )
-  })
-}
 
 export function useSettings(): {
   settings: PublicSettings | null
@@ -573,52 +556,7 @@ export function useSettings(): {
       if (isEncryptedProfileRecoveryMessage(message) || isMacKeychainUnlockMessage(message)) setBootError(message)
     }
   }, [])
-  useEffect(() => {
-    // First-paint load with retry. getSettings() can reject before the main-process handler is
-    // registered (boot-order race) or on a transient decrypt hiccup; the app renders only the
-    // "Starting Métis…" strip until `settings` is non-null, and the overlay is usually already
-    // focused so the focus-refetch below never fires — without a retry a single boot reject strands
-    // the app on that strip indefinitely. Retry with backoff until it resolves.
-    // FITO-185-G-TIMEOUT: also bound each invoke (~2s) so a HUNG IPC (never settles) advances
-    // retries, and stop by 15s wall so bootError surfaces instead of spinning forever.
-    let cancelled = false
-    const deadline = Date.now() + BOOT_DEADLINE_MS
-    void (async () => {
-      for (let attempt = 0; !cancelled; attempt++) {
-        try {
-          const s = await withBootIpcTimeout(window.toto.getSettings(), 'getSettings')
-          if (!cancelled) {
-            setSettings(s)
-            setBootError(null)
-          }
-          return
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e)
-          if (isMacKeychainUnlockMessage(message)) {
-            if (!cancelled) setBootError(message)
-            return
-          }
-          if (attempt >= 20 || Date.now() >= deadline) {
-            console.error('[boot] getSettings failed after retries; app cannot start', e)
-            if (!cancelled) setBootError(message)
-            return
-          }
-          const wait = Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
-          await new Promise((r) => setTimeout(r, wait))
-        }
-      }
-    })()
-    // Refetch on focus so settings changed by the MAIN process (e.g. the Dust CLI auto-connect / token
-    // refresh on launch) surface in the UI without the user having to do anything.
-    const onFocus = (): void => void refresh()
-    window.addEventListener('focus', onFocus)
-    const unsubscribe = window.toto.onSettingsChanged(onFocus)
-    return () => {
-      cancelled = true
-      window.removeEventListener('focus', onFocus)
-      unsubscribe()
-    }
-  }, [refresh])
+  useSettingsBoot(refresh, setSettings, setBootError)
   const patch = useCallback(async (p: Partial<PublicSettings>) => {
     const next = await window.toto.setSettings(p)
     setSettings(next)
@@ -646,16 +584,7 @@ export function useSettings(): {
   const testKey = useCallback(async (provider: ProviderId, k: string) => {
     return window.toto.testApiKey(provider, k)
   }, [])
-  const unlockEncryptedProfile = useCallback(async (): Promise<void> => {
-    try {
-      setSettings(await window.toto.unlockEncryptedProfile())
-      setBootError(null)
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setBootError(message)
-      throw e
-    }
-  }, [])
+  const unlockEncryptedProfile = useEncryptedProfileUnlock(setSettings, setBootError)
   return {
     settings,
     bootError,

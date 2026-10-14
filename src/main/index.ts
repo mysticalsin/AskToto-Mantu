@@ -123,7 +123,6 @@ import {
   setApiKey,
   clearApiKey,
   clearDustRefreshToken,
-  getDustRefreshToken,
   testApiKey,
   hasApiKey,
   hasKeysMap,
@@ -135,18 +134,16 @@ import {
   getAdminLocalSpeechPackPolicy,
   getSonioxApiKey,
   setSonioxApiKey,
-  clearSonioxApiKey,
-  resetCredentialReadCachesAfterProfileUnlock
+  clearSonioxApiKey
 } from './store'
+import { requireMacKeychainUnlock } from './secrets'
+import { registerMacProfileUnlockIpc } from './ipc/mac-profile-unlock'
 import {
-  authorizeMacKeychainUnlock,
-  KeychainKeyRecoveryError,
-  MacKeychainUnlockRequiredError,
-  isMacKeychainUnlockAuthorized,
-  prepareFileKeyForWrite,
-  requireMacKeychainUnlock,
-  resetMacKeychainUnlockAuthorization
-} from './secrets'
+  applyOperatorBootstrapSettings,
+  createMacProfileBootCoordinator,
+  safeOverlayLayout,
+  safeOverlayPlacement
+} from './mac-profile-boot'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
@@ -279,7 +276,6 @@ import {
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
-  DEFAULT_OVERLAY_LAYOUT,
   ASK_REVEAL_MIN_HEIGHT_PX,
   BAR_IDLE_HEIGHT_PX,
   askRevealHeight,
@@ -737,7 +733,6 @@ import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifec
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
-  reloadSessionAfterProfileUnlock,
   signIn as authSignIn,
   signOut as authSignOut,
   requireAuth,
@@ -979,8 +974,6 @@ function makeRefreshDustAuth(current: {
   }
 }
 
-// KEYSTORE BACKEND — packaged installs use OS-backed encryption. On macOS, existing-profile
-// Keychain reads wait for the visible, explicit unlock action registered below.
 //
 // Windows (NOT forced): none of the above applies. safeStorage there is DPAPI-backed, tied to the
 // signed-in Windows account rather than to the binary's code signature, and never shows a prompt.
@@ -2279,44 +2272,7 @@ let emittedAppStarted = false
 let observability: RunObservability | null = null
 let bootWorkGate: BootWork | null = null
 let startupBootWork: BootWork | null = null
-let startupBootWorkReleaseWindow: BrowserWindow | null = null
-let startupBootWorkReleaseRequested = false
-let startupBootWorkReleased = false
-let startupBootInitializationComplete = false
-const deferredMacProfileBootSteps = new Map<string, () => void>()
-
-function macProfileUnlockRequired(): boolean {
-  return app.isPackaged && process.platform === 'darwin' && !isMacKeychainUnlockAuthorized()
-}
-
-function isMacProfileUnlockError(error: unknown): boolean {
-  return macProfileUnlockRequired() && error instanceof KeychainKeyRecoveryError
-}
-
-function deferMacProfileBootStep(name: string, run: () => void): void {
-  deferredMacProfileBootSteps.set(name, run)
-  mainLog.info(`[boot] ${name} deferred until the encrypted profile is unlocked`)
-}
-
-function resumeDeferredMacProfileBootSteps(): void {
-  if (!startupBootInitializationComplete || macProfileUnlockRequired()) return
-  const steps = [...deferredMacProfileBootSteps.entries()]
-  deferredMacProfileBootSteps.clear()
-  for (const [name, run] of steps) {
-    try {
-      run()
-    } catch (error) {
-      mainLog.error(`[boot] deferred ${name} failed:`, error)
-      auditLog('app.error.boot_step', { step: name, message: error, recoveryStatus: 'continued' })
-    }
-  }
-}
-
-function releaseStartupBootWorkIfReady(): void {
-  if (!startupBootWorkReleaseRequested || startupBootWorkReleased || macProfileUnlockRequired()) return
-  startupBootWorkReleased = true
-  startupBootWork?.releaseAfterFirstShow(startupBootWorkReleaseWindow)
-}
+const macProfileBoot = createMacProfileBootCoordinator(() => startupBootWork)
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -3335,26 +3291,12 @@ const TOP_CENTER_MARGIN_PX = 24
 const RESIZE_EDGE_MARGIN = 8
 
 function liveOverlayLayout(): OverlayLayout {
-  try {
-    return resolveOverlayPresentation({
-      placement: liveOverlayPlacement(),
-      layout: parseOverlayLayout(getSettings().overlayLayout)
-    }).layout
-  } catch {
-    // A packaged Mac may need visible consent before an existing profile can be read. Keep
-    // window construction independent from that read; the renderer shows the unlock surface.
-    return DEFAULT_OVERLAY_LAYOUT
-  }
+  return safeOverlayLayout(getSettings)
 }
 
 /** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
 function liveOverlayPlacement(): OverlayPlacement {
-  try {
-    return parseOverlayPlacement(getSettings().overlayPlacement)
-  } catch {
-    // The unlock surface must still be positioned while profile settings are Keychain-locked.
-    return 'top-center'
-  }
+  return safeOverlayPlacement(getSettings)
 }
 
 /** The sidecar falls back to the established top-center behavior on a constrained display. */
@@ -5325,40 +5267,9 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
-  // --- Settings & permissions ---
-  ipcMain.handle(IPC.settingsUnlockProfile, (e) => {
-    assertMainWindow(e)
-    authorizeMacKeychainUnlock()
-    try {
-      // Legacy raw file keys use secrets.ts's atomic tmp+rename migration. Wrapped keys are only
-      // unwrapped after this user action, so macOS never shows a Keychain dialog behind first paint.
-      prepareFileKeyForWrite()
-      reloadSessionAfterProfileUnlock()
-      resetCredentialReadCachesAfterProfileUnlock()
-      // Validate/migrate stored legacy safeStorage credentials while the visible unlock action is
-      // still pending. A Keychain denial must keep the secure-storage card up, not return settings
-      // and let later startup/background readers misreport valid credentials as absent.
-      void hasKeysMap()
-      void getDustRefreshToken()
-      const settings = publicSettingsWithSpeakerPolicy()
-      if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
-      releaseStartupBootWorkIfReady()
-      resumeDeferredMacProfileBootSteps()
-      return settings
-    } catch (error) {
-      resetMacKeychainUnlockAuthorization()
-      resetCredentialReadCachesAfterProfileUnlock()
-      if (app.isPackaged && process.platform === 'darwin' && error instanceof KeychainKeyRecoveryError) {
-        throw new MacKeychainUnlockRequiredError()
-      }
-      throw error
-    }
-  })
+  registerMacProfileUnlockIpc(assertMainWindow, publicSettingsWithSpeakerPolicy, () => win, macProfileBoot.unlockSucceeded)
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
-    // Fresh and existing packaged Mac profiles both begin at the visible unlock surface. This
-    // prevents a first settings read from silently allowing onboarding defaults or prompting behind
-    // the window before the user has accepted the Keychain action.
     if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     const s = publicSettingsWithSpeakerPolicy()
     // Re-apply the live side effects of a managed-config change (content protection / shortcuts / tray)
@@ -9773,24 +9684,13 @@ if (!app.requestSingleInstanceLock()) {
       })
       {
         setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
-        const applyOperatorBootstrapSettings = (): void => {
-          const boot = getSettings()
-          if (
-            !boot.operatorUrl &&
-            process.env.METIS_OPERATOR_URL &&
-            /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)
-          ) {
-            setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
-          }
-          if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
-            setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
-          }
-        }
         try {
-          applyOperatorBootstrapSettings()
+          applyOperatorBootstrapSettings(getSettings, setSettings, process.env)
         } catch (e) {
-          if (!isMacProfileUnlockError(e)) throw e
-          deferMacProfileBootStep('applyOperatorBootstrapSettings', applyOperatorBootstrapSettings)
+          if (!macProfileBoot.isUnlockError(e)) throw e
+          macProfileBoot.defer('applyOperatorBootstrapSettings', () =>
+            applyOperatorBootstrapSettings(getSettings, setSettings, process.env)
+          )
         }
       }
       // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
@@ -9983,15 +9883,7 @@ if (!app.requestSingleInstanceLock()) {
           try {
             fn()
           } catch (e) {
-            if (isMacProfileUnlockError(e)) {
-              deferMacProfileBootStep(name, () => runStep(name, fn))
-              auditLog('app.error.boot_step', {
-                step: name,
-                message: e,
-                recoveryStatus: 'retry_pending'
-              })
-              return
-            }
+            if (macProfileBoot.deferUnlockError(name, e, () => runStep(name, fn))) return
             // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
             // boot-step failure is actually diagnosable and shows up in the audit trail.
             mainLog.error(`[boot] ${name} failed:`, e)
@@ -10266,9 +10158,7 @@ if (!app.requestSingleInstanceLock()) {
       await yieldBeforeBootWindow() // M2-0422: window construction is its own task
       withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
       scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
-      startupBootWorkReleaseWindow = win
-      startupBootWorkReleaseRequested = true
-      releaseStartupBootWorkIfReady()
+      macProfileBoot.requestBootWorkRelease(win)
       revealController.markBootComplete()
       // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
       clearBootWatchOnce('createWindow')
@@ -10323,20 +10213,15 @@ if (!app.requestSingleInstanceLock()) {
       runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
       runStep('startMeetingNotifier', startMeetingNotifier)
       runStep('initAutoUpdate', () => initAutoUpdate(() => win))
-      // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
-      // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
-      // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
-      // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
+      // Resume background reconciliation after first paint; directory scans cover sync clients without reliable fs.watch events.
       const BRAIN_RECONCILE_MS = 60 * 1000
       const runDelayedBrainStartup = (): void => {
-        if (macProfileUnlockRequired()) {
-          // Keep first paint and ordinary boot initialization independent from the profile lock. The
-          // one-shot brain startup resumes after unlock; release the boot blocker while waiting.
-          setBootPowerSaveBlock(false)
-          clearBootWatchOnce('profile-unlock-deferred')
-          deferMacProfileBootStep('runDelayedBrainStartup', runDelayedBrainStartup)
-          return
-        }
+        if (
+          macProfileBoot.deferIfLocked('runDelayedBrainStartup', runDelayedBrainStartup, () => {
+            setBootPowerSaveBlock(false)
+            clearBootWatchOnce('profile-unlock-deferred')
+          })
+        ) return
         // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
         // launch that decrypts index.json. When the previous run died before boot completed, this launch
         // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
@@ -10425,9 +10310,7 @@ if (!app.requestSingleInstanceLock()) {
           /* settings store not ready */
         }
       })
-      startupBootInitializationComplete = true
-      releaseStartupBootWorkIfReady()
-      resumeDeferredMacProfileBootSteps()
+      macProfileBoot.completeInitialization()
     })
     .catch((e) => {
       // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
