@@ -16,6 +16,25 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const object = record(value)
+  if (object)
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+      .join(',')}}`
+  return JSON.stringify(value) ?? 'null'
+}
+
+function freezeJson<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) freezeJson(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
 function safePath(path: unknown): path is string {
   if (
     typeof path !== 'string' ||
@@ -61,7 +80,9 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
       'builder',
       'upstream',
       'files',
-      'licenses'
+      'licenses',
+      'entrypoints',
+      'models'
     ])
   ) {
     throw new Error('RUNTIME_INVENTORY_INVALID')
@@ -86,22 +107,29 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
   const builder = record(inventory.builder)
   const target = record(inventory.target)
   const runtime = record(inventory.runtime)
+  const entrypoints = record(inventory.entrypoints)
+  const sameClosedJson = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right)
   if (
     inventory.schemaVersion !== 1 ||
-    inventory.kind !== 'runtime' ||
+    inventory.kind !== row.kind ||
     inventory.componentId !== row.componentId ||
     inventory.artifactId !== row.artifactId ||
     !target ||
     !exactKeys(target, ['platform', 'arch']) ||
     target.platform !== row.target.platform ||
     target.arch !== row.target.arch ||
-    !runtime ||
-    !exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) ||
-    runtime.electronVersion !== row.runtime.electronVersion ||
-    runtime.nodeAbi !== row.runtime.nodeAbi ||
-    runtime.napi !== row.runtime.napi ||
-    runtime.chromiumVersion !== row.runtime.chromiumVersion ||
-    runtime.hostProtocol !== row.runtime.hostProtocol ||
+    !sameClosedJson(inventory.entrypoints, row.entrypoints) ||
+    !sameClosedJson(inventory.models, row.models) ||
+    (row.kind === 'runtime' &&
+      (!runtime ||
+        !row.runtime ||
+        !exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) ||
+        runtime.electronVersion !== row.runtime.electronVersion ||
+        runtime.nodeAbi !== row.runtime.nodeAbi ||
+        runtime.napi !== row.runtime.napi ||
+        runtime.chromiumVersion !== row.runtime.chromiumVersion ||
+        runtime.hostProtocol !== row.runtime.hostProtocol)) ||
+    (row.kind === 'model' && (inventory.runtime !== null || row.runtime !== null)) ||
     source.repositoryUri !== SOURCE_REPOSITORY ||
     source.commit !== row.signer.sourceCommit ||
     source.ref !== row.signer.ref ||
@@ -134,7 +162,11 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
     inventory.files.length > MAX_INVENTORY_FILES ||
     !Array.isArray(inventory.licenses) ||
     inventory.licenses.length < 1 ||
-    inventory.licenses.length > MAX_INVENTORY_LICENSES
+    inventory.licenses.length > MAX_INVENTORY_LICENSES ||
+    !entrypoints ||
+    !Array.isArray(inventory.models) ||
+    (row.kind === 'runtime' && (Object.keys(entrypoints).length === 0 || inventory.models.length !== 0)) ||
+    (row.kind === 'model' && (Object.keys(entrypoints).length !== 0 || inventory.models.length === 0))
   )
     throw new Error('RUNTIME_INVENTORY_IDENTITY_MISMATCH')
 
@@ -209,6 +241,56 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
     if (!Number.isSafeInteger(totalBytes) || totalBytes > MAX_TOTAL_PAYLOAD_BYTES)
       throw new Error('RUNTIME_INVENTORY_TOO_LARGE')
   }
+  if (totalBytes !== row.payloadBytes) throw new Error('RUNTIME_CATALOG_PAYLOAD_SIZE_MISMATCH')
+  const roles = new Set([
+    'parakeet-host',
+    'whisper-import-host',
+    'whisper-renderer-worker',
+    'speaker-embedding-host',
+    'llama-server'
+  ])
+  for (const [role, path] of Object.entries(entrypoints)) {
+    if (!roles.has(role) || !safePath(path) || !exact.has(path))
+      throw new Error('RUNTIME_ENTRYPOINT_INVENTORY_MISMATCH')
+  }
+  const modelIds = new Set<string>()
+  const modelMembers = new Set<string>()
+  for (const raw of inventory.models) {
+    const model = record(raw)
+    if (
+      !model ||
+      !exactKeys(model, ['id', 'root', 'members']) ||
+      typeof model.id !== 'string' ||
+      ![
+        'asr.parakeet-tdt-0.6b-v3-int8',
+        'asr.whisper-base-q8',
+        'speaker.embedding',
+        'qwen3.5-0.8b',
+        'qwen3.5-4b'
+      ].includes(model.id) ||
+      modelIds.has(model.id) ||
+      !safePath(model.root) ||
+      !Array.isArray(model.members) ||
+      model.members.length === 0
+    ) {
+      throw new Error('RUNTIME_MODEL_INVENTORY_INVALID')
+    }
+    modelIds.add(model.id)
+    const localMembers = new Set<string>()
+    for (const member of model.members) {
+      const foldedMember = typeof member === 'string' ? member.toLowerCase() : ''
+      if (
+        !safePath(member) ||
+        localMembers.has(foldedMember) ||
+        modelMembers.has(foldedMember) ||
+        !exact.has(`${model.root}/${member}`)
+      ) {
+        throw new Error('RUNTIME_MODEL_INVENTORY_INVALID')
+      }
+      localMembers.add(foldedMember)
+      modelMembers.add(foldedMember)
+    }
+  }
   for (const raw of inventory.licenses) {
     const license = record(raw)
     if (
@@ -247,5 +329,5 @@ export function parseRuntimeInventory(value: unknown, row: RuntimeCatalogRow): R
       throw new Error('RUNTIME_LICENSE_NOTICE_MISSING')
     }
   }
-  return inventory as unknown as RuntimeInventoryV1
+  return freezeJson(inventory) as unknown as RuntimeInventoryV1
 }

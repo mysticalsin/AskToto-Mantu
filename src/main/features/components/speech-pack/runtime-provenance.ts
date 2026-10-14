@@ -5,6 +5,8 @@ import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
 import { parseRuntimeInventory } from './runtime-inventory'
 import { hashPinnedArchive } from './runtime-archive'
+import { verifyPinnedRuntimeTrust } from './runtime-trust'
+import type { RuntimeEntryRole, RuntimeModelId } from './runtime-lease'
 
 const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
 const MAX_INVENTORY_BYTES = 20 * 1024 * 1024
@@ -27,25 +29,42 @@ const OID = {
 } as const
 
 export interface RuntimeCatalogRow {
-  readonly kind: 'runtime'
+  readonly kind: 'runtime' | 'model'
   readonly componentId: string
   readonly artifactId: string
-  readonly target: { readonly platform: 'darwin' | 'win32'; readonly arch: 'arm64' | 'x64' }
+  readonly target: { readonly platform: 'darwin' | 'win32' | 'any'; readonly arch: 'arm64' | 'x64' | 'any' }
   readonly runtime: {
     readonly electronVersion: string
     readonly nodeAbi: string
     readonly napi: string
     readonly chromiumVersion: string
     readonly hostProtocol: 1
-  }
+  } | null
+  readonly payloadBytes: number
   readonly archive: {
     readonly bytes: number
     readonly sha256: string
     readonly url: string
     readonly releaseAssetId: number
   }
-  readonly inventory: { readonly bytes: number; readonly sha256: string }
-  readonly bundle: { readonly bytes: number; readonly sha256: string }
+  readonly inventory: {
+    readonly bytes: number
+    readonly sha256: string
+    readonly url: string
+    readonly releaseAssetId: number
+  }
+  readonly bundle: {
+    readonly bytes: number
+    readonly sha256: string
+    readonly url: string
+    readonly releaseAssetId: number
+  }
+  readonly entrypoints: Readonly<Partial<Record<RuntimeEntryRole, string>>>
+  readonly models: readonly {
+    readonly id: RuntimeModelId
+    readonly root: string
+    readonly members: readonly string[]
+  }[]
   readonly signer: {
     readonly issuer: string
     readonly repositoryUri: string
@@ -75,7 +94,7 @@ export interface RuntimeCatalogV1 {
 
 export interface RuntimeInventoryV1 {
   readonly schemaVersion: 1
-  readonly kind: 'runtime'
+  readonly kind: 'runtime' | 'model'
   readonly componentId: string
   readonly artifactId: string
   readonly target: RuntimeCatalogRow['target']
@@ -120,6 +139,8 @@ export interface RuntimeInventoryV1 {
     readonly noticeSha256: string
     readonly sourceReceiptUri: string
   }[]
+  readonly entrypoints: RuntimeCatalogRow['entrypoints']
+  readonly models: RuntimeCatalogRow['models']
 }
 
 export interface RuntimeExtractedFile {
@@ -201,6 +222,14 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function freezeJson<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) freezeJson(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
 function boundedUtf8Json(bytes: Uint8Array, limit: number, code: string): unknown {
   if (bytes.byteLength === 0 || bytes.byteLength > limit) throw new Error(code)
   let text: string
@@ -259,6 +288,41 @@ function productionArchiveUrl(value: unknown): value is string {
   }
 }
 
+function validModelRows(rows: readonly unknown[], allowed: readonly string[]): boolean {
+  const ids = new Set<string>()
+  const members = new Set<string>()
+  return (
+    rows.length <= allowed.length &&
+    rows.every((raw) => {
+      const model = record(raw)
+      if (
+        !model ||
+        !exactKeys(model, ['id', 'root', 'members']) ||
+        typeof model.id !== 'string' ||
+        !allowed.includes(model.id) ||
+        ids.has(model.id) ||
+        !safePath(model.root) ||
+        !Array.isArray(model.members) ||
+        model.members.length === 0 ||
+        model.members.length > MAX_INVENTORY_FILES
+      )
+        return false
+      ids.add(model.id)
+      for (const member of model.members) {
+        if (
+          typeof member !== 'string' ||
+          !safePath(member) ||
+          members.has(member.toLowerCase()) ||
+          !safePath(`${model.root}/${member}`)
+        )
+          return false
+        members.add(member.toLowerCase())
+      }
+      return true
+    })
+  )
+}
+
 function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
   const row = record(value)
   if (
@@ -269,10 +333,13 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
       'artifactId',
       'target',
       'runtime',
+      'payloadBytes',
       'archive',
       'inventory',
       'bundle',
-      'signer'
+      'signer',
+      'entrypoints',
+      'models'
     ])
   )
     return false
@@ -282,27 +349,74 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
   const inventory = record(row.inventory)
   const bundle = record(row.bundle)
   const signer = record(row.signer)
+  const entrypoints = record(row.entrypoints)
+  const roles = [
+    'parakeet-host',
+    'whisper-import-host',
+    'whisper-renderer-worker',
+    'speaker-embedding-host',
+    'llama-server'
+  ]
+  const modelIds = [
+    'asr.parakeet-tdt-0.6b-v3-int8',
+    'asr.whisper-base-q8',
+    'speaker.embedding',
+    'qwen3.5-0.8b',
+    'qwen3.5-4b'
+  ]
+  const models = Array.isArray(row.models) ? row.models : null
+  const modelRowsValid = models !== null && validModelRows(models, modelIds)
+  const runtimeShape =
+    row.kind === 'runtime'
+      ? Boolean(
+          runtime &&
+            target &&
+            target.platform !== 'any' &&
+            target.arch !== 'any' &&
+            modelRowsValid &&
+            models?.length === 0 &&
+            entrypoints &&
+            Object.keys(entrypoints).length > 0
+        )
+      : Boolean(
+          row.kind === 'model' &&
+            row.runtime === null &&
+            target?.platform === 'any' &&
+            target.arch === 'any' &&
+            runtime === null &&
+            modelRowsValid &&
+            models?.length > 0 &&
+            entrypoints &&
+            Object.keys(entrypoints).length === 0
+        )
   return Boolean(
-    row.kind === 'runtime' &&
+    (row.kind === 'runtime' || row.kind === 'model') &&
+      runtimeShape &&
+      Number.isSafeInteger(row.payloadBytes) &&
+      (row.payloadBytes as number) > 0 &&
+      (row.payloadBytes as number) <= MAX_TOTAL_PAYLOAD_BYTES &&
       typeof row.componentId === 'string' &&
       /^[a-z][a-z0-9.-]{0,79}$/.test(row.componentId) &&
       typeof row.artifactId === 'string' &&
       /^[a-z][a-z0-9.-]{0,79}$/.test(row.artifactId) &&
       target &&
       exactKeys(target, ['platform', 'arch']) &&
-      (target.platform === 'darwin' || target.platform === 'win32') &&
-      (target.arch === 'arm64' || target.arch === 'x64') &&
-      runtime &&
-      exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) &&
-      typeof runtime.electronVersion === 'string' &&
-      /^\d+\.\d+\.\d+$/.test(runtime.electronVersion) &&
-      typeof runtime.nodeAbi === 'string' &&
-      /^\d{1,8}$/.test(runtime.nodeAbi) &&
-      typeof runtime.napi === 'string' &&
-      /^\d{1,8}$/.test(runtime.napi) &&
-      typeof runtime.chromiumVersion === 'string' &&
-      /^\d+\.\d+\.\d+\.\d+$/.test(runtime.chromiumVersion) &&
-      runtime.hostProtocol === 1 &&
+      (target.platform === 'darwin' || target.platform === 'win32' || target.platform === 'any') &&
+      (target.arch === 'arm64' || target.arch === 'x64' || target.arch === 'any') &&
+      (row.kind === 'model' ||
+        Boolean(
+          runtime &&
+            exactKeys(runtime, ['electronVersion', 'nodeAbi', 'napi', 'chromiumVersion', 'hostProtocol']) &&
+            typeof runtime.electronVersion === 'string' &&
+            /^\d+\.\d+\.\d+$/.test(runtime.electronVersion) &&
+            typeof runtime.nodeAbi === 'string' &&
+            /^\d{1,8}$/.test(runtime.nodeAbi) &&
+            typeof runtime.napi === 'string' &&
+            /^\d{1,8}$/.test(runtime.napi) &&
+            typeof runtime.chromiumVersion === 'string' &&
+            /^\d+\.\d+\.\d+\.\d+$/.test(runtime.chromiumVersion) &&
+            runtime.hostProtocol === 1
+        )) &&
       archive &&
       exactKeys(archive, ['bytes', 'sha256', 'url', 'releaseAssetId']) &&
       Number.isSafeInteger(archive.bytes) &&
@@ -314,19 +428,28 @@ function isCatalogRow(value: unknown): value is RuntimeCatalogRow {
       Number.isSafeInteger(archive.releaseAssetId) &&
       (archive.releaseAssetId as number) > 0 &&
       inventory &&
-      exactKeys(inventory, ['bytes', 'sha256']) &&
+      exactKeys(inventory, ['bytes', 'sha256', 'url', 'releaseAssetId']) &&
       Number.isSafeInteger(inventory.bytes) &&
       (inventory.bytes as number) > 0 &&
       (inventory.bytes as number) <= MAX_INVENTORY_BYTES &&
       typeof inventory.sha256 === 'string' &&
       SHA256.test(inventory.sha256) &&
+      productionArchiveUrl(inventory.url) &&
+      Number.isSafeInteger(inventory.releaseAssetId) &&
+      (inventory.releaseAssetId as number) > 0 &&
       bundle &&
-      exactKeys(bundle, ['bytes', 'sha256']) &&
+      exactKeys(bundle, ['bytes', 'sha256', 'url', 'releaseAssetId']) &&
       Number.isSafeInteger(bundle.bytes) &&
       (bundle.bytes as number) > 0 &&
       (bundle.bytes as number) <= MAX_BUNDLE_BYTES &&
       typeof bundle.sha256 === 'string' &&
       SHA256.test(bundle.sha256) &&
+      productionArchiveUrl(bundle.url) &&
+      Number.isSafeInteger(bundle.releaseAssetId) &&
+      (bundle.releaseAssetId as number) > 0 &&
+      entrypoints &&
+      Object.keys(entrypoints).every((role) => roles.includes(role) && safePath(entrypoints[role])) &&
+      modelRowsValid &&
       signer &&
       exactKeys(signer, [
         'issuer',
@@ -393,21 +516,23 @@ export function parseRuntimeCatalog(bytes: Uint8Array): RuntimeCatalogV1 {
     ) {
       throw new Error('RUNTIME_TRUST_ROOT_UNAVAILABLE')
     }
-    trustRoot = root as RuntimeCatalogV1['trustRoot']
+    trustRoot = freezeJson(root) as RuntimeCatalogV1['trustRoot']
   }
   const seen = new Set<string>()
+  const artifactIds = new Set<string>()
   for (const row of parsed.targets) {
     if (!isCatalogRow(row)) throw new Error('RUNTIME_CATALOG_ROW_INVALID')
     const key = `${row.componentId}:${row.target.platform}:${row.target.arch}`
-    if (seen.has(key)) throw new Error('RUNTIME_CATALOG_DUPLICATE_TARGET')
+    if (seen.has(key) || artifactIds.has(row.artifactId)) throw new Error('RUNTIME_CATALOG_DUPLICATE_TARGET')
     seen.add(key)
+    artifactIds.add(row.artifactId)
   }
   return Object.freeze({
     schemaVersion: 1,
     protocolVersion: 1,
     catalogId: parsed.catalogId,
     trustRoot,
-    targets: Object.freeze(parsed.targets as RuntimeCatalogRow[])
+    targets: Object.freeze((parsed.targets as RuntimeCatalogRow[]).map(freezeJson))
   })
 }
 
@@ -527,13 +652,7 @@ export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): 
   const { row, trustRootPin, bundleBytes, archivePath, inventoryBytes, trustedRootJson, trustedRootReceiptJson } = input
   if (!isCatalogRow(row)) throw new Error('RUNTIME_CATALOG_ROW_INVALID')
   if (!trustRootPin) throw new Error('RUNTIME_TRUST_ROOT_UNAVAILABLE')
-  if (
-    trustedRootJson.byteLength !== trustRootPin.bytes ||
-    trustedRootJson.byteLength > MAX_TRUST_ROOT_BYTES ||
-    sha256(trustedRootJson) !== trustRootPin.sha256
-  ) {
-    throw new Error('RUNTIME_TRUST_ROOT_PIN_MISMATCH')
-  }
+  const trustedRoot = verifyPinnedRuntimeTrust(trustRootPin, trustedRootJson, trustedRootReceiptJson)
   if (
     bundleBytes.byteLength !== row.bundle.bytes ||
     bundleBytes.byteLength > MAX_BUNDLE_BYTES ||
@@ -555,57 +674,6 @@ export async function verifyWithCatalogIdentity(input: RuntimeProvenanceInput): 
     boundedUtf8Json(inventoryBytes, MAX_INVENTORY_BYTES, 'RUNTIME_INVENTORY_INVALID'),
     row
   )
-  if (
-    trustedRootReceiptJson.byteLength !== trustRootPin.receipt.bytes ||
-    trustedRootReceiptJson.byteLength > 64 * 1024 ||
-    sha256(trustedRootReceiptJson) !== trustRootPin.receipt.sha256
-  ) {
-    throw new Error('RUNTIME_TRUST_ROOT_RECEIPT_PIN_MISMATCH')
-  }
-  const receipt = record(boundedUtf8Json(trustedRootReceiptJson, 64 * 1024, 'RUNTIME_TRUST_ROOT_RECEIPT_INVALID'))
-  const verifiedBy = receipt && record(receipt.verifiedBy)
-  if (
-    !receipt ||
-    !exactKeys(receipt, [
-      'schemaVersion',
-      'source',
-      'verifiedBy',
-      'sourceCommit',
-      'workflowRef',
-      'workflowCommit',
-      'runId',
-      'attempt',
-      'lockSha256',
-      'rootBytes',
-      'rootSha256'
-    ]) ||
-    receipt.schemaVersion !== 1 ||
-    receipt.source !== trustRootPin.source ||
-    !verifiedBy ||
-    !exactKeys(verifiedBy, ['package', 'version']) ||
-    verifiedBy.package !== '@sigstore/tuf' ||
-    verifiedBy.version !== '5.0.0' ||
-    typeof receipt.sourceCommit !== 'string' ||
-    !COMMIT.test(receipt.sourceCommit) ||
-    typeof receipt.workflowCommit !== 'string' ||
-    !COMMIT.test(receipt.workflowCommit) ||
-    typeof receipt.workflowRef !== 'string' ||
-    !/^mysticalsin\/AskToto-Mantu\/\.github\/workflows\/runtime-trust-root\.yml@refs\/heads\/[A-Za-z0-9._/-]{1,256}$/.test(
-      receipt.workflowRef
-    ) ||
-    typeof receipt.runId !== 'string' ||
-    !/^\d{1,20}$/.test(receipt.runId) ||
-    !Number.isSafeInteger(receipt.attempt) ||
-    (receipt.attempt as number) < 1 ||
-    typeof receipt.lockSha256 !== 'string' ||
-    !SHA256.test(receipt.lockSha256) ||
-    receipt.rootBytes !== trustRootPin.bytes ||
-    receipt.rootSha256 !== trustRootPin.sha256
-  ) {
-    throw new Error('RUNTIME_TRUST_ROOT_RECEIPT_INVALID')
-  }
-  const trustedRoot = record(boundedUtf8Json(trustedRootJson, MAX_TRUST_ROOT_BYTES, 'RUNTIME_TRUST_ROOT_UNAVAILABLE'))
-  if (!trustedRoot) throw new Error('RUNTIME_TRUST_ROOT_UNAVAILABLE')
   const bundleJson = boundedUtf8Json(bundleBytes, MAX_BUNDLE_BYTES, 'RUNTIME_BUNDLE_INVALID')
   let bundle: unknown
   try {

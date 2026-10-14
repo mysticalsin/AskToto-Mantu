@@ -61,16 +61,8 @@ export type RuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
 // Health budget: Windows Defender's first-run scan of a freshly-unpacked exe can add tens of seconds
 // before the process even starts executing (PLAN.md §7 risk 3) — mac has no such AV tax.
 const HEALTH_BUDGET_MS: Record<LlamaPlatform, number> = { mac: 30_000, win: 60_000 }
-// Port-line budget: bounds the wait for the `listening on http://127.0.0.1:<port>` line, which is what
-// GATES the health poll — HEALTH_BUDGET_MS only starts counting after that line is parsed. Without this
-// budget a child that starts but never prints the line (wrong build, GPU driver stall, a changed log
-// format in a future llama.cpp release) leaves start() pending forever with nothing surfaced to the user.
-// Deliberately DOUBLE the health budget rather than equal to it: this is a hang-breaker, not a
-// performance SLA, and a false timeout is the worse failure (it would silently disable Métis Local on
-// slow-but-healthy hardware). Everything expensive about a cold start lands in THIS phase, not the health
-// phase — Defender's first-run scan of the freshly-unpacked exe, plus the full GGUF+mmproj read off a
-// cold disk, which the live spike log shows completing BEFORE the listening line is printed. In the
-// healthy case the line arrives in well under a second, so the headroom costs nothing.
+// The listener-line budget bounds stalls before the health timer starts. Double the health budget to
+// tolerate Defender scans and cold model reads without leaving a malformed child pending forever.
 const PORT_LINE_BUDGET_MS: Record<LlamaPlatform, number> = { mac: 60_000, win: 120_000 }
 const HEALTH_POLL_INTERVAL_MS = 250
 const IDLE_STOP_MS = 15 * 60_000
@@ -690,23 +682,22 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
   }
   if (state === 'running') {
     if (samePaths(lastModelPaths, modelPaths)) {
-      if (modelPaths.runtimeLease !== lastModelPaths?.runtimeLease) await modelPaths.runtimeLease?.release()
+      const matchedChild = child
+      if (modelPaths.runtimeLease !== lastModelPaths?.runtimeLease) {
+        await modelPaths.runtimeLease?.release()
+        assertCurrentGeneration(requestGeneration)
+        if (state !== 'running' || !matchedChild || child !== matchedChild || !samePaths(lastModelPaths, modelPaths))
+          throw new StartCancelledError()
+      }
       return
     }
     if (activeStreamCount > 0) {
-      // A different model was requested while >=1 request is actively streaming from the current sidecar
-      // (switch-kill hardening) — killing it now would truncate that response mid-flight with no retry
-      // (index.ts's onError only retries/fails over when the stream hasn't produced a token yet). Defer:
-      // wait for every in-flight stream to finish, then re-evaluate (mirrors the 'starting' branch above)
-      // instead of switching here. A caller for the SAME model that becomes active in the meantime resolves
-      // via the samePaths() check above once this recurses. Diagnostic only (mainLog, not auditLog) — no
-      // security-relevant action has happened yet; the eventual stop/start still audits as it always did.
+      // Drain active streams before changing the runtime they use.
       mainLog.info('local runtime: model switch deferred — stream(s) active', { activeStreamCount })
       await waitForDrain()
       assertCurrentGeneration(requestGeneration)
       return start(modelPaths, platform)
     }
-    // Mark this as an intentional stop before waiting for the exact child's exit.
     clearIdleTimer()
     state = 'stopped'
     port = null

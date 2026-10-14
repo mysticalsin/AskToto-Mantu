@@ -8,13 +8,11 @@ export const DESIGN_CAPTURE_ENTRY = 'design-capture'
  * the build sets METIS_DESIGN_CAPTURE=1 (the design-capture workflow), so a normal `npm run build` and every
  * installer built from it carry no trace of it. electron-builder's `files` lists exclude it a second time.
  */
-export function rendererInputs(
-  rendererRoot: string,
-  env: Record<string, string | undefined>
-): Record<string, string> {
+export function rendererInputs(rendererRoot: string, env: Record<string, string | undefined>): Record<string, string> {
   const inputs: Record<string, string> = {
     index: resolve(rendererRoot, 'index.html'),
-    decoder: resolve(rendererRoot, 'decoder.html')
+    decoder: resolve(rendererRoot, 'decoder.html'),
+    'runtime-worker-host': resolve(rendererRoot, 'runtime-worker-host.html')
   }
   if (env.METIS_DESIGN_CAPTURE === '1') {
     inputs[DESIGN_CAPTURE_ENTRY] = resolve(rendererRoot, `${DESIGN_CAPTURE_ENTRY}.html`)

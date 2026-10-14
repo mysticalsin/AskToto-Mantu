@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
 import { ensureWhisperWorkerProfile } from './whisper-profile-admission'
+import { createRuntimeWhisperWorkerProxy } from './runtime-whisper-worker-proxy'
+import { METIS_PACKAGE_PROFILE } from '@shared/package-profile'
 import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
 import { detectLanguage, detectLanguages } from '@shared/lang-id'
 import {
@@ -1200,7 +1202,10 @@ export function useListen(
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
     ensureWhisperWorkerProfile()
-    const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
+    const w =
+      METIS_PACKAGE_PROFILE === 'lean'
+        ? createRuntimeWhisperWorkerProxy()
+        : new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     readyRef.current = false
     w.onmessage = (e: MessageEvent): void => {
       if (workerRef.current !== w) return // terminated/replaced worker from an earlier session

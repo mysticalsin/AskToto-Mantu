@@ -186,7 +186,10 @@ async function load(quality: 'best' | 'fast', allowWebGpu: boolean): Promise<voi
       engine = 'webgpu'
       return
     } catch (err) {
-      post({ type: 'log', message: `webgpu load failed, falling back to wasm: ${String((err as Error)?.message || err)}` })
+      post({
+        type: 'log',
+        message: `webgpu load failed, falling back to wasm: ${String((err as Error)?.message || err)}`
+      })
       asr = null
     }
   }
@@ -205,6 +208,8 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     audio?: Float32Array
     speaker?: string
     bundled?: boolean
+    runtimeBase?: string
+    wasmBase?: string
     language?: string
     resetFollow?: boolean
     partial?: boolean
@@ -225,14 +230,26 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     // Must run before load() so the pipeline() call picks up the correct paths.
     if (bundled) {
       env.allowLocalModels = true
-      env.localModelPath = 'asr-model://models'
+      const runtimeBase = msg.runtimeBase
+      const wasmBase = msg.wasmBase
+      if (runtimeBase !== undefined || wasmBase !== undefined) {
+        const validRuntimeResource = (value: string | undefined): value is string =>
+          typeof value === 'string' &&
+          /^metis-runtime:\/\/[0-9a-f]{64}\/runtime\/[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*$/.test(value)
+        if (!validRuntimeResource(runtimeBase) || !validRuntimeResource(wasmBase)) {
+          loading = false
+          post({ type: 'error', message: 'The offline speech runtime is not available.' })
+          return
+        }
+      }
+      env.localModelPath = runtimeBase ?? 'asr-model://models'
       // Zero-download guarantee: forbid any fallback fetch to the HF CDN when a bundled model file is
       // missing. Without this, transformers.js silently fetches the missing file from the network,
       // violating the "fully offline" contract. Fail visibly instead so missing files are caught early.
       env.allowRemoteModels = false
       // env.backends.onnx.wasm is typed as potentially undefined; guard before writing.
       // Overrides the cdn.jsdelivr.net default so WASM blobs load from bundled resources/ort/.
-      if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = 'asr-model://ort/'
+      if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = wasmBase ?? 'asr-model://ort/'
       // The bundled path serves every file instantly from local disk through the custom asr-model://
       // protocol, so persisting it in the browser's Cache Storage API buys nothing — and Chromium's
       // CacheStorage only recognizes http(s) requests, so transformers.js's getModelFile() cache lookup
@@ -256,7 +273,12 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // Report honestly whenever 'best' was requested but didn't actually land on the WebGPU/large model
       // (no bundled model, no WebGPU adapter, or a WebGPU load failure) — callers must not infer quality
       // from the request alone, since it silently downgrades to WASM/whisper-base in every packaged build.
-      post({ type: 'ready', engine, requestedQuality, qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu' })
+      post({
+        type: 'ready',
+        engine,
+        requestedQuality,
+        qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu'
+      })
     } catch (err) {
       // Both paths failed. The raw transformers.js message ("local_files_only=true … file was not found
       // locally at asr-model://…") is meaningless to a user mid-meeting — surface a human line instead,
@@ -334,7 +356,11 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // silent (an empty text reply): a permanently dead WASM module would then produce an empty
       // transcript with no signal anywhere.
       post({ type: 'log', message: `ASR window failed: ${String((err as Error)?.message || err)}` })
-      post({ type: 'error', message: 'Part of the audio could not be transcribed. Transcription is continuing.', speaker })
+      post({
+        type: 'error',
+        message: 'Part of the audio could not be transcribed. Transcription is continuing.',
+        speaker
+      })
     }
   }
 }

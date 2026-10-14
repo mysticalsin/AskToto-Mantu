@@ -485,6 +485,33 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     endStream()
   })
 
+  it('does not resolve a same-generation start if Stop wins while an unused incoming lease is releasing', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const activeLease = testLease('a'.repeat(64))
+    const running = start({ ...pathsA, runtimeLease: activeLease.lease, runtimeBinary: '/managed/llama-server' }, 'mac')
+    emitListening(0, 55702)
+    await running
+
+    let finishRelease!: () => void
+    const releaseHeld = new Promise<void>((resolve) => {
+      finishRelease = resolve
+    })
+    const incomingLease = testLease('a'.repeat(64), () => releaseHeld)
+    const redundantStart = start(
+      { ...pathsA, runtimeLease: incomingLease.lease, runtimeBinary: '/managed/llama-server' },
+      'mac'
+    )
+    await waitUntil(() => incomingLease.release.mock.calls.length === 1)
+
+    await stop()
+    finishRelease()
+    await expect(redundantStart).rejects.toThrow('local runtime start cancelled')
+    expect(isRunning()).toBe(false)
+    expect(activeLease.release).toHaveBeenCalledTimes(1)
+    expect(incomingLease.release).toHaveBeenCalledTimes(1)
+    expect(spawnState.calls).toHaveLength(1)
+  })
+
   it('switches immediately (baseline unaffected) when no stream is active — activeStreamCount defaults to zero', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }

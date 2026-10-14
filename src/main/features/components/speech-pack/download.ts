@@ -57,6 +57,8 @@ export interface DownloadRequest {
   signal: AbortSignal
   /** Rechecked before reads and writes so a revoked local policy stops the transfer promptly. */
   authorize?: () => boolean
+  /** Awaitable settings/policy/capture boundary rechecked around each network and file await. */
+  authorizeAsync?: () => Promise<void>
   /** A service-process nonce; partial bytes from a prior process cannot resume silently. */
   resumeScope?: string
   /** Owned model root; descendants are checked before any temporary path is created or opened. */
@@ -373,14 +375,25 @@ class OversizedResponse extends SpeechPackError {
   }
 }
 
-export function sha256File(path: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(path)
-    stream.on('data', (chunk: string | Buffer) => hash.update(chunk))
-    stream.on('end', () => resolve(hash.digest('hex')))
-    stream.on('error', reject)
-  })
+export async function sha256File(
+  path: string,
+  options: { expectedBytes?: number; authorizeAsync?: () => Promise<void> } = {}
+): Promise<string> {
+  const hash = createHash('sha256')
+  let bytes = 0
+  for await (const chunk of createReadStream(path)) {
+    await options.authorizeAsync?.()
+    const data = chunk as Buffer
+    bytes += data.byteLength
+    if (bytes > (options.expectedBytes ?? 10_000_000_000))
+      throw new SpeechPackError('tamper', 'file exceeded its pinned size')
+    hash.update(data)
+  }
+  await options.authorizeAsync?.()
+  if (options.expectedBytes !== undefined && bytes !== options.expectedBytes) {
+    throw new SpeechPackError('tamper', 'file did not match its pinned size')
+  }
+  return hash.digest('hex')
 }
 
 /** Size of the file at `path`, or 0 when it does not exist. */
@@ -411,11 +424,14 @@ async function request(
   url: string,
   headers: Record<string, string>,
   signal: AbortSignal,
-  deps: DownloadDeps
+  deps: DownloadDeps,
+  authorizeAsync?: () => Promise<void>
 ): Promise<Response> {
   let current = url
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await authorizeAsync?.()
     const res = await deps.fetch(current, { headers, signal, redirect: 'manual' })
+    await authorizeAsync?.()
     if (res.status < 300 || res.status >= 400) return res
     const location = res.headers.get('location')
     await res.body?.cancel().catch(() => undefined)
@@ -482,7 +498,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       headers.Range = `bytes=${offset}-`
       headers['If-Range'] = validator
     }
-    const res = await request(req.url, headers, ctrl.signal, deps)
+    const res = await request(req.url, headers, ctrl.signal, deps, req.authorizeAsync)
     unclaimedBody = res.body
     const contentType = res.headers.get('content-type')
 
@@ -564,13 +580,16 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       arm(timing.idleTimeoutMs)
       for (;;) {
         if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+        await req.authorizeAsync?.()
         const { done, value } = await reader.read()
+        await req.authorizeAsync?.()
         if (done) {
           bodyDone = true
           break
         }
         if (!value || value.byteLength === 0) continue
         if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+        await req.authorizeAsync?.()
         if (first) {
           first = false
           if (looksLikeHtmlBytes(value)) throw new SpeechPackError('captive', 'received a web page instead of the file')
@@ -582,7 +601,8 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
         if (value.byteLength > req.bytes - written || (append && value.byteLength > rangeBytes - receivedInRange)) {
           throw new OversizedResponse()
         }
-        await handle.write(value)
+        await handle.writeFile(value)
+        await req.authorizeAsync?.()
         written += value.byteLength
         receivedInRange += value.byteLength
         req.onProgress(written)
@@ -629,7 +649,9 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
   await assertSafeDownloadPaths(req.dest, req.trustedRoot)
   if ((await sizeOf(req.dest)) === req.bytes) {
     try {
-      if ((await sha256File(req.dest)) === req.sha256) {
+      if (
+        (await sha256File(req.dest, { expectedBytes: req.bytes, authorizeAsync: req.authorizeAsync })) === req.sha256
+      ) {
         req.onProgress(req.bytes)
         return
       }
@@ -646,6 +668,7 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
   for (;;) {
     if (req.signal.aborted) throw req.signal.reason
     if (req.authorize && !req.authorize()) throw new SpeechPackError('policy', 'transfer is no longer authorized')
+    await req.authorizeAsync?.()
     let before = await sizeOf(partial)
     if (before > req.bytes) {
       await removeFile(partial, { force: true })
@@ -655,7 +678,11 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
     req.onProgress(before)
     try {
       await transferOnce(req, deps)
-      if ((await sha256File(partial)) === req.sha256) {
+      await req.authorizeAsync?.()
+      if (
+        (await sha256File(partial, { expectedBytes: req.bytes, authorizeAsync: req.authorizeAsync })) === req.sha256
+      ) {
+        await req.authorizeAsync?.()
         await removeFile(`${partial}.json`, { force: true })
         await rename(partial, req.dest)
         req.onProgress(req.bytes)

@@ -268,6 +268,10 @@ export const IPC = {
   speechPackAction: 'speech-pack:action',
   speechPackPlanPreview: 'speech-pack:plan-preview',
   speechPackInstallWithPlan: 'speech-pack:install-with-plan',
+  runtimeInstallPlanPreview: 'runtime:install-plan-preview',
+  runtimeInstallWithPlan: 'runtime:install-with-plan',
+  runtimeWhisperWorkerOpen: 'runtime:whisper-worker-open',
+  runtimeWhisperWorkerClose: 'runtime:whisper-worker-close',
   speechPackProgress: 'speech-pack:progress',
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.

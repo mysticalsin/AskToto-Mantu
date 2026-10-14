@@ -16,7 +16,7 @@ describe('runtime archive held-descriptor hashing', () => {
       await expect(hashPinnedArchive(path, bytes.byteLength)).resolves.toBe(
         createHash('sha256').update(bytes).digest('hex')
       )
-      await expect(hashPinnedArchive(path, bytes.byteLength - 1)).rejects.toThrow(/shape mismatch|too large/i)
+      await expect(hashPinnedArchive(path, bytes.byteLength - 1)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -29,7 +29,7 @@ describe('runtime archive held-descriptor hashing', () => {
       try {
         const path = join(root, 'raced-pipe')
         execFileSync('mkfifo', [path])
-        await expect(hashPinnedArchive(path, 1)).rejects.toThrow(/shape mismatch/i)
+        await expect(hashPinnedArchive(path, 1)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
       } finally {
         await rm(root, { recursive: true, force: true })
       }

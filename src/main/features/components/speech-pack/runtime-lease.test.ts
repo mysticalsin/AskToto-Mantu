@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   acquireFeatureRuntime,
   configureRuntimeLeaseProvider,
+  parseWindowsSystemRootsResponse,
   windowsSystemLoaderRoots,
   type VerifiedRuntimeGeneration
 } from './runtime-lease'
@@ -20,6 +21,41 @@ describe('Windows optional-host system loader roots', () => {
     ['NUL', 'C:\\Windows\0;C:\\Injected']
   ])('rejects %s roots', (_label, value) => {
     expect(() => windowsSystemLoaderRoots(value)).toThrow(/system loader root is invalid/i)
+  })
+
+  it('accepts only the fixed helper response and API-derived System32 path', () => {
+    expect(
+      parseWindowsSystemRootsResponse({
+        status: 0,
+        stdout: '{"version":1,"windowsRoot":"C:\\\\Windows","systemRoot":"C:\\\\Windows\\\\System32"}\n',
+        stderr: ''
+      })
+    ).toEqual({ windowsRoot: 'C:\\Windows', systemRoot: 'C:\\Windows\\System32' })
+  })
+
+  it.each([
+    [
+      'extra fields',
+      0,
+      '{"version":1,"windowsRoot":"C:\\\\Windows","systemRoot":"C:\\\\Windows\\\\System32","extra":true}\n',
+      ''
+    ],
+    [
+      'environment spoof',
+      0,
+      '{"version":1,"windowsRoot":"Z:\\\\attacker","systemRoot":"Z:\\\\attacker\\\\System32"}\n',
+      ''
+    ],
+    ['mismatched system directory', 0, '{"version":1,"windowsRoot":"C:\\\\Windows","systemRoot":"C:\\\\Evil"}\n', ''],
+    [
+      'stderr output',
+      0,
+      '{"version":1,"windowsRoot":"C:\\\\Windows","systemRoot":"C:\\\\Windows\\\\System32"}\n',
+      'unexpected'
+    ],
+    ['nonzero status', 2, '{"version":1,"error":"ARGUMENTS_INVALID"}\n', '']
+  ])('rejects helper response with %s', (_label, status, stdout, stderr) => {
+    expect(() => parseWindowsSystemRootsResponse({ status, stdout, stderr })).toThrow()
   })
 
   it('snapshots roles and every model member before issuing a feature lease', async () => {
@@ -68,6 +104,7 @@ describe('Windows optional-host system loader roots', () => {
       models,
       nativeLibraryDirs: ['native'],
       rendererFiles,
+      rendererPins: { 'worker/index.js': { bytes: 10, sha256: 'd'.repeat(64) } },
       release: async () => undefined
     }
     configureRuntimeLeaseProvider({ acquire: async () => generation })

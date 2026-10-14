@@ -5,7 +5,11 @@
  * activated feature generation. Paths stay inside the main process and are never accepted from IPC.
  * A lease pins that generation until the corresponding child/worker has crossed its shutdown barrier.
  */
-import { delimiter, isAbsolute, relative, resolve, sep, win32 } from 'node:path'
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { lstatSync, readFileSync } from 'node:fs'
+import { delimiter, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { app } from 'electron'
 import type { OptionalRuntimeTarget } from './runtime-components'
 
 export type RuntimeFeatureId = 'offline-asr' | 'speaker-embedding' | 'local-llm'
@@ -29,6 +33,12 @@ export interface VerifiedRuntimeModel {
   readonly members: readonly string[]
 }
 
+export interface VerifiedRuntimeResourcePin {
+  readonly path: string
+  readonly bytes: number
+  readonly sha256: string
+}
+
 export interface VerifiedRuntimeGeneration {
   readonly generationIdentity: string
   readonly catalogIdentity: string
@@ -41,6 +51,7 @@ export interface VerifiedRuntimeGeneration {
   readonly nativeLibraryDirs: readonly string[]
   /** Only paths represented in the reviewed runtime inventory may be served to an approved renderer. */
   readonly rendererFiles: Readonly<Record<string, string>>
+  readonly rendererPins: Readonly<Record<string, { readonly bytes: number; readonly sha256: string }>>
   /** Provider owns the store reference and releases it only after the last shared lease exits. */
   readonly release: () => void | Promise<void>
 }
@@ -65,6 +76,9 @@ export interface RuntimeFeatureLease {
   model(id: RuntimeModelId): string
   modelFile(id: RuntimeModelId, member: string): string
   rendererFile(relativePath: string): string
+  rendererRolePath(role: RuntimeEntryRole): string
+  rendererModelRoot(id: RuntimeModelId): string
+  rendererResource(relativePath: string): VerifiedRuntimeResourcePin
   rendererResources(): ReadonlyMap<string, string>
   release(): Promise<void>
 }
@@ -107,11 +121,11 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
   const ownedRoots = lease.loaderDirectories()
   let systemRoots: string[]
   if (process.platform === 'win32') {
-    const [root, system32] = windowsSystemLoaderRoots(process.env.SystemRoot ?? process.env.SYSTEMROOT)
-    env.SystemRoot = root
-    env.SYSTEMROOT = root
-    env.WINDIR = root
-    systemRoots = [root, system32]
+    const { windowsRoot, systemRoot } = windowsSystemRootsFromPackagedHelper()
+    env.SystemRoot = windowsRoot
+    env.SYSTEMROOT = windowsRoot
+    env.WINDIR = windowsRoot
+    systemRoots = [windowsRoot, systemRoot]
   } else {
     systemRoots =
       process.platform === 'darwin'
@@ -119,7 +133,6 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
         : ['/lib', '/usr/lib', '/lib64', '/usr/lib64']
   }
   const loaderRoots = [...ownedRoots, ...systemRoots]
-  if (process.platform === 'win32') env.PATH = loaderRoots.join(delimiter)
   if (process.platform === 'linux') {
     env.PATH = loaderRoots.join(delimiter)
     env.LD_LIBRARY_PATH = loaderRoots.join(delimiter)
@@ -129,6 +142,127 @@ export function runtimeHostEnvironment(lease: RuntimeFeatureLease): NodeJS.Proce
     env.DYLD_LIBRARY_PATH = loaderRoots.join(delimiter)
   }
   return env
+}
+
+const WINDOWS_ROOT_MANIFEST_MAX_BYTES = 4096
+const WINDOWS_ROOT_HELPER_MAX_BYTES = 2_000_000
+
+function exactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === [...keys].sort().join(',')
+  )
+}
+
+/** Strictly parse the helper's bounded API response before any result enters a child loader path. */
+export function parseWindowsSystemRootsResponse(input: {
+  readonly status: number | null
+  readonly stdout: string
+  readonly stderr: string
+}): { readonly windowsRoot: string; readonly systemRoot: string } {
+  if (input.status !== 0 || input.stderr !== '' || input.stdout.length < 2 || input.stdout.length > 2048) {
+    throw new Error('WINDOWS_OS_ROOT_HELPER_FAILED')
+  }
+  const lines = input.stdout.split('\n')
+  if (lines.length !== 2 || lines[1] !== '' || lines[0].includes('\r')) {
+    throw new Error('WINDOWS_OS_ROOT_RESPONSE_INVALID')
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(lines[0]) as unknown
+  } catch {
+    throw new Error('WINDOWS_OS_ROOT_RESPONSE_INVALID')
+  }
+  if (
+    !exactObject(value, ['systemRoot', 'version', 'windowsRoot']) ||
+    value.version !== 1 ||
+    typeof value.windowsRoot !== 'string' ||
+    typeof value.systemRoot !== 'string'
+  ) {
+    throw new Error('WINDOWS_OS_ROOT_RESPONSE_INVALID')
+  }
+  const [windowsRoot, expectedSystemRoot] = windowsSystemLoaderRoots(value.windowsRoot)
+  if (value.windowsRoot !== windowsRoot || value.systemRoot.toLowerCase() !== expectedSystemRoot.toLowerCase()) {
+    throw new Error('WINDOWS_OS_ROOT_RESPONSE_INVALID')
+  }
+  return Object.freeze({ windowsRoot, systemRoot: expectedSystemRoot })
+}
+
+function assertWindowsOsDirectories(roots: { windowsRoot: string; systemRoot: string }): void {
+  try {
+    for (const path of [roots.windowsRoot, roots.systemRoot]) {
+      const stat = lstatSync(path)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('WINDOWS_OS_ROOT_DIRECTORY_INVALID')
+    }
+  } catch {
+    throw new Error('WINDOWS_OS_ROOT_DIRECTORY_INVALID')
+  }
+}
+
+function windowsSystemRootsFromPackagedHelper(): { windowsRoot: string; systemRoot: string } {
+  if (!app.isPackaged) throw new Error('WINDOWS_OS_ROOT_HELPER_UNAVAILABLE')
+  const manifestPath = join(app.getAppPath(), 'out', 'main', 'win-os-roots.manifest.json')
+  const helperPath = join(process.resourcesPath, 'win-os-roots', 'osroots.exe')
+  const manifestStat = lstatSync(manifestPath)
+  const helperStat = lstatSync(helperPath)
+  if (
+    !manifestStat.isFile() ||
+    manifestStat.isSymbolicLink() ||
+    !helperStat.isFile() ||
+    helperStat.isSymbolicLink() ||
+    helperStat.nlink !== 1 ||
+    manifestStat.size < 1 ||
+    manifestStat.size > WINDOWS_ROOT_MANIFEST_MAX_BYTES ||
+    helperStat.size < 64 ||
+    helperStat.size > WINDOWS_ROOT_HELPER_MAX_BYTES
+  ) {
+    throw new Error('WINDOWS_OS_ROOT_HELPER_INVALID')
+  }
+  const manifestBytes = readFileSync(manifestPath)
+  if (manifestBytes.byteLength !== manifestStat.size) throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
+  let manifest: unknown
+  try {
+    manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes)) as unknown
+  } catch {
+    throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
+  }
+  if (
+    !exactObject(manifest, ['bytes', 'helperVersion', 'path', 'schemaVersion', 'sha256']) ||
+    manifest.schemaVersion !== 1 ||
+    manifest.helperVersion !== 1 ||
+    manifest.path !== 'win-os-roots/osroots.exe' ||
+    !Number.isSafeInteger(manifest.bytes) ||
+    (manifest.bytes as number) !== helperStat.size ||
+    typeof manifest.sha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(manifest.sha256)
+  ) {
+    throw new Error('WINDOWS_OS_ROOT_MANIFEST_INVALID')
+  }
+  const helperBytes = readFileSync(helperPath)
+  if (
+    helperBytes.byteLength !== helperStat.size ||
+    createHash('sha256').update(helperBytes).digest('hex') !== manifest.sha256 ||
+    helperBytes.toString('ascii', 0, 2) !== 'MZ'
+  ) {
+    throw new Error('WINDOWS_OS_ROOT_HELPER_PIN_MISMATCH')
+  }
+  const result = spawnSync(helperPath, ['--json'], {
+    encoding: 'utf8',
+    maxBuffer: 2048,
+    timeout: 3000,
+    windowsHide: true,
+    env: { PATH: '' }
+  })
+  if (result.error) throw new Error('WINDOWS_OS_ROOT_HELPER_FAILED')
+  const roots = parseWindowsSystemRootsResponse({
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr
+  })
+  assertWindowsOsDirectories(roots)
+  return roots
 }
 
 export function windowsSystemLoaderRoots(value: string | undefined): readonly [string, string] {
@@ -231,6 +365,9 @@ function snapshotGeneration(generation: VerifiedRuntimeGeneration): VerifiedRunt
     models: Object.freeze(models),
     nativeLibraryDirs: Object.freeze([...generation.nativeLibraryDirs]),
     rendererFiles: Object.freeze({ ...generation.rendererFiles }),
+    rendererPins: Object.freeze(
+      Object.fromEntries(Object.entries(generation.rendererPins).map(([key, pin]) => [key, Object.freeze({ ...pin })]))
+    ),
     release: generation.release.bind(generation)
   })
 }
@@ -253,6 +390,7 @@ function validateGeneration(
     !Array.isArray(generation.nativeLibraryDirs) ||
     generation.nativeLibraryDirs.length > 32 ||
     !generation.rendererFiles ||
+    !generation.rendererPins ||
     typeof generation.rendererFiles !== 'object' ||
     Array.isArray(generation.rendererFiles)
   ) {
@@ -353,14 +491,121 @@ function validateGeneration(
     throw new Error('Optional runtime provider omitted the selected LLM model root.')
   }
   const rendererPaths = Object.keys(generation.rendererFiles)
+  if (Object.keys(generation.rendererPins).sort().join(',') !== rendererPaths.sort().join(',')) {
+    throw new Error('Optional runtime renderer pins do not match its exact resource map.')
+  }
   if ((feature === 'offline-asr' && rendererPaths.length === 0) || rendererPaths.length > 4096) {
     throw new Error('Optional runtime renderer inventory is incomplete or too large.')
   }
   for (const rel of rendererPaths) {
-    if (!safeRelativePath(rel) || !safeRelativePath(generation.rendererFiles[rel] ?? '')) {
+    const pin = generation.rendererPins[rel]
+    if (
+      !safeRelativePath(rel) ||
+      !safeRelativePath(generation.rendererFiles[rel] ?? '') ||
+      !pin ||
+      !Number.isSafeInteger(pin.bytes) ||
+      pin.bytes < 0 ||
+      !/^[0-9a-f]{64}$/.test(pin.sha256)
+    ) {
       throw new Error('Optional runtime renderer inventory contains an invalid path.')
     }
   }
+}
+
+/** Internal constructor for the installer self-test, whose inputs are built only from verified staged inventory. */
+export async function createRuntimeFeatureLeaseForVerifiedGeneration(
+  feature: RuntimeFeatureId,
+  target: OptionalRuntimeTarget,
+  generationInput: VerifiedRuntimeGeneration,
+  selectedModelId?: RuntimeModelId
+): Promise<RuntimeFeatureLease> {
+  let generation: VerifiedRuntimeGeneration
+  try {
+    generation = snapshotGeneration(generationInput)
+    validateGeneration(feature, generation, target, selectedModelId)
+  } catch (error) {
+    await generationInput.release()
+    throw error
+  }
+  let released = false
+  const getPath = <K extends RuntimeEntryRole | RuntimeModelId>(
+    map: Readonly<Partial<Record<K, string>>>,
+    key: K
+  ): string => {
+    if (released) throw new Error('Optional runtime lease has been released.')
+    const path = map[key]
+    if (!path) throw new Error('Optional runtime entry is not part of this lease.')
+    return absoluteOwnedPath(generation.rootDir, path)
+  }
+  const getModelPath = (id: RuntimeModelId): string => {
+    if (released) throw new Error('Optional runtime lease has been released.')
+    const model = generation.models[id]
+    if (!model) throw new Error('Optional runtime model is not part of this lease.')
+    return absoluteOwnedPath(generation.rootDir, model.root)
+  }
+  const lease: RuntimeFeatureLease = Object.freeze({
+    feature,
+    generationIdentity: generation.generationIdentity,
+    catalogIdentity: generation.catalogIdentity,
+    target: Object.freeze({ ...generation.target }),
+    loaderDirectories: () => {
+      if (released) throw new Error('Optional runtime lease has been released.')
+      return Object.freeze(generation.nativeLibraryDirs.map((path) => absoluteOwnedPath(generation.rootDir, path)))
+    },
+    entry: (role: RuntimeEntryRole) => getPath(generation.entries, role),
+    model: (id: RuntimeModelId) => getModelPath(id),
+    modelFile(id: RuntimeModelId, member: string): string {
+      if (released || !safeRelativePath(member)) throw new Error('Optional runtime model file is not available.')
+      const model = generation.models[id]
+      if (!model || !model.members.includes(member))
+        throw new Error('Optional runtime model file is not in the verified inventory.')
+      return absoluteOwnedPath(generation.rootDir, `${model.root}/${member}`)
+    },
+    rendererFile(relativePath: string): string {
+      if (released || !safeRelativePath(relativePath)) throw new Error('Optional runtime file is not available.')
+      const path = generation.rendererFiles[relativePath]
+      if (!path) throw new Error('Optional runtime file is not in the verified inventory.')
+      return absoluteOwnedPath(generation.rootDir, path)
+    },
+    rendererRolePath(role: RuntimeEntryRole): string {
+      const entry = getPath(generation.entries, role)
+      const matches = Object.entries(generation.rendererFiles).filter(
+        ([, path]) => absoluteOwnedPath(generation.rootDir, path) === entry
+      )
+      if (matches.length !== 1) throw new Error('Optional runtime role is not a verified renderer resource.')
+      return matches[0][0]
+    },
+    rendererModelRoot(id: RuntimeModelId): string {
+      if (released) throw new Error('Optional runtime lease has been released.')
+      const model = generation.models[id]
+      if (!model || model.members.some((member) => !generation.rendererFiles[`${model.root}/${member}`]))
+        throw new Error('Optional runtime model is not a verified renderer closure.')
+      return model.root
+    },
+    rendererResource(relativePath: string): VerifiedRuntimeResourcePin {
+      if (released || !safeRelativePath(relativePath)) throw new Error('Optional runtime file is not available.')
+      const path = generation.rendererFiles[relativePath]
+      const pin = generation.rendererPins[relativePath]
+      if (!path || !pin) throw new Error('Optional runtime file is not in the verified inventory.')
+      return Object.freeze({ path: absoluteOwnedPath(generation.rootDir, path), ...pin })
+    },
+    rendererResources(): ReadonlyMap<string, string> {
+      if (released) throw new Error('Optional runtime lease has been released.')
+      return new Map(
+        Object.entries(generation.rendererFiles).map(([name, path]) => [
+          name,
+          absoluteOwnedPath(generation.rootDir, path)
+        ])
+      )
+    },
+    async release(): Promise<void> {
+      if (released) return
+      released = true
+      await generation.release()
+    }
+  })
+  liveLeases.set(lease as object, { feature })
+  return lease
 }
 
 /** Acquire and pin one whole feature generation. Missing or unconfigured runtimes fail closed. */
@@ -422,6 +667,29 @@ export async function acquireFeatureRuntime(
       const path = generation.rendererFiles[relativePath]
       if (!path) throw new Error('Optional runtime file is not in the verified inventory.')
       return absoluteOwnedPath(generation.rootDir, path)
+    },
+    rendererRolePath(role: RuntimeEntryRole): string {
+      const entry = getPath(generation.entries, role)
+      const matches = Object.entries(generation.rendererFiles).filter(
+        ([, path]) => absoluteOwnedPath(generation.rootDir, path) === entry
+      )
+      if (matches.length !== 1) throw new Error('Optional runtime role is not a verified renderer resource.')
+      return matches[0][0]
+    },
+    rendererModelRoot(id: RuntimeModelId): string {
+      if (released) throw new Error('Optional runtime lease has been released.')
+      const model = generation.models[id]
+      if (!model || model.members.some((member) => !generation.rendererFiles[`${model.root}/${member}`])) {
+        throw new Error('Optional runtime model is not a verified renderer closure.')
+      }
+      return model.root
+    },
+    rendererResource(relativePath: string): VerifiedRuntimeResourcePin {
+      if (released || !safeRelativePath(relativePath)) throw new Error('Optional runtime file is not available.')
+      const path = generation.rendererFiles[relativePath]
+      const pin = generation.rendererPins[relativePath]
+      if (!path || !pin) throw new Error('Optional runtime file is not in the verified inventory.')
+      return Object.freeze({ path: absoluteOwnedPath(generation.rootDir, path), ...pin })
     },
     rendererResources(): ReadonlyMap<string, string> {
       if (released) throw new Error('Optional runtime lease has been released.')

@@ -38,7 +38,7 @@ import {
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import {
@@ -133,6 +133,8 @@ import {
   recordMeetingSummarized,
   getAdminLocalSpeechPackPolicy,
   getLocalModelProvisioningIdentity,
+  getSpeechPackPolicyIdentity,
+  getSpeechPackSelectionIdentity,
   readSettingsAtAuthorityBoundary,
   getSonioxApiKey,
   setSonioxApiKey,
@@ -797,11 +799,21 @@ import { startIntelligenceWork } from './brain/intelligence-work'
 import {
   prepareSpeechPackRuntime,
   registerOptionalModelProvisioningIpc,
+  resolveTrustedSpeechPackPolicy,
   startSpeechPackDesktopFromMain
 } from './speech-pack-bootstrap'
 import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
 import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
 import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
+import { acquirePackageRuntimeLease } from './features/components/speech-pack/runtime-admission'
+import { configureRuntimeLeaseProvider } from './features/components/speech-pack/runtime-lease'
+import { createRuntimeGenerationProvider } from './features/components/speech-pack/runtime-generation-provider'
+import { createRuntimeInstallService } from './features/components/speech-pack/runtime-install-service'
+import { runRuntimeCandidateSelfTest } from './features/components/speech-pack/runtime-candidate-self-test'
+import { runtimeTargetFor } from './features/components/speech-pack/runtime-components'
+import { registerRuntimeInstallIpc } from './ipc/runtime-install-ipc'
+import { registerRuntimeWhisperWorkerIpc } from './ipc/runtime-whisper-worker-ipc'
+import { createRuntimeWhisperHost } from './features/components/speech-pack/runtime-worker-host'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
@@ -1219,6 +1231,9 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 let listeningActive = false
 let speechPackDesktop: ReturnType<typeof startSpeechPackDesktopFromMain> | null = null
 let speechDesktop: ReturnType<typeof startSpeechDesktopBootstrap> | null = null
+let runtimeInstallService: ReturnType<typeof createRuntimeInstallService> | null = null
+let runtimeInstallIpcCleanup: (() => void) | null = null
+let runtimeWhisperWorkerIpcCleanup: (() => Promise<void>) | null = null
 
 function setListeningActive(on: boolean): void {
   if (on && win && !win.isDestroyed() && activeLiveSpeakerStartedAt !== null) {
@@ -9672,6 +9687,12 @@ protocol.registerSchemesAsPrivileged([
   {
     scheme: 'asr-model',
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
+  },
+  {
+    // Handler registration is scoped to an app-created in-memory Session. The UI's default Session never
+    // receives this scheme handler, and CSP remains active in the private worker host.
+    scheme: 'metis-runtime',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
   }
 ])
 
@@ -9986,6 +10007,112 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
+      runStep('runtimeLeaseProvider', () => {
+        const runtimeProvider = createRuntimeGenerationProvider({
+          resourcesRoot,
+          storeRoot: join(app.getPath('userData'), 'optional-runtimes')
+        })
+        configureRuntimeLeaseProvider(runtimeProvider)
+        bootWork.run('validateRuntimeCatalog', () => runtimeProvider.initialize())
+        const readRuntimeAuthority = async (feature: 'offline-asr' | 'speaker-embedding' | 'local-llm') => {
+          const authority = await readSettingsAtAuthorityBoundary()
+          const settings = authority.settings
+          const policy = getSpeechPolicyAuthorityStatus(settings)
+          const selectedModelId =
+            feature === 'offline-asr'
+              ? settings.asrEngine === 'parakeet'
+                ? 'asr.parakeet-tdt-0.6b-v3-int8'
+                : settings.asrEngine === 'whisper'
+                  ? 'asr.whisper-base-q8'
+                  : null
+              : feature === 'speaker-embedding'
+                ? 'speaker.embedding'
+                : settings.localLlm.modelId === 'qwen3.5-0.8b' || settings.localLlm.modelId === 'qwen3.5-4b'
+                  ? settings.localLlm.modelId
+                  : null
+          const packageIdentity =
+            verifiedPackageContract.status === 'verified'
+              ? `${verifiedPackageContract.profile}:${verifiedPackageContract.inventory.identity}`
+              : `${verifiedPackageContract.status}:${verifiedPackageContract.profile}`
+          const policyAllowsTransfer = resolveTrustedSpeechPackPolicy(settings, authority.localSpeechPack) !== 'blocked'
+          const featureSelectionAllowed =
+            feature === 'offline-asr'
+              ? settings.asrEngine === 'whisper' || settings.asrEngine === 'parakeet'
+              : feature === 'local-llm'
+                ? selectedModelId !== null && localModelAllowedByPolicy(getActiveModelPolicy(settings), selectedModelId)
+                : false
+          const permitted =
+            authority.readable &&
+            requireAuth() &&
+            verifiedPackageContract.status === 'verified' &&
+            verifiedPackageContract.profile === 'lean' &&
+            policyAllowsTransfer &&
+            !captureActiveForWindowRestart() &&
+            featureSelectionAllowed
+          const profileIdentity = createHash('sha256').update(packageIdentity).digest('hex')
+          const policyIdentity = createHash('sha256')
+            .update(`${policy.identity}:${getSpeechPackPolicyIdentity()}:${authority.epoch}`)
+            .digest('hex')
+          const selectionSource =
+            feature === 'local-llm' ? getLocalModelProvisioningIdentity() : getSpeechPackSelectionIdentity()
+          const selectionIdentity = createHash('sha256').update(selectionSource).digest('hex')
+          const captureIdentity = `capture:${speechPackCaptureRevision}`
+          return {
+            readable: authority.readable,
+            allowedFeatures: permitted ? [feature] : [],
+            profileIdentity,
+            policyIdentity,
+            selectionIdentity,
+            captureIdentity,
+            captureActive: captureActiveForWindowRestart(),
+            transferAllowed: permitted,
+            selectedModelId
+          } as const
+        }
+        runtimeInstallService = createRuntimeInstallService({
+          provider: runtimeProvider,
+          resourcesRoot,
+          storeRoot: join(app.getPath('userData'), 'optional-runtimes'),
+          readAuthority: readRuntimeAuthority,
+          readTarget: async () => runtimeTargetFor(await getPackageRuntimeContract(), app.getVersion()),
+          selfTest: runRuntimeCandidateSelfTest
+        })
+        runtimeInstallIpcCleanup = registerRuntimeInstallIpc({
+          ipcMain,
+          assertMainWindow,
+          plans: runtimeInstallService
+        }).cleanup
+        runtimeWhisperWorkerIpcCleanup = registerRuntimeWhisperWorkerIpc({
+          ipcMain,
+          assertMainWindow,
+          readAuthority: async () => {
+            const authority = await readSettingsAtAuthorityBoundary()
+            const settings = authority.settings
+            const policy = getSpeechPolicyAuthorityStatus(settings)
+            const allowed =
+              authority.readable &&
+              requireAuth() &&
+              verifiedPackageContract.status === 'verified' &&
+              verifiedPackageContract.profile === 'lean' &&
+              settings.asrEngine === 'whisper' &&
+              policy.status !== 'unverified' &&
+              resolveTrustedSpeechPackPolicy(settings, authority.localSpeechPack) !== 'blocked' &&
+              !captureActiveForWindowRestart()
+            const identity = createHash('sha256')
+              .update(
+                `${authority.epoch}:${getSpeechPackSelectionIdentity()}:${policy.identity}:${speechPackCaptureRevision}:${verifiedPackageContract.status}:${verifiedPackageContract.profile}`
+              )
+              .digest('hex')
+            return { readable: authority.readable, allowed, identity }
+          },
+          acquireLease: async (signal) => {
+            const lease = await acquirePackageRuntimeLease('offline-asr', 'asr.whisper-base-q8', signal)
+            if (!lease) throw new Error('RUNTIME_NOT_CONFIGURED')
+            return lease
+          },
+          createHost: createRuntimeWhisperHost
+        }).cleanup
+      })
       runStep('speechPackIpc', () => {
         speechPackDesktop = startSpeechPackDesktopFromMain({
           resourcesRoot,
@@ -10305,6 +10432,26 @@ app.on('before-quit', (e) => {
     () => app.quit(),
     !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed()
   )
+})
+
+let runtimeWorkerShutdown = false
+let runtimeWorkerShutdownComplete = false
+app.on('before-quit', (event) => {
+  if (runtimeWorkerShutdownComplete || !runtimeWhisperWorkerIpcCleanup) return
+  event.preventDefault()
+  if (runtimeWorkerShutdown) return
+  runtimeWorkerShutdown = true
+  runtimeInstallIpcCleanup?.()
+  runtimeInstallService?.clear()
+  void runtimeWhisperWorkerIpcCleanup()
+    .then(() => {
+      runtimeWorkerShutdownComplete = true
+      app.quit()
+    })
+    .catch(() => {
+      runtimeWorkerShutdown = false
+      mainLog.warn('[runtime] optional Whisper worker exit was not confirmed; keeping its lease and host active')
+    })
 })
 
 app.on('before-quit', (e) => {
