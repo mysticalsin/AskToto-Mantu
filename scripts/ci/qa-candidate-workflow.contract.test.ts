@@ -764,6 +764,10 @@ describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
       { ...producer, run: { id: -1, attempt: 2 } },
       { ...producer, run: { id: 1.5, attempt: 2 } },
       { ...producer, run: { id: 9007199254740992, attempt: 2 } },
+      { ...producer, run: { id: 12345678901, attempt: 0 } },
+      { ...producer, run: { id: 12345678901, attempt: -1 } },
+      { ...producer, run: { id: 12345678901, attempt: 1.5 } },
+      { ...producer, run: { id: 12345678901, attempt: 9007199254740992 } },
       { ...producer, run: { id: 12345678901 } },
       { ...producer, run: { attempt: 2 } },
       { ...producer, run: undefined },
@@ -773,7 +777,15 @@ describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
     for (const invalid of producerFailures) expect(evaluate(JSON.stringify(invalid))).toBe(false)
 
     for (const invalid of [null, [], true, 2, 'text']) expect(evaluate(JSON.stringify(invalid))).toBe(false)
-    for (const input of ['', ' \n\t', '{', `${document}\n${document}`, `${document}\n${JSON.stringify({ ...producer, repository: 'other/repo' })}`]) {
+    const mismatch = JSON.stringify({ ...producer, repository: 'other/repo' })
+    for (const input of [
+      '',
+      ' \n\t',
+      '{',
+      `${document}\n${document}`,
+      `${document}\n${mismatch}`,
+      `${mismatch}\n${document}`
+    ]) {
       expect(evaluate(input)).toBe(false)
     }
 
