@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process'
 import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
 import { constants as fsConstants, lstat, open, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
+import { execFileNoShell } from './infra/process/exec-file'
 // Via logger.ts, never `electron-log` directly — see the note on the same import in updater.ts.
 import { mainLog as log } from './logger'
 
@@ -76,7 +77,11 @@ function isAdminWriteSid(sid: string): boolean {
 // write-EA/attrs, delete, write-DAC, write-owner, generic-write, generic-all).
 const WRITE_MASK = 0x2 | 0x4 | 0x10 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
 
-export type AclProbe = { owner: string; aces: { sid: string; rights: number; type: string }[] }
+export type AclProbe = {
+  owner: string
+  processOwner?: string
+  aces: { sid: string; rights: number; type: string }[]
+}
 
 /** Pure trust decision over a probed ACL: the file is admin-authored iff it is owned by a well-known
  *  admin/SYSTEM principal AND no broad non-admin principal holds a write ACE. Exported for unit tests. */
@@ -99,11 +104,12 @@ export function readAclForTest(path: string): AclProbe | null {
   return readAcl(path)
 }
 
-function readAcl(path: string): AclProbe | null {
-  const ps = `
+function aclProbeCommand(path: string): string {
+  return `
 $ErrorActionPreference='Stop'
 try {
   $a = Get-Acl -LiteralPath ${JSON.stringify(path)}
+  $processOwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   function SidOf($ref){ try { return $ref.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { return $ref.Value } }
   # MQA-008: the owner MUST come from GetOwner(), not from the .Owner property. FileSecurity.Owner is a
   # System.String (e.g. "BUILTIN\\Administrators"), not an IdentityReference — so SidOf() threw on
@@ -115,26 +121,123 @@ try {
   try { $ownerSid = $a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value } catch {
     try { $ownerSid = (New-Object System.Security.Principal.NTAccount($a.Owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $ownerSid = '' }
   }
-  $out = [ordered]@{ owner = $ownerSid; aces = @() }
+  $out = [ordered]@{ owner = $ownerSid; processOwner = $processOwnerSid; aces = @() }
   foreach($ace in $a.Access){
     $out.aces += [ordered]@{ sid = (SidOf $ace.IdentityReference); rights = [int]$ace.FileSystemRights.value__; type = $ace.AccessControlType.ToString() }
   }
   $out | ConvertTo-Json -Compress -Depth 5
 } catch { '' }`
+}
+
+function parseAclOutput(output: string): AclProbe | null {
+  const text = output.trim()
+  if (!text) return null
   try {
-    const out = execFileSync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps], {
+    const parsed = JSON.parse(text)
+    const aces = Array.isArray(parsed.aces) ? parsed.aces : parsed.aces ? [parsed.aces] : []
+    return { owner: String(parsed.owner || ''), processOwner: String(parsed.processOwner || ''), aces }
+  } catch {
+    return null
+  }
+}
+
+function readAcl(path: string): AclProbe | null {
+  try {
+    const out = execFileSync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', aclProbeCommand(path)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 8000
     }).trim()
-    if (!out) return null
-    const parsed = JSON.parse(out)
-    // ConvertTo-Json emits a bare object for a single ACE; normalize to an array.
-    const aces = Array.isArray(parsed.aces) ? parsed.aces : parsed.aces ? [parsed.aces] : []
-    return { owner: String(parsed.owner || ''), aces }
+    return parseAclOutput(out)
   } catch {
     return null
   }
+}
+
+const PRIVATE_CURRENT_USER_TRUSTED_SIDS = new Set(['S-1-5-18', 'S-1-5-32-544'])
+const PRIVATE_FULL_CONTROL = 0x1f01ff
+
+/** Strict private-path DACL decision: only the exact process owner, SYSTEM, and Administrators may read. */
+export function evaluateCurrentUserPrivateAcl(acl: AclProbe): boolean {
+  const processOwner = acl.processOwner || ''
+  if (!/^S-1-\d+(?:-\d+)+$/.test(processOwner) || acl.owner !== processOwner) return false
+  if (!acl.aces.length) return false
+  const ownerHasFullControl = acl.aces.some(
+    (ace) =>
+      ace.sid === processOwner && ace.type === 'Allow' && (ace.rights & PRIVATE_FULL_CONTROL) === PRIVATE_FULL_CONTROL
+  )
+  return (
+    ownerHasFullControl &&
+    acl.aces.every((ace) => {
+      if (!/^S-1-\d+(?:-\d+)+$/.test(ace.sid) || !Number.isSafeInteger(ace.rights) || ace.rights < 0) return false
+      if (ace.type !== 'Allow') return false
+      return ace.sid === processOwner || PRIVATE_CURRENT_USER_TRUSTED_SIDS.has(ace.sid)
+    })
+  )
+}
+
+function privateAclCommand(path: string, prepare: boolean): string {
+  const encodedPath = Buffer.from(path, 'utf8').toString('base64')
+  return `
+$ErrorActionPreference='Stop'
+try {
+  $path = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))
+  $processOwner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  if (${prepare ? '$true' : '$false'}) {
+    $acl = Get-Acl -LiteralPath $path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleAll($rule) }
+    $acl.SetOwner($processOwner)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
+    if ((Get-Item -LiteralPath $path).PSIsContainer) {
+      $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    }
+    $propagation = [System.Security.AccessControl.PropagationFlags]::None
+    $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    $principals = @($processOwner, [System.Security.Principal.SecurityIdentifier]'S-1-5-18', [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544')
+    foreach ($sid in $principals) {
+      $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, $rights, $inheritance, $propagation, $allow)
+      $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $path -AclObject $acl
+  }
+  $acl = Get-Acl -LiteralPath $path
+  function SidOf($ref) { try { return $ref.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { return $ref.Value } }
+  $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  $out = [ordered]@{ owner = $owner; processOwner = $processOwner.Value; aces = @() }
+  foreach ($ace in $acl.Access) {
+    $out.aces += [ordered]@{ sid = (SidOf $ace.IdentityReference); rights = [int]$ace.FileSystemRights.value__; type = $ace.AccessControlType.ToString() }
+  }
+  $out | ConvertTo-Json -Compress -Depth 5
+} catch { '' }`
+}
+
+function readPrivateAclAsync(path: string, prepare: boolean): Promise<AclProbe | null> {
+  return new Promise((resolve) => {
+    execFileNoShell(
+      WINDOWS_POWERSHELL,
+      ['-NoProfile', '-NonInteractive', '-Command', privateAclCommand(path, prepare)],
+      { shell: false, timeout: 8000, windowsHide: true },
+      (error, output) => {
+        resolve(error || output === undefined ? null : parseAclOutput(output))
+      }
+    )
+  })
+}
+
+/** Fresh asynchronous current-user DACL verification for private per-user files and directories. */
+export async function verifyPrivateCurrentUserAcl(path: string): Promise<boolean> {
+  if (process.platform !== 'win32') return true
+  const acl = await readPrivateAclAsync(path, false)
+  return acl !== null && evaluateCurrentUserPrivateAcl(acl)
+}
+
+/** Apply a strict current-user DACL and verify it in the same asynchronous process probe. */
+export async function preparePrivateCurrentUserAcl(path: string): Promise<boolean> {
+  if (process.platform !== 'win32') return true
+  const acl = await readPrivateAclAsync(path, true)
+  return acl !== null && evaluateCurrentUserPrivateAcl(acl)
 }
 
 // The ACL verdict is memoized ONLY under a key its subject cannot forge, and ONLY for seconds.
