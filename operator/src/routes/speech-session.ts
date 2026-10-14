@@ -238,6 +238,8 @@ export async function handleSpeechCapabilities(input: {
     ready: true,
     routeId: policyResult.policy.routeId,
     modelId: policyResult.policy.modelId,
+    configVersion: policyResult.policy.configVersion,
+    policyVersion: policyResult.policy.policyVersion,
     languages: policyResult.policy.allowedLanguages,
     format: { encoding: 'pcm_s16le', sampleRate: 16_000, channels: 1 },
     validUntil: Math.min(readiness.expiresAt, input.now + 60_000),

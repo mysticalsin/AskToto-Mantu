@@ -50,6 +50,8 @@
       "ready": true,
       "routeId": "deepgram-via-gateway",
       "modelId": "nova-3",
+      "configVersion": "fixture-config-a-v1",
+      "policyVersion": "fixture-policy-a-v1",
       "languages": ["multi", "en", "fr", "es", "pt", "it"],
       "format": { "encoding": "pcm_s16le", "sampleRate": 16000, "channels": 1 },
       "validUntil": 1893456060000,
