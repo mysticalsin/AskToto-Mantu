@@ -73,7 +73,8 @@ describe('ImportJobManager recovery race', () => {
 
     // Recovery sees a cloned checkpoint before ASR has completed, then pauses before returning it.
     const recoveringCheckpoint = [...store.jobs.values()].map((job) => structuredClone(job))
-    expect(recoveringCheckpoint).toMatchObject([{ jobId: 'job-1', state: 'transcribing', file: undefined }])
+    expect(recoveringCheckpoint).toMatchObject([{ jobId: 'job-1', state: 'transcribing' }])
+    expect(recoveringCheckpoint[0]).not.toHaveProperty('file')
     store.list = async () => {
       recoveryListStarted.resolve()
       await releaseRecoveryList.promise
