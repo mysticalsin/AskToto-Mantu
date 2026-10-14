@@ -1,0 +1,16 @@
+{
+  "speech": {
+    "capability": "speech",
+    "selected": "parakeet",
+    "allowed": ["parakeet"],
+    "ready": ["parakeet"],
+    "status": { "state": "ready" }
+  },
+  "generation": {
+    "capability": "speech",
+    "selected": "parakeet",
+    "allowed": ["parakeet"],
+    "ready": ["parakeet"],
+    "status": { "state": "ready" }
+  }
+}

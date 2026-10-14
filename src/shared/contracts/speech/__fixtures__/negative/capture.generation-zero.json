@@ -1,0 +1,6 @@
+{
+  "generation": 0,
+  "engine": "parakeet",
+  "requestedTracks": ["microphone"],
+  "capturedTracks": ["microphone"]
+}

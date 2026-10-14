@@ -241,3 +241,54 @@ CREATE TABLE IF NOT EXISTS model_policy_history (
   policy_json TEXT NOT NULL,
   updated_by TEXT NOT NULL
 );
+
+-- M2-0107 durable speech reservations/grants; intentionally metadata-only, never audio or transcripts.
+CREATE TABLE IF NOT EXISTS speech_sessions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  license_jti TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  capture_generation INTEGER NOT NULL CHECK (capture_generation > 0),
+  route_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  config_version TEXT NOT NULL,
+  language TEXT,
+  status TEXT NOT NULL CHECK (status IN ('active', 'cancelled', 'expired')),
+  track_count INTEGER NOT NULL CHECK (track_count BETWEEN 1 AND 2),
+  reserved_ms INTEGER NOT NULL CHECK (reserved_ms >= 0),
+  settled_ms INTEGER NOT NULL DEFAULT 0 CHECK (settled_ms >= 0),
+  budget_window_start INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  grant_expires_at INTEGER NOT NULL,
+  lease_expires_at INTEGER NOT NULL,
+  license_expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS speech_sessions_active_tenant ON speech_sessions(tenant_id, audience, status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS speech_sessions_budget ON speech_sessions(tenant_id, audience, budget_window_start);
+CREATE INDEX IF NOT EXISTS speech_sessions_principal ON speech_sessions(license_jti, device_id, status);
+
+CREATE TABLE IF NOT EXISTS speech_grants (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  license_jti TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  track TEXT NOT NULL CHECK (track IN ('microphone', 'system')),
+  capture_generation INTEGER NOT NULL CHECK (capture_generation > 0),
+  route_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  config_version TEXT NOT NULL,
+  language TEXT,
+  issued_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  redeemed_at INTEGER,
+  revoked_at INTEGER,
+  UNIQUE(session_id, track)
+);
+
+CREATE INDEX IF NOT EXISTS speech_grants_session ON speech_grants(session_id, revoked_at, redeemed_at);
+CREATE INDEX IF NOT EXISTS speech_grants_principal ON speech_grants(tenant_id, audience, license_jti, device_id);

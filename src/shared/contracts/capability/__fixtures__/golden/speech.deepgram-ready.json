@@ -1,0 +1,7 @@
+{
+  "capability": "speech",
+  "selected": "deepgram-nova3",
+  "allowed": ["deepgram-nova3"],
+  "ready": ["deepgram-nova3"],
+  "status": { "state": "ready" }
+}

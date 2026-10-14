@@ -1,0 +1,7 @@
+{
+  "capability": "generation",
+  "selected": "parakeet",
+  "allowed": ["parakeet"],
+  "ready": ["parakeet"],
+  "status": { "state": "ready" }
+}
