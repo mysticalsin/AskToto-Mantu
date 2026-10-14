@@ -6,11 +6,20 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { inventoryCoreFiles, packageInventoryIdentity, validatePackageInventory } from './package-inventory.mjs'
-import { removeCloudflareEmbedPlaceholder } from './lean-package-stage.mjs'
+import { removeKnownLeanPackagePlaceholders } from './lean-package-stage.mjs'
 import type { PackageInventoryV1 } from '../../src/shared/package-profile'
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const execFileAsync = promisify(execFile)
+const STAGED_PLACEHOLDER_DIRECTORIES = [
+  'cloudflare-embed',
+  'operator',
+  'license-lease',
+  'managed-node/darwin-arm64',
+  'managed-node/darwin-x64',
+  'managed-node/win-x64',
+  'vcredist'
+]
 
 function inventory(): PackageInventoryV1 {
   const value = {
@@ -32,32 +41,60 @@ function inventory(): PackageInventoryV1 {
 }
 
 describe('lean package inventory contract', () => {
-  it('omits only the cloudflare directory placeholder while preserving real zero-byte files', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-cloudflare-'))
+  it('omits only the exact staged placeholders while preserving ordinary and nested zero-byte files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-placeholders-'))
     try {
-      await mkdir(join(root, 'cloudflare-embed', 'nested'), { recursive: true })
-      await writeFile(join(root, 'cloudflare-embed', '.gitkeep'), '')
+      for (const directory of STAGED_PLACEHOLDER_DIRECTORIES) {
+        await mkdir(join(root, directory), { recursive: true })
+        await writeFile(join(root, directory, '.gitkeep'), '')
+      }
       await writeFile(join(root, 'cloudflare-embed', 'empty-runtime-resource'), '')
-      await writeFile(join(root, 'cloudflare-embed', 'nested', '.gitkeep'), '')
+      await writeFile(join(root, 'operator', 'pubkey.json'), '{"publicKey":"fixture"}')
+      await mkdir(join(root, 'operator', 'nested'), { recursive: true })
+      await writeFile(join(root, 'operator', 'nested', '.gitkeep'), '')
+      await writeFile(join(root, 'managed-node', '.gitkeep'), '')
 
-      await expect(removeCloudflareEmbedPlaceholder(root)).resolves.toBe(true)
+      await expect(removeKnownLeanPackagePlaceholders(root)).resolves.toBe(true)
       await expect(inventoryCoreFiles(root)).resolves.toMatchObject([
         { path: 'cloudflare-embed/empty-runtime-resource', bytes: 0 },
-        { path: 'cloudflare-embed/nested/.gitkeep', bytes: 0 }
+        { path: 'managed-node/.gitkeep', bytes: 0 },
+        { path: 'operator/nested/.gitkeep', bytes: 0 },
+        { path: 'operator/pubkey.json', bytes: 23 }
       ])
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('fails closed if the exact staging placeholder is not the known empty regular file', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-cloudflare-invalid-'))
-    const placeholder = join(root, 'cloudflare-embed', '.gitkeep')
+  it.each(
+    STAGED_PLACEHOLDER_DIRECTORIES
+  )('fails closed if the exact %s placeholder is not the known empty regular file', async (directory) => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-placeholder-invalid-'))
+    const placeholder = join(root, directory, '.gitkeep')
     try {
-      await mkdir(join(root, 'cloudflare-embed'), { recursive: true })
+      await mkdir(join(root, directory), { recursive: true })
       await writeFile(placeholder, 'unexpected payload')
-      await expect(removeCloudflareEmbedPlaceholder(root)).rejects.toThrow(/zero-byte regular file/)
-      await expect(inventoryCoreFiles(root)).resolves.toMatchObject([{ path: 'cloudflare-embed/.gitkeep', bytes: 18 }])
+      await expect(removeKnownLeanPackagePlaceholders(root)).rejects.toThrow(/zero-byte regular file/)
+      await expect(inventoryCoreFiles(root)).resolves.toContainEqual({
+        path: `${directory}/.gitkeep`,
+        bytes: 18,
+        sha256: sha('unexpected payload')
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(STAGED_PLACEHOLDER_DIRECTORIES)('refuses to remove a linked %s placeholder', async (directory) => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-lean-stage-placeholder-link-'))
+    const placeholder = join(root, directory, '.gitkeep')
+    const target = join(root, 'target')
+    try {
+      await mkdir(join(root, directory), { recursive: true })
+      await mkdir(target)
+      await symlink(target, placeholder, process.platform === 'win32' ? 'junction' : undefined)
+      await expect(removeKnownLeanPackagePlaceholders(root)).rejects.toThrow(/zero-byte regular file/)
+      await expect(inventoryCoreFiles(root)).rejects.toThrow(/symbolic link/)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

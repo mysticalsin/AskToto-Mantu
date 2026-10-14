@@ -5,7 +5,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { inventoryCoreFiles, packageInventoryIdentity, validatePackageInventory } from './lib/package-inventory.mjs'
 import { copyContainedTree } from './lib/contained-tree-copy.mjs'
-import { removeCloudflareEmbedPlaceholder } from './lib/lean-package-stage.mjs'
+import { removeKnownLeanPackagePlaceholders } from './lib/lean-package-stage.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PROFILE = process.env.METIS_PACKAGE_PROFILE ?? 'full'
@@ -79,7 +79,6 @@ await copyTree('resources/runtime-trust/acquisition-receipt.json', 'runtime-trus
 await copyTree('THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md')
 await copyTree('skills', 'skills')
 await copyTree('build/cloudflare-embed', 'cloudflare-embed')
-await removeCloudflareEmbedPlaceholder(resourcesRoot)
 await copyTree('resources/operator', 'operator')
 await copyTree('resources/license-lease', 'license-lease')
 await copyTree(`resources/ffmpeg/${targetFolder}`, `ffmpeg/${targetFolder}`)
@@ -95,6 +94,7 @@ if (platform === 'darwin') {
 } else {
   await copyTree('resources/vcredist', 'vcredist')
 }
+await removeKnownLeanPackagePlaceholders(resourcesRoot)
 
 const packageProfilePath = join(resourcesRoot, 'speech-pack-profile.json')
 await writeFile(packageProfilePath, '{"schema":1,"profile":"lean"}\n', { flag: 'wx', mode: 0o644 })
