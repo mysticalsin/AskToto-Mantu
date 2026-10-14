@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
-import { canonicalizeIncrementalMeetingRecord } from './incremental-record-canonical'
+import { canonicalizeIncrementalMeetingRecord } from '../../infra/process/incremental-record-canonical'
 import { createStorageGateway } from '../../infra/storage/gateway'
 import type { ContentPresence, DatalessDetector } from '../../infra/storage/dataless'
 import {
@@ -12,7 +12,7 @@ import {
   type IncrementalMeetingJournalStorage
 } from './incremental-meeting-journal'
 import { createIncrementalMeetingJournalFileStorage } from './incremental-meeting-journal-files'
-import { issueIncrementalRecordReceipt } from './incremental-record-receipt'
+import { issueIncrementalRecordReceipt } from '../../infra/process/incremental-record-receipt'
 import { encodeIndex, identityHash } from './incremental-meeting-journal-format'
 import type { StorageGateway } from '../../infra/storage/gateway'
 import { atomicSavedWriteStream } from '../../infra/storage/atomic-saved-write'
