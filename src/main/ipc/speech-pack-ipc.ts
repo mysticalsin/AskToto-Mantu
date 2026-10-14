@@ -1,11 +1,8 @@
 import { IPC } from '@shared/ipc'
 import type { SpeechPackService } from '../features/components'
 
-type SpeechPackIpcEvent = { sender: unknown }
-type SpeechPackIpcMain = {
-  handle(channel: string, listener: (event: SpeechPackIpcEvent, request?: unknown) => unknown): void
-  removeHandler(channel: string): void
-}
+type SpeechPackIpcEvent = Electron.IpcMainInvokeEvent
+type SpeechPackIpcMain = Pick<Electron.IpcMain, 'handle' | 'removeHandler'>
 
 /** Register the renderer-facing speech-pack surface after validating the trusted main-window sender. */
 export function registerSpeechPackIpc(options: {
