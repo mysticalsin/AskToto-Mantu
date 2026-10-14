@@ -41,13 +41,13 @@
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3083,
-    "src/main/brain/publish.ts": 964,
+    "src/main/brain/publish.ts": 954,
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 10402,
-    "src/main/store.ts": 1364,
-    "src/main/transcripts.ts": 1197,
+    "src/main/index.ts": 10335,
+    "src/main/store.ts": 1338,
+    "src/main/transcripts.ts": 1086,
     "src/renderer/src/App.tsx": 4796,
     "src/renderer/src/components/Bar.tsx": 962,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
@@ -61,7 +61,7 @@
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3128,
-    "src/shared/ipc.ts": 2466
+    "src/shared/ipc.ts": 2430
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -118,7 +118,7 @@
     "src/main/speaker-id.ts": 6,
     "src/main/store.ts": 42,
     "src/main/time-saved-log.ts": 4,
-    "src/main/transcripts.ts": 27,
+    "src/main/transcripts.ts": 26,
     "src/main/updater.ts": 1,
     "src/main/whisper-asr-host.ts": 1,
     "src/main/win-security.ts": 7
@@ -127,7 +127,7 @@
     "src/main/brain/publish.ts": 20,
     "src/main/brain/store.ts": 63,
     "src/main/graphify.ts": 17,
-    "src/main/transcripts.ts": 33
+    "src/main/transcripts.ts": 29
   },
   "FF-06": {},
   "FF-07": {

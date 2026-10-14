@@ -1,5 +1,13 @@
-import { renderNonNumeric, renderNumeric, factRow, plainFactRow, NOT_CONFIDENTIAL } from './publish-provenance'
-import { publicMeetingText } from '../features/meetings/meeting-speech'
+import {
+  renderNonNumeric,
+  renderNumeric,
+  factRow,
+  plainFactRow,
+  changelogEntries,
+  formatNumber,
+  type ChangeRow
+} from './publish-provenance'
+import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from '../features/meetings/meeting-speech'
 import { app } from 'electron'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, unlinkSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
@@ -10,12 +18,17 @@ import {
   type DealEntity,
   type MeetingExtraction,
   type MeetingRef,
-  type ProvenantField,
   type EntityKind,
   type LedgerCommitment
 } from '@shared/brain'
 import { hasMeetingFlag, parse, readMeetingFields } from '../features/meetings/meeting-document'
-import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
+import {
+  resolveMeetingsFolder,
+  decodeSavedMeetingAsync,
+  readSavedFile,
+  writeSaved,
+  parseRecapMarkdown
+} from '../transcripts'
 import {
   listEntities,
   readPerson,
@@ -27,6 +40,7 @@ import {
   slugify
 } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
+import { storageAt } from '../infra/storage/meetings-storage'
 
 /**
  * Task MI-5 — the Dust-readable markdown mirror. Renders the CRM-corrected brain (entities +
@@ -110,15 +124,6 @@ function buildFrontmatter(fields: Array<[string, string]>): string {
 }
 
 const AI_NOTICE = '> AI-generated summary — verify before relying.\n'
-
-// ── Locale-independent number formatting (determinism: Number.toLocaleString() depends on the ─────────
-// runtime's default locale, which can differ between machines/CI and would break byte-identical output).
-function formatNumber(n: number): string {
-  const sign = n < 0 ? '-' : ''
-  const [intPart, frac] = Math.abs(n).toFixed(2).replace(/\.00$/, '').split('.')
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return sign + grouped + (frac ? `.${frac}` : '')
-}
 
 // ── Confidential meetings ─────────────────────────────────────────────────────────────────────────────
 
@@ -241,17 +246,18 @@ function addConfidentialTeamMeetings(s: Settings, out: Set<string>): void {
  *  full readdir + synchronous read+decrypt of EVERY saved meeting, so letting publishAll/publishForExtraction
  *  re-scan per page turns one toggle into O(pages × meetings) blocking main-process reads. They read it once
  *  and thread the result through `knownConfidential`. */
-export function readConfidentialMeetings(s: Settings): Set<string> {
+export async function readConfidentialMeetings(s: Settings): Promise<Set<string>> {
   const folder = resolveMeetingsFolder(s)
   const out = new Set<string>()
+  const maxBytes = getMeetingSpeechReadLimitBytes()
   for (const f of listSavedMeetingFiles(s)) {
-    let md: string
-    try {
-      md = readSavedFile(join(folder, f))
-    } catch {
+    const raw = await storageAt(folder).read(f, { ...(maxBytes ? { maxBytes } : {}) })
+    if (raw.status !== 'ok') {
       out.add(f)
       continue
     }
+    const decoded = await decodeSavedMeetingAsync(raw.bytes, false, join(folder, f))
+    const md = decoded.ok ? decoded.text : ''
     if (!md || readFrontmatterFlag(md, 'confidential')) out.add(f)
   }
   addConfidentialTeamMeetings(s, out)
@@ -259,27 +265,6 @@ export function readConfidentialMeetings(s: Settings): Set<string> {
 }
 
 // ── Render gate ────────────────────────────────────────────────────────────────────────────────────────
-
-interface ChangeRow {
-  date: string
-  text: string
-}
-
-function changelogEntries(
-  fields: Array<{ label: string; field: ProvenantField<unknown> | undefined; format: (v: unknown) => string }>,
-  confidential: Set<string>
-): ChangeRow[] {
-  const rows: ChangeRow[] = []
-  for (const { label, field, format } of fields) {
-    if (!field) continue
-    for (const e of field.superseded) {
-      if (!NOT_CONFIDENTIAL(e.source_file, confidential)) continue
-      const src = e.source_file ? ` [${e.source_file}]` : ''
-      rows.push({ date: e.date, text: `${label} was ${format(e.value)}${src}` })
-    }
-  }
-  return rows.sort((a, b) => (a.date === b.date ? a.text.localeCompare(b.text) : a.date > b.date ? -1 : 1)).slice(0, 10)
-}
 
 // ── Timeline / commitments (confidential meetings excluded) ────────────────────────────────────────────
 
@@ -480,7 +465,7 @@ export async function publishEntity(
 ): Promise<void> {
   if (!s.publishBrainPages || !id) return
   ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
   let md: string | null = null
   let meetings: MeetingRef[] = []
   if (kind === 'person') {
@@ -578,7 +563,7 @@ export async function publishMeetingCard(
   const base = basename(meetingFile)
   if (!base.endsWith('.md')) return
   ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
   if (confidential.has(base)) {
     await removeMeetingCard(s, base)
     return
@@ -591,7 +576,12 @@ export async function publishMeetingCard(
   }
   let raw: string
   try {
-    raw = publicMeetingText(readSavedFile(path))
+    const maxBytes = getMeetingSpeechReadLimitBytes()
+    const read = await storageAt(folder).read(base, { ...(maxBytes ? { maxBytes } : {}) })
+    if (read.status !== 'ok') return
+    const decoded = await decodeSavedMeetingAsync(read.bytes, false, path)
+    if (!decoded.ok) return
+    raw = await publicMeetingTextAsync(decoded.text)
   } catch {
     return
   }
@@ -808,7 +798,7 @@ function readAllMeetingRefs(s: Settings): MeetingRef[] {
 export async function publishIndexes(s: Settings, knownConfidential?: Set<string>): Promise<void> {
   if (!s.publishBrainPages) return
   ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
 
   const accounts = listEntities(s, 'account')
     .map((id) => readAccount(s, id))
@@ -898,7 +888,7 @@ export async function publishForExtraction(
   if (!s.publishBrainPages) return
   // One scan for the whole merge: this runs on EVERY ingested meeting (live and backfill), so re-reading
   // the confidential flags per page would re-decrypt the entire meetings folder ~5-10x per meeting.
-  const confidential = readConfidentialMeetings(s)
+  const confidential = await readConfidentialMeetings(s)
   const accountSlug = x.account && x.account.name.trim() ? resolveEntitySlug(aliasMap, 'account', x.account.name) : null
   if (accountSlug) await publishEntity(s, 'account', accountSlug, confidential)
   for (const p of x.people) {
@@ -923,7 +913,7 @@ export async function publishAll(s: Settings): Promise<void> {
   ensureWikiDirs(s)
   // One scan for the whole regeneration: a full-corpus rescan per page is O(pages × meetings) synchronous
   // read+decrypts on the main process, which is what froze the app for minutes on one Confidential toggle.
-  const confidential = readConfidentialMeetings(s)
+  const confidential = await readConfidentialMeetings(s)
   // Same "once for the whole regeneration" rule for the alias map (QA MQA-152): it is the other
   // full-corpus read+decrypt a card needs, and no page written below mutates an entity, so one map
   // serves every card.

@@ -278,9 +278,9 @@ export function graphifySourceDir(s: Settings): string {
  *  (source = raw folder) and any meeting is flagged confidential, a build would extract that confidential
  *  content into the Dust-readable knowledge graph. Refuse until the user turns publishing on (which builds
  *  from the confidential-free mirror instead). (QA #10) */
-function confidentialGraphRefusal(s: Settings): string | null {
+async function confidentialGraphRefusal(s: Settings): Promise<string | null> {
   if (s.publishBrainPages) return null // source is the wiki mirror, which already excludes confidential
-  if (readConfidentialMeetings(s).size === 0) return null
+  if ((await readConfidentialMeetings(s)).size === 0) return null
   return 'Some meetings are marked confidential, but the knowledge graph is built from your meetings folder, which still includes them. Turn on "Publish meeting intelligence" in Settings so the graph is built from the confidential-free published mirror instead.'
 }
 
@@ -296,7 +296,7 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
     return graphifyStatus()
   }
   // Confidentiality fail-closed: never feed a confidential meeting into the graph (QA #10).
-  const confidentialRefusal = confidentialGraphRefusal(getSettings())
+  const confidentialRefusal = await confidentialGraphRefusal(getSettings())
   if (confidentialRefusal) {
     lastError = confidentialRefusal
     return graphifyStatus()
@@ -352,13 +352,13 @@ let rebuildTimer: NodeJS.Timeout | null = null
 const REBUILD_DEBOUNCE_MS = 20_000
 
 /** Called after a note/meeting is saved. Coalesces a burst of saves into one incremental rebuild. */
-export function scheduleRebuild(): void {
+export async function scheduleRebuild(): Promise<void> {
   const s = getSettings()
   if (!s.graphifyEnabled || !s.graphifyAutoRebuild) return
   // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
   // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
   if (graphifyRefusalReason(s)) return
-  if (confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
+  if (await confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
   if (rebuildTimer) clearTimeout(rebuildTimer)
   const fire = (): void => {
     rebuildTimer = null

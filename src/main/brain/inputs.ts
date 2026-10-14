@@ -4,14 +4,14 @@
  * Listing/classification is metadata-only. Transcript bytes are opened only by readSourceText(), after
  * the storage gateway has classified the file as local.
  */
-import { publicMeetingText } from '../features/meetings/meeting-speech'
+import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from '../features/meetings/meeting-speech'
 import { basename, dirname, join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import type { BrainIndex } from '@shared/brain'
 import { fnv1a } from '@shared/hash'
 import { storageAt, classifyAll } from '../infra/storage/meetings-storage'
 import type { ContentVersion, StorageGateway } from '../infra/storage/gateway'
-import { decodeSaved, resolveMeetingsFolder } from '../transcripts'
+import { decodeSavedMeetingAsync, resolveMeetingsFolder } from '../transcripts'
 import { mainLog } from '../logger'
 import { brainDir, slugify } from './store'
 
@@ -133,11 +133,15 @@ export function countUnextracted(scan: SourceScan, idx: BrainIndex): number {
 }
 
 export async function readSourceText(file: string): Promise<SourceText> {
-  const read = await storageAt(dirname(file)).read(basename(file))
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  const read = await storageAt(dirname(file)).read(basename(file), { ...(maxBytes ? { maxBytes } : {}) })
   const observation = 'version' in read ? observationOf(read.version) : {}
   if (read.status === 'ok') {
     try {
-      return { status: 'ok', text: publicMeetingText(decodeSaved(read.bytes)), observation }
+      const decoded = await decodeSavedMeetingAsync(read.bytes, false, file)
+      if (!decoded.ok)
+        return { status: 'unreadable', error: new Error('Meeting file could not be decrypted.'), observation }
+      return { status: 'ok', text: await publicMeetingTextAsync(decoded.text), observation }
     } catch {
       return { status: 'unreadable', error: new Error('Meeting text could not be projected safely.'), observation }
     }

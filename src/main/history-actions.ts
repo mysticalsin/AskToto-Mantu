@@ -7,11 +7,11 @@
  *   - `safeName` is a basename already checked by safeMeetingBasename; these helpers never build a path
  *     from anything else.
  */
-import { publicMeetingText } from './features/meetings/meeting-speech'
+import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from './features/meetings/meeting-speech'
 import { join } from 'node:path'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { ReadOptions } from './infra/storage/gateway'
-import { decodeSaved, decryptToTemp, isEncryptedBytes } from './transcripts'
+import { decodeSavedMeetingAsync, decryptMeetingToTempAsync, isEncryptedBytes } from './transcripts'
 
 /** Shown on the History row when the gateway could not read the meeting (cloud-only, locked, slow). */
 export const MEETING_NOT_READABLE_MSG =
@@ -28,27 +28,32 @@ export async function meetingOpenTarget(
 ): Promise<OpenTarget> {
   const path = join(folder, safeName)
   const gateway = storageAt(folder)
+  const maxBytes = getMeetingSpeechReadLimitBytes()
   // A FIFO, socket or device is refused before any read: a plain gateway read would still open it once
   // the detector answers. Classify's other verdicts never skip the read below.
   const fileClass = (await gateway.classify([safeName])).get(safeName)
   if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular)
     return { ok: false, error: MEETING_NOT_READABLE_MSG }
-  let read = await gateway.read(safeName)
+  let read = await gateway.read(safeName, { ...(maxBytes ? { maxBytes } : {}) })
   // The user's explicit Open hydrates this one cloud-only file (under a content permit, with progress).
   if (hydrate && (read.status === 'dataless' || read.status === 'unknown'))
-    read = await gateway.read(safeName, { hydrate, onProgress })
+    read = await gateway.read(safeName, { hydrate, onProgress, ...(maxBytes ? { maxBytes } : {}) })
   if (read.status === 'missing') return { ok: true, path, encrypted: false }
   if (read.status !== 'ok') return { ok: false, error: MEETING_NOT_READABLE_MSG }
   if (!isEncryptedBytes(read.bytes)) return { ok: true, path, encrypted: false }
-  return { ok: true, path: decryptToTemp(path, read.bytes), encrypted: true }
+  return { ok: true, path: await decryptMeetingToTempAsync(path, read.bytes), encrypted: true }
 }
 
 /** The gateway-backed readSavedFile: the meeting's decoded text, '' when it cannot be decrypted on this
  *  device. Throws an ENOENT error when the file is missing and a plain error when it cannot be read, so
  *  callers keep readSavedFile's error handling. */
 export async function readSavedMeeting(folder: string, safeName: string): Promise<string> {
-  const read = await storageAt(folder).read(safeName)
-  if (read.status === 'ok') return publicMeetingText(decodeSaved(read.bytes))
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  const read = await storageAt(folder).read(safeName, { ...(maxBytes ? { maxBytes } : {}) })
+  if (read.status === 'ok') {
+    const decoded = await decodeSavedMeetingAsync(read.bytes, false, join(folder, safeName))
+    return publicMeetingTextAsync(decoded.ok ? decoded.text : '')
+  }
   const error = new Error(`meeting file ${read.status}`) as NodeJS.ErrnoException
   if (read.status === 'missing') error.code = 'ENOENT'
   throw error

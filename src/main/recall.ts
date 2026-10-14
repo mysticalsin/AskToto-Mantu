@@ -2,7 +2,6 @@ import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import {
-  hasMeetingFlag,
   parse,
   readMeetingFields as frontmatter,
   recapSectionEndIndex,
@@ -10,11 +9,18 @@ import {
   serialize,
   setMeetingField
 } from './features/meetings/meeting-document'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, DEBRIEF_HEADING } from './transcripts'
 import {
-  decodeStoredMeetingSpeech,
-  renderMeetingTranscript,
-  rewriteStoredSpeechTranscript
+  resolveMeetingsFolder,
+  decodeSavedMeetingAsync,
+  isEncryptedBytes,
+  writeSaved,
+  DEBRIEF_HEADING
+} from './transcripts'
+import {
+  decodeStoredMeetingSpeechAsync,
+  getMeetingSpeechReadLimitBytes,
+  renderMeetingTranscriptAsync,
+  rewriteStoredSpeechTranscriptAsync
 } from './features/meetings/meeting-speech'
 import {
   meetingSpeechPrefix,
@@ -22,8 +28,10 @@ import {
   refuseReservedSpeechProse
 } from './features/meetings/speech-provenance'
 import { storageAt } from './infra/storage/meetings-storage'
+import { writeWithAdmission } from './infra/storage/write-with-admission'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
-import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
+import { UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
+import { FILENAME_TIMESTAMP, isMeetingConfidentialOnDisk, isOwnedMeetingFile } from './meeting-privacy'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
 import { readLegacyTranscript } from './features/meetings/legacy-transcript'
@@ -36,12 +44,14 @@ import type { RecallHydration } from '@shared/recall-hydration'
 // meeting back, editing it, and deleting it. History's list and search read path lives in history-read.ts.
 // Reaches the meetings folder only through the storage gateway and meeting-files.ts, never node:fs.
 export { listMeetings, searchMeetings, searchMeetingsLatest, type HistoryRow } from './history-read'
+export { isMeetingConfidentialOnDisk } from './meeting-privacy'
 
 async function readMeetingBytes(
   folder: string,
   file: string
 ): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
-  const read = await storageAt(folder).read(file)
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  const read = await storageAt(folder).read(file, { ...(maxBytes ? { maxBytes } : {}) })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
   return { ok: true, bytes: read.bytes }
@@ -53,7 +63,8 @@ async function readMeetingText(
 ): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
   const read = await readMeetingBytes(folder, file)
   if (!read.ok) return read
-  const text = decodeSaved(read.bytes)
+  const decoded = await decodeSavedMeetingAsync(read.bytes, false, join(folder, file))
+  const text = decoded.ok ? decoded.text : ''
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   return { ok: true, text, encrypted: isEncryptedBytes(read.bytes) }
 }
@@ -178,17 +189,20 @@ export async function recallRead(
   if (fileClass?.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular)
     return { ok: false, error: 'Could not read the meeting file.' }
-  let read = await gateway.read(safeName)
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  let read = await gateway.read(safeName, { ...(maxBytes ? { maxBytes } : {}) })
   // An explicit open (`hydrate`) is the one place a cloud-only file is hydrated: this one file, under a
   // content permit, reporting progress. Listing, search and background passes never do.
   if (hydrate && (read.status === 'dataless' || read.status === 'unknown'))
-    read = await gateway.read(safeName, { hydrate: true, onProgress })
+    read = await gateway.read(safeName, { hydrate: true, onProgress, ...(maxBytes ? { maxBytes } : {}) })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
-  const completeText = decodeSaved(read.bytes)
-  const speech = decodeStoredMeetingSpeech(completeText)
+  const decoded = await decodeSavedMeetingAsync(read.bytes, false, join(folder, safeName))
+  if (!decoded.ok) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+  const completeText = decoded.text
+  const speech = await decodeStoredMeetingSpeechAsync(completeText)
   if (!speech.ok) return { ok: false, error: 'Meeting text could not be projected safely.' }
   const text = speech.publicMarkdown
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
@@ -415,7 +429,8 @@ export async function updateMeetingRecap(
   settings: Settings,
   file: string,
   newRecap: string,
-  recapStatus?: RecapStatus
+  recapStatus?: RecapStatus,
+  beforeReplace?: () => void
 ): Promise<{ ok: boolean; error?: string }> {
   const statusError = recapStatusValidationError(newRecap, recapStatus)
   if (statusError) return { ok: false, error: statusError }
@@ -485,11 +500,9 @@ export async function updateMeetingRecap(
     updated = serialize(setMeetingField(doc, 'recap_status', recapStatus))
   }
 
-  try {
-    await writeSaved(fullPath, updated, wasEncrypted)
-  } catch {
-    return { ok: false, error: 'Could not save your changes.' }
-  }
+  const write = await writeWithAdmission(beforeReplace, (guard) => writeSaved(fullPath, updated, wasEncrypted, guard))
+  if (write.kind === 'admission-refused') throw write.error
+  if (write.kind === 'write-failed') return { ok: false, error: 'Could not save your changes.' }
   return { ok: true }
 }
 
@@ -519,7 +532,7 @@ export async function updateMeetingTranscript(
   const { text, encrypted: wasEncrypted } = read
 
   try {
-    const framed = rewriteStoredSpeechTranscript(text, lines)
+    const framed = await rewriteStoredSpeechTranscriptAsync(text, lines)
     if (framed !== null) {
       await writeSaved(fullPath, framed, wasEncrypted)
       return { ok: true }
@@ -540,7 +553,7 @@ export async function updateMeetingTranscript(
   const debriefIdx = afterStart.search(debriefRe)
   const tail = debriefIdx === -1 ? '' : afterStart.slice(debriefIdx)
   const head = text.slice(0, bodyStart)
-  const rendered = renderMeetingTranscript(lines) || '_No speech captured._'
+  const rendered = (await renderMeetingTranscriptAsync(lines)) || '_No speech captured._'
   const updated = tail ? `${head}${rendered}\n\n${tail}` : `${head}${rendered}\n`
 
   try {
@@ -637,65 +650,6 @@ export async function setMeetingConfidential(
 }
 
 /**
- * Disk-backed confidential check for MCP push (Wave 4 defense-in-depth). The renderer already gates
- * on its local flag, but a buggy/compromised UI could omit `args.confidential` — main must re-read
- * frontmatter. Unreadable / undecryptable / missing frontmatter fails CLOSED (same as publish MQA-077):
- * treat as confidential so nothing leaves the device.
- */
-export async function isMeetingConfidentialOnDisk(settings: Settings, file: string): Promise<boolean> {
-  const safeName = basename(file)
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
-    return true
-  }
-  const folder = resolveMeetingsFolder(settings)
-  const read = await storageAt(folder).read(safeName)
-  if (read.status !== 'ok') return true // missing / unreadable — fail closed
-  const completeText = decodeSaved(read.bytes)
-  const speech = decodeStoredMeetingSpeech(completeText)
-  if (!speech.ok) return true
-  const text = speech.publicMarkdown
-  if (!text) return true
-  if (!parse(text)) return true
-  return hasMeetingFlag(text, 'confidential')
-}
-
-// Every file Métis itself writes into the meetings folder carries one of these frontmatter types (see
-// saveMeeting / saveNote / saveDraftTranscript in transcripts.ts). Used as the ownership check for a
-// file whose NAME no longer matches Métis's own shape (a transcript the user renamed by hand), so an
-// erasure request still erases it.
-const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-summary', 'meeting-transcript-draft', 'note'])
-
-/**
- * Tri-state ownership verdict for a file in the meetings folder. The meetings folder is an arbitrary
- * user-chosen directory (Settings → Change folder), so the wipe below cannot delete by `.md` extension
- * alone: it would take the user's unrelated markdown with it, permanently, with no backup and no undo.
- * Filename shape first (the cheap decisive signal sweepExpiredMeetings already trusts), then the
- * frontmatter type, then the encrypted envelope — a save this device can't decrypt is still ours, and
- * must still go. A THROWN read is UNREADABLE, never `false`: "could not read it right now" is not the
- * same verdict as "confirmed not ours" — collapsing them lets a real, transiently-locked meeting be
- * silently skipped by an erasure request that then reports success (MQA-103). Mirrors the exact
- * tri-state discipline readMeetingUncached's UNREADABLE sentinel already establishes in history-read.ts.
- */
-async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean | typeof UNREADABLE> {
-  if (DRAFT_FILENAME.test(file) || FILENAME_TIMESTAMP.test(file)) return true
-  const raw = await storageAt(folder).read(file)
-  if (raw.status !== 'ok') {
-    // A THROWN read is a transient "can't read it right now" (an EBUSY/EPERM AV/EDR or OneDrive
-    // upload-hash lock, or an unhydrated Files-On-Demand placeholder — routine on this folder, see
-    // transcripts.ts), NOT "not a meeting file". Report UNREADABLE so deleteAllMeetings surfaces it as a
-    // FAILURE rather than silently folding a possibly-owned (e.g. hand-renamed) transcript into `skipped`.
-    return UNREADABLE
-  }
-  try {
-    const text = decodeSaved(raw.bytes)
-    if (!text) return isEncryptedBytes(raw.bytes)
-    return OWNED_FRONTMATTER_TYPES.has(frontmatter(text).type)
-  } catch {
-    return false // decoded but unparseable — never guess, skip rather than risk deleting the wrong file
-  }
-}
-
-/**
  * Delete every saved meeting + the index — a genuine "delete all my Métis data" action, for a
  * GDPR/CCPA erasure request or a full account wipe. The caller (index.ts) is responsible for also
  * purging the knowledge graph (purgeGraphArtifacts) and prompting for confirmation first; this
@@ -751,8 +705,6 @@ export async function deleteAllMeetings(): Promise<{
 // Filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see transcripts.ts) — parsed here rather than
 // trusting file mtime, since mtime changes on copy/sync (this folder is often OneDrive-synced) and
 // would silently corrupt age-based retention.
-const FILENAME_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})-/
-
 /**
  * Auto-delete meetings older than `retentionDays` (storage-limitation control for recorded third-party
  * speech). `retentionDays <= 0` means retention is off — keep everything, the historical default. Swept

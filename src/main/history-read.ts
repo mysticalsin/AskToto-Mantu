@@ -10,9 +10,9 @@
  *     hydrates a file: only an explicit open does (recallRead in recall.ts, meetingOpenTarget).
  *   - A newer search aborts the one still queued at the gateway (searchMeetingsLatest).
  */
-import { projectMeetingSpeech } from './features/meetings/speech-provenance'
+import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from './features/meetings/meeting-speech'
 import { join } from 'node:path'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes } from './transcripts'
+import { resolveMeetingsFolder, decodeSavedMeetingAsync, isEncryptedBytes } from './transcripts'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import type { FileClass } from './infra/storage/gateway'
 import { getSettings } from './store'
@@ -216,7 +216,8 @@ async function readMeetingUncached(
   file: string,
   signal?: AbortSignal
 ): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
-  const raw = await storageAt(folder).read(file, { signal })
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  const raw = await storageAt(folder).read(file, { signal, ...(maxBytes ? { maxBytes } : {}) })
   if (raw.status !== 'ok') {
     if (raw.status === 'dataless' || raw.status === 'unknown' || raw.status === 'timeout') return NOT_LOCAL
     // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
@@ -225,9 +226,13 @@ async function readMeetingUncached(
     return UNREADABLE
   }
   try {
-    const projected = projectMeetingSpeech(decodeSaved(raw.bytes))
-    if (!projected.ok) return UNREADABLE
-    const text = projected.publicMarkdown
+    const decoded = await decodeSavedMeetingAsync(raw.bytes, false, join(folder, file))
+    if (!decoded.ok) {
+      if (!isEncryptedBytes(raw.bytes)) return null
+      const stub = lockedStub(file)
+      return stub ? { text: '', sum: stub } : null
+    }
+    const text = await publicMeetingTextAsync(decoded.text)
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
       // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's

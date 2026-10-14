@@ -77,4 +77,34 @@ export function plainFactRow(label: string, value: string): string {
   return `| ${label} | ${value} | — |`
 }
 
+/** Locale-independent number formatting keeps generated pages byte-identical across machines. */
+export function formatNumber(n: number): string {
+  const sign = n < 0 ? '-' : ''
+  const [intPart, frac] = Math.abs(n).toFixed(2).replace(/\.00$/, '').split('.')
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return sign + grouped + (frac ? `.${frac}` : '')
+}
+
+export interface ChangeRow {
+  date: string
+  text: string
+}
+
+/** Bounded, deterministic superseded history after excluding confidential meeting sources. */
+export function changelogEntries(
+  fields: Array<{ label: string; field: ProvenantField<unknown> | undefined; format: (v: unknown) => string }>,
+  confidential: Set<string>
+): ChangeRow[] {
+  const rows: ChangeRow[] = []
+  for (const { label, field, format } of fields) {
+    if (!field) continue
+    for (const entry of field.superseded) {
+      if (!NOT_CONFIDENTIAL(entry.source_file, confidential)) continue
+      const source = entry.source_file ? ` [${entry.source_file}]` : ''
+      rows.push({ date: entry.date, text: `${label} was ${format(entry.value)}${source}` })
+    }
+  }
+  return rows.sort((a, b) => (a.date === b.date ? a.text.localeCompare(b.text) : a.date > b.date ? -1 : 1)).slice(0, 10)
+}
+
 // ── Changelog (superseded history, capped 10, confidential entries excluded) ───────────────────────────

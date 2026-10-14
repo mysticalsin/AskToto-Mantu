@@ -1001,4 +1001,22 @@ describe.skipIf(process.platform === 'win32')('kernel-blocking pool protection (
     expect(result).toMatchObject({ status: 'dataless' })
     expect(releaseFifo(fifo)).toBe(false) // nobody was ever waiting to open it
   })
+
+  it('enforces a purpose-specific byte cap before and during a real file read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-bounded-read-'))
+    try {
+      writeFileSync(join(root, 'meeting.md'), '12345')
+      const gateway = createStorageGateway({ root: () => root, detector: localDetector() })
+      expect(await gateway.read('meeting.md', { maxBytes: 4 })).toMatchObject({
+        status: 'unavailable',
+        code: 'SIZE_LIMIT'
+      })
+      expect(await gateway.read('meeting.md', { maxBytes: 5 })).toMatchObject({
+        status: 'ok',
+        bytes: Buffer.from('12345')
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

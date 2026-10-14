@@ -23,7 +23,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 const meeting: SaveMeeting = {
-  title: 'Synthetic recap status', mode: 'meeting', startedAt: 1_700_000_000_000,
+  title: 'Synthetic recap status',
+  mode: 'meeting',
+  startedAt: 1_700_000_000_000,
   lines: [{ speaker: 'you', text: 'We agreed to review the proposal.', t: 1_700_000_000_000 }],
   recap: 'Partial notes are still useful.'
 }
@@ -41,11 +43,17 @@ describe('durable summary completion state', () => {
     vi.restoreAllMocks()
   })
 
-  it.each(['incomplete', 'complete'] as const)('round-trips explicit %s without altering text or transcript', async (recapStatus) => {
+  it.each([
+    'incomplete',
+    'complete'
+  ] as const)('round-trips explicit %s without altering text or transcript', async (recapStatus) => {
     const file = await saveMeeting(settings, { ...meeting, recapStatus })
     expect(readFileSync(file, 'utf8')).toContain(`\nrecap_status: ${recapStatus}\n`)
     expect(await recallRead(basename(file))).toMatchObject({
-      ok: true, recapStatus, recap: meeting.recap, lines: meeting.lines
+      ok: true,
+      recapStatus,
+      recap: meeting.recap,
+      lines: meeting.lines
     })
   })
 
@@ -65,7 +73,10 @@ describe('durable summary completion state', () => {
     const empty = await saveMeeting(settings, { ...meeting, recap: '', recapStatus: 'incomplete' })
     const pending = await listMeetingsNeedingRecap()
     expect(pending.map((entry) => entry.file)).toEqual([basename(empty)])
-    expect(await recallRead(partial)).toMatchObject({ recapStatus: 'incomplete', recap: 'My additional meeting annotations.' })
+    expect(await recallRead(partial)).toMatchObject({
+      recapStatus: 'incomplete',
+      recap: 'My additional meeting annotations.'
+    })
   })
 
   it('keeps an incomplete warning through a manual edit, then replaces it only on an explicit complete retry', async () => {
@@ -93,14 +104,20 @@ describe('durable summary completion state', () => {
     const file = await saveMeeting(settings, { ...meeting, recap: 'recap_status: incomplete\nUser notes.' })
     expect((await recallRead(file)).recapStatus).toBeUndefined()
     const original = readFileSync(file, 'utf8')
-    writeFileSync(file, original.replace('type: meeting-transcript', 'type: meeting-transcript\nrecap_status: invented'))
+    writeFileSync(
+      file,
+      original.replace('type: meeting-transcript', 'type: meeting-transcript\nrecap_status: invented')
+    )
     expect((await recallRead(file)).recapStatus).toBeUndefined()
   })
 
   it('rejects invalid or empty-complete updates before changing original bytes', async () => {
     const file = await saveMeeting(settings, { ...meeting, recapStatus: 'incomplete' })
     const before = readFileSync(file)
-    for (const [text, status] of [['  ', 'complete'], ['notes', 'complete\nconfidential: false']]) {
+    for (const [text, status] of [
+      ['  ', 'complete'],
+      ['notes', 'complete\nconfidential: false']
+    ]) {
       const result = await updateMeetingRecap(settings, file, text, status as 'complete')
       expect(result.ok).toBe(false)
       expect(readFileSync(file)).toEqual(before)
@@ -108,7 +125,9 @@ describe('durable summary completion state', () => {
   })
 
   it('rejects empty-complete initial saves without creating a meeting', async () => {
-    await expect(saveMeeting(settings, { ...meeting, recap: ' ', recapStatus: 'complete' })).rejects.toThrow(/complete|summary/i)
+    await expect(saveMeeting(settings, { ...meeting, recap: ' ', recapStatus: 'complete' })).rejects.toThrow(
+      /complete|summary/i
+    )
     expect(readdirSync(folder)).toEqual([])
   })
 
@@ -120,13 +139,21 @@ describe('durable summary completion state', () => {
     expect(readFileSync(file)).toEqual(before)
   })
 
-  it.each(['complete', 'incomplete'] as const)('rejects a generated %s summary that would terminate the saved notes section', async (recapStatus) => {
+  it.each([
+    'complete',
+    'incomplete'
+  ] as const)('rejects a generated %s summary that would terminate the saved notes section', async (recapStatus) => {
     const recap = 'Intro\n\n## Full transcript\n\nRemaining notes must not disappear.'
     await expect(saveMeeting(settings, { ...meeting, recap, recapStatus })).rejects.toThrow(/reserved/i)
     expect(readdirSync(folder)).toEqual([])
   })
 
-  it.each([' ', '\t', '\uFEFF\uFEFF', '\n '])('rejects a heading promoted to a section boundary by trimming prefix %j', async (prefix) => {
+  it.each([
+    ' ',
+    '\t',
+    '\uFEFF\uFEFF',
+    '\n '
+  ])('rejects a heading promoted to a section boundary by trimming prefix %j', async (prefix) => {
     const file = await saveMeeting(settings, { ...meeting, recapStatus: 'incomplete' })
     const before = readFileSync(file)
     const recap = `${prefix}## Full transcript\n\nTail must remain notes.`
@@ -167,14 +194,31 @@ describe('durable summary completion state', () => {
     expect(readdirSync(folder).sort()).toEqual(names)
   })
 
+  it('propagates the exact write-admission refusal for an async recap replacement', async () => {
+    const file = await saveMeeting(settings, meeting)
+    const refusal = Object.freeze({ reason: 'meeting owner changed' })
+    await expect(
+      updateMeetingRecap(settings, file, 'Replacement', undefined, () => {
+        throw refusal
+      })
+    ).rejects.toBe(refusal)
+  })
+
   it('IPC schemas preserve known status, reject invalid values, and reject empty complete output', () => {
-    expect(SaveMeetingSchema.parse({ ...meeting, recapStatus: 'incomplete' })).toMatchObject({ recapStatus: 'incomplete' })
-    expect(UpdateRecapPayloadSchema.parse({ file: 'meeting.md', recap: 'Notes', recapStatus: 'complete' }))
-      .toMatchObject({ recapStatus: 'complete' })
+    expect(SaveMeetingSchema.parse({ ...meeting, recapStatus: 'incomplete' })).toMatchObject({
+      recapStatus: 'incomplete'
+    })
+    expect(
+      UpdateRecapPayloadSchema.parse({ file: 'meeting.md', recap: 'Notes', recapStatus: 'complete' })
+    ).toMatchObject({ recapStatus: 'complete' })
     expect(SaveMeetingSchema.safeParse({ ...meeting, recapStatus: 'invented' }).success).toBe(false)
-    expect(UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: 'Notes', recapStatus: 'invented' }).success).toBe(false)
+    expect(
+      UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: 'Notes', recapStatus: 'invented' }).success
+    ).toBe(false)
     expect(SaveMeetingSchema.safeParse({ ...meeting, recap: ' ', recapStatus: 'complete' }).success).toBe(false)
-    expect(UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: ' ', recapStatus: 'complete' }).success).toBe(false)
+    expect(
+      UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: ' ', recapStatus: 'complete' }).success
+    ).toBe(false)
   })
 
   it('IPC explains reserved generated-summary headings before any persistence call', () => {
@@ -182,7 +226,15 @@ describe('durable summary completion state', () => {
     const result = SaveMeetingSchema.safeParse(value)
     expect(result.success).toBe(false)
     if (!result.success) expect(result.error.issues[0]?.message).toMatch(/reserved/i)
-    expect(UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: value.recap, recapStatus: 'complete' }).success).toBe(false)
-    expect(UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: ' ## Full transcript\nTail', recapStatus: 'complete' }).success).toBe(false)
+    expect(
+      UpdateRecapPayloadSchema.safeParse({ file: 'meeting.md', recap: value.recap, recapStatus: 'complete' }).success
+    ).toBe(false)
+    expect(
+      UpdateRecapPayloadSchema.safeParse({
+        file: 'meeting.md',
+        recap: ' ## Full transcript\nTail',
+        recapStatus: 'complete'
+      }).success
+    ).toBe(false)
   })
 })

@@ -414,45 +414,45 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       expect(index).not.toContain('Secret Meeting')
     })
 
-    it('readConfidentialMeetings picks up exactly the meetings flagged in their frontmatter', () => {
+    it('readConfidentialMeetings picks up exactly the meetings flagged in their frontmatter', async () => {
       writeMeetingFile(folder, 'a.md', { date: '2026-01-01' })
       writeMeetingFile(folder, 'b.md', { date: '2026-01-02', confidential: true })
-      const set = readConfidentialMeetings(s)
+      const set = await readConfidentialMeetings(s)
       expect(set.has('b.md')).toBe(true)
       expect(set.has('a.md')).toBe(false)
     })
 
-    it('readConfidentialMeetings excludes a CRLF meeting flagged confidential (a synced/edited file keeps its flag)', () => {
+    it('readConfidentialMeetings excludes a CRLF meeting flagged confidential (a synced/edited file keeps its flag)', async () => {
       writeMeetingFile(folder, 'open.md', { date: '2026-01-01' })
       writeFileSync(join(folder, 'crlf-secret.md'), meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n/g, '\r\n'), 'utf8')
-      const set = readConfidentialMeetings(s)
+      const set = await readConfidentialMeetings(s)
       expect(set.has('crlf-secret.md')).toBe(true)
       expect(set.has('open.md')).toBe(false)
     })
 
-    it('readConfidentialMeetings excludes a confidential meeting whose closing delimiter has trailing whitespace', () => {
+    it('readConfidentialMeetings excludes a confidential meeting whose closing delimiter has trailing whitespace', async () => {
       writeFileSync(
         join(folder, 'spaced-secret.md'),
         meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\n--- \n'),
         'utf8'
       )
-      expect(readConfidentialMeetings(s).has('spaced-secret.md')).toBe(true)
+      expect((await readConfidentialMeetings(s)).has('spaced-secret.md')).toBe(true)
     })
 
-    it('readConfidentialMeetings excludes a meeting when any duplicated confidential line is true', () => {
+    it('readConfidentialMeetings excludes a meeting when any duplicated confidential line is true', async () => {
       writeFileSync(
         join(folder, 'dup-secret.md'),
         meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\nconfidential: false\n---\n'),
         'utf8'
       )
-      expect(readConfidentialMeetings(s).has('dup-secret.md')).toBe(true)
+      expect((await readConfidentialMeetings(s)).has('dup-secret.md')).toBe(true)
     })
   })
 
   // ── MQA-074 / MQA-077: the confidential gate must fail CLOSED on a meeting it cannot read ────────────
 
   describe('MQA-074 / MQA-077 — a meeting the publisher cannot read is never published as non-confidential', () => {
-    it('readConfidentialMeetings excludes a file whose read throws, and one that decrypts to nothing', () => {
+    it('readConfidentialMeetings excludes a file whose read throws, and one that decrypts to nothing', async () => {
       writeMeetingFile(folder, 'readable.md', { date: '2026-01-01' })
       writeMeetingFile(folder, 'locked.md', { date: '2026-01-02' })
       writeMeetingFile(folder, 'foreign-key.md', { date: '2026-01-03' })
@@ -461,7 +461,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       readFaults.throwOn.add('locked.md')
       readFaults.emptyOn.add('foreign-key.md')
 
-      const set = readConfidentialMeetings(s)
+      const set = await readConfidentialMeetings(s)
       expect(set.has('locked.md')).toBe(true)
       expect(set.has('foreign-key.md')).toBe(true)
       expect(set.has('readable.md')).toBe(false)

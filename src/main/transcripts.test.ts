@@ -549,6 +549,16 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(readFileSync(join(folder, drafts[0]), 'utf8')).toContain('On track')
   })
 
+  it('propagates the exact before-replace admission failure instead of swallowing it as an autosave error', async () => {
+    const admissionError = new Error('owner changed before draft replacement')
+    await expect(
+      saveDraftTranscript(settings, meeting, () => {
+        throw admissionError
+      })
+    ).rejects.toBe(admissionError)
+    expect(readdirSync(folder).some((name) => name.startsWith('.autosave-draft-'))).toBe(false)
+  })
+
   it("does NOT clobber a DIFFERENT (earlier) meeting's crash-recovery draft", async () => {
     const crashed: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000, title: 'Crashed meeting' }
     await saveDraftTranscript(settings, crashed) // meeting A crashed, left its draft on disk

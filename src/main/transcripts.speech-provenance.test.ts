@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
+import { EventEmitter } from 'node:events'
 import { SaveMeetingSchema, type SaveMeeting, type Settings, type TranscriptLine } from '@shared/ipc'
 import {
   saveMeeting,
@@ -10,9 +11,21 @@ import {
   recoverOrphanDrafts,
   isEncryptedFile,
   appendDebrief,
-  readSavedFile
+  readSavedFile,
+  writeSaved
 } from './transcripts'
-import { configureMeetingSpeechLimits } from './features/meetings/meeting-speech'
+import {
+  configureMeetingSpeechLimits,
+  configureMeetingSpeechPersistence,
+  getMeetingSpeechLimits
+} from './features/meetings/meeting-speech'
+import {
+  createMeetingSpeechPersistenceService,
+  type MeetingSpeechWorkerPort,
+  type MeetingSpeechServiceBounds
+} from './infra/process/meeting-speech-host'
+import type { MeetingSpeechRequest } from './infra/process/meeting-speech-protocol'
+import { processMeetingSpeechRequest } from './meeting-speech-worker'
 import {
   recallRead,
   updateMeetingTranscript,
@@ -27,7 +40,28 @@ import { useStorageForTests } from './infra/storage/meetings-storage'
 
 vi.mock('electron')
 let settings: Settings
+let service: ReturnType<typeof createMeetingSpeechPersistenceService> | undefined
 vi.mock('./store', () => ({ getSettings: () => settings }))
+
+const testServiceBounds: MeetingSpeechServiceBounds = {
+  maxInputBytes: 1_000_000,
+  maxOutputBytes: 1_000_000,
+  operationDeadlineMs: 10_000,
+  shutdownDeadlineMs: 2_000
+}
+
+class InlineSpeechWorker extends EventEmitter implements MeetingSpeechWorkerPort {
+  postMessage(request: MeetingSpeechRequest): void {
+    setImmediate(() => {
+      const reply = processMeetingSpeechRequest(request)
+      if (reply) this.emit('message', reply)
+    })
+  }
+  async terminate(): Promise<number> {
+    this.emit('exit', 1)
+    return 1
+  }
+}
 
 const startedAt = Date.parse('2026-10-14T04:00:00.000Z')
 
@@ -87,11 +121,22 @@ describe('actual saved final speech provenance', () => {
       maxRecordBytes: 50000,
       maxPayloadBytes: 1000000
     })
+    service = createMeetingSpeechPersistenceService({
+      readLimits: getMeetingSpeechLimits,
+      readBounds: () => testServiceBounds,
+      ...(process.env.METIS_SPEECH_ACTUAL_WORKER === '1'
+        ? { entryPath: join(process.cwd(), 'out/main/meeting-speech-worker.js') }
+        : { workerFactory: () => new InlineSpeechWorker() })
+    })
+    configureMeetingSpeechPersistence(service)
   })
 
-  afterEach(() => {
-    configureMeetingSpeechLimits(undefined)
+  afterEach(async () => {
+    configureMeetingSpeechPersistence(undefined)
+    await service?.dispose()
+    service = undefined
     useStorageForTests()
+    configureMeetingSpeechLimits(undefined)
     vi.unstubAllEnvs()
     rmSync(folder, { recursive: true, force: true })
   })
@@ -181,6 +226,29 @@ describe('actual saved final speech provenance', () => {
   it('refuses metadata save without a trusted main budget rather than losing the event', async () => {
     configureMeetingSpeechLimits(undefined)
     await expect(saveMeeting(settings, meeting())).rejects.toThrow('Speech metadata could not be retained.')
+  })
+
+  it('wipes and refuses an encrypted speech envelope when native key wrapping fails before worker or file admission', async () => {
+    const target = join(folder, 'wrap-refused.md')
+    const refusal = new Error('native key wrapping refused')
+    const packagedDescriptor = Object.getOwnPropertyDescriptor(app, 'isPackaged')
+    Object.defineProperty(app, 'isPackaged', { configurable: true, value: true })
+    const encryptSpy = vi.spyOn(safeStorage, 'encryptString').mockImplementation(() => {
+      throw refusal
+    })
+    const workerEncryptSpy = vi.spyOn(service!, 'encryptEnvelopeV2')
+    const beforeReplace = vi.fn()
+    try {
+      await expect(writeSaved(target, '<!-- metis-speech-provenance:v1 -->', true, beforeReplace)).rejects.toBe(refusal)
+      expect(workerEncryptSpy).not.toHaveBeenCalled()
+      expect(beforeReplace).not.toHaveBeenCalled()
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      encryptSpy.mockRestore()
+      workerEncryptSpy.mockRestore()
+      if (packagedDescriptor) Object.defineProperty(app, 'isPackaged', packagedDescriptor)
+      else delete (app as Partial<typeof app>).isPackaged
+    }
   })
 
   it.each([false, true])('keeps complete original Open semantics with encryption=%s', async (encrypted) => {

@@ -1,16 +1,11 @@
 import { createHash } from 'node:crypto'
+import type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import { TranscriptLineSchema, type TranscriptLine } from '@shared/transcript-line'
 import { formatTranscriptWithClocks, sanitizeSpeakerName } from './transcript-format'
 
-/** Trusted main-owned budgets. A duration is not a bound on event density; there is no default. */
-export interface SpeechProvenanceLimits {
-  maxRecords: number
-  maxWords: number
-  maxFieldBytes: number
-  maxRecordBytes: number
-  maxPayloadBytes: number
-}
+export type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 
+/** Trusted main-owned budgets. A duration is not a bound on event density; there is no default. */
 const PRIVATE_BEGIN = '<!-- metis-speech-provenance:v1 -->'
 const PRIVATE_END = '<!-- /metis-speech-provenance -->'
 export const SPEECH_TRANSCRIPT_BEGIN = '<!-- metis-speech-transcript:v1 -->'
@@ -215,11 +210,6 @@ export function projectMeetingSpeech(text: string): SpeechProjection {
       .replace('\n' + SPEECH_TRANSCRIPT_END, '')
   return { ok: true, publicMarkdown }
 }
-
-export type SpeechDecoded =
-  | { ok: false; reason: 'FRAME_AMBIGUOUS' }
-  | { ok: true; publicMarkdown: string; status: 'absent' | 'unavailable' }
-  | { ok: true; publicMarkdown: string; status: 'valid'; lines: TranscriptLine[]; clocks: string[] }
 
 export function decodeMeetingSpeech(text: string, limits?: SpeechProvenanceLimits): SpeechDecoded {
   const projected = projectMeetingSpeech(text)
