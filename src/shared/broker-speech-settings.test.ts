@@ -51,13 +51,14 @@ describe('broker speech settings', () => {
     }
   })
 
-  it('preserves malformed explicit settings through the aggregate settings schema for a fail-closed reader', () => {
-    const malformed = { transport: 'broker-v1', engine: 'soniox' }
+  it('reduces malformed explicit settings to one fixed refusal through aggregate settings schemas', () => {
+    const malformed = { transport: 'broker-v1', engine: 'soniox', privateValue: 'discard-me' }
     const parsed = CloudSpeechSettingsSchema.parse({ brokerSpeech: malformed })
     expect(parsed.brokerSpeech).toEqual(BROKER_SPEECH_SETTINGS_REFUSAL)
     expect(parseBrokerSpeechSettings(parsed.brokerSpeech)).toEqual({ ok: false, code: 'INVALID_PROFILE' })
     const aggregate = BaseSettingsSchema.parse({ ...DEFAULT_SETTINGS, brokerSpeech: malformed })
     expect(aggregate.brokerSpeech).toEqual(BROKER_SPEECH_SETTINGS_REFUSAL)
+    expect(JSON.stringify(aggregate.brokerSpeech)).not.toContain('discard-me')
     expect(
       BrokerSpeechSettingsLoadSchema.parse({ transport: 'broker-v1', engine: 'unknown', secret: 'discard-me' })
     ).toEqual(BROKER_SPEECH_SETTINGS_REFUSAL)

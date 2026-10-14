@@ -8,11 +8,38 @@ export const BrokerSpeechSettingsSchema = z
   })
   .strict()
 export type BrokerSpeechSettings = z.infer<typeof BrokerSpeechSettingsSchema>
+export const BrokerSpeechSettingsWriteSchema = BrokerSpeechSettingsSchema
+
+export const BrokerSpeechSettingsRefusalSchema = z
+  .object({
+    transport: z.literal('refused'),
+    engine: z.literal('unconfigured'),
+    reason: z.literal('INVALID_PROFILE')
+  })
+  .strict()
+export type BrokerSpeechSettingsRefusal = z.infer<typeof BrokerSpeechSettingsRefusalSchema>
+export type BrokerSpeechSettingsLoaded = BrokerSpeechSettings | BrokerSpeechSettingsRefusal
+
+export const BROKER_SPEECH_SETTINGS_REFUSAL: BrokerSpeechSettingsRefusal = {
+  transport: 'refused',
+  engine: 'unconfigured',
+  reason: 'INVALID_PROFILE'
+}
 
 export const DEFAULT_BROKER_SPEECH_SETTINGS: BrokerSpeechSettings = {
   transport: 'legacy',
   engine: 'unconfigured'
 }
+
+/** The load path stores only a valid profile or this fixed refusal; arbitrary malformed JSON is discarded. */
+export const BrokerSpeechSettingsLoadSchema = z.preprocess(
+  (value: unknown) => {
+    if (value === undefined) return DEFAULT_BROKER_SPEECH_SETTINGS
+    const parsed = BrokerSpeechSettingsSchema.safeParse(value)
+    return parsed.success ? parsed.data : BROKER_SPEECH_SETTINGS_REFUSAL
+  },
+  z.union([BrokerSpeechSettingsSchema, BrokerSpeechSettingsRefusalSchema])
+)
 
 /** Existing speech settings grouped with the new selector so ipc.ts adds one schema spread, not line count. */
 export const CloudSpeechSettingsSchema = z.object({
@@ -26,8 +53,8 @@ export const CloudSpeechSettingsSchema = z.object({
     .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
   /** Existing provider selection remains in place for legacy cloud speech. */
   cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
-  /** Keep malformed explicit values intact so the broker-specific strict parser can refuse them. */
-  brokerSpeech: z.unknown().default(DEFAULT_BROKER_SPEECH_SETTINGS)
+  /** A finite load union preserves refusal without retaining arbitrary malformed user data. */
+  brokerSpeech: BrokerSpeechSettingsLoadSchema
 })
 
 export type CloudSpeechSettings = z.infer<typeof CloudSpeechSettingsSchema>
