@@ -848,13 +848,7 @@ function validateDigestContext(context) {
 }
 
 function publicParts(summary) {
-  const {
-    bins,
-    candidateBuildRunId,
-    candidateInstallerSha256,
-    candidateDigestBinding,
-    ...profile
-  } = summary.profile
+  const { bins, candidateBuildRunId, candidateInstallerSha256, candidateDigestBinding, ...profile } = summary.profile
   return [
     {
       originalVerdict: summary.originalVerdict,

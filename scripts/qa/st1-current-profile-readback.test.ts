@@ -14,6 +14,10 @@ import {
 } from './st1-current-profile-readback.mjs'
 import { findUnpinnedUses } from '../ci/check-workflow-pins.mjs'
 import { evaluateCriteria } from './lib/st-1-core.mjs'
+import {
+  profileFixture as profile,
+  validReportFixture as validReport
+} from './st1-current-profile-readback-fixtures.mjs'
 
 function validRun() {
   return {
@@ -46,8 +50,6 @@ function validArtifact() {
     }
   }
 }
-
-import { profileFixture as profile, validReportFixture as validReport } from './st1-current-profile-readback-fixtures.mjs'
 
 describe('fixed failed control run binding', () => {
   it('accepts the exact completed failed pull-request run, not a successful or nearby run', () => {
