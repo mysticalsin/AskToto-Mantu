@@ -168,6 +168,7 @@ function createMainPersistenceBootstrapInternal(
   let disposed = false
   let policy: ResourcePolicyResult | undefined
   let policyReadGeneration = 0
+  let policyAdmissionPending = false
   let capability: PersistenceCapability = Object.freeze({ status: 'initializing' })
   let generation = randomUUID()
   let observation = getPublishedSettingsObservation()
@@ -259,7 +260,7 @@ function createMainPersistenceBootstrapInternal(
   })
 
   function admittedProfile(): ResolvedPersistenceProfile | null {
-    if (!policy || policy.status !== 'ready' || disposed) return null
+    if (!policy || policy.status !== 'ready' || disposed || policyAdmissionPending) return null
     return policy.profile
   }
 
@@ -511,6 +512,8 @@ function createMainPersistenceBootstrapInternal(
         (async () => {
           if (disposed) return capability
           const operation = ++policyReadGeneration
+          policyAdmissionPending = true
+          capability = Object.freeze({ status: 'initializing' })
           observation = getPublishedSettingsObservation()
           const authBoundary = captureMainPersistenceSessionBoundary()
           if (!ownsMainInstance() || !authBoundary.isCurrent())
@@ -562,6 +565,7 @@ function createMainPersistenceBootstrapInternal(
                   profileId: candidate.profile.id,
                   reason: 'qualification-required'
                 })
+                if (operation === policyReadGeneration) policyAdmissionPending = false
                 return capability
               }
             }
@@ -602,8 +606,10 @@ function createMainPersistenceBootstrapInternal(
               policy = resolvedPolicy
               capability = Object.freeze({ status: 'policy-unavailable', code: resolvedPolicy.code })
             }
+            if (operation === policyReadGeneration) policyAdmissionPending = false
           } catch {
             if (operation === policyReadGeneration && !disposed) {
+              policyAdmissionPending = false
               policy = undefined
               capability = Object.freeze({ status: 'policy-unavailable', code: 'POLICY_UNAVAILABLE' })
             }
