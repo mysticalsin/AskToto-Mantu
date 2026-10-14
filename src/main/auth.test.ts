@@ -17,6 +17,16 @@ import { getSettings, setSettings } from './store'
 import { readTrustedAdminManaged } from './win-security'
 
 vi.mock('electron')
+// Node exposes these APIs through non-configurable ESM namespace properties on Windows. Delegate to
+// the real modules while making the few filesystem probes in the lease hot-path test spyable on every OS.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) }
+})
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) }
+})
 // Stub only the admin-trusted managed-config read so tests never inherit this machine's real ProgramData
 // policy (default null = no admin policy). All other win-security exports stay real — store.ts imports
 // adminManagedConfigPath from here. The MQA-107 admin-managed gate test overrides readTrustedAdminManaged.
@@ -341,13 +351,27 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
 describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
   // The single-flight latch stops CONCURRENT flows; this pins the SEQUENTIAL control: escalating
   // backoff after consecutive failures, reset on success, gate checked before the latch is taken.
-  it('escalates 2s -> 4s -> 8s capped at 60s and resets on success (source-pinned wiring)', async () => {
+  it('escalates 2s -> 4s -> 8s capped at 60s and resets on success', async () => {
     const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
     const { join } = await vi.importActual<typeof import('node:path')>('node:path')
     const src = readFileSync(join(__dirname, 'auth.ts'), 'utf8')
-    expect(src).toMatch(/SIGNIN_BACKOFF_BASE_MS = 2_000/)
-    expect(src).toMatch(/SIGNIN_BACKOFF_MAX_MS = 60_000/)
-    expect(src).toMatch(/SIGNIN_BACKOFF_BASE_MS \* 2 \*\* \(signInFailures - 1\)/)
+    const { INITIAL_SIGN_IN_BACKOFF, resetSignInBackoff, signInBackoffAfterFailure, signInBackoffRemaining } =
+      await import('./auth-session-policy')
+    let state = INITIAL_SIGN_IN_BACKOFF
+    state = signInBackoffAfterFailure(state, 10_000)
+    expect(signInBackoffRemaining(state, 10_000)).toBe(2_000)
+    state = signInBackoffAfterFailure(state, 12_000)
+    expect(signInBackoffRemaining(state, 12_000)).toBe(4_000)
+    state = signInBackoffAfterFailure(state, 16_000)
+    expect(signInBackoffRemaining(state, 16_000)).toBe(8_000)
+    let cappedDelayStartedAt = 0
+    for (let failure = 4; failure <= 7; failure += 1) {
+      const attemptAt = state.blockedUntil
+      state = signInBackoffAfterFailure(state, attemptAt)
+      if (failure === 7) cappedDelayStartedAt = attemptAt
+    }
+    expect(signInBackoffRemaining(state, cappedDelayStartedAt)).toBe(60_000)
+    expect(signInBackoffRemaining(resetSignInBackoff(), 16_000)).toBe(0)
     // The gate runs inside signIn() BEFORE the latch is taken, and failure/success both update state.
     const signInBody = src.slice(src.indexOf('export async function signIn('), src.indexOf('MQA-107 escape hatch'))
     const gate = signInBody.indexOf('signInBackoffRemainingMs()')
@@ -357,7 +381,7 @@ describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
     expect(signInBody).toMatch(/recordSignInFailure\(\)/)
     expect(signInBody).toMatch(/recordSignInSuccess\(\)/)
     // The failure count reaches the audit trail so a hammering loop is visible, not silent.
-    expect(signInBody).toMatch(/consecutive: signInFailures/)
+    expect(signInBody).toMatch(/consecutive: signInBackoff\.failures/)
   })
 
   it('reports remaining wait to the caller in whole seconds', async () => {
@@ -462,6 +486,7 @@ describe('speech auth lease (auth module authority)', () => {
   let settingsBoundaryReads = 0
   let adminBoundaryReads = 0
   let policyRevisionReads = 0
+  let activeProfilePath: string
 
   beforeEach(async () => {
     vi.resetModules()
@@ -471,9 +496,10 @@ describe('speech auth lease (auth module authority)', () => {
     adminBoundaryReads = 0
     policyRevisionReads = 0
     ud = mkdtempSync(join(tmpdir(), 'asktoto-speech-auth-lease-'))
+    activeProfilePath = ud
     const electron = await import('electron')
     ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
+      n === 'userData' ? activeProfilePath : join(activeProfilePath, n)
     )
     saved = {}
     for (const k of AZURE_ENV) {
@@ -505,6 +531,12 @@ describe('speech auth lease (auth module authority)', () => {
   }
 
   async function prepareAuth(adminReader?: (path: string) => Promise<Uint8Array | null>) {
+    // vi.resetModules() also recreates the Electron mock module. Rebind its profile path before loading
+    // auth/store so the newly imported modules read the same isolated files the test prepared.
+    const electron = await import('electron')
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
+      n === 'userData' ? activeProfilePath : join(activeProfilePath, n)
+    )
     const auth = await import('./auth')
     const { getSettings } = await import('./store')
     const { readTrustedAdminManagedBytes } = await import('./win-security')
@@ -541,11 +573,17 @@ describe('speech auth lease (auth module authority)', () => {
     const fs = await import('node:fs')
     const fsPromises = await import('node:fs/promises')
     const winSecurity = await import('./win-security')
-    const reads = vi.spyOn(fs, 'readFileSync')
-    const lstatReads = vi.spyOn(fsPromises, 'lstat')
-    const openReads = vi.spyOn(fsPromises, 'open')
-    const pathReads = vi.spyOn(app, 'getPath')
-    const adminPathReads = vi.spyOn(winSecurity, 'adminManagedConfigPath')
+    const electron = await import('electron')
+    const reads = vi.mocked(fs.readFileSync)
+    const lstatReads = vi.mocked(fsPromises.lstat)
+    const openReads = vi.mocked(fsPromises.open)
+    const pathReads = vi.mocked(electron.app.getPath)
+    const adminPathReads = vi.mocked(winSecurity.adminManagedConfigPath)
+    reads.mockClear()
+    lstatReads.mockClear()
+    openReads.mockClear()
+    pathReads.mockClear()
+    adminPathReads.mockClear()
     const settingsReadsBefore = settingsBoundaryReads
     const adminReadsBefore = adminBoundaryReads
     const policyRevisionReadsBefore = policyRevisionReads
@@ -721,6 +759,7 @@ describe('speech auth lease (auth module authority)', () => {
 
     // Root archives profile A after its pre-archive reset and then switches userData to profile B.
     const app = (await import('electron')).app
+    activeProfilePath = nextProfile
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
       n === 'userData' ? nextProfile : join(nextProfile, n)
     )
