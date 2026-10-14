@@ -113,7 +113,7 @@ describe('import queue layout', () => {
     expect(recall).toMatch(/<ImportQueueSection/)
     expect(queueActions).toMatch(/importAudioStartBatch/)
     expect(queueActions).toMatch(/importAudioDrop/)
-    expect(retentionPanel).toMatch(/resumeDisabled={policyBlocked}/)
+    expect(retentionPanel).toMatch(/resumeDisabled={actionsBlocked}/)
     expect(`${recall}\n${queueActions}\n${retentionPanel}`).not.toMatch(/webUtils\.getPathForFile/)
     expect(`${recall}\n${queueActions}\n${retentionPanel}`).not.toMatch(/file\.path/)
   })

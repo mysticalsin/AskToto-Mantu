@@ -1,13 +1,30 @@
 import { useCallback, useEffect, useState, type DragEvent } from 'react'
-import type { ImportAssetsProgress, ImportJobView, ImportAudioPickResult } from '@shared/ipc'
+import type {
+  ImportAssetsProgress,
+  ImportCapabilityState,
+  ImportJobView,
+  ImportPolicyState,
+  ImportAudioPickResult
+} from '@shared/ipc'
 import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
 
-const SUMMARY_ONLY_IMPORT_NOTICE =
-  'Recording import currently requires retaining a full transcript. Your organization’s summary-only policy prevents import. Your original recording is unchanged.'
+export function importBlockNotice(policy: ImportPolicyState, capability: ImportCapabilityState): string {
+  if (policy === 'unavailable') return 'Import is paused because current organization settings could not be verified.'
+  if (policy === 'summary-only') {
+    return 'Recording import requires retaining a full transcript. Your organization’s summary-only policy prevents import. Your original recording is unchanged.'
+  }
+  if (capability === 'cloud-only-unsupported') {
+    return 'Recording import is unavailable because this installation does not support its configured cloud-only speech route.'
+  }
+  return 'Import is paused because the available speech capability could not be verified.'
+}
 
 export function useImportQueue(refreshList: () => void) {
   const [jobs, setJobs] = useState<ImportJobView[]>([])
-  const [policyBlocked, setPolicyBlocked] = useState(false)
+  const [policyState, setPolicyState] = useState<ImportPolicyState>('unavailable')
+  const [capabilityState, setCapabilityState] = useState<ImportCapabilityState>('unavailable')
+  const policyBlocked = policyState !== 'allowed'
+  const actionsBlocked = policyBlocked || capabilityState !== 'available'
   const [policyHeldJobIds, setPolicyHeldJobIds] = useState<string[]>([])
   const [inventoryOverflow, setInventoryOverflow] = useState(false)
   const [policyHoldOverflow, setPolicyHoldOverflow] = useState(false)
@@ -42,7 +59,8 @@ export function useImportQueue(refreshList: () => void) {
             ...snapshot.jobs,
             ...heldViews.filter((held) => !snapshot.jobs.some((job) => job.jobId === held.jobId))
           ])
-          setPolicyBlocked(snapshot.policyBlocked)
+          setPolicyState(snapshot.policyState)
+          setCapabilityState(snapshot.capabilityState)
           setPolicyHeldJobIds(snapshot.policyHeldJobIds)
           setInventoryOverflow(snapshot.inventoryOverflow)
           setPolicyHoldOverflow(snapshot.policyHoldOverflow)
@@ -70,8 +88,8 @@ export function useImportQueue(refreshList: () => void) {
 
   const startPickedImports = useCallback(
     async (picked: ImportAudioPickResult): Promise<void> => {
-      if (policyBlocked) {
-        setError(SUMMARY_ONLY_IMPORT_NOTICE)
+      if (actionsBlocked) {
+        setError(importBlockNotice(policyState, capabilityState))
         return
       }
       const files = pickedFiles(picked)
@@ -88,13 +106,13 @@ export function useImportQueue(refreshList: () => void) {
         setError(caught instanceof Error ? caught.message : 'Could not start the imports.')
       }
     },
-    [policyBlocked, upsertJob]
+    [actionsBlocked, policyState, capabilityState, upsertJob]
   )
 
   const importAudio = useCallback(async (): Promise<void> => {
     setError(null)
-    if (policyBlocked) {
-      setError(SUMMARY_ONLY_IMPORT_NOTICE)
+    if (actionsBlocked) {
+      setError(importBlockNotice(policyState, capabilityState))
       return
     }
     let picked: ImportAudioPickResult
@@ -106,7 +124,7 @@ export function useImportQueue(refreshList: () => void) {
     }
     if (picked.cancelled) return
     await startPickedImports(picked)
-  }, [policyBlocked, startPickedImports])
+  }, [actionsBlocked, policyState, capabilityState, startPickedImports])
 
   const onDragOver = useCallback((event: DragEvent): void => {
     if (![...event.dataTransfer.types].includes('Files')) return
@@ -124,8 +142,8 @@ export function useImportQueue(refreshList: () => void) {
     async (event: DragEvent): Promise<void> => {
       event.preventDefault()
       setDragOver(false)
-      if (policyBlocked) {
-        setError(SUMMARY_ONLY_IMPORT_NOTICE)
+      if (actionsBlocked) {
+        setError(importBlockNotice(policyState, capabilityState))
         return
       }
       const files = [...event.dataTransfer.files].filter(isImportDropFile)
@@ -140,7 +158,7 @@ export function useImportQueue(refreshList: () => void) {
         setError(caught instanceof Error ? caught.message : 'Could not import the dropped recordings.')
       }
     },
-    [policyBlocked, startPickedImports]
+    [actionsBlocked, policyState, capabilityState, startPickedImports]
   )
 
   const cancel = useCallback((jobId: string): void => {
@@ -173,6 +191,9 @@ export function useImportQueue(refreshList: () => void) {
   return {
     jobs,
     policyBlocked,
+    policyState,
+    capabilityState,
+    actionsBlocked,
     policyHeldJobIds,
     inventoryOverflow,
     policyHoldOverflow,

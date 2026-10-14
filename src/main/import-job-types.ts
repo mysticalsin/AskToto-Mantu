@@ -1,4 +1,6 @@
 import type { SaveMeeting, TranscriptLine } from '@shared/ipc'
+import type { ImportRetentionState } from './import-retention-policy'
+import type { ImportAsrDecodeAdmission, ImportAsrLanguageProbe, ImportAsrTranscriber } from './import-asr-admission'
 
 export interface ImportHoldInventory {
   jobIds: string[]
@@ -74,7 +76,7 @@ export interface ImportJobStore {
   listHeldJobIds?(): Promise<ImportHoldInventory>
   loadHeld?(jobId: string, explicitResume?: boolean): Promise<ImportJob | undefined>
   clearHold?(jobId: string): Promise<void>
-  markHeld?(jobId: string): Promise<boolean>
+  markHeld?(jobId: string, reason?: 'policy' | 'restart'): Promise<boolean>
 }
 
 /** In-memory identity for one admitted decode attempt. A retry of the same durable job gets a new ID. */
@@ -92,6 +94,7 @@ export interface ImportDecodeMemoryAdmission {
 export interface ImportJobsSnapshot {
   jobs: ImportJob[]
   policyBlocked: boolean
+  policyState: ImportRetentionState
   heldJobIds: string[]
   policyHeldJobIds: string[]
   inventoryOverflow: boolean
@@ -104,10 +107,10 @@ export interface ImportJobManagerDeps {
   decode: (job: ImportJob) => void | Promise<void>
   /** `language`, when set, is the whole-recording majority vote (see finishDecoding) — the engine may
    *  hard-pin it instead of guessing per window. Null/absent = engine decides (legacy behavior). */
-  transcribe: (samples: Float32Array, opts?: { language?: string | null }) => Promise<string>
+  transcribe: ImportAsrTranscriber
   /** MQA-235: language-ID one utterance window (Parakeet text + lang-id in the live wiring). Used for
    *  the whole-recording majority vote; absent = no vote, engines guess as before. */
-  probeLanguageName?: (samples: Float32Array) => Promise<string | null>
+  probeLanguageName?: ImportAsrLanguageProbe
   /** Synchronously admit exact transient speaker ownership for one fresh import attempt. */
   beginSpeakers?: (attempt: ImportSpeakerAttempt) => boolean
   /** MQA-235: diarize one utterance window — an enrolled profile name or a session cluster label
@@ -148,6 +151,12 @@ export interface ImportJobManagerDeps {
   personaMode?: () => string
   /** Current trusted organization policy; checked before admission and every durable write. */
   canRetainTranscript?: () => boolean
+  /** Explicit closed retention state for production; legacy callback remains for isolated old fixtures. */
+  retentionStatus?: () => ImportRetentionState
+  /** Freshly re-reads trusted policy after async boundaries before work or transcript persistence. */
+  refreshRetentionStatus?: () => Promise<ImportRetentionState>
+  /** Current authenticated-session check for explicit held-job resume boundaries. */
+  isImportAuthorized?: () => boolean
   /** Revalidates the exact source fingerprint before explicit resume. */
   validateSource?: (job: ImportJob) => void | Promise<void>
   /** Current OS free memory in bytes. Injected by tests; production reads node:os freemem(). */
@@ -155,7 +164,7 @@ export interface ImportJobManagerDeps {
   /** Physical OS memory in bytes. Injected by tests; production reads node:os totalmem(). */
   totalMemoryBytes?: () => unknown
   /** Called at actual decoder admission, after any low-free-memory VAD downgrade. */
-  onDecodeAdmission?: (job: ImportJob, memory: ImportDecodeMemoryAdmission) => void | Promise<void>
+  onDecodeAdmission?: ImportAsrDecodeAdmission
   now?: () => number
   newId?: () => string
   /** How many recordings may occupy the decoded-audio admission slot at once. ASR stays mutexed. The

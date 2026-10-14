@@ -116,13 +116,14 @@ describe('summary-only import checkpoint holds', () => {
       saveMeeting: vi.fn(async () => 'saved-import.md'),
       enqueueIngest: vi.fn(),
       generateRecap: vi.fn(async () => undefined),
-      updateRecap: vi.fn(async () => undefined)
+      updateRecap: vi.fn(async () => undefined),
+      newId: randomUUID
     })
 
     const job = await manager.start({
       path: '/private/interview.wav',
       name: 'interview.wav',
-      sizeBytes: 1_234,
+      sizeBytes: 1234,
       mtimeMs: 1_700_000_000_000
     })
 
@@ -227,6 +228,32 @@ describe('summary-only import checkpoint holds', () => {
     asyncFsProbe.afterLstat = (path) => {
       if (path === checkpointPath && asyncFsProbe.openPaths.includes(checkpointPath)) current = settings(true)
     }
+
+    await expect(store.loadHeld(job.jobId, true)).rejects.toThrow(/summary-only/i)
+
+    expect(asyncFsProbe.openPaths).toContain(checkpointPath)
+    expect(asyncFsProbe.readFilePaths).not.toContain(checkpointPath)
+  })
+
+  it('uses the refreshed authority again after FD metadata and before transcript bytes are read', async () => {
+    let current = settings(false)
+    const root = join(makeRoot(), 'import-jobs')
+    const job = savedJob()
+    const checkpointPath = join(root, `job-${job.jobId}.json`)
+    const refresh = async () => {
+      if (asyncFsProbe.openPaths.includes(checkpointPath)) current = settings(true)
+      return current.enterpriseLive.summaryOnly ? 'summary-only' : 'allowed'
+    }
+    const store = new EncryptedImportJobStore(
+      () => current,
+      root,
+      () => 'allowed',
+      refresh
+    )
+    await store.save(job)
+    await store.markExistingJobsHeld('restart')
+    asyncFsProbe.openPaths = []
+    asyncFsProbe.readFilePaths = []
 
     await expect(store.loadHeld(job.jobId, true)).rejects.toThrow(/summary-only/i)
 

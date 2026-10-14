@@ -11,6 +11,9 @@ export type ImportJobState =
   | 'policy-held'
   | 'cancelled'
 
+export type ImportPolicyState = 'allowed' | 'summary-only' | 'unavailable'
+export type ImportCapabilityState = 'available' | 'cloud-only-unsupported' | 'unavailable'
+
 /** Sanitised job state exposed to the overlay. Source paths remain main-process-only. */
 export interface ImportJobView {
   jobId: string
@@ -32,6 +35,10 @@ export interface ImportJobView {
 export interface ImportJobsSnapshot {
   jobs: ImportJobView[]
   policyBlocked: boolean
+  /** Current trusted retention-policy observation. Unknown is represented as unavailable and stays closed. */
+  policyState: ImportPolicyState
+  /** Whether this installation has an approved import transcription route. */
+  capabilityState: ImportCapabilityState
   heldJobIds: string[]
   policyHeldJobIds: string[]
   inventoryOverflow: boolean

@@ -2,7 +2,7 @@ import { estimateNoteTakingMinutes, wordsFromTexts } from '@shared/time-saved-ev
 import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
-import { ImportRetentionBlockedError } from './import-retention-policy'
+import { isImportRetentionRefusal } from './import-retention-policy'
 import { StaleImportJobWriteError } from './import-job-retention-coordinator'
 import type { ImportJob, ImportJobManagerDeps, ImportSpeakerAttempt } from './import-job-types'
 
@@ -33,6 +33,7 @@ export interface ImportJobPipelineHost {
   ): Promise<string>
   retentionAllowed(): boolean
   assertRetentionAllowed(): void
+  refreshRetention(): Promise<void>
   assertJobWriteAllowed(job: ImportJob, attempt?: ImportJobPipelineAttempt): void
   stopIfPolicyHeld(job: ImportJob, attempt?: ImportJobPipelineAttempt): Promise<boolean>
   holdForPolicy(job: ImportJob): Promise<void>
@@ -115,6 +116,8 @@ export async function consumeVadPcm(
   attempt?: ImportJobPipelineAttempt
 ): Promise<boolean> {
   const pcm = assembleVadPcmAndRelease(host.takePcm(job.jobId))
+  await host.refreshRetention()
+  if (await host.stopIfPolicyHeld(job, attempt)) return false
   const windows = vadWindowsFromPcm(pcm, SAMPLE_RATE)
   job.durationMs = Math.round((pcm.length * 1000) / SAMPLE_RATE)
   if (windows.length === 0) {
@@ -141,10 +144,12 @@ export async function consumeVadPcm(
       if (terminal(job.state) || !host.attemptAccepts(attempt)) return false
       try {
         const w = windows[idx]
-        const lang = await host.deps.probeLanguageName(pcm.subarray(w.start, w.end))
+        const lang = await host.deps.probeLanguageName(pcm.subarray(w.start, w.end), () => host.attemptAccepts(attempt))
+        await host.refreshRetention()
         if (!host.retentionAllowed() || !host.attemptAccepts(attempt)) return false
         if (lang) tally.set(lang, (tally.get(lang) ?? 0) + 1)
-      } catch {
+      } catch (error) {
+        if (isImportRetentionRefusal(error)) throw error
         if (!host.retentionAllowed() || !host.attemptAccepts(attempt)) return false
       }
     }
@@ -172,6 +177,7 @@ export async function consumeVadPcm(
       )
     } catch (error) {
       if (host.isAttemptStopped(error)) return false
+      if (isImportRetentionRefusal(error)) throw error
       if (terminal(job.state)) return false
       await host.fail(job, message(error))
       return false
@@ -228,6 +234,7 @@ export async function finalizeImportJob(
 ): Promise<void> {
   try {
     job.progressPct = Math.max(job.progressPct ?? 0, 99)
+    await host.refreshRetention()
     host.assertRetentionAllowed()
     const file = await host.deps.saveMeeting(
       {
@@ -252,11 +259,13 @@ export async function finalizeImportJob(
     if (await host.stopIfPolicyHeld(job, attempt)) return
     let recapPersisted = false
     try {
+      await host.refreshRetention()
       host.assertRetentionAllowed()
       const recap = await host.deps.generateRecap(host.copy(job))
       if (await host.abandonIfCancelled(job, file)) return
       if (await host.stopIfPolicyHeld(job, attempt)) return
       if (recap?.trim()) {
+        await host.refreshRetention()
         host.assertRetentionAllowed()
         await host.deps.updateRecap(file, recap, 'complete', () => host.assertJobWriteAllowed(job, attempt))
         if (await host.abandonIfCancelled(job, file)) return
@@ -265,7 +274,7 @@ export async function finalizeImportJob(
       } else job.recapError = 'No AI provider is configured to create the automatic summary.'
     } catch (error) {
       if (error instanceof StaleImportJobWriteError) return
-      if (error instanceof ImportRetentionBlockedError) throw error
+      if (isImportRetentionRefusal(error)) throw error
       job.recapError = message(error)
     }
 
@@ -281,6 +290,8 @@ export async function finalizeImportJob(
     }
     if (await host.abandonIfCancelled(job, file)) return
     if (await host.stopIfPolicyHeld(job, attempt)) return
+    await host.refreshRetention()
+    host.assertRetentionAllowed()
     await host.deps.enqueueIngest(file, undefined, () => host.assertJobWriteAllowed(job, attempt))
     if (await host.abandonIfCancelled(job, file)) return
     if (await host.stopIfPolicyHeld(job, attempt)) return
@@ -297,7 +308,7 @@ export async function finalizeImportJob(
     await host.removeCheckpoint(job.jobId)
   } catch (error) {
     if (error instanceof StaleImportJobWriteError) return
-    if (job.state === 'policy-held' || error instanceof ImportRetentionBlockedError) {
+    if (job.state === 'policy-held' || isImportRetentionRefusal(error)) {
       if (job.state !== 'policy-held') await host.holdForPolicy(job)
     } else if (job.state !== 'cancelled') await host.fail(job, message(error))
   } finally {
