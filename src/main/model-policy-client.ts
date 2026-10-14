@@ -39,6 +39,7 @@ import {
   type SpeechPolicyIdentityReader,
   type SpeechPolicyIdentitySettings,
   type SpeechPolicyProofListener,
+  type SpeechPolicyAuthorityStatus,
   type VerifiedSpeechPolicy
 } from './speech-policy-authority'
 
@@ -211,6 +212,17 @@ function liveSpeechPolicyIdentity(): SpeechPolicyIdentity | null {
 /** Synchronous main-only read. It never fetches and returns null unless the current scope has a fresh signed response. */
 export function getVerifiedSpeechPolicySnapshot(): VerifiedSpeechPolicy | null {
   return speechPolicyAuthority.get(liveSpeechPolicyIdentity(), speechPolicyClock())
+}
+
+/** Current signed speech-policy authority; configured credentials without a verified receipt stay closed. */
+export function getSpeechPolicyAuthorityStatus(
+  settings: ModelPolicyClientSettings
+): { status: 'unconfigured'; identity: string } | SpeechPolicyAuthorityStatus {
+  if (!resolveOperatorCredential(settings)) {
+    const epoch = speechPolicyAuthority.observeIdentity(null)
+    return { status: 'unconfigured', identity: `speech-proof:${epoch}:unconfigured` }
+  }
+  return speechPolicyAuthority.authorityStatus(liveSpeechPolicyIdentity(), speechPolicyClock())
 }
 
 /**

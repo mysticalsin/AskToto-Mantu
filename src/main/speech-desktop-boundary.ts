@@ -22,6 +22,7 @@ import {
   setSpeechPolicyIdentityReader,
   invalidateSpeechPolicyProof,
   setSpeechPolicyProofRevocationListener,
+  getSpeechPolicyAuthorityStatus,
   refreshModelPolicyChecked
 } from './model-policy-client'
 import { getSettings } from './store'
@@ -34,7 +35,7 @@ export function speechDesktopBoundaryOptions() {
   let pathsRevision = actualPathsRevision()
   configureSpeechAuthLeaseReaders({
     readSettingsAtBoundary: async () => {
-      readSettingsAtAuthorityBoundary()
+      await readSettingsAtAuthorityBoundary()
       return getPublishedSettingsObservation()
     },
     readSettingsEpoch: getSettingsObservationEpoch,
@@ -47,7 +48,13 @@ export function speechDesktopBoundaryOptions() {
       pathsRevision = actualPathsRevision()
       lease = await refreshSpeechAuthLease()
     },
-    observeAuthenticationSettings: observeSpeechAuthSettings,
+    observeAuthenticationSettings: (
+      observation: Parameters<typeof observeSpeechAuthSettings>[0],
+      pathsRevision: Parameters<typeof observeSpeechAuthSettings>[1]
+    ) => {
+      observeSpeechAuthSettings(observation, pathsRevision)
+      getSpeechPolicyAuthorityStatus(observation.readable ? observation.settings : {})
+    },
     observeAuthenticationRevocations: (listener: () => void) =>
       subscribeSpeechAuthLeaseInvalidation(() => {
         lease = null

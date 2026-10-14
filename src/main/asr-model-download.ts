@@ -249,10 +249,11 @@ export function ensureHighTierAsrModel(spec: AsrModelSpec = HIGH_TIER_ASR_MODEL)
 export async function ensureHighTierAsrModelExplicit(options: {
   authenticated: boolean
   runtimeAvailable: () => Promise<boolean>
-  authorityReadable: () => boolean
+  authorityReadable: () => boolean | Promise<boolean>
   onTransfer: () => void
 }): Promise<boolean> {
-  if (!options.authenticated || !(await options.runtimeAvailable()) || !options.authorityReadable()) return false
+  if (!options.authenticated || !(await options.runtimeAvailable()) || !(await options.authorityReadable()))
+    return false
   options.onTransfer()
   return ensureHighTierAsrModel()
 }
@@ -263,7 +264,7 @@ export function registerHighTierAsrModelFetch(options: {
   assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
   authenticated: () => boolean
   runtimeAvailable: () => Promise<boolean>
-  authorityReadable: () => boolean
+  authorityReadable: () => boolean | Promise<boolean>
   onTransfer: () => void
 }): void {
   options.ipcMain.handle(options.channel, async (event) => {

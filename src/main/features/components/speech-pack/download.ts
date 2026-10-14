@@ -13,7 +13,7 @@
  */
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
@@ -65,6 +65,28 @@ export interface DownloadRequest {
 }
 
 const MAX_REDIRECTS = 5
+
+export async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Find a parent whose filesystem can report available bytes for a not-yet-created staging path. */
+export async function nearestExistingPath(path: string): Promise<string> {
+  let current = path
+  while (!(await pathExists(current)) && dirname(current) !== current) current = dirname(current)
+  return current
+}
+
+/** Free bytes at an existing path, used before creating a large model staging tree. */
+export async function availableBytesAtPath(path: string): Promise<number> {
+  const fs = await statfs(path)
+  return fs.bavail * fs.bsize
+}
 
 async function assertSafeDownloadPaths(dest: string, trustedRoot?: string): Promise<void> {
   const boundary = resolve(trustedRoot ?? dirname(dest))

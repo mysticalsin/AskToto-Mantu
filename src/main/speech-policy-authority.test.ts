@@ -72,6 +72,24 @@ describe('strict speech policy identity', () => {
 })
 
 describe('speech policy scope high-water authority', () => {
+  it('requires a verified signed-unmanaged receipt and advances identity across scope ABA', () => {
+    const authority = new SpeechPolicyAuthority()
+    const first = identity()
+    const firstStatus = authority.authorityStatus(first, NOW)
+    expect(firstStatus.status).toBe('unverified')
+
+    authority.observeIdentity(identity('1123456789abcdef', 'device-02'))
+    const returnedStatus = authority.authorityStatus(first, NOW)
+    expect(returnedStatus.status).toBe('unverified')
+    expect(returnedStatus.identity).not.toBe(firstStatus.identity)
+
+    expect(authority.acceptUnmanaged(first, NOW, 'signed-unmanaged-revision')).toBe('unmanaged')
+    expect(authority.authorityStatus(first, NOW)).toMatchObject({
+      status: 'unmanaged',
+      identity: expect.stringContaining('signed-unmanaged-revision')
+    })
+  })
+
   it('does not renew freshness from lower versions or accept conflicting same-version content', () => {
     const authority = new SpeechPolicyAuthority()
     const currentIdentity = identity()

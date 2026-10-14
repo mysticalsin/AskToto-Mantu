@@ -38,6 +38,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
+import type { ProviderId } from '@shared/providers'
 
 const KEY_FILE = 'secret-key.bin'
 const ALG = 'aes-256-gcm' as const
@@ -45,6 +46,33 @@ const ALG = 'aes-256-gcm' as const
 /** Byte lengths for the [IV][tag][ciphertext] wire format. */
 const IV_LEN = 12
 const TAG_LEN = 16
+
+const PROVIDER_ENV_VARIABLE: Record<ProviderId, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  nvidia: 'NVIDIA_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  qwen: 'DASHSCOPE_API_KEY',
+  minimax: 'MINIMAX_API_KEY',
+  kimi: 'KIMI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  groq: 'GROQ_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  grok: 'XAI_API_KEY',
+  dust: 'DUST_API_KEY',
+  'claude-cli': '',
+  'codex-cli': '',
+  gemini: 'GEMINI_API_KEY',
+  // The Worker secret is not a Cloudflare account token; that credential never leaves operator infrastructure.
+  cloudflare: 'METIS_PROXY_KEY',
+  local: '',
+  custom: 'ASKTOTO_CUSTOM_API_KEY'
+}
+
+/** Environment-backed provider credentials are part of the secret source, not settings persistence. */
+export function providerEnvironmentVariable(provider: ProviderId): string {
+  return PROVIDER_ENV_VARIABLE[provider]
+}
 
 /**
  * An older packaged build may have wrapped this file-backend key with macOS

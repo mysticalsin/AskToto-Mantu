@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import type { Settings } from '@shared/ipc'
 import type { SpeechPolicyIdentitySource } from './speech-policy-authority'
 import { createSpeechBootstrapState, type SpeechSettingsObservation } from './speech-bootstrap-state'
 import { createSpeechDesktopRuntime, type SpeechDesktopRuntimeOptions } from './speech-desktop-runtime'
@@ -14,7 +13,7 @@ type BoundaryMetadata = {
 
 export type SpeechDesktopBootstrapOptions = Omit<SpeechDesktopRuntimeOptions, 'readState' | 'prepareAuthority'> & {
   observeSettings: (listener: (observation: SettingsObservation) => void) => () => void
-  readSettingsAtBoundary: () => Settings
+  readSettingsAtBoundary: () => Promise<unknown> | unknown
   readSettingsEpoch: () => number
   readBoundaryMetadata: () => Promise<BoundaryMetadata>
   readPolicyPathsRevision: () => string
@@ -56,7 +55,7 @@ export function startSpeechDesktopBootstrap(options: SpeechDesktopBootstrapOptio
       readingSettingsBoundary = true
       try {
         await options.prepareAuthentication()
-        options.readSettingsAtBoundary()
+        await options.readSettingsAtBoundary()
         const observation = latest
         if (!observation || observation.epoch !== options.readSettingsEpoch())
           throw new Error('Speech settings boundary is unavailable')

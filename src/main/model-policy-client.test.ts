@@ -22,6 +22,7 @@ import {
 } from '@shared/model-policy'
 import {
   getActiveModelPolicy,
+  getSpeechPolicyAuthorityStatus,
   getVerifiedSpeechPolicySnapshot,
   invalidateSpeechPolicyProof,
   narrowAllowedForCapability,
@@ -97,6 +98,17 @@ function useSpeechIdentity(settings = SPEECH_SETTINGS, durableDeviceId: string |
 }
 
 describe('refreshModelPolicy / getActiveModelPolicy', () => {
+  it('keeps configured speech policy unverified until a signed unmanaged decision is accepted', async () => {
+    const settings = { ...SPEECH_SETTINGS, operatorIngestSecret: 'shared-secret' }
+    useSpeechIdentity(settings)
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unverified')
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW)))
+
+    await refreshModelPolicyChecked(settings)
+
+    expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unmanaged')
+  })
+
   it('starts unmanaged (null) before any fetch', () => {
     expect(getActiveModelPolicy(SETTINGS)).toBeNull()
   })

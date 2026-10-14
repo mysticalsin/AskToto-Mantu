@@ -39,6 +39,11 @@ export interface VerifiedSpeechPolicy {
   policy: ModelPolicyDocument
 }
 
+export type SpeechPolicyAuthorityStatus =
+  | { status: 'unverified'; identity: string }
+  | { status: 'unmanaged'; identity: string }
+  | { status: 'managed'; identity: string; policy: ModelPolicyDocument }
+
 type PolicyHighWater = {
   version: number
   revision: string
@@ -251,6 +256,30 @@ export class SpeechPolicyAuthority {
       return null
     }
     return { ...snapshot, policy: clonePolicy(snapshot.policy) }
+  }
+
+  authorityStatus(identity: SpeechPolicyIdentity | null, now = Date.now()): SpeechPolicyAuthorityStatus {
+    const epoch = this.observeIdentity(identity)
+    if (!identity) return { status: 'unverified', identity: `speech-proof:${epoch}:missing-identity` }
+    const snapshot = this.get(identity, now)
+    if (snapshot) {
+      return {
+        status: 'managed',
+        identity: `speech-proof:${epoch}:${identity.scopeKey}:${snapshot.revision}`,
+        policy: snapshot.policy
+      }
+    }
+    const receipt = this.highWater.get(identity.scopeKey)
+    if (receipt?.kind === 'unmanaged') {
+      return {
+        status: 'unmanaged',
+        identity: `speech-proof:${epoch}:${identity.scopeKey}:unmanaged:${receipt.version}:${receipt.revision}`
+      }
+    }
+    return {
+      status: 'unverified',
+      identity: `speech-proof:${epoch}:${identity.scopeKey}:${receipt?.kind ?? 'none'}:${receipt?.version ?? 0}:${receipt?.revision ?? 'none'}`
+    }
   }
 
   reset(): void {

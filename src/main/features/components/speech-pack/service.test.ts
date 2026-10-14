@@ -479,6 +479,29 @@ describe('explicit speech-pack service boundary', () => {
     await run((service) => service.shutdown(), 'busy')
   })
 
+  it('invalidates a reviewed plan after policy authority changes away and back', async () => {
+    let policyIdentity = 'speech-proof:4:scope-a:revision-1'
+    const { service, createEngine } = setup({ policyIdentity: () => policyIdentity })
+    const preview = await service.planPreview({
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install',
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    })
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error('expected a current install plan')
+
+    policyIdentity = 'speech-proof:5:scope-b:revision-2'
+    service.policyChanged()
+    policyIdentity = 'speech-proof:6:scope-a:revision-1'
+    service.policyChanged()
+
+    await expect(service.installWithPlan({ planId: preview.plan.planId, action: 'install' })).resolves.toEqual({
+      ok: false,
+      reason: 'plan-expired'
+    })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
   it('does not admit a transfer after shutdown has started', async () => {
     const { service, createEngine } = setup()
     await service.shutdown()

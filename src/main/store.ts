@@ -39,12 +39,23 @@ import {
   decryptSecret,
   encryptSecret,
   prepareFileKeyForWrite,
+  providerEnvironmentVariable,
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
-import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import {
+  adminManagedConfigPath,
+  readManagedPolicyAuthorityFile,
+  type ManagedPolicyAuthorityRead,
+  readTrustedAdminManaged
+} from './win-security'
 import { AdminManagedCache, type AdminPolicyIdentity } from './admin-managed-cache'
-import { publishSettingsSnapshot } from './settings-observation'
+import {
+  getPublishedSettingsObservation,
+  getSettingsObservationEpoch,
+  publishSettingsSnapshot,
+  type SettingsPolicyAuthoritySnapshot
+} from './settings-observation'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -57,12 +68,18 @@ import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import type { LocalSpeechPackPolicy } from '@shared/model-policy'
 import { assertBrokerSpeechSettingsPatch, BrokerSpeechSettingsLoadSchema } from '@shared/broker-speech-settings'
-import { FreshLeanSpeechAuthority, ManagedPolicyAuthority } from './fresh-lean-speech-defaults'
+import {
+  FreshLeanSpeechAuthority,
+  isSettingsSetupComplete,
+  ManagedPolicyAuthority,
+  validSettingsKeysOnly
+} from './fresh-lean-speech-defaults'
 import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
 import { isProfileRecoveryFileName } from './profile-recovery-files'
 
 const dir = () => app.getPath('userData')
 const freshLeanSpeechAuthority = new FreshLeanSpeechAuthority()
+const speechAuthorityIdentities = freshLeanSpeechAuthority.identityReaders(getSettings)
 const managedPolicyAuthority = new ManagedPolicyAuthority()
 function adminPolicyIdentity(): AdminPolicyIdentity {
   const path = adminManagedConfigPath()
@@ -76,13 +93,21 @@ function adminPolicyIdentity(): AdminPolicyIdentity {
   }
 }
 let adminPolicyPathState: 'absent' | 'present' | 'unknown' = 'unknown'
-let freshAdminTrustRead = false
+let freshAdminRead: ManagedPolicyAuthorityRead | null = null
+let freshUserManagedRead: ManagedPolicyAuthorityRead | null = null
 const adminCache = new AdminManagedCache({
   readIdentity: adminPolicyIdentity,
-  readTrusted: () => readTrustedAdminManaged(undefined, { freshAuthority: freshAdminTrustRead })
+  readTrusted: () => {
+    if (freshAdminRead)
+      return freshAdminRead.status === 'present' ? Buffer.from(freshAdminRead.bytes).toString('utf8') : null
+    return readTrustedAdminManaged()
+  }
 })
 const adminManagedContent = (): string | null =>
-  managedPolicyAuthority.readAdminContent(() => adminCache.read(), adminPolicyPathState)
+  managedPolicyAuthority.readAdminContent(
+    () => adminCache.read(),
+    () => adminPolicyPathState
+  )
 export function resetAdminManagedCache(): void {
   adminCache.reset()
   managedPolicyAuthority.setAdminReadable(true)
@@ -107,29 +132,6 @@ function encryptedProfileFiles(): string[] {
     .map((entry) => entry.name)
 }
 
-const ENV_VAR: Record<ProviderId, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  nvidia: 'NVIDIA_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  qwen: 'DASHSCOPE_API_KEY',
-  minimax: 'MINIMAX_API_KEY',
-  kimi: 'KIMI_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  groq: 'GROQ_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  grok: 'XAI_API_KEY',
-  dust: 'DUST_API_KEY',
-  'claude-cli': '',
-  'codex-cli': '',
-  gemini: 'GEMINI_API_KEY',
-  // The shared secret the operator's Worker checks, NOT a Cloudflare account token — that one never
-  // leaves the operator's infrastructure (it is a Wrangler secret on the Worker itself).
-  cloudflare: 'METIS_PROXY_KEY',
-  local: '', // keyless — Métis Local's per-session sidecar key lives only in local-runtime.ts memory
-  custom: 'ASKTOTO_CUSTOM_API_KEY'
-}
-
 function ensureDir(): void {
   const d = dir()
   if (!existsSync(d)) mkdirSync(d, { recursive: true })
@@ -138,19 +140,15 @@ function ensureDir(): void {
 type Shape = Record<string, { safeParse: (v: unknown) => { success: boolean; data?: unknown } }>
 const shape = (): Shape => BaseSettingsSchema.shape as unknown as Shape
 
-/** Keep only the individually-valid keys of an arbitrary object against the settings schema. */
-function validKeysOnly(obj: Record<string, unknown>): Record<string, unknown> {
-  const s = shape()
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(obj)) {
-    if (!s[k] || v === undefined) continue
-    const r = s[k].safeParse(v)
-    if (r.success) out[k] = r.data
-  }
-  return out
-}
-
 function readPolicyFile<T>(path: string, source: 'user' | 'admin', fallback: T, parse: (raw: string) => T): T {
+  if (source === 'user' && freshUserManagedRead) {
+    if (freshUserManagedRead.status === 'absent') return fallback
+    if (freshUserManagedRead.status !== 'present') {
+      managedPolicyAuthority.setUnreadable(source)
+      return fallback
+    }
+    return parse(Buffer.from(freshUserManagedRead.bytes).toString('utf8'))
+  }
   try {
     return parse(readFileSync(path, 'utf8'))
   } catch (error) {
@@ -161,7 +159,7 @@ function readPolicyFile<T>(path: string, source: 'user' | 'admin', fallback: T, 
 
 /** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
 const readManagedFrom = (path: string): Record<string, unknown> =>
-  readPolicyFile(path, 'user', {}, (raw) => managedPolicyAuthority.parseManaged(raw, 'user', validKeysOnly))
+  readPolicyFile(path, 'user', {}, (raw) => managedPolicyAuthority.parseManaged(raw, 'user', validSettingsKeysOnly))
 const readLockedFrom = (path: string): string[] =>
   readPolicyFile(path, 'user', [], (raw) => managedPolicyAuthority.parseLocked(raw, 'user'))
 const readRawPolicyFrom = (path: string, source: 'user' | 'admin' = 'user'): string | null =>
@@ -173,7 +171,7 @@ export function validatedManaged(): Record<string, unknown> {
   const admin = adminManagedContent()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...(admin ? managedPolicyAuthority.parseManaged(admin, 'admin', validKeysOnly) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
+    ...(admin ? managedPolicyAuthority.parseManaged(admin, 'admin', validSettingsKeysOnly) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
   }
 }
 
@@ -226,7 +224,7 @@ export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
  *  no-op (the env still resolves), so the UI shows a 'set via environment variable' chip instead. */
 export function getEnvKeyProviders(): string[] {
-  const ids: string[] = PROVIDER_IDS.filter((p) => !!process.env[ENV_VAR[p]])
+  const ids: string[] = PROVIDER_IDS.filter((p) => !!process.env[providerEnvironmentVariable(p)])
   if ((process.env.SONIOX_API_KEY || '').trim()) ids.push('soniox')
   return ids
 }
@@ -503,15 +501,6 @@ export function resetAsrHardwarePreferenceForTests(): void {
   _freshAsrEngine = null
 }
 
-function setupIsComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
-  const userDone = 'onboardingDone' in user ? shape().onboardingDone.safeParse(user.onboardingDone) : null
-  const managedDone = 'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
-  return (
-    (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
-    (typeof user.onboardingDoneAt === 'number' && Number.isFinite(user.onboardingDoneAt) && user.onboardingDoneAt > 0)
-  )
-}
-
 /** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
  *  that the cache key includes the settings path (see `userPath` below), but kept because existing suites
  *  call it in beforeEach and an explicit reset is a harmless belt-and-braces. Production never swaps
@@ -522,23 +511,39 @@ export function resetSettingsCacheForTests(): void {
   managedPolicyAuthority.reset()
 }
 
-/** Opaque monotonic revision; callers must not project the raw user selection as plan authority. */
-export const getSpeechPackSelectionIdentity = (): string =>
-  freshLeanSpeechAuthority.identityAfterRead(getSettings, 'selection')
-
-/** Opaque monotonic revision of the currently accepted effective speech-pack policy. */
-export const getSpeechPackPolicyIdentity = (): string =>
-  freshLeanSpeechAuthority.identityAfterRead(getSettings, 'policy')
+export const getSpeechPackSelectionIdentity = speechAuthorityIdentities.selection
+export const getSpeechPackPolicyIdentity = speechAuthorityIdentities.policy
+export const getLocalModelProvisioningIdentity = speechAuthorityIdentities.localModel
 
 /** Resolve real current settings and revalidate machine trust at an explicit authority boundary. */
-export const readSettingsAtAuthorityBoundary = freshLeanSpeechAuthority.bindBoundary(
-  () => {
-    _settingsCache = null
-    adminCache.reset()
-  },
-  getSettings,
-  (fresh) => (freshAdminTrustRead = fresh)
-)
+/** Serialize temporary verified-file overrides so concurrent admissions cannot cross-contaminate reads. */
+export function readSettingsAtAuthorityBoundary(): Promise<SettingsPolicyAuthoritySnapshot> {
+  return freshLeanSpeechAuthority.readSettingsAuthorityBoundary({
+    readFiles: async () => {
+      const [user, admin] = await Promise.all([
+        readManagedPolicyAuthorityFile(join(dir(), 'managed-config.json')),
+        readManagedPolicyAuthorityFile(adminManagedConfigPath(), undefined, true)
+      ])
+      return { user, admin }
+    },
+    setReads: (user, admin) => {
+      freshUserManagedRead = user
+      freshAdminRead = admin
+    },
+    resetCaches: () => {
+      _settingsCache = null
+      adminCache.reset()
+    },
+    readSettings: getSettings,
+    readPolicy: () => ({
+      allowedProviders: getAllowedProviders(),
+      localSpeechPack: getAdminLocalSpeechPackPolicy(),
+      lockedKeys: getLockedKeys()
+    }),
+    readable: () => getPublishedSettingsObservation()?.readable === true,
+    epoch: getSettingsObservationEpoch
+  })
+}
 
 function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
   return {
@@ -622,7 +627,7 @@ export function getSettings(): Settings {
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
   const effectiveBrokerSpeech = BrokerSpeechSettingsLoadSchema.parse({ ...base, ...raw }.brokerSpeech)
   const storedAsr = 'asrEngine' in raw && shape().asrEngine.safeParse(raw.asrEngine).success
-  const completedSetup = setupIsComplete(raw, managed)
+  const completedSetup = isSettingsSetupComplete(raw, managed)
   // A readable fresh/incomplete sparse profile gets the one-time hardware preference. Completed sparse
   // profiles retain the former Parakeet default, and explicit/managed/locked choices remain authoritative.
   if (
@@ -655,7 +660,7 @@ export function getSettings(): Settings {
     // blocks answering until an https customBaseUrl actually exists. Only fall back to full defaults when
     // the merged settings don't even validate field-by-field — a genuinely stale/hand-edited
     // settings.json — so getSettings can still never throw/brick the app.
-    const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
+    const merged: Record<string, unknown> = { ...base, ...validSettingsKeysOnly(raw) }
     // Only reset `provider` when the provider value itself doesn't validate against the schema's
     // enum — never merely because customBaseUrl is empty/not-yet-https. A user who just picked
     // Custom (customBaseUrl: '') has a perfectly valid provider choice; clobbering it here reverts
@@ -734,7 +739,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
   }
   // Validate the incoming patch (drop malformed keys), then persist ONLY user overrides (sparse)
   // so managed-config stays a live default layer.
-  const clean = validKeysOnly((patch ?? {}) as Record<string, unknown>)
+  const clean = validSettingsKeysOnly((patch ?? {}) as Record<string, unknown>)
   const locked = getLockedKeys()
   const allowed: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(clean)) {
@@ -763,9 +768,17 @@ export function setSettings(patch: Partial<Settings>): Settings {
   if (Object.hasOwn(prev, 'brokerSpeech')) prev.brokerSpeech = BrokerSpeechSettingsLoadSchema.parse(prev.brokerSpeech)
   const next = { ...prev, ...allowed }
   const managed = validatedManaged()
-  freshLeanSpeechAuthority.preserveProjectedRoute(next, prev, allowed, managed, locked, getSettings)
+  freshLeanSpeechAuthority.preserveProjectedRoute(
+    next,
+    prev,
+    allowed,
+    [...managedPolicyAuthority.managedKeys],
+    locked,
+    managedPolicyAuthority.readable,
+    getSettings
+  )
   const previousAsr = 'asrEngine' in prev && shape().asrEngine.safeParse(prev.asrEngine).success
-  const previousCompleted = setupIsComplete(prev, managed)
+  const previousCompleted = isSettingsSetupComplete(prev, managed)
   // Completing a genuinely fresh unmanaged setup is the sole persistence point for the derived choice.
   // Without it, a high-RAM profile would show Whisper during setup and fall back to legacy Parakeet as
   // soon as onboardingDone landed. Never persist a managed/locked default: policy must remain live.
@@ -1106,7 +1119,7 @@ export function dustSelectedAgentVision(sId: string | undefined): boolean {
 
 export function getApiKey(provider: ProviderId): string {
   // Env-var keys bypass the cache — they're already an O(1) lookup and must stay live.
-  const env = process.env[ENV_VAR[provider]]
+  const env = process.env[providerEnvironmentVariable(provider)]
   if (env) return env
 
   if (_apiKeyCache.has(provider)) return _apiKeyCache.get(provider)!

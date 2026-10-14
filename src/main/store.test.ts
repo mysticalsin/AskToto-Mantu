@@ -22,6 +22,7 @@ import {
   getAdminLocalSpeechPackPolicy,
   getLockedKeys,
   configureFreshLeanSpeechDefaults,
+  readSettingsAtAuthorityBoundary,
   getSpeechPackSelectionIdentity,
   resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
@@ -176,6 +177,23 @@ describe('store', () => {
 
   it('does not derive a fresh lean route when a recovered settings profile exists', async () => {
     writeFileSync(join(userData, 'settings.json.recovered'), 'unreadable profile', 'utf8')
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+  })
+
+  it('uses a strict authority boundary for managed settings and keeps unreadability through cache hits', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    mkdirSync(join(userData, 'managed-config.json'))
+
+    const authority = await readSettingsAtAuthorityBoundary()
+    expect(authority.readable).toBe(false)
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+    expect(getSettings().onboardingDone).toBe(true)
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+  })
+
+  it('treats a known profile marker directory as an existing profile', async () => {
+    mkdirSync(join(userData, 'auth-session.bin'))
     await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
   })

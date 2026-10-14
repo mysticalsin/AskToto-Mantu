@@ -18,21 +18,23 @@
  *
  * A marker exists only after step 4 completed, and step 4 only runs on a fully verified, self-tested set,
  * so no crash can leave a marker without a complete directory or a half-filled directory behind a marker.
- * A crash between 4 and 5 leaves a complete but unmarked directory; the next start re-verifies it and
- * writes the marker, or removes it. initialise() restores a verified aside if needed and prunes asides only
- * after the current directory and marker have both been verified.
+ * A crash between 4 and 5 leaves a complete but unmarked directory; startup never activates it. An explicit
+ * repair/resume plan must verify and self-test it again before promotion.
  * Cancel is checked before the self-test, before activation, after the marker switch and before 'ready'.
  *
  * State and events carry component ids, byte counts and error kinds only — no path, transcript, audio or
  * user text ever enters a state, an event or a log line.
  */
-import { lstat, mkdir, open, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { adoptExtracted, createArchiveSink, isSafeEntryName, type ExtractArchive } from './archive'
 import {
   DEFAULT_TIMING,
+  availableBytesAtPath,
   downloadVerified,
+  nearestExistingPath,
+  pathExists as exists,
   sha256File,
   sizeOf,
   type DownloadDeps,
@@ -48,6 +50,7 @@ import {
   type SpeechPackComponentId
 } from './manifest'
 import { componentManifestIdentity } from './resolver'
+import { runPinnedSpeechPackSelfTest } from './self-test'
 
 export const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
 export const EMIT_INTERVAL_MS = 250
@@ -100,12 +103,14 @@ export interface SpeechPackEngineOptions {
   authorizeTransfer?: (componentId: SpeechPackComponentId) => boolean
   /** Forced trust refresh at the reviewed activation boundary; status and chunk polls never call this. */
   authorizeActivation?: (componentId: SpeechPackComponentId) => boolean | Promise<boolean>
+  /** Trust refresh for rollback-only renames that restore the previously active verified generation. */
+  authorizeRollback?: (componentId: SpeechPackComponentId) => boolean | Promise<boolean>
   /** Distinguishes an in-process pause/resume from stale partial data left by a prior launch. */
   resumeScope?: string
 }
 
 export interface SpeechPackEngine {
-  /** Adopt packs already on disk (and finish an activation that was interrupted before its marker). */
+  /** Adopt only directories with an existing valid activation marker; never activate at startup. */
   initialise(): Promise<void>
   getState(id: SpeechPackComponentId): SpeechPackState
   states(): Record<SpeechPackComponentId, SpeechPackState>
@@ -134,26 +139,6 @@ interface MarkerSnapshot {
   bytes: Buffer
 }
 
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function nearestExisting(path: string): Promise<string> {
-  let current = path
-  while (!(await exists(current)) && dirname(current) !== current) current = dirname(current)
-  return current
-}
-
-async function defaultFreeBytes(path: string): Promise<number> {
-  const fs = await statfs(path)
-  return fs.bavail * fs.bsize
-}
-
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw signal.reason
 }
@@ -170,7 +155,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     random: options.random ?? Math.random,
     timing: { ...DEFAULT_TIMING, ...options.timing }
   }
-  const freeBytes = options.freeBytes ?? defaultFreeBytes
+  const freeBytes = options.freeBytes ?? availableBytesAtPath
   const interval = options.emitIntervalMs ?? EMIT_INTERVAL_MS
   const { rootDir } = options
   const fixture = options.fixture ?? SELF_TEST_FIXTURE
@@ -188,6 +173,14 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       throw new SpeechPackError('policy', 'speech-pack activation is no longer authorized')
     }
     assertAuthorized(c, signal)
+  }
+
+  async function rollbackAuthorized(c: SpeechPackComponent): Promise<boolean> {
+    try {
+      return (await options.authorizeRollback?.(c.id)) !== false
+    } catch {
+      return false
+    }
   }
 
   const states = new Map<SpeechPackComponentId, SpeechPackState>(
@@ -274,7 +267,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     return true
   }
 
-  async function writeMarker(c: SpeechPackComponent): Promise<void> {
+  async function writeMarker(c: SpeechPackComponent, signal: AbortSignal): Promise<void> {
+    await assertActivationAuthorized(c, signal)
     const marker: Marker = {
       schema: 2,
       component: c.id,
@@ -284,6 +278,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     await mkdir(dirname(markerPath(c)), { recursive: true })
     await writeFile(`${markerPath(c)}.tmp`, JSON.stringify(marker))
     await activationStep('marker-tmp-written')
+    await assertActivationAuthorized(c, signal)
     await rename(`${markerPath(c)}.tmp`, markerPath(c))
     await activationStep('marker-written')
   }
@@ -360,6 +355,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       const markerFile = markerPath(c)
       const temp = `${markerFile}.restore.tmp`
       await writeFile(temp, snapshot.bytes)
+      if (!(await rollbackAuthorized(c))) return false
       await rename(temp, markerFile)
       return true
     } catch {
@@ -404,27 +400,9 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     if (candidates.length === 0) return false
     const dest = finalDir(c)
     if (await exists(dest)) return false
+    if (!(await rollbackAuthorized(c))) return false
     await rename(candidates[0], dest)
     return true
-  }
-
-  async function selfTestDirectory(c: SpeechPackComponent, dir: string): Promise<boolean> {
-    try {
-      if (
-        (await sizeOf(options.fixtureWavPath)) !== fixture.bytes ||
-        (await sha256File(options.fixtureWavPath)) !== fixture.sha256
-      )
-        return false
-      const decoded = await options.selfTest({
-        componentId: c.id,
-        packDir: dir,
-        wavPath: options.fixtureWavPath,
-        signal: new AbortController().signal
-      })
-      return decoded.trim().length > 0
-    } catch {
-      return false
-    }
   }
 
   async function ensureOwnedDirectory(path: string, create: boolean): Promise<void> {
@@ -489,18 +467,12 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       const dir = finalDir(c)
       let marker = await readMarkerSnapshot(c, true)
       if (!(await exists(dir))) {
-        if (!(await restoreAside(c))) continue
-        marker = await readMarkerSnapshot(c)
+        continue
       }
       if (!(await dirVerified(c, dir))) continue
       const alreadyActivated =
         marker?.marker.version === c.version && marker.marker.manifestIdentity === componentManifestIdentity(c)
-      if (!alreadyActivated) {
-        // An unmarked complete directory can be a process-kill recovery point. Re-run the pinned fixture
-        // in an isolated host before publishing a marker; a size/hash pass alone is not activation proof.
-        if (!(await selfTestDirectory(c, dir))) continue
-        await writeMarker(c)
-      }
+      if (!alreadyActivated) continue
       set(c.id, { status: 'ready' }, !alreadyActivated)
       // Keep the old complete directory until a verified current directory and its marker both exist.
       await removeAsideDirs(c)
@@ -509,19 +481,23 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
 
   // A cancel that lands after its pack is already active must still win: the pack is taken back out.
   async function deactivate(c: SpeechPackComponent, previousMarker: MarkerSnapshot | null): Promise<void> {
+    if (!(await rollbackAuthorized(c))) return
     if (previousMarker && previousMarker.marker.version !== c.version) {
       // Restore the old active pointer atomically before removing the new candidate directory.
       if (!(await restoreMarkerSnapshot(c, previousMarker))) return
+      if (!(await rollbackAuthorized(c))) return
       await rm(finalDir(c), { recursive: true, force: true })
       await restoreAside(c)
       return
     }
 
+    if (!(await rollbackAuthorized(c))) return
     await rm(finalDir(c), { recursive: true, force: true })
     const restoredCurrent = await restoreAside(c)
     if (previousMarker && restoredCurrent) {
       await restoreMarkerSnapshot(c, previousMarker)
     } else {
+      if (!(await rollbackAuthorized(c))) return
       await rm(markerPath(c), { force: true })
     }
   }
@@ -574,7 +550,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         // Download remainder, plus the extraction cap (the archive holds files beyond the pinned ones) while the archive still exists.
         required += Math.max(0, source.archive.bytes - held) + source.extractCapBytes
       }
-      const free = await freeBytes(await nearestExisting(staging))
+      const free = await freeBytes(await nearestExistingPath(staging))
       if (free < required) throw new SpeechPackError('disk', 'not enough free disk space', required, free)
     }
 
@@ -645,16 +621,17 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     // Cancel wins at every step: it is checked again before the self-test and before the activation rename.
     assertAuthorized(c, signal)
     set(c.id, { status: 'self-testing' })
-    if (
-      (await sizeOf(options.fixtureWavPath)) !== fixture.bytes ||
-      (await sha256File(options.fixtureWavPath)) !== fixture.sha256
-    ) {
-      throw new SpeechPackError('tamper', 'self-test fixture does not match its pin')
-    }
     let decoded = ''
     try {
       decoded = (
-        await options.selfTest({ componentId: c.id, packDir: staging, wavPath: options.fixtureWavPath, signal })
+        await runPinnedSpeechPackSelfTest({
+          componentId: c.id,
+          packDir: staging,
+          wavPath: options.fixtureWavPath,
+          signal,
+          fixture,
+          selfTest: options.selfTest
+        })
       ).trim()
     } catch {
       decoded = ''
@@ -675,20 +652,21 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       if (!previousMarker) await rm(markerPath(c), { force: true })
       // An existing pack is renamed aside, never deleted first, so the swap has no moment without a whole directory.
       if (await exists(dest)) {
+        await assertActivationAuthorized(c, signal)
         await rename(dest, aside)
         movedAside = true
         await activationStep('old-moved-aside')
         await assertActivationAuthorized(c, signal)
       }
+      await assertActivationAuthorized(c, signal)
       await rename(staging, dest)
       promoted = true
       await activationStep('renamed')
-      assertAuthorized(c, signal)
-      await writeMarker(c)
+      await writeMarker(c, signal)
       // Every failure after the first activation rename restores the exact prior marker and complete directory.
-      assertAuthorized(c, signal)
+      await assertActivationAuthorized(c, signal)
       await activationStep('ready-check')
-      assertAuthorized(c, signal)
+      await assertActivationAuthorized(c, signal)
       set(c.id, { status: 'ready' }, true)
       // The service clears its activity lease on the ready event; only a user cancellation can still win here.
       if (signal.aborted && signal.reason === 'cancel') throw signal.reason

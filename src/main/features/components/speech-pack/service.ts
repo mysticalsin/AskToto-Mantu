@@ -46,6 +46,8 @@ export interface SpeechPackServiceOptions {
   policyIdentity?: () => string
   /** Force current managed/admin trust only at explicit admission and activation boundaries. */
   refreshAuthority?: () => boolean | Promise<boolean>
+  /** Fresh trust read for restoration-only renames after an interrupted/revoked activation. */
+  refreshRollbackAuthority?: () => boolean | Promise<boolean>
   /** Live authoritative capture state; a throwing getter fails closed. */
   captureActive?: () => boolean
   /** Stable capture epoch identity, including a capture that starts and ends between status polls. */
@@ -161,7 +163,15 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return false
     }
   }
+  const refreshRollbackAuthority = async (): Promise<boolean> => {
+    try {
+      return (await options.refreshRollbackAuthority?.()) !== false
+    } catch {
+      return false
+    }
+  }
   let observedSelectionIdentity = currentSelectionIdentity()
+  let observedPolicyIdentity = currentPolicyIdentity()
 
   const isCaptureActive = (): boolean => {
     if (captureActive) return true
@@ -194,15 +204,21 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
             currentSelectionIdentity() === authority.selectionIdentity
         )
       },
-      authorizeActivation: async (id) =>
-        (await refreshAuthority()) &&
-        Boolean(
-          activeAuthority.has(id) &&
+      authorizeActivation: async (id) => {
+        if (!(await refreshAuthority())) return false
+        const authority = activeAuthority.get(id)
+        return Boolean(
+          authority &&
             activity.has(id) &&
             policyAllows() &&
+            currentPolicyIdentity() === authority.policyIdentity &&
             !isCaptureActive() &&
-            selectedId(options.selectedEngine()) === id
+            currentCaptureIdentity() === authority.captureIdentity &&
+            selectedId(options.selectedEngine()) === id &&
+            currentSelectionIdentity() === authority.selectionIdentity
         )
+      },
+      authorizeRollback: refreshRollbackAuthority
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
@@ -631,7 +647,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return () => listeners.delete(listener)
     },
     policyChanged(): void {
-      if (policyAllows() && featureEnabled()) return
+      const nextIdentity = currentPolicyIdentity()
+      const identityChanged = nextIdentity !== observedPolicyIdentity
+      observedPolicyIdentity = nextIdentity
+      if (!identityChanged && nextIdentity !== null && policyAllows() && featureEnabled()) return
       authorityRevision += 1
       installPlans.clear()
       for (const id of activity) engine?.cancel(id)

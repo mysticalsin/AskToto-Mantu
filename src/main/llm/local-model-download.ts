@@ -103,9 +103,14 @@ async function alreadyValid(path: string, spec: LocalModelFile): Promise<boolean
  * HTTP 302 or `server declared 1032 bytes` — the transfer never starts and Settings looks idle. Follow
  * https Location hops ourselves; a fetch that already landed on 200 is a no-op.
  */
-async function fetchFollowingRedirects(url: string, signal: AbortSignal): Promise<Response> {
+async function fetchFollowingRedirects(
+  url: string,
+  signal: AbortSignal,
+  authorize?: () => Promise<boolean>
+): Promise<Response> {
   let current = url
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (authorize && !(await authorize())) throw new Error('local model authority changed before transfer')
     const res = await net.fetch(current, { signal })
     if (res.status < 300 || res.status >= 400) return res
     const loc = res.headers.get('location')
@@ -123,7 +128,8 @@ async function downloadOne(
   file: 'gguf' | 'mmproj',
   spec: LocalModelFile,
   dest: string,
-  onChunk: (bytes: number) => void
+  onChunk: (bytes: number) => void,
+  authorize?: () => Promise<boolean>
 ): Promise<void> {
   mkdirSync(dirname(dest), { recursive: true })
   // Before the network is touched: a transfer that cannot fit must not start.
@@ -145,7 +151,7 @@ async function downloadOne(
   let output: ReturnType<typeof createWriteStream> | undefined
   let outputClosed: Promise<void> | undefined
   try {
-    const res = await fetchFollowingRedirects(spec.url, ctrl.signal)
+    const res = await fetchFollowingRedirects(spec.url, ctrl.signal, authorize)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
 
     // Reject on the declared length before writing anything: a redirect to a login/error page or a
@@ -207,6 +213,7 @@ async function downloadOne(
       throw new Error(`${file}: sha256 ${digest.slice(0, 12)}… does not match the pinned ${spec.sha256.slice(0, 12)}…`)
     }
     // Only now is the file allowed to exist under its real name.
+    if (authorize && !(await authorize())) throw new Error('local model authority changed before activation')
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
@@ -226,7 +233,7 @@ async function downloadOne(
  * Resolves true when the model is ready. Never throws — callers treat false as "Local unavailable".
  * Concurrent callers share one download rather than racing for the same files.
  */
-export function ensureLocalModel(modelId: string): Promise<boolean> {
+export function ensureLocalModel(modelId: string, authorize?: () => Promise<boolean>): Promise<boolean> {
   if (inFlight) return inFlight
   // Publish BEFORE the async work so the first localModels:list (Settings / onboarding, same tick as
   // boot) reads `downloading` instead of idle/`not-downloaded`. A missed first poll used to freeze
@@ -234,13 +241,17 @@ export function ensureLocalModel(modelId: string): Promise<boolean> {
   if (state.status !== 'downloading' || state.modelId !== modelId) {
     state = { modelId, status: 'downloading', progress: 0 }
   }
-  inFlight = run(modelId).finally(() => {
+  inFlight = run(modelId, authorize).finally(() => {
     inFlight = null
   })
   return inFlight
 }
 
-async function run(modelId: string): Promise<boolean> {
+async function run(modelId: string, authorize?: () => Promise<boolean>): Promise<boolean> {
+  if (authorize && !(await authorize())) {
+    state = IDLE
+    return false
+  }
   let entry
   try {
     entry = getModel(modelId)
@@ -299,12 +310,26 @@ async function run(modelId: string): Promise<boolean> {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS && !ok; attempt++) {
       try {
         received = base
-        await downloadOne(f.key, f.spec, f.dest, (n) => {
-          received += n
-          publish('downloading')
-        })
+        if (authorize && !(await authorize())) {
+          state = IDLE
+          return false
+        }
+        await downloadOne(
+          f.key,
+          f.spec,
+          f.dest,
+          (n) => {
+            received += n
+            publish('downloading')
+          },
+          authorize
+        )
         ok = true
       } catch (err) {
+        if (authorize && !(await authorize())) {
+          state = IDLE
+          return false
+        }
         lastErr = err
         received = base
         publish('downloading')

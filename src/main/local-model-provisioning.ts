@@ -1,3 +1,11 @@
+import { localModelAllowedByPolicy, type ModelPolicyDocument } from '@shared/model-policy'
+import type { Settings } from '@shared/ipc'
+
+type LocalProvisioningSettings = Pick<
+  Settings,
+  'localLlm' | 'enterpriseLive' | 'operatorUrl' | 'operatorIngestSecret' | 'operatorLicenseToken'
+>
+
 /** Optional LLM provisioning policy. Transcription assets have a separate mandatory setup path. */
 export async function provisionLocalModel(
   local: { enabled: boolean; modelId: string },
@@ -14,20 +22,77 @@ export async function provisionLocalModel(
 
 /** Explicit user action admission; each read callback is a fresh policy/profile authority boundary. */
 export async function provisionExplicitLocalModel(options: {
+  captureActive: () => boolean
+  captureIdentity: () => string
   runtimeAvailable: () => Promise<boolean>
-  readSettings: () => { settings: { localLlm: { enabled: boolean; modelId: string } }; readable: boolean }
-  allowedProviders: () => readonly string[] | null
-  ensure: (modelId: string) => Promise<boolean>
+  localModelIdentity: () => string
+  readSettings: () => Promise<{
+    settings: LocalProvisioningSettings
+    readable: boolean
+    allowedProviders: readonly string[] | null
+    modelPolicy:
+      | { status: 'unconfigured' | 'unmanaged'; identity: string }
+      | { status: 'managed'; identity: string; policy: ModelPolicyDocument }
+      | { status: 'unverified'; identity: string }
+  }>
+  ensure: (modelId: string, authorized: () => Promise<boolean>) => Promise<boolean>
   onReady: () => void
 }): Promise<boolean> {
   if (!(await options.runtimeAvailable())) return false
-  const admission = options.readSettings()
-  if (!admission.readable) return false
+  if (options.captureActive()) return false
+  const captureIdentity = options.captureIdentity()
+  const localModelIdentity = options.localModelIdentity()
+  const admission = await options.readSettings()
+  const modelId = admission.settings.localLlm.modelId
+  const isAllowed = (snapshot: Awaited<ReturnType<typeof options.readSettings>>): boolean =>
+    snapshot.readable &&
+    snapshot.modelPolicy.status !== 'unverified' &&
+    (snapshot.modelPolicy.status !== 'unconfigured' ||
+      (!snapshot.settings.operatorUrl?.trim() &&
+        !snapshot.settings.operatorIngestSecret?.trim() &&
+        !snapshot.settings.operatorLicenseToken?.trim() &&
+        snapshot.settings.enterpriseLive.managed === false &&
+        snapshot.settings.enterpriseLive.inferenceMode === 'legacy')) &&
+    !(snapshot.allowedProviders && !snapshot.allowedProviders.includes('local')) &&
+    (snapshot.modelPolicy.status !== 'managed' || localModelAllowedByPolicy(snapshot.modelPolicy.policy, modelId))
+  if (!isAllowed(admission) || options.captureActive()) return false
+  const proofIdentity = admission.modelPolicy.identity
+  const authorized = async (): Promise<boolean> => {
+    if (
+      options.captureActive() ||
+      options.captureIdentity() !== captureIdentity ||
+      options.localModelIdentity() !== localModelIdentity
+    )
+      return false
+    const current = await options.readSettings()
+    return (
+      isAllowed(current) &&
+      current.settings.localLlm.modelId === modelId &&
+      current.modelPolicy.identity === proofIdentity &&
+      !options.captureActive() &&
+      options.captureIdentity() === captureIdentity &&
+      options.localModelIdentity() === localModelIdentity
+    )
+  }
+  if (!(await authorized())) return false
   const admittedModel = admission.settings.localLlm
-  const ready = await provisionLocalModel(admittedModel, options.allowedProviders(), options.ensure, 'explicit')
+  const ready = await provisionLocalModel(
+    admittedModel,
+    admission.allowedProviders,
+    (id) => options.ensure(id, authorized),
+    'explicit'
+  )
   if (!ready) return false
-  const current = options.readSettings()
-  if (!current.readable || current.settings.localLlm.modelId !== admittedModel.modelId) return false
+  const current = await options.readSettings()
+  if (
+    !isAllowed(current) ||
+    current.settings.localLlm.modelId !== admittedModel.modelId ||
+    current.modelPolicy.identity !== proofIdentity ||
+    options.captureActive() ||
+    options.captureIdentity() !== captureIdentity ||
+    options.localModelIdentity() !== localModelIdentity
+  )
+    return false
   options.onReady()
   return true
 }
@@ -37,9 +102,19 @@ export function registerExplicitLocalModelEnsure(options: {
   channel: string
   assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
   runtimeAvailable: () => Promise<boolean>
-  readSettings: () => { settings: { localLlm: { enabled: boolean; modelId: string } }; readable: boolean }
-  allowedProviders: () => readonly string[] | null
-  ensure: (modelId: string) => Promise<boolean>
+  captureActive: () => boolean
+  captureIdentity: () => string
+  localModelIdentity: () => string
+  readSettings: () => Promise<{
+    settings: LocalProvisioningSettings
+    readable: boolean
+    allowedProviders: readonly string[] | null
+    modelPolicy:
+      | { status: 'unconfigured' | 'unmanaged'; identity: string }
+      | { status: 'managed'; identity: string; policy: ModelPolicyDocument }
+      | { status: 'unverified'; identity: string }
+  }>
+  ensure: (modelId: string, authorized: () => Promise<boolean>) => Promise<boolean>
   onReady: () => void
   onFailure: (error: unknown) => void
 }): void {
@@ -49,8 +124,10 @@ export function registerExplicitLocalModelEnsure(options: {
       return {
         ok: await provisionExplicitLocalModel({
           runtimeAvailable: options.runtimeAvailable,
+          captureActive: options.captureActive,
+          captureIdentity: options.captureIdentity,
+          localModelIdentity: options.localModelIdentity,
           readSettings: options.readSettings,
-          allowedProviders: options.allowedProviders,
           ensure: options.ensure,
           onReady: options.onReady
         })

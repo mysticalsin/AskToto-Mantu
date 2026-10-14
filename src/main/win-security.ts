@@ -17,7 +17,7 @@
 // Both shell out to built-in Windows tools (powershell / icacls); everything is a no-op off win32.
 
 import { execFileSync } from 'node:child_process'
-import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync, type Stats } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
 import { constants as fsConstants, lstat, open, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 // Via logger.ts, never `electron-log` directly — see the note on the same import in updater.ts.
@@ -270,11 +270,8 @@ export function trustedAdminManagedPath(): string | null {
  * isAdminManagedTrusted's platform gate). Returns null when absent, unreadable, untrusted, or the
  * path was swapped mid-check.
  */
-export function readTrustedAdminManaged(
-  path: string = adminManagedConfigPath(),
-  options: { freshAuthority?: boolean } = {}
-): string | null {
-  if (!options.freshAuthority && process.platform !== 'win32') {
+export function readTrustedAdminManaged(path: string = adminManagedConfigPath()): string | null {
+  if (process.platform !== 'win32') {
     try {
       return readFileSync(path, 'utf8')
     } catch {
@@ -292,15 +289,7 @@ export function readTrustedAdminManaged(
     const st = fstatSync(fd)
     if (!st.isFile()) return null
 
-    const trusted =
-      process.platform !== 'win32'
-        ? true
-        : options.freshAuthority
-          ? (() => {
-              const acl = readAcl(path)
-              return acl !== null && evaluateAclTrust(acl)
-            })()
-          : aclTrusted(path, st)
+    const trusted = aclTrusted(path, st)
     if (!trusted) {
       warnUntrusted(path)
       return null
@@ -319,34 +308,7 @@ export function readTrustedAdminManaged(
     }
     if (st2.dev !== st.dev || st2.ino !== st.ino) return null
 
-    if (!options.freshAuthority) return readFileSync(fd, 'utf8')
-    const maxBytes = MAX_TRUSTED_ADMIN_MANAGED_BYTES
-    if (!Number.isSafeInteger(st.size) || st.size < 0 || st.size > maxBytes) return null
-    const buffer = Buffer.alloc(st.size + 1)
-    let total = 0
-    while (total < buffer.length) {
-      const bytesRead = readSync(fd, buffer, total, buffer.length - total, null)
-      if (bytesRead === 0) break
-      total += bytesRead
-    }
-    const after = fstatSync(fd)
-    let pathAfter: ReturnType<typeof statSync>
-    try {
-      pathAfter = statSync(path)
-    } catch {
-      return null
-    }
-    if (
-      total > maxBytes ||
-      total !== st.size ||
-      after.dev !== st.dev ||
-      after.ino !== st.ino ||
-      after.size !== st.size ||
-      pathAfter.dev !== st.dev ||
-      pathAfter.ino !== st.ino
-    )
-      return null
-    return buffer.subarray(0, total).toString('utf8')
+    return readFileSync(fd, 'utf8')
   } catch {
     return null
   } finally {
@@ -369,11 +331,17 @@ function sameTrustedAdminSnapshot(left: Stats, right: Stats): boolean {
   )
 }
 
-/** Read exact bytes from one regular, non-symlink admin-policy file, failing closed on any race. */
-export async function readTrustedAdminManagedBytes(
-  path: string = adminManagedConfigPath(),
-  maxBytes = MAX_TRUSTED_ADMIN_MANAGED_BYTES
-): Promise<Uint8Array | null> {
+export type ManagedPolicyAuthorityRead =
+  | { status: 'absent' }
+  | { status: 'invalid' }
+  | { status: 'present'; bytes: Uint8Array }
+
+/** Read bounded regular-file bytes from one verified descriptor; optionally require machine ACL trust. */
+export async function readManagedPolicyAuthorityFile(
+  path: string,
+  maxBytes = MAX_TRUSTED_ADMIN_MANAGED_BYTES,
+  requireAdminTrust = false
+): Promise<ManagedPolicyAuthorityRead> {
   if (
     typeof path !== 'string' ||
     path.length === 0 ||
@@ -381,13 +349,13 @@ export async function readTrustedAdminManagedBytes(
     maxBytes < 0 ||
     maxBytes > MAX_TRUSTED_ADMIN_MANAGED_BYTES
   )
-    return null
+    return { status: 'invalid' }
 
   let beforeOpen: Stats
   try {
     beforeOpen = await lstat(path)
-  } catch {
-    return null
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { status: 'absent' } : { status: 'invalid' }
   }
   if (
     beforeOpen.isSymbolicLink() ||
@@ -396,7 +364,7 @@ export async function readTrustedAdminManagedBytes(
     beforeOpen.size < 0 ||
     beforeOpen.size > maxBytes
   )
-    return null
+    return { status: 'invalid' }
 
   let handle: FileHandle
   try {
@@ -407,26 +375,27 @@ export async function readTrustedAdminManagedBytes(
       (fsConstants.O_NONBLOCK ?? 0)
     handle = await open(path, flags)
   } catch {
-    return null
+    return { status: 'invalid' }
   }
 
   try {
     const opened = await handle.stat()
     const pathAtOpen = await lstat(path)
-    if (!sameTrustedAdminSnapshot(beforeOpen, opened) || !sameTrustedAdminSnapshot(beforeOpen, pathAtOpen)) return null
+    if (!sameTrustedAdminSnapshot(beforeOpen, opened) || !sameTrustedAdminSnapshot(beforeOpen, pathAtOpen))
+      return { status: 'invalid' }
 
-    if (process.platform === 'win32') {
+    if (requireAdminTrust && process.platform === 'win32') {
       // Raw bytes establish fresh policy authority; the legacy path-only helpers keep their short ACL memo.
       const acl = readAcl(path)
       const trusted = acl !== null && evaluateAclTrust(acl)
       if (!trusted) {
         warnUntrusted(path)
-        return null
+        return { status: 'invalid' }
       }
       const pathAfterAcl = await lstat(path)
       const fdAfterAcl = await handle.stat()
       if (!sameTrustedAdminSnapshot(beforeOpen, pathAfterAcl) || !sameTrustedAdminSnapshot(beforeOpen, fdAfterAcl))
-        return null
+        return { status: 'invalid' }
     }
 
     // One extra byte detects growth beyond the caller's cap without allocating according to file size.
@@ -438,7 +407,7 @@ export async function readTrustedAdminManagedBytes(
       if (bytesRead === 0) break
       total += bytesRead
     }
-    if (total > maxBytes) return null
+    if (total > maxBytes) return { status: 'invalid' }
 
     const afterRead = await handle.stat()
     const pathAfterRead = await lstat(path)
@@ -447,11 +416,11 @@ export async function readTrustedAdminManagedBytes(
       !sameTrustedAdminSnapshot(beforeOpen, pathAfterRead) ||
       total !== afterRead.size
     )
-      return null
+      return { status: 'invalid' }
 
-    return Buffer.from(buffer.subarray(0, total))
+    return { status: 'present', bytes: Buffer.from(buffer.subarray(0, total)) }
   } catch {
-    return null
+    return { status: 'invalid' }
   } finally {
     try {
       await handle.close()
@@ -459,6 +428,15 @@ export async function readTrustedAdminManagedBytes(
       // A close failure cannot make an otherwise untrusted read safe to return.
     }
   }
+}
+
+/** Read exact bytes from one regular, non-symlink admin-policy file, failing closed on any race. */
+export async function readTrustedAdminManagedBytes(
+  path: string = adminManagedConfigPath(),
+  maxBytes = MAX_TRUSTED_ADMIN_MANAGED_BYTES
+): Promise<Uint8Array | null> {
+  const read = await readManagedPolicyAuthorityFile(path, maxBytes, true)
+  return read.status === 'present' ? read.bytes : null
 }
 
 /** Apply an owner-only DACL (current user + SYSTEM, inheritance removed) to a file on win32, where

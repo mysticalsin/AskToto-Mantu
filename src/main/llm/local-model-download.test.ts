@@ -232,6 +232,14 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     rmSync(userData, { recursive: true, force: true })
   })
 
+  it('does not start a weight request after the fresh authority check is revoked', async () => {
+    const authorized = vi.fn(async () => false)
+    await expect(ensureLocalModel('qwen3.5-0.8b', authorized)).resolves.toBe(false)
+    expect(authorized).toHaveBeenCalledOnce()
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(localModelDownloadState().status).toBe('idle')
+  })
+
   it('MQA-185 — fetches the weights over Electron net.fetch so a corporate proxy can carry them', async () => {
     mockFetch.mockImplementation((url: string) =>
       Promise.resolve(

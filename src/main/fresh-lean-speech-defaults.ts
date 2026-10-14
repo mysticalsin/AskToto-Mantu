@@ -4,6 +4,8 @@ import { BaseSettingsSchema, type Settings } from '@shared/ipc'
 import { BrokerSpeechSettingsSchema, DEFAULT_BROKER_SPEECH_SETTINGS } from '@shared/broker-speech-settings'
 import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
 import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
+import type { SettingsPolicyAuthoritySnapshot } from './settings-observation'
+import type { ManagedPolicyAuthorityRead } from './win-security'
 import { isProfileRecoveryFileName } from './profile-recovery-files'
 
 type PackageProfile = 'full' | 'lean'
@@ -28,6 +30,32 @@ const FRESH_LEAN_BROKER_DEFAULT = Object.freeze({
   engine: 'cloudflare-nova3' as const
 })
 
+type SettingsShape = Record<string, { safeParse: (value: unknown) => { success: boolean; data?: unknown } }>
+
+/** Keep only individually valid persisted settings keys while malformed managed policy is denied separately. */
+export function validSettingsKeysOnly(obj: Record<string, unknown>): Record<string, unknown> {
+  const shape = BaseSettingsSchema.shape as unknown as SettingsShape
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(obj)) {
+    if (!shape[key] || value === undefined) continue
+    const parsed = shape[key].safeParse(value)
+    if (parsed.success) out[key] = parsed.data
+  }
+  return out
+}
+
+/** Setup is complete only after a typed onboarding bit or a durable completion timestamp. */
+export function isSettingsSetupComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
+  const userDone =
+    'onboardingDone' in user ? BaseSettingsSchema.shape.onboardingDone.safeParse(user.onboardingDone) : null
+  const managedDone =
+    'onboardingDone' in managed ? BaseSettingsSchema.shape.onboardingDone.safeParse(managed.onboardingDone) : null
+  return (
+    (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
+    (typeof user.onboardingDoneAt === 'number' && Number.isFinite(user.onboardingDoneAt) && user.onboardingDoneAt > 0)
+  )
+}
+
 async function doesNotExist(path: string): Promise<boolean> {
   try {
     await lstat(path)
@@ -43,7 +71,7 @@ export async function captureFreshProfileBoundary(userDataRoot: string): Promise
   for (const name of siblingPaths) if (!(await doesNotExist(join(userDataRoot, name)))) return false
   try {
     const entries = await readdir(userDataRoot, { withFileTypes: true })
-    return !entries.some((entry) => entry.isFile() && isProfileRecoveryFileName(entry.name))
+    return !entries.some((entry) => isProfileRecoveryFileName(entry.name))
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT'
   }
@@ -110,9 +138,18 @@ export class ManagedPolicyAuthority {
     this.adminReadable = readable
   }
 
-  readAdminContent(readContent: () => string | null, pathState: 'absent' | 'present' | 'unknown'): string | null {
+  readAdminContent(
+    readContent: () => string | null,
+    getPathState: () => 'absent' | 'present' | 'unknown'
+  ): string | null {
     const content = readContent()
-    this.adminReadable = pathState === 'absent' || (pathState === 'present' && content !== null)
+    const pathState = getPathState()
+    if (
+      pathState === 'unknown' ||
+      (pathState === 'present' && content === null) ||
+      (pathState === 'absent' && content !== null)
+    )
+      this.adminReadable = false
     return content
   }
 
@@ -225,8 +262,43 @@ export class FreshLeanSpeechAuthority {
   private projected = false
   private selectionRevision = 0
   private policyRevision = 0
+  private localModelRevision = 0
   private selection: string | null = null
   private policy: string | null = null
+  private localModel: string | null = null
+  private authorityQueue: Promise<void> = Promise.resolve()
+
+  readSettingsAuthorityBoundary(options: {
+    readFiles: () => Promise<{ user: ManagedPolicyAuthorityRead; admin: ManagedPolicyAuthorityRead }>
+    setReads: (user: ManagedPolicyAuthorityRead | null, admin: ManagedPolicyAuthorityRead | null) => void
+    resetCaches: () => void
+    readSettings: () => Settings
+    readPolicy: () => {
+      allowedProviders: string[] | null
+      localSpeechPack: LocalSpeechPackPolicy | null
+      lockedKeys: string[]
+    }
+    readable: () => boolean
+    epoch: () => number
+  }): Promise<SettingsPolicyAuthoritySnapshot> {
+    const result = this.authorityQueue.then(async () => {
+      const reads = await options.readFiles()
+      options.setReads(reads.user, reads.admin)
+      options.resetCaches()
+      try {
+        const settings = options.readSettings()
+        const policy = options.readPolicy()
+        return { settings, readable: options.readable(), epoch: options.epoch(), ...policy }
+      } finally {
+        options.setReads(null, null)
+      }
+    })
+    this.authorityQueue = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
 
   async configure(
     compiledProfile: PackageProfile,
@@ -288,8 +360,9 @@ export class FreshLeanSpeechAuthority {
     next: Record<string, unknown>,
     previous: Record<string, unknown>,
     allowed: Record<string, unknown>,
-    managed: Record<string, unknown>,
+    managedKeys: readonly string[],
     locked: readonly string[],
+    authorityReadable: boolean,
     currentSettings: () => Settings
   ): void {
     if (!this.profileWasAbsent || Object.keys(previous).length !== 0) return
@@ -297,22 +370,28 @@ export class FreshLeanSpeechAuthority {
     const initial = currentSettings()
     if (
       !this.projected ||
+      !authorityReadable ||
+      managedKeys.length > 0 ||
       Object.hasOwn(previous, 'brokerSpeech') ||
       Object.hasOwn(previous, 'cloudSttProvider') ||
-      Object.hasOwn(managed, 'brokerSpeech') ||
-      Object.hasOwn(managed, 'cloudSttProvider') ||
       locked.includes('brokerSpeech') ||
-      locked.includes('cloudSttProvider')
+      locked.includes('cloudSttProvider') ||
+      initial.cloudSttProvider !== 'unconfigured' ||
+      initial.enterpriseLive.managed !== false ||
+      initial.enterpriseLive.inferenceMode !== 'legacy' ||
+      initial.enterpriseLive.summaryOnly !== false
     )
       return
     next.brokerSpeech = initial.brokerSpeech
   }
 
-  observe(selection: string, policy: string): void {
+  observe(selection: string, policy: string, localModel: string): void {
     if (this.selection !== null && this.selection !== selection) this.selectionRevision += 1
     if (this.policy !== null && this.policy !== policy) this.policyRevision += 1
+    if (this.localModel !== null && this.localModel !== localModel) this.localModelRevision += 1
     this.selection = selection
     this.policy = policy
+    this.localModel = localModel
   }
 
   observePolicy(
@@ -330,7 +409,8 @@ export class FreshLeanSpeechAuthority {
         enterpriseLive: settings.enterpriseLive,
         localSpeechPackLocked: lockedKeys.includes('localSpeechPack'),
         readable
-      })
+      }),
+      settings.localLlm.modelId
     )
   }
 
@@ -353,9 +433,26 @@ export class FreshLeanSpeechAuthority {
     return `policy:${this.policyRevision}`
   }
 
-  identityAfterRead(readSettings: () => Settings, identity: 'selection' | 'policy'): string {
+  localModelIdentity(): string {
+    return `local-model:${this.localModelRevision}`
+  }
+
+  identityAfterRead(readSettings: () => Settings, identity: 'selection' | 'policy' | 'localModel'): string {
     readSettings()
-    return identity === 'selection' ? this.selectionIdentity() : this.policyIdentity()
+    if (identity === 'selection') return this.selectionIdentity()
+    return identity === 'policy' ? this.policyIdentity() : this.localModelIdentity()
+  }
+
+  identityReaders(readSettings: () => Settings): {
+    selection: () => string
+    policy: () => string
+    localModel: () => string
+  } {
+    return {
+      selection: () => this.identityAfterRead(readSettings, 'selection'),
+      policy: () => this.identityAfterRead(readSettings, 'policy'),
+      localModel: () => this.identityAfterRead(readSettings, 'localModel')
+    }
   }
 
   readBoundary<T>(resetCaches: () => void, readSettings: () => T, setFresh: (fresh: boolean) => void): T {
@@ -382,5 +479,7 @@ export class FreshLeanSpeechAuthority {
     this.policyRevision = 0
     this.selection = null
     this.policy = null
+    this.localModel = null
+    this.authorityQueue = Promise.resolve()
   }
 }
