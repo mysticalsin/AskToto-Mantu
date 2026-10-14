@@ -276,6 +276,53 @@ describe('atomic streamed saved write', () => {
     expect(await readFile(temp, 'utf8')).toBe(mutation === 'append' ? 'new!' : 'bad')
   })
 
+  it.each([
+    'append',
+    'same-size overwrite',
+    'replacement'
+  ] as const)('revalidates temp ownership after async pre-replace admission (%s)', async (mutation) => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    const temp = `${target}.${'ab'.repeat(12)}.tmp`
+    await writeFile(target, 'old')
+    let markPreparing!: () => void
+    let releasePrepare!: () => void
+    const preparing = new Promise<void>((resolve) => {
+      markPreparing = resolve
+    })
+    const prepareGate = new Promise<void>((resolve) => {
+      releasePrepare = resolve
+    })
+
+    const pending = atomicSavedWriteStream(target, byteChunks('new'), {
+      ...bounds,
+      prepareBeforeReplace: async () => {
+        markPreparing()
+        await prepareGate
+      }
+    })
+    await preparing
+    if (mutation === 'append') appendFileSync(temp, '!')
+    else if (mutation === 'same-size overwrite') {
+      const descriptor = openSync(temp, 'r+')
+      try {
+        writeSync(descriptor, Buffer.from('bad'), 0, 3, 0)
+      } finally {
+        closeSync(descriptor)
+      }
+    } else {
+      unlinkSync(temp)
+      writeFileSync(temp, 'foreign replacement')
+    }
+    releasePrepare()
+
+    await expect(pending).rejects.toMatchObject({ name: 'TEMP_OWNERSHIP' })
+    expect(await readFile(target, 'utf8')).toBe('old')
+    expect(await readFile(temp, 'utf8')).toBe(
+      mutation === 'append' ? 'new!' : mutation === 'same-size overwrite' ? 'bad' : 'foreign replacement'
+    )
+  })
+
   it('rejects asynchronous owner checks before any replacement', async () => {
     const root = await directory()
     const target = join(root, 'meeting.md')

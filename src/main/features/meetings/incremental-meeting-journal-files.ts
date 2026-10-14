@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { mkdir, open, realpath, stat } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { StorageGateway } from '../../infra/storage/gateway'
 import { atomicSavedWriteStream } from '../../infra/storage/atomic-saved-write'
 import { withIncrementalMeetingMutation } from './incremental-meeting-mutation-lock'
+import { createBoundedJournalFileReader } from './incremental-meeting-journal-file-read'
+import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journal-root'
 import { consumeIncrementalRecordReceipt } from './incremental-record-receipt'
 import {
   SHA256,
@@ -76,7 +78,6 @@ export type IncrementalJournalPageResult =
   | { status: 'ok'; nextRevision: number; durableRevision: number; complete: boolean }
   | { status: 'stale-owner' | 'unavailable' }
 
-type BoundedFileRead = { status: 'ok'; bytes: Buffer } | { status: 'missing' | 'unavailable' }
 type BoundedManifestRead = { status: 'ok'; core: ManifestCore; bytes: Buffer } | { status: 'missing' | 'unavailable' }
 
 function activeCheck(base: () => boolean, request: () => boolean): () => boolean {
@@ -100,7 +101,8 @@ export function createIncrementalMeetingJournalFileStorage(
   const streamFile = gateway?.stream.bind(gateway)
   const list = gateway?.list.bind(gateway)
   const key = exactKey(options.key)
-  const root = resolve(rootInput)
+  const rootInputPath = resolve(rootInput)
+  let root = rootInputPath
   if (
     !key ||
     !UUID.test(meetingId) ||
@@ -126,65 +128,32 @@ export function createIncrementalMeetingJournalFileStorage(
     key?.fill(0)
     return undefined
   }
-  const mutationKey = `${root}\0${meetingId}`
   const manifestName = 'manifest.v1'
-  const manifestPath = join(root, manifestName)
+  let manifestPath = join(root, manifestName)
   let disposed = false
   const baseCurrent = (): boolean => !disposed && safeCurrent(isCurrent)
   const recordName = (hash: string): string => `record-${hash}.v1`
   const identityIndexName = (hash: string): string => `identity-${hash}.v1`
   const indexName = (revision: number): string => `index-${String(revision).padStart(12, '0')}.v1`
   const pathFor = (name: string): string => join(root, name)
-
-  async function readBytes(name: string, maxBytes: number, requestCurrent: () => boolean): Promise<BoundedFileRead> {
-    if (!baseCurrent() || !requestCurrent()) return { status: 'unavailable' }
-    let classification: Awaited<ReturnType<StorageGateway['classify']>>
-    try {
-      classification = await classify!([name])
-    } catch {
-      return { status: 'unavailable' }
-    }
-    if (!baseCurrent() || !requestCurrent()) return { status: 'unavailable' }
-    const file = classification.get(name)
-    if (!file) return { status: 'unavailable' }
-    if (file.status === 'missing') return { status: 'missing' }
-    if (file.status !== 'ok' || file.isSymlink || !file.isRegular || file.version.size > maxBytes)
-      return { status: 'unavailable' }
-    const parts: Uint8Array[] = []
-    let collectedBytes = 0
-    let stream: Awaited<ReturnType<StorageGateway['stream']>>
-    try {
-      stream = await streamFile!(
-        name,
-        (chunk) => {
-          if (!baseCurrent() || !requestCurrent()) throw new Error('STALE_OWNER')
-          const length = chunk.byteLength
-          if (!Number.isSafeInteger(length) || length <= 0 || collectedBytes > maxBytes - length)
-            throw new Error('READ_LIMIT')
-          const owned = ownedBytes(chunk)
-          collectedBytes += length
-          parts.push(owned)
-        },
-        { maxBytes, maxChunkBytes: Math.min(maxChunkBytes, maxBytes) }
-      )
-    } catch {
-      for (const part of parts) part.fill(0)
-      return { status: 'unavailable' }
-    }
-    if (
-      !baseCurrent() ||
-      !requestCurrent() ||
-      stream.status !== 'ok' ||
-      stream.bytesRead !== collectedBytes ||
-      collectedBytes > maxBytes
-    ) {
-      for (const part of parts) part.fill(0)
-      return stream.status === 'missing' ? { status: 'missing' } : { status: 'unavailable' }
-    }
-    const bytes = Buffer.concat(parts, collectedBytes)
-    for (const part of parts) part.fill(0)
-    return { status: 'ok', bytes }
+  const resolveCurrentRoot = createIncrementalMeetingJournalRoot(rootInputPath, baseCurrent)
+  async function canonicalMutationKey(): Promise<string | undefined> {
+    const path = await resolveCurrentRoot()
+    if (!path) return undefined
+    root = path
+    manifestPath = join(root, manifestName)
+    return `${root}\0${meetingId}`
   }
+  async function rootAligned(): Promise<boolean> {
+    return (await resolveCurrentRoot()) === root && baseCurrent()
+  }
+  const readBytes = createBoundedJournalFileReader({
+    baseCurrent,
+    rootAligned,
+    maxChunkBytes,
+    classify: classify!,
+    stream: streamFile!
+  })
 
   async function readManifest(requestCurrent: () => boolean): Promise<BoundedManifestRead> {
     const read = await readBytes(manifestName, 16_384, requestCurrent)
@@ -203,7 +172,7 @@ export function createIncrementalMeetingJournalFileStorage(
     requestCurrent: () => boolean,
     maxBytes: number
   ): Promise<boolean> {
-    if (!baseCurrent() || !requestCurrent() || bytes.byteLength > maxBytes) {
+    if (!(await rootAligned()) || !baseCurrent() || !requestCurrent() || bytes.byteLength > maxBytes) {
       bytes.fill(0)
       return false
     }
@@ -228,9 +197,12 @@ export function createIncrementalMeetingJournalFileStorage(
         },
         beforeReplace: () => {
           if (!baseCurrent() || !requestCurrent()) throw new Error('STALE_OWNER')
+        },
+        prepareBeforeReplace: async () => {
+          if (!(await rootAligned()) || !baseCurrent() || !requestCurrent()) throw new Error('STALE_OWNER')
         }
       })
-      return baseCurrent() && requestCurrent()
+      return (await rootAligned()) && baseCurrent() && requestCurrent()
     } catch {
       return false
     } finally {
@@ -243,19 +215,17 @@ export function createIncrementalMeetingJournalFileStorage(
       const requestCurrent = baseCurrent
       if (!requestCurrent()) return { status: 'unavailable' }
       try {
-        await mkdir(root, { recursive: true, mode: 0o700 })
-        if (!baseCurrent()) return { status: 'unavailable' }
-        const rootPath = await realpath(root)
-        if (!baseCurrent() || resolve(rootPath) !== root || !(await stat(rootPath)).isDirectory())
-          return { status: 'unavailable' }
+        if (!(await canonicalMutationKey()) || !baseCurrent()) return { status: 'unavailable' }
         const current = await readManifest(requestCurrent)
         if (current.status === 'ok') {
           current.bytes.fill(0)
           return { status: 'ok', snapshot: snapshotFrom(current.core) }
         }
         if (current.status !== 'missing') return { status: 'unavailable' }
+        if (!(await rootAligned())) return { status: 'unavailable' }
         const entries = await list!('.')
-        if (!baseCurrent() || entries.status !== 'ok' || entries.names.length !== 0) return { status: 'unavailable' }
+        if (!(await rootAligned()) || entries.status !== 'ok' || entries.names.length !== 0)
+          return { status: 'unavailable' }
         const core: ManifestCore = {
           version: 1,
           meetingId,
@@ -277,15 +247,16 @@ export function createIncrementalMeetingJournalFileStorage(
         if (!baseCurrent()) return { status: 'unavailable' }
         const created = await open(manifestPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
         try {
-          if (!baseCurrent()) return { status: 'unavailable' }
+          if (!(await rootAligned())) return { status: 'unavailable' }
           await created.writeFile(encoded)
-          if (!baseCurrent()) return { status: 'unavailable' }
+          if (!(await rootAligned())) return { status: 'unavailable' }
           await created.sync()
+          if (!(await rootAligned())) return { status: 'unavailable' }
         } finally {
           await created.close()
           encoded.fill(0)
         }
-        return baseCurrent() ? { status: 'ok', snapshot: snapshotFrom(core) } : { status: 'unavailable' }
+        return (await rootAligned()) ? { status: 'ok', snapshot: snapshotFrom(core) } : { status: 'unavailable' }
       } catch {
         return { status: 'unavailable' }
       }
@@ -773,12 +744,16 @@ export function createIncrementalMeetingJournalFileStorage(
   return {
     ...storage,
     async initialize() {
-      const locked = await withIncrementalMeetingMutation(mutationKey, baseCurrent, () => storage.initialize())
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return { status: 'unavailable' }
+      const locked = await withIncrementalMeetingMutation(canonicalKey, baseCurrent, () => storage.initialize())
       return locked.status === 'ok' ? locked.value : { status: 'unavailable' }
     },
     async commitAppend(request, isCurrent) {
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return { status: 'unavailable' }
       const locked = await withIncrementalMeetingMutation(
-        mutationKey,
+        canonicalKey,
         () => baseCurrent() && safeCurrent(isCurrent),
         () => storage.commitAppend(request, isCurrent)
       )
@@ -787,8 +762,10 @@ export function createIncrementalMeetingJournalFileStorage(
         : { status: locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable' }
     },
     async transitionState(state, isCurrent) {
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return 'unavailable'
       const locked = await withIncrementalMeetingMutation(
-        mutationKey,
+        canonicalKey,
         () => baseCurrent() && safeCurrent(isCurrent),
         () => storage.transitionState(state, isCurrent)
       )

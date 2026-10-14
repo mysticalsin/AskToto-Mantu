@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import { canonicalizeIncrementalMeetingRecord } from './incremental-record-canonical'
 import { createStorageGateway } from '../../infra/storage/gateway'
@@ -15,6 +15,9 @@ import { createIncrementalMeetingJournalFileStorage } from './incremental-meetin
 import { issueIncrementalRecordReceipt } from './incremental-record-receipt'
 import { encodeIndex, identityHash } from './incremental-meeting-journal-format'
 import type { StorageGateway } from '../../infra/storage/gateway'
+import { atomicSavedWriteStream } from '../../infra/storage/atomic-saved-write'
+import { createBoundedJournalFileReader } from './incremental-meeting-journal-file-read'
+import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journal-root'
 
 const meetingId = '64d5a603-0b18-4da5-8a3f-4a42c9d22031'
 const recordJson = new TextEncoder().encode(
@@ -97,7 +100,7 @@ describe('encrypted incremental meeting journal files', () => {
       status: 'ok',
       snapshot: { state: 'active', acceptedRevision: 0, durableRevision: 0, recordCount: 0 }
     })
-    await expect(appender(first).append(recordJson, 0)).resolves.toMatchObject({
+    await expect(appender(first).append(recordJson, 0)).resolves.toEqual({
       status: 'durable',
       revision: 1,
       duplicate: false
@@ -170,6 +173,151 @@ describe('encrypted incremental meeting journal files', () => {
     await expect(stale.initialize()).resolves.toEqual({ status: 'unavailable' })
     expect(await readdir(root)).toEqual([])
     stale.dispose()
+  })
+
+  it('canonicalizes valid parent aliases before sharing the per-meeting initialization lock', async () => {
+    const physicalParent = await mkdtemp(join(tmpdir(), 'metis-incremental-root-'))
+    roots.push(physicalParent)
+    const aliasParent = join(physicalParent, 'alias')
+    await symlink(physicalParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
+    const aliased = await store(join(aliasParent, 'journal'))
+    const canonical = await store(join(physicalParent, 'journal'))
+
+    const [aliasedResult, canonicalResult] = await Promise.all([aliased.initialize(), canonical.initialize()])
+    expect(aliasedResult).toMatchObject({ status: 'ok' })
+    expect(canonicalResult).toMatchObject({ status: 'ok' })
+    expect(await readdir(join(physicalParent, 'journal'))).toEqual(['manifest.v1'])
+    aliased.dispose()
+    canonical.dispose()
+  })
+
+  it('rejects a symlink as the final storage-root component', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'metis-incremental-root-link-'))
+    roots.push(parent)
+    const target = join(parent, 'target')
+    const alias = join(parent, 'alias')
+    await mkdir(target)
+    await symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    const linked = await store(alias)
+
+    await expect(linked.initialize()).resolves.toEqual({ status: 'unavailable' })
+    expect(await readdir(target)).toEqual([])
+    linked.dispose()
+  })
+
+  it('refuses reads after a valid parent alias is retargeted', async () => {
+    const originalParent = await mkdtemp(join(tmpdir(), 'metis-incremental-original-'))
+    const replacementParent = await mkdtemp(join(tmpdir(), 'metis-incremental-replacement-'))
+    roots.push(originalParent, replacementParent)
+    const aliasParent = join(originalParent, 'alias')
+    await symlink(originalParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
+    const aliasedRoot = join(aliasParent, 'journal')
+    const gateway = createStorageGateway({ root: () => aliasedRoot, detector: detector() })
+    const storage = await store(aliasedRoot, () => true, key, gateway)
+    await expect(storage.initialize()).resolves.toMatchObject({ status: 'ok' })
+    const classify = vi.spyOn(gateway, 'classify')
+    await rm(aliasParent, { force: true })
+    await symlink(replacementParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(storage.readSnapshot(meetingId, () => true)).resolves.toEqual({ status: 'unavailable' })
+    expect(classify).not.toHaveBeenCalled()
+    expect(await readdir(replacementParent)).toEqual([])
+    storage.dispose()
+  })
+
+  it('refuses reads after the canonical final root is replaced', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'metis-incremental-replaced-root-'))
+    roots.push(parent)
+    const root = join(parent, 'journal')
+    const replacement = join(parent, 'replacement')
+    const gateway = createStorageGateway({ root: () => root, detector: detector() })
+    const storage = await store(root, () => true, key, gateway)
+    await expect(storage.initialize()).resolves.toMatchObject({ status: 'ok' })
+    const classify = vi.spyOn(gateway, 'classify')
+    await mkdir(replacement)
+    await rm(root, { recursive: true })
+    await symlink(replacement, root, process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(storage.readSnapshot(meetingId, () => true)).resolves.toEqual({ status: 'unavailable' })
+    expect(classify).not.toHaveBeenCalled()
+    expect(await readdir(replacement)).toEqual([])
+    storage.dispose()
+  })
+
+  it('rechecks request authority after awaited root metadata before classifying a read', async () => {
+    let markRootCheck!: () => void
+    let releaseRootCheck!: (value: boolean) => void
+    const rootCheckStarted = new Promise<void>((resolve) => {
+      markRootCheck = resolve
+    })
+    const rootCheck = new Promise<boolean>((resolve) => {
+      releaseRootCheck = resolve
+    })
+    const classify = vi.fn(async () => new Map())
+    const stream = vi.fn(async () => ({ status: 'missing' as const }))
+    const reader = createBoundedJournalFileReader({
+      baseCurrent: () => true,
+      rootAligned: () => {
+        markRootCheck()
+        return rootCheck
+      },
+      maxChunkBytes: 8,
+      classify: classify as unknown as StorageGateway['classify'],
+      stream: stream as unknown as StorageGateway['stream']
+    })
+    let requestCurrent = true
+    const read = reader('manifest.v1', 64, () => requestCurrent)
+    await rootCheckStarted
+    requestCurrent = false
+    releaseRootCheck(true)
+
+    await expect(read).resolves.toEqual({ status: 'unavailable' })
+    expect(classify).not.toHaveBeenCalled()
+    expect(stream).not.toHaveBeenCalled()
+  })
+
+  it('does not replace under a canonical root swapped during the async pre-replace check', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'metis-incremental-write-root-'))
+    roots.push(parent)
+    const root = join(parent, 'journal')
+    const movedRoot = join(parent, 'journal-before-swap')
+    const replacement = join(parent, 'replacement')
+    await mkdir(root)
+    await mkdir(replacement)
+    const target = join(root, 'manifest.v1')
+    await writeFile(target, 'original')
+    const resolveRoot = createIncrementalMeetingJournalRoot(root, () => true)
+    expect(await resolveRoot()).toBe(root)
+
+    let markPreparing!: () => void
+    let releasePrepare!: () => void
+    const preparing = new Promise<void>((resolve) => {
+      markPreparing = resolve
+    })
+    const prepareGate = new Promise<void>((resolve) => {
+      releasePrepare = resolve
+    })
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield Uint8Array.from(Buffer.from('replacement'))
+    }
+    const write = atomicSavedWriteStream(target, chunks(), {
+      maxBytes: 32,
+      maxChunkBytes: 16,
+      maxChunks: 1,
+      prepareBeforeReplace: async () => {
+        markPreparing()
+        await prepareGate
+        if (!(await resolveRoot())) throw new Error('ROOT_CHANGED')
+      }
+    })
+    await preparing
+    await rename(root, movedRoot)
+    await symlink(replacement, root, process.platform === 'win32' ? 'junction' : 'dir')
+    releasePrepare()
+
+    await expect(write).rejects.toThrow('ROOT_CHANGED')
+    expect(await readFile(join(movedRoot, 'manifest.v1'), 'utf8')).toBe('original')
+    expect(await readdir(replacement)).toEqual([])
   })
 
   it('serializes two adapters for the same meeting through the durable frontier CAS', async () => {

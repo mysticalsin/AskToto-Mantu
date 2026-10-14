@@ -11,6 +11,8 @@ export interface AtomicSavedWriteStreamBounds {
   /** Synchronous main-owned admission checks, never a renderer callback. */
   beforeChunk?: () => void
   beforeReplace?: () => void
+  /** Async physical-root admission after temp sync and immediately before each rename attempt. */
+  prepareBeforeReplace?: () => Promise<void>
 }
 
 export interface AtomicSavedWriteStreamResult {
@@ -137,7 +139,8 @@ export async function atomicSavedWriteStream(
     maxChunkBytes: bounds.maxChunkBytes,
     maxChunks: bounds.maxChunks,
     beforeChunk: bounds.beforeChunk,
-    beforeReplace: bounds.beforeReplace
+    beforeReplace: bounds.beforeReplace,
+    prepareBeforeReplace: bounds.prepareBeforeReplace
   }
   if (!validBounds(limits)) throw invalidLimit()
   const tmp = `${file}.${randomBytes(12).toString('hex')}.tmp`
@@ -207,6 +210,12 @@ export async function atomicSavedWriteStream(
     handle = undefined
     for (let attempt = 0; ; attempt++) {
       checkAdmission(limits.beforeChunk)
+      if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
+        const error = new Error('Streamed saved write lost ownership of its temporary file.')
+        error.name = 'TEMP_OWNERSHIP'
+        throw error
+      }
+      await limits.prepareBeforeReplace?.()
       if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
         const error = new Error('Streamed saved write lost ownership of its temporary file.')
         error.name = 'TEMP_OWNERSHIP'
