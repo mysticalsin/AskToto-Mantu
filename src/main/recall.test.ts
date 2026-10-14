@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, existsS
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
-import { saveMeeting, isEncryptedFile } from './transcripts'
+import { saveMeeting, saveNote, isEncryptedFile } from './transcripts'
 import { listMeetings, deleteMeeting, recallRead, searchMeetings, searchMeetingsLatest, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap, openExplicitly, HYDRATION_BUSY_MSG, HYDRATION_FAILED_MSG } from './recall'
 import { meetingOpenTarget } from './history-actions'
 import type { Settings, SaveMeeting } from '@shared/ipc'
@@ -110,6 +110,49 @@ describe('recall — language tags round-trip through save → recallRead', () =
     // The exact rewrite the Speaker Intelligence backfill performs: formatTranscript over reparsed lines.
     const { formatTranscript } = await import('./transcripts')
     expect(formatTranscript(r.lines ?? [])).toContain('_[conversation switches to English]_')
+  })
+})
+
+describe('recall — saved Q&A notes reopen through recallRead', () => {
+  let folder: string
+
+  beforeEach(() => {
+    useStorageForTests()
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-note-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('returns the exact saved note title, question and answer without listing it as a meeting', async () => {
+    const savedNote = {
+      title: 'Synthetic restart note',
+      mode: 'general',
+      question: 'Synthetic question?\nSecond line.',
+      answer: 'Synthetic answer.\nFollow-up line.'
+    }
+    const file = await saveNote(testSettings, savedNote)
+    const read = await recallRead(basename(file))
+
+    expect(read).toMatchObject({ ok: true, kind: 'note', ...savedNote })
+    expect(await listMeetings()).toEqual([])
+  })
+
+  it('fails closed when the note text repeats a structural answer heading', async () => {
+    const file = await saveNote(testSettings, {
+      title: 'Synthetic ambiguous note',
+      mode: 'general',
+      question: 'Question text\n\n## Answer\n\nQuestion continuation',
+      answer: 'Synthetic answer.'
+    })
+
+    await expect(recallRead(basename(file))).resolves.toMatchObject({
+      ok: false,
+      error: 'This saved note could not be read.'
+    })
   })
 })
 

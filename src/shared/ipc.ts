@@ -2048,12 +2048,16 @@ export const RecallBackfillSpeakersPayloadSchema = z.object({
 })
 export type RecallBackfillSpeakersPayload = z.infer<typeof RecallBackfillSpeakersPayloadSchema>
 
-/** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
+/** Result of reading a saved meeting or quick note back through the explicit History reader. */
 export interface RecallReadResult {
   ok: boolean
   error?: string
+  /** `note` is returned only for a saved Q&A note; these fields are absent on meeting reads. */
+  kind?: 'meeting' | 'note'
   title?: string
   mode?: string
+  question?: string
+  answer?: string
   startedAt?: number
   durationMs?: number
   recap?: string
