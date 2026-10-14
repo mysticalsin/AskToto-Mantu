@@ -23,7 +23,7 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path", "bytes", "sha256", "receipt"],
+          "required": ["path", "bytes", "sha256", "source", "receipt"],
           "properties": {
             "path": {
               "const": "runtime-trust/sigstore-trusted-root.json"
@@ -35,6 +35,9 @@
             },
             "sha256": {
               "$ref": "#/$defs/sha256"
+            },
+            "source": {
+              "const": "https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
             },
             "receipt": {
               "type": "object",

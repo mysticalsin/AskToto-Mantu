@@ -6,6 +6,7 @@ import { createGzip } from 'node:zlib'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import Ajv2020 from 'ajv/dist/2020.js'
 
 const MAX_FILES = 100_000
 const MAX_DIRECTORIES = 100_000
@@ -79,7 +80,9 @@ function validMetadata(value) {
     return false
   if (
     value.schemaVersion !== 1 ||
+    typeof value.componentId !== 'string' ||
     !/^[a-z][a-z0-9.-]{0,79}$/.test(value.componentId) ||
+    typeof value.artifactId !== 'string' ||
     !/^[a-z][a-z0-9.-]{0,79}$/.test(value.artifactId)
   )
     return false
@@ -96,9 +99,13 @@ function validMetadata(value) {
       return false
     if (
       value.runtime.hostProtocol !== 1 ||
+      typeof value.runtime.electronVersion !== 'string' ||
       !/^\d+\.\d+\.\d+$/.test(value.runtime.electronVersion) ||
+      typeof value.runtime.nodeAbi !== 'string' ||
       !/^\d{1,8}$/.test(value.runtime.nodeAbi) ||
+      typeof value.runtime.napi !== 'string' ||
       !/^\d{1,8}$/.test(value.runtime.napi) ||
+      typeof value.runtime.chromiumVersion !== 'string' ||
       !/^\d+\.\d+\.\d+\.\d+$/.test(value.runtime.chromiumVersion)
     )
       return false
@@ -159,13 +166,23 @@ function validMetadata(value) {
     return false
   if (value.source.repositoryUri !== 'https://github.com/mysticalsin/AskToto-Mantu') return false
   if (
+    typeof value.source.commit !== 'string' ||
     !GIT_SHA.test(value.source.commit) ||
+    typeof value.source.workflowCommit !== 'string' ||
     !GIT_SHA.test(value.source.workflowCommit) ||
+    typeof value.source.lockSha256 !== 'string' ||
     !SHA256.test(value.source.lockSha256)
   )
     return false
+  if (typeof value.source.workflowPath !== 'string') return false
   if (!/^\.github\/workflows\/[a-z0-9-]+\.yml$/.test(value.source.workflowPath)) return false
-  if (!/^\d{1,20}$/.test(value.source.runId) || !Number.isSafeInteger(value.source.attempt) || value.source.attempt < 1)
+  if (
+    typeof value.source.runId !== 'string' ||
+    !/^\d{1,20}$/.test(value.source.runId) ||
+    !Number.isSafeInteger(value.source.attempt) ||
+    value.source.attempt < 1 ||
+    value.source.attempt > 1000
+  )
     return false
   if (
     typeof value.source.ref !== 'string' ||
@@ -176,10 +193,13 @@ function validMetadata(value) {
     return false
   if (
     !exactKeys(value.builder, ['nodeVersion', 'npmVersion', 'zlibVersion', 'packages']) ||
+    typeof value.builder.nodeVersion !== 'string' ||
     !/^v\d+\.\d+\.\d+$/.test(value.builder.nodeVersion) ||
+    typeof value.builder.npmVersion !== 'string' ||
     !/^\d+\.\d+\.\d+$/.test(value.builder.npmVersion) ||
     typeof value.builder.zlibVersion !== 'string' ||
     value.builder.zlibVersion.length < 1 ||
+    value.builder.zlibVersion.length > 64 ||
     !Array.isArray(value.builder.packages) ||
     value.builder.packages.length < 1 ||
     value.builder.packages.length > 128
@@ -282,6 +302,7 @@ async function readStableFile(path, maxBytes, errorCode) {
 }
 
 function validUrl(value) {
+  if (typeof value !== 'string') return false
   try {
     const url = new URL(value)
     return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
@@ -469,6 +490,7 @@ function validateMetadataRecords(metadata, fileMap) {
       item.revision.length > 256 ||
       !exactKeys(item.digest, ['algorithm', 'value']) ||
       !['sha256', 'sha512'].includes(item.digest.algorithm) ||
+      typeof item.digest.value !== 'string' ||
       !new RegExp(item.digest.algorithm === 'sha256' ? '^[a-f0-9]{64}$' : '^[a-f0-9]{128}$').test(item.digest.value)
     ) {
       throw new Error('RUNTIME_PAYLOAD_UPSTREAM_RECEIPT_INVALID')
@@ -498,12 +520,15 @@ function validateMetadataRecords(metadata, fileMap) {
       typeof license.version !== 'string' ||
       license.version.length < 1 ||
       license.version.length > 128 ||
+      typeof license.spdx !== 'string' ||
       !/^[A-Za-z0-9.+() -]{1,128}$/.test(license.spdx) ||
       !validUrl(license.sourceUri) ||
       !validUrl(license.sourceReceiptUri) ||
       !safeRelativePath(license.noticePath) ||
       !Number.isSafeInteger(license.noticeBytes) ||
       license.noticeBytes < 1 ||
+      license.noticeBytes > 20_000_000 ||
+      typeof license.noticeSha256 !== 'string' ||
       !SHA256.test(license.noticeSha256)
     )
       throw new Error('RUNTIME_PAYLOAD_LICENSE_RECEIPT_INVALID')
@@ -594,6 +619,29 @@ async function run() {
   const fileMap = new Map(rows.map((row) => [row.path, row]))
   const records = validateMetadataRecords(metadata, fileMap)
 
+  const inventory = {
+    schemaVersion: 1,
+    kind: metadata.kind,
+    componentId: metadata.componentId,
+    artifactId: metadata.artifactId,
+    target: metadata.target,
+    runtime: metadata.runtime,
+    entrypoints: records.entrypoints,
+    models: records.models,
+    source: metadata.source,
+    builder: metadata.builder,
+    upstream: records.upstream,
+    files: rows.map(({ path, bytes, sha256, executable }) => ({ path, bytes, sha256, executable })),
+    licenses: records.licenses
+  }
+  const inventoryBytes = Buffer.from(`${JSON.stringify(inventory, null, 2)}\n`, 'utf8')
+  if (inventoryBytes.length > MAX_INVENTORY_BYTES) throw new Error('RUNTIME_PAYLOAD_INVENTORY_OVERSIZED')
+  const inventorySchema = JSON.parse(
+    await readFile(new URL('../../resources/runtime-schema/inventory.schema.json', import.meta.url), 'utf8')
+  )
+  const validateInventory = new Ajv2020({ allErrors: true, strict: false }).compile(inventorySchema)
+  if (!validateInventory(inventory)) throw new Error('RUNTIME_PAYLOAD_INVENTORY_SCHEMA_MISMATCH')
+
   await mkdir(output, { recursive: true })
   const archivePath = resolve(output, `${metadata.artifactId}.tar.gz`)
   const gzipHash = createHash('sha256')
@@ -612,23 +660,6 @@ async function run() {
     createWriteStream(archivePath, { flags: 'wx', mode: 0o600 })
   )
 
-  const inventory = {
-    schemaVersion: 1,
-    kind: metadata.kind,
-    componentId: metadata.componentId,
-    artifactId: metadata.artifactId,
-    target: metadata.target,
-    runtime: metadata.runtime,
-    entrypoints: records.entrypoints,
-    models: records.models,
-    source: metadata.source,
-    builder: metadata.builder,
-    upstream: records.upstream,
-    files: rows.map(({ path, bytes, sha256, executable }) => ({ path, bytes, sha256, executable })),
-    licenses: records.licenses
-  }
-  const inventoryBytes = Buffer.from(`${JSON.stringify(inventory, null, 2)}\n`, 'utf8')
-  if (inventoryBytes.length > MAX_INVENTORY_BYTES) throw new Error('RUNTIME_PAYLOAD_INVENTORY_OVERSIZED')
   const inventoryPath = resolve(output, `${metadata.artifactId}.inventory.json`)
   await writeFile(inventoryPath, inventoryBytes, { flag: 'wx', mode: 0o600 })
   const candidate = {
