@@ -9,6 +9,7 @@ import type { CfGeo } from '../geo'
 import type { AccessCtx } from '../access'
 import type { D1DatabaseLike } from '../d1'
 import type { OperatorStore } from '../store'
+import type { SpeechPolicyEvidence } from '../speech/policy'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from '../cloudflare'
 import { activeCloudflareAccount } from '../keys'
 import { looksLikeSecret } from '../redact'
@@ -35,6 +36,19 @@ export interface Env {
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
   CF_ACCOUNT_ID?: string
+  /** Speech broker deployment policy. Missing values fail closed; never set from request fields. */
+  SPEECH_TENANT_ID?: string
+  SPEECH_AUDIENCE?: string
+  SPEECH_POLICY_VERSION?: string
+  SPEECH_ROUTE_ID?: string
+  SPEECH_MODEL_ID?: string
+  SPEECH_CONFIG_VERSION?: string
+  SPEECH_ALLOWED_LANGUAGES?: string
+  SPEECH_MAX_CONCURRENT_SESSIONS?: string
+  SPEECH_MAX_CONCURRENT_TRACKS?: string
+  SPEECH_BUDGET_WINDOW_MS?: string
+  SPEECH_BUDGET_MAX_MS?: string
+  SPEECH_MAX_SESSION_MS?: string
 }
 
 export interface HandleOpts {
@@ -44,6 +58,8 @@ export interface HandleOpts {
   geo?: CfGeo
   cfFetch?: typeof fetch
   providerFetch?: typeof fetch
+  /** Internal CI injection only; no Worker production handler supplies synthetic route evidence. */
+  speechPolicyEvidence?: SpeechPolicyEvidence
 }
 
 export type AdminCtx = {

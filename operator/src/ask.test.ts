@@ -322,6 +322,8 @@ describe('G10 Access bypass + rate limit for /v1/ask', () => {
   it('lists /v1/ask next to /v1/use for Cloudflare Access Bypass', () => {
     expect(ACCESS_BYPASS_PATHS).toContain('/v1/ask')
     expect(ACCESS_BYPASS_PATHS).toContain('/v1/use')
+    expect(ACCESS_BYPASS_PATHS).toContain('/v1/speech/sessions')
+    expect(ACCESS_BYPASS_PATHS).toContain('/v1/speech/sessions/*')
   })
 
   it('unauthenticated POST is HMAC 401 JSON, never an Access redirect', async () => {

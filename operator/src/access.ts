@@ -49,6 +49,8 @@ export const ACCESS_BYPASS_PATHS = [
   '/v1/skills/manifest',
   '/v1/integrations',
   '/v1/model-policy',
+  '/v1/speech/sessions',
+  '/v1/speech/sessions/*',
   '/assets/*'
 ] as const
 

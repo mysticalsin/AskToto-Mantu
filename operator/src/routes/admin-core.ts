@@ -56,7 +56,9 @@ export const EXPECTED_D1_TABLES = [
   'integrations',
   'integration_grants',
   'operator_settings',
-  'model_policy'
+  'model_policy',
+  'speech_sessions',
+  'speech_grants'
 ] as const
 
 const PLACEHOLDER_DIFF_RE = /^#\s*unified diff against .+\n#\s*edit, then approve\. push is a separate click\.$/i
@@ -175,6 +177,15 @@ export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = 
     'last_test_json',
     'last_test_at',
     'notes'
+  ],
+  speech_sessions: [
+    'tenant_id', 'audience', 'license_jti', 'device_id', 'capture_generation', 'route_id', 'model_id',
+    'config_version', 'language', 'status', 'track_count', 'reserved_ms', 'settled_ms', 'budget_window_start',
+    'grant_expires_at', 'lease_expires_at', 'license_expires_at'
+  ],
+  speech_grants: [
+    'token_hash', 'tenant_id', 'audience', 'license_jti', 'device_id', 'track', 'capture_generation',
+    'route_id', 'model_id', 'config_version', 'language', 'issued_at', 'expires_at', 'redeemed_at', 'revoked_at'
   ]
 }
 

@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { allocateSpeechSession, cancelSpeechSession, redeemSpeechGrant } from './grants'
 
+const batchTails = new WeakMap<DatabaseSync, Promise<void>>()
+
 function sqliteD1(db: DatabaseSync): D1DatabaseLike {
   return {
     prepare(sql) {
@@ -19,17 +21,22 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
       }
       return adapter
     },
-    async batch(statements) {
-      db.exec('BEGIN')
-      try {
-        const results = []
-        for (const statement of statements) results.push(await statement.run() as { success: boolean })
-        db.exec('COMMIT')
-        return results
-      } catch (error) {
-        db.exec('ROLLBACK')
-        throw error
-      }
+    batch(statements) {
+      const batchTail = batchTails.get(db) ?? Promise.resolve()
+      const result = batchTail.then(async () => {
+        db.exec('BEGIN')
+        try {
+          const results = []
+          for (const statement of statements) results.push(await statement.run() as { success: boolean })
+          db.exec('COMMIT')
+          return results
+        } catch (error) {
+          db.exec('ROLLBACK')
+          throw error
+        }
+      })
+      batchTails.set(db, result.then(() => undefined, () => undefined))
+      return result
     }
   }
 }
@@ -47,17 +54,49 @@ function migratedDb(): DatabaseSync {
   return db
 }
 
+function brokerDb(): DatabaseSync {
+  const db = migratedDb()
+  db.prepare('INSERT INTO tiers (id, label, entitlements_json, updated_at) VALUES (?, ?, ?, ?)')
+    .run('metis', 'Métis', JSON.stringify(['listen', 'operator_keys']), 1)
+  for (const [device, jti] of [['device-a', 'license-a'], ['device-b', 'license-b']]) {
+    db.prepare(`INSERT INTO issued_licenses (jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by, tier, activated_device)
+      VALUES (?, 'test', 'hash', 365, 1, 1000, 0, 1, 'test', 'metis', ?)`).run(jti, device)
+    db.prepare(`INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, approval, license_jti)
+      VALUES (?, 'hash', 'win32', 'test', 1, 1, 'approved', ?)`).run(device, jti)
+  }
+  return db
+}
+
 const binding = {
   tenantId: 'tenant-a', audience: 'operator-test', licenseJti: 'license-a', deviceId: 'device-a',
   captureGeneration: 7, routeId: 'workers-ai-nova3', model: '@cf/deepgram/nova-3', configVersion: 'v1',
+  language: 'en',
   tracks: ['microphone', 'system'] as const, now: 10_000, licenseExpiresAt: 1_000_000,
-  grantTtlMs: 60_000, leaseMs: 300_000, budgetWindowMs: 3_600_000, maxReservedMs: 600_000,
+  grantTtlMs: 60_000, leaseMs: 300_000, budgetWindowMs: 3_600_000, budgetMaxMs: 1_800_000, maxReservedMs: 600_000,
   maxSessions: 1, maxTracks: 2
 }
 
 describe('D1 speech grants', () => {
+  it('installs on fresh schema and upgrades existing data without deleting it', () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const root = join(__dirname, '..', '..')
+      db.exec(readFileSync(join(root, '..', 'schema.sql'), 'utf8'))
+      db.prepare(`INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?)`).run('existing-device', 'existing-hash', 'win32', '1.9.7', 1, 2)
+      const alter = readFileSync(join(root, '..', 'schema-alter.sql'), 'utf8')
+      for (const sql of parseStatements(alter)) {
+        try { db.exec(sql) } catch (error) {
+          if (!/duplicate column name|already exists/i.test(String(error))) throw error
+        }
+      }
+      expect(db.prepare('SELECT seat_hash FROM seats WHERE device_id = ?').get('existing-device')).toMatchObject({ seat_hash: 'existing-hash' })
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('speech_sessions', 'speech_grants') ORDER BY name").all()).toHaveLength(2)
+    } finally { db.close() }
+  })
+
   it('allocates one opaque grant per track and only stores token hashes', async () => {
-    const db = migratedDb()
+    const db = brokerDb()
     try {
       const allocation = await allocateSpeechSession(sqliteD1(db), binding)
       expect(allocation.ok).toBe(true)
@@ -70,18 +109,33 @@ describe('D1 speech grants', () => {
   })
 
   it('allows only one of two parallel contenders for the final concurrency slot', async () => {
-    const db = migratedDb()
+    const db = brokerDb()
     try {
+      const d1 = sqliteD1(db)
       const results = await Promise.all([
-        allocateSpeechSession(sqliteD1(db), binding),
-        allocateSpeechSession(sqliteD1(db), { ...binding, deviceId: 'device-b', licenseJti: 'license-b' })
+        allocateSpeechSession(d1, binding),
+        allocateSpeechSession(d1, { ...binding, deviceId: 'device-b', licenseJti: 'license-b' })
       ])
       expect(results.filter((result) => result.ok)).toHaveLength(1)
     } finally { db.close() }
   })
 
+  it('allows only one of two parallel contenders for the final budget reservation', async () => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const limited = { ...binding, maxSessions: 2, budgetMaxMs: binding.maxReservedMs }
+      const results = await Promise.all([
+        allocateSpeechSession(d1, limited),
+        allocateSpeechSession(d1, { ...limited, deviceId: 'device-b', licenseJti: 'license-b' })
+      ])
+      expect(results.filter((result) => result.ok)).toHaveLength(1)
+      expect(results.filter((result) => !result.ok && result.code === 'BUDGET_LIMIT')).toHaveLength(1)
+    } finally { db.close() }
+  })
+
   it('atomically redeems a token once and binds it to exact session and track', async () => {
-    const db = migratedDb()
+    const db = brokerDb()
     try {
       const allocation = await allocateSpeechSession(sqliteD1(db), binding)
       expect(allocation.ok).toBe(true)
@@ -98,7 +152,7 @@ describe('D1 speech grants', () => {
   })
 
   it('cancellation releases only its session reservation and is idempotent', async () => {
-    const db = migratedDb()
+    const db = brokerDb()
     try {
       const first = await allocateSpeechSession(sqliteD1(db), binding)
       expect(first.ok).toBe(true)
@@ -108,6 +162,25 @@ describe('D1 speech grants', () => {
       expect(await cancelSpeechSession(sqliteD1(db), first.sessionId, binding)).toMatchObject({ ok: true })
       expect(await cancelSpeechSession(sqliteD1(db), first.sessionId, binding)).toMatchObject({ ok: true })
       expect((await allocateSpeechSession(sqliteD1(db), { ...binding, deviceId: 'device-b', licenseJti: 'license-b' })).ok).toBe(true)
+    } finally { db.close() }
+  })
+
+  it('expiry releases only an unredeemed reservation in its tenant and audience', async () => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const first = await allocateSpeechSession(d1, binding)
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      const expired = await allocateSpeechSession(d1, {
+        ...binding, deviceId: 'device-b', licenseJti: 'license-b', now: binding.now + binding.leaseMs + 1,
+        licenseExpiresAt: binding.licenseExpiresAt
+      })
+      expect(expired.ok).toBe(true)
+      const rows = db.prepare('SELECT id, status, reserved_ms FROM speech_sessions ORDER BY created_at').all() as Array<{ id: string; status: string; reserved_ms: number }>
+      expect(rows).toHaveLength(2)
+      expect(rows[0]).toMatchObject({ id: first.sessionId, status: 'expired', reserved_ms: 0 })
+      expect(rows[1]).toMatchObject({ status: 'active' })
     } finally { db.close() }
   })
 })

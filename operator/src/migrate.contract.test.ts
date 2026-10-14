@@ -173,3 +173,31 @@ describe('schema-alter.sql model_policy table (M2-0412, operator/src/model-polic
     expect(alters).toHaveLength(0)
   })
 })
+
+describe('speech broker additive schema (M2-0107)', () => {
+  it('creates durable session reservations and one-use grants in both fresh and upgrade schemas', () => {
+    for (const sql of [schemaSql, schemaAlterSql]) {
+      const statements = parseStatements(sql)
+      const sessions = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_sessions\b/i.test(statement))
+      const grants = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_grants\b/i.test(statement))
+      expect(sessions).toBeTruthy()
+      expect(grants).toBeTruthy()
+      for (const column of [
+        'id TEXT PRIMARY KEY', 'tenant_id TEXT NOT NULL', 'audience TEXT NOT NULL',
+        'license_jti TEXT NOT NULL', 'device_id TEXT NOT NULL', 'capture_generation INTEGER NOT NULL',
+        'route_id TEXT NOT NULL', 'model_id TEXT NOT NULL', 'config_version TEXT NOT NULL', 'language TEXT',
+        'track_count INTEGER NOT NULL', 'reserved_ms INTEGER NOT NULL', 'settled_ms INTEGER NOT NULL',
+        'budget_window_start INTEGER NOT NULL', 'lease_expires_at INTEGER NOT NULL'
+      ]) expect(sessions?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'token_hash TEXT NOT NULL UNIQUE', 'session_id TEXT NOT NULL', 'track TEXT NOT NULL',
+        'capture_generation INTEGER NOT NULL', 'route_id TEXT NOT NULL', 'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL', 'language TEXT', 'expires_at INTEGER NOT NULL', 'redeemed_at INTEGER', 'revoked_at INTEGER'
+      ]) expect(grants?.replace(/\s+/g, ' ')).toContain(column)
+      expect(grants).not.toMatch(/\btoken\s+TEXT\b/i)
+      expect(grants).not.toMatch(/audio|transcript|content/i)
+      expect(statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_sessions_active_tenant\b/i.test(statement))).toBe(true)
+      expect(statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_grants_session\b/i.test(statement))).toBe(true)
+    }
+  })
+})
