@@ -24,6 +24,28 @@ type CurrentProposal = CommandControlProposal & {
   expiresAt: number
 }
 
+export type CommandConfirmationPolicyInput = {
+  authenticated: boolean
+  listenEntitled: boolean
+  owner: { destroyed: boolean; visible: boolean; focused: boolean } | null
+  onboardingExclusive: boolean
+  lifecycleHooksReady: boolean
+}
+
+/** Pure gate for every non-in-app action. Missing trust or lifecycle state denies confirmation. */
+export function commandConfirmationPolicyAllows(input: CommandConfirmationPolicyInput): boolean {
+  return (
+    input.authenticated &&
+    input.listenEntitled &&
+    input.owner !== null &&
+    !input.owner.destroyed &&
+    input.owner.visible &&
+    input.owner.focused &&
+    !input.onboardingExclusive &&
+    input.lifecycleHooksReady
+  )
+}
+
 type CommandControlDeps = {
   execute: (request: DesktopActionRequest) => Promise<DesktopActionResult>
   /** Main-process policy is required: omitting it must never turn confirmation into permission. */

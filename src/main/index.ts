@@ -669,7 +669,7 @@ import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
-import { CommandControl } from './command-control'
+import { CommandControl, commandConfirmationPolicyAllows } from './command-control'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
 import {
@@ -1092,22 +1092,24 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+let commandLifecycleRevocationHooksReady = false
 const commandControl = new CommandControl({
   execute: executeDesktopAction,
   // Command input is a microphone capability. Reuse the existing Listen entitlement instead of
   // inventing a new license field, and re-evaluate auth, entitlement and foreground state at Confirm.
   policyAllows: () => {
     const owner = win
-    return (
-      requireAuth() &&
-      operatorGate('listen').allowed &&
-      !!owner &&
-      !owner.isDestroyed() &&
-      owner.isVisible() &&
-      owner.isFocused() &&
-      !islandResting &&
-      !onboardingExclusiveLive()
-    )
+    const ownerState =
+      owner && !owner.isDestroyed()
+        ? { destroyed: false, visible: owner.isVisible(), focused: owner.isFocused() }
+        : null
+    return commandConfirmationPolicyAllows({
+      authenticated: requireAuth(),
+      listenEntitled: operatorGate('listen').allowed,
+      owner: ownerState,
+      onboardingExclusive: onboardingExclusiveLive() || islandResting,
+      lifecycleHooksReady: commandLifecycleRevocationHooksReady
+    })
   },
   audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata),
   onState: (state) => {
@@ -9646,12 +9648,25 @@ if (!app.requestSingleInstanceLock()) {
     .then(async () => {
       initLogging() // route main-process logs to a rotated file before anything else can fail
       // Register before the overlay can issue proposals. A laptop lock or sleep must revoke any
-      // outstanding confirmation even if its TTL timer pauses with the process.
+      // outstanding confirmation even if its TTL timer pauses with the process. Confirmation stays
+      // disabled unless BOTH hooks register successfully.
+      let suspendHookRegistered = false
+      let lockScreenHookRegistered = false
       try {
         powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))
-        powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))
+        suspendHookRegistered = true
       } catch (e) {
-        mainLog.warn('[boot] powerMonitor command-revocation hooks failed:', e)
+        mainLog.warn('[boot] command confirmation disabled: suspend revocation hook registration failed:', e)
+      }
+      try {
+        powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))
+        lockScreenHookRegistered = true
+      } catch (e) {
+        mainLog.warn('[boot] command confirmation disabled: lock-screen revocation hook registration failed:', e)
+      }
+      commandLifecycleRevocationHooksReady = suspendHookRegistered && lockScreenHookRegistered
+      if (!commandLifecycleRevocationHooksReady) {
+        mainLog.error('[boot] command confirmation disabled: lifecycle revocation hooks are not ready')
       }
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork

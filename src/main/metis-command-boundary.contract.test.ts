@@ -45,10 +45,22 @@ describe('Cap2 command authority boundary', () => {
     expect(setup).toContain("operatorGate('listen').allowed")
     expect(setup).toContain('owner.isVisible()')
     expect(setup).toContain('owner.isFocused()')
-    expect(setup).toContain('!onboardingExclusiveLive()')
+    expect(setup).toContain('onboardingExclusive: onboardingExclusiveLive() || islandResting')
+    expect(setup).toContain('commandConfirmationPolicyAllows')
+    expect(setup).toContain('lifecycleHooksReady: commandLifecycleRevocationHooksReady')
     expect(control).not.toContain('policyAllows?')
     expect(control).toContain('this.deps.policyAllows(proposal.request) === true')
     expect(control).toContain('Object.freeze(')
+    const lifecycleRegistration = between(
+      main,
+      'let suspendHookRegistered = false',
+      'const bootWork = createBootWork()'
+    )
+    expect(lifecycleRegistration).toContain("powerMonitor.on('suspend'")
+    expect(lifecycleRegistration).toContain("powerMonitor.on('lock-screen'")
+    expect(lifecycleRegistration).toContain(
+      'commandLifecycleRevocationHooksReady = suspendHookRegistered && lockScreenHookRegistered'
+    )
   })
 
   it('revokes pending authority when the window loses focus, hides, auth clears, locks, or suspends', () => {

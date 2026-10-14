@@ -1,7 +1,37 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CommandControl } from './command-control'
+import {
+  CommandControl,
+  commandConfirmationPolicyAllows,
+  type CommandConfirmationPolicyInput
+} from './command-control'
 
 const allowCommandPolicy = (): boolean => true
+const confirmedCommandPolicy: CommandConfirmationPolicyInput = {
+  authenticated: true,
+  listenEntitled: true,
+  owner: { destroyed: false, visible: true, focused: true },
+  onboardingExclusive: false,
+  lifecycleHooksReady: true
+}
+
+describe('command confirmation policy', () => {
+  it('allows confirmation only when the authenticated, entitled, focused owner and lifecycle hooks are ready', () => {
+    expect(commandConfirmationPolicyAllows(confirmedCommandPolicy)).toBe(true)
+  })
+
+  it.each([
+    ['auth is missing', { authenticated: false }],
+    ['Listen entitlement is missing', { listenEntitled: false }],
+    ['the owner is missing', { owner: null }],
+    ['the owner is destroyed', { owner: { destroyed: true, visible: true, focused: true } }],
+    ['the owner is hidden', { owner: { destroyed: false, visible: false, focused: true } }],
+    ['the owner is unfocused', { owner: { destroyed: false, visible: true, focused: false } }],
+    ['exclusive onboarding is active', { onboardingExclusive: true }],
+    ['lifecycle revocation hooks are unavailable', { lifecycleHooksReady: false }]
+  ] as const)('denies confirmation when %s', (_reason, override) => {
+    expect(commandConfirmationPolicyAllows({ ...confirmedCommandPolicy, ...override })).toBe(false)
+  })
+})
 
 describe('CommandControl', () => {
   it('rejects confirmation from a different renderer owner without executing', async () => {
@@ -106,16 +136,22 @@ describe('CommandControl', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
-  it('revokes lifecycle-owned authority and audits action metadata only', () => {
+  it('revokes lifecycle-owned authority and audits action metadata only', async () => {
     const audit = vi.fn()
+    const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
     const controller = new CommandControl({
-      execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
+      execute,
       policyAllows: allowCommandPolicy,
       audit
     })
-    controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
+    const proposal = controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
     controller.revokeForLifecycleEvent('renderer_replaced')
     expect(controller.getState()).toEqual({ proposalId: null })
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'proposal_missing'
+    })
+    expect(execute).not.toHaveBeenCalled()
     expect(audit).toHaveBeenCalledWith('command.revoked', {
       actionId: 'desktop.open_notes',
       reason: 'renderer_replaced'
