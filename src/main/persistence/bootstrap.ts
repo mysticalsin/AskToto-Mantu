@@ -604,8 +604,7 @@ function createMainPersistenceBootstrapInternal(
                   })
                 })
               const previousSpeech = speech
-              if (previousSpeech && previousSpeech !== nextSpeech)
-                await invalidateSpeech(previousSpeech)
+              if (previousSpeech && previousSpeech !== nextSpeech) await invalidateSpeech(previousSpeech)
               if (!highWaterCurrent()) throw new Error('Persistence authority changed before publication')
               speech = nextSpeech
               policy = resolvedPolicy

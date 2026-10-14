@@ -241,10 +241,13 @@ describe('main persistence factory source fixture', () => {
     }
     const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
       { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
-      sourceFixture(async () => null, () => {
-        markWorkerCreated()
-        return new HeldExitWorker()
-      })
+      sourceFixture(
+        async () => null,
+        () => {
+          markWorkerCreated()
+          return new HeldExitWorker()
+        }
+      )
     )
     try {
       await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
