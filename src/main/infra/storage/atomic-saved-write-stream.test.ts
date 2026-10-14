@@ -1,8 +1,13 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { atomicSavedWriteStream } from './atomic-saved-write'
+
+vi.mock('node:crypto', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:crypto')>()
+  return { ...original, randomBytes: vi.fn((size: number) => Buffer.alloc(size, 0xab)) }
+})
 
 const roots: string[] = []
 
@@ -101,5 +106,44 @@ describe('atomic streamed saved write', () => {
       )
     ).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
     expect(await readFile(target, 'utf8')).toBe('old')
+  })
+
+  it('does not unlink a colliding temp path that it failed to create', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    const collision = `${target}.${'ab'.repeat(12)}.tmp`
+    await writeFile(target, 'old')
+    await writeFile(collision, 'foreign temp')
+
+    await expect(atomicSavedWriteStream(target, byteChunks('new'), bounds)).rejects.toMatchObject({ code: 'EEXIST' })
+
+    expect(await readFile(target, 'utf8')).toBe('old')
+    expect(await readFile(collision, 'utf8')).toBe('foreign temp')
+  })
+
+  it('checks the current owner after writes and immediately before the rename', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    await writeFile(target, 'old')
+    let current = true
+    const checks: string[] = []
+
+    await expect(
+      atomicSavedWriteStream(target, byteChunks('new'), {
+        ...bounds,
+        beforeChunk: () => {
+          checks.push('chunk')
+          if (!current) throw new Error('STALE_OWNER')
+        },
+        beforeReplace: () => {
+          checks.push('replace')
+          current = false
+        }
+      })
+    ).rejects.toThrow('STALE_OWNER')
+
+    expect(checks.at(-1)).toBe('chunk')
+    expect(await readFile(target, 'utf8')).toBe('old')
+    expect(await readdir(root)).toEqual([basename(target)])
   })
 })
