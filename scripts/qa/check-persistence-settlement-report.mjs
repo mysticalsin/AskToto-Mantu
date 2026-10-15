@@ -1,14 +1,18 @@
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const requiredFiles = [
   'src/main/persistence/bootstrap-main-factory.integration.test.ts',
-  'src/main/persistence/root-registry.test.ts'
+  'src/main/persistence/root-registry.test.ts',
+  'src/main/persistence/protected-meeting-keys.test.ts',
+  'src/main/persistence/legacy-file-key.test.ts'
 ]
 const requiredSuites = new Map([
   [requiredFiles[0], 'main persistence factory source fixture'],
-  [requiredFiles[1], 'persistence root registry']
+  [requiredFiles[1], 'persistence root registry'],
+  [requiredFiles[2], 'protected meeting-key lifecycle'],
+  [requiredFiles[3], 'profile-bound legacy file-key access']
 ])
 const hashedSources = [
   ...requiredFiles,
@@ -17,9 +21,11 @@ const hashedSources = [
   'src/main/persistence/bootstrap-speech-owner.ts',
   'src/main/persistence/root-registry.ts',
   'src/main/persistence/protected-meeting-keys.ts',
+  'src/main/persistence/legacy-file-key.ts',
   'src/main/infra/process/meeting-speech-host.ts',
   'src/main/meeting-speech-worker.ts',
   'src/main/features/meetings/incremental-meeting-journal.ts',
+  'src/main/features/meetings/incremental-meeting-journal-files.ts',
   'src/main/features/meetings/incremental-record-receipt.ts',
   'src/main/auth-speech-lease.ts',
   'src/main/settings-authority-history.ts',
@@ -185,7 +191,43 @@ const cases = [
     title: 'joins one failed-open root close through the captured binder capability',
     expected: 'passed',
     evidence: 'R07'
-  }
+  },
+  ...[
+    ['P01', 'retires a held key publication permanently, then admits a live successor'],
+    ['P02', 'reopen is read-only and a corrupt key record is preserved'],
+    ['P03', 'fails closed when the native backend becomes unavailable and preserves the valid key record'],
+    ['P04', 'does not publish a key or unlink a replacement after a held ACL proof'],
+    ['P05', 'retires the original scope during a held ACL proof before any key bytes are written']
+  ].map(([caseId, title]) => ({ file: requiredFiles[2], caseId, title, expected: 'passed' })),
+  {
+    file: requiredFiles[3],
+    caseId: 'L01',
+    title: 'reads only an admitted original profile, with no process-global cached key',
+    expected: 'passed'
+  },
+  ...[
+    ['K01', 'joins protected key admission before disposing the key owner', 'failed'],
+    ['K02', 'keeps protected key disposal pending while the admitted callback is held', 'passed'],
+    ['K03', 'joins protected key post-use checks and wipes before disposal completes', 'failed'],
+    ['K04', 'disposes a protected key after a physically completed callback refusal', 'passed'],
+    ['K05', 'joins legacy key admission before disposing the key owner', 'failed'],
+    ['K06', 'keeps legacy key disposal pending while the admitted callback is held', 'passed'],
+    ['K07', 'joins legacy key post-use checks and wipes before disposal completes', 'failed'],
+    ['K08', 'disposes a legacy key after a physically completed callback refusal', 'passed'],
+    ['K09', 'cleans a constructed journal store when the key post-use guard rejects', 'failed'],
+    ['K10', 'retains the constructed journal store until successful owner handoff', 'passed']
+  ].map(([caseId, title, expected]) => ({
+    file:
+      caseId === 'K09' || caseId === 'K10'
+        ? requiredFiles[0]
+        : ['K01', 'K02', 'K03', 'K04'].includes(caseId)
+          ? requiredFiles[2]
+          : requiredFiles[3],
+    caseId,
+    title,
+    expected,
+    evidence: caseId
+  }))
 ]
 
 function requireValue(condition, message) {
@@ -211,7 +253,7 @@ function readReport(path) {
   const absolute = resolve(path)
   let info
   try {
-    info = statSync(absolute)
+    info = lstatSync(absolute)
   } catch {
     throw new Error('persistence-settlement-report:JSON report is missing')
   }
@@ -300,7 +342,7 @@ function readCaseEvidence(log) {
     const index = line.indexOf(marker)
     if (index < 0) continue
     const payload = line.slice(index + marker.length).trim()
-    requireValue(payload.length > 0 && payload.length <= 4096, 'case evidence size is invalid')
+    requireValue(payload.length > 0 && Buffer.byteLength(line, 'utf8') + 1 <= 4096, 'case evidence size is invalid')
     let value
     try {
       value = JSON.parse(payload)
@@ -984,6 +1026,203 @@ function validateStructuredEvidence(evidence, assertion) {
   }
 }
 
+function closedObject(value, keys, label) {
+  requireValue(value && typeof value === 'object' && !Array.isArray(value), `${label} is not an object`)
+  requireValue(
+    Object.keys(value).sort().join(',') === [...keys].sort().join(','),
+    `${label} fields differ from the closed schema`
+  )
+}
+
+function validateK1Evidence(witness) {
+  const id = witness.caseId
+  const protectedIds = new Set(['K01', 'K02', 'K03', 'K04'])
+  if (['K01', 'K02', 'K03', 'K04', 'K05', 'K06', 'K07', 'K08'].includes(id)) {
+    closedObject(
+      witness,
+      ['caseId', 'stage', 'keyReady', 'physical', 'observed', 'settled', 'postUseBorrowAtDisposal', 'parents'],
+      id
+    )
+    closedObject(witness.physical, ['rawMatchesRoot', 'realStatCompleted', 'held', 'entries'], `${id}.physical`)
+    closedObject(
+      witness.observed,
+      ['operation', 'callbackCalls', 'callbackCompleted', 'borrow', 'disposals', 'checkpoint'],
+      `${id}.observed`
+    )
+    closedObject(
+      witness.settled,
+      [
+        'use',
+        'originalCallbackError',
+        'callbackCalls',
+        'borrow',
+        'disposals',
+        'repeat',
+        'lateUse',
+        'lateCallbackCalls',
+        'extraPhysicalChecks'
+      ],
+      `${id}.settled`
+    )
+    closedObject(
+      witness.parents,
+      ['writerCloseAttempts', 'writerCloseConfirmed', 'rootCloseAttempts', 'rootCloseConfirmed'],
+      `${id}.parents`
+    )
+    const admission = id === 'K01' || id === 'K05'
+    const callback = id === 'K02' || id === 'K06'
+    const postUse = id === 'K03' || id === 'K07'
+    const refusal = id === 'K04' || id === 'K08'
+    const observedDisposals = admission || postUse || refusal ? ['fulfilled', 'fulfilled'] : ['pending', 'pending']
+    requireValue(
+      witness.stage === (admission ? 'admission' : callback ? 'callback' : postUse ? 'post-use' : 'completed-refusal'),
+      `${id} stage is invalid`
+    )
+    requireValue(
+      witness.keyReady === true &&
+        witness.physical.rawMatchesRoot === true &&
+        witness.physical.realStatCompleted === true &&
+        witness.physical.held === (admission || postUse) &&
+        witness.physical.entries === (admission || postUse ? 1 : 0),
+      `${id} physical gate evidence is invalid`
+    )
+    requireValue(
+      witness.observed.operation === (refusal ? 'rejected' : 'pending') &&
+        witness.observed.callbackCalls === (admission ? 0 : 1) &&
+        witness.observed.callbackCompleted === (postUse || refusal) &&
+        witness.observed.borrow === (admission ? 'absent' : refusal ? 'zero' : 'nonzero') &&
+        JSON.stringify(witness.observed.disposals) === JSON.stringify(observedDisposals) &&
+        witness.observed.checkpoint === true,
+      `${id} pending observation differs from the fixed RED schedule`
+    )
+    requireValue(
+      witness.settled.use === (refusal ? 'callback-error' : 'retired') &&
+        witness.settled.originalCallbackError === refusal &&
+        witness.settled.callbackCalls === (admission ? 0 : 1) &&
+        witness.settled.borrow === (admission ? 'absent' : 'zero') &&
+        JSON.stringify(witness.settled.disposals) === '["fulfilled","fulfilled"]' &&
+        witness.settled.repeat === 'fulfilled' &&
+        witness.settled.lateUse === 'retired' &&
+        witness.settled.lateCallbackCalls === 0 &&
+        witness.settled.extraPhysicalChecks === 0,
+      `${id} joined lifecycle evidence differs from the fixed RED schedule`
+    )
+    requireValue(
+      witness.postUseBorrowAtDisposal === (postUse ? 'nonzero' : null),
+      `${id} borrow-at-disposal observation is invalid`
+    )
+    requireValue(
+      witness.parents.writerCloseAttempts === (protectedIds.has(id) ? 1 : 0) &&
+        witness.parents.writerCloseConfirmed === (protectedIds.has(id) ? 1 : 0) &&
+        witness.parents.rootCloseAttempts === 1 &&
+        witness.parents.rootCloseConfirmed === 1,
+      `${id} parent custody counters are invalid`
+    )
+    for (const count of [
+      witness.physical.entries,
+      witness.observed.callbackCalls,
+      witness.settled.callbackCalls,
+      witness.settled.lateCallbackCalls,
+      witness.settled.extraPhysicalChecks,
+      ...Object.values(witness.parents)
+    ])
+      requireValue(integer(count) && count <= 8, `${id} contains an invalid bounded counter`)
+    return
+  }
+  if (id === 'K09') {
+    closedObject(witness, ['caseId', 'physical', 'store', 'opening', 'parents', 'bootstrap'], id)
+    closedObject(witness.physical, ['rawMatchesRoot', 'realStatCompleted', 'entries'], `${id}.physical`)
+    closedObject(
+      witness.store,
+      [
+        'constructorCalls',
+        'actualObject',
+        'borrowZeroAtGate',
+        'initializeAtGate',
+        'disposeAtGate',
+        'disposeAfterOpen',
+        'disposeAfterBootstrap',
+        'extraDisposeAfterRepeat',
+        'disposedSameObject'
+      ],
+      `${id}.store`
+    )
+    closedObject(witness.opening, ['atGate', 'outcome', 'sameError'], `${id}.opening`)
+    closedObject(
+      witness.parents,
+      ['keySettlements', 'writerCloseAttempts', 'writerCloseConfirmed', 'rootCloseAttempts', 'rootCloseConfirmed'],
+      `${id}.parents`
+    )
+    closedObject(
+      witness.bootstrap,
+      ['first', 'repeat', 'samePromise', 'workersStarted', 'workerExits'],
+      `${id}.bootstrap`
+    )
+    requireValue(
+      JSON.stringify(witness.physical) === '{"rawMatchesRoot":true,"realStatCompleted":true,"entries":1}' &&
+        JSON.stringify(witness.store) ===
+          '{"constructorCalls":1,"actualObject":true,"borrowZeroAtGate":true,"initializeAtGate":0,"disposeAtGate":0,"disposeAfterOpen":0,"disposeAfterBootstrap":0,"extraDisposeAfterRepeat":0,"disposedSameObject":null}' &&
+        JSON.stringify(witness.opening) === '{"atGate":"pending","outcome":"original-stat-error","sameError":true}' &&
+        JSON.stringify(witness.parents) ===
+          '{"keySettlements":1,"writerCloseAttempts":1,"writerCloseConfirmed":1,"rootCloseAttempts":1,"rootCloseConfirmed":1}' &&
+        JSON.stringify(witness.bootstrap) ===
+          '{"first":"fulfilled","repeat":"fulfilled","samePromise":true,"workersStarted":1,"workerExits":1}',
+      'K09 evidence differs from the fixed causal RED schedule'
+    )
+    return
+  }
+  if (id === 'K10') {
+    closedObject(witness, ['caseId', 'physical', 'store', 'opening', 'append', 'parents', 'bootstrap', 'journal'], id)
+    closedObject(witness.physical, ['rawMatchesRoot', 'realStatCompleted', 'entries'], `${id}.physical`)
+    closedObject(
+      witness.store,
+      [
+        'constructorCalls',
+        'actualObject',
+        'borrowZeroAtGate',
+        'initializeAtGate',
+        'disposeAtGate',
+        'initializeAfterOpen',
+        'disposeAfterOpen',
+        'disposeAfterAppend',
+        'disposeAfterJournal',
+        'disposeAfterBootstrap',
+        'extraDisposeAfterRepeat',
+        'disposedSameObject'
+      ],
+      `${id}.store`
+    )
+    closedObject(witness.opening, ['atGate', 'outcome'], `${id}.opening`)
+    closedObject(witness.append, ['status', 'revision'], `${id}.append`)
+    closedObject(
+      witness.parents,
+      ['keySettlements', 'writerCloseAttempts', 'writerCloseConfirmed', 'rootCloseAttempts', 'rootCloseConfirmed'],
+      `${id}.parents`
+    )
+    closedObject(
+      witness.bootstrap,
+      ['first', 'repeat', 'samePromise', 'workersStarted', 'workerExits'],
+      `${id}.bootstrap`
+    )
+    closedObject(witness.journal, ['first', 'repeat', 'samePromise'], `${id}.journal`)
+    requireValue(
+      JSON.stringify(witness.physical) === '{"rawMatchesRoot":true,"realStatCompleted":true,"entries":1}' &&
+        JSON.stringify(witness.store) ===
+          '{"constructorCalls":1,"actualObject":true,"borrowZeroAtGate":true,"initializeAtGate":0,"disposeAtGate":0,"initializeAfterOpen":1,"disposeAfterOpen":0,"disposeAfterAppend":0,"disposeAfterJournal":1,"disposeAfterBootstrap":1,"extraDisposeAfterRepeat":0,"disposedSameObject":true}' &&
+        JSON.stringify(witness.opening) === '{"atGate":"pending","outcome":"fulfilled"}' &&
+        JSON.stringify(witness.append) === '{"status":"durable","revision":1}' &&
+        JSON.stringify(witness.parents) ===
+          '{"keySettlements":1,"writerCloseAttempts":1,"writerCloseConfirmed":1,"rootCloseAttempts":1,"rootCloseConfirmed":1}' &&
+        JSON.stringify(witness.bootstrap) ===
+          '{"first":"fulfilled","repeat":"fulfilled","samePromise":true,"workersStarted":1,"workerExits":1}' &&
+        JSON.stringify(witness.journal) === '{"first":"fulfilled","repeat":"fulfilled","samePromise":true}',
+      'K10 evidence differs from the fixed successful handoff control'
+    )
+    return
+  }
+  requireValue(false, `${id} is not a K1 witness`)
+}
+
 function validate() {
   const reportPath = process.env.VITEST_REPORT_PATH
   const logPath = process.env.VITEST_LOG_PATH
@@ -994,18 +1233,28 @@ function validate() {
     'report/log/unhandled/receipt paths are missing'
   )
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-green-owned-cleanup',
-    'phase is not settlement-green-owned-cleanup'
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'persistence-k1-red',
+    'phase is not the fixed persistence-k1-red phase'
   )
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? ''), 'run attempt is invalid')
   requireValue(process.env.PERSISTENCE_SETTLEMENT_TARGET === 'ubuntu-latest', 'source target is not pinned Ubuntu')
-  requireValue(process.env.VITEST_EXIT_CODE === '0', 'Vitest did not return the required settlement GREEN exit')
+  requireValue(
+    hashedSources.length === 23 && new Set(hashedSources).size === 23,
+    'source receipt roster is not exactly 23 unique paths'
+  )
+  requireValue(process.env.VITEST_EXIT_CODE === '1', 'Vitest did not return the required actual K1 RED exit')
+  requireValue(process.env.GITHUB_JOB === 'test-first', 'reporter job binding is not test-first')
+  requireValue(
+    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === '7254798aafdcbced95a933d62fbef8522672e375',
+    'reviewed parent commit binding is invalid'
+  )
+  requireValue(process.version === 'v22.22.3', 'Node runtime is not the pinned 22.22.3')
 
   let log
   try {
-    const logInfo = statSync(resolve(logPath))
+    const logInfo = lstatSync(resolve(logPath))
     requireValue(logInfo.isFile() && logInfo.size > 0 && logInfo.size <= 4 * 1024 * 1024, 'Vitest log size is invalid')
     log = readFileSync(resolve(logPath), 'utf8')
   } catch {
@@ -1033,37 +1282,44 @@ function validate() {
     'R04',
     'R05',
     'R06',
-    'R07'
-  ]
+    'R07',
+    'K01',
+    'K02',
+    'K03',
+    'K04',
+    'K05',
+    'K06',
+    'K07',
+    'K08',
+    'K09',
+    'K10'
+  ].sort()
   requireValue(
     expectedWitnessIds.join(',') === requiredWitnessIds.join(','),
-    'closed case inventory does not produce the exact sixteen-witness roster'
+    'closed case inventory does not produce the exact twenty-six-witness roster'
   )
   requireValue(
     evidence.size === requiredWitnessIds.length && requiredWitnessIds.every((caseId) => evidence.has(caseId)),
-    'actual evidence does not contain exactly the sixteen unique closed witnesses'
+    'actual evidence does not contain exactly the twenty-six unique closed witnesses'
   )
+  for (const caseId of requiredWitnessIds.filter((id) => id.startsWith('K'))) validateK1Evidence(evidence.get(caseId))
 
   const { bytes, report } = readReport(reportPath)
   const { bytes: unhandledBytes, report: unhandledReport } = readUnhandledReport(unhandledReportPath)
-  requireValue(report.success === true, 'Vitest JSON does not record a successful run')
+  requireValue(report.success === false, 'Vitest JSON does not record the expected K1 RED run')
   const expectedCounters = {
-    numTotalTests: 23,
-    numPassedTests: 23,
-    numFailedTests: 0,
+    numTotalTests: 39,
+    numPassedTests: 34,
+    numFailedTests: 5,
     numPendingTests: 0,
     numTodoTests: 0,
-    numTotalTestSuites: 4,
+    numTotalTestSuites: 8,
+    numPassedTestSuites: 2,
+    numFailedTestSuites: 6,
     numPendingTestSuites: 0
   }
   for (const [name, expected] of Object.entries(expectedCounters))
     requireValue(report[name] === expected, `${name} must equal ${expected}`)
-  for (const name of ['numPassedTestSuites', 'numFailedTestSuites'])
-    requireValue(integer(report[name]), `${name} is missing or invalid`)
-  requireValue(
-    report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites === 4,
-    'recursive suite counts are inconsistent'
-  )
   if ('numUnhandledErrors' in report)
     requireValue(
       report.numUnhandledErrors === unhandledReport.unhandledCount,
@@ -1076,8 +1332,8 @@ function validate() {
     )
 
   requireValue(
-    Array.isArray(report.testResults) && report.testResults.length === 2,
-    'test file inventory is not exactly two files'
+    Array.isArray(report.testResults) && report.testResults.length === 4,
+    'test file inventory is not exactly four files'
   )
   const files = new Map()
   for (const result of report.testResults) {
@@ -1095,7 +1351,6 @@ function validate() {
   const suiteTitles = new Set()
   for (const file of requiredFiles) {
     const result = files.get(file)
-    requireValue(result.status === 'passed', `expected passed suite status for ${file}`)
     requireValue(Array.isArray(result.assertionResults), `assertion results are missing for ${file}`)
     for (const assertion of result.assertionResults) {
       requireValue(
@@ -1114,37 +1369,65 @@ function validate() {
     }
     requireValue(!result.message, `runner or import error occurred in ${file}`)
   }
-  requireValue(suiteTitles.size === 2, 'recursive describe inventory is not exactly two groups')
+  requireValue(suiteTitles.size === 4, 'recursive describe inventory is not exactly four groups')
   requireValue(
     report.testResults.length + suiteTitles.size === report.numTotalTestSuites,
-    'recursive suite total is not four'
+    'recursive suite total is not eight'
   )
-  requireValue(actualCases.size === cases.length, 'actual assertion count is not twenty-three')
+  requireValue(actualCases.size === cases.length && cases.length === 39, 'actual assertion count is not thirty-nine')
 
   for (const expected of cases) {
     const found = actualCases.get(expected.title)
     requireValue(found && found.file === expected.file, `case inventory differs: ${expected.title}`)
     requireValue(found.assertion.status === expected.expected, `unexpected status for ${expected.title}`)
-    requireValue(!found.assertion.failureMessages?.length, `case failed: ${expected.title}`)
+    const failures = found.assertion.failureMessages
+    requireValue(Array.isArray(failures), `failure-message array is missing for ${expected.title}`)
+    if (expected.expected === 'passed')
+      requireValue(failures.length === 0, `passing case has failure messages: ${expected.title}`)
+    else {
+      const causes = {
+        K01: 'K01 complete protected admission must settle before key disposal',
+        K03: 'K03 protected post-use physical check and borrowed wipe must precede key disposal',
+        K05: 'K05 complete legacy admission must settle before key disposal',
+        K07: 'K07 legacy post-use physical check and borrowed wipe must precede key disposal',
+        K09: 'K09 constructed journal storage must be owned before key post-use failure'
+      }
+      requireValue(
+        failures.length === 1 && failures[0].split(/\r?\n/, 1)[0] === `AssertionError: ${causes[expected.caseId]}`,
+        `failure is not the exact causal K1 assertion for ${expected.caseId}`
+      )
+    }
     if (expected.evidence) validateStructuredEvidence(evidence, expected)
+  }
+  for (const file of requiredFiles) {
+    const result = files.get(file)
+    const expectedFileStatus = file === requiredFiles[1] ? 'passed' : 'failed'
+    requireValue(
+      result.status === expectedFileStatus,
+      `file suite status differs from the five causal RED cases for ${file}`
+    )
   }
   requireValue(
     [...actualCases.keys()].every((title) => cases.some((entry) => entry.title === title)),
     'unexpected assertion was reported'
   )
 
+  const logBytes = readFileSync(resolve(logPath))
   const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
-    schema: 'metis-persistence-settlement-source-receipt/v1',
-    disposition: 'SETTLEMENT_GREEN_OWNED_CLEANUP',
-    phase: 'settlement-green-owned-cleanup',
+    schema: 'metis-persistence-k1-source-receipt/v1',
+    disposition: 'EXPECTED_K1_RED',
+    phase: 'persistence-k1-red',
+    parentCommit: process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT,
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+    job: process.env.GITHUB_JOB,
     target: process.env.PERSISTENCE_SETTLEMENT_TARGET,
     node: process.version,
-    vitestExitCode: 0,
+    vitestExitCode: Number(process.env.VITEST_EXIT_CODE),
     reportSha256: sha256(bytes),
+    logSha256: sha256(logBytes),
     unhandledReportSha256: sha256(unhandledBytes),
     unhandledReporterCount: unhandledReport.unhandledCount,
     sourceHashes,
@@ -1158,10 +1441,16 @@ function validate() {
       recursiveSuites: report.numTotalTestSuites,
       unhandled: 0
     },
-    cases: cases.map((entry) => ({ file: entry.file, title: entry.title, status: entry.expected }))
+    cases: cases.map((entry) => ({
+      caseId: entry.caseId,
+      file: entry.file,
+      title: entry.title,
+      status: entry.expected
+    })),
+    witnessIds: requiredWitnessIds
   }
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  console.log('persistence-settlement:SETTLEMENT_GREEN_OWNED_CLEANUP 23 cases; 23 passed; 16 owner witnesses')
+  console.log('persistence-settlement:EXPECTED_K1_RED 39 cases; 34 passed; 5 causal failures; 26 witnesses')
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }
 

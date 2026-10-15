@@ -1,4 +1,4 @@
-name: Persistence owned cleanup source GREEN
+name: Persistence K1 complete key-use RED
 
 on:
   push:
@@ -15,6 +15,10 @@ on:
       - src/main/persistence/root-registry.ts
       - src/main/persistence/bootstrap-main-factory.integration.test.ts
       - src/main/persistence/root-registry.test.ts
+      - src/main/persistence/protected-meeting-keys.test.ts
+      - src/main/persistence/legacy-file-key.test.ts
+      - src/main/persistence/legacy-file-key.ts
+      - src/main/features/meetings/incremental-meeting-journal-files.ts
       - src/main/infra/process/meeting-speech-host.ts
       - src/main/meeting-speech-worker.ts
       - src/main/features/meetings/incremental-meeting-journal.ts
@@ -39,16 +43,18 @@ defaults:
 
 jobs:
   test-first:
-    name: 23-case owned cleanup settlement GREEN
+    name: 39-case K1 complete key-use expected RED
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: settlement-green-owned-cleanup
+      PERSISTENCE_SETTLEMENT_PHASE: persistence-k1-red
+      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 7254798aafdcbced95a933d62fbef8522672e375
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
@@ -68,14 +74,30 @@ jobs:
           echo "UNHANDLED_REPORT_PATH=$SETTLEMENT_REPORT_DIR/unhandled.json" >> "$GITHUB_ENV"
           echo "SETTLEMENT_RECEIPT_PATH=$SETTLEMENT_REPORT_DIR/receipt.json" >> "$GITHUB_ENV"
           echo "REPORT_STARTED_AT_MS=$(date -u +%s%3N)" >> "$GITHUB_ENV"
+      - name: Verify the exact five-path test-first change envelope
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT"
+          actual_paths="$(git diff --name-only "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA" | LC_ALL=C sort)"
+          expected_paths="$(printf '%s\n' \
+            .github/workflows/persistence-settlement.yml \
+            scripts/qa/check-persistence-settlement-report.mjs \
+            src/main/persistence/bootstrap-main-factory.integration.test.ts \
+            src/main/persistence/legacy-file-key.test.ts \
+            src/main/persistence/protected-meeting-keys.test.ts | LC_ALL=C sort)"
+          test "$actual_paths" = "$expected_paths"
+          git diff --check "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA"
       - name: Install the frozen Node 22 test dependencies
-        run: npm ci --no-audit --no-fund
-      - name: Run the exact factory and root-registry suites with actual exit and JSON
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the exact four-module K1 suite with actual exit and JSON
         run: |
           set +e
           NO_COLOR=1 FORCE_COLOR=0 ./node_modules/.bin/vitest run \
             src/main/persistence/bootstrap-main-factory.integration.test.ts \
             src/main/persistence/root-registry.test.ts \
+            src/main/persistence/protected-meeting-keys.test.ts \
+            src/main/persistence/legacy-file-key.test.ts \
             --retry=0 \
             --reporter=default \
             --reporter=json \
@@ -101,18 +123,136 @@ jobs:
           const smallCount = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 8 ? value : 'missing'
           const status = (value) => ['passed', 'failed', 'pending', 'todo'].includes(value) ? value : 'unknown'
           const outcomeStatus = (value) => ['fulfilled', 'rejected'].includes(value) ? value : 'unknown'
-          const allowedCases = new Set(['F02', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'F05', 'F06', 'F07', 'F08', 'F10', 'R04', 'R05', 'R06', 'R07'])
+          const allowedCases = new Set(['F02', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'F05', 'F06', 'F07', 'F08', 'F10', 'R04', 'R05', 'R06', 'R07', 'K01', 'K02', 'K03', 'K04', 'K05', 'K06', 'K07', 'K08', 'K09', 'K10'])
           const counters = [
             'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests',
             'numTodoTests', 'numTotalTestSuites', 'numPendingTestSuites',
             'numPassedTestSuites', 'numFailedTestSuites', 'numUnhandledErrors'
           ]
           const readBounded = (file, limit) => {
-            const info = fs.statSync(file)
+            const info = fs.lstatSync(file)
             if (!info.isFile() || info.size <= 0 || info.size > limit) throw new Error('invalid-size')
             return fs.readFileSync(file, 'utf8')
           }
           const projectEvidence = (record) => {
+            const keyCases = new Set(['K01', 'K02', 'K03', 'K04', 'K05', 'K06', 'K07', 'K08'])
+            const bool = (value) => typeof value === 'boolean' ? value : 'unknown'
+            const count = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 8 ? value : 'missing'
+            const oneOf = (value, choices) => choices.includes(value) ? value : 'unknown'
+            const nullableBool = (value) => value === null || typeof value === 'boolean' ? value : 'unknown'
+            const pair = (value) => Array.isArray(value) && value.length === 2
+              ? value.map((item) => oneOf(item, ['pending', 'fulfilled', 'rejected']))
+              : ['unknown', 'unknown']
+            const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+            const physical = object(record.physical)
+            const parents = object(record.parents)
+            const bootstrap = object(record.bootstrap)
+            if (keyCases.has(record.caseId)) {
+              const observed = object(record.observed)
+              const settled = object(record.settled)
+              return {
+                caseId: record.caseId,
+                stage: oneOf(record.stage, ['admission', 'callback', 'post-use', 'completed-refusal']),
+                keyReady: bool(record.keyReady),
+                physical: {
+                  rawMatchesRoot: bool(physical.rawMatchesRoot),
+                  realStatCompleted: bool(physical.realStatCompleted),
+                  held: bool(physical.held),
+                  entries: count(physical.entries)
+                },
+                observed: {
+                  operation: oneOf(observed.operation, ['pending', 'fulfilled', 'rejected']),
+                  callbackCalls: count(observed.callbackCalls),
+                  callbackCompleted: bool(observed.callbackCompleted),
+                  borrow: oneOf(observed.borrow, ['absent', 'nonzero', 'zero']),
+                  disposals: pair(observed.disposals),
+                  checkpoint: bool(observed.checkpoint)
+                },
+                settled: {
+                  use: oneOf(settled.use, ['retired', 'callback-error']),
+                  originalCallbackError: bool(settled.originalCallbackError),
+                  callbackCalls: count(settled.callbackCalls),
+                  borrow: oneOf(settled.borrow, ['absent', 'zero']),
+                  disposals: pair(settled.disposals),
+                  repeat: oneOf(settled.repeat, ['pending', 'fulfilled', 'rejected']),
+                  lateUse: oneOf(settled.lateUse, ['retired']),
+                  lateCallbackCalls: count(settled.lateCallbackCalls),
+                  extraPhysicalChecks: count(settled.extraPhysicalChecks)
+                },
+                postUseBorrowAtDisposal: record.postUseBorrowAtDisposal === null
+                  ? null
+                  : oneOf(record.postUseBorrowAtDisposal, ['nonzero', 'zero']),
+                parents: {
+                  writerCloseAttempts: count(parents.writerCloseAttempts),
+                  writerCloseConfirmed: count(parents.writerCloseConfirmed),
+                  rootCloseAttempts: count(parents.rootCloseAttempts),
+                  rootCloseConfirmed: count(parents.rootCloseConfirmed)
+                }
+              }
+            }
+            if (record.caseId === 'K09' || record.caseId === 'K10') {
+              const store = object(record.store)
+              const opening = object(record.opening)
+              const result = {
+                caseId: record.caseId,
+                physical: {
+                  rawMatchesRoot: bool(physical.rawMatchesRoot),
+                  realStatCompleted: bool(physical.realStatCompleted),
+                  entries: count(physical.entries)
+                },
+                store: {
+                  constructorCalls: count(store.constructorCalls),
+                  actualObject: bool(store.actualObject),
+                  borrowZeroAtGate: bool(store.borrowZeroAtGate),
+                  initializeAtGate: count(store.initializeAtGate),
+                  disposeAtGate: count(store.disposeAtGate),
+                  disposeAfterOpen: count(store.disposeAfterOpen),
+                  disposeAfterBootstrap: count(store.disposeAfterBootstrap),
+                  extraDisposeAfterRepeat: count(store.extraDisposeAfterRepeat),
+                  disposedSameObject: nullableBool(store.disposedSameObject)
+                },
+                opening: record.caseId === 'K09'
+                  ? {
+                      atGate: oneOf(opening.atGate, ['pending']),
+                      outcome: oneOf(opening.outcome, ['original-stat-error']),
+                      sameError: bool(opening.sameError)
+                    }
+                  : {
+                      atGate: oneOf(opening.atGate, ['pending']),
+                      outcome: oneOf(opening.outcome, ['fulfilled'])
+                    },
+                parents: {
+                  keySettlements: count(parents.keySettlements),
+                  writerCloseAttempts: count(parents.writerCloseAttempts),
+                  writerCloseConfirmed: count(parents.writerCloseConfirmed),
+                  rootCloseAttempts: count(parents.rootCloseAttempts),
+                  rootCloseConfirmed: count(parents.rootCloseConfirmed)
+                },
+                bootstrap: {
+                  first: oneOf(bootstrap.first, ['pending', 'fulfilled', 'rejected']),
+                  repeat: oneOf(bootstrap.repeat, ['pending', 'fulfilled', 'rejected']),
+                  samePromise: bool(bootstrap.samePromise),
+                  workersStarted: count(bootstrap.workersStarted),
+                  workerExits: count(bootstrap.workerExits)
+                }
+              }
+              if (record.caseId === 'K09') return result
+              result.store.initializeAfterOpen = count(store.initializeAfterOpen)
+              result.store.disposeAfterAppend = count(store.disposeAfterAppend)
+              result.store.disposeAfterJournal = count(store.disposeAfterJournal)
+              const append = object(record.append)
+              const journal = object(record.journal)
+              result.append = {
+                status: oneOf(append.status, ['durable']),
+                revision: count(append.revision)
+              }
+              result.journal = {
+                first: oneOf(journal.first, ['pending', 'fulfilled', 'rejected']),
+                repeat: oneOf(journal.repeat, ['pending', 'fulfilled', 'rejected']),
+                samePromise: bool(journal.samePromise)
+              }
+              return result
+            }
             const result = { caseId: record.caseId }
             const numeric = [
               'keySettlementAttemptsBeforeSuccessor', 'keySettlementAttemptsAfterDisposal',
@@ -280,12 +420,12 @@ jobs:
             const counts = Object.fromEntries(counters.map((key) => [key, integer(report[key])]))
             console.log(`SETTLEMENT_DIAGNOSTIC_COUNTS ${JSON.stringify(counts)}`)
             let shown = 0
-            for (const suite of Array.isArray(report.testResults) ? report.testResults.slice(0, 2) : []) {
-              const file = ['bootstrap-main-factory.integration.test.ts', 'root-registry.test.ts'].find((name) =>
+            for (const suite of Array.isArray(report.testResults) ? report.testResults.slice(0, 4) : []) {
+              const file = ['bootstrap-main-factory.integration.test.ts', 'root-registry.test.ts', 'protected-meeting-keys.test.ts', 'legacy-file-key.test.ts'].find((name) =>
                 typeof suite.name === 'string' && suite.name.replaceAll('\\', '/').endsWith(`/${name}`))
               if (!file) continue
-              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 23) : []) {
-                if (shown++ >= 23) break
+              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 39) : []) {
+                if (shown++ >= 39) break
                 const title = typeof assertion.title === 'string' ? safeText(assertion.title, 160) : 'missing'
                 console.log(`SETTLEMENT_DIAGNOSTIC_CASE file=${file} status=${status(assertion.status)} title=${title}`)
                 if (status(assertion.status) === 'failed' && Array.isArray(assertion.failureMessages) && assertion.failureMessages[0]) {
@@ -294,7 +434,7 @@ jobs:
                   console.log(`SETTLEMENT_DIAGNOSTIC_FIRST_ERROR file=${file} title=${title} name=${identity ? firstLine.split(':', 1)[0] : 'unknown'} message=${safeText(identity?.[1] || firstLine)}`)
                 }
               }
-              if (shown > 23) break
+              if (shown > 39) break
             }
           }
 
@@ -310,7 +450,7 @@ jobs:
             for (const line of log.split(/\r?\n/)) {
               const marker = 'PERSISTENCE_SETTLEMENT_EVIDENCE '
               const index = line.indexOf(marker)
-              if (index < 0 || evidenceCount >= 16) continue
+              if (index < 0 || evidenceCount >= 26) continue
               const payload = line.slice(index + marker.length).trim()
               if (payload.length > 4096) {
                 if (!evidenceErrorPrinted) console.log('SETTLEMENT_DIAGNOSTIC_ERROR evidence=oversize')
@@ -330,13 +470,17 @@ jobs:
             console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE_COUNT ${evidenceCount}`)
           }
           NODE
-      - name: Validate all 23 settlements and 16 exact owner witnesses
+      - name: Validate all 39 cases and 26 exact lifecycle witnesses
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain the raw run, JSON and SETTLEMENT_GREEN_OWNED_CLEANUP receipt
+      - name: Retain raw reports and EXPECTED_K1_RED receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-settlement-green-owned-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/
+          name: persistence-k1-red-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/vitest.json
+            ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/vitest.log
+            ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/unhandled.json
+            ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/receipt.json
           if-no-files-found: error
           retention-days: 14
