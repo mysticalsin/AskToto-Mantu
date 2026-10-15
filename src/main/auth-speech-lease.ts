@@ -1,10 +1,19 @@
 import type { Settings } from '@shared/ipc'
+import type { AuthEnvironmentSnapshot } from './auth-config'
 import { createHash } from 'node:crypto'
+import {
+  assertVerifiedSpeechAuthBoundaryCurrent,
+  getVerifiedSpeechAuthBoundaryPersistenceReceipt,
+  getVerifiedSpeechAuthBoundaryEnvironmentSnapshot,
+  isVerifiedSpeechAuthBoundary,
+  sameVerifiedSpeechAuthBoundarySources
+} from './auth-speech-boundary'
 
 export interface SpeechAuthSettingsObservation {
   readonly settings: Settings
   readonly readable: boolean
   readonly epoch: number
+  readonly authoritySnapshot?: object
 }
 
 export interface SpeechAuthLeaseReaders {
@@ -42,7 +51,10 @@ export interface SpeechAuthLeaseDependencies {
   readSession: () => SpeechAuthSession | null
   readSessionEpoch: () => number
   readProfilePath: () => string
+  isPersistenceSettingsReceiptCurrent?: (receipt: object) => boolean
+  isAuthEnvironmentSnapshotCurrent?: (snapshot: AuthEnvironmentSnapshot) => boolean
   readBoundary: (readers: SpeechAuthLeaseReaders) => Promise<VerifiedSpeechAuthBoundary | null>
+  readMainPersistenceBoundary?: (isOriginalFenceCurrent: () => boolean) => Promise<VerifiedSpeechAuthBoundary | null>
   validateSession: (config: SpeechAuthConfig | null) => void
   sessionIsValid: (session: SpeechAuthSession, config: SpeechAuthConfig | null, now: number) => boolean
 }
@@ -60,10 +72,42 @@ export interface MainPersistenceSessionBoundary {
 
 export interface MainPersistenceSessionBoundaryInput {
   readonly config: SpeechAuthConfig | null
+  readonly enforced: boolean
+  readonly sticky: boolean
+}
+
+function persistencePrincipal(session: SpeechAuthSession): string | null {
+  const tenant = session.tid.trim().toLowerCase()
+  const email = session.email.trim().toLowerCase()
+  const domain = session.domain.trim().toLowerCase()
+  if (!tenant || !email || !domain || !email.endsWith(`@${domain}`)) return null
+  return createHash('sha256').update(`metis-persistence-principal/v1\n${tenant}\n${domain}\n${email}`).digest('hex')
+}
+
+function sameSessionSnapshot(current: SpeechAuthSession | null, snapshot: SpeechAuthSession | null): boolean {
+  return current === null || snapshot === null
+    ? current === snapshot
+    : current.email === snapshot.email &&
+        current.domain === snapshot.domain &&
+        current.tid === snapshot.tid &&
+        current.at === snapshot.at
+}
+
+interface PublishedMainPersistenceObservation {
+  readonly config: SpeechAuthConfig | null
   readonly configured: boolean
   readonly enforced: boolean
   readonly sticky: boolean
-  readonly authorized: boolean
+  readonly settingsReceipt: object
+  readonly session: SpeechAuthSession | null
+  readonly sessionSnapshot: SpeechAuthSession | null
+  readonly sessionEpoch: number
+  readonly profilePath: string
+  readonly environmentSnapshot: AuthEnvironmentSnapshot
+  readonly authorityEpoch: number
+  readonly semanticEpoch: number
+  readonly principalAssociation: string | null
+  readonly verifiedBoundary: VerifiedSpeechAuthBoundary
 }
 
 interface LeaseRecord {
@@ -97,6 +141,17 @@ function settingsSemantic(settings: Settings): string {
   ])
 }
 
+function sameConfig(left: SpeechAuthConfig | null, right: SpeechAuthConfig | null): boolean {
+  return (
+    left === right ||
+    (!!left &&
+      !!right &&
+      left.clientId === right.clientId &&
+      left.tenantId === right.tenantId &&
+      left.allowedDomain === right.allowedDomain)
+  )
+}
+
 export class SpeechAuthLeaseController {
   private readonly records = new WeakMap<object, LeaseRecord>()
   private readonly listeners = new Set<() => void>()
@@ -112,6 +167,9 @@ export class SpeechAuthLeaseController {
   private boundaryGeneration = 0
   private latestRecord: LeaseRecord | null = null
   private inFlight: Promise<SpeechAuthLease | null> | null = null
+  private publishedMainPersistence: PublishedMainPersistenceObservation | null = null
+  private inFlightMainPersistence: Promise<MainPersistenceSessionBoundary | null> | null = null
+  private readonly publishedMainBoundaries = new WeakMap<object, MainPersistenceSessionBoundary>()
 
   constructor(private readonly dependencies: SpeechAuthLeaseDependencies) {}
 
@@ -130,15 +188,10 @@ export class SpeechAuthLeaseController {
   /** Hash the verified in-memory tenant/account association without exposing raw identity to callers. */
   capturePersistencePrincipal(): string | null {
     const session = this.dependencies.readSession()
-    if (!session) return null
-    const tenant = session.tid.trim().toLowerCase()
-    const email = session.email.trim().toLowerCase()
-    const domain = session.domain.trim().toLowerCase()
-    if (!tenant || !email || !domain || !email.endsWith(`@${domain}`)) return null
-    return createHash('sha256').update(`metis-persistence-principal/v1\n${tenant}\n${domain}\n${email}`).digest('hex')
+    return session ? persistencePrincipal(session) : null
   }
 
-  /** Main-owned, no-I/O currentness for retained work; config is captured at the explicit action boundary. */
+  /** Explicit preparation API. Its caller has already performed the actual auth refresh. */
   captureMainPersistenceSessionBoundary(input: MainPersistenceSessionBoundaryInput): MainPersistenceSessionBoundary {
     const session = this.dependencies.readSession()
     const sessionSnapshot = session ? { ...session } : null
@@ -147,18 +200,19 @@ export class SpeechAuthLeaseController {
     const authorityEpoch = this.authorityEpoch
     const semanticEpoch = this.semanticEpoch
     const config = input.config ? { ...input.config } : null
+    const configured = config !== null
     const principalAssociation = this.capturePersistencePrincipal()
     let lastWallNow = Date.now()
     let lastMonotonicNow = performance.now()
     const boundary = Object.freeze({
       principalAssociation,
-      configured: input.configured,
+      configured,
       isCurrent: () => {
         const wallNow = Date.now()
         const monotonicNow = performance.now()
         const currentSession = this.dependencies.readSession()
         if (
-          !input.authorized ||
+          !(input.enforced || input.sticky ? !!currentSession : !configured || !!currentSession) ||
           this.authorityEpoch !== authorityEpoch ||
           this.semanticEpoch !== semanticEpoch ||
           this.dependencies.readSessionEpoch() !== sessionEpoch ||
@@ -182,7 +236,7 @@ export class SpeechAuthLeaseController {
           ) {
             return false
           }
-        } else if (currentSession !== null || input.enforced || input.sticky || (input.configured && config !== null)) {
+        } else if (currentSession !== null || input.enforced || input.sticky || configured) {
           return false
         }
         lastWallNow = wallNow
@@ -191,6 +245,253 @@ export class SpeechAuthLeaseController {
       }
     }) as MainPersistenceSessionBoundary
     return boundary
+  }
+
+  /** Explicit C1 producer; only a privately associated store/auth frame can reach publication. */
+  refreshMainPersistenceSessionObservation(): Promise<MainPersistenceSessionBoundary | null> {
+    if (this.inFlightMainPersistence) return this.inFlightMainPersistence
+    const pending = this.prepareMainPersistenceObservation()
+    this.inFlightMainPersistence = pending
+    void pending.then(
+      () => {
+        if (this.inFlightMainPersistence === pending) this.inFlightMainPersistence = null
+      },
+      () => {
+        if (this.inFlightMainPersistence === pending) this.inFlightMainPersistence = null
+      }
+    )
+    return pending
+  }
+
+  private async prepareMainPersistenceObservation(): Promise<MainPersistenceSessionBoundary | null> {
+    const reader = this.dependencies.readMainPersistenceBoundary
+    if (!reader) {
+      this.retireMainPersistence()
+      return null
+    }
+    let boundaryGeneration: number
+    try {
+      this.dependencies.prepareSession()
+      boundaryGeneration = ++this.boundaryGeneration
+    } catch {
+      this.retireMainPersistence()
+      return null
+    }
+    let session: SpeechAuthSession | null
+    let sessionSnapshot: SpeechAuthSession | null
+    let sessionEpoch: number
+    let profilePath: string
+    let authorityEpoch: number
+    let semanticEpoch: number
+    try {
+      session = this.dependencies.readSession()
+      sessionSnapshot = session ? Object.freeze({ ...session }) : null
+      sessionEpoch = this.dependencies.readSessionEpoch()
+      profilePath = this.dependencies.readProfilePath()
+      authorityEpoch = this.authorityEpoch
+      semanticEpoch = this.semanticEpoch
+    } catch {
+      this.retireMainPersistence()
+      return null
+    }
+    let originalFenceRetired = false
+    const isOriginalSessionValueCurrent = () => {
+      const currentSession = this.dependencies.readSession()
+      if (currentSession !== session || !sameSessionSnapshot(currentSession, sessionSnapshot))
+        originalFenceRetired = true
+      return !originalFenceRetired
+    }
+    const isOriginalFenceCurrent = () => {
+      const isCurrent =
+        boundaryGeneration === this.boundaryGeneration &&
+        this.authorityEpoch === authorityEpoch &&
+        this.semanticEpoch === semanticEpoch &&
+        this.dependencies.readSessionEpoch() === sessionEpoch &&
+        this.dependencies.readProfilePath() === profilePath &&
+        isOriginalSessionValueCurrent()
+      if (!isCurrent) originalFenceRetired = true
+      return !originalFenceRetired
+    }
+    let boundary: VerifiedSpeechAuthBoundary | null = null
+    try {
+      boundary = await reader(isOriginalFenceCurrent)
+      if (!boundary || !isOriginalFenceCurrent() || !isVerifiedSpeechAuthBoundary(boundary))
+        throw new Error('Stale auth frame')
+      await assertVerifiedSpeechAuthBoundaryCurrent(boundary)
+      if (!isOriginalFenceCurrent()) throw new Error('Original auth fence changed')
+      const settingsReceipt = getVerifiedSpeechAuthBoundaryPersistenceReceipt(boundary)
+      if (!settingsReceipt || !this.dependencies.isPersistenceSettingsReceiptCurrent?.(settingsReceipt))
+        throw new Error('Settings receipt is not current')
+      const environmentSnapshot = getVerifiedSpeechAuthBoundaryEnvironmentSnapshot(boundary)
+      if (!environmentSnapshot || !this.dependencies.isAuthEnvironmentSnapshotCurrent?.(environmentSnapshot))
+        throw new Error('Auth environment changed during preparation')
+      if (boundary.session !== session || !sameSessionSnapshot(boundary.session, sessionSnapshot))
+        throw new Error('Session changed during authority read')
+      this.dependencies.validateSession(boundary.config)
+      if (!isOriginalFenceCurrent() || this.dependencies.readSession() !== session)
+        throw new Error('Session validation changed the captured session')
+
+      const observation = boundary.observation
+      const changedSettings = this.observeSettings(observation, boundary.pathsRevision)
+      const expectedAuthorityEpoch = authorityEpoch + (changedSettings ? 1 : 0)
+      const expectedSemanticEpoch = semanticEpoch + (changedSettings ? 1 : 0)
+      if (
+        boundaryGeneration !== this.boundaryGeneration ||
+        this.authorityEpoch !== expectedAuthorityEpoch ||
+        this.semanticEpoch !== expectedSemanticEpoch ||
+        this.dependencies.readSessionEpoch() !== sessionEpoch ||
+        this.dependencies.readProfilePath() !== profilePath ||
+        !isOriginalSessionValueCurrent() ||
+        !this.dependencies.isPersistenceSettingsReceiptCurrent?.(settingsReceipt)
+      )
+        throw new Error('Authority changed before publication')
+
+      const allowed = boundary.enforced || boundary.sticky ? !!session : !boundary.config || !!session
+      if (!allowed) throw new Error('Auth policy requires a session')
+      const principalAssociation = sessionSnapshot ? persistencePrincipal(sessionSnapshot) : null
+      const previous = this.publishedMainPersistence
+      if (
+        previous &&
+        this.isPublishedMainPersistenceCurrent(previous) &&
+        previous.session === session &&
+        previous.sessionEpoch === sessionEpoch &&
+        previous.profilePath === profilePath &&
+        JSON.stringify(previous.environmentSnapshot) === JSON.stringify(environmentSnapshot) &&
+        previous.configured === (boundary.config !== null) &&
+        previous.enforced === boundary.enforced &&
+        previous.sticky === boundary.sticky &&
+        sameConfig(previous.config, boundary.config) &&
+        previous.settingsReceipt === settingsReceipt &&
+        previous.principalAssociation === principalAssociation &&
+        sameVerifiedSpeechAuthBoundarySources(previous.verifiedBoundary, boundary)
+      )
+        return this.capturePublishedMainPersistenceSessionBoundary()
+
+      if (previous) {
+        this.retireMainPersistence(previous)
+        if (
+          boundaryGeneration !== this.boundaryGeneration ||
+          this.dependencies.readSessionEpoch() !== sessionEpoch ||
+          this.dependencies.readProfilePath() !== profilePath ||
+          !isOriginalSessionValueCurrent() ||
+          !this.dependencies.isPersistenceSettingsReceiptCurrent?.(settingsReceipt)
+        )
+          throw new Error('Original authority changed while retiring prior publication')
+      }
+      const published: PublishedMainPersistenceObservation = Object.freeze({
+        config: boundary.config ? Object.freeze({ ...boundary.config }) : null,
+        configured: boundary.config !== null,
+        enforced: boundary.enforced,
+        sticky: boundary.sticky,
+        settingsReceipt,
+        session,
+        sessionSnapshot,
+        sessionEpoch,
+        profilePath,
+        environmentSnapshot,
+        authorityEpoch: this.authorityEpoch,
+        semanticEpoch: this.semanticEpoch,
+        principalAssociation,
+        verifiedBoundary: boundary
+      })
+      this.publishedMainPersistence = published
+      return this.createPublishedBoundary(published)
+    } catch {
+      this.retireMainPersistence()
+      return null
+    }
+  }
+
+  /** Read-only currentness over the last coherent authStatus publication; never starts preparation. */
+  capturePublishedMainPersistenceSessionBoundary(): MainPersistenceSessionBoundary | null {
+    const published = this.publishedMainPersistence
+    if (!published || !this.isPublishedMainPersistenceCurrent(published)) return null
+    return this.createPublishedBoundary(published)
+  }
+
+  private createPublishedBoundary(published: PublishedMainPersistenceObservation): MainPersistenceSessionBoundary {
+    const existing = this.publishedMainBoundaries.get(published as object)
+    if (existing) return existing
+    let lastWallNow = Date.now()
+    let lastMonotonicNow = performance.now()
+    const boundary = Object.freeze({
+      principalAssociation: published.principalAssociation,
+      configured: published.configured,
+      isCurrent: () => {
+        const wallNow = Date.now()
+        const monotonicNow = performance.now()
+        if (
+          !this.isPublishedMainPersistenceCurrent(published) ||
+          !Number.isFinite(wallNow) ||
+          !Number.isFinite(monotonicNow) ||
+          wallNow < lastWallNow ||
+          monotonicNow < lastMonotonicNow
+        ) {
+          this.retireMainPersistence(published)
+          return false
+        }
+        lastWallNow = wallNow
+        lastMonotonicNow = monotonicNow
+        return true
+      }
+    }) as MainPersistenceSessionBoundary
+    this.publishedMainBoundaries.set(published as object, boundary)
+    return boundary
+  }
+
+  private isPublishedMainPersistenceCurrent(published: PublishedMainPersistenceObservation): boolean {
+    if (
+      this.publishedMainPersistence !== published ||
+      this.authorityEpoch !== published.authorityEpoch ||
+      this.semanticEpoch !== published.semanticEpoch ||
+      this.dependencies.readSessionEpoch() !== published.sessionEpoch ||
+      this.dependencies.readProfilePath() !== published.profilePath ||
+      this.dependencies.readSession() !== published.session ||
+      !this.dependencies.isAuthEnvironmentSnapshotCurrent?.(published.environmentSnapshot) ||
+      !this.dependencies.isPersistenceSettingsReceiptCurrent?.(published.settingsReceipt)
+    ) {
+      this.retireMainPersistence(published)
+      return false
+    }
+    const session = published.session
+    if (session) {
+      const snapshot = published.sessionSnapshot
+      if (
+        !snapshot ||
+        session.email !== snapshot.email ||
+        session.domain !== snapshot.domain ||
+        session.tid !== snapshot.tid ||
+        session.at !== snapshot.at ||
+        !this.dependencies.sessionIsValid(session, published.config, Date.now())
+      ) {
+        this.retireMainPersistence(published)
+        return false
+      }
+    } else if (published.enforced || published.sticky || published.configured) {
+      this.retireMainPersistence(published)
+      return false
+    }
+    return true
+  }
+
+  private retireMainPersistence(expected?: PublishedMainPersistenceObservation): void {
+    if (expected && this.publishedMainPersistence !== expected) return
+    if (!this.publishedMainPersistence) return
+    this.publishedMainPersistence = null
+    this.semanticEpoch += 1
+  }
+
+  /** Legacy synchronous auth reads may revoke stale C1 state, but cannot create or refresh it. */
+  retireMainPersistenceIfStatusDisagrees(config: SpeechAuthConfig | null, enforced: boolean, sticky: boolean): void {
+    const published = this.publishedMainPersistence
+    if (!published) return
+    if (
+      !sameConfig(published.config, config) ||
+      published.enforced !== enforced ||
+      published.sticky !== sticky ||
+      !this.isPublishedMainPersistenceCurrent(published)
+    )
+      this.retireMainPersistence(published)
   }
 
   private retire(): void {
@@ -211,6 +512,7 @@ export class SpeechAuthLeaseController {
 
   invalidate(): void {
     this.authorityKey = null
+    this.publishedMainPersistence = null
     this.retire()
   }
 

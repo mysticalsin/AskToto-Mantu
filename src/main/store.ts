@@ -56,12 +56,6 @@ import {
   publishSettingsSnapshot,
   type SettingsPolicyAuthoritySnapshot
 } from './settings-observation'
-import {
-  beginSettingsAuthorityProducerFrame,
-  commitManagedAuthorityDocument,
-  endSettingsAuthorityProducerFrame,
-  flushSettingsAuthorityInvalidations
-} from './settings-authority-history'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -82,6 +76,13 @@ import {
 } from './fresh-lean-speech-defaults'
 import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
 import { isProfileRecoveryFileName } from './profile-recovery-files'
+import {
+  attachSettingsAuthAuthorityFrame,
+  captureSettingsCacheAuthorityKey,
+  captureSettingsAuthAuthorityPins,
+  createSettingsAuthorityManagedReader,
+  type SettingsCacheAuthorityKey
+} from './settings-auth-authority-frame'
 
 const dir = () => app.getPath('userData')
 const freshLeanSpeechAuthority = new FreshLeanSpeechAuthority()
@@ -99,71 +100,31 @@ function adminPolicyIdentity(): AdminPolicyIdentity {
   }
 }
 let adminPolicyPathState: 'absent' | 'present' | 'unknown' = 'unknown'
-let freshAdminRead: ManagedPolicyAuthorityRead | null = null
-let freshUserManagedRead: ManagedPolicyAuthorityRead | null = null
-type ManagedRawAuthorityRead = Readonly<{
-  sourceIdentity: string
-  status: 'readable' | 'unreadable'
-  raw: string | null
-}>
-let managedAuthorityReadFrame: Map<'user' | 'admin', ManagedRawAuthorityRead> | null = null
-
-function withManagedAuthorityReadFrame<T>(read: () => T): T {
-  if (managedAuthorityReadFrame) return read()
-  const prior = managedAuthorityReadFrame
-  managedAuthorityReadFrame = new Map()
-  beginSettingsAuthorityProducerFrame()
-  try {
-    return read()
-  } finally {
-    managedAuthorityReadFrame = prior
-    endSettingsAuthorityProducerFrame()
-  }
-}
-
-function readManagedAuthorityRaw(
-  source: 'user' | 'admin',
-  sourceIdentity: string,
-  read: () => ManagedRawAuthorityRead
-): ManagedRawAuthorityRead {
-  const cached = managedAuthorityReadFrame?.get(source)
-  if (cached) {
-    if (cached.sourceIdentity === sourceIdentity) return cached
-    const unreadable = Object.freeze({ sourceIdentity, status: 'unreadable' as const, raw: null })
-    managedAuthorityReadFrame?.set(source, unreadable)
-    publishManagedAuthority(source, sourceIdentity, null, 'unreadable')
-    return unreadable
-  }
-  const result = read()
-  managedAuthorityReadFrame?.set(source, result)
-  return result
-}
-
 const adminCache = new AdminManagedCache({
   readIdentity: adminPolicyIdentity,
   readTrusted: () => {
+    const freshAdminRead = authorityReader.getFreshAdminRead()
     if (freshAdminRead)
       return freshAdminRead.status === 'present' ? Buffer.from(freshAdminRead.bytes).toString('utf8') : null
     return readTrustedAdminManaged()
   }
 })
-const adminManagedContent = (): string | null => {
-  const identity = adminPolicyIdentity()
-  return readManagedAuthorityRaw('admin', identity.path, () => {
-    if (freshAdminRead?.status === 'invalid') {
-      managedPolicyAuthority.setUnreadable('admin')
-      publishManagedAuthority('admin', identity.path, null, 'unreadable')
-      return Object.freeze({ sourceIdentity: identity.path, status: 'unreadable', raw: null })
-    }
-    const content = managedPolicyAuthority.readAdminContent(
+const authorityReader = createSettingsAuthorityManagedReader({
+  adminIdentity: adminPolicyIdentity,
+  adminPathState: () => adminPolicyPathState,
+  readAdminContent: () =>
+    managedPolicyAuthority.readAdminContent(
       () => adminCache.read(),
       () => adminPolicyPathState
-    )
-    const status = adminPolicyPathState === 'unknown' ? 'unreadable' : 'readable'
-    publishManagedAuthority('admin', identity.path, content, status)
-    return Object.freeze({ sourceIdentity: identity.path, status, raw: content })
-  }).raw
-}
+    ),
+  readFile: (path) => readFileSync(path, 'utf8'),
+  setUnreadable: (source) => managedPolicyAuthority.setUnreadable(source),
+  noteReadFailure: (source, error) => managedPolicyAuthority.noteReadFailure(source, error),
+  invalidateSettingsCache: () => {
+    _settingsCache = null
+  }
+})
+const adminManagedContent = authorityReader.adminManagedContent
 export function resetAdminManagedCache(): void {
   adminCache.reset()
   managedPolicyAuthority.setAdminReadable(true)
@@ -196,56 +157,15 @@ function ensureDir(): void {
 type Shape = Record<string, { safeParse: (v: unknown) => { success: boolean; data?: unknown } }>
 const shape = (): Shape => BaseSettingsSchema.shape as unknown as Shape
 
-function readPolicyFile<T>(path: string, source: 'user' | 'admin', fallback: T, parse: (raw: string) => T): T {
-  const document = readManagedAuthorityRaw(source, path, () => {
-    if (source === 'user' && freshUserManagedRead) {
-      if (freshUserManagedRead.status === 'absent')
-        return Object.freeze({ sourceIdentity: path, status: 'readable', raw: null })
-      if (freshUserManagedRead.status !== 'present')
-        return Object.freeze({ sourceIdentity: path, status: 'unreadable', raw: null })
-      return Object.freeze({
-        sourceIdentity: path,
-        status: 'readable',
-        raw: Buffer.from(freshUserManagedRead.bytes).toString('utf8')
-      })
-    }
-    try {
-      return Object.freeze({ sourceIdentity: path, status: 'readable', raw: readFileSync(path, 'utf8') })
-    } catch (error) {
-      return Object.freeze({
-        sourceIdentity: path,
-        status: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'readable' : 'unreadable',
-        raw: null
-      })
-    }
-  })
-  if (document.status === 'unreadable') {
-    managedPolicyAuthority.setUnreadable(source)
-    publishManagedAuthority(source, path, null, 'unreadable')
-    return fallback
-  }
-  if (document.raw === null) {
-    publishManagedAuthority(source, path, null, 'readable')
-    return fallback
-  }
-  try {
-    const value = parse(document.raw)
-    publishManagedAuthority(source, path, document.raw, 'readable')
-    return value
-  } catch (error) {
-    managedPolicyAuthority.noteReadFailure(source, error)
-    publishManagedAuthority(source, path, null, 'unreadable')
-    return fallback
-  }
-}
-
 /** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
 const readManagedFrom = (path: string): Record<string, unknown> =>
-  readPolicyFile(path, 'user', {}, (raw) => managedPolicyAuthority.parseManaged(raw, 'user', validSettingsKeysOnly))
+  authorityReader.readPolicyFile(path, 'user', {}, (raw) =>
+    managedPolicyAuthority.parseManaged(raw, 'user', validSettingsKeysOnly)
+  )
 const readLockedFrom = (path: string): string[] =>
-  readPolicyFile(path, 'user', [], (raw) => managedPolicyAuthority.parseLocked(raw, 'user'))
+  authorityReader.readPolicyFile(path, 'user', [], (raw) => managedPolicyAuthority.parseLocked(raw, 'user'))
 const readRawPolicyFrom = (path: string, source: 'user' | 'admin' = 'user'): string | null =>
-  readPolicyFile(path, source, null, (raw) => raw)
+  authorityReader.readPolicyFile(path, source, null, (raw) => raw)
 
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
@@ -545,33 +465,12 @@ function migrateLegacyBidstackConnection(raw: Record<string, unknown>): void {
 //     without requiring an app restart.
 // Cache is also explicitly invalidated in setSettings / setApiKey / clearApiKey for safety.
 
-function safeMtime(p: string): number {
-  try {
-    return statSync(p).mtimeMs
-  } catch {
-    return 0
-  }
-}
-
-interface SettingsCache {
+interface SettingsCache extends SettingsCacheAuthorityKey {
   value: Settings
   readable: boolean
-  userPath: string
-  userMtime: number
-  managedMtime: number
-  adminMtime: number
 }
 let _settingsCache: SettingsCache | null = null
 
-function publishManagedAuthority(
-  source: 'user' | 'admin',
-  sourceIdentity: string,
-  raw: string | null,
-  status: 'readable' | 'unreadable'
-): void {
-  if (commitManagedAuthorityDocument(source, sourceIdentity, raw, status)) _settingsCache = null
-  flushSettingsAuthorityInvalidations()
-}
 let _freshAsrEngine: FreshAsrEngine | null = null
 
 /** `os.totalmem()` is stable for this process lifetime. Read it once so settings hot paths never probe
@@ -610,18 +509,24 @@ export const getLocalModelProvisioningIdentity = speechAuthorityIdentities.local
 /** Resolve real current settings and revalidate machine trust at an explicit authority boundary. */
 /** Serialize temporary verified-file overrides so concurrent admissions cannot cross-contaminate reads. */
 export function readSettingsAtAuthorityBoundary(): Promise<SettingsPolicyAuthoritySnapshot> {
+  const capturedProfilePath = dir()
+  const capturedAdminPath = adminManagedConfigPath()
+  let sourcePins: Awaited<ReturnType<typeof captureSettingsAuthAuthorityPins>> = null
+  let authorityReads: { user: ManagedPolicyAuthorityRead; admin: ManagedPolicyAuthorityRead } | null = null
   return freshLeanSpeechAuthority.readSettingsAuthorityBoundary({
     readFiles: async () => {
+      sourcePins = await captureSettingsAuthAuthorityPins(capturedProfilePath)
+      if (!sourcePins) throw new Error('Unable to pin settings authority sources')
       const [user, admin] = await Promise.all([
-        readManagedPolicyAuthorityFile(join(dir(), 'managed-config.json')),
-        readManagedPolicyAuthorityFile(adminManagedConfigPath(), undefined, true)
+        readManagedPolicyAuthorityFile(join(capturedProfilePath, 'managed-config.json')),
+        readManagedPolicyAuthorityFile(capturedAdminPath, undefined, true)
       ])
-      return { user, admin }
+      if (dir() !== capturedProfilePath || adminManagedConfigPath() !== capturedAdminPath)
+        throw new Error('Settings authority paths changed during capture')
+      authorityReads = { user, admin }
+      return authorityReads
     },
-    setReads: (user, admin) => {
-      freshUserManagedRead = user
-      freshAdminRead = admin
-    },
+    setReads: authorityReader.setReads,
     resetCaches: () => {
       _settingsCache = null
       adminCache.reset()
@@ -634,26 +539,24 @@ export function readSettingsAtAuthorityBoundary(): Promise<SettingsPolicyAuthori
     }),
     readable: () => getPublishedSettingsObservation()?.readable === true,
     epoch: getSettingsObservationEpoch,
-    withReadFrame: withManagedAuthorityReadFrame
+    withReadFrame: authorityReader.withReadFrame,
+    onSnapshot: (snapshot) => {
+      if (!sourcePins || !authorityReads) throw new Error('Settings authority frame was not captured')
+      if (dir() !== capturedProfilePath || adminManagedConfigPath() !== capturedAdminPath)
+        throw new Error('Settings authority paths changed before frame attachment')
+      attachSettingsAuthAuthorityFrame(snapshot, {
+        profilePath: capturedProfilePath,
+        adminPath: capturedAdminPath,
+        ...sourcePins,
+        userRead: authorityReads.user,
+        adminRead: authorityReads.admin
+      })
+    }
   })
 }
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
-  return {
-    // settings.json path is part of the key so a change of profile directory always misses the cache.
-    // In production `settingsPath()` is constant; test suites point app.getPath('userData') at a fresh
-    // temp dir per case and would otherwise get a prior case's cached Settings when the fresh profile
-    // has no settings.json (all mtimes 0), causing order-dependent flakes.
-    userPath: settingsPath(),
-    userMtime: safeMtime(settingsPath()),
-
-    managedMtime: safeMtime(join(dir(), 'managed-config.json')),
-    adminMtime: safeMtime(adminManagedConfigPath())
-  }
-}
-
 function getSettingsFromAuthorityFrame(): Settings {
-  const m = currentSettingsMtimes()
+  const m = captureSettingsCacheAuthorityKey(settingsPath(), dir(), adminManagedConfigPath())
   if (
     _settingsCache &&
     _settingsCache.userPath === m.userPath &&
@@ -795,7 +698,7 @@ function getSettingsFromAuthorityFrame(): Settings {
 }
 
 export function getSettings(): Settings {
-  return withManagedAuthorityReadFrame(getSettingsFromAuthorityFrame)
+  return authorityReader.withReadFrame(getSettingsFromAuthorityFrame)
 }
 
 /**

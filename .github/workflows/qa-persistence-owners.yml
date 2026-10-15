@@ -1,0 +1,222 @@
+name: QA persistence run owners
+
+on:
+  push:
+    paths:
+      - .github/workflows/qa-persistence-owners.yml
+      - vitest.qa-persistence-owners.config.ts
+      - package.json
+      - package-lock.json
+      - src/main/persistence/qa-run-protocol.ts
+      - src/main/persistence/qa-run-protocol.test.ts
+      - src/main/persistence/qa-run-protocol.qa-case.ts
+      - src/main/persistence/qa-run-owner.ts
+      - src/main/persistence/qa-run-owner.qa-case.ts
+      - src/main/persistence/qa-profile-root-owner.ts
+      - src/main/persistence/qa-profile-root-owner.qa-case.ts
+      - src/main/persistence/root-registry.ts
+      - src/main/persistence/root-registry.qa-case.ts
+      - src/main/persistence/native-key-intent.ts
+      - src/main/persistence/native-key-intent.test.ts
+      - src/main/persistence/qa-main-action-owner.ts
+      - src/main/persistence/qa-main-action-owner.test.ts
+      - src/main/persistence/bootstrap.ts
+      - src/main/index.ts
+      - src/main/auth-boundary-adapters.ts
+      - src/main/auth-config.ts
+      - src/main/auth-persistence-observation.test.ts
+      - src/main/auth-persistence-observation.ts
+      - src/main/auth-speech-boundary-readers.test.ts
+      - src/main/auth-speech-boundary-readers.ts
+      - src/main/auth-speech-boundary.ts
+      - src/main/auth-speech-lease.test.ts
+      - src/main/auth-speech-lease.ts
+      - src/main/auth.test.ts
+      - src/main/auth.ts
+      - src/main/fresh-lean-speech-defaults.ts
+      - src/main/fresh-lean-speech-defaults.test.ts
+      - src/main/settings-auth-authority-frame.ts
+      - src/main/settings-observation.test.ts
+      - src/main/speech-desktop-boundary.ts
+      - src/main/store.test.ts
+      - src/main/store.ts
+      - src/main/win-security.ts
+      - src/main/win-security.test.ts
+      - src/main/auth-authority-source-pins.ts
+      - scripts/qa/fixtures/persistence-run-owner-support.ts
+      - scripts/qa/fixtures/persistence-run-owner.child.ts
+      - scripts/qa/fixtures/persistence-run-owner.electron-host.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-persistence-owners-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  source-owners:
+    name: Finite QA owner source fixtures (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-shipping, os: ubuntu-latest, owner: false }
+          - { target: windows-x64, os: windows-latest, owner: true }
+          - { target: macos-x64, os: macos-15-intel, owner: true }
+          - { target: macos-arm64, os: macos-14, owner: true }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frozen test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Remove stale report and run the explicitly selected finite fixtures
+        id: run
+        env:
+          REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          OWNER_TARGET: ${{ matrix.owner }}
+        run: |
+          rm -f "$REPORT"
+          set +e
+          if [[ "$OWNER_TARGET" == true ]]; then
+            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=json --outputFile="$REPORT"
+          else
+            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=json --outputFile="$REPORT"
+          fi
+          result=$?
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Gate exact report inventory, counts and current source hashes
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          EVIDENCE: ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          OWNER_TARGET: ${{ matrix.owner }}
+          VITEST_EXIT: ${{ steps.run.outputs.exit_code }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
+          const sourceFiles = [
+            '.github/workflows/qa-persistence-owners.yml',
+            'vitest.qa-persistence-owners.config.ts',
+            'package.json',
+            'package-lock.json',
+            'src/main/persistence/qa-run-protocol.ts',
+            'src/main/persistence/qa-run-protocol.test.ts',
+            'src/main/persistence/qa-run-protocol.qa-case.ts',
+            'src/main/persistence/qa-run-owner.ts',
+            'src/main/persistence/qa-run-owner.qa-case.ts',
+            'src/main/persistence/qa-profile-root-owner.ts',
+            'src/main/persistence/qa-profile-root-owner.qa-case.ts',
+            'src/main/persistence/root-registry.ts',
+            'src/main/persistence/root-registry.qa-case.ts',
+            'src/main/persistence/native-key-intent.ts',
+            'src/main/persistence/native-key-intent.test.ts',
+            'src/main/persistence/qa-main-action-owner.ts',
+            'src/main/persistence/qa-main-action-owner.test.ts',
+            'src/main/persistence/bootstrap.ts',
+            'src/main/index.ts',
+            'src/main/auth-boundary-adapters.ts',
+            'src/main/auth-config.ts',
+            'src/main/auth-persistence-observation.test.ts',
+            'src/main/auth-persistence-observation.ts',
+            'src/main/auth-speech-boundary-readers.test.ts',
+            'src/main/auth-speech-boundary-readers.ts',
+            'src/main/auth-speech-boundary.ts',
+            'src/main/auth-speech-lease.test.ts',
+            'src/main/auth-speech-lease.ts',
+            'src/main/auth.test.ts',
+            'src/main/auth.ts',
+            'src/main/fresh-lean-speech-defaults.ts',
+            'src/main/fresh-lean-speech-defaults.test.ts',
+            'src/main/settings-auth-authority-frame.ts',
+            'src/main/settings-observation.test.ts',
+            'src/main/speech-desktop-boundary.ts',
+            'src/main/store.test.ts',
+            'src/main/store.ts',
+            'src/main/win-security.ts',
+            'src/main/win-security.test.ts',
+            'src/main/auth-authority-source-pins.ts',
+            'scripts/qa/fixtures/persistence-run-owner-support.ts',
+            'scripts/qa/fixtures/persistence-run-owner.child.ts',
+            'scripts/qa/fixtures/persistence-run-owner.electron-host.ts'
+          ]
+          const expected = process.env.OWNER_TARGET === 'true'
+            ? new Map([
+                ['src/main/persistence/qa-run-protocol.qa-case.ts', 27],
+                ['src/main/persistence/qa-run-owner.qa-case.ts', 22],
+                ['src/main/persistence/qa-profile-root-owner.qa-case.ts', 8],
+                ['src/main/persistence/root-registry.qa-case.ts', 4],
+                ['src/main/persistence/qa-run-protocol.test.ts', 3],
+                ['src/main/persistence/native-key-intent.test.ts', 12]
+              ])
+            : new Map([
+                ['src/main/persistence/qa-run-protocol.test.ts', 3],
+                ['src/main/persistence/native-key-intent.test.ts', 12]
+              ])
+          const coherenceFiles = process.env.OWNER_TARGET === 'true' ? [
+            'src/main/auth.test.ts',
+            'src/main/auth-speech-lease.test.ts',
+            'src/main/auth-speech-boundary-readers.test.ts',
+            'src/main/auth-persistence-observation.test.ts',
+            'src/main/persistence/qa-main-action-owner.test.ts',
+            'src/main/win-security.test.ts',
+            'src/main/store.test.ts',
+            'src/main/fresh-lean-speech-defaults.test.ts',
+            'src/main/settings-observation.test.ts'
+          ] : []
+          const expectedFiles = [...expected.keys(), ...coherenceFiles]
+          let error = ''
+          let report = null
+          try { report = JSON.parse(readFileSync(process.env.REPORT, 'utf8')) }
+          catch { error = 'Vitest report is missing or invalid.' }
+          const countFields = ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites','numPendingTestSuites']
+          if (report) {
+            if (countFields.some((key) => !Number.isSafeInteger(report[key]) || report[key] < 0)) error ||= 'Vitest counters are missing or invalid.'
+            if (process.env.VITEST_EXIT !== '0' || report.success !== true || report.numTotalTests <= 0 || report.numPassedTests !== report.numTotalTests || report.numFailedTests !== 0 || report.numPendingTests !== 0 || report.numTodoTests !== 0 || report.numFailedTestSuites !== 0 || report.numPendingTestSuites !== 0 || report.numPassedTestSuites <= 0 || report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites) error ||= 'Vitest failed, skipped a case or returned inconsistent totals.'
+            if (!Array.isArray(report.testResults) || report.testResults.length !== expectedFiles.length) error ||= 'Selected file inventory differs from the frozen roster.'
+            for (const file of expectedFiles) {
+              const count = expected.get(file)
+              const matches = Array.isArray(report.testResults) ? report.testResults.filter((item) => typeof item.name === 'string' && item.name.replaceAll('\\','/').endsWith('/' + file)) : []
+              if (matches.length !== 1 || matches[0].status !== 'passed' || !Array.isArray(matches[0].assertionResults) || matches[0].assertionResults.length === 0 || (count !== undefined && matches[0].assertionResults.length !== count) || matches[0].assertionResults.some((test) => test.status !== 'passed')) error ||= `Missing, failed or non-finite required case file: ${file}`
+            }
+            const assertionCount = Array.isArray(report.testResults) ? report.testResults.reduce((total, file) => total + (Array.isArray(file.assertionResults) ? file.assertionResults.length : 0), 0) : 0
+            if (report.numTotalTests !== assertionCount) error ||= 'Per-file test result counts differ from global Vitest totals.'
+          }
+          const sourceHead = execFileSync('git', ['rev-parse','HEAD'], { encoding: 'utf8' }).trim()
+          const hashes = Object.fromEntries(sourceFiles.map((file) => {
+            try { return [file, createHash('sha256').update(readFileSync(file)).digest('hex')] }
+            catch { error ||= `Required source file is missing: ${file}`; return [file, null] }
+          }))
+          const exitCode = /^\d+$/.test(process.env.VITEST_EXIT ?? '') ? Number(process.env.VITEST_EXIT) : null
+          const fileCounts = report && Array.isArray(report.testResults) ? Object.fromEntries(report.testResults.map((file) => [String(file.name).replaceAll('\\','/').split('/').at(-1), Array.isArray(file.assertionResults) ? file.assertionResults.length : 0])) : null
+          const evidence = { schema: 'metis-qa-persistence-source-evidence/v1', target: process.env.TARGET, sourceHead, sourceHashes: hashes, selectedFiles: expectedFiles, perFileTestCounts: fileCounts, vitestExitCode: exitCode, success: !error, error: error || null, counts: report ? Object.fromEntries(countFields.map((key) => [key, report[key]])) : null }
+          writeFileSync(process.env.EVIDENCE, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
+          if (error) { console.error(error); process.exitCode = 1 }
+          NODE
+      - name: Retain bounded source evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qa-persistence-source-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+            ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          if-no-files-found: warn
+          retention-days: 7

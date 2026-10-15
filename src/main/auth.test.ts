@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -7,6 +7,8 @@ import { app } from 'electron'
 import {
   requireAuth,
   authStatus,
+  refreshMainPersistenceSessionObservation,
+  capturePublishedMainPersistenceSessionBoundary,
   tenantMatches,
   signOut,
   resetSelfServeSso,
@@ -14,18 +16,51 @@ import {
   ssoBootstrapAllowed
 } from './auth'
 import { getSettings, setSettings } from './store'
+import { publishSettingsSnapshot } from './settings-observation'
 import { readTrustedAdminManaged } from './win-security'
 
+const authFileReadRace = vi.hoisted(() => ({
+  path: null as string | null,
+  afterRead: null as (() => Promise<void>) | null
+}))
 vi.mock('electron')
 // Node exposes these APIs through non-configurable ESM namespace properties on Windows. Delegate to
 // the real modules while making the few filesystem probes in the lease hot-path test spyable on every OS.
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) }
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync), existsSync: vi.fn(actual.existsSync) }
+})
+vi.mock('node:worker_threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:worker_threads')>()
+  return { ...actual, Worker: vi.fn(actual.Worker) }
 })
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) }
+  return {
+    ...actual,
+    lstat: vi.fn(actual.lstat),
+    open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
+      const [sourcePath] = args
+      const handle = await actual.open(...args)
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'read')
+            return async (...readArgs: Parameters<typeof handle.read>) => {
+              const result = await handle.read(...readArgs)
+              if (authFileReadRace.path === String(sourcePath)) {
+                const afterRead = authFileReadRace.afterRead
+                authFileReadRace.path = null
+                authFileReadRace.afterRead = null
+                await afterRead?.()
+              }
+              return result
+            }
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
+    })
+  }
 })
 // Stub only the admin-trusted managed-config read so tests never inherit this machine's real ProgramData
 // policy (default null = no admin policy). All other win-security exports stay real — store.ts imports
@@ -83,6 +118,370 @@ describe('auth trust boundary — requireAuth / authStatus', () => {
   it('fail-CLOSED via managed-config { requireAuth: true }', () => {
     writeFileSync(join(ud, 'managed-config.json'), JSON.stringify({ requireAuth: true }), 'utf8')
     expect(requireAuth()).toBe(false)
+  })
+})
+
+describe('C1 coherent auth publication producer', () => {
+  let ud: string
+  beforeEach(() => {
+    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-publication-test-'))
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
+    for (const key of ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH'])
+      delete process.env[key]
+  })
+  afterEach(() => {
+    rmSync(ud, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  async function seedConfiguredSession(): Promise<void> {
+    process.env.AZURE_CLIENT_ID = 'client-id'
+    process.env.AZURE_TENANT_ID = TENANT_GUID
+    process.env.ASKTOTO_ALLOWED_DOMAIN = 'example.test'
+    const { encryptSecret } = await import('./secrets')
+    writeFileSync(
+      join(ud, 'auth-session.bin'),
+      encryptSecret(
+        JSON.stringify({
+          email: 'owner@example.test',
+          domain: 'example.test',
+          tid: TENANT_GUID,
+          at: Date.now()
+        })
+      ),
+      { mode: 0o600 }
+    )
+  }
+
+  it('shares authStatus preparation and publishes only a non-null coherent unconfigured-local boundary', async () => {
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    const status = authStatus()
+    expect(status.configured).toBe(false)
+    const boundary = await refreshMainPersistenceSessionObservation()
+    expect(boundary).not.toBeNull()
+    if (!boundary) throw new Error('Expected a coherent local persistence auth boundary')
+    expect(boundary.configured).toBe(false)
+    expect(boundary.principalAssociation).toBeNull()
+    expect(boundary.isCurrent()).toBe(true)
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBe(boundary)
+    expect(Object.keys(boundary)).not.toContain('email')
+    expect(JSON.stringify(boundary)).not.toContain('owner@example.test')
+    const unrelatedSettings = getSettings()
+    publishSettingsSnapshot(
+      {
+        ...unrelatedSettings,
+        provider: unrelatedSettings.provider === 'openai' ? 'anthropic' : 'openai'
+      },
+      true
+    )
+    expect(boundary.isCurrent()).toBe(true)
+
+    const fs = await import('node:fs')
+    const fsPromises = await import('node:fs/promises')
+    const electron = await import('electron')
+    const workerThreads = await import('node:worker_threads')
+    const store = await import('./store')
+    const auth = await import('./auth')
+    const sourceReads = vi.mocked(fs.readFileSync)
+    const sessionFileChecks = vi.mocked(fs.existsSync)
+    const lstatReads = vi.mocked(fsPromises.lstat)
+    const openReads = vi.mocked(fsPromises.open)
+    const settingsReads = vi.spyOn(store, 'getSettings')
+    const settingsBoundaryReads = vi.spyOn(store, 'readSettingsAtAuthorityBoundary')
+    const authStatusRead = vi.spyOn(auth, 'authStatus').mockImplementation(() => {
+      throw new Error('authStatus called by cached route')
+    })
+    const nativeReads = vi.spyOn(electron.safeStorage, 'isEncryptionAvailable').mockImplementation(() => {
+      throw new Error('native storage called by cached route')
+    })
+    const timerStarts = vi.spyOn(globalThis, 'setTimeout').mockImplementation(() => {
+      throw new Error('timer started by cached route')
+    })
+    const workerStarts = vi.mocked(workerThreads.Worker)
+    sourceReads.mockClear()
+    sessionFileChecks.mockClear()
+    lstatReads.mockClear()
+    openReads.mockClear()
+    settingsReads.mockClear()
+    settingsBoundaryReads.mockClear()
+    workerStarts.mockClear()
+    for (let index = 0; index < 20; index += 1) {
+      expect(capturePublishedMainPersistenceSessionBoundary()).toBe(boundary)
+      expect(boundary.isCurrent()).toBe(true)
+    }
+    expect(sourceReads).not.toHaveBeenCalled()
+    expect(sessionFileChecks).not.toHaveBeenCalled()
+    expect(lstatReads).not.toHaveBeenCalled()
+    expect(openReads).not.toHaveBeenCalled()
+    expect(settingsReads).not.toHaveBeenCalled()
+    expect(settingsBoundaryReads).not.toHaveBeenCalled()
+    expect(authStatusRead).not.toHaveBeenCalled()
+    expect(nativeReads).not.toHaveBeenCalled()
+    expect(timerStarts).not.toHaveBeenCalled()
+    expect(workerStarts).not.toHaveBeenCalled()
+    authStatusRead.mockRestore()
+    nativeReads.mockRestore()
+    timerStarts.mockRestore()
+
+    const equalRefresh = await refreshMainPersistenceSessionObservation()
+    expect(equalRefresh).toBe(boundary)
+    expect(boundary.isCurrent()).toBe(true)
+    setSettings({ provider: 'openai' })
+    expect(await refreshMainPersistenceSessionObservation()).toBeNull()
+    expect(boundary.isCurrent()).toBe(false)
+    const afterPhysicalSettingsChange = await refreshMainPersistenceSessionObservation()
+    expect(afterPhysicalSettingsChange).not.toBeNull()
+    expect(afterPhysicalSettingsChange?.isCurrent()).toBe(true)
+  })
+
+  it('retires the actual producer after a managed source changes and is restored during a held store frame', async () => {
+    const managedPath = join(ud, 'managed-config.json')
+    const original = '{"requireAuth":false}'
+    writeFileSync(managedPath, original)
+    const store = await import('./store')
+    const readFrame = store.readSettingsAtAuthorityBoundary
+    let reachedFrame: (() => void) | undefined
+    const frameReached = new Promise<void>((resolve) => {
+      reachedFrame = resolve
+    })
+    let releaseFrame: (() => void) | undefined
+    const heldFrame = new Promise<void>((resolve) => {
+      releaseFrame = resolve
+    })
+    const hold = vi.spyOn(store, 'readSettingsAtAuthorityBoundary').mockImplementation(async () => {
+      const snapshot = await readFrame()
+      reachedFrame?.()
+      await heldFrame
+      return snapshot
+    })
+    const attempt = refreshMainPersistenceSessionObservation()
+    await frameReached
+    writeFileSync(managedPath, '{"requireAuth":true}')
+    writeFileSync(managedPath, original)
+    releaseFrame?.()
+    expect(await attempt).toBeNull()
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    hold.mockRestore()
+  })
+
+  it.each([
+    ['user managed', 'managed-config.json', '{'],
+    ['admin managed', 'admin-managed-config.json', '{'],
+    ['sticky', 'auth-configured.flag', Buffer.from([0xff])],
+    ['LKG', 'auth-lkg-config.json', '{']
+  ])('refuses the actual producer for unreadable %s authority', async (_name, file, contents) => {
+    if (file === 'auth-lkg-config.json') writeFileSync(join(ud, 'auth-configured.flag'), '1')
+    writeFileSync(join(ud, file), contents)
+    expect(await refreshMainPersistenceSessionObservation()).toBeNull()
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+  })
+
+  it('retires the actual producer after settings source A → B → A during a held store frame', async () => {
+    setSettings({ provider: 'openai' })
+    const settingsPath = join(ud, 'settings.json')
+    const original = readFileSync(settingsPath)
+    const store = await import('./store')
+    const readFrame = store.readSettingsAtAuthorityBoundary
+    let reachedFrame: (() => void) | undefined
+    const frameReached = new Promise<void>((resolve) => {
+      reachedFrame = resolve
+    })
+    let releaseFrame: (() => void) | undefined
+    const heldFrame = new Promise<void>((resolve) => {
+      releaseFrame = resolve
+    })
+    const hold = vi.spyOn(store, 'readSettingsAtAuthorityBoundary').mockImplementation(async () => {
+      const snapshot = await readFrame()
+      reachedFrame?.()
+      await heldFrame
+      return snapshot
+    })
+    const attempt = refreshMainPersistenceSessionObservation()
+    await frameReached
+    writeFileSync(settingsPath, Buffer.concat([original, Buffer.from(' ')]))
+    writeFileSync(settingsPath, original)
+    releaseFrame?.()
+    expect(await attempt).toBeNull()
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    hold.mockRestore()
+  })
+
+  it.each([
+    ['sticky flag', 'auth-configured.flag', '1', 'changed-sticky'],
+    [
+      'sticky LKG',
+      'auth-lkg-config.json',
+      `{"clientId":"client-id","tenantId":"${TENANT_GUID}","allowedDomain":"example.test"}`,
+      '{"clientId":"changed"}'
+    ]
+  ])('retires the actual producer when %s changes during its held bounded read', async (_label, name, original, replacement) => {
+    signOut()
+    await seedConfiguredSession()
+    if (name === 'auth-configured.flag')
+      writeFileSync(
+        join(ud, 'auth-lkg-config.json'),
+        '{"clientId":"client-id","tenantId":"' + TENANT_GUID + '","allowedDomain":"example.test"}'
+      )
+    const path = join(ud, name)
+    writeFileSync(path, original)
+    if (name === 'auth-lkg-config.json') writeFileSync(join(ud, 'auth-configured.flag'), '1')
+    expect(authStatus().signedIn).toBe(true)
+    const originalBoundary = await refreshMainPersistenceSessionObservation()
+    expect(originalBoundary).not.toBeNull()
+    if (!originalBoundary) throw new Error('Expected a configured signed-in positive control')
+    expect(originalBoundary.configured).toBe(true)
+    expect(originalBoundary.isCurrent()).toBe(true)
+    let reachedRead: (() => void) | undefined
+    const readReached = new Promise<void>((resolve) => {
+      reachedRead = resolve
+    })
+    let releaseRead: (() => void) | undefined
+    const heldRead = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    authFileReadRace.path = path
+    authFileReadRace.afterRead = async () => {
+      reachedRead?.()
+      await heldRead
+    }
+    const attempt = refreshMainPersistenceSessionObservation()
+    await readReached
+    writeFileSync(path, replacement)
+    writeFileSync(path, original)
+    releaseRead?.()
+    expect(await attempt).toBeNull()
+    expect(originalBoundary.isCurrent()).toBe(false)
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+  })
+
+  it('retires the actual producer when the captured profile changes during a held store frame', async () => {
+    const store = await import('./store')
+    const readFrame = store.readSettingsAtAuthorityBoundary
+    const alternateProfile = mkdtempSync(join(tmpdir(), 'asktoto-auth-profile-b-'))
+    let reachedFrame: (() => void) | undefined
+    const frameReached = new Promise<void>((resolve) => {
+      reachedFrame = resolve
+    })
+    let releaseFrame: (() => void) | undefined
+    const heldFrame = new Promise<void>((resolve) => {
+      releaseFrame = resolve
+    })
+    const hold = vi.spyOn(store, 'readSettingsAtAuthorityBoundary').mockImplementation(async () => {
+      const snapshot = await readFrame()
+      reachedFrame?.()
+      await heldFrame
+      return snapshot
+    })
+    const attempt = refreshMainPersistenceSessionObservation()
+    await frameReached
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? alternateProfile : join(alternateProfile, name)
+    )
+    releaseFrame?.()
+    expect(await attempt).toBeNull()
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? ud : join(ud, name)
+    )
+    hold.mockRestore()
+    expect(await refreshMainPersistenceSessionObservation()).not.toBeNull()
+    rmSync(alternateProfile, { recursive: true, force: true })
+  })
+
+  it('retires a held actual producer after the original auth environment changes', async () => {
+    const store = await import('./store')
+    const readFrame = store.readSettingsAtAuthorityBoundary
+    let reachedFrame: (() => void) | undefined
+    const frameReached = new Promise<void>((resolve) => {
+      reachedFrame = resolve
+    })
+    let releaseFrame: (() => void) | undefined
+    const heldFrame = new Promise<void>((resolve) => {
+      releaseFrame = resolve
+    })
+    const hold = vi.spyOn(store, 'readSettingsAtAuthorityBoundary').mockImplementation(async () => {
+      const snapshot = await readFrame()
+      reachedFrame?.()
+      await heldFrame
+      return snapshot
+    })
+    const attempt = refreshMainPersistenceSessionObservation()
+    await frameReached
+    process.env.ASKTOTO_REQUIRE_AUTH = '1'
+    releaseFrame?.()
+    expect(await attempt).toBeNull()
+    delete process.env.ASKTOTO_REQUIRE_AUTH
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    hold.mockRestore()
+    const next = await refreshMainPersistenceSessionObservation()
+    expect(next).not.toBeNull()
+    expect(next?.isCurrent()).toBe(true)
+  })
+
+  it('retires the actual producer when sign-out advances the captured session epoch during a held store frame', async () => {
+    const store = await import('./store')
+    const readFrame = store.readSettingsAtAuthorityBoundary
+    let reachedFrame: (() => void) | undefined
+    const frameReached = new Promise<void>((resolve) => {
+      reachedFrame = resolve
+    })
+    let releaseFrame: (() => void) | undefined
+    const heldFrame = new Promise<void>((resolve) => {
+      releaseFrame = resolve
+    })
+    const hold = vi.spyOn(store, 'readSettingsAtAuthorityBoundary').mockImplementation(async () => {
+      const snapshot = await readFrame()
+      reachedFrame?.()
+      await heldFrame
+      return snapshot
+    })
+    const attempt = refreshMainPersistenceSessionObservation()
+    await frameReached
+    signOut()
+    releaseFrame?.()
+    expect(await attempt).toBeNull()
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    hold.mockRestore()
+  })
+
+  it('publishes the principal hash only from the captured valid configured session', async () => {
+    process.env.AZURE_CLIENT_ID = 'client-id'
+    process.env.AZURE_TENANT_ID = TENANT_GUID
+    process.env.ASKTOTO_ALLOWED_DOMAIN = 'example.test'
+    const { encryptSecret } = await import('./secrets')
+    writeFileSync(
+      join(ud, 'auth-session.bin'),
+      encryptSecret(
+        JSON.stringify({
+          email: 'owner@example.test',
+          domain: 'example.test',
+          tid: TENANT_GUID,
+          at: Date.now()
+        })
+      ),
+      { mode: 0o600 }
+    )
+    expect(authStatus().signedIn).toBe(true)
+    const boundary = await refreshMainPersistenceSessionObservation()
+    expect(boundary).not.toBeNull()
+    if (!boundary) throw new Error('Expected a coherent configured-session boundary')
+    expect(boundary.configured).toBe(true)
+    expect(boundary.principalAssociation).toMatch(/^[a-f0-9]{64}$/)
+    expect(JSON.stringify(boundary)).not.toContain('owner@example.test')
+    expect(boundary.isCurrent()).toBe(true)
+  })
+
+  it('latches environment A → B → A and permits only a new explicit publication', async () => {
+    const original = await refreshMainPersistenceSessionObservation()
+    expect(original).not.toBeNull()
+    if (!original) throw new Error('Expected an initial coherent publication')
+    process.env.ASKTOTO_REQUIRE_AUTH = '1'
+    expect(original.isCurrent()).toBe(false)
+    delete process.env.ASKTOTO_REQUIRE_AUTH
+    expect(original.isCurrent()).toBe(false)
+    const refreshed = await refreshMainPersistenceSessionObservation()
+    expect(refreshed).not.toBeNull()
+    expect(refreshed?.isCurrent()).toBe(true)
+    expect(refreshed).not.toBe(original)
   })
 })
 

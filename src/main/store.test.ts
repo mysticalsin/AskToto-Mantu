@@ -36,6 +36,10 @@ import {
   getSettingsObservationEpoch
 } from './settings-observation'
 import { captureSettingsAuthority, isSettingsAuthorityCurrent } from './settings-authority-history'
+import {
+  assertSettingsAuthAuthorityFrameCurrent,
+  readSettingsAuthAuthorityFrame
+} from './settings-auth-authority-frame'
 
 const hardware = vi.hoisted(() => ({ totalmem: vi.fn(() => 16 * 1024 ** 3) }))
 vi.mock('node:os', async (importOriginal) => {
@@ -182,6 +186,30 @@ describe('store', () => {
     expect(second.history.persistence).not.toBeNull()
     expect(isSettingsAuthorityCurrent(importReceipt!)).toBe(true)
     expect(isSettingsAuthorityCurrent(persistenceReceipt!)).toBe(true)
+    expect(readSettingsAuthAuthorityFrame(first)).not.toBeNull()
+    expect(readSettingsAuthAuthorityFrame({ ...first })).toBeNull()
+    await expect(assertSettingsAuthAuthorityFrameCurrent(first)).resolves.toBeUndefined()
+    await expect(assertSettingsAuthAuthorityFrameCurrent(second)).resolves.toBeUndefined()
+  })
+
+  it('pins raw requireAuth bytes even though persistence selected-setting semantics omit that field', async () => {
+    const managedPath = join(userData, 'managed-config.json')
+    writeFileSync(
+      managedPath,
+      JSON.stringify({ azure: { clientId: 'c', tenantId: 't', allowedDomain: 'example.test' } })
+    )
+    const frame = await readSettingsAtAuthorityBoundary()
+    const originalReceipt = frame.history.persistence
+    expect(originalReceipt).not.toBeNull()
+    writeFileSync(
+      managedPath,
+      JSON.stringify({
+        azure: { clientId: 'c', tenantId: 't', allowedDomain: 'example.test' },
+        requireAuth: true
+      })
+    )
+    await expect(assertSettingsAuthAuthorityFrameCurrent(frame)).rejects.toThrow()
+    expect(isSettingsAuthorityCurrent(originalReceipt!)).toBe(true)
   })
 
   it('projects the fresh lean route, persists it on the first unrelated write, and preserves it after restart', async () => {

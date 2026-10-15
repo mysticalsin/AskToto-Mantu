@@ -574,6 +574,7 @@ import {
 } from './lifecycle/cloud-stt-window-owner'
 import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
+import { bindQaPersistenceMainWindow } from './persistence/qa-main-action-owner'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
@@ -2857,6 +2858,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     },
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
+  if (QA_IDENTITY_BUILD) {
+    bindQaPersistenceMainWindow(win)
+  }
   observeQuitWindow(win, quitTrace)
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, {
     transparent: chrome.transparent,

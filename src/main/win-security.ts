@@ -16,13 +16,20 @@
 //
 // Both shell out to built-in Windows tools (powershell / icacls); everything is a no-op off win32.
 
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
-import { constants as fsConstants, lstat, open, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
+import { QA_IDENTITY_BUILD } from './qa-identity'
 import { execFileNoShell } from './infra/process/exec-file'
 // Via logger.ts, never `electron-log` directly — see the note on the same import in updater.ts.
 import { mainLog as log } from './logger'
+import {
+  assertManagedPolicyAuthorityReadCurrentImpl,
+  MAX_TRUSTED_ADMIN_MANAGED_BYTES,
+  readManagedPolicyAuthorityFileImpl,
+  type ManagedPolicyAuthorityRead
+} from './auth-authority-source-pins'
 
 // Invoke Windows system tools by ABSOLUTE %SystemRoot%\System32 path, never bare name. Windows'
 // CreateProcess search order includes the current working directory, so a bare `powershell`/`icacls`
@@ -180,6 +187,8 @@ function privateAclCommand(path: string, prepare: boolean): string {
   const encodedPath = Buffer.from(path, 'utf8').toString('base64')
   return `
 $ErrorActionPreference='Stop'
+$env:PSModulePath=$PSHOME+'\\Modules'
+Import-Module ($PSHOME+'\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 try {
   $path = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))
   $processOwner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -224,6 +233,43 @@ function readPrivateAclAsync(path: string, prepare: boolean): Promise<AclProbe |
       }
     )
   })
+}
+
+export type PrivateCurrentUserAclReceipt = Readonly<{
+  processSid: string
+  ownerSid: string
+  daclSha256: string
+}>
+
+/**
+ * Fresh bounded current-user DACL receipt for hosted QA profile ownership. Unlike the legacy policy
+ * memo this always probes the path, returns the process principal, and pins the concrete DACL bytes
+ * observed by the probe. It never changes an ACL and never consults `aclMemo`.
+ */
+export async function readPrivateCurrentUserAclReceipt(path: string): Promise<PrivateCurrentUserAclReceipt | null> {
+  if (!QA_IDENTITY_BUILD || process.platform !== 'win32') return null
+  if (typeof path !== 'string' || path.length === 0 || path.length > 4096) return null
+  const acl = await readPrivateAclAsync(path, false)
+  const processSid = acl?.processOwner ?? ''
+  if (
+    !acl ||
+    !evaluateCurrentUserPrivateAcl(acl) ||
+    !/^S-1-\d+(?:-\d+)+$/.test(processSid) ||
+    acl.owner !== processSid ||
+    acl.aces.length === 0 ||
+    acl.aces.length > 128
+  )
+    return null
+  const canonicalAces = acl.aces
+    .map((ace) => ({ sid: ace.sid, rights: ace.rights, type: ace.type }))
+    .sort((left, right) =>
+      `${left.sid}:${left.type}:${left.rights}`.localeCompare(`${right.sid}:${right.type}:${right.rights}`)
+    )
+  const daclSha256 = createHash('sha256')
+    .update('metis-qa-private-dacl/v1\n', 'utf8')
+    .update(JSON.stringify({ owner: acl.owner, processOwner: acl.processOwner, aces: canonicalAces }), 'utf8')
+    .digest('hex')
+  return Object.freeze({ processSid, ownerSid: acl.owner, daclSha256 })
 }
 
 /** Fresh asynchronous current-user DACL verification for private per-user files and directories. */
@@ -419,118 +465,30 @@ export function readTrustedAdminManaged(path: string = adminManagedConfigPath())
   }
 }
 
-const MAX_TRUSTED_ADMIN_MANAGED_BYTES = 1_048_576
-const TRUSTED_ADMIN_READ_CHUNK_BYTES = 64 * 1024
+export {
+  assertAuthoritySourcePinCurrent,
+  captureAuthoritySourcePin,
+  isAuthoritySourcePinAbsent,
+  sameAuthoritySourcePinIdentity,
+  sameManagedPolicyAuthorityReadSource,
+  type AuthoritySourcePin,
+  type ManagedPolicyAuthorityRead
+} from './auth-authority-source-pins'
 
-function sameTrustedAdminSnapshot(left: Stats, right: Stats): boolean {
-  return (
-    left.isFile() &&
-    right.isFile() &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
-  )
-}
-
-export type ManagedPolicyAuthorityRead =
-  | { status: 'absent' }
-  | { status: 'invalid' }
-  | { status: 'present'; bytes: Uint8Array }
-
-/** Read bounded regular-file bytes from one verified descriptor; optionally require machine ACL trust. */
-export async function readManagedPolicyAuthorityFile(
+export function readManagedPolicyAuthorityFile(
   path: string,
   maxBytes = MAX_TRUSTED_ADMIN_MANAGED_BYTES,
   requireAdminTrust = false
 ): Promise<ManagedPolicyAuthorityRead> {
-  if (
-    typeof path !== 'string' ||
-    path.length === 0 ||
-    !Number.isSafeInteger(maxBytes) ||
-    maxBytes < 0 ||
-    maxBytes > MAX_TRUSTED_ADMIN_MANAGED_BYTES
-  )
-    return { status: 'invalid' }
+  return readManagedPolicyAuthorityFileImpl(path, maxBytes, requireAdminTrust, {
+    readAcl,
+    evaluateAclTrust,
+    warnUntrusted
+  })
+}
 
-  let beforeOpen: Stats
-  try {
-    beforeOpen = await lstat(path)
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { status: 'absent' } : { status: 'invalid' }
-  }
-  if (
-    beforeOpen.isSymbolicLink() ||
-    !beforeOpen.isFile() ||
-    !Number.isSafeInteger(beforeOpen.size) ||
-    beforeOpen.size < 0 ||
-    beforeOpen.size > maxBytes
-  )
-    return { status: 'invalid' }
-
-  let handle: FileHandle
-  try {
-    const flags =
-      fsConstants.O_RDONLY |
-      (fsConstants.O_NOFOLLOW ?? 0) |
-      // A hostile path replacement with a FIFO must not leave the main process blocked in open().
-      (fsConstants.O_NONBLOCK ?? 0)
-    handle = await open(path, flags)
-  } catch {
-    return { status: 'invalid' }
-  }
-
-  try {
-    const opened = await handle.stat()
-    const pathAtOpen = await lstat(path)
-    if (!sameTrustedAdminSnapshot(beforeOpen, opened) || !sameTrustedAdminSnapshot(beforeOpen, pathAtOpen))
-      return { status: 'invalid' }
-
-    if (requireAdminTrust && process.platform === 'win32') {
-      // Raw bytes establish fresh policy authority; the legacy path-only helpers keep their short ACL memo.
-      const acl = readAcl(path)
-      const trusted = acl !== null && evaluateAclTrust(acl)
-      if (!trusted) {
-        warnUntrusted(path)
-        return { status: 'invalid' }
-      }
-      const pathAfterAcl = await lstat(path)
-      const fdAfterAcl = await handle.stat()
-      if (!sameTrustedAdminSnapshot(beforeOpen, pathAfterAcl) || !sameTrustedAdminSnapshot(beforeOpen, fdAfterAcl))
-        return { status: 'invalid' }
-    }
-
-    // One extra byte detects growth beyond the caller's cap without allocating according to file size.
-    const buffer = Buffer.alloc(maxBytes + 1)
-    let total = 0
-    while (total <= maxBytes) {
-      const length = Math.min(TRUSTED_ADMIN_READ_CHUNK_BYTES, maxBytes + 1 - total)
-      const { bytesRead } = await handle.read(buffer, total, length, null)
-      if (bytesRead === 0) break
-      total += bytesRead
-    }
-    if (total > maxBytes) return { status: 'invalid' }
-
-    const afterRead = await handle.stat()
-    const pathAfterRead = await lstat(path)
-    if (
-      !sameTrustedAdminSnapshot(beforeOpen, afterRead) ||
-      !sameTrustedAdminSnapshot(beforeOpen, pathAfterRead) ||
-      total !== afterRead.size
-    )
-      return { status: 'invalid' }
-
-    return { status: 'present', bytes: Buffer.from(buffer.subarray(0, total)) }
-  } catch {
-    return { status: 'invalid' }
-  } finally {
-    try {
-      await handle.close()
-    } catch {
-      // A close failure cannot make an otherwise untrusted read safe to return.
-    }
-  }
+export function assertManagedPolicyAuthorityReadCurrent(read: ManagedPolicyAuthorityRead): Promise<void> {
+  return assertManagedPolicyAuthorityReadCurrentImpl(read, { readAcl, evaluateAclTrust })
 }
 
 /** Read exact bytes from one regular, non-symlink admin-policy file, failing closed on any race. */

@@ -7,6 +7,31 @@ export interface AzureConfig {
   allowedDomain: string
 }
 
+export type AuthEnvironmentSnapshot = Readonly<{
+  azureClientId: string | undefined
+  azureTenantId: string | undefined
+  allowedDomain: string | undefined
+  requireAuth: string | undefined
+}>
+
+export function captureAuthEnvironmentSnapshot(): AuthEnvironmentSnapshot {
+  return Object.freeze({
+    azureClientId: process.env.AZURE_CLIENT_ID,
+    azureTenantId: process.env.AZURE_TENANT_ID,
+    allowedDomain: process.env.ASKTOTO_ALLOWED_DOMAIN,
+    requireAuth: process.env.ASKTOTO_REQUIRE_AUTH
+  })
+}
+
+export function isAuthEnvironmentSnapshotCurrent(snapshot: AuthEnvironmentSnapshot): boolean {
+  return (
+    process.env.AZURE_CLIENT_ID === snapshot.azureClientId &&
+    process.env.AZURE_TENANT_ID === snapshot.azureTenantId &&
+    process.env.ASKTOTO_ALLOWED_DOMAIN === snapshot.allowedDomain &&
+    process.env.ASKTOTO_REQUIRE_AUTH === snapshot.requireAuth
+  )
+}
+
 function isSafeConfigValue(value: string): boolean {
   return value.length > 0 && value.length <= 253 && /^[A-Za-z0-9.-]+$/.test(value)
 }
@@ -57,12 +82,13 @@ export function resolveLeaseConfig(
   admin: Record<string, unknown>,
   user: Record<string, unknown>,
   sticky: boolean,
-  lkg: Record<string, unknown>
+  lkg: Record<string, unknown>,
+  environment: AuthEnvironmentSnapshot = captureAuthEnvironmentSnapshot()
 ): AzureConfig | null {
   const env = usableAzureConfig({
-    clientId: process.env.AZURE_CLIENT_ID,
-    tenantId: process.env.AZURE_TENANT_ID,
-    allowedDomain: process.env.ASKTOTO_ALLOWED_DOMAIN
+    clientId: environment.azureClientId,
+    tenantId: environment.azureTenantId,
+    allowedDomain: environment.allowedDomain
   })
   if (env) return env
   const adminAzure = azureFromManagedContent(JSON.stringify(admin))
@@ -83,10 +109,12 @@ export function resolveLeaseConfig(
   return null
 }
 
-export function leaseEnforced(admin: Record<string, unknown>, user: Record<string, unknown>): boolean {
+export function leaseEnforced(
+  admin: Record<string, unknown>,
+  user: Record<string, unknown>,
+  environment: AuthEnvironmentSnapshot = captureAuthEnvironmentSnapshot()
+): boolean {
   return (
-    /^(1|true|yes)$/i.test(process.env.ASKTOTO_REQUIRE_AUTH || '') ||
-    admin.requireAuth === true ||
-    user.requireAuth === true
+    /^(1|true|yes)$/i.test(environment.requireAuth || '') || admin.requireAuth === true || user.requireAuth === true
   )
 }
