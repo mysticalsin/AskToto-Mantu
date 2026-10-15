@@ -1,0 +1,145 @@
+name: Renderer KaTeX advisory baseline RED
+run-name: Renderer KaTeX baseline RED ${{ github.run_id }} attempt ${{ github.run_attempt }}
+
+on:
+  push:
+    branches:
+      - fix/renderer-katex-security
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renderer-katex-security-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  baseline-red:
+    if: github.ref == 'refs/heads/fix/renderer-katex-security'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux
+          - os: windows-2025
+            name: windows
+          - os: macos-15
+            name: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      BASELINE: 15fcfa376feda44531596218a3751c6ea37f98ef
+    steps:
+      - name: Checkout the source commit with history for baseline validation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse stale source, manifest changes, or files outside the seven-file RED roster
+        shell: bash
+        env:
+          REPORT_DIR: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REPOSITORY" != 'mysticalsin/AskToto-Mantu' ] || [ "$GITHUB_REF" != 'refs/heads/fix/renderer-katex-security' ]; then
+            echo 'renderer-katex-red:WRONG_REPOSITORY_OR_REF'
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$BASELINE" "$GITHUB_SHA"; then
+            echo 'renderer-katex-red:BASELINE_NOT_ANCESTOR'
+            exit 1
+          fi
+          expected="$RUNNER_TEMP/renderer-katex-expected-paths.txt"
+          actual="$RUNNER_TEMP/renderer-katex-actual-paths.txt"
+          cat > "$expected" <<'PATHS'
+          .github/workflows/renderer-katex-security.yml
+          scripts/ci/renderer-katex-provenance.mjs
+          scripts/ci/renderer-katex-unhandled-reporter.mjs
+          src/renderer/src/components/Markdown.katex.browser.test.ts
+          src/renderer/src/components/Markdown.mermaid.browser.test.ts
+          src/renderer/src/components/Markdown.security.browser.test.ts
+          src/renderer/src/components/__tests__/renderer-security-browser-harness.ts
+          PATHS
+          git diff --name-only "$BASELINE" "$GITHUB_SHA" | sort > "$actual"
+          diff -u "$expected" "$actual"
+          printf '%s  %s\n' '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122' 'package.json' '88425a099d638387d1bf14fd06348002e3ced36f29ca25296d00f7e5b92b0393' 'package-lock.json' | sha256sum --check
+          mkdir -p "$REPORT_DIR"
+          echo 'renderer-katex-red:BASELINE_INPUTS_VALID'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+
+      - name: Pin the lock producer-compatible npm version
+        shell: bash
+        env:
+          REPORT_DIR: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --ignore-scripts --no-audit --no-fund
+          node --version | tee "$REPORT_DIR/node-version.txt"
+          npm --version | tee "$REPORT_DIR/npm-version.txt"
+          if [ "$(node --version)" != 'v22.22.3' ] || [ "$(npm --version)" != '10.9.8' ]; then
+            echo 'renderer-katex-red:TOOLCHAIN_MISMATCH'
+            exit 1
+          fi
+          echo 'NPM_VERSION=10.9.8' >> "$GITHUB_ENV"
+
+      - name: Install the unchanged frozen dependency graph
+        shell: bash
+        run: npm ci --no-audit --no-fund
+
+      - name: Install the Chromium version selected by the frozen Playwright package
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            node node_modules/playwright/cli.js install --with-deps chromium
+          else
+            node node_modules/playwright/cli.js install chromium
+          fi
+
+      - name: Run the exact 30-case browser and source regression cohort without retries
+        shell: bash
+        env:
+          RUN_REPORT: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest.json
+          RUN_LOG: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest.log
+          RUN_ERRORS: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-run-errors.json
+          EXIT_FILE: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-exit.txt
+          REPORT_DIR: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          METIS_RENDERER_EVIDENCE_DIR: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          RENDERER_KATEX_UNHANDLED_REPORT: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-run-errors.json
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run \
+            src/renderer/src/components/Markdown.security.browser.test.ts \
+            src/renderer/src/components/Markdown.katex.browser.test.ts \
+            src/renderer/src/components/Markdown.mermaid.browser.test.ts \
+            src/renderer/src/components/Markdown.warmup.test.ts \
+            src/renderer/src/components/CodeBlock.test.ts \
+            --maxWorkers=2 --retry=0 --reporter=json --reporter=./scripts/ci/renderer-katex-unhandled-reporter.mjs --outputFile="$RUN_REPORT" \
+            > "$RUN_LOG" 2>&1
+          test_exit=$?
+          set -e
+          printf '%s\n' "$test_exit" > "$EXIT_FILE"
+          printf 'renderer-katex-red:VITEST_EXIT=%s\n' "$test_exit"
+          node scripts/ci/renderer-katex-provenance.mjs --mode baseline-red --report "$RUN_REPORT" --log "$RUN_LOG" --run-errors "$RUN_ERRORS" --out "$REPORT_DIR/expected-red-evidence.json" --test-exit "$test_exit"
+
+      - name: Upload complete per-platform RED evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: renderer-katex-baseline-red-${{ matrix.name }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Preserve the actual baseline failure as a RED workflow result
+        if: success()
+        shell: bash
+        run: |
+          echo 'renderer-katex-red:EXPECTED_RED_EVIDENCE_RETAINED_NOT_SECURITY_QUALIFIED'
+          exit 1
