@@ -9,8 +9,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { runDiagnosticChild } from './lean-diagnostic-child.mjs'
 import { withOwnedMacImage } from './lean-mac-image.mjs'
 import { asarMemberInventory } from './lean-payload-inventory.mjs'
-import { nativeSmoke, runMacProbe } from './lean-payload-compression.mjs'
-import { walkTree } from './lean-payload-attribution.mjs'
+import {
+  hdiutilReadOnlyEvidence,
+  nativeSmoke,
+  runMacProbe,
+  runWindowsDiagnostics
+} from './lean-payload-compression.mjs'
+import { sha256File, walkTree } from './lean-payload-attribution.mjs'
 
 const roots: string[] = []
 const require = createRequire(import.meta.url)
@@ -68,7 +73,6 @@ function imageRunner({
       return result(command, args)
     }
     if (args[0] === 'verify') return result(command, args)
-    if (args[0] === '-version') return result(command, args, 'hdiutil fixture version')
     throw new Error(`Unexpected command ${args.join(' ')}`)
   }
   return { commands, run }
@@ -297,6 +301,8 @@ describe('lean native diagnostic contracts', () => {
     await writeFile(join(payloadRoot, 'package.json'), '{}')
     await mkdir(scratch)
     await mkdir(reports)
+    const hdiutilPath = join(root, 'hdiutil-fixture')
+    await writeFile(hdiutilPath, 'fixture hdiutil executable')
     let creates = 0
     const { commands, run: baseRun } = imageRunner()
     const run = async (command: string, args: string[], options: unknown) => {
@@ -309,7 +315,7 @@ describe('lean native diagnostic contracts', () => {
     }
     let failure: any
     try {
-      await nativeSmoke('mac', process.cwd(), scratch, reports, run, String)
+      await nativeSmoke('mac', process.cwd(), scratch, reports, run, String, hdiutilPath)
     } catch (error) {
       failure = error
     }
@@ -328,6 +334,108 @@ describe('lean native diagnostic contracts', () => {
     expect(creates).toBe(3)
     expect(commands.some((command) => command.args[0] === '-version')).toBe(false)
     expect(failure.result.exitCode).toBe(1)
+  })
+
+  it('records supported read-only hdiutil evidence and rejects a failed metadata command', async () => {
+    const root = await temporaryRoot()
+    const hdiutilPath = join(root, 'hdiutil-fixture')
+    await writeFile(hdiutilPath, 'fixture hdiutil executable')
+    const { run } = imageRunner()
+    const toolIdentity = { path: hdiutilPath, ...(await sha256File(hdiutilPath)) }
+    const evidence = await hdiutilReadOnlyEvidence(run, String, toolIdentity)
+    expect(evidence.tool).toMatchObject(toolIdentity)
+    expect(evidence.readOnlyProbe).toMatchObject({
+      command: hdiutilPath,
+      args: ['info', '-plist'],
+      exitCode: 0,
+      timedOut: false,
+      outputLimitExceeded: false
+    })
+
+    const failedProbe = result(hdiutilPath, ['info', '-plist'])
+    Object.assign(failedProbe, { exitCode: 1, stderr: 'hdiutil info failed' })
+    await expect(hdiutilReadOnlyEvidence(async () => failedProbe, String, toolIdentity)).rejects.toMatchObject({
+      result: failedProbe
+    })
+  })
+
+  it('retains native smoke tool evidence and reaches Windows archive inventory with a controlled runner', async () => {
+    const root = await temporaryRoot()
+    const payloadRoot = join(root, 'payload')
+    const scratch = join(root, 'scratch')
+    const reports = join(root, 'reports')
+    await mkdir(payloadRoot)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await mkdir(scratch)
+    await mkdir(reports)
+    const hdiutilPath = join(root, 'hdiutil-fixture')
+    await writeFile(hdiutilPath, 'fixture hdiutil executable')
+    const { commands, run } = imageRunner()
+    await nativeSmoke('mac', process.cwd(), scratch, reports, run, String, hdiutilPath)
+    const report = JSON.parse(await readFile(join(reports, 'native-smoke.json'), 'utf8'))
+    expect(report.status).toBe('complete')
+    expect(report.cases.map((item: { name: string; status: string }) => [item.name, item.status])).toEqual([
+      ['shared', 'complete'],
+      ['left', 'complete'],
+      ['right', 'complete']
+    ])
+    expect(report.toolEvidence.readOnlyProbe).toMatchObject({
+      command: hdiutilPath,
+      args: ['info', '-plist'],
+      exitCode: 0
+    })
+    expect(report.toolEvidence.tool).toMatchObject({ path: hdiutilPath, ...(await sha256File(hdiutilPath)) })
+    expect(commands.some((command) => command.args[0] === '-version')).toBe(false)
+
+    const appRoot = join(root, 'app')
+    const windowsReportRoot = join(root, 'windows-reports')
+    const windowsScratchRoot = join(root, 'windows-scratch')
+    const sevenZipPath = join(root, '7za.exe')
+    await mkdir(join(appRoot, 'resources'), { recursive: true })
+    await mkdir(windowsReportRoot)
+    await mkdir(windowsScratchRoot)
+    await writeFile(sevenZipPath, 'controlled 7za fixture')
+    const appManifest = await walkTree(appRoot, { windowsPathRules: true })
+    const archivePath = join(windowsScratchRoot, 'builder-nsis.7z')
+    const archiveBytes = Buffer.from('captured archive bytes')
+    await writeFile(archivePath, archiveBytes)
+    await writeFile(
+      join(windowsReportRoot, 'windows-archive-capture.json'),
+      JSON.stringify({
+        archiveBytes: archiveBytes.length,
+        archiveSha256: createHash('sha256').update(archiveBytes).digest('hex'),
+        archiveName: 'builder-nsis.7z',
+        preCompressedFileExtensions: []
+      })
+    )
+    const windowsCommands: string[][] = []
+    const windowsRun = async (_command: string, args: string[]) => {
+      windowsCommands.push(args)
+      if (args[0] === 'i') return { stdout: 'controlled 7za version', args, exitCode: 0 }
+      if (args[0] === 'l')
+        return {
+          stdout: 'Path = builder-nsis.7z\nType = 7z\n\n----------\nPath = resources\nFolder = +\nSize = 0\n',
+          args,
+          exitCode: 0
+        }
+      if (args[0] === 't') throw new Error('controlled stop after archive inventory')
+      throw new Error(`Unexpected controlled 7za command: ${args.join(' ')}`)
+    }
+    await expect(
+      runWindowsDiagnostics(
+        {
+          appRoot,
+          appManifest,
+          reportRoot: windowsReportRoot,
+          scratchRoot: windowsScratchRoot,
+          installer: '',
+          payloadRoot,
+          report: {}
+        },
+        { run: windowsRun, redact: String, sevenZipPath }
+      )
+    ).rejects.toThrow('controlled stop after archive inventory')
+    expect(windowsCommands.map((args) => args[0])).toEqual(['i', 'l', 't'])
   })
 
   it('marks a changed raw image failed and never writes a complete probe', async () => {

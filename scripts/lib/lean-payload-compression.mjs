@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, join, relative, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { withOwnedMacImage } from './lean-mac-image.mjs'
 import {
@@ -318,9 +318,37 @@ export async function attachMarginal(record, baseline, reportRoot, baselineId = 
   await writeFile(join(reportRoot, `probe-${record.id}.json`), `${JSON.stringify(record, null, 2)}\n`)
 }
 
-export async function runWindowsDiagnostics(context, { run, redact }) {
+export async function hdiutilReadOnlyEvidence(run, redact, toolIdentity) {
+  if (
+    typeof toolIdentity?.path !== 'string' ||
+    !/^(?:\/|[A-Za-z]:[\\/])/.test(toolIdentity.path) ||
+    !Number.isSafeInteger(toolIdentity.bytes) ||
+    toolIdentity.bytes < 0 ||
+    !/^[0-9a-f]{64}$/.test(toolIdentity.sha256 ?? '')
+  )
+    throw new Error('hdiutil executable identity is incomplete')
+  const probe = await run(toolIdentity.path, ['info', '-plist'], { timeoutMs: 30_000, maxOutputBytes: 32_768 })
+  if (probe.command !== toolIdentity.path)
+    throw Object.assign(new Error('hdiutil probe command differs from the hashed executable path'), { result: probe })
+  if (probe.exitCode !== 0 || probe.signal !== null || probe.timedOut === true || probe.outputLimitExceeded === true)
+    throw Object.assign(new Error('hdiutil read-only info probe did not complete successfully'), { result: probe })
+  return {
+    tool: { ...toolIdentity, identityMethod: 'SHA-256 and byte count of the exact executable path used by the probe.' },
+    readOnlyProbe: {
+      command: probe.command,
+      args: probe.args,
+      exitCode: probe.exitCode,
+      stdout: redact(probe.stdout ?? '').slice(0, 4000),
+      stderr: redact(probe.stderr ?? '').slice(0, 4000),
+      timedOut: probe.timedOut === true,
+      outputLimitExceeded: probe.outputLimitExceeded === true
+    }
+  }
+}
+
+export async function runWindowsDiagnostics(context, { run, redact, sevenZipPath }) {
   const { appRoot, appManifest, reportRoot, scratchRoot, installer, payloadRoot, report } = context
-  const sevenZip = await find7za()
+  const sevenZip = sevenZipPath ?? (await find7za())
   const sevenZipIdentity = await sha256File(sevenZip)
   const version = await run(sevenZip, ['i'], { timeoutMs: 60_000 })
   const archivePathname = join(scratchRoot, 'builder-nsis.7z')
@@ -717,7 +745,15 @@ export async function runMacProbe({
   }
 }
 
-export async function nativeSmoke(target, payloadRoot, scratchRoot, reportRoot, run, redact) {
+export async function nativeSmoke(
+  target,
+  payloadRoot,
+  scratchRoot,
+  reportRoot,
+  run,
+  redact,
+  hdiutilPath = '/usr/bin/hdiutil'
+) {
   const root = join(scratchRoot, 'native-smoke')
   await mkdir(root, { recursive: false })
   const repeated = 'shared-compressible-attribution-fixture\n'.repeat(8192)
@@ -756,6 +792,8 @@ export async function nativeSmoke(target, payloadRoot, scratchRoot, reportRoot, 
       { flag: 'wx' }
     )
   } else {
+    const toolIdentity = { path: hdiutilPath, ...(await sha256File(hdiutilPath)) }
+    const runHdiutil = (command, args, options) => run(command === 'hdiutil' ? hdiutilPath : command, args, options)
     const reportPath = join(reportRoot, 'native-smoke.json')
     const smokeReport = {
       schema: 1,
@@ -781,7 +819,7 @@ export async function nativeSmoke(target, payloadRoot, scratchRoot, reportRoot, 
           prepareProjection: async (projection) => {
             for (const member of members) await writeFile(join(projection, member), await readFile(join(root, member)))
           },
-          run,
+          run: runHdiutil,
           redact
         })
         const row = {
@@ -827,8 +865,24 @@ export async function nativeSmoke(target, payloadRoot, scratchRoot, reportRoot, 
         throw Object.assign(error, { nativeSmokeEvidence: row })
       }
     }
-    const toolVersion = await run('hdiutil', ['-version'], { timeoutMs: 30_000 })
-    smokeReport.toolVersion = toolVersion.stdout.trim()
+    try {
+      smokeReport.toolEvidence = await hdiutilReadOnlyEvidence(runHdiutil, redact, toolIdentity)
+    } catch (error) {
+      const result = error.result
+      smokeReport.status = 'failed'
+      smokeReport.failure = {
+        command: result?.command ?? 'hdiutil',
+        args: result?.args ?? ['info', '-plist'],
+        exitCode: Number.isInteger(result?.exitCode) ? result.exitCode : null,
+        signal: result?.signal ?? null,
+        stdout: redact(result?.stdout ?? '').slice(0, 4000),
+        stderr: redact(result?.stderr ?? error.message).slice(0, 4000),
+        timedOut: result?.timedOut === true,
+        outputLimitExceeded: result?.outputLimitExceeded === true
+      }
+      await writeFile(reportPath, `${JSON.stringify(smokeReport, null, 2)}\n`)
+      throw error
+    }
     smokeReport.status = 'complete'
     await writeFile(reportPath, `${JSON.stringify(smokeReport, null, 2)}\n`)
   }

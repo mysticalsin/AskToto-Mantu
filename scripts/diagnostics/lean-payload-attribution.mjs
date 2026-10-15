@@ -26,6 +26,7 @@ import {
 import {
   attachMarginal,
   find7za,
+  hdiutilReadOnlyEvidence,
   nativeSmoke,
   runMacProbe,
   runWindowsDiagnostics,
@@ -438,10 +439,28 @@ async function collect(options) {
       : await run('npm', ['--version'], { cwd: payloadRoot, timeoutMs: 60_000 }).catch(() => null)
   const require = createRequire(join(payloadRoot, 'package.json'))
   const sevenZipPath = options.target === 'win' ? await find7za() : null
-  const tools =
-    options.target === 'mac'
-      ? { hdiutil: await run('hdiutil', ['-version'], { timeoutMs: 30_000 }) }
-      : { sevenZipPath, sevenZipVersion: await run(sevenZipPath, ['i'], { timeoutMs: 30_000 }) }
+  let tools
+  if (options.target === 'mac') {
+    const hdiutilIdentity = { path: '/usr/bin/hdiutil', ...(await sha256File('/usr/bin/hdiutil')) }
+    try {
+      tools = { hdiutil: await hdiutilReadOnlyEvidence(run, redact, hdiutilIdentity) }
+    } catch (error) {
+      const result = error.result
+      error.hdiutilMetadataProbe = result
+        ? {
+            command: result.command,
+            args: result.args,
+            exitCode: result.exitCode,
+            signal: result.signal,
+            stdout: redact(result.stdout ?? '').slice(0, 4000),
+            stderr: redact(result.stderr ?? '').slice(0, 4000),
+            timedOut: result.timedOut,
+            outputLimitExceeded: result.outputLimitExceeded
+          }
+        : { command: '/usr/bin/hdiutil', args: ['info', '-plist'], failure: redact(error.message).slice(0, 4000) }
+      throw error
+    }
+  } else tools = { sevenZipPath, sevenZipVersion: await run(sevenZipPath, ['i'], { timeoutMs: 30_000 }) }
   const managedNodeManifest = JSON.parse(
     await readFile(join(payloadRoot, 'src/shared/managed-node-manifest.json'), 'utf8')
   )
@@ -691,7 +710,8 @@ async function main() {
                 elapsedMs: error.result.elapsedMs,
                 timedOut: error.result.timedOut
               }
-            : null
+            : null,
+          ...(error.hdiutilMetadataProbe ? { hdiutilMetadataProbe: error.hdiutilMetadataProbe } : {})
         }
       ]
       report.timestamps ??= { startedAt: null }
