@@ -38,6 +38,7 @@ interface LeaseState {
   readonly pending: Set<Promise<unknown>>
   retired: boolean
   disposed: boolean
+  disposal: Promise<void> | undefined
 }
 
 const states = new WeakMap<LegacyFileKeyLease, LeaseState>()
@@ -163,46 +164,59 @@ export function createProfileBoundLegacyFileKeyAccess(
     if (state) state.retired = true
   }
 
-  const dispose = async (lease: LegacyFileKeyLease): Promise<void> => {
+  const dispose = (lease: LegacyFileKeyLease): Promise<void> => {
     const state = states.get(lease)
-    if (!state || state.disposed) return
+    if (!state) return Promise.resolve()
+    if (state.disposal) return state.disposal
+    if (state.disposed) return Promise.resolve()
     state.retired = true
-    await Promise.allSettled([...state.pending])
-    state.key.fill(0)
-    state.disposed = true
-    states.delete(lease)
+    const disposal = Promise.allSettled([...state.pending]).then(() => {
+      state.key.fill(0)
+      state.disposed = true
+      states.delete(lease)
+    })
+    state.disposal = disposal
+    return disposal
   }
 
-  const withKey = async <T>(
-    lease: LegacyFileKeyLease,
-    use: (owned32Bytes: Uint8Array) => T | Promise<T>
-  ): Promise<T> => {
+  const withKey = <T>(lease: LegacyFileKeyLease, use: (owned32Bytes: Uint8Array) => T | Promise<T>): Promise<T> => {
     const state = states.get(lease)
     if (!state || state.retired || state.disposed || state.binding !== lease.keyBinding)
-      throw new Error('Legacy profile key lease is retired')
-    if (typeof use !== 'function') throw new Error('Legacy key callback is required')
-    roots.assertScopeCurrent(state.scope, state.root)
-    state.root.assertCurrent()
-    await state.root.assertPhysicalCurrent()
-    if (state.retired || state.disposed) throw new Error('Legacy profile key lease is retired')
-    const bytes = new Uint8Array(32)
-    bytes.set(state.key)
-    const work = Promise.resolve().then(() => {
-      if (state.retired || state.disposed) throw new Error('Legacy profile key lease is retired')
-      return use(bytes)
-    })
-    state.pending.add(work)
+      return Promise.reject(new Error('Legacy profile key lease is retired'))
     try {
-      const result = await work
+      if (typeof use !== 'function') throw new Error('Legacy key callback is required')
       roots.assertScopeCurrent(state.scope, state.root)
       state.root.assertCurrent()
-      await state.root.assertPhysicalCurrent()
-      if (state.retired || state.disposed) throw new Error('Legacy profile key lease was retired during use')
-      return result
-    } finally {
-      bytes.fill(0)
-      state.pending.delete(work)
+    } catch (error) {
+      return Promise.reject(error)
     }
+    const operation = Promise.resolve().then(async () => {
+      await state.root.assertPhysicalCurrent()
+      if (state.retired || state.disposed) throw new Error('Legacy profile key lease is retired')
+      const bytes = new Uint8Array(32)
+      bytes.set(state.key)
+      try {
+        const result = await Promise.resolve().then(() => {
+          roots.assertScopeCurrent(state.scope, state.root)
+          state.root.assertCurrent()
+          if (state.retired || state.disposed) throw new Error('Legacy profile key lease is retired')
+          return use(bytes)
+        })
+        roots.assertScopeCurrent(state.scope, state.root)
+        state.root.assertCurrent()
+        await state.root.assertPhysicalCurrent()
+        if (state.retired || state.disposed) throw new Error('Legacy profile key lease was retired during use')
+        return result
+      } finally {
+        bytes.fill(0)
+      }
+    })
+    state.pending.add(operation)
+    operation.then(
+      () => state.pending.delete(operation),
+      () => state.pending.delete(operation)
+    )
+    return operation
   }
 
   return {
@@ -239,7 +253,16 @@ export function createProfileBoundLegacyFileKeyAccess(
           retire: () => retire(lease),
           dispose: () => dispose(lease)
         })
-        states.set(lease, { scope, root, key, binding, pending: new Set(), retired: false, disposed: false })
+        states.set(lease, {
+          scope,
+          root,
+          key,
+          binding,
+          pending: new Set(),
+          retired: false,
+          disposed: false,
+          disposal: undefined
+        })
         key = undefined
         return lease
       } finally {

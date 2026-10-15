@@ -92,6 +92,7 @@ interface KeyState {
   readonly keyBinding: object
   retired: boolean
   disposed: boolean
+  disposal: Promise<void> | undefined
 }
 
 interface ProtectedKeyRecord {
@@ -533,46 +534,62 @@ export function createProtectedMeetingKeys(options: ProtectedMeetingKeysOptions)
     if (state) state.retired = true
   }
 
-  const disposeHandle = async (handle: ProtectedKeyHandle): Promise<void> => {
+  const disposeHandle = (handle: ProtectedKeyHandle): Promise<void> => {
     const state = states.get(handle)
-    if (!state || state.disposed) return
+    if (!state) return Promise.resolve()
+    if (state.disposal) return state.disposal
+    if (state.disposed) return Promise.resolve()
     state.retired = true
-    await Promise.allSettled([...state.pending])
-    state.key.fill(0)
-    state.disposed = true
-    states.delete(handle)
+    const disposal = Promise.allSettled([...state.pending]).then(() => {
+      state.key.fill(0)
+      state.disposed = true
+      states.delete(handle)
+    })
+    state.disposal = disposal
+    return disposal
   }
 
-  const withKeyInternal = async <T>(
+  const withKeyInternal = <T>(
     scope: OpaqueOperationScope,
     handle: ProtectedKeyHandle,
     use: (owned32Bytes: Uint8Array) => T | Promise<T>
   ): Promise<T> => {
     const state = states.get(handle)
     if (!state || state.scope !== scope || state.keyBinding !== handle.keyBinding || state.retired || state.disposed) {
-      throw new Error('Protected meeting key is retired')
+      return Promise.reject(new Error('Protected meeting key is retired'))
     }
-    if (typeof use !== 'function') throw new Error('Protected key callback is required')
-    options.roots.assertScopeCurrent(scope, state.root)
-    state.root.assertCurrent()
-    await assertPhysicalLive(scope, state.root)
-    if (state.retired || state.disposed) throw new Error('Protected meeting key is retired')
-    const owned32Bytes = copyExactKey(state.key)
-    const work = Promise.resolve().then(() => {
-      if (state.retired || state.disposed) throw new Error('Protected meeting key is retired')
-      return use(owned32Bytes)
-    })
-    state.pending.add(work)
     try {
-      const result = await work
+      if (typeof use !== 'function') throw new Error('Protected key callback is required')
       options.roots.assertScopeCurrent(scope, state.root)
-      await assertPhysicalLive(scope, state.root)
-      if (state.retired || state.disposed) throw new Error('Protected meeting key was retired during use')
-      return result
-    } finally {
-      owned32Bytes.fill(0)
-      state.pending.delete(work)
+      state.root.assertCurrent()
+    } catch (error) {
+      return Promise.reject(error)
     }
+    const operation = Promise.resolve().then(async () => {
+      await assertPhysicalLive(scope, state.root)
+      if (state.retired || state.disposed) throw new Error('Protected meeting key is retired')
+      const owned32Bytes = copyExactKey(state.key)
+      try {
+        const result = await Promise.resolve().then(() => {
+          options.roots.assertScopeCurrent(scope, state.root)
+          state.root.assertCurrent()
+          if (state.retired || state.disposed) throw new Error('Protected meeting key is retired')
+          return use(owned32Bytes)
+        })
+        options.roots.assertScopeCurrent(scope, state.root)
+        await assertPhysicalLive(scope, state.root)
+        if (state.retired || state.disposed) throw new Error('Protected meeting key was retired during use')
+        return result
+      } finally {
+        owned32Bytes.fill(0)
+      }
+    })
+    state.pending.add(operation)
+    operation.then(
+      () => state.pending.delete(operation),
+      () => state.pending.delete(operation)
+    )
+    return operation
   }
 
   const makeHandle = (
@@ -600,7 +617,8 @@ export function createProtectedMeetingKeys(options: ProtectedMeetingKeysOptions)
       pending: new Set(),
       keyBinding,
       retired: false,
-      disposed: false
+      disposed: false,
+      disposal: undefined
     })
     return handle
   }

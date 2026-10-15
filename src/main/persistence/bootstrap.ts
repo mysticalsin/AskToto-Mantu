@@ -414,7 +414,7 @@ function createMainPersistenceBootstrapInternal(
     try {
       storage = await keys.withKey(scope, key, (ownedKey) => {
         try {
-          return createIncrementalMeetingJournalFileStorage({
+          const created = createIncrementalMeetingJournalFileStorage({
             root: journalRoot,
             meetingId: root.meetingId,
             key: ownedKey,
@@ -428,6 +428,8 @@ function createMainPersistenceBootstrapInternal(
             createRootIfMissing: writer !== undefined,
             gateway
           })
+          owner.storage = created
+          return created
         } finally {
           ownedKey.fill(0)
         }

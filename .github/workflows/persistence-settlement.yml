@@ -1,4 +1,4 @@
-name: Persistence K1 complete key-use RED
+name: Persistence K1 complete key-use GREEN
 
 on:
   push:
@@ -16,6 +16,7 @@ on:
       - src/main/persistence/bootstrap-main-factory.integration.test.ts
       - src/main/persistence/root-registry.test.ts
       - src/main/persistence/protected-meeting-keys.test.ts
+      - src/main/persistence/protected-meeting-keys.ts
       - src/main/persistence/legacy-file-key.test.ts
       - src/main/persistence/legacy-file-key.ts
       - src/main/features/meetings/incremental-meeting-journal-files.ts
@@ -43,13 +44,13 @@ defaults:
 
 jobs:
   test-first:
-    name: 39-case K1 complete key-use expected RED
+    name: 39-case K1 complete key-use GREEN
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: persistence-k1-red
-      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 798c21c5d97819fea1e1c8d6dc3bc9da8668e469
+      PERSISTENCE_SETTLEMENT_PHASE: persistence-k1-green
+      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 52c97ca175fccea6db51ab01c912d46d3876d6b4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -74,17 +75,20 @@ jobs:
           echo "UNHANDLED_REPORT_PATH=$SETTLEMENT_REPORT_DIR/unhandled.json" >> "$GITHUB_ENV"
           echo "SETTLEMENT_RECEIPT_PATH=$SETTLEMENT_REPORT_DIR/receipt.json" >> "$GITHUB_ENV"
           echo "REPORT_STARTED_AT_MS=$(date -u +%s%3N)" >> "$GITHUB_ENV"
-      - name: Verify the exact successor and cumulative test-first change envelopes
+      - name: Verify the exact successor and cumulative K1 change envelopes
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD^)" = "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT"
-          test "$(git rev-parse "${PERSISTENCE_SETTLEMENT_PARENT_COMMIT}^")" = "7254798aafdcbced95a933d62fbef8522672e375"
+          test "$(git rev-parse "${PERSISTENCE_SETTLEMENT_PARENT_COMMIT}^")" = "798c21c5d97819fea1e1c8d6dc3bc9da8668e469"
+          test "$(git rev-parse 798c21c5d97819fea1e1c8d6dc3bc9da8668e469^)" = "7254798aafdcbced95a933d62fbef8522672e375"
           actual_paths="$(git diff --name-only "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA" | LC_ALL=C sort)"
           expected_paths="$(printf '%s\n' \
             .github/workflows/persistence-settlement.yml \
             scripts/qa/check-persistence-settlement-report.mjs \
-            src/main/persistence/bootstrap-main-factory.integration.test.ts | LC_ALL=C sort)"
+            src/main/persistence/bootstrap.ts \
+            src/main/persistence/legacy-file-key.ts \
+            src/main/persistence/protected-meeting-keys.ts | LC_ALL=C sort)"
           test "$actual_paths" = "$expected_paths"
           cumulative_paths="$(git diff --name-only 7254798aafdcbced95a933d62fbef8522672e375 "$GITHUB_SHA" | LC_ALL=C sort)"
           cumulative_expected="$(printf '%s\n' \
@@ -92,7 +96,10 @@ jobs:
             scripts/qa/check-persistence-settlement-report.mjs \
             src/main/persistence/bootstrap-main-factory.integration.test.ts \
             src/main/persistence/legacy-file-key.test.ts \
-            src/main/persistence/protected-meeting-keys.test.ts | LC_ALL=C sort)"
+            src/main/persistence/protected-meeting-keys.test.ts \
+            src/main/persistence/bootstrap.ts \
+            src/main/persistence/legacy-file-key.ts \
+            src/main/persistence/protected-meeting-keys.ts | LC_ALL=C sort)"
           test "$cumulative_paths" = "$cumulative_expected"
           git diff --check "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA"
       - name: Install the frozen Node 22 test dependencies
@@ -479,11 +486,11 @@ jobs:
           NODE
       - name: Validate all 39 cases and 26 exact lifecycle witnesses
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain raw reports and EXPECTED_K1_RED receipt
+      - name: Retain raw reports and K1 GREEN receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-k1-red-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persistence-k1-green-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/vitest.json
             ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/vitest.log

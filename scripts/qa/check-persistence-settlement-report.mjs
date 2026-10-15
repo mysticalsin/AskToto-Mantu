@@ -206,15 +206,15 @@ const cases = [
     expected: 'passed'
   },
   ...[
-    ['K01', 'joins protected key admission before disposing the key owner', 'failed'],
+    ['K01', 'joins protected key admission before disposing the key owner', 'passed'],
     ['K02', 'keeps protected key disposal pending while the admitted callback is held', 'passed'],
-    ['K03', 'joins protected key post-use checks and wipes before disposal completes', 'failed'],
+    ['K03', 'joins protected key post-use checks and wipes before disposal completes', 'passed'],
     ['K04', 'disposes a protected key after a physically completed callback refusal', 'passed'],
-    ['K05', 'joins legacy key admission before disposing the key owner', 'failed'],
+    ['K05', 'joins legacy key admission before disposing the key owner', 'passed'],
     ['K06', 'keeps legacy key disposal pending while the admitted callback is held', 'passed'],
-    ['K07', 'joins legacy key post-use checks and wipes before disposal completes', 'failed'],
+    ['K07', 'joins legacy key post-use checks and wipes before disposal completes', 'passed'],
     ['K08', 'disposes a legacy key after a physically completed callback refusal', 'passed'],
-    ['K09', 'cleans a constructed journal store when the key post-use guard rejects', 'failed'],
+    ['K09', 'cleans a constructed journal store when the key post-use guard rejects', 'passed'],
     ['K10', 'retains the constructed journal store until successful owner handoff', 'passed']
   ].map(([caseId, title, expected]) => ({
     file:
@@ -1073,7 +1073,7 @@ function validateK1Evidence(witness) {
     const callback = id === 'K02' || id === 'K06'
     const postUse = id === 'K03' || id === 'K07'
     const refusal = id === 'K04' || id === 'K08'
-    const observedDisposals = admission || postUse || refusal ? ['fulfilled', 'fulfilled'] : ['pending', 'pending']
+    const observedDisposals = refusal ? ['fulfilled', 'fulfilled'] : ['pending', 'pending']
     requireValue(
       witness.stage === (admission ? 'admission' : callback ? 'callback' : postUse ? 'post-use' : 'completed-refusal'),
       `${id} stage is invalid`
@@ -1093,7 +1093,7 @@ function validateK1Evidence(witness) {
         witness.observed.borrow === (admission ? 'absent' : refusal ? 'zero' : 'nonzero') &&
         JSON.stringify(witness.observed.disposals) === JSON.stringify(observedDisposals) &&
         witness.observed.checkpoint === true,
-      `${id} pending observation differs from the fixed RED schedule`
+      `${id} pending observation differs from the fixed GREEN schedule`
     )
     requireValue(
       witness.settled.use === (refusal ? 'callback-error' : 'retired') &&
@@ -1105,10 +1105,10 @@ function validateK1Evidence(witness) {
         witness.settled.lateUse === 'retired' &&
         witness.settled.lateCallbackCalls === 0 &&
         witness.settled.extraPhysicalChecks === 0,
-      `${id} joined lifecycle evidence differs from the fixed RED schedule`
+      `${id} joined lifecycle evidence differs from the fixed GREEN schedule`
     )
     requireValue(
-      witness.postUseBorrowAtDisposal === (postUse ? 'nonzero' : null),
+      witness.postUseBorrowAtDisposal === (postUse ? 'zero' : null),
       `${id} borrow-at-disposal observation is invalid`
     )
     requireValue(
@@ -1161,13 +1161,13 @@ function validateK1Evidence(witness) {
     requireValue(
       JSON.stringify(witness.physical) === '{"rawMatchesRoot":true,"realStatCompleted":true,"entries":1}' &&
         JSON.stringify(witness.store) ===
-          '{"constructorCalls":1,"actualObject":true,"borrowZeroAtGate":true,"initializeAtGate":0,"disposeAtGate":0,"disposeAfterOpen":0,"disposeAfterBootstrap":0,"extraDisposeAfterRepeat":0,"disposedSameObject":null}' &&
+          '{"constructorCalls":1,"actualObject":true,"borrowZeroAtGate":true,"initializeAtGate":0,"disposeAtGate":0,"disposeAfterOpen":1,"disposeAfterBootstrap":1,"extraDisposeAfterRepeat":0,"disposedSameObject":true}' &&
         JSON.stringify(witness.opening) === '{"atGate":"pending","outcome":"original-stat-error","sameError":true}' &&
         JSON.stringify(witness.parents) ===
           '{"keySettlements":1,"writerCloseAttempts":1,"writerCloseConfirmed":1,"rootCloseAttempts":1,"rootCloseConfirmed":1}' &&
         JSON.stringify(witness.bootstrap) ===
           '{"first":"fulfilled","repeat":"fulfilled","samePromise":true,"workersStarted":1,"workerExits":1}',
-      'K09 evidence differs from the fixed causal RED schedule'
+      'K09 evidence differs from the fixed causal GREEN schedule'
     )
     return
   }
@@ -1233,8 +1233,8 @@ function validate() {
     'report/log/unhandled/receipt paths are missing'
   )
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'persistence-k1-red',
-    'phase is not the fixed persistence-k1-red phase'
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'persistence-k1-green',
+    'phase is not the fixed persistence-k1-green phase'
   )
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
@@ -1244,10 +1244,10 @@ function validate() {
     hashedSources.length === 23 && new Set(hashedSources).size === 23,
     'source receipt roster is not exactly 23 unique paths'
   )
-  requireValue(process.env.VITEST_EXIT_CODE === '1', 'Vitest did not return the required actual K1 RED exit')
+  requireValue(process.env.VITEST_EXIT_CODE === '0', 'Vitest did not return the required actual K1 GREEN exit')
   requireValue(process.env.GITHUB_JOB === 'test-first', 'reporter job binding is not test-first')
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === '798c21c5d97819fea1e1c8d6dc3bc9da8668e469',
+    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === '52c97ca175fccea6db51ab01c912d46d3876d6b4',
     'reviewed parent commit binding is invalid'
   )
   requireValue(process.version === 'v22.22.3', 'Node runtime is not the pinned 22.22.3')
@@ -1306,16 +1306,16 @@ function validate() {
 
   const { bytes, report } = readReport(reportPath)
   const { bytes: unhandledBytes, report: unhandledReport } = readUnhandledReport(unhandledReportPath)
-  requireValue(report.success === false, 'Vitest JSON does not record the expected K1 RED run')
+  requireValue(report.success === true, 'Vitest JSON does not record the expected K1 GREEN run')
   const expectedCounters = {
     numTotalTests: 39,
-    numPassedTests: 34,
-    numFailedTests: 5,
+    numPassedTests: 39,
+    numFailedTests: 0,
     numPendingTests: 0,
     numTodoTests: 0,
     numTotalTestSuites: 8,
-    numPassedTestSuites: 2,
-    numFailedTestSuites: 6,
+    numPassedTestSuites: 8,
+    numFailedTestSuites: 0,
     numPendingTestSuites: 0
   }
   for (const [name, expected] of Object.entries(expectedCounters))
@@ -1384,28 +1384,13 @@ function validate() {
     requireValue(Array.isArray(failures), `failure-message array is missing for ${expected.title}`)
     if (expected.expected === 'passed')
       requireValue(failures.length === 0, `passing case has failure messages: ${expected.title}`)
-    else {
-      const causes = {
-        K01: 'K01 complete protected admission must settle before key disposal',
-        K03: 'K03 protected post-use physical check and borrowed wipe must precede key disposal',
-        K05: 'K05 complete legacy admission must settle before key disposal',
-        K07: 'K07 legacy post-use physical check and borrowed wipe must precede key disposal',
-        K09: 'K09 constructed journal storage must be owned before key post-use failure'
-      }
-      requireValue(
-        failures.length === 1 && failures[0].split(/\r?\n/, 1)[0] === `AssertionError: ${causes[expected.caseId]}`,
-        `failure is not the exact causal K1 assertion for ${expected.caseId}`
-      )
-    }
+    else requireValue(false, `unexpected failure in the fixed GREEN run: ${expected.title}`)
     if (expected.evidence) validateStructuredEvidence(evidence, expected)
   }
   for (const file of requiredFiles) {
     const result = files.get(file)
-    const expectedFileStatus = file === requiredFiles[1] ? 'passed' : 'failed'
-    requireValue(
-      result.status === expectedFileStatus,
-      `file suite status differs from the five causal RED cases for ${file}`
-    )
+    const expectedFileStatus = 'passed'
+    requireValue(result.status === expectedFileStatus, `file suite status differs from the fixed GREEN run for ${file}`)
   }
   requireValue(
     [...actualCases.keys()].every((title) => cases.some((entry) => entry.title === title)),
@@ -1416,8 +1401,8 @@ function validate() {
   const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
     schema: 'metis-persistence-k1-source-receipt/v1',
-    disposition: 'EXPECTED_K1_RED',
-    phase: 'persistence-k1-red',
+    disposition: 'K1_GREEN_COMPLETE_KEY_USE',
+    phase: 'persistence-k1-green',
     parentCommit: process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT,
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
@@ -1450,7 +1435,7 @@ function validate() {
     witnessIds: requiredWitnessIds
   }
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  console.log('persistence-settlement:EXPECTED_K1_RED 39 cases; 34 passed; 5 causal failures; 26 witnesses')
+  console.log('persistence-settlement:K1_GREEN_COMPLETE_KEY_USE 39 cases; 39 passed; 0 failed; 26 witnesses')
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }
 
