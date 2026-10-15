@@ -343,11 +343,99 @@ describe('managed authority source membership and pins', () => {
 
   it('keeps a verified absence tied to its original namespace witness', async () => {
     const path = join(root, 'missing-policy.json')
+    const numericParent = () => {
+      const stats = statSync(root)
+      return {
+        kind: stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other',
+        dev: stats.dev,
+        ino: stats.ino,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        ctimeMs: stats.ctimeMs,
+        birthtimeMs: stats.birthtimeMs,
+        uid: stats.uid,
+        gid: stats.gid,
+        mode: stats.mode
+      }
+    }
+    const preciseParent = () => {
+      const stats = statSync(root, { bigint: true })
+      return {
+        kind: stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other',
+        dev: stats.dev,
+        ino: stats.ino,
+        size: stats.size,
+        mtimeNs: stats.mtimeNs,
+        ctimeNs: stats.ctimeNs,
+        birthtimeNs: stats.birthtimeNs,
+        uid: stats.uid,
+        gid: stats.gid,
+        mode: stats.mode
+      }
+    }
+    const numericMatches = (left: ReturnType<typeof numericParent>, right: ReturnType<typeof numericParent>) => ({
+      kind: left.kind === right.kind,
+      dev: left.dev === right.dev,
+      ino: left.ino === right.ino,
+      size: left.size === right.size,
+      mtimeMs: left.mtimeMs === right.mtimeMs,
+      ctimeMs: left.ctimeMs === right.ctimeMs,
+      birthtimeMs: left.birthtimeMs === right.birthtimeMs,
+      uid: left.uid === right.uid,
+      gid: left.gid === right.gid,
+      mode: left.mode === right.mode
+    })
+    const preciseMatches = (left: ReturnType<typeof preciseParent>, right: ReturnType<typeof preciseParent>) => ({
+      kind: left.kind === right.kind,
+      dev: left.dev === right.dev,
+      ino: left.ino === right.ino,
+      size: left.size === right.size,
+      mtimeNs: left.mtimeNs === right.mtimeNs,
+      ctimeNs: left.ctimeNs === right.ctimeNs,
+      birthtimeNs: left.birthtimeNs === right.birthtimeNs,
+      uid: left.uid === right.uid,
+      gid: left.gid === right.gid,
+      mode: left.mode === right.mode
+    })
+    const boundedNsDelta = (before: bigint, after: bigint): string | null => {
+      const delta = after - before
+      return delta < -300_000_000_000n || delta > 300_000_000_000n ? null : delta.toString()
+    }
+    const parentBeforeCapture = numericParent()
+    const preciseBeforeCapture = preciseParent()
     const pin = await captureAuthoritySourcePin(path)
+    const parentAfterCapture = numericParent()
+    const preciseAfterCapture = preciseParent()
+    writeFileSync(path, '{}')
+    const parentAfterCreate = numericParent()
+    const preciseAfterCreate = preciseParent()
+    rmSync(path)
+    const parentAfterUnlink = numericParent()
+    const preciseAfterUnlink = preciseParent()
+    console.info(
+      JSON.stringify({
+        kind: 'authority-namespace-witness',
+        platform: process.platform,
+        numericMatches: {
+          afterCapture: numericMatches(parentBeforeCapture, parentAfterCapture),
+          afterCreate: numericMatches(parentBeforeCapture, parentAfterCreate),
+          afterUnlink: numericMatches(parentBeforeCapture, parentAfterUnlink)
+        },
+        preciseMatches: {
+          afterCapture: preciseMatches(preciseBeforeCapture, preciseAfterCapture),
+          afterCreate: preciseMatches(preciseBeforeCapture, preciseAfterCreate),
+          afterUnlink: preciseMatches(preciseBeforeCapture, preciseAfterUnlink)
+        },
+        preciseDeltaNs: {
+          mtimeAfterCreate: boundedNsDelta(preciseBeforeCapture.mtimeNs, preciseAfterCreate.mtimeNs),
+          ctimeAfterCreate: boundedNsDelta(preciseBeforeCapture.ctimeNs, preciseAfterCreate.ctimeNs),
+          mtimeAfterUnlink: boundedNsDelta(preciseBeforeCapture.mtimeNs, preciseAfterUnlink.mtimeNs),
+          ctimeAfterUnlink: boundedNsDelta(preciseBeforeCapture.ctimeNs, preciseAfterUnlink.ctimeNs)
+        }
+      })
+    )
     expect(pin).not.toBeNull()
     if (!pin) throw new Error('Expected a verified absence pin')
-    writeFileSync(path, '{}')
-    rmSync(path)
     await expect(assertAuthoritySourcePinCurrent(pin)).rejects.toThrow()
   })
 

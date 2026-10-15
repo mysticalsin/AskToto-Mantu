@@ -1412,7 +1412,6 @@ describe('speech auth lease (auth module authority)', () => {
     await writeSessionFile()
     const adminPath = join(ud, 'admin-managed-config.json')
     writeFileSync(adminPath, '{}', 'utf8')
-    const { readTrustedAdminManagedBytes } = await import('./win-security')
     let began!: () => void
     let release!: () => void
     const started = new Promise<void>((resolve) => {
@@ -1421,10 +1420,13 @@ describe('speech auth lease (auth module authority)', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
+    // This test-owned policy file is the exact configured source under test. The injected reader models
+    // a trusted machine-policy read while readTrustedAdminText still performs its real source-pin checks.
     const auth = await prepareAuth(async (path) => {
+      if (path !== adminPath) throw new Error('Unexpected admin policy fixture path')
       began()
       await gate
-      return readTrustedAdminManagedBytes(path)
+      return readFileSync(path)
     })
 
     const older = auth.refreshSpeechAuthLease()
@@ -1478,7 +1480,6 @@ describe('speech auth lease (auth module authority)', () => {
           idTokenClaims: { tid: TENANT_GUID }
         }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>
     )
-    const { readTrustedAdminManagedBytes } = await import('./win-security')
     let adminReads = 0
     let began!: () => void
     let release!: () => void
@@ -1488,13 +1489,16 @@ describe('speech auth lease (auth module authority)', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
+    // This test-owned policy file is the exact configured source under test. The injected reader models
+    // a trusted machine-policy read while readTrustedAdminText still performs its real source-pin checks.
     const auth = await prepareAuth(async (path) => {
+      if (path !== join(ud, 'admin-managed-config.json')) throw new Error('Unexpected admin policy fixture path')
       adminReads += 1
       if (adminReads === 2) {
         began()
         await gate
       }
-      return readTrustedAdminManagedBytes(path)
+      return readFileSync(path)
     })
     const lease = await auth.refreshSpeechAuthLease()
     expect(lease).not.toBeNull()
