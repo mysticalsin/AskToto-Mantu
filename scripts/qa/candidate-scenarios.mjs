@@ -37,6 +37,7 @@ import {
   isStrictSemver,
   reportProblems
 } from './fresh-onboarding-baseline.mjs'
+import { RECOVERY_ASSERTIONS, packagedRecoveryReportProblems } from './packaged-restart-recovery.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { TLS_REPORT, TLS_SCENARIO, assessHostedTlsReport, bindHostedTlsCandidate } from './hosted-candidate-tls.mjs'
 import { VARIANTS } from './provenance.mjs'
@@ -676,6 +677,46 @@ export const SCENARIOS = Object.freeze({
       })
     })
   }),
+  // WORKSTREAM-electron-packaged-acceptance: exercise only a fresh synthetic profile across two clean launches
+  // of the exact installed candidate. This checks same-package recovery of settings, a saved meeting and a
+  // saved note; it is not cross-version upgrade, updater-feed, rollback or customer-data acceptance.
+  'packaged-restart-recovery': Object.freeze({
+    ticket: 'WORKSTREAM-electron-packaged-acceptance',
+    m2Crosswalk: 'UNKNOWN',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL' }),
+    reportAssessment: 'packaged-restart-recovery',
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerKind: 'mac-dmg',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/packaged-restart-recovery.mjs',
+        args: ({ app, report }) => {
+          if (!app) throw new Error('packaged-restart-recovery needs the installed app (--app).')
+          return ['--app', app, '--platform', 'mac', '--out', report]
+        },
+        report: 'packaged-restart-recovery.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 30,
+        stepTimeoutMinutes: 20
+      }),
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/packaged-restart-recovery.mjs',
+        args: ({ app, report }) => {
+          if (!app) throw new Error('packaged-restart-recovery needs the installed app (--app).')
+          return ['--app', app, '--platform', 'win', '--out', report]
+        },
+        report: 'packaged-restart-recovery.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 30,
+        stepTimeoutMinutes: 20
+      })
+    })
+  }),
   // M2-0469 (proves M2-0037): 4 overlay renderer SIGKILLs within 60 s give 3 reloads, then the halted
   // dialog and no 4th reload. It needs no QA-only hook, so it installs the promotable DMG; the proof seeds
   // its own onboarded settings into a throwaway ASKTOTO_USERDATA profile, so the default profile is never
@@ -1017,9 +1058,28 @@ export function assessPackagedSmokeReport(report, platform) {
   return { problems, row_verdicts, notCovered }
 }
 
+/** The exact-schema synthetic same-package restart report is a candidate package result, not upgrade evidence. */
+/** @param {string | undefined} platform */
+export function assessPackagedRecoveryReport(report, platform = undefined) {
+  const problems = packagedRecoveryReportProblems(report)
+  const expectedPlatform = platform === 'mac' ? 'darwin' : platform === 'win' ? 'win32' : undefined
+  if (expectedPlatform && report?.platform !== expectedPlatform)
+    problems.push('packaged recovery report platform does not match the scenario platform.')
+  const allowedIds = new Set(RECOVERY_ASSERTIONS)
+  const row_verdicts = {
+    recovery: Array.isArray(report?.assertions)
+      ? report.assertions
+          .filter((row) => allowedIds.has(row?.id) && ['PASS', 'FAIL', 'NOT_RUN'].includes(row?.status))
+          .map(({ id, status }) => ({ id, status }))
+      : []
+  }
+  return { problems, row_verdicts, notCovered: [] }
+}
+
 export function assessScenarioReport({ scenario, platform, report, expected = undefined }) {
   const entry = scenarioEntry(scenario)
   if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
+  if (entry.reportAssessment === 'packaged-restart-recovery') return assessPackagedRecoveryReport(report, platform)
   if (entry.reportAssessment === FRESH_ONBOARDING_SCENARIO) return assessFreshOnboardingReport(report, expected)
   if (entry.reportAssessment === TLS_SCENARIO)
     return { problems: assessHostedTlsReport(report, expected), notCovered: [] }
@@ -1112,6 +1172,7 @@ export function assertCandidateProvenance(provenance, candidateRun, candidateAtt
  *   exitCode: number | null,
  *   detail: string,
  *   reportWritten: boolean,
+ *   reportData?: Record<string, unknown> | null,
  *   reportAssessment?: any
  * }} input
  */
@@ -1170,6 +1231,7 @@ export function laneRecord({
     outcome,
     report: reportWritten ? target.report : null,
     detail: outcome === 'PASS' ? null : assessmentProblems.join('\n') || detail || null,
+    ...(scenarioEntry(scenario).m2Crosswalk ? { m2_crosswalk: scenarioEntry(scenario).m2Crosswalk } : {}),
     ...reportFields,
     ...(reportAssessment?.row_verdicts ? { row_verdicts: reportAssessment.row_verdicts } : {}),
     ...(notCovered.length ? { not_covered: notCovered } : {})
@@ -1198,6 +1260,7 @@ export function laneSummary(lane) {
     ['report', lane.report ?? 'none']
   ]
   if (lane.detail) rows.push(['detail', lane.detail])
+  if (lane.m2_crosswalk) rows.push(['M2 crosswalk', lane.m2_crosswalk])
   for (const { row, reason } of lane.not_covered ?? []) rows.push([`not covered: ${row}`, reason])
   for (const [group, verdicts] of Object.entries(lane.row_verdicts ?? {})) {
     for (const row of verdicts) rows.push([`${group}: ${row.id}`, row.status])

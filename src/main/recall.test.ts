@@ -12,7 +12,7 @@ import {
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
-import { saveMeeting, isEncryptedFile } from './transcripts'
+import { saveMeeting, saveNote, isEncryptedFile } from './transcripts'
 import {
   listMeetings,
   deleteMeeting,
@@ -154,6 +154,49 @@ describe('recall — language tags round-trip through save → recallRead', () =
     // The exact rewrite the Speaker Intelligence backfill performs: formatTranscript over reparsed lines.
     const { formatTranscript } = await import('./features/meetings/transcript-format')
     expect(formatTranscript(r.lines ?? [])).toContain('_[conversation switches to English]_')
+  })
+})
+
+describe('recall — saved Q&A notes reopen through recallRead', () => {
+  let folder: string
+
+  beforeEach(() => {
+    useStorageForTests()
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-note-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('returns the exact saved note title, question and answer without listing it as a meeting', async () => {
+    const savedNote = {
+      title: 'Synthetic restart note',
+      mode: 'general',
+      question: 'Synthetic question?\nSecond line.',
+      answer: 'Synthetic answer.\nFollow-up line.'
+    }
+    const file = await saveNote(testSettings, savedNote)
+    const read = await recallRead(basename(file))
+
+    expect(read).toMatchObject({ ok: true, kind: 'note', ...savedNote })
+    expect(await listMeetings()).toEqual([])
+  })
+
+  it('fails closed when the note text repeats a structural answer heading', async () => {
+    const file = await saveNote(testSettings, {
+      title: 'Synthetic ambiguous note',
+      mode: 'general',
+      question: 'Question text\n\n## Answer\n\nQuestion continuation',
+      answer: 'Synthetic answer.'
+    })
+
+    await expect(recallRead(basename(file))).resolves.toMatchObject({
+      ok: false,
+      error: 'This saved note could not be read.'
+    })
   })
 })
 
@@ -1443,7 +1486,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
       await vi.waitFor(() => expect(events).toEqual([{ file: first, state: 'hydrating' }]))
       reads.length = 0
 
-      expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+      expect(await openRead(second, send)).toEqual({
+        ok: false,
+        error: HYDRATION_BUSY_MSG
+      })
       expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({
         ok: false,
         error: HYDRATION_BUSY_MSG
@@ -1492,7 +1538,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
 
         // The timed-out read still holds its content permit: a second download would hold the other one.
         reads.length = 0
-        expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+        expect(await openRead(second, send)).toEqual({
+          ok: false,
+          error: HYDRATION_BUSY_MSG
+        })
         expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({
           ok: false,
           error: HYDRATION_BUSY_MSG

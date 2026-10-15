@@ -12,6 +12,7 @@ import {
 } from './features/meetings/meeting-document'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, DEBRIEF_HEADING } from './transcripts'
 import { formatTranscript } from './features/meetings/transcript-format'
+import { readSavedNote } from './features/meetings/recall-note'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
@@ -147,8 +148,8 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
 }
 
 /**
- * Read a saved meeting file back into memory for "Resume session".
- * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
+ * Read a saved meeting or Q&A note back through the explicit History reader.
+ * Meeting reads return the recap/transcript; note reads return the saved title, question and answer.
  * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
  */
 export async function recallRead(
@@ -181,6 +182,8 @@ export async function recallRead(
   const text = decodeSaved(read.bytes)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
+  const note = readSavedNote(text, safeName)
+  if (note) return note
   const fm = frontmatter(text)
   if (!isMeetingDocumentType(fm.type)) {
     return { ok: false, error: 'This does not look like a meeting file.' }
