@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -42,8 +42,23 @@ const binding = {
 }
 
 async function fixture(): Promise<{ parent: string; packRoot: string }> {
-  const parent = await mkdtemp(join(tmpdir(), 'runtime-owned-tree-'))
-  roots.push(parent)
+  const rawParent = await mkdtemp(join(tmpdir(), 'runtime-owned-tree-'))
+  roots.push(rawParent)
+  const original = await lstat(rawParent, { bigint: true })
+  if (!original.isDirectory() || original.isSymbolicLink()) {
+    throw new Error('runtime-owned-tree fixture parent is not a real directory')
+  }
+  const parent = await realpath(rawParent)
+  const canonical = await lstat(parent, { bigint: true })
+  if (
+    !canonical.isDirectory() ||
+    canonical.isSymbolicLink() ||
+    canonical.dev !== original.dev ||
+    canonical.ino !== original.ino ||
+    canonical.birthtimeNs !== original.birthtimeNs
+  ) {
+    throw new Error('runtime-owned-tree fixture parent identity changed during canonicalization')
+  }
   return { parent, packRoot: join(parent, 'speech-packs') }
 }
 
