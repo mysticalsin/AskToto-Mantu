@@ -71,8 +71,15 @@ describe('lean payload attribution contracts', () => {
     const accounting = asarPhysicalAccounting(
       { bytes: 111, sha256: 'b'.repeat(64) },
       [
-        { path: 'out/main.js', bytes: 40, sha256: 'c'.repeat(64), packed: true, unpacked: false },
-        { path: 'out/renderer/video.mp4', bytes: 60, sha256: 'd'.repeat(64), packed: false, unpacked: true }
+        { path: 'out/main.js', type: 'file', bytes: 40, sha256: 'c'.repeat(64), packed: true, unpacked: false },
+        {
+          path: 'out/renderer/video.mp4',
+          type: 'file',
+          bytes: 60,
+          sha256: 'd'.repeat(64),
+          packed: false,
+          unpacked: true
+        }
       ],
       { totals: { lstatBytes: 60, regularFileBytes: 60, linkTextBytes: 0 } }
     )
@@ -87,15 +94,15 @@ describe('lean payload attribution contracts', () => {
 
   it('discovers actual managed Node child groups from packaged paths', () => {
     const entries = [
-      'resources/managed-node/darwin-arm64/bin/node',
-      'resources/managed-node/darwin-arm64/include/node/node.h',
-      'resources/managed-node/darwin-arm64/lib/node_modules/npm/package.json',
-      'resources/managed-node/darwin-arm64/lib/node_modules/npm/README.md',
-      'resources/managed-node/darwin-arm64/lib/node_modules/npm/man/npm.1',
-      'resources/managed-node/darwin-arm64/lib/node_modules/npm/LICENSE',
-      'resources/managed-node/darwin-arm64/share/doc/node/README.md',
-      'resources/managed-node/darwin-arm64/share/licenses/LICENSE',
-      'resources/managed-node/darwin-arm64/lib/node_modules/corepack/package.json'
+      'Contents/Resources/managed-node/darwin-arm64/bin/node',
+      'Contents/Resources/managed-node/darwin-arm64/include/node/node.h',
+      'Contents/Resources/managed-node/darwin-arm64/lib/node_modules/npm/package.json',
+      'Contents/Resources/managed-node/darwin-arm64/lib/node_modules/npm/README.md',
+      'Contents/Resources/managed-node/darwin-arm64/lib/node_modules/npm/man/npm.1',
+      'Contents/Resources/managed-node/darwin-arm64/lib/node_modules/npm/LICENSE',
+      'Contents/Resources/managed-node/darwin-arm64/share/doc/node/README.md',
+      'Contents/Resources/managed-node/darwin-arm64/share/licenses/LICENSE',
+      'Contents/Resources/managed-node/darwin-arm64/lib/node_modules/corepack/package.json'
     ].map((path) => ({ path, type: 'file' as const, mode: 0o644, bytes: 1, sha256: 'e'.repeat(64), lstatBytes: 1 }))
     const children = managedNodeChildren({ entries } as never, 'darwin')
     expect(children.executable).toEqual([entries[0].path])
@@ -202,6 +209,7 @@ describe('lean payload attribution contracts', () => {
     await mkdir(join(source, 'resources', 'child'), { recursive: true })
     await writeFile(join(source, 'resources', 'child', 'keep.bin'), 'keep')
     await writeFile(join(source, 'resources', 'child', 'omit.bin'), 'omit')
+    await mkdir(join(root, 'scratch'))
     const manifest = await walkTree(source)
     const projection = await copyProjection(source, destination, ['resources/child/keep.bin'], manifest.manifestSha256)
     expect(projection.entries.map((entry) => entry.path)).toEqual([

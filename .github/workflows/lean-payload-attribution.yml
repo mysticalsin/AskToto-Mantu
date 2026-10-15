@@ -48,7 +48,7 @@ jobs:
           set +e
           NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run \
             scripts/lib/lean-payload-attribution.test.ts \
-            --reporter=json \
+            --reporter=default --reporter=json \
             --outputFile="$LEAN_CONTRACT_ROOT/vitest.json" \
             --dangerouslyIgnoreUnhandledErrors=false
           test_exit=$?
