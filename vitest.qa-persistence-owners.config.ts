@@ -118,6 +118,11 @@ const qaOwnerProject = fixtureStamp
   : []
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@shared': resolve('src/shared')
+    }
+  },
   test: {
     projects: [shippingProject, ...qaOwnerProject]
   }

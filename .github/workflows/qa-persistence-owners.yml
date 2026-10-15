@@ -92,9 +92,9 @@ jobs:
           rm -f "$REPORT"
           set +e
           if [[ "$OWNER_TARGET" == true ]]; then
-            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=json --outputFile="$REPORT"
+            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT"
           else
-            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=json --outputFile="$REPORT"
+            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT"
           fi
           result=$?
           echo "exit_code=$result" >> "$GITHUB_OUTPUT"
