@@ -1402,6 +1402,7 @@ describe('renderer remediation evidence validators', () => {
 
   it('requires zero-exit full audit and a complete npm 10.9.8 CycloneDX lock graph', () => {
     const root = tempRoot()
+    const sourceRoot = join(root, 'AskToto-Mantu')
     const audit = join(root, 'audit.json')
     const allZero = {
       auditReportVersion: 2,
@@ -1490,7 +1491,14 @@ describe('renderer remediation evidence validators', () => {
       specVersion: '1.5',
       metadata: {
         tools: [{ vendor: 'npm', name: 'cli', version: '10.9.8' }],
-        component: { type: 'application', name: 'asktoto', version: '1.9.7', 'bom-ref': 'asktoto@1.9.7' }
+        component: {
+          type: 'application',
+          name: 'AskToto-Mantu',
+          version: '1.9.7',
+          'bom-ref': 'asktoto@1.9.7',
+          purl: 'pkg:npm/asktoto@1.9.7',
+          properties: [{ name: 'cdx:npm:package:path', value: '' }]
+        }
       },
       components: lockNodes.map(([name, version, path]) => {
         const node = lock.packages[path]
@@ -1514,13 +1522,50 @@ describe('renderer remediation evidence validators', () => {
       ]
     }
     put(sbomPath, JSON.stringify(sbom))
-    expect(checkSbom(sbomPath, lock).componentCount).toBe(4)
-    expect(checkSbom(sbomPath, lock).supplementalLicenseAddendum).toEqual(
+    expect(checkSbom(sbomPath, lock, 0, sourceRoot).componentCount).toBe(4)
+    expect(checkSbom(sbomPath, lock, 0, sourceRoot).supplementalLicenseAddendum).toEqual(
       expect.objectContaining({
         lockPath: 'node_modules/khroma',
         materialSha256: '66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49'
       })
     )
+    const wrongDisplayName = structuredClone(sbom)
+    wrongDisplayName.metadata.component.name = 'asktoto'
+    put(sbomPath, JSON.stringify(wrongDisplayName))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const wrongVersion = structuredClone(sbom)
+    wrongVersion.metadata.component.version = '1.9.6'
+    put(sbomPath, JSON.stringify(wrongVersion))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const wrongBomRef = structuredClone(sbom)
+    wrongBomRef.metadata.component['bom-ref'] = 'AskToto-Mantu@1.9.7'
+    put(sbomPath, JSON.stringify(wrongBomRef))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const wrongPurl = structuredClone(sbom)
+    wrongPurl.metadata.component.purl = 'pkg:npm/AskToto-Mantu@1.9.7'
+    put(sbomPath, JSON.stringify(wrongPurl))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const missingPurl = structuredClone(sbom)
+    delete (missingPurl.metadata.component as { purl?: string }).purl
+    put(sbomPath, JSON.stringify(missingPurl))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const missingRootPath = structuredClone(sbom)
+    missingRootPath.metadata.component.properties = []
+    put(sbomPath, JSON.stringify(missingRootPath))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const nonemptyRootPath = structuredClone(sbom)
+    nonemptyRootPath.metadata.component.properties[0].value = './'
+    put(sbomPath, JSON.stringify(nonemptyRootPath))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const duplicateRootPath = structuredClone(sbom)
+    duplicateRootPath.metadata.component.properties.push({ name: 'cdx:npm:package:path', value: '' })
+    put(sbomPath, JSON.stringify(duplicateRootPath))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_ROOT_IDENTITY')
+    const scopedSbom = structuredClone(sbom)
+    scopedSbom.metadata.component.name = '@scope/checkout'
+    put(sbomPath, JSON.stringify(scopedSbom))
+    expect(checkSbom(sbomPath, lock, 0, join(root, '@scope', 'checkout')).componentCount).toBe(4)
+    put(sbomPath, JSON.stringify(sbom))
     const duplicateLock = structuredClone(lock) as { packages: Record<string, unknown> }
     duplicateLock.packages['node_modules/mermaid/node_modules/katex'] = structuredClone(
       lock.packages['node_modules/katex']
@@ -1531,15 +1576,15 @@ describe('renderer remediation evidence validators', () => {
     duplicateSbom.components.push(nestedKatex)
     duplicateSbom.dependencies.push({ ref: ref('katex', '0.18.2'), dependsOn: [] })
     put(sbomPath, JSON.stringify(duplicateSbom))
-    expect(checkSbom(sbomPath, duplicateLock).componentCount).toBe(5)
+    expect(checkSbom(sbomPath, duplicateLock, 0, sourceRoot).componentCount).toBe(5)
     put(sbomPath, JSON.stringify(sbom))
     const missingEdge = structuredClone(sbom)
     missingEdge.dependencies[3].dependsOn = []
     put(sbomPath, JSON.stringify(missingEdge))
-    reject(() => checkSbom(sbomPath, lock), 'SBOM_DEPENDENCY_EDGE_MISMATCH')
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_DEPENDENCY_EDGE_MISMATCH')
     sbom.components = sbom.components.filter((entry) => entry.name !== 'mermaid')
     put(sbomPath, JSON.stringify(sbom))
-    reject(() => checkSbom(sbomPath, lock), 'SBOM_COMPONENT_COVERAGE')
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_COMPONENT_COVERAGE')
   })
 
   it('binds the exact KaTeX lock fix while rejecting an alternate KaTeX identity, duplicate copy, or unrelated lock churn', () => {
@@ -2326,7 +2371,7 @@ describe('renderer remediation evidence validators', () => {
       true
     )
     const shortNotice = fullFontNotice.replace(
-      'This license becomes null and void if any of the above conditions are not met.',
+      'This license becomes null and void if any of the above conditions are\nnot met.',
       'This license remains in force.'
     )
     if (shortNotice === fullFontNotice) throw new Error('OFL fixture did not contain the termination paragraph')

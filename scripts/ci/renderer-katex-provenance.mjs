@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, resolve, relative } from 'node:path'
+import { basename, dirname, isAbsolute, resolve, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { compareInventories, validateGraph } from './renderer-katex-build-evidence.mjs'
 
@@ -1580,7 +1580,7 @@ function licenseIdentifiers(component) {
   return component.licenses.flatMap((entry) => [entry.license?.id, entry.expression].filter(Boolean))
 }
 
-export function checkSbom(reportPath, lock, exitCode = 0) {
+export function checkSbom(reportPath, lock, exitCode = 0, sourceRoot = process.cwd()) {
   if (exitCode !== 0) fail('SBOM_COMMAND_EXIT')
   if (statSync(reportPath).size === 0 || statSync(reportPath).size > 64 * 1024 * 1024) fail('SBOM_SIZE')
   const bytes = readFileSync(reportPath)
@@ -1605,6 +1605,11 @@ export function checkSbom(reportPath, lock, exitCode = 0) {
   const packages = lock.packages || {}
   const rootPackage = packages['']
   if (!rootPackage?.name || !rootPackage.version || !sbom.metadata?.component) fail('SBOM_ROOT_IDENTITY')
+  const sourcePath = resolve(sourceRoot)
+  const sourceFolder = basename(sourcePath)
+  const sourceParent = basename(dirname(sourcePath))
+  const rootDisplayName =
+    (sourceParent.startsWith('@') ? `${sourceParent}/${sourceFolder}` : sourceFolder) || rootPackage.name
   const expected = Object.entries(packages).filter(([, entry]) => entry?.version)
   const componentByPath = new Map()
   const allComponents = [...components, sbom.metadata.component]
@@ -1634,10 +1639,17 @@ export function checkSbom(reportPath, lock, exitCode = 0) {
       fail(`SBOM_DUPLICATE_REF_EDGE_AMBIGUITY:${ref}`)
     expectedEdges.set(ref, edges)
     if (!path) {
+      const rootComponent = sbom.metadata.component
+      const rootPaths = Array.isArray(rootComponent.properties)
+        ? rootComponent.properties.filter((property) => property?.name === 'cdx:npm:package:path')
+        : []
       if (
-        sbom.metadata.component.name !== name ||
-        sbom.metadata.component.version !== entry.version ||
-        sbom.metadata.component['bom-ref'] !== ref
+        rootComponent.name !== rootDisplayName ||
+        rootComponent.version !== entry.version ||
+        rootComponent['bom-ref'] !== ref ||
+        rootComponent.purl !== `pkg:npm/${name.replace(/^@/u, '%40')}@${entry.version}` ||
+        rootPaths.length !== 1 ||
+        rootPaths[0].value !== ''
       )
         fail('SBOM_ROOT_IDENTITY')
       continue
@@ -2163,7 +2175,7 @@ async function mainGreen(args, root) {
   if (process.version !== 'v22.22.3' || process.env.NPM_VERSION !== '10.9.8') fail('TOOLCHAIN_PIN')
   const origins = checkHarnessOrigins(dirname(outPath), PATCHED_KATEX.version)
   const audit = checkAudit(resolve(root, args.get('audit')), Number(args.get('audit-exit')))
-  const sbom = checkSbom(resolve(root, args.get('sbom')), dependency.lock, Number(args.get('sbom-exit')))
+  const sbom = checkSbom(resolve(root, args.get('sbom')), dependency.lock, Number(args.get('sbom-exit')), root)
   audit.producer = checkNpmProducer(
     resolve(root, args.get('audit-producer')),
     resolve(root, args.get('audit')),

@@ -2106,7 +2106,7 @@ async function runObservedBuild(reportPath) {
     `const outerConfig = ${JSON.stringify(outerConfig)}`,
     `electronConfig.renderer.plugins = [...(electronConfig.renderer.plugins || []), createViteObserverPlugin(${JSON.stringify(mainUrl)}, { outerConfig })]`,
     `const originalWorkerPlugins = electronConfig.renderer.worker?.plugins`,
-    `electronConfig.renderer.worker = { ...(electronConfig.renderer.worker || {}), plugins: async (...args) => { const existing = typeof originalWorkerPlugins === 'function' ? await originalWorkerPlugins(...args) : originalWorkerPlugins || []; return [...existing, createViteObserverPlugin(${JSON.stringify(workerUrl)}, { worker: true, outerConfig })] } }`,
+    `electronConfig.renderer.worker = { ...(electronConfig.renderer.worker || {}), plugins: (...args) => { const existing = typeof originalWorkerPlugins === 'function' ? originalWorkerPlugins(...args) : originalWorkerPlugins || []; return [...existing, createViteObserverPlugin(${JSON.stringify(workerUrl)}, { worker: true, outerConfig })] } }`,
     'export default electronConfig'
   ].join('\n')
   writeFileSync(configPath, `${wrapper}\n`, { flag: 'wx' })
