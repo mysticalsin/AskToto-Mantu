@@ -1,9 +1,10 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { app } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
+import * as winSecurity from '../win-security'
 import {
   PERSISTENCE_POLICY_DOMAIN,
   classifyAdminPolicyDocument,
@@ -17,6 +18,7 @@ import {
   qualificationReportProfileDigestV1,
   qualificationReportDigest,
   readBundledPersistenceReceipt,
+  readAdminPolicyReceipt,
   resolvePersistenceResourcePolicy,
   verifyQaPersistenceCandidateBundle,
   verifySignedEnterpriseRestriction,
@@ -532,5 +534,265 @@ describe('persistence resource policy contracts', () => {
       getAppPath.mockRestore()
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+
+  it('does not downgrade malformed administrative policy bytes to absence', async ({ task }) => {
+    const label = 'P15_MALFORMED_AUTHORITY_MUST_REMAIN_INVALID'
+    const sourceCommit = 'a'.repeat(40)
+    const hostPlatform = process.platform
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const programDataPresent = Object.hasOwn(process.env, 'ProgramData')
+    const programDataValue = process.env.ProgramData
+    const originalReader = winSecurity.readManagedPolicyAuthorityFile
+    let directory = ''
+    let expectedDirectory = ''
+    let expectedPath = ''
+    let readerRestored = false
+    let platformRestored = false
+    let programDataRestored = false
+    let tempRemoved = false
+    let fixtureReady = false
+    let fixtureError = false
+    const readError = new Error('P15 fixed read error')
+    const closeError = new Error('P15 fixed close error')
+    const rows = [
+      { id: 'M01', bytes: Buffer.from('{"persistenceResourcePolicy":'), expected: 'INVALID' },
+      { id: 'M02', bytes: Buffer.from([0xc3, 0x28]), expected: 'INVALID' },
+      { id: 'M03', bytes: Buffer.from('null'), expected: 'INVALID' },
+      { id: 'M04', bytes: Buffer.from('[]'), expected: 'INVALID' },
+      { id: 'M05', bytes: Buffer.from('"policy"'), expected: 'INVALID' },
+      { id: 'M06', bytes: Buffer.from('7'), expected: 'INVALID' },
+      { id: 'M07', bytes: Buffer.from('false'), expected: 'INVALID' },
+      { id: 'M08', bytes: Buffer.from('{"requireAuth":true,"requireAuth":false}'), expected: 'INVALID' },
+      {
+        id: 'M09',
+        bytes: Buffer.from(
+          '{"persistenceResourcePolicy":{"purpose":"persistence-resource-policy","version":1,"version":2}}'
+        ),
+        expected: 'INVALID'
+      },
+      {
+        id: 'M10',
+        bytes: Buffer.from('{"persistenceResourcePolicy":null,"persistenceResourcePolic\\u0079":null}'),
+        expected: 'INVALID'
+      },
+      { id: 'C01', bytes: Buffer.from('{"requireAuth":true}'), expected: 'ABSENT' },
+      { id: 'C02', bytes: Buffer.from('{"purpose":"other-policy","value":true}'), expected: 'ABSENT' },
+      { id: 'C03', expected: 'ABSENT', absent: true },
+      { id: 'C04', expected: 'INVALID', invalid: true },
+      { id: 'C05', expected: 'REJECTED', error: readError },
+      { id: 'C06', expected: 'REJECTED', error: closeError },
+      { id: 'C07', bytes: Buffer.from('{"persistenceResourcePolicy":null}'), expected: 'INVALID' },
+      {
+        id: 'C08',
+        bytes: Buffer.from('{"purpose":"persistence-resource-policy","version":1,"expiresAt":"invalid"}'),
+        expected: 'INVALID'
+      }
+    ]
+    const observations: Array<Record<string, unknown>> = []
+    let mismatches = 0
+    const isOpaqueReceipt = (value: unknown): boolean =>
+      value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === null && Object.isFrozen(value)
+    const resolverState = (value: unknown): string => {
+      if (!value || typeof value !== 'object' || !('status' in value)) return 'unexpected'
+      if (value.status === 'candidate') return 'candidate'
+      if (value.status !== 'refused' || !('code' in value) || Object.keys(value).sort().join(',') !== 'code,status')
+        return 'unexpected'
+      return value.code === 'ENTERPRISE_INVALID' || value.code === 'ENTERPRISE_REQUIRED' ? value.code : 'unexpected'
+    }
+
+    let reader: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      try {
+        directory = mkdtempSync(resolve(tmpdir(), 'metis-persistence-policy-p15-'))
+        expectedDirectory = resolve(directory, 'Métis')
+        expectedPath = resolve(expectedDirectory, 'managed-config.json')
+        reader = vi.spyOn(winSecurity, 'readManagedPolicyAuthorityFile')
+        mkdirSync(expectedDirectory)
+        process.env.ProgramData = directory
+        Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+        fixtureReady = winSecurity.adminManagedConfigPath() === expectedPath
+      } catch {
+        fixtureError = true
+      }
+
+      if (fixtureReady && reader) {
+        for (const row of rows) {
+          const callsBefore = reader.mock.calls.length
+          let entered = false
+          let terminal = false
+          let receiptState: 'opaque' | 'none' | 'unexpected' = 'none'
+          let optional = 'not-called'
+          let required = 'not-called'
+          let rejection = 'none'
+          let readerOutcome: 'present' | 'absent' | 'invalid' | 'rejected' | 'unexpected' = 'unexpected'
+          let readerArgs: 'exact' | 'wrong' | 'missing' = 'missing'
+          let resolverCalls = 0
+          try {
+            reader.mockImplementationOnce(async (path: string, maxBytes?: number, requireAdminTrust?: boolean) => {
+              const result = row.absent
+                ? await originalReader(path, maxBytes, requireAdminTrust)
+                : row.error
+                  ? await Promise.reject(row.error)
+                  : row.invalid
+                    ? { status: 'invalid' as const }
+                    : { status: 'present' as const, bytes: row.bytes! }
+              readerOutcome = result.status
+              return result
+            })
+            entered = true
+            const receipt = await readAdminPolicyReceipt()
+            receiptState = isOpaqueReceipt(receipt) ? 'opaque' : 'unexpected'
+            if (!isOpaqueReceipt(receipt)) mismatches++
+            const optionalResult = resolvePersistenceResourcePolicy({
+              catalogBytes,
+              sourceCommit,
+              runtime,
+              mode: 'qualification',
+              adminReceipt: receipt,
+              enterpriseRequired: false
+            })
+            optional = resolverState(optionalResult)
+            resolverCalls++
+            const requiredResult = resolvePersistenceResourcePolicy({
+              catalogBytes,
+              sourceCommit,
+              runtime,
+              mode: 'qualification',
+              adminReceipt: receipt,
+              enterpriseRequired: true
+            })
+            required = resolverState(requiredResult)
+            resolverCalls++
+            if (row.expected === 'INVALID') {
+              if (optional !== 'ENTERPRISE_INVALID' || required !== 'ENTERPRISE_INVALID') mismatches++
+            } else {
+              if (optional !== 'candidate' || required !== 'ENTERPRISE_REQUIRED') mismatches++
+              if (
+                optionalResult.status !== 'candidate' ||
+                optionalResult.profile.qualification.state !== 'PROPOSED' ||
+                optionalResult.profile.qualification.reportSha256 !== null ||
+                optionalResult.profile.maxHeldRoots !== 4
+              ) {
+                optional = 'unexpected'
+                mismatches++
+              }
+            }
+            terminal = true
+          } catch (error) {
+            readerOutcome = error === readError || error === closeError ? 'rejected' : 'unexpected'
+            if (error === readError) rejection = 'same-read-error'
+            else if (error === closeError) rejection = 'same-close-error'
+            else rejection = 'unexpected'
+            if (row.expected !== 'REJECTED' || rejection === 'unexpected') mismatches++
+            terminal = true
+          }
+          const call = reader.mock.calls.at(-1)
+          if (
+            reader.mock.calls.length - callsBefore === 1 &&
+            call?.[0] === expectedPath &&
+            call[1] === 1_048_576 &&
+            call[2] === true
+          )
+            readerArgs = 'exact'
+          else readerArgs = reader.mock.calls.length === callsBefore ? 'missing' : 'wrong'
+          if (reader.mock.calls.length - callsBefore !== 1 || readerArgs !== 'exact') mismatches++
+          if (row.expected === 'REJECTED' && (resolverCalls !== 0 || receiptState !== 'none')) mismatches++
+          observations.push({
+            id: row.id,
+            entered,
+            terminal,
+            readerCalls: reader.mock.calls.length - callsBefore,
+            readerArgs,
+            readerOutcome,
+            receipt: receiptState,
+            optional,
+            required,
+            rejection
+          })
+        }
+      } else {
+        for (const row of rows) {
+          observations.push({
+            id: row.id,
+            entered: false,
+            terminal: false,
+            readerCalls: 0,
+            readerArgs: 'missing',
+            readerOutcome: 'unexpected',
+            receipt: 'none',
+            optional: 'not-called',
+            required: 'not-called',
+            rejection: 'unexpected'
+          })
+        }
+      }
+    } catch {
+      fixtureError = true
+    } finally {
+      try {
+        reader?.mockRestore()
+        readerRestored = winSecurity.readManagedPolicyAuthorityFile === originalReader
+      } catch {
+        fixtureError = true
+      }
+      try {
+        if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
+        else Reflect.deleteProperty(process, 'platform')
+        platformRestored =
+          JSON.stringify(Object.getOwnPropertyDescriptor(process, 'platform')) === JSON.stringify(platformDescriptor)
+      } catch {
+        fixtureError = true
+      }
+      try {
+        if (programDataPresent) process.env.ProgramData = programDataValue!
+        else Reflect.deleteProperty(process.env, 'ProgramData')
+        programDataRestored =
+          Object.hasOwn(process.env, 'ProgramData') === programDataPresent &&
+          process.env.ProgramData === programDataValue
+      } catch {
+        fixtureError = true
+      }
+      try {
+        if (directory) rmSync(directory, { recursive: true, force: true })
+        tempRemoved = !directory || !existsSync(directory)
+      } catch {
+        fixtureError = true
+      }
+    }
+
+    if (fixtureError) fixtureReady = false
+    const p15 = {
+      schema: 'metis-persistence-policy-p15/v1',
+      hostPlatform,
+      branchPlatform: 'win32',
+      boundary: 'trusted-byte-reader',
+      fixtureReady,
+      cleanup: { readerRestored, platformRestored, programDataRestored, tempRemoved },
+      rows: observations
+    }
+    Object.assign(task.meta, { persistencePolicyP15: p15 })
+    if (
+      !fixtureReady ||
+      fixtureError ||
+      observations.length !== 18 ||
+      Object.values(p15.cleanup).some((value) => !value)
+    )
+      mismatches++
+    for (const [index, observation] of observations.entries()) {
+      const row = rows[index]!
+      if (observation.entered !== true || observation.terminal !== true) mismatches++
+      if (row.expected === 'ABSENT') {
+        if (observation.optional !== 'candidate' || observation.required !== 'ENTERPRISE_REQUIRED') mismatches++
+      } else if (row.expected === 'INVALID') {
+        if (observation.optional !== 'ENTERPRISE_INVALID' || observation.required !== 'ENTERPRISE_INVALID') mismatches++
+      } else if (
+        observation.optional !== 'not-called' ||
+        observation.required !== 'not-called' ||
+        observation.rejection !== (row.id === 'C05' ? 'same-read-error' : 'same-close-error')
+      )
+        mismatches++
+    }
+    expect(mismatches, label).toBe(0)
   })
 })

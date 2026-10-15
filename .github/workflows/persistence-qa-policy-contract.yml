@@ -7,12 +7,22 @@ on:
       - package.json
       - package-lock.json
       - vitest.config.ts
+      - electron.vite.config.ts
       - scripts/qa/run-persistence-qa-policy-validation.mjs
+      - scripts/qa/persistence-policy-reporter.mjs
+      - scripts/hermetic/sandbox-env.mjs
       - resources/persistence-profiles.v1.json
+      - __mocks__/electron.ts
       - src/main/persistence/resource-policy-contract.ts
       - src/main/persistence/resource-policy.ts
       - src/main/persistence/resource-policy.test.ts
+      - src/main/persistence/policy-high-water.ts
+      - src/main/persistence/policy-high-water.test.ts
       - src/main/persistence/bootstrap.ts
+      - src/main/win-security.ts
+      - src/main/license-lease-verify.ts
+      - src/main/logger.ts
+      - src/main/infra/process/exec-file.ts
   workflow_dispatch:
 
 permissions:
@@ -31,6 +41,9 @@ jobs:
     name: Persistence QA policy contract (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      PERSISTENCE_QA_POLICY_TARGET: ${{ matrix.os }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,35 +52,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Initialize owned report directory and failure JSON
-        id: report_dir
-        run: |
-          set -euo pipefail
-          : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
-          case "$RUNNER_TEMP" in
-            /) exit 1 ;;
-            [A-Za-z]:|[A-Za-z]:/|[A-Za-z]:\\) exit 1 ;;
-            /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
-            *) exit 1 ;;
-          esac
-          report_dir="$RUNNER_TEMP/persistence-qa-policy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_OS}"
-          case "$report_dir" in
-            "$RUNNER_TEMP"/*) ;;
-            *) exit 1 ;;
-          esac
-          mkdir -p "$report_dir"
-          printf '%s\n' '{"state":"failed","phase":"before-validation"}' > "$report_dir/qualification-status.json"
-          printf 'PERSISTENCE_QA_POLICY_REPORT_DIR=%s\n' "$report_dir" >> "$GITHUB_ENV"
-          printf 'path=%s\n' "$report_dir" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
           cache-dependency-path: package-lock.json
+      - name: Initialize exclusive policy evidence directory
+        id: report_dir
+        run: node scripts/qa/run-persistence-qa-policy-validation.mjs initialize
       - name: Install frozen test dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run strict persistence QA policy contract tests
-        run: node scripts/qa/run-persistence-qa-policy-validation.mjs
+        run: node scripts/qa/run-persistence-qa-policy-validation.mjs validate
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && steps.report_dir.outcome == 'success' && steps.report_dir.outputs.path != ''
         with:
