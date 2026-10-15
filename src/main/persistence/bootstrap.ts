@@ -47,6 +47,7 @@ import {
   type WriterLease
 } from './root-registry'
 import { PersistencePolicyHighWaterStore } from './policy-high-water'
+import { createMainSpeechOwner, requirePublishedMainSpeechOwner, type MainSpeechOwner } from './bootstrap-speech-owner'
 
 declare const __METIS_SOURCE_COMMIT__: string
 let mainInstanceAuthorityLost = false
@@ -94,7 +95,10 @@ export interface MainPersistenceBootstrapSourceFixture {
   readonly sourceCommit: () => string
   readonly resolvePolicy: (input: ResourcePolicyInput) => ResourcePolicyResult
   readonly nativeKeyStore: NativeKeyStore
-  readonly createSpeech: (profile: ResolvedPersistenceProfile) => MeetingSpeechPersistenceService
+  readonly createSpeech: (
+    profile: ResolvedPersistenceProfile,
+    isCurrent: () => boolean
+  ) => MeetingSpeechPersistenceService
 }
 
 export interface MainPersistenceBootstrapOptions {
@@ -105,6 +109,7 @@ export interface MainPersistenceBootstrapOptions {
 interface ScopeEntry {
   readonly binding: RootScopeBinding
   readonly scope: OpaqueOperationScope
+  readonly speechOwner: MainSpeechOwner
   retired: boolean
 }
 
@@ -173,6 +178,7 @@ function createMainPersistenceBootstrapInternal(
   let generation = randomUUID()
   let observation = getPublishedSettingsObservation()
   let speech: MeetingSpeechPersistenceService | undefined
+  let speechOwner: MainSpeechOwner | undefined
   let disposal: Promise<void> | undefined
   const scopes = new WeakMap<object, ScopeEntry>()
   const liveScopes = new Set<ScopeEntry>()
@@ -247,6 +253,7 @@ function createMainPersistenceBootstrapInternal(
   function retire(reason: string): void {
     if (disposed) return
     generation = `${generation}:${reason}:${randomUUID()}`
+    speechOwner?.retire()
     for (const entry of liveScopes) {
       entry.retired = true
       roots.retireScope(entry.scope)
@@ -282,8 +289,11 @@ function createMainPersistenceBootstrapInternal(
 
   function mintScope(
     profile: ResolvedPersistenceProfile,
+    owner: MainSpeechOwner,
     journalGeneration: string = randomUUID()
   ): OpaqueOperationScope {
+    if (owner.profile !== profile || !owner.isCurrent())
+      throw new Error('The admitted speech policy owner is unavailable')
     const authBoundary = captureMainPersistenceSessionBoundary()
     if (!ownsMainInstance() || !authBoundary.isCurrent())
       throw new Error('The main instance or verified account authority is unavailable')
@@ -310,6 +320,7 @@ function createMainPersistenceBootstrapInternal(
     const scope = Object.freeze(Object.create(null)) as OpaqueOperationScope
     const entry: ScopeEntry = {
       scope,
+      speechOwner: owner,
       retired: false,
       binding: Object.freeze({
         profileNamespace: identityHash(`profile/v2\n${capturedUserData}\n${principal}`).slice(0, 48),
@@ -333,6 +344,7 @@ function createMainPersistenceBootstrapInternal(
           lastPolicyMonotonicNow = monotonicNow
           return (
             !disposed &&
+            owner.isCurrent() &&
             ownsMainInstance() &&
             !entry.retired &&
             generation === capturedGeneration &&
@@ -359,15 +371,11 @@ function createMainPersistenceBootstrapInternal(
       (Date.now() < profile.enterpriseWindow.notBefore || Date.now() >= profile.enterpriseWindow.expiresAt)
     )
       throw new Error('Enterprise persistence policy is outside its validity window')
-    if (!observation?.readable || !settingsEncrypts(observation.settings))
+    if (!observation?.readable || observation.settings.encryptTranscripts !== true)
       throw new Error('Encrypted meeting storage must be enabled before retained persistence')
     if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(observation.settings.enterpriseLive ?? observation.settings)))
       throw new Error('The current enterprise retention policy forbids full meeting transcripts')
     return profile
-  }
-
-  function settingsEncrypts(settings: NonNullable<typeof observation>['settings']): boolean {
-    return settings.encryptTranscripts === true
   }
 
   function createJournal(
@@ -393,6 +401,9 @@ function createMainPersistenceBootstrapInternal(
   ): Promise<WritableMainMeetingJournal | ReadOnlyMainMeetingJournal> {
     const gateway = gateways.get(root)
     if (!profile || !gateway) throw new Error('Persistence root services are not installed')
+    const scopeEntry = scopes.get(scope as object)
+    const speechService = scopeEntry?.speechOwner.service
+    if (!scopeEntry || !speechService) throw new Error('Persistence speech owner is not installed for this journal')
     const current = () => {
       try {
         roots.assertScopeCurrent(scope, root)
@@ -453,7 +464,7 @@ function createMainPersistenceBootstrapInternal(
           meetingId: root.meetingId,
           isCurrent: current,
           readLimits: () => ({ ...profile.speech, maxJournalBytes: profile.derived.journalBytes }),
-          canonicalizeRecord: (record, binding) => requireSpeech().canonicalizeIncrementalRecord(record, binding),
+          canonicalizeRecord: (record, binding) => speechService.canonicalizeIncrementalRecord(record, binding),
           storage
         })
     } catch (error) {
@@ -528,6 +539,9 @@ function createMainPersistenceBootstrapInternal(
         (async () => {
           if (disposed) return capability
           const operation = ++policyReadGeneration
+          speechOwner?.retire()
+          const previousSpeech = speech
+          const previousSpeechSettlement = invalidateSpeech(previousSpeech)
           policyAdmissionPending = true
           capability = Object.freeze({ status: 'initializing' })
           observation = getPublishedSettingsObservation()
@@ -536,7 +550,6 @@ function createMainPersistenceBootstrapInternal(
             throw new Error('The main instance or verified account authority is unavailable')
           const settingsAuthority = captureSettingsAuthority('persistence')
           if (!settingsAuthority) throw new Error('Persistence settings authority is unavailable')
-          const originalObservation = observation
           const originalGeneration = generation
           try {
             const capturedProfilePath = currentUserData()
@@ -592,9 +605,29 @@ function createMainPersistenceBootstrapInternal(
                 !(await highWaterStore.commit(highWater.value, resolvedPolicy.policyHighWater, highWaterCurrent))
               )
                 throw new Error('Persistence policy version was not durably committed')
+              if (previousSpeechSettlement) await previousSpeechSettlement
+              if (!highWaterCurrent()) throw new Error('Persistence authority changed before speech construction')
               const speechPolicy = toMeetingSpeechPolicy(resolvedPolicy.profile)
+              const nextOwner = createMainSpeechOwner({
+                profile: resolvedPolicy.profile,
+                policyPublication: resolvedPolicy,
+                policyReadOperation: operation,
+                generation: originalGeneration,
+                profilePath: capturedProfilePath,
+                isDisposed: () => disposed,
+                isAdmissionPending: () => policyAdmissionPending,
+                currentPolicyReadOperation: () => policyReadGeneration,
+                currentGeneration: () => generation,
+                currentProfilePath: currentUserData,
+                isOriginalAuthorityCurrent: highWaterCurrent,
+                isPublished: (candidate) =>
+                  speechOwner === candidate &&
+                  speech === candidate.service &&
+                  policy === candidate.policyPublication &&
+                  capability.status === 'ready'
+              })
               const nextSpeech =
-                sourceFixture?.createSpeech(resolvedPolicy.profile) ??
+                sourceFixture?.createSpeech(resolvedPolicy.profile, nextOwner.isCurrent) ??
                 createMeetingSpeechPersistenceService({
                   readLimits: () => speechPolicy.limits,
                   readBounds: () => ({
@@ -602,18 +635,29 @@ function createMainPersistenceBootstrapInternal(
                     maxOutputBytes: speechPolicy.maxOutputBytes,
                     operationDeadlineMs: speechPolicy.operationDeadlineMs,
                     shutdownDeadlineMs: speechPolicy.shutdownDeadlineMs
-                  })
+                  }),
+                  isCurrent: nextOwner.isCurrent
                 })
-              const previousSpeech = speech
-              if (previousSpeech && previousSpeech !== nextSpeech) await invalidateSpeech(previousSpeech)
-              if (!highWaterCurrent()) throw new Error('Persistence authority changed before publication')
+              nextOwner.attachService(nextSpeech)
               speech = nextSpeech
               policy = resolvedPolicy
+              speechOwner = nextOwner
               capability = Object.freeze({
                 status: 'ready',
                 profileId: resolvedPolicy.profile.id,
                 nativeKeyAccess: options.nativeKeyIntent
               })
+              policyAdmissionPending = false
+              if (!nextOwner.publish() || !nextOwner.isCurrent()) {
+                nextOwner.retire()
+                speech = undefined
+                speechOwner = undefined
+                policy = undefined
+                capability = Object.freeze({ status: 'policy-unavailable', code: 'POLICY_UNAVAILABLE' })
+                const abandonedSettlement = invalidateSpeech(nextSpeech)
+                if (abandonedSettlement) await abandonedSettlement
+                throw new Error('Persistence speech owner changed before publication')
+              }
             } else if (resolvedPolicy.status === 'candidate') {
               policy = resolvedPolicy
               capability = Object.freeze({
@@ -642,7 +686,8 @@ function createMainPersistenceBootstrapInternal(
       return trackOperation(
         (async () => {
           const profile = requireActionableProfile()
-          const scope = mintScope(profile)
+          const owner = requirePublishedMainSpeechOwner(speechOwner, profile)
+          const scope = mintScope(profile, owner)
           let root: OwnedMeetingRoot
           try {
             root = await roots.create(scope, meetingId)
@@ -676,7 +721,8 @@ function createMainPersistenceBootstrapInternal(
       return trackOperation(
         (async () => {
           const profile = requireActionableProfile()
-          const scope = mintScope(profile, keyReference.journalGeneration)
+          const owner = requirePublishedMainSpeechOwner(speechOwner, profile)
+          const scope = mintScope(profile, owner, keyReference.journalGeneration)
           let root: OwnedMeetingRoot
           try {
             root = await roots.openExisting(scope, meetingId)

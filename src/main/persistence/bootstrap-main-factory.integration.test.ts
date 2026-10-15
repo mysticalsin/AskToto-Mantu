@@ -13,7 +13,11 @@ import {
   type MeetingSpeechWorkerFactory,
   type MeetingSpeechWorkerPort
 } from '../infra/process/meeting-speech-host'
-import type { MeetingSpeechRequest } from '../infra/process/meeting-speech-protocol'
+import {
+  isMeetingSpeechReply,
+  type MeetingSpeechReply,
+  type MeetingSpeechRequest
+} from '../infra/process/meeting-speech-protocol'
 import {
   discardIncrementalRecordReceipt,
   inspectIncrementalRecordReceipt,
@@ -25,7 +29,9 @@ import { publishSettingsSnapshot } from '../settings-observation'
 
 import {
   createMainPersistenceBootstrapWithSourceFixture,
-  type MainPersistenceBootstrapSourceFixture
+  type MainPersistenceBootstrapSourceFixture,
+  type ReadOnlyMainMeetingJournal,
+  type WritableMainMeetingJournal
 } from './bootstrap'
 import {
   parseProfileCatalog,
@@ -46,21 +52,29 @@ type SettlementGate = {
   attempts: number
   raw: SettlementFixtureHandle | undefined
 }
+type CanonicalReplyIdentity = { protocol: number; id: number; generation: number; successful: boolean }
 
 vi.mock('electron')
 vi.mock('../auth', () => ({
-  captureMainPersistenceSessionBoundary: () => ({
-    principalAssociation: 'a'.repeat(64),
-    configured: true,
-    isCurrent: () => true
-  }),
+  captureMainPersistenceSessionBoundary: () => {
+    const epoch = settlementFaults.authEpoch
+    const principalAssociation = settlementFaults.authPrincipalAssociation
+    return {
+      principalAssociation,
+      configured: true,
+      isCurrent: () =>
+        settlementFaults.authEpoch === epoch && settlementFaults.authPrincipalAssociation === principalAssociation
+    }
+  },
   subscribeSpeechAuthLeaseInvalidation: () => () => {}
 }))
 
 const settlementFaults = vi.hoisted(() => ({
   closeGates: new Map<string, SettlementGate>(),
   openedHandles: new Map<string, SettlementFixtureHandle>(),
-  keyGate: null as SettlementGate | null
+  keyGate: null as SettlementGate | null,
+  authEpoch: 0,
+  authPrincipalAssociation: 'a'.repeat(64)
 }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -172,6 +186,17 @@ function recordSettlementEvidence(caseId: string, evidence: Record<string, unkno
   console.info(`PERSISTENCE_SETTLEMENT_EVIDENCE ${JSON.stringify({ caseId, ...evidence })}`)
 }
 
+function isMatchingCanonicalSuccess(request: MeetingSpeechRequest, value: unknown): value is MeetingSpeechReply {
+  return (
+    request.operation === 'canonical-record' &&
+    isMeetingSpeechReply(value) &&
+    value.protocol === request.protocol &&
+    value.id === request.id &&
+    value.generation === request.generation &&
+    value.result.ok
+  )
+}
+
 async function closeFixtureHandle(path: string): Promise<void> {
   const handle = settlementFaults.openedHandles.get(path) as { close: () => Promise<void> } | undefined
   await handle?.close().catch(() => undefined)
@@ -180,7 +205,8 @@ async function closeFixtureHandle(path: string): Promise<void> {
 class SourceWorker extends EventEmitter implements MeetingSpeechWorkerPort {
   constructor(
     private readonly onRequest?: (request: MeetingSpeechRequest) => void,
-    private readonly onPhysicalExit?: () => void
+    private readonly onPhysicalExit?: () => void,
+    private readonly beforeReply?: (request: MeetingSpeechRequest, reply: unknown) => Promise<void>
   ) {
     super()
   }
@@ -191,7 +217,11 @@ class SourceWorker extends EventEmitter implements MeetingSpeechWorkerPort {
     this.onRequest?.(request)
     queueMicrotask(() => {
       const reply = processMeetingSpeechRequest(request)
-      if (reply) this.emit('message', reply)
+      if (reply)
+        void (async () => {
+          await this.beforeReply?.(request, reply)
+          this.emit('message', reply)
+        })()
     })
   }
   async terminate(): Promise<number> {
@@ -212,9 +242,10 @@ function sourceFixture(
     context: {
       admittedProfile: ResolvedPersistenceProfile
       policy: ReturnType<typeof toMeetingSpeechPolicy>
-      suppliedIsCurrent: (() => boolean) | undefined
+      suppliedIsCurrent: () => boolean
     }
-  ) => MeetingSpeechPersistenceService
+  ) => MeetingSpeechPersistenceService,
+  enterpriseWindow: ResolvedPersistenceProfile['enterpriseWindow'] = null
 ): MainPersistenceBootstrapSourceFixture {
   const maxHeldRootsForFixture = maxHeldRoots ?? 4
   if (!Number.isSafeInteger(maxHeldRootsForFixture) || maxHeldRootsForFixture < 1 || maxHeldRootsForFixture > 8)
@@ -242,7 +273,7 @@ function sourceFixture(
     allowedProviders: null,
     publicationAllowed: false,
     retentionAllowed: true,
-    enterpriseWindow: null
+    enterpriseWindow
   })
   const result: ResourcePolicyResult = Object.freeze({
     status: 'ready',
@@ -272,7 +303,7 @@ function sourceFixture(
         return value.slice('source-fixture:'.length)
       }
     },
-    createSpeech: (admittedProfile, suppliedIsCurrent?: () => boolean) => {
+    createSpeech: (admittedProfile, suppliedIsCurrent: () => boolean) => {
       const policy = toMeetingSpeechPolicy(admittedProfile)
       const service = createMeetingSpeechPersistenceService({
         readLimits: () => policy.limits,
@@ -282,12 +313,75 @@ function sourceFixture(
           operationDeadlineMs: policy.operationDeadlineMs,
           shutdownDeadlineMs: policy.shutdownDeadlineMs
         }),
-        ...(suppliedIsCurrent ? { isCurrent: suppliedIsCurrent } : {}),
+        isCurrent: suppliedIsCurrent,
         workerFactory: workerFactory ?? (() => new SourceWorker())
       })
       return speechObserver ? speechObserver(service, { admittedProfile, policy, suppliedIsCurrent }) : service
     }
   }
+}
+
+type OwnerSpeechObservation = {
+  service: MeetingSpeechPersistenceService | undefined
+  isCurrent: (() => boolean) | undefined
+  bindings: IncrementalRecordReceiptBinding[]
+  canonicalCalls: number
+  canonicalDispatches: number
+  workerStarts: number
+  acceptedReceipts: number
+  hostError: 'NONE' | 'CANCELLED' | 'UNCONFIGURED' | 'WORKER_FAILED' | 'OTHER'
+}
+
+function ownerSpeechObservation(): OwnerSpeechObservation {
+  return {
+    service: undefined,
+    isCurrent: undefined,
+    bindings: [],
+    canonicalCalls: 0,
+    canonicalDispatches: 0,
+    workerStarts: 0,
+    acceptedReceipts: 0,
+    hostError: 'NONE'
+  }
+}
+
+function observeOwnerSpeech(
+  service: MeetingSpeechPersistenceService,
+  isCurrent: () => boolean,
+  observation: OwnerSpeechObservation
+): MeetingSpeechPersistenceService {
+  const canonicalize = service.canonicalizeIncrementalRecord.bind(service)
+  const observed: MeetingSpeechPersistenceService = {
+    ...service,
+    async canonicalizeIncrementalRecord(recordJson, binding) {
+      observation.canonicalCalls += 1
+      observation.bindings.push(binding)
+      try {
+        const receipt = await canonicalize(recordJson, binding)
+        observation.acceptedReceipts += 1
+        return receipt
+      } catch (error) {
+        observation.hostError =
+          error instanceof Error && ['CANCELLED', 'UNCONFIGURED', 'WORKER_FAILED'].includes(error.name)
+            ? (error.name as OwnerSpeechObservation['hostError'])
+            : 'OTHER'
+        throw error
+      }
+    }
+  }
+  observation.service = observed
+  observation.isCurrent = isCurrent
+  return observed
+}
+
+function speechRecord(recordId: string, text: string, timestamp: number): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      identity: { kind: 'local', recordId },
+      source: 'local-final',
+      line: { speaker: 'you', text, t: timestamp }
+    })
+  )
 }
 
 function configureMainProcess(userData: string): void {
@@ -376,7 +470,7 @@ describe('main persistence factory source fixture', () => {
       (service, { policy, suppliedIsCurrent }) => {
         if (instrumented) return service
         instrumented = true
-        ownerPredicate = suppliedIsCurrent ? 'present' : 'missing'
+        ownerPredicate = 'present'
         const originalCanonicalize = service.canonicalizeIncrementalRecord.bind(service)
         return {
           ...service,
@@ -612,6 +706,640 @@ describe('main persistence factory source fixture', () => {
       await bootstrap.dispose()
       vi.restoreAllMocks()
       rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('admits speech work only after its exact policy owner is published', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-speech-owner-publish-'))
+    configureMainProcess(userData)
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    publishSettingsSnapshot({ ...DEFAULT_SETTINGS, encryptTranscripts: true }, true)
+    const observed = ownerSpeechObservation()
+    let candidateFalseInFactory = false
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(
+        async () => null,
+        () => {
+          observed.workerStarts += 1
+          return new SourceWorker((request) => {
+            if (request.operation === 'canonical-record') observed.canonicalDispatches += 1
+          })
+        },
+        undefined,
+        (service, { suppliedIsCurrent }) => {
+          candidateFalseInFactory = suppliedIsCurrent() === false
+          return observeOwnerSpeech(service, suppliedIsCurrent, observed)
+        }
+      )
+    )
+    let journal: WritableMainMeetingJournal | undefined
+    try {
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      const ownerCurrentAfterPublication = observed.isCurrent?.() === true
+      const workerStartsBeforeAppend = observed.workerStarts
+      journal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1280')
+      const appendResult = await journal.append(
+        speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f90', 'published owner', 1_700_000_000_010),
+        0
+      )
+      const workerStartsAfterAppend = observed.workerStarts
+      bootstrap.retire('O01-owner-retired')
+      const ownerFalseAfterRetire = observed.isCurrent?.() === false
+      await journal.settle()
+      await bootstrap.dispose()
+      const ownerFalseAfterDispose = observed.isCurrent?.() === false
+      const evidence = {
+        candidateFalseInFactory,
+        workerStartsBeforeAppend,
+        ownerCurrentAfterPublication,
+        appendStatus: appendResult.status,
+        workerStartsAfterAppend,
+        ownerFalseAfterRetire,
+        ownerFalseAfterDispose
+      }
+      recordSettlementEvidence('O01', evidence)
+      expect(evidence).toEqual({
+        candidateFalseInFactory: true,
+        workerStartsBeforeAppend: 0,
+        ownerCurrentAfterPublication: true,
+        appendStatus: 'durable',
+        workerStartsAfterAppend: 1,
+        ownerFalseAfterRetire: true,
+        ownerFalseAfterDispose: true
+      })
+    } finally {
+      await journal?.settle().catch(() => undefined)
+      await bootstrap.dispose().catch(() => undefined)
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('retires the original speech and journal owners across a same-profile policy refresh', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-speech-owner-refresh-'))
+    configureMainProcess(userData)
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    publishSettingsSnapshot({ ...DEFAULT_SETTINGS, encryptTranscripts: true }, true)
+    const exitGate = settlementGate()
+    let factoryCalls = 0
+    let oldWorkerPhysicalExit = false
+    const observedOwners: Array<OwnerSpeechObservation & { profile?: ResolvedPersistenceProfile }> = []
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(
+        async () => null,
+        () => {
+          factoryCalls += 1
+          const worker =
+            factoryCalls === 1
+              ? new (class extends SourceWorker {
+                  override async terminate(): Promise<number> {
+                    exitGate.attempts += 1
+                    exitGate.notifyEntered()
+                    await exitGate.wait
+                    return super.terminate()
+                  }
+                })(
+                  (request) => {
+                    if (request.operation === 'canonical-record') observedOwners[0]!.canonicalDispatches += 1
+                  },
+                  () => {
+                    oldWorkerPhysicalExit = true
+                  }
+                )
+              : new SourceWorker((request) => {
+                  const current = observedOwners.at(-1)
+                  if (request.operation === 'canonical-record' && current) current.canonicalDispatches += 1
+                })
+          const current = observedOwners.at(-1)
+          if (current) current.workerStarts += 1
+          return worker
+        },
+        undefined,
+        (service, { admittedProfile, suppliedIsCurrent }) => {
+          const observed = ownerSpeechObservation() as OwnerSpeechObservation & { profile?: ResolvedPersistenceProfile }
+          observed.profile = admittedProfile
+          observedOwners.push(observed)
+          return observeOwnerSpeech(service, suppliedIsCurrent, observed)
+        }
+      )
+    )
+    let oldJournal: WritableMainMeetingJournal | undefined
+    let freshJournal: WritableMainMeetingJournal | undefined
+    try {
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      const firstOwner = observedOwners[0]
+      oldJournal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1281')
+      const initialAppend = await oldJournal.append(
+        speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f91', 'before refresh', 1_700_000_000_011),
+        0
+      )
+      const refresh = bootstrap.prime()
+      await exitGate.entered
+      const oldOwnerFalseWhilePending = firstOwner?.isCurrent?.() === false
+      const newActionBlocked = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1282').then(
+        () => false,
+        () => true
+      )
+      const noReplacementBeforeExit = observedOwners.length === 1
+      const physicalExitHeld = exitGate.attempts === 1
+      exitGate.release()
+      await expect(refresh).resolves.toMatchObject({ status: 'ready' })
+      const oldOwnerFalseAfterRefresh = firstOwner?.isCurrent?.() === false
+      const sameProfileObject = observedOwners.length === 2 && observedOwners[0]?.profile === observedOwners[1]?.profile
+      const oldAppend = await oldJournal.append(
+        speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f92', 'old journal after refresh', 1_700_000_000_012),
+        1
+      )
+      const freshOwnerCurrent = observedOwners[1]?.isCurrent?.() === true
+      freshJournal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1283')
+      const freshAppend = await freshJournal.append(
+        speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f93', 'fresh journal after refresh', 1_700_000_000_013),
+        0
+      )
+      const evidence = {
+        initialAppendStatus: initialAppend.status,
+        oldOwnerFalseWhilePending,
+        newActionBlocked,
+        noReplacementBeforeExit,
+        physicalExitHeld,
+        physicalExitReleased: oldWorkerPhysicalExit,
+        sameProfileObject,
+        oldOwnerFalseAfterRefresh,
+        oldJournalStatus: oldAppend.status,
+        oldJournalReason: oldAppend.status === 'refused' ? oldAppend.reason : null,
+        freshOwnerCurrent,
+        freshAppendStatus: freshAppend.status
+      }
+      recordSettlementEvidence('O02', evidence)
+      expect(evidence).toEqual({
+        initialAppendStatus: 'durable',
+        oldOwnerFalseWhilePending: true,
+        newActionBlocked: true,
+        noReplacementBeforeExit: true,
+        physicalExitHeld: true,
+        physicalExitReleased: true,
+        sameProfileObject: true,
+        oldOwnerFalseAfterRefresh: true,
+        oldJournalStatus: 'refused',
+        oldJournalReason: 'STALE_OWNER',
+        freshOwnerCurrent: true,
+        freshAppendStatus: 'durable'
+      })
+    } finally {
+      exitGate.release()
+      await oldJournal?.settle().catch(() => undefined)
+      await freshJournal?.settle().catch(() => undefined)
+      await bootstrap.dispose().catch(() => undefined)
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a held canonical reply after the original settings authority is replaced and restored', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-speech-owner-settings-'))
+    configureMainProcess(userData)
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    const settings = { ...DEFAULT_SETTINGS, encryptTranscripts: true }
+    publishSettingsSnapshot(settings, true)
+    const replyGate = settlementGate()
+    const observations: OwnerSpeechObservation[] = []
+    let heldRequestIdentity: (Omit<CanonicalReplyIdentity, 'successful'> & { operation: string }) | undefined
+    let heldReplyIdentity: CanonicalReplyIdentity | undefined
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(
+        async () => null,
+        () =>
+          new SourceWorker(
+            (request) => {
+              const current = observations[0]
+              if (request.operation === 'canonical-record' && current) current.canonicalDispatches += 1
+            },
+            undefined,
+            async (request, reply) => {
+              if (!isMatchingCanonicalSuccess(request, reply)) return
+              replyGate.attempts += 1
+              heldRequestIdentity = {
+                protocol: request.protocol,
+                id: request.id,
+                generation: request.generation,
+                operation: request.operation
+              }
+              heldReplyIdentity = {
+                protocol: reply.protocol,
+                id: reply.id,
+                generation: reply.generation,
+                successful: reply.result.ok
+              }
+              replyGate.notifyEntered()
+              await replyGate.wait
+            }
+          ),
+        undefined,
+        (service, { suppliedIsCurrent }) => {
+          const observed = ownerSpeechObservation()
+          observations.push(observed)
+          return observeOwnerSpeech(service, suppliedIsCurrent, observed)
+        }
+      )
+    )
+    let journal: WritableMainMeetingJournal | undefined
+    let reopened: ReadOnlyMainMeetingJournal | undefined
+    try {
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      journal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1284')
+      const appendPromise = journal.append(
+        speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f94', 'held settings reply', 1_700_000_000_014),
+        0
+      )
+      const appendOutcome = appendPromise.then(
+        (result) => ({ status: 'resolved' as const, result }),
+        (error: unknown) => ({ status: 'rejected' as const, errorName: error instanceof Error ? error.name : 'OTHER' })
+      )
+      await replyGate.entered
+      publishSettingsSnapshot({ ...settings, encryptTranscripts: false }, true)
+      publishSettingsSnapshot(settings, true)
+      const oldOwnerFalseAfterRestore = observations[0]?.isCurrent?.() === false
+      replyGate.release()
+      const completedAppend = await appendOutcome
+      const appendResult = completedAppend.status === 'resolved' ? completedAppend.result : undefined
+      const heldActualReply =
+        replyGate.attempts === 1 &&
+        heldRequestIdentity?.operation === 'canonical-record' &&
+        heldRequestIdentity.protocol === heldReplyIdentity?.protocol &&
+        heldRequestIdentity.id === heldReplyIdentity?.id &&
+        heldRequestIdentity.generation === heldReplyIdentity?.generation &&
+        heldReplyIdentity.successful === true
+      const oldReceiptAccepted = (observations[0]?.acceptedReceipts ?? 0) > 0
+      const keyReference = journal.keyReference
+      await journal.settle()
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      reopened = await bootstrap.openExisting(journal.meetingId, keyReference)
+      const durableRevisionUnchanged = reopened.snapshot.durableRevision === 0
+      const recordCountUnchanged = reopened.snapshot.recordCount === 0
+      const evidence = {
+        heldActualReply,
+        canonicalDispatches: observations[0]?.canonicalDispatches ?? 0,
+        settingsChangedAndRestored: true,
+        oldOwnerFalseAfterRestore,
+        hostError: observations[0]?.hostError ?? 'OTHER',
+        oldReceiptAccepted,
+        appendStatus: appendResult?.status ?? 'threw',
+        appendReason: appendResult?.status === 'refused' ? appendResult.reason : null,
+        durableRevisionUnchanged,
+        recordCountUnchanged
+      }
+      recordSettlementEvidence('O03', evidence)
+      expect(evidence).toEqual({
+        heldActualReply: true,
+        canonicalDispatches: 1,
+        settingsChangedAndRestored: true,
+        oldOwnerFalseAfterRestore: true,
+        hostError: 'CANCELLED',
+        oldReceiptAccepted: false,
+        appendStatus: 'refused',
+        appendReason: 'UNAVAILABLE',
+        durableRevisionUnchanged: true,
+        recordCountUnchanged: true
+      })
+      await reopened.settle()
+      await journal.settle()
+    } finally {
+      replyGate.release()
+      await reopened?.settle().catch(() => undefined)
+      await journal?.settle().catch(() => undefined)
+      await bootstrap.dispose().catch(() => undefined)
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the original speech owner retired after an observed profile path replacement and restoration', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-speech-owner-path-a-'))
+    const replacementUserData = mkdtempSync(resolve(tmpdir(), 'metis-main-speech-owner-path-b-'))
+    configureMainProcess(userData)
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    publishSettingsSnapshot({ ...DEFAULT_SETTINGS, encryptTranscripts: true }, true)
+    const observed = ownerSpeechObservation()
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(
+        async () => null,
+        () =>
+          new SourceWorker((request) => {
+            if (request.operation === 'canonical-record') observed.canonicalDispatches += 1
+          }),
+        undefined,
+        (service, { suppliedIsCurrent }) => observeOwnerSpeech(service, suppliedIsCurrent, observed)
+      )
+    )
+    let journal: WritableMainMeetingJournal | undefined
+    let reopened: ReadOnlyMainMeetingJournal | undefined
+    try {
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      journal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1285')
+      const record = speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f95', 'path owner record', 1_700_000_000_015)
+      const appendResult = await journal.append(Uint8Array.from(record), 0)
+      const binding = observed.bindings[0]
+      const originalService = observed.service
+      const pathSpy = vi.spyOn(app as unknown as { getPath: (name: string) => string }, 'getPath')
+      pathSpy.mockReturnValue(replacementUserData)
+      const ownerFalseAtReplacement = observed.isCurrent?.() === false
+      pathSpy.mockReturnValue(userData)
+      const ownerFalseAfterRestoration = observed.isCurrent?.() === false
+      const dispatchesBeforeStaleCall = observed.canonicalDispatches
+      const staleHostError =
+        binding && originalService
+          ? await originalService.canonicalizeIncrementalRecord(Uint8Array.from(record), binding).then(
+              () => 'NONE',
+              (error: unknown) => (error instanceof Error ? error.name : 'OTHER')
+            )
+          : 'MISSING_BINDING'
+      const dispatchesAfterStaleCall = observed.canonicalDispatches
+      const keyReference = journal.keyReference
+      await journal.settle()
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      reopened = await bootstrap.openExisting(journal.meetingId, keyReference)
+      const frontierUnchanged = reopened.snapshot.durableRevision === 1 && reopened.snapshot.recordCount === 1
+      const evidence = {
+        initialAppendStatus: appendResult.status,
+        bindingCaptured: binding !== undefined,
+        serviceCaptured: originalService !== undefined,
+        ownerFalseAtReplacement,
+        ownerFalseAfterRestoration,
+        staleHostError,
+        dispatchesBeforeStaleCall,
+        dispatchesAfterStaleCall,
+        frontierUnchanged
+      }
+      recordSettlementEvidence('O04', evidence)
+      expect(evidence).toEqual({
+        initialAppendStatus: 'durable',
+        bindingCaptured: true,
+        serviceCaptured: true,
+        ownerFalseAtReplacement: true,
+        ownerFalseAfterRestoration: true,
+        staleHostError: 'CANCELLED',
+        dispatchesBeforeStaleCall: 1,
+        dispatchesAfterStaleCall: 1,
+        frontierUnchanged: true
+      })
+      await reopened.settle()
+      await journal.settle()
+    } finally {
+      await reopened?.settle().catch(() => undefined)
+      await journal?.settle().catch(() => undefined)
+      await bootstrap.dispose().catch(() => undefined)
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+      rmSync(replacementUserData, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a held canonical reply after the original session principal is replaced and restored', async () => {
+    const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-speech-owner-auth-'))
+    configureMainProcess(userData)
+    commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+    commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+    publishSettingsSnapshot({ ...DEFAULT_SETTINGS, encryptTranscripts: true }, true)
+    const replyGate = settlementGate()
+    const observations: OwnerSpeechObservation[] = []
+    const originalPrincipal = settlementFaults.authPrincipalAssociation
+    const originalEpoch = settlementFaults.authEpoch
+    let heldRequestIdentity: (Omit<CanonicalReplyIdentity, 'successful'> & { operation: string }) | undefined
+    let heldReplyIdentity: CanonicalReplyIdentity | undefined
+    const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+      { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+      sourceFixture(
+        async () => null,
+        () =>
+          new SourceWorker(
+            (request) => {
+              const current = observations[0]
+              if (request.operation === 'canonical-record' && current) current.canonicalDispatches += 1
+            },
+            undefined,
+            async (request, reply) => {
+              if (!isMatchingCanonicalSuccess(request, reply)) return
+              replyGate.attempts += 1
+              heldRequestIdentity = {
+                protocol: request.protocol,
+                id: request.id,
+                generation: request.generation,
+                operation: request.operation
+              }
+              heldReplyIdentity = {
+                protocol: reply.protocol,
+                id: reply.id,
+                generation: reply.generation,
+                successful: reply.result.ok
+              }
+              replyGate.notifyEntered()
+              await replyGate.wait
+            }
+          ),
+        undefined,
+        (service, { suppliedIsCurrent }) => {
+          const observed = ownerSpeechObservation()
+          observations.push(observed)
+          return observeOwnerSpeech(service, suppliedIsCurrent, observed)
+        }
+      )
+    )
+    let journal: WritableMainMeetingJournal | undefined
+    let reopened: ReadOnlyMainMeetingJournal | undefined
+    try {
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      journal = await bootstrap.openNew('16f45c47-6583-45fb-8340-72aa6b6d1286')
+      const appendPromise = journal.append(
+        speechRecord('6370e1cc-43f4-4976-a912-04d0c3ca8f96', 'held auth reply', 1_700_000_000_016),
+        0
+      )
+      const appendOutcome = appendPromise.then(
+        (result) => ({ status: 'resolved' as const, result }),
+        (error: unknown) => ({ status: 'rejected' as const, errorName: error instanceof Error ? error.name : 'OTHER' })
+      )
+      await replyGate.entered
+      settlementFaults.authEpoch += 1
+      settlementFaults.authPrincipalAssociation = 'b'.repeat(64)
+      settlementFaults.authEpoch += 1
+      settlementFaults.authPrincipalAssociation = originalPrincipal
+      const replacementRestored = settlementFaults.authPrincipalAssociation === originalPrincipal
+      const oldOwnerFalseAfterRestore = observations[0]?.isCurrent?.() === false
+      replyGate.release()
+      const completedAppend = await appendOutcome
+      const appendResult = completedAppend.status === 'resolved' ? completedAppend.result : undefined
+      const heldActualReply =
+        replyGate.attempts === 1 &&
+        heldRequestIdentity?.operation === 'canonical-record' &&
+        heldRequestIdentity.protocol === heldReplyIdentity?.protocol &&
+        heldRequestIdentity.id === heldReplyIdentity?.id &&
+        heldRequestIdentity.generation === heldReplyIdentity?.generation &&
+        heldReplyIdentity.successful === true
+      const oldReceiptAccepted = (observations[0]?.acceptedReceipts ?? 0) > 0
+      const keyReference = journal.keyReference
+      await journal.settle()
+      await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+      reopened = await bootstrap.openExisting(journal.meetingId, keyReference)
+      const durableRevisionUnchanged = reopened.snapshot.durableRevision === 0
+      const recordCountUnchanged = reopened.snapshot.recordCount === 0
+      const evidence = {
+        heldActualReply,
+        canonicalDispatches: observations[0]?.canonicalDispatches ?? 0,
+        originalPrincipalRestored: replacementRestored,
+        originalAuthEpochChanged: settlementFaults.authEpoch !== originalEpoch,
+        oldOwnerFalseAfterRestore,
+        hostError: observations[0]?.hostError ?? 'OTHER',
+        oldReceiptAccepted,
+        appendStatus: appendResult?.status ?? 'threw',
+        appendReason: appendResult?.status === 'refused' ? appendResult.reason : null,
+        durableRevisionUnchanged,
+        recordCountUnchanged
+      }
+      recordSettlementEvidence('O05', evidence)
+      expect(evidence).toEqual({
+        heldActualReply: true,
+        canonicalDispatches: 1,
+        originalPrincipalRestored: true,
+        originalAuthEpochChanged: true,
+        oldOwnerFalseAfterRestore: true,
+        hostError: 'CANCELLED',
+        oldReceiptAccepted: false,
+        appendStatus: 'refused',
+        appendReason: 'UNAVAILABLE',
+        durableRevisionUnchanged: true,
+        recordCountUnchanged: true
+      })
+      await reopened.settle()
+      await journal.settle()
+    } finally {
+      replyGate.release()
+      settlementFaults.authPrincipalAssociation = originalPrincipal
+      settlementFaults.authEpoch = originalEpoch
+      await reopened?.settle().catch(() => undefined)
+      await journal?.settle().catch(() => undefined)
+      await bootstrap.dispose().catch(() => undefined)
+      vi.restoreAllMocks()
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('permanently refuses expired or regressed speech owner clocks', async () => {
+    const clock = { wall: Date.now(), monotonic: performance.now() }
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall)
+    const monotonicNow = vi.spyOn(performance, 'now').mockImplementation(() => clock.monotonic)
+    const outcomes: Array<Record<string, unknown>> = []
+    const clockCases = [
+      'enterprise-expiry',
+      'wall-clock-rollback',
+      'monotonic-clock-rollback',
+      'non-finite-clock'
+    ] as const
+    const createdDirectories: string[] = []
+    try {
+      for (const [index, caseId] of clockCases.entries()) {
+        clock.wall += 20
+        clock.monotonic += 20
+        const baseWall = clock.wall
+        const baseMonotonic = clock.monotonic
+        const userData = mkdtempSync(resolve(tmpdir(), `metis-main-speech-owner-clock-${index}-`))
+        createdDirectories.push(userData)
+        configureMainProcess(userData)
+        commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+        commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+        publishSettingsSnapshot({ ...DEFAULT_SETTINGS, encryptTranscripts: true }, true)
+        const observed = ownerSpeechObservation()
+        const enterpriseWindow =
+          caseId === 'enterprise-expiry' ? { notBefore: baseWall - 1000, expiresAt: baseWall + 500 } : null
+        const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+          { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+          sourceFixture(
+            async () => null,
+            () =>
+              new SourceWorker((request) => {
+                if (request.operation === 'canonical-record') observed.canonicalDispatches += 1
+              }),
+            undefined,
+            (service, { suppliedIsCurrent }) => observeOwnerSpeech(service, suppliedIsCurrent, observed),
+            enterpriseWindow
+          )
+        )
+        let journal: WritableMainMeetingJournal | undefined
+        try {
+          await expect(bootstrap.prime()).resolves.toMatchObject({ status: 'ready' })
+          const ownerCurrentBeforeFault = observed.isCurrent?.() === true
+          journal = await bootstrap.openNew(`16f45c47-6583-45fb-8340-72aa6b6d128${index}`)
+          const record = speechRecord(
+            `6370e1cc-43f4-4976-a912-04d0c3ca8f9${index}`,
+            `clock owner ${caseId}`,
+            1_700_000_000_020 + index
+          )
+          const appendResult = await journal.append(Uint8Array.from(record), 0)
+          const binding = observed.bindings[0]
+          const dispatchesBeforeFault = observed.canonicalDispatches
+          if (caseId === 'enterprise-expiry') clock.wall = enterpriseWindow!.expiresAt
+          else if (caseId === 'wall-clock-rollback') clock.wall = baseWall - 1
+          else if (caseId === 'monotonic-clock-rollback') clock.monotonic = baseMonotonic - 1
+          else clock.monotonic = Number.NaN
+          const ownerFalseAtFault = observed.isCurrent?.() === false
+          const staleHostError =
+            binding && observed.service
+              ? await observed.service.canonicalizeIncrementalRecord(Uint8Array.from(record), binding).then(
+                  () => 'NONE',
+                  (error: unknown) => (error instanceof Error ? error.name : 'OTHER')
+                )
+              : 'MISSING_BINDING'
+          const dispatchesAfterFault = observed.canonicalDispatches
+          clock.wall = baseWall
+          clock.monotonic = baseMonotonic
+          const ownerFalseAfterRestore = observed.isCurrent?.() === false
+          const evidence = {
+            caseId,
+            ownerCurrentBeforeFault,
+            initialAppendStatus: appendResult.status,
+            bindingCaptured: binding !== undefined,
+            ownerFalseAtFault,
+            staleHostError,
+            dispatchesBeforeFault,
+            dispatchesAfterFault,
+            ownerFalseAfterRestore
+          }
+          outcomes.push(evidence)
+          await journal.settle()
+          await bootstrap.dispose()
+        } finally {
+          clock.wall = baseWall
+          clock.monotonic = baseMonotonic
+          await journal?.settle().catch(() => undefined)
+          await bootstrap.dispose().catch(() => undefined)
+        }
+      }
+      recordSettlementEvidence('O06', { clockCases: outcomes })
+      expect(outcomes).toHaveLength(4)
+      expect(outcomes).toEqual(
+        clockCases.map((caseId) => ({
+          caseId,
+          ownerCurrentBeforeFault: true,
+          initialAppendStatus: 'durable',
+          bindingCaptured: true,
+          ownerFalseAtFault: true,
+          staleHostError: 'CANCELLED',
+          dispatchesBeforeFault: 1,
+          dispatchesAfterFault: 1,
+          ownerFalseAfterRestore: true
+        }))
+      )
+    } finally {
+      dateNow.mockRestore()
+      monotonicNow.mockRestore()
+      vi.restoreAllMocks()
+      for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true })
     }
   })
 

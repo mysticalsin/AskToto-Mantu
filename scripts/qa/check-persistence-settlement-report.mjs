@@ -13,6 +13,7 @@ const requiredSuites = new Map([
 const hashedSources = [
   ...requiredFiles,
   'src/main/persistence/bootstrap.ts',
+  'src/main/persistence/bootstrap-speech-owner.ts',
   'src/main/persistence/root-registry.ts',
   'src/main/persistence/protected-meeting-keys.ts',
   'src/main/infra/process/meeting-speech-host.ts',
@@ -39,14 +40,56 @@ const cases = [
     file: requiredFiles[0],
     caseId: 'F02',
     title: 'creates, appends, settles, freshly reopens read-only, and preserves the durable frontier',
-    expected: 'failed',
-    cause: 'F02 main-owned speech owner dependency'
+    expected: 'passed',
+    evidence: 'F02'
   },
   {
     file: requiredFiles[0],
     caseId: 'F03',
     title: 'keeps main settlement pending until a retired worker reports physical exit',
     expected: 'passed'
+  },
+  {
+    file: requiredFiles[0],
+    caseId: 'O01',
+    title: 'admits speech work only after its exact policy owner is published',
+    expected: 'passed',
+    evidence: 'O01'
+  },
+  {
+    file: requiredFiles[0],
+    caseId: 'O02',
+    title: 'retires the original speech and journal owners across a same-profile policy refresh',
+    expected: 'passed',
+    evidence: 'O02'
+  },
+  {
+    file: requiredFiles[0],
+    caseId: 'O03',
+    title: 'rejects a held canonical reply after the original settings authority is replaced and restored',
+    expected: 'passed',
+    evidence: 'O03'
+  },
+  {
+    file: requiredFiles[0],
+    caseId: 'O04',
+    title: 'keeps the original speech owner retired after an observed profile path replacement and restoration',
+    expected: 'passed',
+    evidence: 'O04'
+  },
+  {
+    file: requiredFiles[0],
+    caseId: 'O05',
+    title: 'rejects a held canonical reply after the original session principal is replaced and restored',
+    expected: 'passed',
+    evidence: 'O05'
+  },
+  {
+    file: requiredFiles[0],
+    caseId: 'O06',
+    title: 'permanently refuses expired or regressed speech owner clocks',
+    expected: 'passed',
+    evidence: 'O06'
   },
   {
     file: requiredFiles[0],
@@ -126,6 +169,13 @@ function requireValue(condition, message) {
   if (!condition) throw new Error(`persistence-settlement-report:${message}`)
 }
 
+function requireEvidenceKeys(evidence, keys, caseId) {
+  requireValue(
+    Object.keys(evidence).sort().join(',') === [...keys, 'caseId'].sort().join(','),
+    `${caseId} witness fields differ from the closed schema`
+  )
+}
+
 function integer(value) {
   return Number.isSafeInteger(value) && value >= 0
 }
@@ -181,14 +231,7 @@ function readCaseEvidence(log) {
   return evidence
 }
 
-function requireCausalEvidence(evidence, assertion) {
-  requireValue(assertion.failureMessages.length === 1, `causal case ${assertion.title} must have one assertion failure`)
-  const failureText = assertion.failureMessages[0]
-  requireValue(failureText.startsWith('AssertionError:'), `causal case ${assertion.title} is not an assertion failure`)
-  requireValue(
-    !/STACK_TRACE_ERROR|timed? ?out|timeout|Cannot find module|Failed to load module/i.test(failureText),
-    `causal case ${assertion.title} contains a runner/import/timeout error`
-  )
+function validateStructuredEvidence(evidence, assertion) {
   const causeEvidence = evidence.get(assertion.caseId)
   requireValue(causeEvidence, `actual injected-boundary evidence is missing for ${assertion.caseId}`)
 
@@ -219,12 +262,12 @@ function requireCausalEvidence(evidence, assertion) {
     ].sort()
     requireValue(
       Object.keys(causeEvidence).sort().join(',') === expectedKeys.join(','),
-      'F02 owner-dependency witness fields differ from the closed schema'
+      'F02 main-owned owner witness fields differ from the closed schema'
     )
     requireValue(
       causeEvidence.readyProfile === true &&
         causeEvidence.openedRealJournal === true &&
-        causeEvidence.ownerPredicate === 'missing' &&
+        causeEvidence.ownerPredicate === 'present' &&
         causeEvidence.journalOwnerBeforeControl === true &&
         causeEvidence.journalOwnerAfterControl === true &&
         causeEvidence.recordInputsEqual === true &&
@@ -239,12 +282,167 @@ function requireCausalEvidence(evidence, assertion) {
         causeEvidence.controlPhysicalExit === true &&
         causeEvidence.controlReceiptDiscarded === true &&
         causeEvidence.bootstrapCanonicalCalls === 1 &&
-        causeEvidence.bootstrapCanonicalDispatches === 0 &&
-        causeEvidence.bootstrapHostError === 'UNCONFIGURED' &&
-        causeEvidence.appendStatus === 'refused' &&
-        causeEvidence.appendReason === 'UNAVAILABLE',
-      'F02 did not prove a healthy real control and the original ownerless host refusal'
+        causeEvidence.bootstrapCanonicalDispatches === 1 &&
+        causeEvidence.bootstrapHostError === 'NONE' &&
+        causeEvidence.appendStatus === 'durable' &&
+        causeEvidence.appendReason === null,
+      'F02 did not prove the real control and main-owned durable append'
     )
+  } else if (assertion.caseId === 'O01') {
+    requireEvidenceKeys(
+      causeEvidence,
+      [
+        'candidateFalseInFactory',
+        'workerStartsBeforeAppend',
+        'ownerCurrentAfterPublication',
+        'appendStatus',
+        'workerStartsAfterAppend',
+        'ownerFalseAfterRetire',
+        'ownerFalseAfterDispose'
+      ],
+      'O01'
+    )
+    requireValue(
+      causeEvidence.candidateFalseInFactory === true &&
+        causeEvidence.workerStartsBeforeAppend === 0 &&
+        causeEvidence.ownerCurrentAfterPublication === true &&
+        causeEvidence.appendStatus === 'durable' &&
+        causeEvidence.workerStartsAfterAppend === 1 &&
+        causeEvidence.ownerFalseAfterRetire === true &&
+        causeEvidence.ownerFalseAfterDispose === true,
+      'O01 did not witness candidate-to-published owner authority and sticky retirement'
+    )
+  } else if (assertion.caseId === 'O02') {
+    requireEvidenceKeys(
+      causeEvidence,
+      [
+        'initialAppendStatus',
+        'oldOwnerFalseWhilePending',
+        'newActionBlocked',
+        'noReplacementBeforeExit',
+        'physicalExitHeld',
+        'physicalExitReleased',
+        'sameProfileObject',
+        'oldOwnerFalseAfterRefresh',
+        'oldJournalStatus',
+        'oldJournalReason',
+        'freshOwnerCurrent',
+        'freshAppendStatus'
+      ],
+      'O02'
+    )
+    requireValue(
+      causeEvidence.initialAppendStatus === 'durable' &&
+        causeEvidence.oldOwnerFalseWhilePending === true &&
+        causeEvidence.newActionBlocked === true &&
+        causeEvidence.noReplacementBeforeExit === true &&
+        causeEvidence.physicalExitHeld === true &&
+        causeEvidence.physicalExitReleased === true &&
+        causeEvidence.sameProfileObject === true &&
+        causeEvidence.oldOwnerFalseAfterRefresh === true &&
+        causeEvidence.oldJournalStatus === 'refused' &&
+        causeEvidence.oldJournalReason === 'STALE_OWNER' &&
+        causeEvidence.freshOwnerCurrent === true &&
+        causeEvidence.freshAppendStatus === 'durable',
+      'O02 did not witness original-owner retirement and joined same-profile refresh'
+    )
+  } else if (assertion.caseId === 'O03' || assertion.caseId === 'O05') {
+    requireEvidenceKeys(
+      causeEvidence,
+      [
+        'heldActualReply',
+        'canonicalDispatches',
+        ...(assertion.caseId === 'O03' ? ['settingsChangedAndRestored'] : []),
+        ...(assertion.caseId === 'O05' ? ['originalPrincipalRestored', 'originalAuthEpochChanged'] : []),
+        'oldOwnerFalseAfterRestore',
+        'hostError',
+        'oldReceiptAccepted',
+        'appendStatus',
+        'appendReason',
+        'durableRevisionUnchanged',
+        'recordCountUnchanged'
+      ],
+      assertion.caseId
+    )
+    requireValue(
+      causeEvidence.heldActualReply === true &&
+        causeEvidence.canonicalDispatches === 1 &&
+        causeEvidence.oldOwnerFalseAfterRestore === true &&
+        causeEvidence.hostError === 'CANCELLED' &&
+        causeEvidence.oldReceiptAccepted === false &&
+        causeEvidence.appendStatus === 'refused' &&
+        causeEvidence.appendReason === 'UNAVAILABLE' &&
+        causeEvidence.durableRevisionUnchanged === true &&
+        causeEvidence.recordCountUnchanged === true &&
+        (assertion.caseId !== 'O05' ||
+          (causeEvidence.originalPrincipalRestored === true && causeEvidence.originalAuthEpochChanged === true)),
+      `${assertion.caseId} did not witness held-reply cancellation and unchanged durable frontier`
+    )
+    if (assertion.caseId === 'O03')
+      requireValue(causeEvidence.settingsChangedAndRestored === true, 'O03 settings authority was not restored')
+  } else if (assertion.caseId === 'O04') {
+    requireEvidenceKeys(
+      causeEvidence,
+      [
+        'initialAppendStatus',
+        'bindingCaptured',
+        'serviceCaptured',
+        'ownerFalseAtReplacement',
+        'ownerFalseAfterRestoration',
+        'staleHostError',
+        'dispatchesBeforeStaleCall',
+        'dispatchesAfterStaleCall',
+        'frontierUnchanged'
+      ],
+      'O04'
+    )
+    requireValue(
+      causeEvidence.initialAppendStatus === 'durable' &&
+        causeEvidence.bindingCaptured === true &&
+        causeEvidence.serviceCaptured === true &&
+        causeEvidence.ownerFalseAtReplacement === true &&
+        causeEvidence.ownerFalseAfterRestoration === true &&
+        causeEvidence.staleHostError === 'CANCELLED' &&
+        causeEvidence.dispatchesBeforeStaleCall === 1 &&
+        causeEvidence.dispatchesAfterStaleCall === 1 &&
+        causeEvidence.frontierUnchanged === true,
+      'O04 did not witness sticky profile-path retirement before dispatch'
+    )
+  } else if (assertion.caseId === 'O06') {
+    requireEvidenceKeys(causeEvidence, ['clockCases'], 'O06')
+    requireValue(
+      Array.isArray(causeEvidence.clockCases) && causeEvidence.clockCases.length === 4,
+      'O06 clock-case inventory is not exactly four'
+    )
+    const ids = ['enterprise-expiry', 'wall-clock-rollback', 'monotonic-clock-rollback', 'non-finite-clock']
+    for (const [index, item] of causeEvidence.clockCases.entries()) {
+      requireEvidenceKeys(
+        item,
+        [
+          'ownerCurrentBeforeFault',
+          'initialAppendStatus',
+          'bindingCaptured',
+          'ownerFalseAtFault',
+          'staleHostError',
+          'dispatchesBeforeFault',
+          'dispatchesAfterFault',
+          'ownerFalseAfterRestore'
+        ],
+        `O06/${ids[index]}`
+      )
+      requireValue(
+        item.caseId === ids[index] &&
+          item.ownerCurrentBeforeFault === true &&
+          item.initialAppendStatus === 'durable' &&
+          item.bindingCaptured === true &&
+          item.ownerFalseAtFault === true &&
+          item.staleHostError === 'CANCELLED' &&
+          item.dispatchesBeforeFault === 1 &&
+          item.dispatchesAfterFault === 1 &&
+          item.ownerFalseAfterRestore === true,
+        `O06 clock witness ${index} did not prove sticky pre-dispatch refusal`
+      )
+    }
   } else if (assertion.caseId === 'F05') {
     requireValue(
       causeEvidence.keySettlementAttemptsBeforeSuccessor === 1 &&
@@ -317,12 +515,15 @@ function validate() {
   const logPath = process.env.VITEST_LOG_PATH
   const receiptPath = process.env.SETTLEMENT_RECEIPT_PATH
   requireValue(reportPath && logPath && receiptPath, 'report/log/receipt paths are missing')
-  requireValue(process.env.PERSISTENCE_SETTLEMENT_PHASE === 'owner-dependency-red', 'phase is not owner-dependency-red')
+  requireValue(
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-red-with-owner',
+    'phase is not settlement-red-with-owner'
+  )
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? ''), 'run attempt is invalid')
   requireValue(process.env.PERSISTENCE_SETTLEMENT_TARGET === 'ubuntu-latest', 'source target is not pinned Ubuntu')
-  requireValue(process.env.VITEST_EXIT_CODE === '1', 'Vitest did not return the required causal RED exit')
+  requireValue(process.env.VITEST_EXIT_CODE === '1', 'Vitest did not return the required settlement RED exit')
 
   let log
   try {
@@ -334,17 +535,26 @@ function validate() {
   }
   requireValue(!/unhandled errors?|unhandled rejections?/i.test(log), 'Vitest log records an unhandled error')
   const evidence = readCaseEvidence(log)
+  const expectedWitnessIds = cases
+    .filter((entry) => entry.evidence || entry.expected === 'failed')
+    .map((entry) => entry.caseId)
+    .sort()
+  const requiredWitnessIds = ['F02', 'F05', 'F06', 'F07', 'F08', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'R04', 'R05']
   requireValue(
-    evidence.size === cases.filter((entry) => entry.expected === 'failed').length,
-    'actual evidence does not contain exactly the seven causal witnesses'
+    expectedWitnessIds.join(',') === requiredWitnessIds.join(','),
+    'closed case inventory does not produce the exact thirteen-witness roster'
+  )
+  requireValue(
+    evidence.size === requiredWitnessIds.length && requiredWitnessIds.every((caseId) => evidence.has(caseId)),
+    'actual evidence does not contain exactly the thirteen unique closed witnesses'
   )
 
   const { bytes, report } = readReport(reportPath)
   requireValue(report.success === false, 'Vitest JSON does not record a failed run')
   const expectedCounters = {
-    numTotalTests: 14,
-    numPassedTests: 7,
-    numFailedTests: 7,
+    numTotalTests: 20,
+    numPassedTests: 14,
+    numFailedTests: 6,
     numPendingTests: 0,
     numTodoTests: 0,
     numTotalTestSuites: 4,
@@ -364,6 +574,10 @@ function validate() {
       Array.isArray(report.unhandledErrors) && report.unhandledErrors.length === 0,
       'Vitest recorded unhandled errors'
     )
+  requireValue(
+    report.numUnhandledErrors === 0 || (Array.isArray(report.unhandledErrors) && report.unhandledErrors.length === 0),
+    'Vitest JSON does not prove zero unhandled errors'
+  )
 
   requireValue(
     Array.isArray(report.testResults) && report.testResults.length === 2,
@@ -409,7 +623,7 @@ function validate() {
     report.testResults.length + suiteTitles.size === report.numTotalTestSuites,
     'recursive suite total is not four'
   )
-  requireValue(actualCases.size === cases.length, 'actual assertion count is not fourteen')
+  requireValue(actualCases.size === cases.length, 'actual assertion count is not twenty')
 
   for (const expected of cases) {
     const found = actualCases.get(expected.title)
@@ -417,14 +631,23 @@ function validate() {
     requireValue(found.assertion.status === expected.expected, `unexpected status for ${expected.title}`)
     if (expected.expected === 'failed') {
       requireValue(
-        Array.isArray(found.assertion.failureMessages) && found.assertion.failureMessages.length > 0,
-        `failure details missing for ${expected.title}`
+        Array.isArray(found.assertion.failureMessages) && found.assertion.failureMessages.length === 1,
+        `causal case ${expected.title} must have exactly one assertion failure`
       )
-      const failureText = found.assertion.failureMessages.join('\n')
-      requireCausalEvidence(evidence, { ...expected, failureMessages: found.assertion.failureMessages })
+      const failureText = found.assertion.failureMessages[0]
+      requireValue(
+        failureText.startsWith('AssertionError:'),
+        `causal case ${expected.title} is not an assertion failure`
+      )
+      requireValue(
+        !/STACK_TRACE_ERROR|timed? ?out|timeout|Cannot find module|Failed to load module/i.test(failureText),
+        `causal case ${expected.title} contains a runner/import/timeout error`
+      )
+      validateStructuredEvidence(evidence, expected)
       requireValue(failureText.includes(expected.cause), `assertion location omits its case label: ${expected.title}`)
     } else {
       requireValue(!found.assertion.failureMessages?.length, `positive control failed: ${expected.title}`)
+      if (expected.evidence) validateStructuredEvidence(evidence, expected)
     }
   }
   requireValue(
@@ -435,8 +658,8 @@ function validate() {
   const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
     schema: 'metis-persistence-settlement-source-receipt/v1',
-    disposition: 'EXPECTED_OWNER_DEPENDENCY_RED',
-    phase: 'owner-dependency-red',
+    disposition: 'EXPECTED_SETTLEMENT_RED_OWNER_VERIFIED',
+    phase: 'settlement-red-with-owner',
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
@@ -459,7 +682,7 @@ function validate() {
   }
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   console.log(
-    'persistence-settlement:EXPECTED_OWNER_DEPENDENCY_RED 14 cases; 7 positive controls passed; 7 named causal failures'
+    'persistence-settlement:EXPECTED_SETTLEMENT_RED_OWNER_VERIFIED 20 cases; 14 passed; 6 named settlement failures'
   )
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }

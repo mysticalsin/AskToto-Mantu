@@ -9,6 +9,7 @@ on:
       - vitest.config.ts
       - scripts/qa/check-persistence-settlement-report.mjs
       - src/main/persistence/bootstrap.ts
+      - src/main/persistence/bootstrap-speech-owner.ts
       - src/main/persistence/bootstrap-settlement.ts
       - src/main/persistence/root-registry.ts
       - src/main/persistence/bootstrap-main-factory.integration.test.ts
@@ -37,12 +38,12 @@ defaults:
 
 jobs:
   test-first:
-    name: F3424 owner dependency causal RED
+    name: F3424 settlement RED with verified speech owner
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: owner-dependency-red
+      PERSISTENCE_SETTLEMENT_PHASE: settlement-red-with-owner
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -95,7 +96,7 @@ jobs:
           const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 'missing'
           const status = (value) => ['passed', 'failed', 'pending', 'todo'].includes(value) ? value : 'unknown'
           const outcomeStatus = (value) => ['fulfilled', 'rejected'].includes(value) ? value : 'unknown'
-          const allowedCases = new Set(['F02', 'F05', 'F06', 'F07', 'F08', 'R04', 'R05'])
+          const allowedCases = new Set(['F02', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'F05', 'F06', 'F07', 'F08', 'R04', 'R05'])
           const counters = [
             'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests',
             'numTodoTests', 'numTotalTestSuites', 'numPendingTestSuites',
@@ -114,7 +115,9 @@ jobs:
               'rootCloseAttemptsBeforeSuccessor', 'rootCloseAttemptsAfterDisposal',
               'writerCloseAttemptsBeforeDisposal', 'writerCloseAttemptsAfterDisposal',
               'failedOpenCloseAttempts', 'closeAttempts', 'maxHeldRoots',
-              'controlCanonicalDispatches', 'bootstrapCanonicalCalls', 'bootstrapCanonicalDispatches'
+              'controlCanonicalDispatches', 'bootstrapCanonicalCalls', 'bootstrapCanonicalDispatches',
+              'workerStartsBeforeAppend', 'workerStartsAfterAppend', 'canonicalDispatches',
+              'dispatchesBeforeStaleCall', 'dispatchesAfterStaleCall'
             ]
             const booleans = [
               'successorAdmitted', 'gatewayRejected', 'reopenedCapability',
@@ -123,7 +126,15 @@ jobs:
               'readyProfile', 'openedRealJournal', 'journalOwnerBeforeControl', 'journalOwnerAfterControl',
               'recordInputsEqual', 'policyInputsEqual', 'controlReceiptValid', 'copiedReceiptRejected',
               'controlBindingIdentitySame', 'controlOwnerTokenIdentitySame', 'controlCallbackIdentitySame',
-              'controlPhysicalExit', 'controlReceiptDiscarded'
+              'controlPhysicalExit', 'controlReceiptDiscarded', 'candidateFalseInFactory',
+              'ownerCurrentAfterPublication', 'ownerFalseAfterRetire',
+              'ownerFalseAfterDispose', 'oldOwnerFalseWhilePending', 'newActionBlocked',
+              'noReplacementBeforeExit', 'physicalExitHeld', 'physicalExitReleased', 'sameProfileObject',
+              'oldOwnerFalseAfterRefresh', 'freshOwnerCurrent', 'heldActualReply', 'settingsChangedAndRestored',
+              'oldOwnerFalseAfterRestore', 'oldReceiptAccepted', 'durableRevisionUnchanged', 'recordCountUnchanged',
+              'bindingCaptured', 'serviceCaptured', 'ownerFalseAtReplacement', 'ownerFalseAfterRestoration',
+              'frontierUnchanged', 'ownerCurrentBeforeFault', 'ownerFalseAtFault', 'ownerFalseAfterRestore',
+              'originalPrincipalRestored', 'originalAuthEpochChanged'
             ]
             for (const key of numeric) if (key in record) result[key] = integer(record[key])
             for (const key of booleans) if (typeof record[key] === 'boolean') result[key] = record[key]
@@ -143,6 +154,23 @@ jobs:
               if (Array.isArray(value.aggregateMessages)) outcome.aggregateMessages = value.aggregateMessages.slice(0, 3).map((item) => safeText(item))
               result[key] = outcome
             }
+            for (const key of ['appendStatus', 'oldJournalStatus'])
+              if (['durable', 'duplicate', 'refused'].includes(record[key])) result[key] = record[key]
+            for (const key of ['appendReason', 'oldJournalReason'])
+              if (record[key] === null || record[key] === 'UNAVAILABLE' || record[key] === 'STALE_OWNER') result[key] = record[key]
+            for (const key of ['hostError', 'staleHostError'])
+              if (['NONE', 'UNCONFIGURED', 'CANCELLED', 'WORKER_FAILED', 'OTHER'].includes(record[key])) result[key] = record[key]
+            if (['present', 'missing'].includes(record.ownerPredicate)) result.ownerPredicate = record.ownerPredicate
+            if (Array.isArray(record.clockCases)) result.clockCases = record.clockCases.slice(0, 4).map((item) => {
+              const bounded = {}
+              for (const key of ['caseId', 'initialAppendStatus', 'staleHostError'])
+                if (typeof item?.[key] === 'string') bounded[key] = safeText(item[key], 60)
+              for (const key of ['ownerCurrentBeforeFault', 'bindingCaptured', 'ownerFalseAtFault', 'ownerFalseAfterRestore'])
+                if (typeof item?.[key] === 'boolean') bounded[key] = item[key]
+              for (const key of ['dispatchesBeforeFault', 'dispatchesAfterFault'])
+                if (key in (item ?? {})) bounded[key] = integer(item[key])
+              return bounded
+            })
             for (const key of ['aggregateMessages', 'rejectionMessages']) {
               if (Array.isArray(record[key])) result[key] = record[key].slice(0, 4).map((item) => safeText(item))
             }
@@ -164,8 +192,8 @@ jobs:
               const file = ['bootstrap-main-factory.integration.test.ts', 'root-registry.test.ts'].find((name) =>
                 typeof suite.name === 'string' && suite.name.replaceAll('\\', '/').endsWith(`/${name}`))
               if (!file) continue
-              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 14) : []) {
-                if (shown++ >= 14) break
+              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 20) : []) {
+                if (shown++ >= 20) break
                 const title = typeof assertion.title === 'string' ? safeText(assertion.title, 160) : 'missing'
                 console.log(`SETTLEMENT_DIAGNOSTIC_CASE file=${file} status=${status(assertion.status)} title=${title}`)
                 if (status(assertion.status) === 'failed' && Array.isArray(assertion.failureMessages) && assertion.failureMessages[0]) {
@@ -174,7 +202,7 @@ jobs:
                   console.log(`SETTLEMENT_DIAGNOSTIC_FIRST_ERROR file=${file} title=${title} name=${identity ? firstLine.split(':', 1)[0] : 'unknown'} message=${safeText(identity?.[1] || firstLine)}`)
                 }
               }
-              if (shown > 14) break
+              if (shown > 20) break
             }
           }
 
@@ -190,7 +218,7 @@ jobs:
             for (const line of log.split(/\r?\n/)) {
               const marker = 'PERSISTENCE_SETTLEMENT_EVIDENCE '
               const index = line.indexOf(marker)
-              if (index < 0 || evidenceCount >= 7) continue
+              if (index < 0 || evidenceCount >= 13) continue
               const payload = line.slice(index + marker.length).trim()
               if (payload.length > 4096) {
                 if (!evidenceErrorPrinted) console.log('SETTLEMENT_DIAGNOSTIC_ERROR evidence=oversize')
@@ -210,13 +238,13 @@ jobs:
             console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE_COUNT ${evidenceCount}`)
           }
           NODE
-      - name: Validate only the seven named owner and settlement failures
+      - name: Validate exact owner witnesses and six named settlement failures
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain the raw run, JSON and EXPECTED_OWNER_DEPENDENCY_RED receipt
+      - name: Retain the raw run, JSON and EXPECTED_SETTLEMENT_RED_OWNER_VERIFIED receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-owner-dependency-red-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persistence-settlement-red-with-owner-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
           retention-days: 14
