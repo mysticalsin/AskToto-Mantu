@@ -1,0 +1,148 @@
+name: C2 N0 fixed inherited stdio probe
+
+on:
+  push:
+    branches:
+      - fix/qa-fixed-stdio-native
+    paths:
+      - scripts/qa/persistence-fixed-stdio-native.mjs
+      - scripts/qa/persistence-fixed-stdio-native-child.mjs
+      - scripts/qa/persistence-fixed-stdio-native-evidence.mjs
+      - scripts/qa/persistence-fixed-stdio-native-replay.mjs
+      - .github/workflows/qa-fixed-stdio-native.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixed-stdio:
+    name: fixed stdio ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: windows-latest
+            target: win32-x64
+          - os: macos-14
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    env:
+      METIS_N0_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Pin Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+
+      - name: Source syntax check
+        id: source
+        run: |
+          node --check scripts/qa/persistence-fixed-stdio-native.mjs
+          node --check scripts/qa/persistence-fixed-stdio-native-child.mjs
+          node --check scripts/qa/persistence-fixed-stdio-native-evidence.mjs
+          node --check scripts/qa/persistence-fixed-stdio-native-replay.mjs
+        shell: bash
+
+      - name: Collect six fixed API observations
+        id: collect
+        continue-on-error: true
+        run: |
+          set +e
+          node --unhandled-rejections=strict scripts/qa/persistence-fixed-stdio-native.mjs --collect
+          collector_status=$?
+          if [[ "$collector_status" != 0 && "$collector_status" != 1 ]]; then exit 2; fi
+          if ! printf 'exit_code=%s\n' "$collector_status" >> "$GITHUB_OUTPUT"; then exit 2; fi
+          exit 0
+        shell: bash
+
+      - name: Record actual collector shell exit
+        id: exit-file
+        if: always() && steps.source.outcome == 'success' && steps.collect.outcome == 'success' && steps.collect.outputs.owned_collection_closed == 'true' && (steps.collect.outputs.exit_code == '0' || steps.collect.outputs.exit_code == '1')
+        env:
+          COLLECTOR_EXIT_CODE: ${{ steps.collect.outputs.exit_code }}
+          METIS_N0_OWNED_CLOSED: ${{ steps.collect.outputs.owned_collection_closed }}
+          METIS_N0_CUSTODY: ${{ steps.collect.outputs.custody }}
+        run: node --unhandled-rejections=strict scripts/qa/persistence-fixed-stdio-native.mjs --record-exit
+        shell: bash
+
+      - name: Independently replay closed evidence
+        id: replay
+        if: always() && steps.exit-file.outcome == 'success'
+        env:
+          METIS_N0_CUSTODY: ${{ steps.exit-file.outputs.custody }}
+        run: node --unhandled-rejections=strict scripts/qa/persistence-fixed-stdio-native.mjs --replay
+        shell: bash
+
+      - name: Admit exact upload paths
+        id: admission
+        if: always() && steps.replay.outcome == 'success' && steps.replay.outputs.safe_upload == 'true'
+        env:
+          METIS_N0_CUSTODY: ${{ steps.replay.outputs.custody }}
+        run: node --unhandled-rejections=strict scripts/qa/persistence-fixed-stdio-native.mjs --admit-upload
+        shell: bash
+
+      - name: Upload exact bounded receipt
+        id: upload
+        if: always() && steps.replay.outcome == 'success' && steps.replay.outputs.safe_upload == 'true' && steps.admission.outcome == 'success' && steps.admission.outputs.admitted == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: n0-fixed-stdio-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N01.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N01.peer-input.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N01.peer-output.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N01.stderr.raw.log
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N02.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N02.peer-input.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N02.peer-output.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N02.stderr.raw.log
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N03.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N03.peer-input.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N03.peer-output.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N03.stderr.raw.log
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N04.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N04.peer-input.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N04.peer-output.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N04.stderr.raw.log
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N05.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N05.peer-input.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N05.peer-output.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N05.stderr.raw.log
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N06.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N06.peer-input.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N06.peer-output.bin
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/N06.stderr.raw.log
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/collector.json
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/parent.events.ndjson
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/collector-exit.json
+            ${{ runner.temp }}/metis-fixed-stdio-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/replay.json
+
+      - name: Require complete positive Socket observations
+        if: always()
+        run: |
+          test '${{ steps.source.outcome }}' = success
+          test '${{ steps.collect.outcome }}' = success
+          test '${{ steps.exit-file.outcome }}' = success
+          test '${{ steps.replay.outcome }}' = success
+          test '${{ steps.admission.outcome }}' = success
+          test '${{ steps.upload.outcome }}' = success
+          test '${{ steps.collect.outputs.exit_code }}' = 0
+          test '${{ steps.admission.outputs.admitted }}' = true
+          test '${{ steps.collect.outputs.owned_collection_closed }}' = true
+          test '${{ steps.replay.outputs.safe_upload }}' = true
+          test '${{ steps.replay.outputs.diagnostic_complete }}' = true
+          test '${{ steps.replay.outputs.socket_positive }}' = true
+        shell: bash
