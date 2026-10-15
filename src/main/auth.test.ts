@@ -244,11 +244,18 @@ describe('C1 coherent auth publication producer', () => {
     expect(equalRefresh).toBe(boundary)
     expect(boundary.isCurrent()).toBe(true)
     setSettings({ provider: 'openai' })
-    expect(await refreshMainPersistenceSessionObservation()).toBeNull()
-    expect(boundary.isCurrent()).toBe(false)
     const afterPhysicalSettingsChange = await refreshMainPersistenceSessionObservation()
     expect(afterPhysicalSettingsChange).not.toBeNull()
-    expect(afterPhysicalSettingsChange?.isCurrent()).toBe(true)
+    if (!afterPhysicalSettingsChange) throw new Error('Expected a fresh boundary after the physical settings change')
+    expect(afterPhysicalSettingsChange).not.toBe(boundary)
+    expect(afterPhysicalSettingsChange.isCurrent()).toBe(true)
+    expect(boundary.isCurrent()).toBe(false)
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBe(afterPhysicalSettingsChange)
+    const repeatedFreshBoundary = await refreshMainPersistenceSessionObservation()
+    expect(repeatedFreshBoundary).toBe(afterPhysicalSettingsChange)
+    expect(repeatedFreshBoundary?.isCurrent()).toBe(true)
+    expect(boundary.isCurrent()).toBe(false)
+    expect(capturePublishedMainPersistenceSessionBoundary()).toBe(afterPhysicalSettingsChange)
   })
 
   it('retires the actual producer after a managed source changes and is restored during a held store frame', async () => {
@@ -372,6 +379,11 @@ describe('C1 coherent auth publication producer', () => {
     const path = join(ud, name)
     writeFileSync(path, original)
     if (name === 'auth-lkg-config.json') writeFileSync(join(ud, 'auth-configured.flag'), '1')
+    if (name === 'auth-lkg-config.json') {
+      delete process.env.AZURE_CLIENT_ID
+      delete process.env.AZURE_TENANT_ID
+      delete process.env.ASKTOTO_ALLOWED_DOMAIN
+    }
     expect(authStatus().signedIn).toBe(true)
     const originalBoundary = await refreshMainPersistenceSessionObservation()
     expect(originalBoundary).not.toBeNull()
@@ -392,11 +404,43 @@ describe('C1 coherent auth publication producer', () => {
       await heldRead
     }
     const attempt = refreshMainPersistenceSessionObservation()
-    await readReached
-    writeFileSync(path, replacement)
-    writeFileSync(path, original)
-    releaseRead?.()
-    expect(await attempt).toBeNull()
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let witness: 'read' | 'timeout' = 'timeout'
+    let settled:
+      | { status: 'settled'; value: Awaited<typeof attempt> }
+      | { status: 'rejected'; error: unknown }
+      | { status: 'timeout' }
+      | undefined
+    try {
+      witness = await Promise.race([
+        readReached.then(() => 'read' as const),
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), 10_000)
+        })
+      ])
+      if (witness === 'read') {
+        writeFileSync(path, replacement)
+        writeFileSync(path, original)
+      }
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      releaseRead?.()
+      settled = await Promise.race([
+        attempt.then(
+          (value) => ({ status: 'settled' as const, value }),
+          (error: unknown) => ({ status: 'rejected' as const, error })
+        ),
+        new Promise<{ status: 'timeout' }>((resolve) => {
+          timeout = setTimeout(() => resolve({ status: 'timeout' }), 5_000)
+        })
+      ])
+      if (timeout) clearTimeout(timeout)
+      authFileReadRace.path = null
+      authFileReadRace.afterRead = null
+    }
+    expect(witness).toBe('read')
+    expect(settled?.status).toBe('settled')
+    if (settled?.status === 'settled') expect(settled.value).toBeNull()
     expect(originalBoundary.isCurrent()).toBe(false)
     expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
   })

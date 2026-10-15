@@ -407,7 +407,7 @@ describe('isAdminManagedTrusted / trustedAdminManagedPath — platform gate', ()
 })
 
 describe('readTrustedAdminManaged — content read tied to the trust decision', () => {
-  const tmpDir = join(tmpdir(), `wsec-readtrust-${process.pid}`)
+  const tmpDir = join(realpathSync(tmpdir()), `wsec-readtrust-${process.pid}`)
   const file = join(tmpDir, 'managed-config.json')
   afterEach(() => {
     try {
@@ -436,7 +436,7 @@ describe('readTrustedAdminManaged — content read tied to the trust decision', 
 })
 
 describe('readTrustedAdminManagedBytes — bounded raw bytes from one trusted file identity', () => {
-  const tmpDir = join(tmpdir(), `wsec-readbytes-${process.pid}`)
+  const tmpDir = join(realpathSync(tmpdir()), `wsec-readbytes-${process.pid}`)
   const file = join(tmpDir, 'managed-config.json')
   afterEach(() => {
     try {
@@ -613,7 +613,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
 // chosen by whoever creates the file, so a swap could inherit a trusted verdict) — hence the two cases
 // after this one, which pin the properties that make it safe: file identity, and a time bound.
 describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028)', () => {
-  const tmpDir = join(tmpdir(), `wsec-aclmemo-${process.pid}`)
+  const tmpDir = join(realpathSync(tmpdir()), `wsec-aclmemo-${process.pid}`)
   const file = join(tmpDir, 'managed-config.json')
   const CONTENT = JSON.stringify({ requireAuth: true })
 
@@ -716,7 +716,7 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
 // accessors have to read the policy through a snapshot of their own. %ProgramData% is redirected here so
 // the probe runs against a temp file instead of a real machine-wide deployment.
 describe('policy accessors — the ACL probe is off the per-ask and per-tick path (MQA-034)', () => {
-  const root = join(tmpdir(), `wsec-adminpolicy-${process.pid}`)
+  const root = join(realpathSync(tmpdir()), `wsec-adminpolicy-${process.pid}`)
   const programData = join(root, 'ProgramData')
   const policy = join(programData, 'Métis', 'managed-config.json')
   const REAL_PROGRAM_DATA = process.env.ProgramData
