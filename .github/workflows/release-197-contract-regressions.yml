@@ -1,0 +1,544 @@
+name: Release 1.9.7 contract regression baseline
+
+on:
+  push:
+    branches:
+      - fix/release-197-contract-regressions
+    paths:
+      - .github/workflows/release-197-contract-regressions.yml
+      - scripts/lean-builder-exclusions.test.ts
+      - scripts/qa/rebuild-waves.contract.test.ts
+      - scripts/trace/build-traceability.test.ts
+      - scripts/trace/build-traceability.mjs
+      - scripts/docs/managed-config-docs.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-197-contract-regressions-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused-baseline:
+    name: Contract regression baseline (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        id: install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Reserve an exclusive fresh evidence and producer namespace
+        id: namespace
+        if: steps.install.outcome == 'success'
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TARGET_OS: ${{ matrix.os }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const name = `release-197-${process.env.RUN_ID}-${process.env.RUN_ATTEMPT}-${process.env.TARGET_OS}`
+          if (!/^release-197-[1-9][0-9]*-[1-9][0-9]*-(?:ubuntu-latest|windows-latest)$/.test(name)) throw new Error('invalid attempt namespace')
+          const evidence = path.join(process.env.RUNNER_TEMP, name)
+          const outRoot = path.resolve('out')
+          if (fs.existsSync(outRoot)) {
+            const stat = fs.lstatSync(outRoot)
+            if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('unsafe producer output parent')
+          } else fs.mkdirSync(outRoot, { mode: 0o700 })
+          const producer = path.join(outRoot, name)
+          if (fs.existsSync(evidence) || fs.existsSync(producer)) throw new Error('attempt namespace already exists')
+          fs.mkdirSync(evidence, { mode: 0o700 })
+          fs.mkdirSync(producer, { mode: 0o700 })
+          for (const file of ['vitest.json','vitest.log','producer.log','manifest.json'])
+            if (fs.existsSync(path.join(evidence, file))) throw new Error('stale evidence destination')
+          for (const file of ['traceability.json','README.md','prd-lock.md','THREAT-MODEL.md','COVERAGE-MAP.md','m2-0016-evidence.json'])
+            if (fs.existsSync(path.join(producer, file))) throw new Error('stale producer destination')
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `evidence_dir=${evidence}\ntrace_out=${path.relative(process.cwd(), producer).split(path.sep).join('/')}\n`)
+          NODE
+      - name: Run the exact four-file Vitest baseline
+        id: focused
+        if: steps.namespace.outcome == 'success'
+        env:
+          METIS_CI_ROOT_REPORT: ${{ steps.namespace.outputs.evidence_dir }}/vitest.json
+          VITEST_LOG: ${{ steps.namespace.outputs.evidence_dir }}/vitest.log
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 --retry=0 --dangerouslyIgnoreUnhandledErrors=false scripts/lean-builder-exclusions.test.ts scripts/qa/rebuild-waves.contract.test.ts scripts/trace/build-traceability.test.ts scripts/docs/managed-config-docs.test.ts 2>&1 | tee "$VITEST_LOG"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          echo "exit_code=${statuses[0]}" >> "$GITHUB_OUTPUT"
+          echo "capture_exit_code=${statuses[1]}" >> "$GITHUB_OUTPUT"
+          if [[ "${statuses[0]}" -ne 0 ]]; then exit "${statuses[0]}"; fi
+          exit "${statuses[1]}"
+      - name: Run the real default traceability producer
+        id: producer
+        if: always() && steps.namespace.outcome == 'success'
+        env:
+          TRACE_OUT: ${{ steps.namespace.outputs.trace_out }}
+          PRODUCER_LOG: ${{ steps.namespace.outputs.evidence_dir }}/producer.log
+        run: |
+          set +e
+          node scripts/trace/build-traceability.mjs --check --out "$TRACE_OUT" 2>&1 | tee "$PRODUCER_LOG"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          echo "exit_code=${statuses[0]}" >> "$GITHUB_OUTPUT"
+          echo "capture_exit_code=${statuses[1]}" >> "$GITHUB_OUTPUT"
+          echo "out_dir=$TRACE_OUT" >> "$GITHUB_OUTPUT"
+          if [[ "${statuses[0]}" -ne 0 ]]; then exit "${statuses[0]}"; fi
+          exit "${statuses[1]}"
+      - name: Validate the complete causal RED and write its bounded manifest
+        id: evidence
+        if: always()
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          EXPECTED_OS: ${{ matrix.os }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          NAMESPACE_OUTCOME: ${{ steps.namespace.outcome }}
+          VITEST_EXIT: ${{ steps.focused.outputs.exit_code }}
+          VITEST_CAPTURE_EXIT: ${{ steps.focused.outputs.capture_exit_code }}
+          PRODUCER_EXIT: ${{ steps.producer.outputs.exit_code }}
+          PRODUCER_CAPTURE_EXIT: ${{ steps.producer.outputs.capture_exit_code }}
+          REPORT: ${{ steps.namespace.outputs.evidence_dir }}/vitest.json
+          VITEST_LOG: ${{ steps.namespace.outputs.evidence_dir }}/vitest.log
+          PRODUCER_LOG: ${{ steps.namespace.outputs.evidence_dir }}/producer.log
+          TRACE_OUT: ${{ steps.namespace.outputs.trace_out }}
+          MANIFEST: ${{ steps.namespace.outputs.evidence_dir }}/manifest.json
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const crypto = require('node:crypto')
+          const { execFileSync } = require('node:child_process')
+
+          const expectedRefs = {
+            'src/main/brain/corrections.ts': 'c8a7100d88e65c1d61cc053bd13cf55a4d852589977ede648f534034017e7041',
+            'src/main/brain/publish.ts': '816569fbd476427ed9ac34660c00fc5cfafcb81e4cbc1e3e2c96ad8dcb8f0a26',
+            'src/main/llm/prewarm.ts': '10f3e540fd0d463a507fa316d450325c23d8aad4c01d176afa3991d9a3310c22',
+            'src/main/brain/publish-provenance.ts': '9f349c962bff0daf6e715a15ff8f8c3fcf9d534d263168b4996707ae530752b4'
+          }
+          const baselineFiles = new Map()
+          const add = (file, ancestor, title, expectedStatus) => baselineFiles.set(
+            `${file}\0${JSON.stringify(ancestor)}\0${title}`,
+            { file, ancestorTitles: ancestor, title, expectedStatus }
+          )
+          const addMany = (file, suite, titles, failed = new Set()) => {
+            for (const title of titles) add(file, [suite], title, failed.has(title) ? 'failed' : 'passed')
+          }
+          const builderFile = 'scripts/lean-builder-exclusions.test.ts'
+          add(builderFile, [], 'excludes inference workers from normalized darwin file sets while retaining application entries', 'failed')
+          add(builderFile, [], 'excludes inference workers from normalized win32 file sets while retaining application entries', 'failed')
+          const rebuildFile = 'scripts/qa/rebuild-waves.contract.test.ts'
+          addMany(rebuildFile, 'QA rebuild contracts — Wave 2 routing + failover notice', [
+            'exposes routingMode and lastFailover on PublicSettings; dismiss IPC exists',
+            'failover() records lastFailoverNotice and auditLog provider.failover',
+            'App renders a dismissible failover chip'
+          ])
+          addMany(rebuildFile, 'QA rebuild contracts — Wave 3 consolidation', [
+            'saveTranscript defers ingest when brainConsolidation.enabled'
+          ])
+          addMany(rebuildFile, 'QA rebuild contracts — Wave 4 confidential MCP', [
+            'Review blocks CRM and task push when confidentialFlag is on',
+            'pushQueue skips confidential outbound actions'
+          ])
+          addMany(rebuildFile, 'QA rebuild contracts — Wave 1D SUMMARY headings', [
+            'parseRecapMarkdown aliases Next steps into actionItems',
+            'SUMMARY_PROMPT uses ## Next steps / ## Decisions'
+          ], new Set(['parseRecapMarkdown aliases Next steps into actionItems']))
+          addMany(rebuildFile, 'QA rebuild contracts — Wave 1 provisional strip', [
+            'stripProvisionalLines exists and save paths use it'
+          ], new Set(['stripProvisionalLines exists and save paths use it']))
+          const traceFile = 'scripts/trace/build-traceability.test.ts'
+          addMany(traceFile, 'traceability builder M2-0016 coverage rows', [
+            'builds the workflow artifact from Section 25 COV rows in traceability.json',
+            'fails the builder path when Section 25 COV rows are absent',
+            'keeps the workflow on the same traceability builder command'
+          ], new Set(['builds the workflow artifact from Section 25 COV rows in traceability.json']))
+          const docsFile = 'scripts/docs/managed-config-docs.test.ts'
+          addMany(docsFile, 'managed-config check functions fire on a bad fixture', [
+            'flags a key that is neither a Settings key nor a governance key',
+            'accepts a governance key only through the explicit list',
+            'flags licenseGateEnabled whether set or only locked',
+            'flags a doc that lists the license gate as an enforced control',
+            'the governance list documents where every key is read'
+          ], new Set(['the governance list documents where every key is read']))
+          const exampleTitles = [
+            'sets only Settings keys or listed governance keys',
+            'does not set licenseGateEnabled while enforcement is compiled off',
+            'locks only keys it can enforce',
+            'names only the single Windows admin path'
+          ]
+          const exampleSuite = 'the shipped examples and docs list only enforced controls'
+          for (const example of ['build/managed-config.example.json', 'build/managed-config.enterprise.example.json']) {
+            for (const title of exampleTitles) add(docsFile, [exampleSuite], `${example} ${title}`, 'passed')
+          }
+          addMany(docsFile, exampleSuite, [
+            'the enterprise example uses a reserved example domain and placeholder tenant ids',
+            'the managed-config docs name the accented Métis path and never a supported AskToto path',
+            'no doc under docs/ lists the license gate as an enforced control while it is compiled off'
+          ])
+
+          function assert(condition, message) {
+            if (!condition) throw new Error(message)
+          }
+          const attemptName = `release-197-${process.env.RUN_ID}-${process.env.RUN_ATTEMPT}-${process.env.EXPECTED_OS}`
+          const validAttempt = /^release-197-[1-9][0-9]*-[1-9][0-9]*-(?:ubuntu-latest|windows-latest)$/.test(attemptName)
+          const evidenceRoot = validAttempt && process.env.NAMESPACE_OUTCOME === 'success' &&
+            path.resolve(path.dirname(process.env.MANIFEST || '.')) === path.resolve(process.env.RUNNER_TEMP, attemptName)
+              ? path.resolve(process.env.RUNNER_TEMP, attemptName)
+              : fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'release-197-incomplete-'))
+          const uploadRoot = path.join(evidenceRoot, 'bounded-upload')
+          fs.mkdirSync(uploadRoot, { mode: 0o700 })
+          const captured = []
+          const admissionErrors = []
+          let admittedBytes = 0
+          function sameIdentity(left, right) {
+            return left.isFile() && right.isFile() && left.dev === right.dev && left.ino === right.ino &&
+              left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs
+          }
+          function safeInfo(file, uploadName = null) {
+            assert(typeof file === 'string' && file.length > 0, 'missing original path')
+            const absolute = path.resolve(file)
+            const root = path.parse(absolute).root
+            const parts = absolute.slice(root.length).split(path.sep).filter(Boolean)
+            let parent = root
+            const ancestors = []
+            for (const part of parts.slice(0, -1)) {
+              parent = path.join(parent, part)
+              const stat = fs.lstatSync(parent, { bigint: true })
+              assert(!stat.isSymbolicLink() && stat.isDirectory(), `unsafe non-directory or symlink ancestor: ${parent}`)
+              ancestors.push({ path: parent, stat })
+            }
+            const stat = fs.lstatSync(absolute, { bigint: true })
+            assert(!stat.isSymbolicLink() && stat.isFile(), `expected ordinary file: ${absolute}`)
+            assert(stat.size <= 2n * 1024n * 1024n, `file exceeds 2 MiB: ${absolute}`)
+            const size = Number(stat.size)
+            assert(admittedBytes + size <= 8 * 1024 * 1024 - 64 * 1024, 'original read set exceeds reserved 8 MiB budget')
+            admittedBytes += size
+            const fd = fs.openSync(absolute, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+            let bytes
+            try {
+              assert(sameIdentity(stat, fs.fstatSync(fd, { bigint: true })), `original descriptor changed: ${absolute}`)
+              bytes = Buffer.alloc(size)
+              let offset = 0
+              while (offset < size) {
+                const count = fs.readSync(fd, bytes, offset, size - offset, null)
+                assert(count > 0, `short original read: ${absolute}`)
+                offset += count
+              }
+              assert(sameIdentity(stat, fs.fstatSync(fd, { bigint: true })), `original descriptor changed during read: ${absolute}`)
+            } finally {
+              fs.closeSync(fd)
+            }
+            assert(sameIdentity(stat, fs.lstatSync(absolute, { bigint: true })), `named original changed during read: ${absolute}`)
+            for (const ancestor of ancestors) {
+              const after = fs.lstatSync(ancestor.path, { bigint: true })
+              assert(after.isDirectory() && !after.isSymbolicLink() && after.dev === ancestor.stat.dev &&
+                after.ino === ancestor.stat.ino, `original ancestor changed: ${ancestor.path}`)
+            }
+            const result = { absolute, bytes: size, content: bytes, sha256: sha256(bytes) }
+            if (uploadName !== null) {
+              assert(/^[A-Za-z0-9.-]+$/.test(uploadName), 'invalid bounded upload name')
+              const staged = path.join(uploadRoot, uploadName)
+              fs.writeFileSync(staged, bytes, { flag: 'wx', mode: 0o600 })
+              captured.push({ path: uploadName, source: absolute, bytes: size, sha256: result.sha256, staged })
+            }
+            return result
+          }
+          function sha256(bytes) {
+            return crypto.createHash('sha256').update(bytes).digest('hex')
+          }
+          function normPath(value) {
+            return value.replaceAll('\\', '/')
+          }
+
+          const expectedTraceOut = `out/${attemptName}`
+          const producerNames = ['traceability.json', 'README.md', 'prd-lock.md', 'THREAT-MODEL.md', 'COVERAGE-MAP.md', 'm2-0016-evidence.json']
+          const producerRelFiles = producerNames.map((name) => `${expectedTraceOut}/${name}`)
+          const payloadSpecs = [
+            [process.env.REPORT, 'vitest.json'], [process.env.VITEST_LOG, 'vitest.log'],
+            [process.env.PRODUCER_LOG, 'producer.log'],
+            ...producerRelFiles.map((file, index) => [file, producerNames[index]])
+          ]
+          const payloadInfos = new Map()
+          if (validAttempt && process.env.NAMESPACE_OUTCOME === 'success' && process.env.TRACE_OUT === expectedTraceOut &&
+              path.resolve(path.dirname(process.env.MANIFEST || '.')) === evidenceRoot) {
+            for (const [file, name] of payloadSpecs) {
+              try { payloadInfos.set(name, safeInfo(file, name)) }
+              catch (error) { admissionErrors.push(`${name}: ${error.message}`) }
+            }
+          } else admissionErrors.push('fresh attempt namespace or producer path unavailable')
+          let validated = false
+          let manifestDetails = null
+          let validationFailure = null
+          try {
+          assert(admissionErrors.length === 0, 'one or more original payloads were absent, unsafe, oversized or changed')
+          assert(process.env.INSTALL_OUTCOME === 'success', 'npm ci did not complete; this is an incomplete run, not causal RED')
+          assert(process.env.VITEST_EXIT === '1', `expected actual Vitest exit 1, got ${process.env.VITEST_EXIT || 'missing'}`)
+          assert(process.env.PRODUCER_EXIT === '1', `expected actual producer exit 1, got ${process.env.PRODUCER_EXIT || 'missing'}`)
+          assert(process.env.VITEST_CAPTURE_EXIT === '0' && process.env.PRODUCER_CAPTURE_EXIT === '0', 'tee capture failed')
+          assert(process.version === 'v22.22.3', `unexpected Node runtime: ${process.version}`)
+          const expectedPlatform = process.env.EXPECTED_OS === 'windows-latest' ? ['win32','x64'] : ['linux','x64']
+          assert(process.platform === expectedPlatform[0] && process.arch === expectedPlatform[1], 'runner platform or architecture mismatch')
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+          assert(head === process.env.EXPECTED_HEAD, `checkout HEAD ${head} did not match event SHA ${process.env.EXPECTED_HEAD}`)
+          assert(execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim() === '',
+            'tracked checkout changed during the baseline run')
+
+          const reportFile = payloadInfos.get('vitest.json')
+          const vitestLogFile = payloadInfos.get('vitest.log')
+          const producerLogFile = payloadInfos.get('producer.log')
+          const producerFiles = producerNames.map((name) => payloadInfos.get(name))
+          const sourceFiles = [
+            ...Object.keys(expectedRefs),
+            'package.json', 'package-lock.json', 'vitest.config.ts', 'electron.vite.config.ts',
+            'scripts/hermetic/sandbox-env.mjs', 'tsconfig.tests.json', 'scripts/trace/m2-0016-lock.mjs',
+            'scripts/before-pack.mjs', 'src/main/transcripts-recap.ts', 'src/shared/ipc.ts',
+            '.github/workflows/release-197-contract-regressions.yml',
+            'scripts/lean-builder-exclusions.test.ts',
+            'scripts/qa/rebuild-waves.contract.test.ts',
+            'scripts/trace/build-traceability.test.ts',
+            'scripts/docs/managed-config-docs.test.ts',
+            'scripts/trace/build-traceability.mjs'
+          ]
+          const sourceInfos = new Map(sourceFiles.map((file) => [file, safeInfo(file)]))
+          const totalBoundBytes = [reportFile, vitestLogFile, producerLogFile, ...producerFiles, ...sourceInfos.values()]
+            .reduce((sum, item) => sum + item.bytes, 0)
+          assert(totalBoundBytes <= 8 * 1024 * 1024, `bounded read set exceeds 8 MiB: ${totalBoundBytes}`)
+
+          const fixedBaselineHashes = {
+            'scripts/lean-builder-exclusions.test.ts': '8c333aa492cc098f6736eefcae7d59881f7cb123ee56209e2f6d646b86458b5a',
+            'scripts/qa/rebuild-waves.contract.test.ts': '1b13036827668ebf2ae46248db8917ba16b262d0c6bd559129a5c0b01a9e5e2d',
+            'scripts/trace/build-traceability.test.ts': '98d335998274e3d2950dddecd50fcf49a8605b6435d7950e83e22c02c7bb790f',
+            'scripts/docs/managed-config-docs.test.ts': '0300ede12d921bf4384dff228654b4da6c232fe0c2b664b86f53addd33b011ca',
+            'scripts/trace/build-traceability.mjs': '8e0827da4d904a4d5b0fc561c8b57d425e1c044826e4eecb6b41077b307863e9'
+          }
+          const sourceBindings = {}
+          for (const file of sourceFiles) {
+            const checkout = sourceInfos.get(file).content
+            const blob = execFileSync('git', ['show', `HEAD:${file}`], { maxBuffer: 2 * 1024 * 1024 })
+            const canonical = blob.toString('utf8').replace(/\r\n/g, '\n')
+            assert(Buffer.from(canonical, 'utf8').equals(blob), `Git source blob is not canonical UTF-8 LF: ${file}`)
+            const crlf = Buffer.from(canonical.replace(/\n/g, '\r\n'), 'utf8')
+            assert(checkout.equals(blob) || checkout.equals(crlf), `checkout differs from HEAD blob: ${file}`)
+            if (fixedBaselineHashes[file]) assert(sha256(blob) === fixedBaselineHashes[file], `baseline test or producer changed: ${file}`)
+            sourceBindings[file] = {
+              git_blob_sha256: sha256(blob), checkout_sha256: sha256(checkout),
+              representation: checkout.equals(blob) ? 'git-lf' : 'derived-crlf'
+            }
+          }
+
+          const report = JSON.parse(reportFile.content.toString('utf8'))
+          const results = report.testResults
+          assert(Array.isArray(results) && results.length === 4, 'Vitest report must contain exactly four test files')
+          const repoRoot = normPath(process.cwd()).replace(/\/$/, '')
+          const actual = []
+          const seenFiles = new Set()
+          for (const fileResult of results) {
+            assert(fileResult && typeof fileResult.name === 'string' && fileResult.status === 'failed' &&
+              fileResult.message === '', 'unexpected file or hook failure in Vitest result')
+            const absoluteName = normPath(fileResult.name)
+            const relativeName = absoluteName.startsWith(`${repoRoot}/`) ? absoluteName.slice(repoRoot.length + 1) : absoluteName
+            assert(!seenFiles.has(relativeName), `duplicate Vitest file result: ${relativeName}`)
+            seenFiles.add(relativeName)
+            assert(Array.isArray(fileResult.assertionResults), `missing assertions for ${relativeName}`)
+            const assertionNames = new Set()
+            for (const assertion of fileResult.assertionResults) {
+              assert(assertion && Array.isArray(assertion.ancestorTitles) &&
+                assertion.ancestorTitles.every((name) => typeof name === 'string' && name.length > 0) &&
+                typeof assertion.title === 'string' && typeof assertion.status === 'string' &&
+                assertion.fullName === [...assertion.ancestorTitles, assertion.title].join(' ') &&
+                Array.isArray(assertion.failureMessages) &&
+                assertion.failureMessages.every((message) => typeof message === 'string'),
+                `invalid assertion ancestry or failure detail in ${relativeName}`)
+              const key = `${relativeName}\0${JSON.stringify(assertion.ancestorTitles)}\0${assertion.title}`
+              assert(!assertionNames.has(key), `duplicate assertion in ${relativeName}: ${assertion.fullName}`)
+              assertionNames.add(key)
+              actual.push({ file: relativeName, ancestorTitles: assertion.ancestorTitles, title: assertion.title, status: assertion.status, failureMessages: assertion.failureMessages })
+            }
+          }
+          const expected = [...baselineFiles.values()].map(({ file, ancestorTitles, title, expectedStatus }) => ({ file, ancestorTitles, title, status: expectedStatus }))
+          const keyOf = ({ file, ancestorTitles, title }) => `${file}\0${JSON.stringify(ancestorTitles)}\0${title}`
+          const expectedKeys = expected.map(keyOf).sort()
+          const actualKeys = actual.map(keyOf).sort()
+          assert(expectedKeys.length === 30 && actual.length === 30, `expected exact 30-case population, got ${actual.length}`)
+          assert(JSON.stringify(actualKeys) === JSON.stringify(expectedKeys), 'Vitest case multiset differs from the frozen four-file roster')
+          const expectedSuites = new Map([[builderFile, 0], [rebuildFile, 5], [traceFile, 1], [docsFile, 2]])
+          const nestedSuites = new Set()
+          const failedNestedSuites = new Set()
+          for (const file of expectedSuites.keys()) {
+            const fileSuites = new Set()
+            for (const item of actual.filter((item) => item.file === file))
+              for (let depth = 1; depth <= item.ancestorTitles.length; depth += 1) {
+                const key = JSON.stringify([file, ...item.ancestorTitles.slice(0, depth)])
+                fileSuites.add(key)
+                nestedSuites.add(key)
+                if (item.status === 'failed') failedNestedSuites.add(key)
+              }
+            assert(fileSuites.size === expectedSuites.get(file), `nested suite inventory changed: ${file}`)
+          }
+          assert(nestedSuites.size === 8 && report.numTotalTestSuites === results.length + nestedSuites.size &&
+            report.numTotalTestSuites === 12 && report.numFailedTestSuites === 8 &&
+            report.numPassedTestSuites === 4 && report.numPendingTestSuites === 0 &&
+            report.numTotalTestSuites === report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites &&
+            report.numFailedTestSuites >= results.filter((item) => item.status === 'failed').length + failedNestedSuites.size,
+            'pinned Vitest suite counters or nested suite inventory differ from the baseline')
+          for (const item of expected) {
+            const observed = actual.find((candidate) => keyOf(candidate) === keyOf(item))
+            assert(observed.status === item.status, `wrong status for ${item.file} > ${item.title}: ${observed.status}`)
+            assert(Array.isArray(observed.failureMessages) && observed.failureMessages.length === (item.status === 'failed' ? 1 : 0),
+              `unexpected appended or missing failure for ${item.file} > ${item.title}`)
+          }
+          assert(Number.isSafeInteger(report.numPassedTests) && report.numPassedTests === 24, `expected 24 passing cases, got ${report.numPassedTests}`)
+          assert(Number.isSafeInteger(report.numFailedTests) && report.numFailedTests === 6, `expected 6 failing cases, got ${report.numFailedTests}`)
+          assert(Number.isSafeInteger(report.numPendingTests) && report.numPendingTests === 0, `expected 0 pending cases, got ${report.numPendingTests}`)
+          assert(Number.isSafeInteger(report.numTodoTests) && report.numTodoTests === 0, `expected 0 todo cases, got ${report.numTodoTests}`)
+          assert(Number.isSafeInteger(report.numTotalTests) && report.numTotalTests === 30, `expected 30 total cases, got ${report.numTotalTests}`)
+          assert(report.success === false, 'Vitest JSON must preserve the expected failing result')
+
+          const expectedFailureCauses = [
+            [builderFile, 'excludes inference workers from normalized darwin file sets while retaining application entries', /isEnabled/],
+            [builderFile, 'excludes inference workers from normalized win32 file sets while retaining application entries', /isEnabled/],
+            [rebuildFile, 'parseRecapMarkdown aliases Next steps into actionItems', /sections.*next steps/],
+            [rebuildFile, 'stripProvisionalLines exists and save paths use it', /provisional/],
+            [docsFile, 'the governance list documents where every key is read', /locked: src\/main\/store\.ts must contain obj\.locked \?\? obj\.lockedKeys/],
+            [traceFile, 'builds the workflow artifact from Section 25 COV rows in traceability.json', /expected \[ Array\(1\) \] to deeply equal \[\]/]
+          ]
+          for (const [file, title, cause] of expectedFailureCauses) {
+            const assertion = actual.find((item) => item.file === file && item.title === title)
+            assert(cause.test(assertion.failureMessages[0]), `failure cause did not match for ${title}`)
+          }
+
+          const producerReportPath = path.join(process.env.TRACE_OUT, 'traceability.json')
+          const producerReport = JSON.parse(payloadInfos.get('traceability.json').content.toString('utf8'))
+          const expectedProblem = 'src/main/brain/publish.ts: expected 974 lines, found 954'
+          assert(Array.isArray(producerReport.check?.problems), 'producer report omitted its check problems')
+          assert(JSON.stringify(producerReport.check.problems) === JSON.stringify([expectedProblem]), `producer report mismatch was not exactly the reviewed publish source delta: ${JSON.stringify(producerReport.check.problems)}`)
+          assert(Array.isArray(producerReport.reviewed_scopes) && producerReport.reviewed_scopes.length === 28, 'baseline producer scope set must retain all 28 original paths')
+          assert(Array.isArray(producerReport.rows) && producerReport.rows.filter((row) => row.family === 'COV' && row.section === 25).length === 44, 'baseline producer report must retain all 44 Section 25 rows')
+          const producerLog = producerLogFile.content.toString('utf8')
+          assert(producerLog.includes(`[traceability] ${expectedProblem}`), 'actual producer log omitted the source mismatch')
+          assert((producerLog.match(/\[traceability\] /g) || []).length === 1, 'producer emitted an unexpected additional validation failure')
+          const vitestLog = vitestLogFile.content.toString('utf8')
+          assert(!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(vitestLog), 'Vitest default log contains terminal controls')
+          assert(!/(?:Vitest caught [1-9][0-9]* unhandled errors? during the test run|Unhandled Errors|There were unhandled errors during test collection|Failed Suites [1-9][0-9]*|Source Errors|Test timed out|Hook timed out|Failed to load url|Error when evaluating module)/i.test(vitestLog),
+            'Vitest emitted an unhandled, fatal, timeout or collection diagnostic')
+          assert(/Test Files\s+4 failed\s*\(4\)/.test(vitestLog) &&
+            /Tests\s+6 failed\s*\|\s*24 passed\s*\(30\)/.test(vitestLog),
+            'actual default reporter summary is missing the four-file 24/6 baseline')
+
+          const referenceObservations = []
+          for (const [file, expectedCanonicalSha256] of Object.entries(expectedRefs)) {
+            const bytes = sourceInfos.get(file).content
+            const rawSha256 = sha256(bytes)
+            const canonicalSource = bytes.toString('utf8').replace(/\r\n/g, '\n')
+            const canonicalSha256 = sha256(Buffer.from(canonicalSource, 'utf8'))
+            assert(canonicalSha256 === expectedCanonicalSha256, `fixed source reference changed: ${file}`)
+            referenceObservations.push({
+              path: file,
+              reference_commit: 'bf38b0bc74c91a7cf35b22829a0aac85746034e8',
+              expected_sha256: expectedCanonicalSha256,
+              hash_policy: 'sha256-utf8-crlf-to-lf',
+              observed_raw_sha256: rawSha256,
+              observed_canonical_sha256: canonicalSha256,
+              matches: true
+            })
+          }
+
+          const sourceHashes = {}
+          for (const file of sourceFiles) sourceHashes[file] = sourceInfos.get(file).sha256
+          const payloadFiles = captured.map(({ path: name, bytes, sha256 }) => ({ path: name, bytes, sha256 }))
+          manifestDetails = {
+            schema: 1,
+            classification: 'SOURCE_ONLY_NONPROMOTABLE_DIAGNOSTIC',
+            phase: 'BASELINE_RED',
+            head,
+            run_id: process.env.RUN_ID,
+            run_attempt: process.env.RUN_ATTEMPT,
+            runner_os: process.env.EXPECTED_OS,
+            runtime: { node: process.version, platform: process.platform, arch: process.arch },
+            commands: {
+              install: 'npm ci --ignore-scripts --no-audit --no-fund',
+              focused: 'node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 --retry=0 --dangerouslyIgnoreUnhandledErrors=false scripts/lean-builder-exclusions.test.ts scripts/qa/rebuild-waves.contract.test.ts scripts/trace/build-traceability.test.ts scripts/docs/managed-config-docs.test.ts',
+              focused_exit: Number(process.env.VITEST_EXIT),
+              focused_capture_exit: Number(process.env.VITEST_CAPTURE_EXIT),
+              producer: `node scripts/trace/build-traceability.mjs --check --out ${process.env.TRACE_OUT}`,
+              producer_exit: Number(process.env.PRODUCER_EXIT),
+              producer_capture_exit: Number(process.env.PRODUCER_CAPTURE_EXIT)
+            },
+            expected_baseline: { cases: 30, passed: 24, failed: 6, pending: 0, todo: 0, named_failures: expectedFailureCauses.map(([, title]) => title) },
+            source_hashes: sourceHashes,
+            source_bindings: sourceBindings,
+            source_reference_observations: referenceObservations,
+            producer_failure: expectedProblem,
+            unhandled_error_count: { value: null, availability: 'not-in-pinned-vitest-json', log_checked_for_framework_markers: true },
+            uploaded_payload_files: payloadFiles,
+            manifest_self_hash: 'omitted: a manifest cannot contain its own stable hash'
+          }
+          validated = true
+          console.log(`validated baseline RED head=${head} os=${process.env.EXPECTED_OS} cases=30 pass=24 fail=6 producer_exit=1`)
+          } catch (error) {
+            validationFailure = String(error?.message || error).slice(0, 240)
+            console.error(`incomplete baseline evidence: ${validationFailure}`)
+          } finally {
+            const manifest = validated ? manifestDetails : {
+              schema: 1,
+              classification: 'SOURCE_ONLY_NONPROMOTABLE_DIAGNOSTIC',
+              phase: 'INCOMPLETE_OR_DIFFERENT_FAILURE',
+              expected_head: process.env.EXPECTED_HEAD,
+              run_id: process.env.RUN_ID,
+              run_attempt: process.env.RUN_ATTEMPT,
+              expected_os: process.env.EXPECTED_OS,
+              runtime: { node: process.version, platform: process.platform, arch: process.arch },
+              actual_exits: {
+                focused: process.env.VITEST_EXIT || null, focused_capture: process.env.VITEST_CAPTURE_EXIT || null,
+                producer: process.env.PRODUCER_EXIT || null, producer_capture: process.env.PRODUCER_CAPTURE_EXIT || null
+              },
+              admission_errors: admissionErrors.slice(0, 12),
+              validation_failure: validationFailure,
+              separately_safe_payload_files: captured.map(({ path: name, bytes, sha256 }) => ({ path: name, bytes, sha256 })),
+              unhandled_error_count: { value: null, availability: 'not-in-pinned-vitest-json' },
+              manifest_self_hash: 'omitted: a manifest cannot contain its own stable hash'
+            }
+            const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
+            assert(bytes.length <= 64 * 1024 && admittedBytes + bytes.length <= 8 * 1024 * 1024, 'bounded manifest or upload set exceeded limits')
+            const stagedManifest = path.join(uploadRoot, 'manifest.json')
+            fs.writeFileSync(stagedManifest, bytes, { flag: 'wx', mode: 0o600 })
+            captured.push({ path: 'manifest.json', bytes: bytes.length, sha256: sha256(bytes), staged: stagedManifest })
+            for (const item of captured) {
+              const stat = fs.lstatSync(item.staged)
+              assert(stat.isFile() && !stat.isSymbolicLink() && stat.size === item.bytes, `staged upload changed: ${item.path}`)
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT,
+              `upload_paths<<RELEASE_197_BOUNDED_FILES\n${captured.map((item) => item.staged).join('\n')}\nRELEASE_197_BOUNDED_FILES\n`)
+          }
+          if (!validated) process.exitCode = 1
+          NODE
+      - name: Upload finite baseline diagnostic evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-197-contract-baseline-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ steps.evidence.outputs.upload_paths }}
