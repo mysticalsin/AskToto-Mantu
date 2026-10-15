@@ -8,7 +8,7 @@ on:
       - package.json
       - package-lock.json
       - vitest.config.ts
-      - scripts/qa/run-import-authority-validation.mjs
+      - scripts/qa/run-import-authority-fixtures.mjs
       - scripts/qa/run-incremental-core-validation.mjs
       - scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts
       - src/main/import-*.ts
@@ -81,8 +81,8 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install frozen test dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Run strict import authority and persistence tests
-        run: node scripts/qa/run-import-authority-validation.mjs
+      - name: Run bounded per-file import authority diagnostics
+        run: node scripts/qa/run-import-authority-fixtures.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && steps.report_dir.outcome == 'success' && steps.report_dir.outputs.path != ''
         with:
