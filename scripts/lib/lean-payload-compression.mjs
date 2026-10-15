@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { withOwnedMacImage } from './lean-mac-image.mjs'
 import {
   classifyAppPath,
   copyProjection,
@@ -589,6 +590,7 @@ export async function runMacProbe({
   sourceRoot,
   sourceManifest,
   entries,
+  payloadRoot,
   scratchRoot,
   output,
   reports,
@@ -597,11 +599,7 @@ export async function runMacProbe({
   redact
 }) {
   const started = performance.now()
-  const projectionRoot = join(scratchRoot, `projection-${id}`)
   const appName = basename(sourceRoot)
-  const appProjection = join(projectionRoot, appName)
-  const rawImage = join(scratchRoot, `raw-${id}.dmg`)
-  const image = join(scratchRoot, `probe-${id}.dmg`)
   const paths = entries.map((entry) => entry.path).sort()
   const record = {
     id,
@@ -623,51 +621,41 @@ export async function runMacProbe({
     status: 'running'
   }
   try {
-    await mkdir(projectionRoot, { recursive: false })
     const projectionPaths = expandProjectionPaths(sourceManifest, paths)
     record.structuralParentPaths = projectionPaths.filter((path) => !paths.includes(path))
-    if (paths.length) await copyProjection(sourceRoot, appProjection, projectionPaths, sourceManifest.manifestSha256)
-    const create = await run(
-      'hdiutil',
-      [
-        'create',
-        '-ov',
-        '-fs',
-        'HFS+',
-        '-volname',
-        'METIS_ATTRIBUTION_NONPROMOTABLE',
-        '-srcfolder',
-        projectionRoot,
-        '-format',
-        'UDRW',
-        rawImage
-      ],
-      { timeoutMs: 60 * 60_000 }
-    )
-    const rawIdentity = await sha256File(rawImage)
-    const rawStat = await stat(rawImage, { bigint: true })
-    const convert = await run('hdiutil', ['convert', rawImage, '-format', 'UDBZ', '-o', image], {
-      timeoutMs: 60 * 60_000
+    const evidence = await withOwnedMacImage({
+      payloadRoot,
+      scratchRoot,
+      caseId: id,
+      prepareProjection: async (projectionRoot) => {
+        if (paths.length)
+          await copyProjection(
+            sourceRoot,
+            join(projectionRoot, appName),
+            projectionPaths,
+            sourceManifest.manifestSha256
+          )
+      },
+      run,
+      redact
     })
-    const rawAfterConvert = await sha256File(rawImage)
-    if (rawIdentity.bytes !== rawAfterConvert.bytes || rawIdentity.sha256 !== rawAfterConvert.sha256)
-      throw new Error(`UDRW source changed during conversion: ${id}`)
-    const verify = await run('hdiutil', ['verify', image], { timeoutMs: 10 * 60_000 })
-    record.commands = [create, convert, verify].map((item) => ({
+    record.commands = evidence.commands.map((item) => ({
       ...item,
-      stdout: redact(item.stdout),
-      stderr: redact(item.stderr)
+      stdout: redact(item.stdout ?? ''),
+      stderr: redact(item.stderr ?? '')
     }))
-    record.rawImage = {
-      ...rawIdentity,
-      allocatedBytes: Number(rawStat.blocks * 512n),
-      digestUnchangedThroughConversion: true
+    record.container = {
+      volumeName: evidence.volumeName,
+      volumeNamePolicy: evidence.volumeNamePolicy,
+      cleanup: evidence.cleanup
     }
-    const identity = await sha256File(image)
-    const imageStat = await stat(image, { bigint: true })
-    record.outputBytes = identity.bytes
-    record.outputSha256 = identity.sha256
-    record.outputAllocatedBytes = Number(imageStat.blocks * 512n)
+    record.rawImage = {
+      ...evidence.raw,
+      digestUnchangedThroughConversion: evidence.raw?.unchangedThroughConversion === true
+    }
+    record.outputBytes = evidence.output.bytes
+    record.outputSha256 = evidence.output.sha256
+    record.outputAllocatedBytes = evidence.output.allocatedBytes
     record.elapsedMs = Math.round(performance.now() - started)
     record.verified = true
     record.status = 'complete'
@@ -675,10 +663,57 @@ export async function runMacProbe({
     await writeFile(join(output, `probe-${id}.json`), `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' })
     reports.push(record)
     return record
-  } finally {
-    await rm(projectionRoot, { recursive: true, force: true })
-    await rm(rawImage, { force: true })
-    await rm(image, { force: true })
+  } catch (error) {
+    if (error.evidence) {
+      record.commands = error.evidence.commands.map((item) => ({
+        ...item,
+        stdout: redact(item.stdout ?? ''),
+        stderr: redact(item.stderr ?? '')
+      }))
+      record.container = {
+        volumeName: error.evidence.volumeName,
+        volumeNamePolicy: error.evidence.volumeNamePolicy,
+        ownedDirectory: error.evidence.ownedDirectory,
+        cleanup: error.evidence.cleanup,
+        rawImagePath: error.evidence.rawImagePath,
+        outputImagePath: error.evidence.outputImagePath
+      }
+      if (error.evidence.raw) {
+        record.rawImage = {
+          ...error.evidence.raw,
+          digestUnchangedThroughConversion: error.evidence.raw.unchangedThroughConversion === true
+        }
+      }
+      if (error.evidence.output) {
+        record.outputBytes = error.evidence.output.bytes
+        record.outputSha256 = error.evidence.output.sha256
+        record.outputAllocatedBytes = error.evidence.output.allocatedBytes
+      }
+    }
+    record.elapsedMs = Math.round(performance.now() - started)
+    record.failure = {
+      message: redact(error.message).slice(0, 4000),
+      child: error.result
+        ? {
+            command: redact(error.result.command).slice(0, 4096),
+            args: error.result.args?.slice(0, 128).map((arg) => redact(arg).slice(0, 4096)) ?? [],
+            exitCode: Number.isInteger(error.result.exitCode) ? error.result.exitCode : null,
+            signal: error.result.signal ?? null,
+            timedOut: error.result.timedOut === true,
+            outputLimitExceeded: error.result.outputLimitExceeded === true,
+            ...(typeof error.result.spawnError === 'string'
+              ? { spawnError: redact(error.result.spawnError).slice(0, 4000) }
+              : {}),
+            stdout: redact(error.result.stdout ?? '').slice(0, 4000),
+            stderr: redact(error.result.stderr ?? '').slice(0, 4000)
+          }
+        : null
+    }
+    record.status = 'failed'
+    record.verified = false
+    await writeFile(join(output, `probe-${id}.json`), `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' })
+    reports.push(record)
+    throw error
   }
 }
 
@@ -721,56 +756,81 @@ export async function nativeSmoke(target, payloadRoot, scratchRoot, reportRoot, 
       { flag: 'wx' }
     )
   } else {
+    const reportPath = join(reportRoot, 'native-smoke.json')
+    const smokeReport = {
+      schema: 1,
+      platform: target,
+      volumeNamePolicy: 'METIS_A_ plus 24 random lowercase hexadecimal characters; fixed 32 ASCII bytes',
+      cases: records,
+      status: 'running',
+      note: 'Shared compressible fixture bytes are intentionally repeated. Actual standalone and joint container outputs are evidence of shared coding behavior; their sizes are not per-file additive contributions.'
+    }
+    await writeFile(reportPath, `${JSON.stringify(smokeReport, null, 2)}\n`, { flag: 'wx' })
     for (const [name, members] of [
       ['shared', ['left.txt', 'right.txt']],
       ['left', ['left.txt']],
       ['right', ['right.txt']]
     ]) {
-      const projection = join(root, `${name}-src`)
-      const input = join(root, `${name}-raw.dmg`)
-      const image = join(root, `${name}.dmg`)
-      await mkdir(projection, { recursive: false })
-      for (const member of members) await writeFile(join(projection, member), await readFile(join(root, member)))
-      const create = await run(
-        'hdiutil',
-        [
-          'create',
-          '-ov',
-          '-fs',
-          'HFS+',
-          '-volname',
-          'METIS_ATTRIBUTION_SMOKE',
-          '-srcfolder',
-          projection,
-          '-format',
-          'UDRW',
-          input
-        ],
-        { timeoutMs: 5 * 60_000 }
-      )
-      const convert = await run('hdiutil', ['convert', input, '-format', 'UDBZ', '-o', image], {
-        timeoutMs: 5 * 60_000
-      })
-      const verify = await run('hdiutil', ['verify', image], { timeoutMs: 5 * 60_000 })
-      const output = await sha256File(image)
-      records.push({
-        name,
-        bytes: output.bytes,
-        sha256: output.sha256,
-        createArgs: create.args,
-        convertArgs: convert.args,
-        verified: verify.exitCode === 0
-      })
-      await rm(projection, { recursive: true, force: true })
-      await rm(input, { force: true })
-      await rm(image, { force: true })
+      let evidence
+      try {
+        evidence = await withOwnedMacImage({
+          payloadRoot,
+          scratchRoot: root,
+          caseId: `smoke-${name}`,
+          timeouts: { createMs: 5 * 60_000, convertMs: 5 * 60_000, verifyMs: 5 * 60_000 },
+          prepareProjection: async (projection) => {
+            for (const member of members) await writeFile(join(projection, member), await readFile(join(root, member)))
+          },
+          run,
+          redact
+        })
+        const row = {
+          name,
+          bytes: evidence.output.bytes,
+          sha256: evidence.output.sha256,
+          allocatedBytes: evidence.output.allocatedBytes,
+          volumeName: evidence.volumeName,
+          volumeNamePolicy: evidence.volumeNamePolicy,
+          raw: evidence.raw,
+          cleanup: evidence.cleanup,
+          create: evidence.commands.find((item) => item.args?.[0] === 'create'),
+          convert: evidence.commands.find((item) => item.args?.[0] === 'convert'),
+          verify: evidence.commands.find((item) => item.args?.[0] === 'verify'),
+          verified: true,
+          status: 'complete'
+        }
+        records.push(row)
+        smokeReport.status = 'running'
+        await writeFile(reportPath, `${JSON.stringify(smokeReport, null, 2)}\n`)
+      } catch (error) {
+        const row = {
+          name,
+          status: 'failed',
+          verified: false,
+          volumeName: error.evidence?.volumeName ?? null,
+          volumeNamePolicy: error.evidence?.volumeNamePolicy ?? null,
+          ownedDirectory: error.evidence?.ownedDirectory ?? null,
+          raw: error.evidence?.raw ?? null,
+          output: error.evidence?.output ?? null,
+          commands: (error.evidence?.commands ?? (error.result ? [error.result] : [])).map((item) => ({
+            ...item,
+            stdout: redact(item.stdout ?? '').slice(0, 4000),
+            stderr: redact(item.stderr ?? '').slice(0, 4000)
+          })),
+          cleanup: error.evidence?.cleanup ?? { status: 'pending', directoryRetained: true },
+          failure: redact(error.message).slice(0, 4000)
+        }
+        records.push(row)
+        smokeReport.status = 'failed'
+        smokeReport.failure = row
+        await writeFile(reportPath, `${JSON.stringify(smokeReport, null, 2)}\n`)
+        throw Object.assign(error, { nativeSmokeEvidence: row })
+      }
     }
     const toolVersion = await run('hdiutil', ['-version'], { timeoutMs: 30_000 })
-    await writeFile(
-      join(reportRoot, 'native-smoke.json'),
-      `${JSON.stringify({ schema: 1, platform: target, toolVersion: toolVersion.stdout.trim(), cases: records, note: 'Shared compressible fixture bytes are intentionally repeated. Actual standalone and joint container outputs are evidence of shared coding behavior; their sizes are not per-file additive contributions.' }, null, 2)}\n`,
-      { flag: 'wx' }
-    )
+    smokeReport.toolVersion = toolVersion.stdout.trim()
+    smokeReport.status = 'complete'
+    await writeFile(reportPath, `${JSON.stringify(smokeReport, null, 2)}\n`)
   }
   await rm(root, { recursive: true, force: true })
 }

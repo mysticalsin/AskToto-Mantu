@@ -1,0 +1,508 @@
+import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { PassThrough } from 'node:stream'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { runDiagnosticChild } from './lean-diagnostic-child.mjs'
+import { withOwnedMacImage } from './lean-mac-image.mjs'
+import { asarMemberInventory } from './lean-payload-inventory.mjs'
+import { nativeSmoke, runMacProbe } from './lean-payload-compression.mjs'
+import { walkTree } from './lean-payload-attribution.mjs'
+
+const roots: string[] = []
+const require = createRequire(import.meta.url)
+const plist = require('plist')
+
+async function temporaryRoot() {
+  const path = await mkdtemp(join(tmpdir(), 'lean-native-diagnostic-'))
+  roots.push(path)
+  return path
+}
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+})
+
+function info(images: unknown[] = []) {
+  return plist.build({ images })
+}
+
+function result(command: string, args: string[], stdout = '') {
+  return {
+    command,
+    args,
+    cwd: undefined,
+    exitCode: 0,
+    signal: null,
+    elapsedMs: 1,
+    stdout,
+    stderr: '',
+    timedOut: false,
+    outputLimitExceeded: false
+  }
+}
+
+function imageRunner({
+  onInfo = () => info(),
+  onConvert
+}: {
+  onInfo?: (args: string[]) => string
+  onConvert?: (raw: string, output: string) => Promise<void>
+} = {}) {
+  const commands: Array<{ command: string; args: string[] }> = []
+  const run = async (command: string, args: string[], _options?: unknown) => {
+    commands.push({ command, args: [...args] })
+    if (args[0] === 'info') return result(command, args, onInfo(args))
+    if (args[0] === 'create') {
+      await writeFile(args.at(-1)!, 'raw image identity')
+      return result(command, args)
+    }
+    if (args[0] === 'convert') {
+      const raw = args[1]
+      const output = args[args.indexOf('-o') + 1]
+      if (onConvert) await onConvert(raw, output)
+      else await copyFile(raw, output)
+      return result(command, args)
+    }
+    if (args[0] === 'verify') return result(command, args)
+    if (args[0] === '-version') return result(command, args, 'hdiutil fixture version')
+    throw new Error(`Unexpected command ${args.join(' ')}`)
+  }
+  return { commands, run }
+}
+
+describe('lean native diagnostic contracts', () => {
+  it('reads a real locked-ASAR scoped license with canonical nested packed and unpacked inventory', async () => {
+    const root = await temporaryRoot()
+    const source = join(root, 'source')
+    const archive = join(root, 'fixture.asar')
+    const license = Buffer.from('Scoped package license\nCopyright 2026\n')
+    await mkdir(join(source, 'node_modules', '@scope', 'pkg', 'dist'), { recursive: true })
+    await writeFile(join(source, 'node_modules', '@scope', 'pkg', 'LICENSE'), license)
+    await writeFile(join(source, 'node_modules', '@scope', 'pkg', 'dist', 'index.js'), 'packed nested file')
+    await writeFile(join(source, 'node_modules', '@scope', 'pkg', 'native.bin'), Buffer.from([0, 1, 2, 3, 255]))
+    const asar = require('@electron/asar')
+    const asarPackage = JSON.parse(
+      await readFile(join(process.cwd(), 'node_modules/@electron/asar/package.json'), 'utf8')
+    )
+    expect(asarPackage.version).toBe('3.4.1')
+    await asar.createPackageWithOptions(source, archive, { unpack: '**/native.bin' })
+    const inventory = await asarMemberInventory(process.cwd(), archive, `${archive}.unpacked`)
+    expect(asar.extractFile(archive, join('node_modules', '@scope', 'pkg', 'LICENSE'))).toEqual(license)
+    const members = inventory.members
+    const licenseMember = members.find((member: { path: string }) => member.path === 'node_modules/@scope/pkg/LICENSE')
+    expect(licenseMember).toMatchObject({
+      bytes: license.length,
+      sha256: createHash('sha256').update(license).digest('hex'),
+      packed: true,
+      unpacked: false
+    })
+    expect(members.map((member: { path: string }) => member.path)).toEqual([
+      'node_modules',
+      'node_modules/@scope',
+      'node_modules/@scope/pkg',
+      'node_modules/@scope/pkg/LICENSE',
+      'node_modules/@scope/pkg/dist',
+      'node_modules/@scope/pkg/dist/index.js',
+      'node_modules/@scope/pkg/native.bin'
+    ])
+    expect(members.find((member: { path: string }) => member.path.endsWith('/native.bin'))).toMatchObject({
+      bytes: 5,
+      sha256: createHash('sha256')
+        .update(Buffer.from([0, 1, 2, 3, 255]))
+        .digest('hex'),
+      packed: false,
+      unpacked: true
+    })
+    expect(inventory.unpackedTree.totals.regularFileBytes).toBe(5)
+    const unpackedTree = await walkTree(`${archive}.unpacked`)
+    expect(inventory.unpackedTree.manifestSha256).toBe(unpackedTree.manifestSha256)
+  })
+
+  it('uses distinct owned names and directories and preserves HFS+ UDRW UDBZ identity evidence', async () => {
+    const root = await temporaryRoot()
+    const payloadRoot = join(root, 'payload')
+    const scratch = join(root, 'scratch')
+    await mkdir(payloadRoot)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await mkdir(scratch)
+    let randomValue = 1
+    const { commands, run } = imageRunner()
+    const make = (caseId: string) =>
+      withOwnedMacImage({
+        payloadRoot: process.cwd(),
+        scratchRoot: scratch,
+        caseId,
+        randomBytesImpl: (size: number) => Buffer.alloc(size, randomValue++),
+        prepareProjection: async (projection: string) => writeFile(join(projection, 'fixture.txt'), caseId),
+        run
+      })
+    const first = await make('first')
+    const second = await make('second')
+    expect(first.raw).toBeDefined()
+    expect(first.output).toBeDefined()
+    if (!first.raw || !first.output) throw new Error('Expected raw and converted image identity evidence')
+    expect(first.volumeName).not.toBe(second.volumeName)
+    expect(first.volumeName).toMatch(/^METIS_A_[0-9a-f]{24}$/)
+    expect(second.volumeName).toMatch(/^METIS_A_[0-9a-f]{24}$/)
+    expect(first.ownedDirectory).not.toBe(second.ownedDirectory)
+    expect(first.raw).toMatchObject({ bytes: 'raw image identity'.length, unchangedThroughConversion: true })
+    expect(first.output.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(first.cleanup).toMatchObject({ status: 'complete', directoryRemoved: true })
+    const creates = commands.filter((command) => command.args[0] === 'create')
+    expect(creates[0].args).toEqual([
+      'create',
+      '-ov',
+      '-fs',
+      'HFS+',
+      '-volname',
+      first.volumeName,
+      '-srcfolder',
+      first.projectionPath,
+      '-format',
+      'UDRW',
+      first.rawImagePath
+    ])
+    expect(creates[1].args).toEqual([
+      'create',
+      '-ov',
+      '-fs',
+      'HFS+',
+      '-volname',
+      second.volumeName,
+      '-srcfolder',
+      second.projectionPath,
+      '-format',
+      'UDRW',
+      second.rawImagePath
+    ])
+    expect(commands.find((command) => command.args[0] === 'convert')?.args).toEqual([
+      'convert',
+      first.rawImagePath,
+      '-format',
+      'UDBZ',
+      '-o',
+      first.outputImagePath
+    ])
+    expect(commands.findIndex((command) => command.args[0] === 'verify')).toBeGreaterThan(
+      commands.findIndex((command) => command.args[0] === 'convert')
+    )
+  })
+
+  it('waits for its exact attachment and ignores an unrelated same-label image without detaching', async () => {
+    const root = await temporaryRoot()
+    const payloadRoot = join(root, 'payload')
+    const scratch = join(root, 'scratch')
+    await mkdir(payloadRoot)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await mkdir(scratch)
+    let snapshots = 0
+    let ownerRaw = ''
+    const { commands, run: baseRun } = imageRunner({
+      onInfo: () => {
+        snapshots += 1
+        return info(
+          snapshots === 1
+            ? [
+                { 'image-path': ownerRaw, 'system-entities': [{ 'volume-name': 'METIS_A_same' }] },
+                { 'image-path': '/tmp/unrelated-image.dmg', 'system-entities': [{ 'volume-name': 'METIS_A_same' }] }
+              ]
+            : [{ 'image-path': '/tmp/unrelated-image.dmg', 'system-entities': [{ 'volume-name': 'METIS_A_same' }] }]
+        )
+      }
+    })
+    const run = async (command: string, args: string[], options: unknown) => {
+      if (args[0] === 'create') ownerRaw = args.at(-1)!
+      return baseRun(command, args, options)
+    }
+    let advancedToConvert = false
+    const evidence = await withOwnedMacImage({
+      payloadRoot: process.cwd(),
+      scratchRoot: scratch,
+      caseId: 'settles',
+      prepareProjection: async (projection: string) => writeFile(join(projection, 'fixture'), 'bytes'),
+      run: async (command: string, args: string[], options: unknown) => {
+        if (args[0] === 'convert') advancedToConvert = snapshots >= 3
+        return run(command, args, options)
+      }
+    })
+    expect(snapshots).toBeGreaterThanOrEqual(3)
+    expect(advancedToConvert).toBe(true)
+    expect(evidence.cleanup.status).toBe('complete')
+    expect(commands.every((command) => command.args[0] !== 'detach' && command.args[0] !== 'unmount')).toBe(true)
+  })
+
+  it('retains pending ownership on a persistent attachment and malformed info without retrying create', async () => {
+    const runScenario = async (caseId: string, malformed: boolean) => {
+      const root = await temporaryRoot()
+      const payloadRoot = join(root, 'payload')
+      const scratch = join(root, 'scratch')
+      await mkdir(payloadRoot)
+      await writeFile(join(payloadRoot, 'package.json'), '{}')
+      await mkdir(scratch)
+      let rawPath = ''
+      let tick = 0
+      const { commands, run: baseRun } = imageRunner({
+        onInfo: () => (malformed ? '<broken plist' : info([{ 'image-path': rawPath, 'system-entities': [] }]))
+      })
+      const run = async (command: string, args: string[], options: unknown) => {
+        if (args[0] === 'create') rawPath = args.at(-1)!
+        return baseRun(command, args, options)
+      }
+      let captured: any
+      let nextCaseStarted = false
+      try {
+        await withOwnedMacImage({
+          payloadRoot: process.cwd(),
+          scratchRoot: scratch,
+          caseId,
+          prepareProjection: async () => {},
+          run,
+          now: () => tick,
+          delay: async (milliseconds: number) => {
+            tick += milliseconds
+          }
+        })
+        nextCaseStarted = true
+        await withOwnedMacImage({
+          payloadRoot: process.cwd(),
+          scratchRoot: scratch,
+          caseId: `${caseId}-next`,
+          prepareProjection: async () => {},
+          run
+        })
+      } catch (error) {
+        captured = error
+      }
+      expect(nextCaseStarted).toBe(false)
+      expect(captured.evidence.cleanup.status).toBe('pending')
+      expect(captured.evidence.cleanup.directoryRetained).toBe(true)
+      expect(commands.filter((command) => command.args[0] === 'create')).toHaveLength(1)
+      expect(commands.some((command) => command.args[0] === 'convert' || command.args[0] === 'detach')).toBe(false)
+      expect(tick).toBeGreaterThanOrEqual(malformed ? 0 : 20_000)
+    }
+    await runScenario('persistent', false)
+    await runScenario('malformed', true)
+  })
+
+  it('retains two completed smoke cases and the exact third Resource busy create failure', async () => {
+    const root = await temporaryRoot()
+    const payloadRoot = join(root, 'payload')
+    const scratch = join(root, 'scratch')
+    const reports = join(root, 'reports')
+    await mkdir(payloadRoot)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await mkdir(scratch)
+    await mkdir(reports)
+    let creates = 0
+    const { commands, run: baseRun } = imageRunner()
+    const run = async (command: string, args: string[], options: unknown) => {
+      if (args[0] === 'create' && ++creates === 3) {
+        const failure = result(command, args, '')
+        Object.assign(failure, { exitCode: 1, stderr: 'hdiutil: create failed - Resource busy' })
+        throw Object.assign(new Error('Command failed: hdiutil (1)'), { result: failure })
+      }
+      return baseRun(command, args, options)
+    }
+    let failure: any
+    try {
+      await nativeSmoke('mac', process.cwd(), scratch, reports, run, String)
+    } catch (error) {
+      failure = error
+    }
+    const report = JSON.parse(await readFile(join(reports, 'native-smoke.json'), 'utf8'))
+    expect(report.status).toBe('failed')
+    expect(report.cases.map((item: { name: string; status: string }) => [item.name, item.status])).toEqual([
+      ['shared', 'complete'],
+      ['left', 'complete'],
+      ['right', 'failed']
+    ])
+    expect(report.failure.commands.find((item: { args: string[] }) => item.args[0] === 'create').stderr).toContain(
+      'Resource busy'
+    )
+    expect(report.cases[2].commands.find((item: { args: string[] }) => item.args[0] === 'create').exitCode).toBe(1)
+    expect(report.cases[2].cleanup.status).toBe('complete')
+    expect(creates).toBe(3)
+    expect(commands.some((command) => command.args[0] === '-version')).toBe(false)
+    expect(failure.result.exitCode).toBe(1)
+  })
+
+  it('marks a changed raw image failed and never writes a complete probe', async () => {
+    const root = await temporaryRoot()
+    const payloadRoot = join(root, 'payload')
+    const source = join(root, 'source')
+    const scratch = join(root, 'scratch')
+    const output = join(root, 'output')
+    await mkdir(payloadRoot)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await mkdir(source)
+    await writeFile(join(source, 'fixture.txt'), 'source bytes')
+    await mkdir(scratch)
+    await mkdir(output)
+    const manifest = await walkTree(source)
+    const { run } = imageRunner({
+      onConvert: async (raw, image) => {
+        await copyFile(raw, image)
+        await writeFile(raw, 'mutated raw image')
+      }
+    })
+    let failure: any
+    try {
+      await runMacProbe({
+        id: 'changed-raw',
+        sourceRoot: source,
+        sourceManifest: manifest,
+        entries: manifest.entries,
+        payloadRoot: process.cwd(),
+        scratchRoot: scratch,
+        output,
+        reports: [],
+        run,
+        redact: String
+      })
+    } catch (error) {
+      failure = error
+    }
+    const record = JSON.parse(await readFile(join(output, 'probe-changed-raw.json'), 'utf8'))
+    expect(failure.message).toMatch(/changed during conversion/)
+    expect(record.status).toBe('failed')
+    expect(record.verified).toBe(false)
+    expect(record.rawImage.digestUnchangedThroughConversion).toBe(false)
+    expect(record.outputBytes).toBeNull()
+  })
+
+  it('waits for child close after output overflow before image ownership cleanup', async () => {
+    const root = await temporaryRoot()
+    const payloadRoot = join(root, 'payload')
+    const scratch = join(root, 'scratch')
+    await mkdir(payloadRoot)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await mkdir(scratch)
+    class Child extends EventEmitter {
+      stdout = new PassThrough()
+      stderr = new PassThrough()
+      kills: Array<string | undefined> = []
+      kill(signal?: string) {
+        this.kills.push(signal)
+        return true
+      }
+    }
+    let child!: Child
+    let spawned!: () => void
+    const spawnedPromise = new Promise<void>((resolveSpawned) => {
+      spawned = resolveSpawned
+    })
+    const commands: string[][] = []
+    const run = async (command: string, args: string[], options: any) => {
+      commands.push(args)
+      if (args[0] === 'create')
+        return runDiagnosticChild(command, args, {
+          ...options,
+          maxOutputBytes: 4,
+          spawnImpl: () => {
+            child = new Child()
+            spawned()
+            return child as any
+          }
+        })
+      if (args[0] === 'info') return result(command, args, info())
+      throw new Error('unexpected command after failed create')
+    }
+    let settled = false
+    const operation = withOwnedMacImage({
+      payloadRoot: process.cwd(),
+      scratchRoot: scratch,
+      caseId: 'overflow',
+      prepareProjection: async () => {},
+      run
+    }).finally(() => {
+      settled = true
+    })
+    await spawnedPromise
+    child.stdout.write('12345')
+    await Promise.resolve()
+    expect(child.kills).toHaveLength(1)
+    expect(settled).toBe(false)
+    expect(commands.some((args) => args[0] === 'info')).toBe(false)
+    child.emit('close', null, 'SIGTERM')
+    let failure: any
+    try {
+      await operation
+    } catch (error) {
+      failure = error
+    }
+    expect(failure.result).toMatchObject({ outputLimitExceeded: true, signal: 'SIGTERM' })
+    expect(Buffer.byteLength(failure.result.stdout)).toBeLessThanOrEqual(4)
+    expect(commands.some((args) => args[0] === 'info')).toBe(true)
+  })
+
+  it('requests timeout termination once and clears escalation when close arrives', async () => {
+    class Child extends EventEmitter {
+      stdout = new PassThrough()
+      stderr = new PassThrough()
+      kills: Array<string | undefined> = []
+      kill(signal?: string) {
+        this.kills.push(signal)
+        return true
+      }
+    }
+    const child = new Child()
+    const timers: Array<{ callback: () => void; cleared: boolean }> = []
+    const run = runDiagnosticChild('fixture', [], {
+      timeoutMs: 1,
+      spawnImpl: () => child as any,
+      setTimeoutImpl: (callback: () => void) => {
+        const timer = { callback, cleared: false }
+        timers.push(timer)
+        return timer as any
+      },
+      clearTimeoutImpl: (timer: any) => {
+        if (timer) timer.cleared = true
+      }
+    } as any)
+    timers[0].callback()
+    expect(child.kills).toEqual([undefined])
+    expect(timers).toHaveLength(2)
+    timers[1].callback()
+    expect(child.kills).toEqual([undefined, 'SIGKILL'])
+    let settled = false
+    const observed = run.catch((error) => {
+      settled = true
+      throw error
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    child.emit('close', null, 'SIGKILL')
+    await expect(observed).rejects.toMatchObject({ result: { timedOut: true, signal: 'SIGKILL' } })
+    expect(timers.every((timer) => timer.cleared)).toBe(true)
+    timers[1].callback()
+    expect(child.kills).toEqual([undefined, 'SIGKILL'])
+  })
+
+  it('preserves success, nonzero close, and emitted spawn failure outcomes', async () => {
+    const spawn = (close: [number | null, string | null], error?: Error) => {
+      const child = new EventEmitter() as any
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
+      queueMicrotask(() => {
+        if (error) child.emit('error', error)
+        child.emit('close', ...close)
+      })
+      child.kill = () => true
+      return child
+    }
+    await expect(runDiagnosticChild('ok', [], { spawnImpl: () => spawn([0, null]) } as any)).resolves.toMatchObject({
+      exitCode: 0,
+      outputLimitExceeded: false
+    })
+    await expect(runDiagnosticChild('nonzero', [], { spawnImpl: () => spawn([7, null]) } as any)).rejects.toMatchObject(
+      { result: { exitCode: 7 } }
+    )
+    await expect(
+      runDiagnosticChild('spawn-error', [], { spawnImpl: () => spawn([null, null], new Error('ENOENT')) } as any)
+    ).rejects.toMatchObject({ result: { exitCode: null, spawnError: 'ENOENT' } })
+  })
+})

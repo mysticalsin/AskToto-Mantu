@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   contract:
-    name: Attribution data-integrity contract
+    name: Attribution data-integrity and native diagnostic contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -47,7 +47,7 @@ jobs:
         run: |
           set +e
           NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run \
-            scripts/lib/lean-payload-attribution.test.ts \
+            scripts/lib/lean-payload-attribution.test.ts scripts/lib/lean-native-diagnostic.test.ts \
             --reporter=default --reporter=json \
             --outputFile="$LEAN_CONTRACT_ROOT/vitest.json" \
             --dangerouslyIgnoreUnhandledErrors=false
@@ -95,34 +95,34 @@ jobs:
             pending: numeric(report.numPendingTests),
             todo: numeric(report.numTodoTests)
           } : null
-          const tests = report?.testResults?.[0]?.assertionResults
-          const ancestors = Array.isArray(tests) ? [...new Set(tests.map((test) =>
-            Array.isArray(test.ancestorTitles) ? test.ancestorTitles.join('\0') : ''
-          ))] : []
-          const namedFailures = Array.isArray(tests)
-            ? tests.filter((test) => test.status !== 'passed').map((test) => {
-                const title = [ ...(Array.isArray(test.ancestorTitles) ? test.ancestorTitles : []), test.title ]
-                  .filter((part) => typeof part === 'string' && part.length > 0).join(' > ')
-                return title.slice(0, 240) || 'UNNAMED_FAILED_ASSERTION'
-              }).slice(0, 18)
-            : []
+          const testResults = Array.isArray(report?.testResults) ? report.testResults : []
+          const tests = testResults.flatMap((file) => Array.isArray(file.assertionResults) ? file.assertionResults : [])
+          const ancestors = testResults.map((file) => {
+            const assertions = Array.isArray(file.assertionResults) ? file.assertionResults : []
+            return [...new Set(assertions.map((test) => Array.isArray(test.ancestorTitles) ? test.ancestorTitles.join('\0') : ''))]
+          })
+          const namedFailures = tests.filter((test) => test.status !== 'passed').map((test) => {
+            const title = [ ...(Array.isArray(test.ancestorTitles) ? test.ancestorTitles : []), test.title ]
+              .filter((part) => typeof part === 'string' && part.length > 0).join(' > ')
+            return title.slice(0, 240) || 'UNNAMED_FAILED_ASSERTION'
+          }).slice(0, 27)
           if (process.env.TEST_STEP_OUTCOME !== 'success') failures.push('TEST_STEP_NOT_SUCCESSFUL')
           if (process.env.TEST_EXIT_CODE !== '0') failures.push('VITEST_EXIT_NOT_ZERO')
           if (report?.success !== true) failures.push('VITEST_REPORT_NOT_SUCCESSFUL')
-          if (!counts || counts.files !== 1 || counts.suites !== 2 || counts.passedSuites !== 2 ||
+          if (!counts || counts.files !== 2 || counts.suites !== 4 || counts.passedSuites !== 4 ||
               counts.failedSuites !== 0 || counts.pendingSuites !== 0 ||
-              counts.tests !== 18 || counts.passed !== 18 ||
+              counts.tests !== 27 || counts.passed !== 27 ||
               counts.failed !== 0 || counts.pending !== 0 || counts.todo !== 0) {
-            failures.push('VITEST_COUNTERS_DO_NOT_MATCH_2_SUITES_18_PASS_0_SKIP_TODO_FAIL')
+            failures.push('VITEST_COUNTERS_DO_NOT_MATCH_4_SUITES_27_PASS_0_SKIP_TODO_FAIL')
           }
-          if (!Array.isArray(report?.testResults) || report.testResults.length !== 1 ||
-              !String(report.testResults[0]?.name ?? '').replaceAll('\\', '/').endsWith('/scripts/lib/lean-payload-attribution.test.ts')) {
+          const resultNames = testResults.map((file) => String(file.name ?? '').replaceAll('\\', '/').split('/').slice(-3).join('/')).sort()
+          if (resultNames.length !== 2 || resultNames[0] !== 'scripts/lib/lean-native-diagnostic.test.ts' ||
+              resultNames[1] !== 'scripts/lib/lean-payload-attribution.test.ts') {
             failures.push('TEST_FILE_INVENTORY_MISMATCH')
           }
-          if (!Array.isArray(tests) || tests.length !== 18 ||
-              tests.some((test) => test.status !== 'passed') ||
-              report?.testResults?.[0]?.status !== 'passed' ||
-              ancestors.length !== 1 || !ancestors[0]) {
+          if (tests.length !== 27 || tests.some((test) => test.status !== 'passed') ||
+              testResults.some((file) => file.status !== 'passed') ||
+              ancestors.length !== 2 || ancestors.some((groups) => groups.length !== 1 || !groups[0])) {
             failures.push('ANCESTOR_GROUP_OR_ASSERTION_INVENTORY_MISMATCH')
           }
           const result = {
@@ -183,9 +183,143 @@ jobs:
           compression-level: 0
           path: ${{ steps.contract_output.outputs.paths }}
 
+  contract-windows:
+    name: Native diagnostic contract on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - id: contract_init
+        name: Initialize exclusive NOT_RUN report below RUNNER_TEMP
+        shell: pwsh
+        run: |
+          @'
+          const { appendFileSync, mkdtempSync, realpathSync, writeFileSync } = require('node:fs')
+          const { join, relative, sep } = require('node:path')
+          const temp = realpathSync(process.env.RUNNER_TEMP)
+          if (!temp || temp === parseRoot(temp)) throw new Error('RUNNER_TEMP is not a usable directory')
+          const root = mkdtempSync(join(temp, `NONPROMOTABLE-lean-attribution-win-contract-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}-`))
+          const relation = relative(temp, root)
+          if (!relation || relation.startsWith(`..${sep}`) || relation === '..') throw new Error('Contract root escaped RUNNER_TEMP')
+          writeFileSync(join(root, 'contract-report.json'), JSON.stringify({ schema: 'lean-attribution-native-contract-v1', status: 'NOT_RUN', counts: null, failures: [] }), { flag: 'wx', mode: 0o600 })
+          appendFileSync(process.env.GITHUB_ENV, `LEAN_CONTRACT_ROOT=${root}\n`)
+          appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n')
+          function parseRoot(value) { return require('node:path').parse(value).root }
+          '@ | node
+      - name: Install pure JavaScript contract dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - id: contract_tests
+        name: Run only the real-ASAR native diagnostic contract with retained Vitest JSON
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:LEAN_CONTRACT_ROOT 'vitest.json'
+          node node_modules/vitest/vitest.mjs run scripts/lib/lean-native-diagnostic.test.ts --reporter=default --reporter=json --outputFile="$output" --dangerouslyIgnoreUnhandledErrors=false
+          $testExit = $LASTEXITCODE
+          "exit_code=$testExit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          exit $testExit
+      - id: contract_validate
+        name: Validate exact Windows native diagnostic case totals and preserve report
+        if: always() && steps.contract_init.outputs.ready == 'true'
+        env:
+          TEST_STEP_OUTCOME: ${{ steps.contract_tests.outcome }}
+          TEST_EXIT_CODE: ${{ steps.contract_tests.outputs.exit_code }}
+        shell: pwsh
+        run: |
+          @'
+          const { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs')
+          const { join } = require('node:path')
+          const root = process.env.LEAN_CONTRACT_ROOT
+          const rawPath = join(root, 'vitest.json')
+          const outputPath = join(root, 'contract-report.json')
+          const maximumRawBytes = 2 * 1024 * 1024
+          const failures = []
+          let rawBytes = null
+          let rawRetained = false
+          let report = null
+          const rawWasPresent = existsSync(rawPath)
+          if (rawWasPresent) {
+            rawBytes = statSync(rawPath).size
+            if (rawBytes > maximumRawBytes) {
+              failures.push('VITEST_JSON_EXCEEDS_2_MIB_LIMIT')
+              rmSync(rawPath)
+            } else {
+              rawRetained = true
+              try { report = JSON.parse(readFileSync(rawPath, 'utf8')) } catch { failures.push('VITEST_JSON_MISSING_OR_INVALID'); rawRetained = false; rmSync(rawPath) }
+            }
+          } else failures.push('VITEST_JSON_MISSING_OR_INVALID')
+          const numeric = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null
+          const counts = report ? {
+            files: Array.isArray(report.testResults) ? report.testResults.length : null,
+            suites: numeric(report.numTotalTestSuites),
+            passedSuites: numeric(report.numPassedTestSuites),
+            failedSuites: numeric(report.numFailedTestSuites),
+            pendingSuites: numeric(report.numPendingTestSuites),
+            tests: numeric(report.numTotalTests),
+            passed: numeric(report.numPassedTests),
+            failed: numeric(report.numFailedTests),
+            pending: numeric(report.numPendingTests),
+            todo: numeric(report.numTodoTests)
+          } : null
+          const tests = report?.testResults?.[0]?.assertionResults
+          const ancestors = Array.isArray(tests) ? [...new Set(tests.map((test) => Array.isArray(test.ancestorTitles) ? test.ancestorTitles.join('\0') : ''))] : []
+          const namedFailures = Array.isArray(tests) ? tests.filter((test) => test.status !== 'passed').map((test) => [ ...(test.ancestorTitles ?? []), test.title ].filter(Boolean).join(' > ').slice(0, 240) || 'UNNAMED_FAILED_ASSERTION').slice(0, 9) : []
+          if (process.env.TEST_STEP_OUTCOME !== 'success') failures.push('TEST_STEP_NOT_SUCCESSFUL')
+          if (process.env.TEST_EXIT_CODE !== '0') failures.push('VITEST_EXIT_NOT_ZERO')
+          if (report?.success !== true) failures.push('VITEST_REPORT_NOT_SUCCESSFUL')
+          if (!counts || counts.files !== 1 || counts.suites !== 2 || counts.passedSuites !== 2 || counts.failedSuites !== 0 || counts.pendingSuites !== 0 || counts.tests !== 9 || counts.passed !== 9 || counts.failed !== 0 || counts.pending !== 0 || counts.todo !== 0) failures.push('VITEST_COUNTERS_DO_NOT_MATCH_2_SUITES_9_PASS_0_SKIP_TODO_FAIL')
+          const files = Array.isArray(report?.testResults) ? report.testResults : []
+          if (files.length !== 1 || !String(files[0]?.name ?? '').replaceAll('\\', '/').endsWith('/scripts/lib/lean-native-diagnostic.test.ts')) failures.push('TEST_FILE_INVENTORY_MISMATCH')
+          if (!Array.isArray(tests) || tests.length !== 9 || tests.some((test) => test.status !== 'passed') || files[0]?.status !== 'passed' || ancestors.length !== 1 || !ancestors[0]) failures.push('ANCESTOR_GROUP_OR_ASSERTION_INVENTORY_MISMATCH')
+          const status = !rawWasPresent ? 'NOT_RUN' : failures.length === 0 ? 'PASS' : 'FAIL'
+          const result = { schema: 'lean-attribution-native-contract-v1', status, rawBytes, counts, failedAssertions: namedFailures, failures }
+          writeFileSync(outputPath, JSON.stringify(result), { mode: 0o600 })
+          appendFileSync(process.env.GITHUB_OUTPUT, `raw_retained=${rawRetained}\n`)
+          console.log(`contract counts: ${JSON.stringify(counts)}`)
+          if (failures.length) { console.error(`contract validation failed: ${failures.join(', ')}`); if (namedFailures.length) console.error(`failed assertions: ${namedFailures.join(' | ')}`); process.exitCode = 1 }
+          '@ | node
+      - id: contract_output
+        name: Guard the exact owned Windows contract report set before retention
+        if: always() && steps.contract_init.outputs.ready == 'true'
+        shell: pwsh
+        run: |
+          @'
+          const { appendFileSync, readdirSync, readFileSync, statSync } = require('node:fs')
+          const { join } = require('node:path')
+          const root = process.env.LEAN_CONTRACT_ROOT
+          const reportPath = join(root, 'contract-report.json')
+          const report = JSON.parse(readFileSync(reportPath, 'utf8'))
+          if (!['PASS', 'FAIL', 'NOT_RUN'].includes(report.status)) throw new Error('Windows contract report is not finalized')
+          const names = readdirSync(root).sort()
+          const expected = names.includes('vitest.json') ? ['contract-report.json', 'vitest.json'] : ['contract-report.json']
+          if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('Windows contract output inventory mismatch')
+          let paths = `${reportPath}`
+          if (expected.length === 2) {
+            const rawPath = join(root, 'vitest.json')
+            if (statSync(rawPath).size > 2 * 1024 * 1024) throw new Error('Windows raw Vitest JSON exceeds limit')
+            JSON.parse(readFileSync(rawPath, 'utf8'))
+            paths += `\n${rawPath}`
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `paths<<EOF\n${paths}\nEOF\n`)
+          '@ | node
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        name: Retain bounded Windows native contract result only
+        if: always() && steps.contract_init.outputs.ready == 'true' && steps.contract_output.outputs.paths != ''
+        with:
+          name: NONPROMOTABLE-lean-attribution-win-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          path: ${{ steps.contract_output.outputs.paths }}
+
   payload:
     name: NONPROMOTABLE ${{ matrix.variant }} attribution
-    needs: contract
+    needs: [contract, contract-windows]
     strategy:
       fail-fast: false
       max-parallel: 2

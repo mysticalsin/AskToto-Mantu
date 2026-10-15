@@ -85,7 +85,7 @@ export async function asarMemberInventory(payloadRoot, asarPath, unpackedRoot) {
     const identity = header.unpacked
       ? await sha256File(join(unpackedRoot, ...path.split('/')))
       : (() => {
-          const bytes = asar.extractFile(asarPath, path)
+          const bytes = asar.extractFile(asarPath, path.split('/').join(sep))
           return { bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex') }
         })()
     if (header.size !== identity.bytes) throw new Error(`ASAR logical size differs from physical member: ${path}`)

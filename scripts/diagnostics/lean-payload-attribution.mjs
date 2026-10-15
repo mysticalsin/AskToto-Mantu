@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { spawn } from 'node:child_process'
 import { lstat, mkdir, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import os from 'node:os'
-import { performance } from 'node:perf_hooks'
+import { runDiagnosticChild } from '../lib/lean-diagnostic-child.mjs'
 import {
   assertOwnedDisjoint,
   accountPathGroups,
@@ -64,59 +63,15 @@ function boundedNativeSmokeFailure(error, redact) {
       signal: result.signal === null || typeof result.signal === 'string' ? result.signal : null,
       stdout: boundedText(result.stdout, 2_000_000),
       stderr: boundedText(result.stderr, 2_000_000),
-      timedOut: result.timedOut === true
+      timedOut: result.timedOut === true,
+      outputLimitExceeded: result.outputLimitExceeded === true,
+      ...(typeof result.spawnError === 'string' ? { spawnError: boundedText(result.spawnError, 4000) } : {})
     }
   }
   return failure
 }
 async function run(command, args, { cwd, timeoutMs = 30 * 60_000, maxOutputBytes = 2_000_000 } = {}) {
-  const started = performance.now()
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    let total = 0
-    let timedOut = false
-    const collect = (which) => (chunk) => {
-      total += chunk.length
-      if (total > maxOutputBytes) {
-        child.kill()
-        reject(new Error(`Diagnostic child output exceeded ${maxOutputBytes} bytes`))
-        return
-      }
-      if (which === 'stdout') stdout += chunk.toString('utf8')
-      else stderr += chunk.toString('utf8')
-    }
-    child.stdout.on('data', collect('stdout'))
-    child.stderr.on('data', collect('stderr'))
-    const timer = setTimeout(() => {
-      timedOut = true
-      child.kill()
-      const killer = setTimeout(() => child.kill('SIGKILL'), 5000)
-      killer.unref()
-    }, timeoutMs)
-    child.once('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.once('close', (code, signal) => {
-      clearTimeout(timer)
-      const result = {
-        command,
-        args: [...args],
-        cwd,
-        exitCode: code,
-        signal,
-        elapsedMs: Math.round(performance.now() - started),
-        stdout: redact(stdout),
-        stderr: redact(stderr),
-        timedOut
-      }
-      if (timedOut || code !== 0)
-        reject(Object.assign(new Error(`Command failed: ${command} (${code ?? signal})`), { result }))
-      else resolvePromise(result)
-    })
-  })
+  return runDiagnosticChild(command, args, { cwd, timeoutMs, maxOutputBytes, redact })
 }
 async function locateNpmCli(payloadRoot) {
   const candidates = [
@@ -239,7 +194,8 @@ async function findInstaller(outputRoot, extension) {
   return found[0]
 }
 async function runMacDiagnostics(context) {
-  const { appRoot, appManifest, reportRoot, scratchRoot, installer, report } = context
+  const { appRoot, appManifest, reportRoot, scratchRoot, installer, payloadRoot, report } = context
+  const runProbe = (options) => runMacProbe({ ...options, payloadRoot })
   const nativeRecords = []
   report.macDmg = await verifyMacInstaller(installer, appRoot, scratchRoot, nativeRecords, run)
   const components = partitionManifest(appManifest, 'darwin')
@@ -249,7 +205,7 @@ async function runMacDiagnostics(context) {
   if (standaloneProbeCount > 20) throw new Error(`Mac standalone probe roster exceeds 20 sets: ${standaloneProbeCount}`)
   const probes = []
   const fullEntries = appManifest.entries
-  const fullBefore = await runMacProbe({
+  const fullBefore = await runProbe({
     id: 'full-control-before',
     sourceRoot: appRoot,
     sourceManifest: appManifest,
@@ -260,7 +216,7 @@ async function runMacDiagnostics(context) {
     run,
     redact
   })
-  await runMacProbe({
+  await runProbe({
     id: 'empty-control',
     sourceRoot: appRoot,
     sourceManifest: appManifest,
@@ -275,7 +231,7 @@ async function runMacDiagnostics(context) {
   for (const [name, paths] of Object.entries(components)) {
     if (!paths.length) continue
     const set = selectedEntries(appManifest, paths)
-    await runMacProbe({
+    await runProbe({
       id: `component-${name}`,
       sourceRoot: appRoot,
       sourceManifest: appManifest,
@@ -289,7 +245,7 @@ async function runMacDiagnostics(context) {
     })
   }
   for (const [name, paths] of children) {
-    await runMacProbe({
+    await runProbe({
       id: `managed-node-${name}`,
       sourceRoot: appRoot,
       sourceManifest: appManifest,
@@ -320,7 +276,7 @@ async function runMacDiagnostics(context) {
     }
     const omitted = new Set(omittedPaths)
     const included = fullEntries.filter((entry) => !omitted.has(entry.path))
-    const leaveOut = await runMacProbe({
+    const leaveOut = await runProbe({
       id,
       sourceRoot: appRoot,
       sourceManifest: appManifest,
@@ -334,7 +290,7 @@ async function runMacDiagnostics(context) {
     })
     await attachMarginal(leaveOut, fullBefore, reportRoot)
   }
-  const fullAfter = await runMacProbe({
+  const fullAfter = await runProbe({
     id: 'full-control-after',
     sourceRoot: appRoot,
     sourceManifest: appManifest,
@@ -348,7 +304,7 @@ async function runMacDiagnostics(context) {
   })
   const controlRepeat =
     fullBefore.outputBytes !== fullAfter.outputBytes
-      ? await runMacProbe({
+      ? await runProbe({
           id: 'full-control-repeat',
           sourceRoot: appRoot,
           sourceManifest: appManifest,
@@ -364,7 +320,8 @@ async function runMacDiagnostics(context) {
   report.mac = {
     container: {
       type: 'diagnostic HFS+ UDBZ image',
-      volumeName: 'METIS_ATTRIBUTION_NONPROMOTABLE',
+      volumeNamePolicy:
+        'METIS_A_ plus 24 random lowercase hexadecimal characters; fixed 32 ASCII bytes; each probe records its own name.',
       note: 'Builder layout/decorations/filesystem sizing may differ; these probes do not predict final DMG delta.'
     },
     componentPaths: components,
@@ -763,7 +720,8 @@ async function main() {
       } catch {}
       const failure = boundedNativeSmokeFailure(error, redact)
       report.status = 'failed'
-      report.failure = failure
+      const activeCase = report.cases?.find((item) => item.status === 'failed') ?? error.nativeSmokeEvidence ?? null
+      report.failure = { ...failure, activeCase }
       await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`)
       const loggedFailure = {
         ...failure,
