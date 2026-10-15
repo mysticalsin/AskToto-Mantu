@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -72,11 +73,18 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
     liveSpeakerReceipts,
     importSpeakerOwners
   })
-  const finalizeImportSpeakers = vi.fn(() => (settings.speakerId.enabled ? new Map([['Speaker 1', 'Speaker 1']]) : null))
+  const finalizeImportSpeakers = vi.fn(() =>
+    settings.speakerId.enabled ? new Map([['Speaker 1', 'Speaker 1']]) : null
+  )
   actualFunction('initializeImportJobs', {
     importJobs: null,
+    randomUUID,
     wireIntelligenceIndexWork: noop,
-    ImportJobManager: class { constructor(deps: Record<string, any>) { captured = deps } },
+    ImportJobManager: class {
+      constructor(deps: Record<string, any>) {
+        captured = deps
+      }
+    },
     EncryptedImportJobStore: class {},
     getSettings: () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
     getSpeakerId: () => speakerId,
@@ -174,7 +182,12 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
     let resolve!: (value: { name: string }) => void
     const speakerId = {
       discardSession: vi.fn(),
-      labelSessionWindow: vi.fn(() => new Promise((done) => { resolve = done }))
+      labelSessionWindow: vi.fn(
+        () =>
+          new Promise((done) => {
+            resolve = done
+          })
+      )
     }
     const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', {
       speakerIdInstance: speakerId,
@@ -261,11 +274,9 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
 
     await expect(backfill('synthetic.md')).resolves.toEqual({ ok: true, named: 1 })
     expect(speakerId.autoEnrollFromLabeledWindows).not.toHaveBeenCalled()
-    expect(updateMeetingTranscript).toHaveBeenCalledWith(
-      settings,
-      'synthetic.md',
-      [{ ...lines[0], name: 'Resolved person' }]
-    )
+    expect(updateMeetingTranscript).toHaveBeenCalledWith(settings, 'synthetic.md', [
+      { ...lines[0], name: 'Resolved person' }
+    ])
   })
 
   it('settings persistence and managed settings reads both apply the saved speaker policy', () => {
@@ -313,7 +324,10 @@ describe('Save voiceprints opt-in wiring', () => {
       speakerIdInstance: null,
       getSettings,
       createSpeakerId: (deps: SpeakerIdDeps = {}) =>
-        createSpeakerId({ ...deps, createExtractor: () => ({ compute: async (samples: Float32Array) => voice(samples[0]) }) })
+        createSpeakerId({
+          ...deps,
+          createExtractor: () => ({ compute: async (samples: Float32Array) => voice(samples[0]) })
+        })
     })
     return getSpeakerId()
   }
@@ -350,8 +364,10 @@ describe('Save voiceprints opt-in wiring', () => {
 
     const restarted = startApp()
     expect(restarted.createSession('live:2')).toBe(true)
-    await expect(restarted.labelSessionWindow('live:2', windowFor(2), 'live'))
-      .resolves.toMatchObject({ name: 'Jane Doe', source: 'profile' })
+    await expect(restarted.labelSessionWindow('live:2', windowFor(2), 'live')).resolves.toMatchObject({
+      name: 'Jane Doe',
+      source: 'profile'
+    })
   })
 
   it('turning Save voiceprints off stops the next write and keeps what was saved', async () => {
