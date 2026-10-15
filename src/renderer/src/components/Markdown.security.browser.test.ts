@@ -414,9 +414,10 @@ describe('production Markdown security and interaction browser regressions', () 
       'Name\tNotes\tContext\tDependency\tStatus\n' +
       'Ada\tLong value for narrow viewport\tUses an unusually long description that must remain readable in a narrow viewport\tRenderer package and its KaTeX integration\tReady\n' +
       'Grace\tCompiler\tMaintains another detailed explanation for responsive table verification\tMermaid package and its rendered graph relationship\tPlanned'
+    const expectedClipboardTsv = process.platform === 'win32' ? expectedTsv.replaceAll('\n', '\r\n') : expectedTsv
     await expect
       .poll(async () => test.page.evaluate(() => navigator.clipboard.readText()), { timeout: 5_000 })
-      .toBe(expectedTsv)
+      .toBe(expectedClipboardTsv)
     await expectNoUnexpectedEffects(test)
   })
 

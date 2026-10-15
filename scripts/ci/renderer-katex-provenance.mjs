@@ -66,6 +66,26 @@ const IDS = Object.freeze([
 ])
 const CAUSAL_RED = Object.freeze(['K1', 'K2', 'K3', 'K4', 'K9'])
 const EXPECTED_OLD_NAMESPACE_RED = Object.freeze(['K5', 'K6'])
+const KATEX_TEST_PATH = 'src/renderer/src/components/Markdown.katex.browser.test.ts'
+const KATEX_SUITE = 'actual installed KaTeX advisory and API regressions'
+const CAUSAL_LOCATIONS = Object.freeze({
+  K1: '86:7',
+  K2: '105:110',
+  K3: '145:110',
+  K4: '161:103',
+  K5: '192:20',
+  K6: '231:20',
+  K9: '349:30'
+})
+const CAUSAL_KEYS = Object.freeze({
+  K5: Object.freeze(['errorMessage', 'errorName', 'rendered']),
+  K6: Object.freeze(['after', 'own']),
+  K9: Object.freeze(['errorMessage', 'errorName', 'rendered'])
+})
+const K5_SENTINEL =
+  'StringMatching /(?:undefined control sequence|Undefined control sequence).*rendererInheritedSentinel/u'
+const K6_SENTINEL =
+  'StringMatching /^ParseError:.*(?:undefined control sequence|Undefined control sequence).*rendererScopedSentinel/u'
 
 function fail(code) {
   throw new Error(`renderer-katex-provenance:${code}`)
@@ -117,15 +137,26 @@ function requireAncestor(root, ancestor, head, code) {
 function checkSourceLineage(root) {
   const head = gitText(root, ['rev-parse', 'HEAD'])
   if (head !== (process.env.GITHUB_SHA || head)) fail('CHECKOUT_SHA_MISMATCH')
-  if (gitText(root, ['rev-parse', `${IMAGE_POLICY_COMMIT}^`]) !== HARNESS_BASELINE)
-    fail('IMAGE_POLICY_PARENT')
+  if (gitText(root, ['rev-parse', `${IMAGE_POLICY_COMMIT}^`]) !== HARNESS_BASELINE) fail('IMAGE_POLICY_PARENT')
   requireAncestor(root, BASE, head, 'DEPENDENCY_BASELINE_ANCESTRY')
   requireAncestor(root, HARNESS_BASELINE, head, 'HARNESS_BASELINE_ANCESTRY')
   requireAncestor(root, IMAGE_POLICY_COMMIT, head, 'IMAGE_POLICY_ANCESTRY')
-  requireExactPaths(changedPaths(root, `${BASE}..${HARNESS_BASELINE}`), HARNESS_BASELINE_FILES, 'HARNESS_BASELINE_PATHS')
-  requireExactPaths(changedPaths(root, `${HARNESS_BASELINE}..${IMAGE_POLICY_COMMIT}`), [IMAGE_POLICY_PATH], 'IMAGE_POLICY_PATHS')
+  requireExactPaths(
+    changedPaths(root, `${BASE}..${HARNESS_BASELINE}`),
+    HARNESS_BASELINE_FILES,
+    'HARNESS_BASELINE_PATHS'
+  )
+  requireExactPaths(
+    changedPaths(root, `${HARNESS_BASELINE}..${IMAGE_POLICY_COMMIT}`),
+    [IMAGE_POLICY_PATH],
+    'IMAGE_POLICY_PATHS'
+  )
   requireExactPaths(changedPaths(root, `${IMAGE_POLICY_COMMIT}..${head}`), HARNESS_REPAIR_FILES, 'HARNESS_REPAIR_PATHS')
-  requireExactPaths(changedPaths(root, `${BASE}..${head}`), [...HARNESS_BASELINE_FILES, IMAGE_POLICY_PATH], 'COMPOSED_CHANGE_PATHS')
+  requireExactPaths(
+    changedPaths(root, `${BASE}..${head}`),
+    [...HARNESS_BASELINE_FILES, IMAGE_POLICY_PATH],
+    'COMPOSED_CHANGE_PATHS'
+  )
   const reviewedBytes = gitBytes(root, ['show', `${IMAGE_POLICY_COMMIT}:${IMAGE_POLICY_PATH}`])
   const currentBytes = readFileSync(resolve(root, IMAGE_POLICY_PATH))
   const parentBytes = gitBytes(root, ['show', `${HARNESS_BASELINE}:${IMAGE_POLICY_PATH}`])
@@ -150,7 +181,385 @@ function assertionId(assertion) {
   const name = assertion.title || assertion.fullName || ''
   return IDS.find((id) => name.startsWith(`${id} `) || name.startsWith(`${id}:`)) || null
 }
-function checkReport(reportPath, exitCode) {
+function sourceRelative(fileName) {
+  let localPath = fileName
+  if (fileName.startsWith('file://')) localPath = new URL(fileName).pathname
+  return relative(process.cwd(), resolve(localPath)).replaceAll('\\', '/')
+}
+function parseRawFailureSection(logText) {
+  if (logText.includes('\0') || /\u001b/u.test(logText)) fail('RAW_LOG_UNEXPECTED_CONTROL')
+  if (/\r(?!\n)/u.test(logText)) fail('RAW_LOG_LINE_ENDING')
+  const lines = logText.replaceAll('\r\n', '\n').split('\n')
+  const sections = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^⎯{3,} Failed Tests (\d+) ⎯{3,}$/u.exec(lines[index])
+    if (match) sections.push({ index, declared: Number(match[1]) })
+  }
+  if (sections.length !== 1 || sections[0].declared !== 7) fail('RAW_FAILURE_SECTION_CARDINALITY')
+  const section = lines.slice(sections[0].index + 1)
+  const records = []
+  let cursor = 0
+  while (cursor < section.length) {
+    if (!section[cursor].startsWith(' FAIL  ')) {
+      if (/^⎯{3,}\[\d+\/\d+\]⎯$/u.test(section[cursor])) fail('RAW_FAILURE_DELIMITER_WITHOUT_BLOCK')
+      cursor += 1
+      continue
+    }
+    const header = section[cursor]
+    const headerMatch = /^ FAIL  (.+\.ts) > (.+) > (K[1-9] .+)$/u.exec(header)
+    if (!headerMatch) fail('RAW_FAILURE_HEADER')
+    const start = cursor
+    cursor += 1
+    while (cursor < section.length && !/^⎯{3,}\[\d+\/\d+\]⎯$/u.test(section[cursor])) {
+      if (section[cursor].startsWith(' FAIL  ')) fail('RAW_FAILURE_BLOCK_UNTERMINATED')
+      cursor += 1
+    }
+    const delimiter = /^⎯{3,}\[(\d+)\/(\d+)\]⎯$/u.exec(section[cursor] || '')
+    if (!delimiter) fail('RAW_FAILURE_BLOCK_TRUNCATED')
+    const blockLines = [...section.slice(start, cursor), section[cursor]]
+    if (Buffer.byteLength(blockLines.join('\n'), 'utf8') > 16_384) fail('RAW_FAILURE_BLOCK_SIZE')
+    records.push({ header, path: headerMatch[1], suite: headerMatch[2], title: headerMatch[3], lines: blockLines })
+    if (records.length > 7) fail('RAW_FAILURE_BLOCK_COUNT')
+    if (Number(delimiter[1]) !== records.length || Number(delimiter[2]) !== 7) fail('RAW_FAILURE_DELIMITER_SEQUENCE')
+    cursor += 1
+  }
+  const failLikeLines = section.filter((line) => /^\s*FAIL\b/u.test(line))
+  if (records.length !== 7 || failLikeLines.length !== 7 || failLikeLines.some((line) => !line.startsWith(' FAIL  ')))
+    fail('RAW_FAILURE_BLOCK_COUNT')
+  const byId = new Map()
+  for (const record of records) {
+    const id = assertionId({ title: record.title })
+    if (!CAUSAL_RED.includes(id) && !EXPECTED_OLD_NAMESPACE_RED.includes(id)) fail('RAW_UNEXPECTED_FAILURE')
+    if (byId.has(id)) fail('RAW_FAILURE_DUPLICATE_CASE')
+    byId.set(id, record)
+  }
+  if ([...CAUSAL_RED, ...EXPECTED_OLD_NAMESPACE_RED].some((id) => !byId.has(id))) fail('RAW_FAILURE_CASE_MISSING')
+  return byId
+}
+function parseDiffMembers(lines, id) {
+  const members = { expected: new Map(), received: new Map() }
+  const common = []
+  for (const line of lines) {
+    if (!line) continue
+    if (line === '  {' || line === '  }') {
+      common.push(line)
+      continue
+    }
+    const marker = line.slice(0, 2)
+    if (marker !== '- ' && marker !== '+ ') fail('RAW_DIFF_GRAMMAR')
+    if (!line.startsWith(`${marker}  `)) fail('RAW_DIFF_INDENTATION')
+    const text = line.slice(4)
+    const match = /^"([A-Za-z]+)": (.+?)(,?)$/u.exec(text)
+    if (!match) fail('RAW_DIFF_MEMBER')
+    const [, key, rawValue, comma] = match
+    if (comma !== ',' || rawValue.endsWith(',')) fail('RAW_DIFF_COMMA')
+    const target = marker === '- ' ? members.expected : members.received
+    if (target.has(key)) fail('RAW_DIFF_DUPLICATE_MEMBER')
+    let value
+    if (rawValue === K5_SENTINEL && id === 'K5') value = '<<rendererInheritedSentinel undefined-control matcher>>'
+    else if (rawValue === K6_SENTINEL && id === 'K6') value = '<<rendererScopedSentinel undefined-control matcher>>'
+    else {
+      try {
+        value = JSON.parse(rawValue)
+      } catch {
+        fail('RAW_DIFF_VALUE')
+      }
+      if (value === null || !['string', 'boolean'].includes(typeof value)) fail('RAW_DIFF_VALUE_TYPE')
+    }
+    target.set(key, value)
+  }
+  if (JSON.stringify(common) !== JSON.stringify(['  {', '  }'])) fail('RAW_DIFF_OBJECT_CONTEXT')
+  return members
+}
+function validateCausalBlock(id, record, assertion, relativeName) {
+  if (Buffer.byteLength(record.lines.join('\n'), 'utf8') > 16_384) fail('RAW_FAILURE_BLOCK_SIZE')
+  const expectedTitle = assertion.title
+  if (
+    record.path.replaceAll('\\', '/') !== KATEX_TEST_PATH ||
+    record.suite !== KATEX_SUITE ||
+    record.title !== expectedTitle ||
+    relativeName !== KATEX_TEST_PATH ||
+    assertion.fullName !== `${record.suite} ${record.title}` ||
+    JSON.stringify(assertion.ancestorTitles) !== JSON.stringify([record.suite])
+  )
+    fail('RAW_JSON_IDENTITY_MISMATCH')
+  const message = assertion.failureMessages[0]
+  const firstLine = message.split('\n', 1)[0]
+  const summaries = record.lines.filter((line) => line.startsWith('AssertionError: '))
+  if (summaries.length !== 1 || summaries[0] !== firstLine || !firstLine.startsWith('AssertionError: '))
+    fail('RAW_ASSERTION_SUMMARY_MISMATCH')
+  if (/pageerror|unhandledrejection|browser.*closed|timeout|launch.*failed/iu.test(message))
+    fail('RED_IS_HARNESS_FAILURE')
+  const expectedLocation = CAUSAL_LOCATIONS[id]
+  const rawFrames = record.lines.filter((line) => /^\s+❯ /u.test(line))
+  if (rawFrames.length !== 1) fail('RAW_SOURCE_FRAME_CARDINALITY')
+  const rawFrame = /^\s+❯ (.+):(\d+):(\d+)$/u.exec(rawFrames[0])
+  if (
+    !rawFrame ||
+    rawFrame[1].replaceAll('\\', '/') !== KATEX_TEST_PATH ||
+    `${rawFrame[2]}:${rawFrame[3]}` !== expectedLocation
+  )
+    fail('RAW_SOURCE_FRAME_MISMATCH')
+  const jsonFrames = [...message.matchAll(/^\s+at (.+):(\d+):(\d+)$/gmu)]
+  if (!jsonFrames.length) fail('JSON_SOURCE_FRAME_MISSING')
+  const jsonFrame = jsonFrames[0]
+  if (sourceRelative(jsonFrame[1]) !== KATEX_TEST_PATH || `${jsonFrame[2]}:${jsonFrame[3]}` !== expectedLocation)
+    fail('JSON_SOURCE_FRAME_MISMATCH')
+  const expectedHeading = record.lines.indexOf('- Expected')
+  const receivedHeading = record.lines.indexOf('+ Received')
+  const frameIndex = record.lines.indexOf(rawFrames[0])
+  if (
+    expectedHeading < 0 ||
+    receivedHeading < 0 ||
+    record.lines.lastIndexOf('- Expected') !== expectedHeading ||
+    record.lines.lastIndexOf('+ Received') !== receivedHeading ||
+    expectedHeading >= receivedHeading ||
+    receivedHeading >= frameIndex
+  )
+    fail('RAW_DIFF_HEADINGS')
+  const diff = record.lines.slice(receivedHeading + 1, frameIndex)
+  let received
+  if (['K1', 'K2', 'K3', 'K4'].includes(id)) {
+    const meaningful = diff.filter(Boolean)
+    if (JSON.stringify(meaningful) !== JSON.stringify(['- []', '+ [', `+   "javascript:alert(1)",`, '+ ]']))
+      fail('RAW_UNSAFE_HREF_CAUSE_MISSING')
+    received = ['javascript:alert(1)']
+  } else {
+    const { expected, received: actual } = parseDiffMembers(record.lines.slice(receivedHeading + 1, frameIndex), id)
+    const expectedKeys = CAUSAL_KEYS[id]
+    if (
+      JSON.stringify([...expected.keys()]) !== JSON.stringify(expectedKeys) ||
+      JSON.stringify([...actual.keys()]) !== JSON.stringify(expectedKeys)
+    )
+      fail('RAW_DIFF_MEMBER_SET')
+    const actualValue = Object.fromEntries(actual)
+    const expectedValue = Object.fromEntries(expected)
+    if (id === 'K5') {
+      if (JSON.stringify(actualValue) !== JSON.stringify({ errorMessage: '', errorName: '', rendered: true }))
+        fail('RED_INHERITED_MACRO_CAUSE_MISSING')
+      if (
+        JSON.stringify(expectedValue) !==
+        JSON.stringify({
+          errorMessage: '<<rendererInheritedSentinel undefined-control matcher>>',
+          errorName: 'ParseError',
+          rendered: false
+        })
+      )
+        fail('RAW_INHERITED_MACRO_EXPECTATION')
+    } else if (id === 'K6') {
+      if (JSON.stringify(actualValue) !== JSON.stringify({ after: 'rendered', own: true }))
+        fail('RED_INHERITED_UNDO_CAUSE_MISSING')
+      if (
+        JSON.stringify(expectedValue) !==
+        JSON.stringify({
+          after: '<<rendererScopedSentinel undefined-control matcher>>',
+          own: false
+        })
+      )
+        fail('RAW_INHERITED_UNDO_EXPECTATION')
+    } else if (id === 'K9') {
+      if (
+        JSON.stringify(actualValue) !==
+        JSON.stringify({
+          errorMessage: 'KaTeX parse error: Too many expansions: infinite loop or need to increase maxExpand setting',
+          errorName: 'ParseError',
+          rendered: false
+        })
+      )
+        fail('RED_INHERITED_BOUND_CAUSE_MISSING')
+      if (JSON.stringify(expectedValue) !== JSON.stringify({ errorMessage: '', errorName: '', rendered: true }))
+        fail('RAW_INHERITED_BOUND_EXPECTATION')
+    }
+    received = actualValue
+  }
+  return {
+    rawBlockSha256: sha256(Buffer.from(record.lines.join('\n'), 'utf8')),
+    sourceLocation: expectedLocation,
+    received
+  }
+}
+function causalFixture(id, diffLines, location, summary) {
+  const title = `${id} fixture title bound to its assertion`
+  const source = `${resolve(process.cwd(), KATEX_TEST_PATH)}:${location}`
+  const assertion = {
+    title,
+    fullName: `${KATEX_SUITE} ${title}`,
+    ancestorTitles: [KATEX_SUITE],
+    failureMessages: [`${summary}\n    at ${source}\n    at file:///fixture/runner.js:1:1`]
+  }
+  const lines = [
+    ` FAIL  ${KATEX_TEST_PATH} > ${KATEX_SUITE} > ${title}`,
+    summary,
+    '',
+    '- Expected',
+    '+ Received',
+    ...diffLines,
+    '',
+    ` ❯ ${KATEX_TEST_PATH}:${location}`
+  ]
+  return { assertion, record: { path: KATEX_TEST_PATH, suite: KATEX_SUITE, title, lines } }
+}
+function requireFixtureReject(id, fixture) {
+  let rejected = false
+  try {
+    validateCausalBlock(id, fixture.record, fixture.assertion, KATEX_TEST_PATH)
+  } catch {
+    rejected = true
+  }
+  if (!rejected) fail('CAUSAL_FIXTURE_ACCEPTED_INVALID')
+}
+function requireRawSectionReject(text) {
+  let rejected = false
+  try {
+    parseRawFailureSection(text)
+  } catch {
+    rejected = true
+  }
+  if (!rejected) fail('RAW_SECTION_FIXTURE_ACCEPTED_INVALID')
+}
+function duplicateFixtureLine(fixture, prefix) {
+  const lines = [...fixture.record.lines]
+  const index = lines.findIndex((line) => line.startsWith(prefix))
+  if (index < 0) fail('CAUSAL_FIXTURE_SOURCE_LINE_MISSING')
+  lines.splice(index, 0, lines[index])
+  return { ...fixture, record: { ...fixture.record, lines } }
+}
+function checkCausalParserFixtures() {
+  const cases = [
+    {
+      id: 'K1',
+      location: CAUSAL_LOCATIONS.K1,
+      summary: "AssertionError: expected [ 'javascript:alert(1)' ] to deeply equal []",
+      diff: ['', '- []', '+ [', `+   "javascript:alert(1)",`, '+ ]']
+    },
+    ...['K2', 'K3', 'K4'].map((id) => ({
+      id,
+      location: CAUSAL_LOCATIONS[id],
+      summary: "AssertionError: expected [ 'javascript:alert(1)' ] to deeply equal []",
+      diff: ['', '- []', '+ [', `+   "javascript:alert(1)",`, '+ ]']
+    })),
+    {
+      id: 'K5',
+      location: CAUSAL_LOCATIONS.K5,
+      summary:
+        "AssertionError: expected { rendered: true, errorName: '', …(1) } to deeply equal { rendered: false, …(2) }",
+      diff: [
+        '  {',
+        `-   "errorMessage": ${K5_SENTINEL},`,
+        '-   "errorName": "ParseError",',
+        '-   "rendered": false,',
+        '+   "errorMessage": "",',
+        '+   "errorName": "",',
+        '+   "rendered": true,',
+        '  }'
+      ]
+    },
+    {
+      id: 'K6',
+      location: CAUSAL_LOCATIONS.K6,
+      summary: "AssertionError: expected { own: true, after: 'rendered' } to deeply equal { Object (own, after) }",
+      diff: [
+        '  {',
+        `-   "after": ${K6_SENTINEL},`,
+        '-   "own": false,',
+        '+   "after": "rendered",',
+        '+   "own": true,',
+        '  }'
+      ]
+    },
+    {
+      id: 'K9',
+      location: CAUSAL_LOCATIONS.K9,
+      summary:
+        "AssertionError: expected { rendered: false, …(2) } to deeply equal { rendered: true, errorName: '', …(1) }",
+      diff: [
+        '  {',
+        '-   "errorMessage": "",',
+        '-   "errorName": "",',
+        '-   "rendered": true,',
+        '+   "errorMessage": "KaTeX parse error: Too many expansions: infinite loop or need to increase maxExpand setting",',
+        '+   "errorName": "ParseError",',
+        '+   "rendered": false,',
+        '  }'
+      ]
+    }
+  ].map((fixture) => ({ ...fixture, ...causalFixture(fixture.id, fixture.diff, fixture.location, fixture.summary) }))
+  for (const fixture of cases) validateCausalBlock(fixture.id, fixture.record, fixture.assertion, KATEX_TEST_PATH)
+  const k1 = cases.find(({ id }) => id === 'K1')
+  const k5 = cases.find(({ id }) => id === 'K5')
+  const k6 = cases.find(({ id }) => id === 'K6')
+  const k9 = cases.find(({ id }) => id === 'K9')
+  const ids = ['K1', 'K2', 'K3', 'K4', 'K5', 'K6', 'K9']
+  const rawLines = ids.flatMap((id, index) => [
+    ` FAIL  ${KATEX_TEST_PATH} > ${KATEX_SUITE} > ${id} synthetic section fixture`,
+    'AssertionError: synthetic fixture summary',
+    `⎯⎯⎯[${index + 1}/7]⎯`
+  ])
+  const rawSection = `⎯⎯⎯ Failed Tests 7 ⎯⎯⎯\n${rawLines.join('\n')}`
+  if (parseRawFailureSection(rawSection).size !== 7) fail('RAW_SECTION_FIXTURE_REJECTED_VALID')
+  requireRawSectionReject(rawSection.replace('K9 synthetic section fixture', 'K1 synthetic section fixture'))
+  requireRawSectionReject(rawSection.replace('Failed Tests 7', 'Failed Tests 8'))
+  requireRawSectionReject(rawSection.replace(']⎯', ']⎯⎯'))
+  requireRawSectionReject(rawSection.replace(' FAIL  ', ' FAIL '))
+  requireRawSectionReject(rawSection.slice(0, rawSection.lastIndexOf('⎯')))
+  requireFixtureReject('K1', duplicateFixtureLine(k1, '+   "javascript:alert(1)",'))
+  const expectedOnlyUnsafeLines = k1.record.lines
+    .filter((line) => !['+ [', '+   "javascript:alert(1)",', '+ ]'].includes(line))
+    .map((line) => (line === '- []' ? '- ["javascript:alert(1)"]' : line))
+  expectedOnlyUnsafeLines.splice(expectedOnlyUnsafeLines.indexOf('+ Received') + 1, 0, '+ []')
+  requireFixtureReject('K1', {
+    ...k1,
+    record: { ...k1.record, lines: expectedOnlyUnsafeLines }
+  })
+  requireFixtureReject('K5', {
+    ...k5,
+    record: {
+      ...k5.record,
+      lines: k5.record.lines.map((line) => (line === '+   "rendered": true,' ? '+   "rendered": false,' : line))
+    }
+  })
+  requireFixtureReject('K6', {
+    ...k6,
+    record: {
+      ...k6.record,
+      lines: k6.record.lines.map((line) => (line === '+   "own": true,' ? '+   "own": false,' : line))
+    }
+  })
+  requireFixtureReject('K9', {
+    ...k9,
+    record: {
+      ...k9.record,
+      lines: k9.record.lines.map((line) =>
+        line.includes('Too many expansions') ? '+   "errorMessage": "Too many expansions",' : line
+      )
+    }
+  })
+  requireFixtureReject('K5', duplicateFixtureLine(k5, '+   "rendered": true,'))
+  requireFixtureReject('K1', {
+    ...k1,
+    record: {
+      ...k1.record,
+      lines: k1.record.lines.map((line) =>
+        line === ` ❯ ${KATEX_TEST_PATH}:${CAUSAL_LOCATIONS.K1}` ? ` ❯ ${KATEX_TEST_PATH}:${CAUSAL_LOCATIONS.K2}` : line
+      )
+    }
+  })
+  requireFixtureReject('K1', {
+    ...k1,
+    record: {
+      ...k1.record,
+      lines: k1.record.lines.map((line) =>
+        line.startsWith('AssertionError: ') ? line.replace('AssertionError: ', 'TypeError: ') : line
+      )
+    },
+    assertion: {
+      ...k1.assertion,
+      failureMessages: k1.assertion.failureMessages.map((message) => message.replace('AssertionError: ', 'TypeError: '))
+    }
+  })
+  requireFixtureReject('K1', { ...k1, record: { ...k1.record, title: 'K9 wrong-case graft' } })
+}
+function checkReport(reportPath, exitCode, rawBlocks) {
   let report
   if (statSync(reportPath).size > 16 * 1024 * 1024) fail('VITEST_REPORT_SIZE')
   try {
@@ -229,11 +638,15 @@ function checkReport(reportPath, exitCode) {
   const failedIds = failed.map(assertionId).sort()
   if (JSON.stringify(failedIds) !== JSON.stringify([...CAUSAL_RED, ...EXPECTED_OLD_NAMESPACE_RED].sort()))
     fail('UNEXPECTED_FAILURE_SET')
-  for (const id of CAUSAL_RED) {
-    const causal = failed.filter((entry) => assertionId(entry) === id)
-    if (causal.length !== 1 || !Array.isArray(causal[0].failureMessages) || causal[0].failureMessages.length !== 1)
-      fail('RED_CAUSAL_ASSERTION_CARDINALITY')
-  }
+  for (const entry of failed)
+    if (
+      !Array.isArray(entry.failureMessages) ||
+      entry.failureMessages.length !== 1 ||
+      typeof entry.failureMessages[0] !== 'string' ||
+      entry.failureMessages[0].length > 16_384 ||
+      !entry.failureMessages[0].startsWith('AssertionError: ')
+    )
+      fail('RED_ASSERTION_MESSAGE_CARDINALITY')
   if (
     exitCode !== 1 ||
     report.success !== false ||
@@ -241,19 +654,15 @@ function checkReport(reportPath, exitCode) {
     report.numPassedTests !== 30 - failedIds.length
   )
     fail('NOT_ACTUAL_NONZERO_RED')
+  const causalEvidence = new Map()
   for (const failure of failed) {
-    const message = (failure.failureMessages || []).join('\n')
-    if (!message || message.length > 16_384 || !/AssertionError|toEqual|toBe/u.test(message)) fail('RED_NOT_ASSERTION')
-    if (/pageerror|unhandledrejection|browser.*closed|timeout|launch.*failed/iu.test(message))
-      fail('RED_IS_HARNESS_FAILURE')
     const id = assertionId(failure)
-    if (['K1', 'K2', 'K3', 'K4'].includes(id) && !/javascript:alert\(1\)/u.test(message))
-      fail('RED_CAUSAL_UNSAFE_HREF_MISSING')
-    if (id === 'K5' && (!/rendererInheritedSentinel/iu.test(message) || !/rendered:\s*true/iu.test(message)))
-      fail('RED_INHERITED_MACRO_CAUSE_MISSING')
-    if (id === 'K6' && (!/own:\s*true|Received:\s*true/iu.test(message) || !/after:\s*['"]rendered/iu.test(message)))
-      fail('RED_INHERITED_UNDO_CAUSE_MISSING')
-    if (id === 'K9' && !/Too many expansions/iu.test(message)) fail('RED_INHERITED_BOUND_CAUSE_MISSING')
+    const owner = results.find((file) => file.assertionResults?.includes(failure))
+    if (!owner) fail('RED_ASSERTION_OWNER_MISSING')
+    const relativeName = relative(process.cwd(), resolve(owner.name)).replaceAll('\\', '/')
+    const record = rawBlocks.get(id)
+    if (!record) fail('RAW_FAILURE_CASE_MISSING')
+    causalEvidence.set(id, validateCausalBlock(id, record, failure, relativeName))
   }
   return {
     selectedFiles: fileNames,
@@ -264,18 +673,20 @@ function checkReport(reportPath, exitCode) {
     todo: report.numTodoTests ?? 0,
     retries: 0,
     failedCases: failed
-      .map((entry) => ({
-        id: assertionId(entry),
-        title: entry.fullName || entry.title,
-        failureSha256: sha256(Buffer.from((entry.failureMessages || []).join('\n'), 'utf8')),
-        causalFailureExcerpt:
-          CAUSAL_RED.includes(assertionId(entry)) || EXPECTED_OLD_NAMESPACE_RED.includes(assertionId(entry))
-            ? (entry.failureMessages || []).join('\n').slice(0, 2_000)
-            : undefined,
-        observedUnsafeOutput: ['K1', 'K2', 'K3', 'K4'].includes(assertionId(entry))
-          ? /javascript:alert\(1\)/u.exec((entry.failureMessages || []).join('\n'))?.[0] || null
-          : undefined
-      }))
+      .map((entry) => {
+        const id = assertionId(entry)
+        const evidence = causalEvidence.get(id)
+        return {
+          id,
+          title: entry.fullName || entry.title,
+          failureSha256: sha256(Buffer.from(entry.failureMessages[0], 'utf8')),
+          rawBlockSha256: evidence.rawBlockSha256,
+          sourceLocation: evidence.sourceLocation,
+          received: evidence.received,
+          causalFailureExcerpt: rawBlocks.get(id).lines.join('\n').slice(0, 2_000),
+          observedUnsafeOutput: ['K1', 'K2', 'K3', 'K4'].includes(id) ? evidence.received[0] : undefined
+        }
+      })
       .sort((a, b) => a.id.localeCompare(b.id)),
     assertionCases: assertions
       .map((entry) => ({ id: assertionId(entry), status: entry.status }))
@@ -318,7 +729,9 @@ function checkHarnessOrigins(directory) {
       !Array.isArray(value.directCandidates) ||
       value.directCandidates.length === 0 ||
       value.directCandidates.length > 64 ||
-      !value.directCandidates.every((candidate) => validCandidate(candidate) && candidate.importer === '\0renderer-katex-security-harness') ||
+      !value.directCandidates.every(
+        (candidate) => validCandidate(candidate) && candidate.importer === '\0renderer-katex-security-harness'
+      ) ||
       !Array.isArray(value.mermaidCandidates) ||
       value.mermaidCandidates.length === 0 ||
       value.mermaidCandidates.length > 128 ||
@@ -432,9 +845,12 @@ function checkRunErrors(reportPath, expectedPath) {
   return { bytes: stat.size, sha256: sha256(readFileSync(reportPath)), errorCount: report.errorCount, errorCodes: [] }
 }
 function main() {
+  checkCausalParserFixtures()
   const args = parseArgs(process.argv.slice(2))
   const root = process.cwd()
   const lineage = checkSourceLineage(root)
+  if (fileHash(root, KATEX_TEST_PATH).sha256 !== '29a45a57d2223da01ed632e2ada5d7a1ab84997add53b74371b5e2324fbb17f0')
+    fail('KATEX_CAUSAL_SOURCE_BINDING')
   const manifest = Object.fromEntries(Object.keys(BASE_HASHES).map((path) => [path, fileHash(root, path)]))
   for (const [path, expected] of Object.entries(BASE_HASHES))
     if (manifest[path].sha256 !== expected) fail(`BASELINE_${path.replaceAll('.', '_').toUpperCase()}_MISMATCH`)
@@ -459,13 +875,18 @@ function main() {
   const residue = VULNERABLE_RESIDUE.map((path) => ({ path, ...fileHash(root, path) }))
   const testExit = Number(args.get('test-exit'))
   if (!Number.isInteger(testExit) || testExit < 0 || testExit > 255) fail('TEST_EXIT_CODE')
-  const tests = checkReport(resolve(root, args.get('report')), testExit)
-  const runErrorsPath = resolve(root, args.get('run-errors'))
-  const outPath = resolve(root, args.get('out'))
-  const runErrors = checkRunErrors(runErrorsPath, resolve(dirname(outPath), 'vitest-run-errors.json'))
   const logPath = resolve(root, args.get('log'))
   const logStat = statSync(logPath)
   if (logStat.size > 4 * 1024 * 1024) fail('VITEST_LOG_SIZE')
+  const logBytes = readFileSync(logPath)
+  if (logBytes.byteLength > 4 * 1024 * 1024) fail('VITEST_LOG_SIZE')
+  const logText = logBytes.toString('utf8')
+  if (!Buffer.from(logText, 'utf8').equals(logBytes)) fail('VITEST_LOG_UTF8')
+  const rawBlocks = parseRawFailureSection(logText)
+  const tests = checkReport(resolve(root, args.get('report')), testExit, rawBlocks)
+  const runErrorsPath = resolve(root, args.get('run-errors'))
+  const outPath = resolve(root, args.get('out'))
+  const runErrors = checkRunErrors(runErrorsPath, resolve(dirname(outPath), 'vitest-run-errors.json'))
   if (process.version !== 'v22.22.3' || process.env.NPM_VERSION !== '10.9.8') fail('TOOLCHAIN_PIN')
   const origins = checkHarnessOrigins(dirname(resolve(root, args.get('out'))))
   const result = {
@@ -509,7 +930,7 @@ function main() {
       bytes: statSync(resolve(root, args.get('report'))).size,
       sha256: sha256(readFileSync(resolve(root, args.get('report'))))
     },
-    testLog: { bytes: logStat.size, sha256: sha256(readFileSync(logPath)) },
+    testLog: { bytes: logBytes.byteLength, sha256: sha256(logBytes) },
     unhandledErrors: runErrors,
     tests
   }
