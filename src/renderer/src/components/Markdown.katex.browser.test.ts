@@ -96,18 +96,13 @@ describe('actual installed KaTeX advisory and API regressions', () => {
 
   it('K2 treats inherited trust on the options prototype as untrusted', async () => {
     const test = await page()
-    const markup = await test.page.evaluate(() => {
-      const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'trust')
-      try {
-        Object.defineProperty(Object.prototype, 'trust', { configurable: true, value: true })
-        const inherited = Object.create({ trust: true })
-        return (window as any).__rendererSecurity.renderKatex('\\href{javascript:alert(1)}{open}', inherited)
-      } finally {
-        if (saved) Object.defineProperty(Object.prototype, 'trust', saved)
-        else delete (Object.prototype as any).trust
-      }
+    const result = await test.page.evaluate(() => {
+      const options = Object.create({ trust: true })
+      const markup = (window as any).__rendererSecurity.renderKatex('\\href{javascript:alert(1)}{open}', options)
+      return { markup, hasOwnTrust: Object.prototype.hasOwnProperty.call(options, 'trust') }
     })
-    expect((await inspectMarkup(test, markup)).anchors.filter((href) => /^javascript:/iu.test(href))).toEqual([])
+    expect(result.hasOwnTrust).toBe(false)
+    expect((await inspectMarkup(test, result.markup)).anchors.filter((href) => /^javascript:/iu.test(href))).toEqual([])
     await expectNoUnexpectedEffects(test)
   })
 
@@ -116,14 +111,38 @@ describe('actual installed KaTeX advisory and API regressions', () => {
     const markup = await test.page.evaluate(() => {
       const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'default')
       try {
-        Object.defineProperty(Object.prototype, 'default', { configurable: true, value: true })
-        return (window as any).__rendererSecurity.renderKatex('\\href{javascript:alert(1)}{open}', {})
+        Object.defineProperty(Object.prototype, 'default', {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: true
+        })
+        const options = {
+          displayMode: false,
+          output: 'htmlAndMathml',
+          leqno: false,
+          fleqn: false,
+          throwOnError: true,
+          errorColor: '#cc0000',
+          macros: {},
+          minRuleThickness: 0,
+          colorIsTextColor: false,
+          strict: 'warn',
+          maxSize: Infinity,
+          maxExpand: 1000,
+          globalGroup: false
+        }
+        return {
+          markup: (window as any).__rendererSecurity.renderKatex('\\href{javascript:alert(1)}{open}', options),
+          hasOwnTrust: Object.prototype.hasOwnProperty.call(options, 'trust')
+        }
       } finally {
         if (saved) Object.defineProperty(Object.prototype, 'default', saved)
         else delete (Object.prototype as any).default
       }
     })
-    expect((await inspectMarkup(test, markup)).anchors.filter((href) => /^javascript:/iu.test(href))).toEqual([])
+    expect(markup.hasOwnTrust).toBe(false)
+    expect((await inspectMarkup(test, markup.markup)).anchors.filter((href) => /^javascript:/iu.test(href))).toEqual([])
     await expectNoUnexpectedEffects(test)
   })
 
@@ -151,20 +170,32 @@ describe('actual installed KaTeX advisory and API regressions', () => {
       try {
         Object.defineProperty(Object.prototype, key, {
           configurable: true,
+          enumerable: false,
+          writable: true,
           value: '\\htmlClass{inherited-sentinel}{BAD}'
         })
         try {
           ;(window as any).__rendererSecurity.renderKatex(key, { macros: {} })
-          return 'rendered'
+          return { rendered: true, errorName: '', errorMessage: '' }
         } catch (error) {
-          return String((error as Error).name) + ':' + String((error as Error).message).slice(0, 160)
+          return {
+            rendered: false,
+            errorName: String((error as Error).name),
+            errorMessage: String((error as Error).message).slice(0, 160)
+          }
         }
       } finally {
         if (saved) Object.defineProperty(Object.prototype, key, saved)
         else delete (Object.prototype as any)[key]
       }
     })
-    expect(result).toContain('ParseError')
+    expect(result).toEqual({
+      rendered: false,
+      errorName: 'ParseError',
+      errorMessage: expect.stringMatching(
+        /(?:undefined control sequence|Undefined control sequence).*rendererInheritedSentinel/u
+      )
+    })
     await expectNoUnexpectedEffects(test)
   })
 
@@ -176,6 +207,8 @@ describe('actual installed KaTeX advisory and API regressions', () => {
       try {
         Object.defineProperty(Object.prototype, key, {
           configurable: true,
+          enumerable: false,
+          writable: true,
           value: '\\htmlClass{inherited-sentinel}{BAD}'
         })
         const macros = {}
@@ -187,7 +220,7 @@ describe('actual installed KaTeX advisory and API regressions', () => {
         try {
           ;(window as any).__rendererSecurity.renderKatex(key, { macros })
         } catch (error) {
-          after = String((error as Error).name)
+          after = `${String((error as Error).name)}:${String((error as Error).message).slice(0, 180)}`
         }
         return { own, after }
       } finally {
@@ -195,7 +228,12 @@ describe('actual installed KaTeX advisory and API regressions', () => {
         else delete (Object.prototype as any)[key]
       }
     })
-    expect(result).toEqual({ own: false, after: 'ParseError' })
+    expect(result).toEqual({
+      own: false,
+      after: expect.stringMatching(
+        /^ParseError:.*(?:undefined control sequence|Undefined control sequence).*rendererScopedSentinel/u
+      )
+    })
     await expectNoUnexpectedEffects(test)
   })
 
@@ -261,24 +299,45 @@ describe('actual installed KaTeX advisory and API regressions', () => {
       const api = (window as any).__rendererSecurity
       const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'maxExpand')
       try {
-        Object.defineProperty(Object.prototype, 'maxExpand', { configurable: true, value: 1 })
-        let inherited = 'rendered'
+        Object.defineProperty(Object.prototype, 'maxExpand', {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: 1
+        })
+        let inherited = { rendered: false, errorName: '', errorMessage: '' }
         try {
           api.renderKatex('\\outerMacro', { macros: { '\\outerMacro': '\\innerMacro', '\\innerMacro': 'x' } })
+          inherited.rendered = true
         } catch (error) {
-          inherited = String((error as Error).message).slice(0, 120)
+          inherited.errorName = String((error as Error).name)
+          inherited.errorMessage = String((error as Error).message).slice(0, 180)
         }
-        let malformed = false
+        if (saved) Object.defineProperty(Object.prototype, 'maxExpand', saved)
+        else delete (Object.prototype as any).maxExpand
+        let malformed = { rejected: false, errorName: '', errorMessage: '' }
         try {
           api.renderKatex('\\frac{1}', {})
-        } catch {
-          malformed = true
+        } catch (error) {
+          malformed = {
+            rejected:
+              String((error as Error).name) === 'ParseError' &&
+              /\\frac|argument|group/iu.test(String((error as Error).message)),
+            errorName: String((error as Error).name),
+            errorMessage: String((error as Error).message).slice(0, 180)
+          }
         }
-        let recursive = false
+        let recursive = { rejected: false, errorName: '', errorMessage: '' }
         try {
           api.renderKatex('\\again', { maxExpand: 32, macros: { '\\again': '\\again' } })
-        } catch {
-          recursive = true
+        } catch (error) {
+          recursive = {
+            rejected:
+              String((error as Error).name) === 'ParseError' &&
+              /too many expansions|too many times/iu.test(String((error as Error).message)),
+            errorName: String((error as Error).name),
+            errorMessage: String((error as Error).message).slice(0, 180)
+          }
         }
         const valid = api.renderKatex('\\frac{1}{2}+y^2', {})
         return { inherited, malformed, recursive, recovered: valid.includes('katex') || valid.includes('<math') }
@@ -287,9 +346,9 @@ describe('actual installed KaTeX advisory and API regressions', () => {
         else delete (Object.prototype as any).maxExpand
       }
     })
-    expect(result.inherited).toBe('rendered')
-    expect(result.malformed).toBe(true)
-    expect(result.recursive).toBe(true)
+    expect(result.inherited).toEqual({ rendered: true, errorName: '', errorMessage: '' })
+    expect(result.malformed.rejected).toBe(true)
+    expect(result.recursive.rejected).toBe(true)
     expect(result.recovered).toBe(true)
     await expectNoUnexpectedEffects(test)
   })

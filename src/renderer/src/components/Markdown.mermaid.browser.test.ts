@@ -57,9 +57,23 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
   it('D1 imports Mermaid core and renders a real math flowchart through the exact shared KaTeX module', async () => {
     const test = await page()
     expect(harness.origins.mermaidCore.replace(/\\/gu, '/')).toMatch(/\/mermaid\/dist\/mermaid\.core\.mjs$/u)
+    expect(harness.origins.directEdge).toMatchObject({
+      importer: expect.any(String),
+      target: expect.any(String),
+      chunk: expect.any(String)
+    })
+    expect(harness.origins.mermaidEdge).toMatchObject({
+      importer: expect.any(String),
+      target: expect.any(String),
+      chunk: expect.any(String)
+    })
+    expect(harness.origins.directEdge.importer).toContain('renderer-katex-security-harness')
+    expect(harness.origins.mermaidEdge.importer.replace(/\\/gu, '/')).toMatch(
+      /\/mermaid\/dist\/chunks\/mermaid\.core\//u
+    )
     expect(harness.origins.katexDirect).toBeTruthy()
     expect(harness.origins.katexFromMermaid).toBe(harness.origins.katexDirect)
-    expect(harness.origins.browserVersion).toMatch(/^\d+\.\d+\.\d+$/u)
+    expect(harness.origins.browserVersion).toMatch(/^\d+\.\d+\.\d+\.\d+$/u)
     const version = await test.page.evaluate(() => (window as any).__rendererSecurity.katexVersion)
     expect(version).toMatch(/^\d+\.\d+\.\d+$/u)
     const svg = await diagram(test, 'flowchart TD\nA[Start] --> B["Formula $$x^2$$"]')
@@ -70,7 +84,10 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
     expect(dom.text).toContain('Formula')
     expect(dom.text).toContain('x')
     expect(await test.page.locator('#diagram math').count()).toBeGreaterThan(0)
-    expect(await test.page.locator('#diagram svg path.flowchart-link[id^="L_A_B_"]').count()).toBeGreaterThan(0)
+    const edgeIds = await test.page
+      .locator('#diagram svg path.flowchart-link')
+      .evaluateAll((nodes) => nodes.map((node) => node.id))
+    expect(edgeIds.filter((id) => /-L_A_B_/u.test(id)).length).toBe(1)
     expect(dom.badAttributes).toEqual([])
     expect(dom.badLinks).toEqual([])
     await expectNoUnexpectedEffects(test)
@@ -128,9 +145,24 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
       const keys = ['trust', 'default', 'processor']
       const saved = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)]))
       try {
-        Object.defineProperty(Object.prototype, 'trust', { configurable: true, value: true })
-        Object.defineProperty(Object.prototype, 'default', { configurable: true, value: true })
-        Object.defineProperty(Object.prototype, 'processor', { configurable: true, value: () => true })
+        Object.defineProperty(Object.prototype, 'trust', {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: true
+        })
+        Object.defineProperty(Object.prototype, 'default', {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: true
+        })
+        Object.defineProperty(Object.prototype, 'processor', {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: () => true
+        })
         ;(window as any).__rendererCallbackCount = 0
         ;(window as any).rendererSecurityCallback = () => {
           ;(window as any).__rendererCallbackCount++
@@ -139,12 +171,36 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
         const source = `%%{init: {"securityLevel":"loose"}}%%\nflowchart LR\nA["<img src=x onerror=alert(1)>"] --> B["javascript:alert(1)"]\nclick A rendererSecurityCallback "unsafe"\nclick A "javascript:alert(1)" "unsafe"`
         const svg = await api.renderMermaid(source, { securityLevel: 'strict' })
         const root = document.getElementById('diagram')!
-        const node = root.querySelector('[id^="flowchart-A"]')
+        const node =
+          Array.from(root.querySelectorAll('[id]')).find((candidate) => /-flowchart-A-/u.test(candidate.id)) || null
         node?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        const active = Array.from(
+          root.querySelectorAll(
+            'script,iframe,object,embed,[onload],[onerror],[onclick],[href],[xlink\\:href],[src],[data]'
+          )
+        ).filter((candidate) => {
+          const tag = candidate.tagName.toLowerCase()
+          if (['script', 'iframe', 'object', 'embed'].includes(tag)) return true
+          if (Array.from(candidate.attributes).some((attribute) => /^on/iu.test(attribute.name))) return true
+          const urls = Array.from(candidate.attributes)
+            .filter((attribute) => ['href', 'xlink:href', 'src', 'data'].includes(attribute.name.toLowerCase()))
+            .map((attribute) => attribute.value)
+            .filter(Boolean)
+          return urls.some((value) => {
+            if (/^(?:javascript|data|file|blob):/iu.test(value) || /^\/\//u.test(value)) return true
+            try {
+              return new URL(value, location.href).origin !== location.origin
+            } catch {
+              return true
+            }
+          })
+        }).length
         return {
           svg,
           callbackTargetPresent: Boolean(node),
-          active: root.querySelectorAll('script,foreignObject,[onload],[onerror],[onclick]').length,
+          active,
+          foreignObjects: root.querySelectorAll('foreignObject').length,
+          labelContent: root.textContent?.includes('javascript:alert(1)'),
           links: Array.from(root.querySelectorAll('[href],[xlink\\:href]')).map(
             (node) => node.getAttribute('href') || node.getAttribute('xlink:href') || ''
           ),
@@ -161,6 +217,8 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
     expect(outcome.svg).toContain('<svg')
     expect(outcome.callbackTargetPresent).toBe(true)
     expect(outcome.active).toBe(0)
+    expect(outcome.foreignObjects).toBeGreaterThan(0)
+    expect(outcome.labelContent).toBe(true)
     expect(outcome.links.filter((href: string) => /^javascript:/iu.test(href))).toEqual([])
     expect(outcome.callbackCount).toBe(0)
     const safe = await diagram(test, 'flowchart LR\nA[Safe] --> B[Control]')
@@ -202,66 +260,102 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
     expect(math).toContain('katex')
     const safe = await diagram(test, 'flowchart LR\nA[Safe] --> B[Diagram]')
     expect(safe).toContain('<svg')
-    const blocked = await test.page.evaluate(async () => {
-      const api = (window as any).__rendererSecurity
-      let evalBlocked = false
-      try {
-        new Function('window.__cspEvalRan=true')()
-      } catch {
-        evalBlocked = true
-      }
-      const script = document.createElement('script')
-      script.textContent = 'window.__cspInlineRan=true'
-      document.body.append(script)
-      const frame = document.createElement('iframe')
-      frame.src = 'https://frame.invalid/'
-      document.body.append(frame)
-      const object = document.createElement('object')
-      object.data = 'https://object.invalid/'
-      document.body.append(object)
-      await fetch('https://connect.invalid/probe').catch(() => undefined)
-      return {
-        evalBlocked,
-        ran: Boolean((window as any).__cspEvalRan || (window as any).__cspInlineRan),
-        errors: [...api.events.errors],
-        csp: [...api.events.csp]
-      }
-    })
-    const expectedCspEvents = [
-      { directives: ['script-src', 'script-src-elem'], blocked: 'inline' },
-      { directives: ['script-src'], blocked: 'eval' },
-      { directives: ['frame-src'], blocked: 'https://frame.invalid/' },
-      { directives: ['object-src'], blocked: 'https://object.invalid/' },
-      { directives: ['connect-src'], blocked: 'https://connect.invalid/probe' }
-    ]
-    await test.page.waitForFunction(
-      (expected) => {
-        const events = (window as any).__rendererSecurity.events.csp as string[]
-        return expected.every((item: { directives: string[]; blocked: string }) =>
-          events.some((entry) => item.directives.some((directive) => entry === `${directive}:${item.blocked}`))
+    let finalEvents: Array<{
+      effectiveDirective: string
+      violatedDirective: string
+      blockedURI: string
+      disposition: string
+    }> = []
+    let blocked: { evalBlocked: boolean; ran: boolean; errors: string[] } | undefined
+    try {
+      blocked = await test.page.evaluate(async () => {
+        const api = (window as any).__rendererSecurity
+        let evalBlocked = false
+        try {
+          new Function('window.__cspEvalRan=true')()
+        } catch {
+          evalBlocked = true
+        }
+        const script = document.createElement('script')
+        script.textContent = 'window.__cspInlineRan=true'
+        document.body.append(script)
+        const frame = document.createElement('iframe')
+        frame.src = 'https://frame.invalid/'
+        document.body.append(frame)
+        const object = document.createElement('object')
+        object.data = 'https://object.invalid/'
+        document.body.append(object)
+        await fetch('https://connect.invalid/probe').catch(() => undefined)
+        return {
+          evalBlocked,
+          ran: Boolean((window as any).__cspEvalRan || (window as any).__cspInlineRan),
+          errors: [...api.events.errors]
+        }
+      })
+      const expectedCspEvents = [
+        { effective: ['script-src', 'script-src-elem'], violated: ['script-src', 'script-src-elem'], kind: 'inline' },
+        { effective: ['script-src'], violated: ['script-src'], kind: 'eval' },
+        { effective: ['frame-src'], violated: ['frame-src'], kind: 'origin', origin: 'https://frame.invalid' },
+        { effective: ['object-src'], violated: ['object-src'], kind: 'origin', origin: 'https://object.invalid' },
+        { effective: ['connect-src'], violated: ['connect-src'], kind: 'origin', origin: 'https://connect.invalid' }
+      ]
+      await expect
+        .poll(
+          async () => {
+            finalEvents = await test.page.evaluate(() => [...(window as any).__rendererSecurity.events.csp])
+            return expectedCspEvents.every((expected) =>
+              finalEvents.some((event) => {
+                if (
+                  !expected.effective.includes(event.effectiveDirective) ||
+                  !expected.violated.includes(event.violatedDirective)
+                )
+                  return false
+                if (event.disposition !== 'enforce') return false
+                if (expected.kind === 'inline' || expected.kind === 'eval') return event.blockedURI === expected.kind
+                try {
+                  return new URL(event.blockedURI).origin === expected.origin
+                } catch {
+                  return false
+                }
+              })
+            )
+          },
+          { timeout: 5_000 }
         )
-      },
-      expectedCspEvents,
-      { timeout: 5_000 }
-    )
-    const finalEvents = await test.page.evaluate(() => ({
-      errors: [...(window as any).__rendererSecurity.events.errors],
-      csp: [...(window as any).__rendererSecurity.events.csp]
-    }))
-    expect(blocked.evalBlocked).toBe(true)
-    expect(blocked.ran).toBe(false)
-    expect(blocked.errors).toEqual([])
-    expect(finalEvents.errors).toEqual([])
-    const observed = finalEvents.csp
-    expect(observed.length).toBe(expectedCspEvents.length)
-    for (const expected of expectedCspEvents) {
-      expect(
-        observed.filter((entry) =>
-          expected.directives.some((directive) => entry === `${directive}:${expected.blocked}`)
-        )
-      ).toHaveLength(1)
+        .toBe(true)
+      const finalErrors = await test.page.evaluate(() => [...(window as any).__rendererSecurity.events.errors])
+      expect(blocked).toBeDefined()
+      expect(blocked!.evalBlocked).toBe(true)
+      expect(blocked!.ran).toBe(false)
+      expect(blocked!.errors).toEqual([])
+      expect(finalErrors).toEqual([])
+      expect(finalEvents).toHaveLength(expectedCspEvents.length)
+      for (const expected of expectedCspEvents) {
+        expect(
+          finalEvents.filter((event) => {
+            if (
+              !expected.effective.includes(event.effectiveDirective) ||
+              !expected.violated.includes(event.violatedDirective) ||
+              event.disposition !== 'enforce'
+            )
+              return false
+            if (expected.kind === 'inline' || expected.kind === 'eval') return event.blockedURI === expected.kind
+            try {
+              return new URL(event.blockedURI).origin === expected.origin
+            } catch {
+              return false
+            }
+          })
+        ).toHaveLength(1)
+      }
+    } finally {
+      finalEvents = await test.page
+        .evaluate(() => [...(window as any).__rendererSecurity.events.csp])
+        .catch(() => finalEvents)
+      const record = JSON.stringify(finalEvents)
+      test.diagnostics.csp.push(record)
+      console.log(`C1_CSP_EVENTS ${record}`)
     }
-    test.diagnostics.csp.push(...observed)
     expect(test.diagnostics.requests).toEqual([])
     expect(test.diagnostics.errors).toEqual([])
     expect(test.diagnostics.downloads).toBe(0)

@@ -43,6 +43,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+
       - name: Refuse stale source, manifest changes, or files outside the seven-file RED roster
         shell: bash
         env:
@@ -51,6 +55,11 @@ jobs:
           set -euo pipefail
           mkdir -p "$REPORT_DIR"
           trap 'status=$?; printf "exit=%s\n" "$status" > "$REPORT_DIR/preflight-status.txt"' EXIT
+          printf 'head=%s\n' "$(git rev-parse HEAD)" > "$REPORT_DIR/source-identity.txt"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo 'renderer-katex-red:DIRTY_CHECKOUT'
+            exit 1
+          fi
           if [ "$GITHUB_REPOSITORY" != 'mysticalsin/AskToto-Mantu' ] || [ "$GITHUB_REF" != 'refs/heads/fix/renderer-katex-security' ]; then
             echo 'renderer-katex-red:WRONG_REPOSITORY_OR_REF'
             exit 1
@@ -73,12 +82,19 @@ jobs:
           LC_ALL=C sort -o "$expected" "$expected"
           git diff --name-only "$BASELINE" "$GITHUB_SHA" | LC_ALL=C sort > "$actual"
           diff -u "$expected" "$actual"
-          printf '%s  %s\n' '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122' 'package.json' '88425a099d638387d1bf14fd06348002e3ced36f29ca25296d00f7e5b92b0393' 'package-lock.json' | sha256sum --check
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { readFileSync } from 'node:fs'
+          const expected = new Map([
+            ['package.json', '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122'],
+            ['package-lock.json', '88425a099d638387d1bf14fd06348002e3ced36f29ca25296d00f7e5b92b0393']
+          ])
+          for (const [file, hash] of expected) {
+            const actual = createHash('sha256').update(readFileSync(file)).digest('hex')
+            if (actual !== hash) throw new Error(`renderer-katex-red:PACKAGE_BYTES_MISMATCH:${file}`)
+          }
+          NODE
           echo 'renderer-katex-red:BASELINE_INPUTS_VALID'
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22.22.3
 
       - name: Pin the lock producer-compatible npm version
         shell: bash

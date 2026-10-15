@@ -41,6 +41,9 @@ type Origins = {
   mermaidCore: string
   katexVersion: string
   browserVersion: string
+  directEdge: { importer: string; target: string; chunk: string }
+  mermaidEdge: { importer: string; target: string; chunk: string }
+  shikiChunks: string[]
 }
 type Diagnostics = {
   errors: string[]
@@ -99,7 +102,12 @@ import * as katexModule from 'katex'
 const events = { errors: [], csp: [], downloads: 0, dialogs: [], pages: 0 }
 window.addEventListener('error', event => events.errors.push(String(event.message || 'window-error')))
 window.addEventListener('unhandledrejection', event => events.errors.push(String(event.reason?.message || event.reason || 'unhandled-rejection')))
-document.addEventListener('securitypolicyviolation', event => events.csp.push(event.violatedDirective + ':' + event.blockedURI))
+document.addEventListener('securitypolicyviolation', event => events.csp.push({
+  effectiveDirective: String(event.effectiveDirective || '').slice(0, 128),
+  violatedDirective: String(event.violatedDirective || '').slice(0, 128),
+  blockedURI: String(event.blockedURI || '').slice(0, 512),
+  disposition: String(event.disposition || '').slice(0, 32)
+}))
 const rootElement = document.getElementById('fixture-root')
 const root = createRoot(rootElement)
 let currentMarkdown = ''
@@ -133,34 +141,48 @@ renderMarkdown(window.__rendererSecurityConfig?.markdown || '')
 `
 }
 
-function originPlugin(origins: Record<string, string[]>): Plugin {
+function originPlugin(): Plugin {
   return {
     name: 'renderer-katex-security-origin-observer',
-    async resolveId(source, importer) {
-      if (source === 'katex' && importer) {
-        const resolved = await this.resolve(source, importer, { skipSelf: true })
-        if (resolved?.id) {
-          const destination = /mermaid(?:\/|\\.)/u.test(importer) ? origins.katexFromMermaid : origins.katexDirect
-          destination.push(resolve(resolved.id))
-        }
-      }
-      return null
-    },
     generateBundle(_options, bundle) {
-      const ids = Object.values(bundle).flatMap((item) => (item.type === 'chunk' ? Object.keys(item.modules) : []))
-      const core = ids.find((id) => /node_modules[\\/]mermaid[\\/]dist[\\/]mermaid\.core\.mjs$/u.test(id))
+      const chunks = Object.values(bundle).filter((item): item is Rollup.OutputChunk => item.type === 'chunk')
+      const ids = chunks.flatMap((item) => Object.keys(item.modules))
+      const emitted = new Map<string, string>()
+      for (const chunk of chunks) for (const id of Object.keys(chunk.modules)) emitted.set(id, chunk.fileName)
+      const directInfo = this.getModuleInfo(HARNESS_ID)
+      const directTargets = [...(directInfo?.importedIds || []), ...(directInfo?.dynamicallyImportedIds || [])].filter(
+        (id) => /(?:^|\/)katex(?:\/|$)/u.test(id.replaceAll('\\', '/')) && emitted.has(id)
+      )
+      const mermaidCandidates = ids.filter((id) =>
+        /\/mermaid\/dist\/chunks\/mermaid\.core\//u.test(id.replaceAll('\\', '/'))
+      )
+      const mermaidEdges = mermaidCandidates.flatMap((importer) => {
+        const info = this.getModuleInfo(importer)
+        return [...(info?.importedIds || []), ...(info?.dynamicallyImportedIds || [])]
+          .filter((id) => /(?:^|\/)katex(?:\/|$)/u.test(id.replaceAll('\\', '/')) && emitted.has(id))
+          .map((target) => ({ importer, target, chunk: emitted.get(target)! }))
+      })
+      const directEdges = directTargets.map((target) => ({ importer: HARNESS_ID, target, chunk: emitted.get(target)! }))
+      const core = ids.find((id) =>
+        /\/node_modules\/mermaid\/dist\/mermaid\.core\.mjs$/u.test(id.replaceAll('\\', '/'))
+      )
+      const shikiChunks = [
+        ...new Set(
+          ids
+            .filter((id) => /(?:\/shiki\/|\/oniguruma|\/onig\/|\.wasm$)/iu.test(id.replaceAll('\\', '/')))
+            .map((id) => emitted.get(id)!)
+            .filter(Boolean)
+        )
+      ].sort()
       this.emitFile({
         type: 'asset',
         fileName: 'renderer-module-origins.json',
         source: JSON.stringify(
           {
-            katexDirect: [...new Set(origins.katexDirect)],
-            katexFromMermaid: [...new Set(origins.katexFromMermaid)],
+            directEdges,
+            mermaidEdges,
             mermaidCore: core || null,
-            outputModules: ids.map((id) => ({
-              id: resolve(id),
-              chunk: Object.values(bundle).find((item) => item.type === 'chunk' && item.modules[id])?.fileName
-            }))
+            shikiChunks
           },
           null,
           2
@@ -233,7 +255,6 @@ export async function startRendererSecurityHarness(): Promise<Harness> {
   const temp = mkdtempSync(join(tmpdir(), 'renderer-katex-security-'))
   const output = join(temp, 'bundle')
   mkdirSync(output, { recursive: true })
-  const maps: Record<string, string[]> = { katexDirect: [], katexFromMermaid: [] }
   let server: Server | undefined
   let browser: Browser | undefined
   const contexts = new Set<BrowserContext>()
@@ -253,7 +274,7 @@ export async function startRendererSecurityHarness(): Promise<Harness> {
           resolveId: (id) => (id === HARNESS_ID ? id : null),
           load: (id) => (id === HARNESS_ID ? fixtureSource() : null)
         },
-        originPlugin(maps)
+        originPlugin()
       ],
       build: {
         outDir: output,
@@ -278,17 +299,21 @@ export async function startRendererSecurityHarness(): Promise<Harness> {
       throw new Error('renderer-harness:external-entry-missing')
     const manifestPath = join(output, 'renderer-module-origins.json')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-      katexDirect: string[]
-      katexFromMermaid: string[]
+      directEdges: Array<{ importer: string; target: string; chunk: string }>
+      mermaidEdges: Array<{ importer: string; target: string; chunk: string }>
       mermaidCore: string | null
+      shikiChunks: string[]
     }
-    const direct = manifest.katexDirect.filter((id) => id.includes(`${sep}katex${sep}`))
-    const dynamic = manifest.katexFromMermaid.filter((id) => id.includes(`${sep}katex${sep}`))
+    const direct = manifest.directEdges
+    const dynamic = manifest.mermaidEdges
     const pkg = JSON.parse(readFileSync(join(ROOT, 'node_modules/katex/package.json'), 'utf8')) as { version: string }
     const origins: Origins = {
-      katexDirect: direct[0] || '',
-      katexFromMermaid: dynamic[0] || '',
+      katexDirect: direct.length === 1 ? direct[0].target : '',
+      katexFromMermaid: dynamic.length === 1 ? dynamic[0].target : '',
       mermaidCore: manifest.mermaidCore || '',
+      directEdge: direct.length === 1 ? direct[0] : { importer: '', target: '', chunk: '' },
+      mermaidEdge: dynamic.length === 1 ? dynamic[0] : { importer: '', target: '', chunk: '' },
+      shikiChunks: manifest.shikiChunks,
       katexVersion: pkg.version,
       browserVersion: ''
     }

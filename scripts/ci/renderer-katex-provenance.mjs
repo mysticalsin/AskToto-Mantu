@@ -43,7 +43,7 @@ const IDS = Object.freeze([
   ...Array.from({ length: 5 }, (_, index) => `D${index + 1}`),
   'C1'
 ])
-const REQUIRED_RED = Object.freeze(['K1', 'K2', 'K3', 'K4'])
+const CAUSAL_RED = Object.freeze(['K1', 'K2', 'K3', 'K4', 'K9'])
 const EXPECTED_OLD_NAMESPACE_RED = Object.freeze(['K5', 'K6'])
 
 function fail(code) {
@@ -155,13 +155,9 @@ function checkReport(reportPath, exitCode) {
     fail('CASE_ROSTER')
   const failed = assertions.filter((entry) => entry.status === 'failed')
   const failedIds = failed.map(assertionId).sort()
-  const failedSet = new Set(failedIds)
-  if (
-    REQUIRED_RED.some((id) => !failedSet.has(id)) ||
-    failedIds.some((id) => !REQUIRED_RED.includes(id) && !EXPECTED_OLD_NAMESPACE_RED.includes(id))
-  )
+  if (JSON.stringify(failedIds) !== JSON.stringify([...CAUSAL_RED, ...EXPECTED_OLD_NAMESPACE_RED].sort()))
     fail('UNEXPECTED_FAILURE_SET')
-  for (const id of REQUIRED_RED) {
+  for (const id of CAUSAL_RED) {
     const causal = failed.filter((entry) => assertionId(entry) === id)
     if (causal.length !== 1 || !Array.isArray(causal[0].failureMessages) || causal[0].failureMessages.length !== 1)
       fail('RED_CAUSAL_ASSERTION_CARDINALITY')
@@ -178,8 +174,14 @@ function checkReport(reportPath, exitCode) {
     if (!message || message.length > 16_384 || !/AssertionError|toEqual|toBe/u.test(message)) fail('RED_NOT_ASSERTION')
     if (/pageerror|unhandledrejection|browser.*closed|timeout|launch.*failed/iu.test(message))
       fail('RED_IS_HARNESS_FAILURE')
-    if (REQUIRED_RED.includes(assertionId(failure)) && !/javascript:alert\(1\)/u.test(message))
+    const id = assertionId(failure)
+    if (['K1', 'K2', 'K3', 'K4'].includes(id) && !/javascript:alert\(1\)/u.test(message))
       fail('RED_CAUSAL_UNSAFE_HREF_MISSING')
+    if (id === 'K5' && (!/rendererInheritedSentinel/iu.test(message) || !/rendered:\s*true/iu.test(message)))
+      fail('RED_INHERITED_MACRO_CAUSE_MISSING')
+    if (id === 'K6' && (!/own:\s*true|Received:\s*true/iu.test(message) || !/after:\s*['"]rendered/iu.test(message)))
+      fail('RED_INHERITED_UNDO_CAUSE_MISSING')
+    if (id === 'K9' && !/Too many expansions/iu.test(message)) fail('RED_INHERITED_BOUND_CAUSE_MISSING')
   }
   return {
     selectedFiles: fileNames,
@@ -194,10 +196,11 @@ function checkReport(reportPath, exitCode) {
         id: assertionId(entry),
         title: entry.fullName || entry.title,
         failureSha256: sha256(Buffer.from((entry.failureMessages || []).join('\n'), 'utf8')),
-        causalFailureExcerpt: REQUIRED_RED.includes(assertionId(entry))
-          ? (entry.failureMessages || []).join('\n').slice(0, 2_000)
-          : undefined,
-        observedUnsafeOutput: REQUIRED_RED.includes(assertionId(entry))
+        causalFailureExcerpt:
+          CAUSAL_RED.includes(assertionId(entry)) || EXPECTED_OLD_NAMESPACE_RED.includes(assertionId(entry))
+            ? (entry.failureMessages || []).join('\n').slice(0, 2_000)
+            : undefined,
+        observedUnsafeOutput: ['K1', 'K2', 'K3', 'K4'].includes(assertionId(entry))
           ? /javascript:alert\(1\)/u.exec((entry.failureMessages || []).join('\n'))?.[0] || null
           : undefined
       }))
@@ -222,11 +225,36 @@ function checkHarnessOrigins(directory) {
     } catch {
       fail('HARNESS_ORIGIN_JSON')
     }
-    if (value.katexVersion !== OLD_KATEX.version || !/^\d+\.\d+\.\d+(?:-.*)?$/u.test(value.browserVersion || ''))
+    if (value.katexVersion !== OLD_KATEX.version || !/^\d+\.\d+\.\d+\.\d+(?:-.*)?$/u.test(value.browserVersion || ''))
       fail('HARNESS_RUNTIME_IDENTITY')
-    if (!value.katexDirect || value.katexDirect !== value.katexFromMermaid) fail('HARNESS_KATEX_MODULE_IDENTITY')
+    const directEdge = value.directEdge
+    const mermaidEdge = value.mermaidEdge
+    const normalize = (text) => String(text || '').replaceAll('\\', '/')
+    if (
+      !directEdge ||
+      directEdge.importer !== '\0renderer-katex-security-harness' ||
+      !directEdge.target ||
+      !directEdge.chunk ||
+      !mermaidEdge ||
+      !mermaidEdge.importer ||
+      !mermaidEdge.target ||
+      !mermaidEdge.chunk ||
+      directEdge.target !== mermaidEdge.target ||
+      directEdge.chunk !== mermaidEdge.chunk ||
+      value.katexDirect !== directEdge.target ||
+      value.katexFromMermaid !== mermaidEdge.target ||
+      !/(?:^|\/)node_modules\/katex\//u.test(normalize(directEdge.target)) ||
+      !/\/node_modules\/mermaid\/dist\/chunks\/mermaid\.core\//u.test(normalize(mermaidEdge.importer))
+    )
+      fail('HARNESS_KATEX_MODULE_IDENTITY')
     if (!/node_modules[\\/]mermaid[\\/]dist[\\/]mermaid\.core\.mjs$/u.test(value.mermaidCore || ''))
       fail('HARNESS_MERMAID_CORE_IDENTITY')
+    if (
+      !Array.isArray(value.shikiChunks) ||
+      value.shikiChunks.length === 0 ||
+      value.shikiChunks.some((chunk) => typeof chunk !== 'string' || !chunk)
+    )
+      fail('HARNESS_SHIKI_CHUNK_MAP')
     return {
       name,
       sha256: sha256(readFileSync(path)),
@@ -234,7 +262,10 @@ function checkHarnessOrigins(directory) {
       browserVersion: value.browserVersion,
       katexDirect: value.katexDirect,
       katexFromMermaid: value.katexFromMermaid,
-      mermaidCore: value.mermaidCore
+      mermaidCore: value.mermaidCore,
+      directEdge,
+      mermaidEdge,
+      shikiChunks: value.shikiChunks
     }
   })
   const first = JSON.stringify({ ...origins[0], name: undefined, sha256: undefined })
