@@ -132,7 +132,9 @@ describe('ACL probe transport and parser', () => {
 
 /** Distinguish a failed Get-Acl invocation from a failed script transport without logging a file path. */
 function probeTransportDiagnostic(path: string, mode: 'command' | 'encoded'): string {
-  const inputPath = mode === 'encoded' ? '$path' : JSON.stringify(path)
+  // PowerShell expands $variables and $() inside double quotes; its single-quoted literal only
+  // requires apostrophes to be doubled. This diagnostic must not execute path characters either.
+  const inputPath = mode === 'encoded' ? '$path' : `'${path.replaceAll("'", "''")}'`
   const script = [
     "$ErrorActionPreference='Stop'",
     "$env:PSModulePath=$PSHOME+'\\Modules'",
@@ -507,6 +509,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     const probe = readAclForTest(literalPath)
     expect(probe?.owner).toMatch(/^S-1-\d+(-\d+)+$/)
     expect(probe?.aces.length).toBeGreaterThan(0)
+    expect(probeTransportDiagnostic(literalPath, 'command')).toMatch(/^sid=True;aces=[1-9]\d*$/)
   }, 20_000)
 
   it('accepts exact bytes from a synthetic hardened admin-owned policy', async () => {
