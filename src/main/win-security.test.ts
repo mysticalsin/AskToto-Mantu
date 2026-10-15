@@ -376,6 +376,7 @@ describe('readTrustedAdminManagedBytes — bounded raw bytes from one trusted fi
     setPlatform('win32')
     mkdirSync(tmpDir, { recursive: true })
     writeFileSync(file, '{"allowedProviders":[]}')
+    // Source-level fresh-reader contract; the live hardened-policy case below proves real Get-Acl.
     managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] })
     probes.count = 0
     resetAclMemoForTests()
@@ -412,11 +413,28 @@ describe('readTrustedAdminManagedBytes — bounded raw bytes from one trusted fi
   })
 })
 
-// Live end-to-end proof through the real PowerShell Get-Acl reader: a file a standard (non-elevated)
-// user can create under %ProgramData% must NOT be honored as admin policy. Windows-only; self-cleaning.
+// Live end-to-end proof through the real PowerShell Get-Acl reader. The negative fixture is given an
+// explicit Users:Write ACE, since a hosted runner may create files with an admin-owned ACL.
+// Windows-only; confined to self-cleaning synthetic files under %ProgramData%.
 describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real ProgramData ACL (win32)', () => {
   const dir = join(process.env.ProgramData || 'C:\\ProgramData', 'Metis__wsectest')
   const file = join(dir, 'managed-config.json')
+  const icacls = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
+  function makeFixtureNonAdminWritable(): void {
+    try {
+      execFileSync(icacls, [file, '/grant', `*${USERS}:(W)`], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 8000
+      })
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException & { status?: number }
+      throw new Error(`synthetic ACL grant failed: status=${failure.status ?? 'none'};code=${failure.code ?? 'none'}`)
+    }
+    const probe = readAclForTest(file)
+    expect(probe).not.toBeNull()
+    expect(probe?.aces.some((ace) => ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0)).toBe(true)
+    expect(probe && evaluateAclTrust(probe)).toBe(false)
+  }
   afterEach(() => {
     try {
       if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
@@ -425,10 +443,11 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     }
   })
 
-  it('rejects a policy file planted by the current non-admin user (owner=self, Users:Write inherited)', () => {
-    mkdirSync(dir, { recursive: true }) // inherits ProgramData's Users:Write ACE, like the real attack
+  it('rejects a policy file explicitly writable by non-admin Users', () => {
+    mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
-    // The file exists and parses, but the ACL reader sees a non-admin owner + inherited Users write.
+    makeFixtureNonAdminWritable()
+    // The file exists and parses, but the real ACL reader sees Users write.
     expect(isAdminManagedTrusted(file)).toBe(false)
     // Budget must clear the code's OWN limit: the ACL read spawns System32 powershell.exe with an
     // 8s execFileSync timeout, which already exceeds vitest's 5s per-test default — so on a cold CI
@@ -486,7 +505,6 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     const hardened = join(dir, 'hardened-policy.json')
     const bytes = JSON.stringify({ requireAuth: true })
     writeFileSync(hardened, bytes)
-    const icacls = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
     try {
       for (const args of [
         [hardened, '/inheritance:r'],
@@ -510,6 +528,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
+    makeFixtureNonAdminWritable()
     // Content must not leak even though the file exists and parses — the ACL is untrusted, so the
     // held-fd read is refused before ever handing the caller a string to JSON.parse.
     expect(readTrustedAdminManaged(file)).toBeNull()
@@ -563,6 +582,8 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
   it('forces a new descriptor-bound ACL probe at an explicit authority boundary', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(Date.now())
+    // Source-level memo contract with a synthetic trusted ACL; the live hardened-policy case above
+    // proves the real Windows Get-Acl path and reader.
     managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] })
     const first = readTrustedAdminManaged(file)
     expect(first).toBe(CONTENT)
