@@ -192,14 +192,26 @@ function sourceFixture(
   workerFactory?: MeetingSpeechWorkerFactory,
   maxHeldRoots?: number
 ): MainPersistenceBootstrapSourceFixture {
-  const catalogBytes = new Uint8Array(readFileSync(resolve(process.cwd(), 'resources/persistence-profiles.v1.json')))
+  const maxHeldRootsForFixture = maxHeldRoots ?? 4
+  if (!Number.isSafeInteger(maxHeldRootsForFixture) || maxHeldRootsForFixture < 1 || maxHeldRootsForFixture > 8)
+    throw new Error('Synthetic source fixture maxHeldRoots must be an integer from 1 through 8')
+  const bundledCatalog = JSON.parse(
+    readFileSync(resolve(process.cwd(), 'resources/persistence-profiles.v1.json'), 'utf8')
+  ) as { profiles?: Array<Record<string, unknown>> }
+  if (!Array.isArray(bundledCatalog.profiles)) throw new Error('Bundled source fixture catalog has no profiles')
+  const catalogBytes = Buffer.from(
+    JSON.stringify({
+      ...bundledCatalog,
+      profiles: bundledCatalog.profiles.map((profile) => ({ ...profile, maxHeldRoots: maxHeldRootsForFixture }))
+    }),
+    'utf8'
+  )
   const parsed = parseProfileCatalog(catalogBytes)
   if (!parsed) throw new Error('Synthetic source fixture catalog failed its real parser')
   const source = parsed.catalog.profiles[0]
   if (!source) throw new Error('Synthetic source fixture catalog has no profile')
   const profile: ResolvedPersistenceProfile = Object.freeze({
     ...source,
-    ...(maxHeldRoots ? { maxHeldRoots } : {}),
     qualification: Object.freeze({ state: 'QUALIFIED', reportSha256: 'b'.repeat(64) }),
     profileDigest: 'c'.repeat(64),
     catalogSha256: 'd'.repeat(64),
