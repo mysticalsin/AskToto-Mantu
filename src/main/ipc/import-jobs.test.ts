@@ -67,7 +67,7 @@ function setup({
   managerStartMany?: () => Promise<ImportJob[]>
   managerResume?: () => Promise<ImportJob>
   managerSnapshot?: () => Promise<unknown>
-  pickAudioFile?: (window: BrowserWindow | null) => Promise<unknown>
+  pickAudioFile?: typeof import('../import-audio').pickAudioFile
   currentWindow?: BrowserWindow | null
   useActualDocumentGuard?: boolean
 } = {}) {
