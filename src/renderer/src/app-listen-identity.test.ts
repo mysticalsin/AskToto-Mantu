@@ -19,8 +19,10 @@ function extractStartListenBoundaries(): { source: ts.SourceFile; boundaries: ts
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'startListen' && node.initializer) {
       const inspect = (child: ts.Node): void => {
-        if (ts.isVariableDeclaration(child) && ['source', 'engine'].includes(child.name.getText(source))) boundaries.push(child)
-        if (ts.isBinaryExpression(child) && child.left.getText(source) === 'meetingStartRef.current') boundaries.push(child)
+        if (ts.isVariableDeclaration(child) && ['source', 'engine'].includes(child.name.getText(source)))
+          boundaries.push(child)
+        if (ts.isBinaryExpression(child) && child.left.getText(source) === 'meetingStartRef.current')
+          boundaries.push(child)
         if (ts.isCallExpression(child) && child.expression.getText(source) === 'listen.start') boundaries.push(child)
         ts.forEachChild(child, inspect)
       }
@@ -47,21 +49,24 @@ function runStartListenSnippet(
       asrQuality: 'fast',
       asrEngine: 'parakeet',
       asrLanguage: 'English',
-      ...(useCloud ? {
-        enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false },
-        cloudSttProvider: 'cloudflare-nova3'
-      } : {})
+      ...(useCloud
+        ? {
+            enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false },
+            cloudSttProvider: 'cloudflare-nova3'
+          }
+        : {})
     },
     resolveListenEngine,
     acceptedCloudConsent: undefined,
     listen: { start },
     Date: { now: () => 42 }
   })
-  const code = ts.transpileModule(boundaries.map(node =>
-    `${ts.isVariableDeclaration(node) ? 'const ' : ''}${node.getText(source)};`
-  ).join('\n'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
-  }).outputText
+  const code = ts.transpileModule(
+    boundaries.map((node) => `${ts.isVariableDeclaration(node) ? 'const ' : ''}${node.getText(source)};`).join('\n'),
+    {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+    }
+  ).outputText
   vm.runInContext(code, context, { timeout: 1_000 })
   return start
 }
