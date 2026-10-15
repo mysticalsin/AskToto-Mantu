@@ -1024,6 +1024,7 @@ async function setupFixture(): Promise<void> {
   }
 }
 
+// biome-ignore lint/correctness/noEmptyPattern: Vitest requires an empty fixture pattern to expose the suite as the second argument.
 beforeAll(({}, suite) => {
   suite.meta.qaU0FixtureOwner = owner
   const original = setupFixture()
@@ -1037,6 +1038,7 @@ afterEach(({ task }) => {
   currentCaseRecord = null
 })
 
+// biome-ignore lint/correctness/noEmptyPattern: Vitest requires an empty fixture pattern to expose the suite as the second argument.
 afterAll(async ({}, suite) => {
   owner.closing = true
   owner.sameSetupPromise = setupPromise !== undefined && setupPromise === beforeAllPromise
