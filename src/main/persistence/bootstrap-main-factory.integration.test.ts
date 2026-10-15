@@ -23,7 +23,7 @@ import {
   inspectIncrementalRecordReceipt,
   type IncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
-} from '../features/meetings/incremental-record-receipt'
+} from '../infra/process/incremental-record-receipt'
 import { commitManagedAuthorityDocument } from '../settings-authority-history'
 import { publishSettingsSnapshot } from '../settings-observation'
 

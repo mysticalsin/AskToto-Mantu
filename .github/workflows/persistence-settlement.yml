@@ -1,14 +1,17 @@
-name: Persistence K1 complete key-use GREEN
+name: Persistence K1/core layering composition GREEN
 
 on:
   push:
     paths:
       - .github/workflows/persistence-settlement.yml
+      - .github/workflows/incremental-core-qualification.yml
       - package.json
       - package-lock.json
       - vitest.config.ts
       - scripts/qa/persistence-settlement-unhandled-reporter.mjs
       - scripts/qa/check-persistence-settlement-report.mjs
+      - scripts/qa/run-incremental-core-validation.mjs
+      - scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts
       - src/main/persistence/bootstrap.ts
       - src/main/persistence/bootstrap-speech-owner.ts
       - src/main/persistence/bootstrap-settlement.ts
@@ -20,10 +23,16 @@ on:
       - src/main/persistence/legacy-file-key.test.ts
       - src/main/persistence/legacy-file-key.ts
       - src/main/features/meetings/incremental-meeting-journal-files.ts
+      - src/main/features/meetings/incremental-meeting-journal-files.test.ts
+      - src/main/features/meetings/incremental-meeting-journal.test.ts
+      - src/main/infra/process/incremental-record-canonical.ts
+      - src/main/infra/process/incremental-record-canonical.test.ts
+      - src/main/infra/process/incremental-record-receipt.ts
       - src/main/infra/process/meeting-speech-host.ts
+      - src/main/infra/process/meeting-speech-host.test.ts
       - src/main/meeting-speech-worker.ts
       - src/main/features/meetings/incremental-meeting-journal.ts
-      - src/main/features/meetings/incremental-record-receipt.ts
+      - src/main/persistence/bootstrap-journal.integration.test.ts
       - src/main/auth-speech-lease.ts
       - src/main/settings-authority-history.ts
       - src/main/settings-observation.ts
@@ -44,13 +53,13 @@ defaults:
 
 jobs:
   test-first:
-    name: 39-case K1 complete key-use GREEN
+    name: 39-case K1/core layering composition GREEN
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: persistence-k1-green
-      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 52c97ca175fccea6db51ab01c912d46d3876d6b4
+      PERSISTENCE_SETTLEMENT_PHASE: persistence-k1-core-layering-composition
+      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 4c4920ce1d0fe4f73ccdeae75329040f8cb01aa2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -75,33 +84,8 @@ jobs:
           echo "UNHANDLED_REPORT_PATH=$SETTLEMENT_REPORT_DIR/unhandled.json" >> "$GITHUB_ENV"
           echo "SETTLEMENT_RECEIPT_PATH=$SETTLEMENT_REPORT_DIR/receipt.json" >> "$GITHUB_ENV"
           echo "REPORT_STARTED_AT_MS=$(date -u +%s%3N)" >> "$GITHUB_ENV"
-      - name: Verify the exact successor and cumulative K1 change envelopes
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT"
-          test "$(git rev-parse "${PERSISTENCE_SETTLEMENT_PARENT_COMMIT}^")" = "798c21c5d97819fea1e1c8d6dc3bc9da8668e469"
-          test "$(git rev-parse 798c21c5d97819fea1e1c8d6dc3bc9da8668e469^)" = "7254798aafdcbced95a933d62fbef8522672e375"
-          actual_paths="$(git diff --name-only "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA" | LC_ALL=C sort)"
-          expected_paths="$(printf '%s\n' \
-            .github/workflows/persistence-settlement.yml \
-            scripts/qa/check-persistence-settlement-report.mjs \
-            src/main/persistence/bootstrap.ts \
-            src/main/persistence/legacy-file-key.ts \
-            src/main/persistence/protected-meeting-keys.ts | LC_ALL=C sort)"
-          test "$actual_paths" = "$expected_paths"
-          cumulative_paths="$(git diff --name-only 7254798aafdcbced95a933d62fbef8522672e375 "$GITHUB_SHA" | LC_ALL=C sort)"
-          cumulative_expected="$(printf '%s\n' \
-            .github/workflows/persistence-settlement.yml \
-            scripts/qa/check-persistence-settlement-report.mjs \
-            src/main/persistence/bootstrap-main-factory.integration.test.ts \
-            src/main/persistence/legacy-file-key.test.ts \
-            src/main/persistence/protected-meeting-keys.test.ts \
-            src/main/persistence/bootstrap.ts \
-            src/main/persistence/legacy-file-key.ts \
-            src/main/persistence/protected-meeting-keys.ts | LC_ALL=C sort)"
-          test "$cumulative_paths" = "$cumulative_expected"
-          git diff --check "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA"
+      - name: Verify the exact composition source before install
+        run: node scripts/qa/check-persistence-settlement-report.mjs --check-composition-source
       - name: Install the frozen Node 22 test dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run the exact four-module K1 suite with actual exit and JSON
@@ -486,11 +470,11 @@ jobs:
           NODE
       - name: Validate all 39 cases and 26 exact lifecycle witnesses
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain raw reports and K1 GREEN receipt
+      - name: Retain raw reports and composition GREEN receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-k1-green-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persistence-k1-core-layering-composition-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/vitest.json
             ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/vitest.log

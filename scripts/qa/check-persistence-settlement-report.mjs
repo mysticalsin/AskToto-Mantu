@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -14,28 +15,103 @@ const requiredSuites = new Map([
   [requiredFiles[2], 'protected meeting-key lifecycle'],
   [requiredFiles[3], 'profile-bound legacy file-key access']
 ])
-const hashedSources = [
-  ...requiredFiles,
-  'src/main/persistence/bootstrap.ts',
-  'src/main/persistence/bootstrap-settlement.ts',
-  'src/main/persistence/bootstrap-speech-owner.ts',
-  'src/main/persistence/root-registry.ts',
-  'src/main/persistence/protected-meeting-keys.ts',
-  'src/main/persistence/legacy-file-key.ts',
-  'src/main/infra/process/meeting-speech-host.ts',
-  'src/main/meeting-speech-worker.ts',
-  'src/main/features/meetings/incremental-meeting-journal.ts',
-  'src/main/features/meetings/incremental-meeting-journal-files.ts',
-  'src/main/features/meetings/incremental-record-receipt.ts',
-  'src/main/auth-speech-lease.ts',
-  'src/main/settings-authority-history.ts',
-  'src/main/settings-observation.ts',
-  'src/main/persistence/resource-policy.ts',
-  'resources/persistence-profiles.v1.json',
-  'scripts/qa/persistence-settlement-unhandled-reporter.mjs',
-  'scripts/qa/check-persistence-settlement-report.mjs',
-  '.github/workflows/persistence-settlement.yml'
+const frozenSourceHashes = new Map([
+  [
+    '.github/workflows/incremental-core-qualification.yml',
+    '3d67774b971fd1c0cd8e30255fe4c52375e024e7667ceb57398ae6fe018a1182'
+  ],
+  ['resources/persistence-profiles.v1.json', '4c18613d27614113055e89bc050943ec8d6042e179f0b5589f4ad9db3cfc7ddf'],
+  [
+    'scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts',
+    '8379f32b08f97da834f458164685d24ff05ff3bb3f6ab5a633a20b57613c4316'
+  ],
+  [
+    'scripts/qa/persistence-settlement-unhandled-reporter.mjs',
+    'b9959aa67009d613a49189ffa6d79818c6c742361ca9b57357eacadeff916525'
+  ],
+  [
+    'scripts/qa/run-incremental-core-validation.mjs',
+    'ef133111f6d3e26c3ebb37f020bf44c1cd8c348b7a60861acc247810c1ad5f1e'
+  ],
+  [
+    'src/main/auth-speech-lease.ts',
+    '9c1c85c5f84903e91223b3e083393daaf03be84b60d38af3163535cf0ec6b883' // gitleaks:allow -- public source SHA-256
+  ],
+  [
+    'src/main/features/meetings/incremental-meeting-journal-files.test.ts',
+    '7cdfbc7b440914937ecd60a9d89e58fdeebcae2d81498263c94f46717e160cd4'
+  ],
+  [
+    'src/main/features/meetings/incremental-meeting-journal-files.ts',
+    '4b1c1e07abbb792eda1dea2e807efe3c3d9f3c9dab19a8835be7806192dd3090'
+  ],
+  [
+    'src/main/features/meetings/incremental-meeting-journal.test.ts',
+    '150c59f7f615493f4a3fee2a241a4b809df215abedba84d93d35f3bd5905cd38'
+  ],
+  [
+    'src/main/features/meetings/incremental-meeting-journal.ts',
+    '606d35a8870b287723673a32ed19da24208ad2a6a9691c181ce902633d3716a6'
+  ],
+  [
+    'src/main/infra/process/incremental-record-canonical.test.ts',
+    '2f216c9be46542398028e98884f4c49d406f3dc5a09d6bcf4f697ff339392502'
+  ],
+  [
+    'src/main/infra/process/incremental-record-canonical.ts',
+    '824eb272e06f2401725055b06dc5326d2f2f9d23c393684a32c2ee17af1ea953'
+  ],
+  [
+    'src/main/infra/process/incremental-record-receipt.ts',
+    'a7bbc1d3d6890c7e4993d583d8c01c2e6232558663e4b2ecd1309b917bef2eaf'
+  ],
+  [
+    'src/main/infra/process/meeting-speech-host.test.ts',
+    '6371d04bee2246aa22c8e91cadcb2c368e3366aacbebd00d2eb263079b6452c8'
+  ],
+  ['src/main/infra/process/meeting-speech-host.ts', '4e6f9e04c9ad945bef23c19d411b9de971ef7495cf89410cd83f7c51c5f6ce56'],
+  ['src/main/meeting-speech-worker.ts', '104297ff180b5a8a77504f0930dacf50ee50e0bfb4cfb3eeab450b01f37092ea'],
+  [
+    'src/main/persistence/bootstrap-journal.integration.test.ts',
+    '5061af70357f8d82a2cd9a80b38f1646205918c54d6a68134473e713b9b92547'
+  ],
+  [
+    'src/main/persistence/bootstrap-main-factory.integration.test.ts',
+    '87d97425b9074483092bdd211ec5cf529e134f56853690e4006b6a507a8e1e14'
+  ],
+  ['src/main/persistence/bootstrap-settlement.ts', '1d74c092c73273b4ae293309aee01bdb155b8b2f44e29a68f39bfe23f6b4f5ce'],
+  [
+    'src/main/persistence/bootstrap-speech-owner.ts',
+    'a4879f6b7a41c99f8571d03dc7fa8256c28777b3916a5b07ee750404601abdfa'
+  ],
+  ['src/main/persistence/bootstrap.ts', 'abeb701438ed77f845b93caee6a3d30ad31bfbc7e1464b1b6af8eb32774b2a28'],
+  [
+    'src/main/persistence/legacy-file-key.test.ts',
+    'cc823c409cdd53da27fa07b66b3ab5c610ca236451304fe03205ecec87ee0956' // gitleaks:allow -- public source SHA-256
+  ],
+  [
+    'src/main/persistence/legacy-file-key.ts',
+    '83a95cf7aa8fc240e008a26edc6fa8b0c62b01e230b66867871498e832ce6e90' // gitleaks:allow -- public source SHA-256
+  ],
+  [
+    'src/main/persistence/protected-meeting-keys.test.ts',
+    'aef2610675be845045d6a243ada88728ae15c5695c1c1705a4e7e3c155aa5ab1'
+  ],
+  [
+    'src/main/persistence/protected-meeting-keys.ts',
+    '08249d1db5ca47324042f1c63eb624119ae9db63b34e1efed86d8933ce72c246'
+  ],
+  ['src/main/persistence/resource-policy.ts', '2d5e634d88764204b754057b8417a8646582ed42157218871d65dc9598f40730'],
+  ['src/main/persistence/root-registry.test.ts', '7a244498039cba6f6fa1e699aee1cc8099a65ef50a267bea62f76e3f0723aba8'],
+  ['src/main/persistence/root-registry.ts', '4b4e0565df58109ec73586e50a92e1cdedc6d86a4515220ddf28d93c54ff7776'],
+  ['src/main/settings-authority-history.ts', 'bd8bf03e79fe7b2d6446e8d8fb2be61d16599127ed9f4bc76c8a6f069bd40742'],
+  ['src/main/settings-observation.ts', 'b2a843144d580cc6654e42b6efb461eca21c78002fa4fd1f7ffaaa6d9fa30fff']
+])
+const consumerSources = [
+  '.github/workflows/persistence-settlement.yml',
+  'scripts/qa/check-persistence-settlement-report.mjs'
 ]
+const hashedSources = [...frozenSourceHashes.keys(), ...consumerSources]
 
 const cases = [
   {
@@ -247,6 +323,194 @@ function integer(value) {
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+const commits = {
+  base: '7254798aafdcbced95a933d62fbef8522672e375',
+  first: '798c21c5d97819fea1e1c8d6dc3bc9da8668e469',
+  second: '52c97ca175fccea6db51ab01c912d46d3876d6b4',
+  k1: '4c4920ce1d0fe4f73ccdeae75329040f8cb01aa2'
+}
+const historicalFive = [
+  '.github/workflows/persistence-settlement.yml',
+  'scripts/qa/check-persistence-settlement-report.mjs',
+  'src/main/persistence/bootstrap.ts',
+  'src/main/persistence/legacy-file-key.ts',
+  'src/main/persistence/protected-meeting-keys.ts'
+]
+const historicalEight = [
+  ...historicalFive,
+  'src/main/persistence/bootstrap-main-factory.integration.test.ts',
+  'src/main/persistence/legacy-file-key.test.ts',
+  'src/main/persistence/protected-meeting-keys.test.ts'
+]
+const compositionModified = [
+  '.github/workflows/incremental-core-qualification.yml',
+  '.github/workflows/persistence-settlement.yml',
+  'scripts/qa/check-persistence-settlement-report.mjs',
+  'scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts',
+  'scripts/qa/run-incremental-core-validation.mjs',
+  'src/main/features/meetings/incremental-meeting-journal-files.test.ts',
+  'src/main/features/meetings/incremental-meeting-journal-files.ts',
+  'src/main/features/meetings/incremental-meeting-journal.test.ts',
+  'src/main/features/meetings/incremental-meeting-journal.ts',
+  'src/main/infra/process/meeting-speech-host.test.ts',
+  'src/main/infra/process/meeting-speech-host.ts',
+  'src/main/meeting-speech-worker.ts',
+  'src/main/persistence/bootstrap-journal.integration.test.ts',
+  'src/main/persistence/bootstrap-main-factory.integration.test.ts'
+]
+const compositionMoves = [
+  [
+    'src/main/features/meetings/incremental-record-canonical.test.ts',
+    'src/main/infra/process/incremental-record-canonical.test.ts'
+  ],
+  [
+    'src/main/features/meetings/incremental-record-canonical.ts',
+    'src/main/infra/process/incremental-record-canonical.ts'
+  ],
+  ['src/main/features/meetings/incremental-record-receipt.ts', 'src/main/infra/process/incremental-record-receipt.ts']
+]
+
+function validateCompositionSource() {
+  requireValue(process.version === 'v22.22.3', 'Node runtime is not the pinned 22.22.3')
+  requireValue(process.env.GITHUB_REPOSITORY === 'mysticalsin/AskToto-Mantu', 'repository identity differs')
+  requireValue(
+    process.env.GITHUB_REF === 'refs/heads/fix/persistence-k1-core-layering-integration',
+    'source branch ref differs'
+  )
+  requireValue(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? ''), 'commit identity is invalid')
+  requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
+  requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? ''), 'run attempt is invalid')
+  requireValue(process.env.GITHUB_JOB === 'test-first', 'job identity differs')
+  requireValue(process.env.PERSISTENCE_SETTLEMENT_TARGET === 'ubuntu-latest', 'source target is not pinned Ubuntu')
+  requireValue(
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'persistence-k1-core-layering-composition' &&
+      process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === commits.k1,
+    'composition phase or parent binding differs'
+  )
+
+  let gitCalls = 0
+  const git = (arguments_) => {
+    requireValue(++gitCalls <= 16, 'Git source collector exceeded sixteen calls')
+    try {
+      const output = execFileSync('git', arguments_, { timeout: 10_000, maxBuffer: 64 * 1024 })
+      const decoded = output.toString('utf8')
+      requireValue(Buffer.from(decoded, 'utf8').equals(output), 'Git output is not valid UTF-8')
+      return decoded
+    } catch {
+      throw new Error('persistence-settlement-report:Git source fact is unavailable or exceeds its bound')
+    }
+  }
+  const head = git(['rev-parse', 'HEAD']).trim()
+  requireValue(head === process.env.GITHUB_SHA, 'checkout head differs from the current run')
+  requireValue(
+    git(['remote', 'get-url', 'origin']).trim() === 'https://github.com/mysticalsin/AskToto-Mantu',
+    'checkout origin differs from the intended repository'
+  )
+  requireValue(git(['status', '--porcelain=v1', '-z', '--untracked-files=all']) === '', 'checkout is dirty')
+  const parent = (commit, expected) => {
+    const words = git(['rev-list', '--parents', '-n', '1', commit]).trim().split(' ')
+    requireValue(
+      words.length === 2 && words[0] === commit && words[1] === expected,
+      `parent chain differs at ${commit}`
+    )
+  }
+  parent(head, commits.k1)
+  parent(commits.k1, commits.second)
+  parent(commits.second, commits.first)
+  parent(commits.first, commits.base)
+
+  const changes = (from, to) => {
+    const raw = git([
+      'diff',
+      '--name-status',
+      '-z',
+      '--find-renames=100%',
+      '--no-ext-diff',
+      '--no-textconv',
+      from,
+      to,
+      '--'
+    ])
+    requireValue(raw.endsWith('\0'), 'Git path records are incomplete')
+    const fields = raw.slice(0, -1).split('\0')
+    const records = []
+    for (let index = 0; index < fields.length; ) {
+      const status = fields[index++]
+      requireValue(status === 'M' || status === 'R100', 'Git change status differs from the closed roster')
+      const oldPath = fields[index++]
+      const newPath = status === 'R100' ? fields[index++] : undefined
+      requireValue(oldPath && (status !== 'R100' || newPath), 'Git change path is missing')
+      records.push(status === 'M' ? { status, path: oldPath } : { status, oldPath, newPath })
+    }
+    return records
+  }
+  const modified = (paths) => [...paths].map((path) => ({ status: 'M', path }))
+  const moved = compositionMoves.map(([oldPath, newPath]) => ({ status: 'R100', oldPath, newPath }))
+  const sameRecords = (actual, expected, label) => {
+    requireValue(actual.length === expected.length, `${label} change count differs`)
+    const sorted = (records) => records.map((record) => JSON.stringify(record)).sort()
+    requireValue(
+      JSON.stringify(sorted(actual)) === JSON.stringify(sorted(expected)),
+      `${label} path/status roster differs`
+    )
+  }
+  const oldFive = changes(commits.second, commits.k1)
+  const oldEight = changes(commits.base, commits.k1)
+  const composition = changes(commits.k1, head)
+  const cumulative = changes(commits.base, head)
+  sameRecords(oldFive, modified(historicalFive), 'historical five')
+  sameRecords(oldEight, modified(historicalEight), 'historical eight')
+  sameRecords(composition, [...modified(compositionModified), ...moved], 'composition seventeen')
+  sameRecords(
+    cumulative,
+    [...modified(new Set([...historicalEight, ...compositionModified])), ...moved],
+    'cumulative twenty-two'
+  )
+  requireValue(git(['diff', '--check', commits.k1, head]) === '', 'composition diff has whitespace errors')
+
+  for (const [retired] of compositionMoves) {
+    let absenceError
+    try {
+      lstatSync(retired)
+    } catch (error) {
+      absenceError = error
+    }
+    requireValue(absenceError?.code === 'ENOENT', `retired source is not absent: ${retired}`)
+  }
+  requireValue(frozenSourceHashes.size === 30, 'frozen source inventory differs')
+  requireValue(
+    hashedSources.length === 32 && new Set(hashedSources).size === 32,
+    'source inventory is not 32 unique paths'
+  )
+  let sourceBytes = 0
+  const sourceHashes = {}
+  for (const path of hashedSources) {
+    const info = lstatSync(path)
+    requireValue(info.isFile() && info.size > 0 && info.size <= 256 * 1024, `source type or size differs: ${path}`)
+    sourceBytes += info.size
+    requireValue(sourceBytes <= 1024 * 1024, 'source inventory exceeds one MiB')
+    const bytes = readFileSync(path)
+    requireValue(bytes.length === info.size, `source changed while reading: ${path}`)
+    sourceHashes[path] = sha256(bytes)
+    if (frozenSourceHashes.has(path))
+      requireValue(sourceHashes[path] === frozenSourceHashes.get(path), `frozen source differs: ${path}`)
+  }
+  for (const path of consumerSources) {
+    const checkoutBlob = git(['hash-object', '--', path]).trim()
+    const committedBlob = git(['rev-parse', `HEAD:${path}`]).trim()
+    requireValue(checkoutBlob === committedBlob, `consumer source is not the committed blob: ${path}`)
+  }
+  return {
+    historicalChain: [commits.base, commits.first, commits.second, commits.k1, head],
+    historicalFive: oldFive,
+    historicalEight: oldEight,
+    compositionPaths: composition,
+    cumulativePaths: cumulative,
+    renamePairs: moved,
+    sourceHashes
+  }
 }
 
 function readReport(path) {
@@ -1224,6 +1488,7 @@ function validateK1Evidence(witness) {
 }
 
 function validate() {
+  const provenance = validateCompositionSource()
   const reportPath = process.env.VITEST_REPORT_PATH
   const logPath = process.env.VITEST_LOG_PATH
   const unhandledReportPath = process.env.UNHANDLED_REPORT_PATH
@@ -1233,21 +1498,21 @@ function validate() {
     'report/log/unhandled/receipt paths are missing'
   )
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'persistence-k1-green',
-    'phase is not the fixed persistence-k1-green phase'
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'persistence-k1-core-layering-composition',
+    'phase is not the fixed composition phase'
   )
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? ''), 'run attempt is invalid')
   requireValue(process.env.PERSISTENCE_SETTLEMENT_TARGET === 'ubuntu-latest', 'source target is not pinned Ubuntu')
   requireValue(
-    hashedSources.length === 23 && new Set(hashedSources).size === 23,
-    'source receipt roster is not exactly 23 unique paths'
+    hashedSources.length === 32 && new Set(hashedSources).size === 32,
+    'source receipt roster is not exactly 32 unique paths'
   )
   requireValue(process.env.VITEST_EXIT_CODE === '0', 'Vitest did not return the required actual K1 GREEN exit')
   requireValue(process.env.GITHUB_JOB === 'test-first', 'reporter job binding is not test-first')
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === '52c97ca175fccea6db51ab01c912d46d3876d6b4',
+    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === commits.k1,
     'reviewed parent commit binding is invalid'
   )
   requireValue(process.version === 'v22.22.3', 'Node runtime is not the pinned 22.22.3')
@@ -1398,11 +1663,10 @@ function validate() {
   )
 
   const logBytes = readFileSync(resolve(logPath))
-  const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
-    schema: 'metis-persistence-k1-source-receipt/v1',
-    disposition: 'K1_GREEN_COMPLETE_KEY_USE',
-    phase: 'persistence-k1-green',
+    schema: 'metis-persistence-k1-core-layering-composition-receipt/v1',
+    disposition: 'K1_CORE_LAYERING_COMPOSITION_39_GREEN',
+    phase: 'persistence-k1-core-layering-composition',
     parentCommit: process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT,
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
@@ -1415,7 +1679,13 @@ function validate() {
     logSha256: sha256(logBytes),
     unhandledReportSha256: sha256(unhandledBytes),
     unhandledReporterCount: unhandledReport.unhandledCount,
-    sourceHashes,
+    sourceHashes: provenance.sourceHashes,
+    historicalChain: provenance.historicalChain,
+    historicalFive: provenance.historicalFive,
+    historicalEight: provenance.historicalEight,
+    compositionPaths: provenance.compositionPaths,
+    cumulativePaths: provenance.cumulativePaths,
+    renamePairs: provenance.renamePairs,
     counts: {
       total: report.numTotalTests,
       passed: report.numPassedTests,
@@ -1434,13 +1704,21 @@ function validate() {
     })),
     witnessIds: requiredWitnessIds
   }
-  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  console.log('persistence-settlement:K1_GREEN_COMPLETE_KEY_USE 39 cases; 39 passed; 0 failed; 26 witnesses')
+  const receiptBytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, 'utf8')
+  requireValue(receiptBytes.length <= 64 * 1024, 'composition receipt exceeds 64 KiB')
+  writeFileSync(receiptPath, receiptBytes, { flag: 'wx', mode: 0o600 })
+  console.log(
+    'persistence-settlement:K1_CORE_LAYERING_COMPOSITION_39_GREEN 39 cases; 39 passed; 0 failed; 26 witnesses'
+  )
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }
 
 try {
-  validate()
+  if (process.argv.length === 2) validate()
+  else if (process.argv.length === 3 && process.argv[2] === '--check-composition-source') {
+    validateCompositionSource()
+    console.log('persistence-settlement:COMPOSITION_SOURCE_ONLY verified; no GREEN receipt')
+  } else requireValue(false, 'unknown checker argument combination')
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'persistence-settlement-report:validation failed')
   process.exitCode = 1

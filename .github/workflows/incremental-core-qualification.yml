@@ -16,6 +16,7 @@ on:
       - src/main/infra/storage/gateway*
       - src/main/infra/storage/atomic-saved-write*
       - src/main/infra/process/meeting-speech-*
+      - src/main/infra/process/incremental-record-*
       - scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts
       - src/main/meeting-speech-worker.ts
       - src/shared/incremental-meeting.ts
