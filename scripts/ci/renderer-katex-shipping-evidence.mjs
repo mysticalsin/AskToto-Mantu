@@ -1355,8 +1355,8 @@ export async function inspectCandidate({
   )
   if (
     JSON.stringify(build.buildRun.configurationHashes) !== JSON.stringify(actualConfigHashes) ||
-    actualConfigHashes['package.json'] !== '587bae986ba457a255a7e52943586401327e3c5c6c9ae1a32f6d120a3bdf280e' ||
-    actualConfigHashes['package-lock.json'] !== 'a381ca5f8cce8042c5fca6a8aaf256e97c5a9c5540a0bb9abd149b10b7d07ced'
+    actualConfigHashes['package.json'] !== 'dddf43f8fcd0a8b353b5b29ed9fa316486a668955ad56161e707f71f56b2ad06' ||
+    actualConfigHashes['package-lock.json'] !== 'f2cedcad1b2b67c9f9fb780d24ab6c8dde6dfa65ae0a76432038450d2a41746c'
   )
     fail('BUILD_SOURCE_CONFIG_BINDING')
   const graphPath = resolve(dirname(buildEvidence), 'renderer-graph.json')

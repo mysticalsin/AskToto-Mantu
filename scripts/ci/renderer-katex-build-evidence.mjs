@@ -791,7 +791,19 @@ function readCssString(value, start, sourcePath) {
   cssUnsupported(sourcePath)
 }
 
-function validateCssEscapes(value, sourcePath) {
+function validateCssEscapes(value, sourcePath, css, start, end, position) {
+  if (
+    typeof css !== 'string' ||
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end < start ||
+    end >= css.length ||
+    end - start + 1 !== value.length ||
+    !css.startsWith(value, start) ||
+    position !== end + 1
+  )
+    cssUnsupported(sourcePath)
   let index = 0
   while (index < value.length) {
     if (value[index] !== '\\') {
@@ -799,7 +811,11 @@ function validateCssEscapes(value, sourcePath) {
       continue
     }
     index += 1
-    if (index >= value.length) cssUnsupported(sourcePath)
+    if (index >= value.length) {
+      // PostCSS ends a word before an escaped slash; the next token still runs normally.
+      if (css[end + 1] === '/' && css[end + 2] !== '*') continue
+      cssUnsupported(sourcePath)
+    }
     const next = value[index]
     const code = value.charCodeAt(index)
     if (code === 0 || next === '\n' || next === '\r' || next === '\f') cssUnsupported(sourcePath)
@@ -889,7 +905,8 @@ function preflightCss(input, sourcePath, budget) {
       } else if (type === ')' || type === ']' || type === '}') {
         if (delimiters.pop() !== type) cssUnsupported(sourcePath)
       } else if (type === 'word' || type === 'at-word') {
-        if (value.includes('\\')) validateCssEscapes(value, sourcePath)
+        if (value.includes('\\'))
+          validateCssEscapes(value, sourcePath, input.css, token[2], token[3], tokenizer.position())
       } else if (type !== 'space' && type !== ',' && type !== ':' && type !== ';') {
         cssUnsupported(sourcePath)
       }

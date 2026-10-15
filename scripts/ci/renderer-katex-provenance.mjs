@@ -10,6 +10,7 @@ const BASE = '15fcfa376feda44531596218a3751c6ea37f98ef'
 const DEPENDENCY_BASELINE = 'cf2889b0c46b001140b7ccd346ffa6010eeec7a1'
 const DEPENDENCY_COMMIT = 'af7da32a46e2edb084c70f41823e7df48a13df9a'
 const RETAINED_FALLBACK_BASE = '3544b519eaff8336b3b1bee25c742d5c7392d476'
+const RETAINED_FAILURE_COMMIT = '1612d40c56b05d39147443b3765cabed1c99ef2a'
 const REMEDIATION_BRANCH = 'fix/renderer-katex-remediation'
 const APPROVED_REPOSITORY = 'mysticalsin/AskToto-Mantu'
 const REMEDIATION_PACKAGE_HASHES = Object.freeze({
@@ -36,6 +37,13 @@ const RETAINED_FALLBACK_FILES = Object.freeze([
   'scripts/ci/renderer-katex-evidence.test.ts',
   ...PACKAGE_METADATA_FILES
 ])
+const CURRENT_REPAIR_FILES = Object.freeze([
+  'scripts/ci/renderer-katex-build-evidence.mjs',
+  'scripts/ci/renderer-katex-provenance.mjs',
+  'scripts/ci/renderer-katex-evidence.test.ts',
+  'scripts/ci/renderer-katex-shipping-evidence.mjs'
+])
+const CUMULATIVE_FALLBACK_FILES = Object.freeze([...new Set([...RETAINED_FALLBACK_FILES, ...CURRENT_REPAIR_FILES])])
 const AMENDED_REMEDIATION_FILES = Object.freeze([...new Set([...REMEDIATION_FILES, ...PACKAGE_METADATA_FILES])])
 const EVIDENCE_TEST_PATH = 'scripts/ci/renderer-katex-evidence.test.ts'
 const EVIDENCE_TEST_COUNT = 14
@@ -1287,11 +1295,13 @@ export function validateRemediationLineageFacts(facts) {
     facts.dirty !== false
   )
     fail('GREEN_SOURCE_IDENTITY')
+  if (facts.retainedFailureParent !== RETAINED_FALLBACK_BASE) fail('GREEN_RETAINED_FAILURE_PARENT')
   for (const commit of [BASE, HARNESS_BASELINE, IMAGE_POLICY_COMMIT, DEPENDENCY_BASELINE, DEPENDENCY_COMMIT])
     if (facts.ancestors?.[commit] !== true) fail(`GREEN_HISTORICAL_ANCESTRY:${commit}`)
   if (facts.ancestors?.[facts.head] !== true || facts.ancestors?.[DEPENDENCY_COMMIT] !== true)
     fail('GREEN_DEPENDENCY_ANCESTRY')
   if (facts.ancestors?.[RETAINED_FALLBACK_BASE] !== true) fail('GREEN_FALLBACK_BASE_ANCESTRY')
+  if (facts.ancestors?.[RETAINED_FAILURE_COMMIT] !== true) fail('GREEN_RETAINED_FAILURE_ANCESTRY')
   const pathPredicates = [
     ['baseToHarness', HARNESS_BASELINE_FILES, 'GREEN_HARNESS_BASELINE_PATHS'],
     ['harnessToPolicy', [IMAGE_POLICY_PATH], 'GREEN_IMAGE_POLICY_PATHS'],
@@ -1300,6 +1310,9 @@ export function validateRemediationLineageFacts(facts) {
     ['rToD', ['package.json', 'package-lock.json'], 'GREEN_R_TO_D_PATHS'],
     ['dToFallbackBase', REMEDIATION_FILES, 'GREEN_D_TO_FALLBACK_BASE_PATHS'],
     ['fallbackBaseToG', RETAINED_FALLBACK_FILES, 'GREEN_FALLBACK_AMENDMENT_PATHS'],
+    ['fallbackBaseToRetainedFailure', RETAINED_FALLBACK_FILES, 'GREEN_RETAINED_FAILURE_PATHS'],
+    ['retainedFailureToG', CURRENT_REPAIR_FILES, 'GREEN_CURRENT_REPAIR_PATHS'],
+    ['fallbackBaseToCurrent', CUMULATIVE_FALLBACK_FILES, 'GREEN_CUMULATIVE_FALLBACK_PATHS'],
     ['dToG', AMENDED_REMEDIATION_FILES, 'GREEN_D_TO_G_PATHS'],
     ['rToG', AMENDED_REMEDIATION_FILES, 'GREEN_R_TO_G_PATHS']
   ]
@@ -1312,6 +1325,8 @@ export function validateRemediationLineageFacts(facts) {
     facts.historicalPackageHashes?.lock !== BASE_HASHES['package-lock.json'] ||
     facts.fallbackBasePackageHashes?.manifest !== RETAINED_FALLBACK_BASE_PACKAGE_HASHES['package.json'] ||
     facts.fallbackBasePackageHashes?.lock !== RETAINED_FALLBACK_BASE_PACKAGE_HASHES['package-lock.json'] ||
+    facts.retainedFailurePackageHashes?.manifest !== REMEDIATION_PACKAGE_HASHES['package.json'] ||
+    facts.retainedFailurePackageHashes?.lock !== REMEDIATION_PACKAGE_HASHES['package-lock.json'] ||
     facts.policyHashes?.parent !== 'b012099ba2a8d66cc29caee8555d5a92ff82b3c7b32c205273a90de2c5d67eaa' ||
     facts.policyHashes?.reviewed !== IMAGE_POLICY_SHA256 ||
     facts.policyHashes?.atR !== IMAGE_POLICY_SHA256
@@ -1322,11 +1337,13 @@ export function validateRemediationLineageFacts(facts) {
     dependencyBaseline: DEPENDENCY_BASELINE,
     dependencyCommit: DEPENDENCY_COMMIT,
     retainedFallbackBase: RETAINED_FALLBACK_BASE,
+    retainedFailureCommit: RETAINED_FAILURE_COMMIT,
     repository: facts.repository,
     ref: facts.ref,
     historicalPaths: facts.paths,
     historicalPackageHashes: facts.historicalPackageHashes,
     fallbackBasePackageHashes: facts.fallbackBasePackageHashes,
+    retainedFailurePackageHashes: facts.retainedFailurePackageHashes,
     policyHashes: facts.policyHashes
   }
 }
@@ -1348,7 +1365,10 @@ function checkRemediationLineage(root) {
     baseToR: changedPaths(root, `${BASE}..${DEPENDENCY_BASELINE}`),
     rToD: changedPaths(root, `${DEPENDENCY_BASELINE}..${DEPENDENCY_COMMIT}`),
     dToFallbackBase: changedPaths(root, `${DEPENDENCY_COMMIT}..${RETAINED_FALLBACK_BASE}`),
-    fallbackBaseToG: changedPaths(root, `${RETAINED_FALLBACK_BASE}..${head}`),
+    fallbackBaseToG: changedPaths(root, `${RETAINED_FALLBACK_BASE}..${RETAINED_FAILURE_COMMIT}`),
+    fallbackBaseToRetainedFailure: changedPaths(root, `${RETAINED_FALLBACK_BASE}..${RETAINED_FAILURE_COMMIT}`),
+    retainedFailureToG: changedPaths(root, `${RETAINED_FAILURE_COMMIT}..${head}`),
+    fallbackBaseToCurrent: changedPaths(root, `${RETAINED_FALLBACK_BASE}..${head}`),
     dToG: changedPaths(root, `${DEPENDENCY_COMMIT}..${head}`),
     rToG: changedPaths(root, `${DEPENDENCY_BASELINE}..${head}`)
   }
@@ -1359,6 +1379,10 @@ function checkRemediationLineage(root) {
   const fallbackBasePackageHashes = {
     manifest: showHash(`${RETAINED_FALLBACK_BASE}:package.json`),
     lock: showHash(`${RETAINED_FALLBACK_BASE}:package-lock.json`)
+  }
+  const retainedFailurePackageHashes = {
+    manifest: showHash(`${RETAINED_FAILURE_COMMIT}:package.json`),
+    lock: showHash(`${RETAINED_FAILURE_COMMIT}:package-lock.json`)
   }
   const policyHashes = {
     parent: showHash(`${HARNESS_BASELINE}:${IMAGE_POLICY_PATH}`),
@@ -1372,6 +1396,7 @@ function checkRemediationLineage(root) {
     githubSha: process.env.GITHUB_SHA,
     dependencyParent: gitText(root, ['rev-parse', `${DEPENDENCY_COMMIT}^`]),
     imagePolicyParent: gitText(root, ['rev-parse', `${IMAGE_POLICY_COMMIT}^`]),
+    retainedFailureParent: gitText(root, ['rev-parse', `${RETAINED_FAILURE_COMMIT}^`]),
     dirty: gitText(root, ['status', '--porcelain=v1']) !== '',
     ancestors: Object.fromEntries(
       [
@@ -1381,12 +1406,14 @@ function checkRemediationLineage(root) {
         DEPENDENCY_BASELINE,
         DEPENDENCY_COMMIT,
         RETAINED_FALLBACK_BASE,
+        RETAINED_FAILURE_COMMIT,
         head
       ].map((commit) => [commit, isAncestor(commit, head)])
     ),
     paths,
     historicalPackageHashes,
     fallbackBasePackageHashes,
+    retainedFailurePackageHashes,
     policyHashes
   })
   const protectedHashes = {

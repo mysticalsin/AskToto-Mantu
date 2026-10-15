@@ -801,6 +801,44 @@ describe('renderer remediation evidence validators', () => {
 
     restoreBase()
     expectThreeReferences()
+    const slash = String.fromCharCode(92) + '/'
+    const fraction = `.top-1${slash}2{top:50%}.left-1${slash}2{left:50%}`
+    const bracket = `.border-${String.fromCharCode(92)}[var${String.fromCharCode(92)}(--cl-destructive${String.fromCharCode(92)})${String.fromCharCode(92)}]${slash}30{color:red}`
+    const escapedLiteral = String.fromCharCode(92).repeat(2)
+    const parity = `.literal-${escapedLiteral}name{color:red}.literal-${escapedLiteral}${slash}2{color:red}`
+    for (const css of [baseCss + fraction + bracket + parity, '\ufeff' + baseCss + fraction]) {
+      restoreBase()
+      put(join(root, 'assets/style.css'), css)
+      expectThreeReferences()
+    }
+    restoreBase()
+    put(join(root, 'index.html'), baseHtml + `<style>${fraction}</style>`)
+    expectThreeReferences()
+    const whitespaceBackslash = String.fromCharCode(92)
+    restoreBase()
+    put(join(root, 'assets/style.css'), baseCss + '.broken' + whitespaceBackslash)
+    reject(() => validateLocalAssetReferences(root, inventory), 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED')
+    for (const suffix of [' ', '\t', '\n', '\r\n', '\f']) {
+      restoreBase()
+      put(join(root, 'assets/style.css'), baseCss + `.broken${suffix}{color:red}`)
+      expectThreeReferences()
+      put(join(root, 'assets/style.css'), baseCss + `.broken${whitespaceBackslash}${suffix}{color:red}`)
+      reject(() => validateLocalAssetReferences(root, inventory), 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED')
+    }
+    for (const css of ['.broken' + String.fromCharCode(92) + '0 {color:red}', `.broken${slash}*closed*/{color:red}`]) {
+      restoreBase()
+      put(join(root, 'assets/style.css'), baseCss + css)
+      reject(() => validateLocalAssetReferences(root, inventory), 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED')
+    }
+    restoreBase()
+    put(join(root, 'assets/style.css'), baseCss + fraction + 'a{background:url("https://unreviewed.invalid/x.png")}')
+    reject(() => validateLocalAssetReferences(root, inventory), 'EXTERNAL_EXECUTABLE_REFERENCE')
+    restoreBase()
+    put(join(root, 'assets/style.css'), baseCss + fraction + 'a{background:u\\72l("https://unreviewed.invalid/x.png")}')
+    reject(() => validateLocalAssetReferences(root, inventory), 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED')
+    restoreBase()
+    put(join(root, 'index.html'), baseHtml + `<div style="color:red${slash}blue"></div>`)
+    reject(() => validateLocalAssetReferences(root, inventory), 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED')
     const compactDeclarations = [
       '--glass-fill:rgb(34 14 60/calc(.6 * var(--overlay-opacity-scale)))',
       '--glass-fill-strong:rgb(28 11 52/calc(.8 * var(--overlay-opacity-scale)))',
@@ -1784,6 +1822,20 @@ describe('renderer remediation evidence validators', () => {
       'src/renderer/src/components/Markdown.mermaid.browser.test.ts'
     ].sort()
     const packageFiles = ['package-lock.json', 'package.json']
+    const retainedFailure = '1612d40c56b05d39147443b3765cabed1c99ef2a'
+    const historicalFive = [
+      'scripts/ci/renderer-katex-build-evidence.mjs',
+      'scripts/ci/renderer-katex-provenance.mjs',
+      'scripts/ci/renderer-katex-evidence.test.ts',
+      ...packageFiles
+    ].sort()
+    const currentFour = [
+      'scripts/ci/renderer-katex-build-evidence.mjs',
+      'scripts/ci/renderer-katex-provenance.mjs',
+      'scripts/ci/renderer-katex-evidence.test.ts',
+      'scripts/ci/renderer-katex-shipping-evidence.mjs'
+    ].sort()
+    const cumulativeSix = [...new Set([...historicalFive, ...currentFour])].sort()
     const facts = {
       repository: 'mysticalsin/AskToto-Mantu',
       ref: 'refs/heads/fix/renderer-katex-remediation',
@@ -1791,6 +1843,7 @@ describe('renderer remediation evidence validators', () => {
       githubSha: 'b'.repeat(40),
       dependencyParent: 'cf2889b0c46b001140b7ccd346ffa6010eeec7a1',
       imagePolicyParent: 'c7901c5551c820171401ff4669b5af4b394eb5b9',
+      retainedFailureParent: fallbackBase,
       dirty: false,
       ancestors: Object.fromEntries(
         [
@@ -1800,6 +1853,7 @@ describe('renderer remediation evidence validators', () => {
           'cf2889b0c46b001140b7ccd346ffa6010eeec7a1',
           'af7da32a46e2edb084c70f41823e7df48a13df9a',
           fallbackBase,
+          retainedFailure,
           'b'.repeat(40)
         ].map((commit) => [commit, true])
       ),
@@ -1833,12 +1887,10 @@ describe('renderer remediation evidence validators', () => {
         ].sort(),
         rToD: packageFiles,
         dToFallbackBase: remediationFiles,
-        fallbackBaseToG: [
-          'scripts/ci/renderer-katex-build-evidence.mjs',
-          'scripts/ci/renderer-katex-provenance.mjs',
-          'scripts/ci/renderer-katex-evidence.test.ts',
-          ...packageFiles
-        ].sort(),
+        fallbackBaseToG: historicalFive,
+        fallbackBaseToRetainedFailure: historicalFive,
+        retainedFailureToG: currentFour,
+        fallbackBaseToCurrent: cumulativeSix,
         dToG: [...packageFiles, ...remediationFiles].sort(),
         rToG: [...packageFiles, ...remediationFiles].sort()
       },
@@ -1850,6 +1902,10 @@ describe('renderer remediation evidence validators', () => {
         manifest: '587bae986ba457a255a7e52943586401327e3c5c6c9ae1a32f6d120a3bdf280e',
         lock: 'a381ca5f8cce8042c5fca6a8aaf256e97c5a9c5540a0bb9abd149b10b7d07ced'
       },
+      retainedFailurePackageHashes: {
+        manifest: 'dddf43f8fcd0a8b353b5b29ed9fa316486a668955ad56161e707f71f56b2ad06',
+        lock: 'f2cedcad1b2b67c9f9fb780d24ab6c8dde6dfa65ae0a76432038450d2a41746c'
+      },
       policyHashes: {
         parent: 'b012099ba2a8d66cc29caee8555d5a92ff82b3c7b32c205273a90de2c5d67eaa',
         reviewed: '5f1d8910947f5b33de58b759d7bebf72088c1dfab26d013a8c9724640a62d994',
@@ -1857,6 +1913,50 @@ describe('renderer remediation evidence validators', () => {
       }
     }
     expect(validateRemediationLineageFacts(facts).dependencyCommit).toBe('af7da32a46e2edb084c70f41823e7df48a13df9a')
+    expect(validateRemediationLineageFacts(facts).retainedFailureCommit).toBe(retainedFailure)
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, retainedFailureParent: '' }),
+      'GREEN_RETAINED_FAILURE_PARENT'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, retainedFailureParent: '0'.repeat(40) }),
+      'GREEN_RETAINED_FAILURE_PARENT'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, ancestors: { ...facts.ancestors, [retainedFailure]: false } }),
+      'GREEN_RETAINED_FAILURE_ANCESTRY'
+    )
+    reject(
+      () =>
+        validateRemediationLineageFacts({
+          ...facts,
+          retainedFailurePackageHashes: { ...facts.retainedFailurePackageHashes, lock: '0'.repeat(64) }
+        }),
+      'GREEN_HISTORICAL_BYTES'
+    )
+    for (const paths of [historicalFive.slice(1), [...historicalFive, 'extra.txt'].sort()])
+      reject(
+        () =>
+          validateRemediationLineageFacts({
+            ...facts,
+            paths: { ...facts.paths, fallbackBaseToRetainedFailure: paths }
+          }),
+        'GREEN_RETAINED_FAILURE_PATHS'
+      )
+    for (const paths of [
+      currentFour.filter((path) => !path.endsWith('shipping-evidence.mjs')),
+      [...currentFour, 'package.json'].sort(),
+      [...currentFour, 'extra.txt'].sort()
+    ])
+      reject(
+        () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, retainedFailureToG: paths } }),
+        'GREEN_CURRENT_REPAIR_PATHS'
+      )
+    reject(
+      () =>
+        validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, fallbackBaseToCurrent: historicalFive } }),
+      'GREEN_CUMULATIVE_FALLBACK_PATHS'
+    )
     reject(
       () => validateRemediationLineageFacts({ ...facts, repository: 'fork/AskToto-Mantu' }),
       'GREEN_SOURCE_IDENTITY'
@@ -2225,6 +2325,70 @@ describe('renderer remediation evidence validators', () => {
     expect(evidence.fontAssets).toEqual([
       expect.objectContaining({ path: 'fonts/KaTeX_Main-Regular.woff2', licensePackage: 'katex' })
     ])
+    const graphPath = join(dirname(buildPath), 'renderer-graph.json')
+    const manifestPath = join(sourceRoot, 'package.json')
+    const lockPath = join(sourceRoot, 'package-lock.json')
+    const boundPaths = [manifestPath, lockPath, graphPath, buildPath, receiptPath]
+    const originalBytes = boundPaths.map((path) => readFileSync(path))
+    const historicalManifest = execFileSync('git', ['show', '3544b519eaff8336b3b1bee25c742d5c7392d476:package.json'])
+    const historicalLock = execFileSync('git', ['show', '3544b519eaff8336b3b1bee25c742d5c7392d476:package-lock.json'])
+    expect(sha(historicalManifest)).toBe('587bae986ba457a255a7e52943586401327e3c5c6c9ae1a32f6d120a3bdf280e')
+    expect(sha(historicalLock)).toBe('a381ca5f8cce8042c5fca6a8aaf256e97c5a9c5540a0bb9abd149b10b7d07ced')
+    const inspectBound = () =>
+      inspectCandidate({
+        structuralFixture: true,
+        resources,
+        buildEvidence: buildPath,
+        candidateReceipt: receiptPath,
+        sourceRoot,
+        profile: 'full',
+        arch: 'win-x64'
+      })
+    const rebindSource = (manifest: Buffer, lock: Buffer) => {
+      put(manifestPath, manifest)
+      put(lockPath, lock)
+      const graph = JSON.parse(originalBytes[2].toString('utf8'))
+      const build = JSON.parse(originalBytes[3].toString('utf8'))
+      const receipt = JSON.parse(originalBytes[4].toString('utf8'))
+      const configPaths = Object.keys(build.buildRun.configurationHashes)
+      const hashes = Object.fromEntries(configPaths.map((path) => [path, sha(readFileSync(join(sourceRoot, path)))]))
+      graph.buildRun.configurationHashes = hashes
+      build.buildRun.configurationHashes = hashes
+      put(graphPath, JSON.stringify(graph))
+      build.graphSha256 = sha(readFileSync(graphPath))
+      put(buildPath, JSON.stringify(build))
+      receipt.buildEvidenceSha256 = sha(readFileSync(buildPath))
+      receipt.configurationHashes = hashes
+      put(receiptPath, JSON.stringify(receipt))
+      expect(hashes).toEqual(
+        Object.fromEntries(configPaths.map((path) => [path, sha(readFileSync(join(sourceRoot, path)))]))
+      )
+      expect(hashes['package.json']).toBe(sha(manifest))
+      expect(hashes['package-lock.json']).toBe(sha(lock))
+      expect(graph.buildRun.configurationHashes).toEqual(hashes)
+      expect(build.buildRun.configurationHashes).toEqual(hashes)
+      expect(receipt.configurationHashes).toEqual(hashes)
+      expect(build.graphSha256).toBe(sha(readFileSync(graphPath)))
+      expect(receipt.buildEvidenceSha256).toBe(sha(readFileSync(buildPath)))
+      expect(JSON.parse(readFileSync(graphPath, 'utf8')).buildRun.configurationHashes).toEqual(hashes)
+      expect(JSON.parse(readFileSync(buildPath, 'utf8')).graphSha256).toBe(build.graphSha256)
+      expect(JSON.parse(readFileSync(receiptPath, 'utf8')).buildEvidenceSha256).toBe(receipt.buildEvidenceSha256)
+    }
+    try {
+      for (const [manifest, lock] of [
+        [historicalManifest, originalBytes[1]],
+        [originalBytes[0], historicalLock],
+        [historicalManifest, historicalLock],
+        [Buffer.concat([originalBytes[0], Buffer.from('\n')]), originalBytes[1]],
+        [originalBytes[0], Buffer.concat([originalBytes[1], Buffer.from('\n')])]
+      ]) {
+        rebindSource(manifest, lock)
+        await expect(inspectBound()).rejects.toThrow('BUILD_SOURCE_CONFIG_BINDING')
+      }
+    } finally {
+      boundPaths.forEach((path, index) => put(path, originalBytes[index]))
+    }
+    expect((await inspectBound()).evidence).toBe('STRUCTURAL_FIXTURE_ONLY')
     const packedBytes = evidence.delivered
       .filter((entry: { origin: string; type: string }) => entry.origin === 'asar' && entry.type === 'file')
       .reduce((total: number, entry: { bytes: number }) => total + entry.bytes, 0)
