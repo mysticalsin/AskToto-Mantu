@@ -60,20 +60,26 @@ jobs:
           node <<'NODE'
           const { readFileSync } = require('node:fs')
           const report = JSON.parse(readFileSync(process.env.REPORT, 'utf8'))
-          const expected = [
-            'src/main/speaker-id-off-switch.test.ts',
-            'src/renderer/src/app-listen-identity.test.ts'
-          ]
-          const files = (report.testResults ?? []).map((item) => String(item.name).replaceAll('\\', '/'))
+          const expected = new Map([
+            ['src/main/speaker-id-off-switch.test.ts', 10],
+            ['src/renderer/src/app-listen-identity.test.ts', 3]
+          ])
+          const results = report.testResults ?? []
+          const files = results.map((item) => String(item.name).replaceAll('\\', '/'))
           const passed = report.numPassedTests
           const failed = report.numFailedTests
           const skipped = (report.numPendingTests ?? 0) + (report.numTodoTests ?? 0)
           const total = report.numTotalTests
           console.log(`head=${process.env.GITHUB_SHA} os=${process.env.RUNNER_OS} files=${files.length} passed=${passed} failed=${failed} skipped=${skipped} total=${total}`)
-          if (report.success !== true || files.length !== expected.length ||
-              expected.some((file) => !files.some((actual) => actual.endsWith(file))) ||
+          const completeFiles = results.length === expected.size && [...expected].every(([file, count]) => {
+            const matches = results.filter((item) => String(item.name).replaceAll('\\', '/').endsWith(file))
+            return matches.length === 1 && matches[0].status === 'passed' &&
+              Array.isArray(matches[0].assertionResults) && matches[0].assertionResults.length === count &&
+              matches[0].assertionResults.every((assertion) => assertion.status === 'passed')
+          })
+          if (report.success !== true || !completeFiles ||
               ![passed, failed, skipped, total].every(Number.isSafeInteger) ||
-              total < 2 || passed !== total || failed !== 0 || skipped !== 0) {
+              total !== 13 || passed !== total || failed !== 0 || skipped !== 0) {
             throw new Error('Focused harness report is incomplete or not fully green')
           }
           NODE
