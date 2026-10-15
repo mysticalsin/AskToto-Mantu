@@ -7,6 +7,10 @@ import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import type { MeetingSpeechPolicy } from '../infra/process/meeting-speech-protocol'
 import type {
   EnterpriseRestriction,
+  ImplementationInventory,
+  ImplementationInventoryEntry,
+  QaPersistenceCaseRoster,
+  QaPersistenceCandidateManifest,
   PersistenceProfile,
   ProfileCatalog,
   QualificationState,
@@ -14,6 +18,10 @@ import type {
 } from './resource-policy-contract'
 export type {
   EnterpriseRestriction,
+  ImplementationInventory,
+  ImplementationInventoryEntry,
+  QaPersistenceCaseRoster,
+  QaPersistenceCandidateManifest,
   PersistenceProfile,
   ProfileCatalog,
   QualificationState,
@@ -32,11 +40,22 @@ import {
   positiveInt,
   profileDigest,
   qualificationReportDigest,
+  qualificationReportProfileDigestV1,
   sha256,
   strictJson,
   validString
 } from './resource-policy-contract'
-export { parseProfileCatalog, persistenceProfileDigest, qualificationReportDigest } from './resource-policy-contract'
+export {
+  implementationInventoryDigest,
+  parseImplementationInventory,
+  parseProfileCatalog,
+  parseQaPersistenceCandidateManifest,
+  parseQaPersistenceCaseRoster,
+  persistenceProfileDigest,
+  qualificationReportDigest,
+  qualificationReportProfileDigestV1,
+  verifyQaPersistenceCandidateBundle
+} from './resource-policy-contract'
 
 export const PERSISTENCE_POLICY_DOMAIN = 'metis-persistence-policy/v1'
 export const MAX_SIGNED_POLICY_BYTES = 1_048_576
@@ -169,6 +188,11 @@ export interface ResourcePolicyInput {
   now?: number
   qualificationReport?: Uint8Array
 }
+
+export type BundledCandidateInputs = Omit<
+  ResourcePolicyInput,
+  'mode' | 'catalogBytes' | 'bundledReceipt' | 'qualificationReport'
+>
 
 export type AdminPolicyReceipt = object & { readonly __adminPolicyReceipt?: never }
 export type BundledPersistenceReceipt = object & { readonly __bundledPersistenceReceipt?: never }
@@ -432,7 +456,7 @@ function validQualification(
     return false
   if (
     report.profileId !== expected.profile.id ||
-    report.profileDigest !== profileDigest(expected.profile) ||
+    report.profileDigest !== qualificationReportProfileDigestV1(expected.profile) ||
     report.implementationSha256 !== expected.implementationSha256 ||
     !SOURCE_RE.test(report.measuredSourceCommit)
   )
@@ -646,6 +670,20 @@ export function resolvePersistenceResourcePolicy(input: ResourcePolicyInput): Re
     runtime: Object.freeze({ ...input.runtime }),
     policyHighWater: acceptedHighWater
   }
+}
+
+/** Resolve the fixed app-owned catalog through its opaque receipt for candidate diagnostics. */
+export function resolveBundledPersistenceCandidate(
+  receipt: BundledPersistenceReceipt | null,
+  capturedInputs: BundledCandidateInputs
+): Exclude<ResourcePolicyResult, { status: 'ready' }> {
+  const bundled = receipt ? bundledReceiptContents.get(receipt) : undefined
+  if (!bundled) return { status: 'refused', code: 'CATALOG_INVALID' }
+  return resolvePersistenceResourcePolicy({
+    ...capturedInputs,
+    mode: 'qualification',
+    catalogBytes: bundled.catalogBytes
+  }) as Exclude<ResourcePolicyResult, { status: 'ready' }>
 }
 
 /** Exact adapter shape consumed by the existing speech worker host; one resolved profile owns both limits. */

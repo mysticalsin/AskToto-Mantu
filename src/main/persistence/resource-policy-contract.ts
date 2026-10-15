@@ -54,6 +54,43 @@ export interface ProfileCatalog {
   profiles: PersistenceProfile[]
 }
 
+export interface ImplementationInventoryEntry {
+  path: string
+  contentSha256: string
+  provenance: 'source' | 'dependency' | 'native' | 'build-contract'
+}
+
+export interface ImplementationInventory {
+  schema: 'metis-persistence-implementation-inventory/v1'
+  sourceCommit: string
+  entries: ImplementationInventoryEntry[]
+}
+
+export interface QaPersistenceCandidateManifest {
+  schema: 'metis-persistence-qa-candidate/v1'
+  purpose: 'isolated-persistence-qualification'
+  sourceCommit: string
+  implementationInventorySha256: string
+  proposedCatalogSha256: string
+  profileId: string
+  profileMeasurementSha256: string
+  caseRosterSha256: string
+  qaIdentity: { appId: 'com.mantu.asktoto.qa'; appName: 'asktoto-qa' }
+  runtimes: Array<{
+    platform: RuntimePlatform
+    arch: 'x64' | 'arm64'
+    node: string
+    v8: string
+    modules: string
+    electron: string
+  }>
+}
+
+export interface QaPersistenceCaseRoster {
+  schema: 'metis-persistence-qa-case-roster/v1'
+  cases: string[]
+}
+
 export interface EnterpriseRestriction {
   issuer: string
   subject: string
@@ -69,12 +106,26 @@ export interface EnterpriseRestriction {
 }
 
 export const MAX_PROFILE_CATALOG_BYTES = 65_536
+export const MAX_QA_CANDIDATE_MANIFEST_BYTES = 65_536
+export const MAX_QA_CASE_ROSTER_BYTES = 16_384
+export const MAX_IMPLEMENTATION_INVENTORY_BYTES = 262_144
+export const MAX_IMPLEMENTATION_INVENTORY_ENTRIES = 256
+export const MAX_IMPLEMENTATION_INVENTORY_ENTRY_PATH_BYTES = 240
 export const PROFILE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/
 export const SHA_RE = /^[a-f0-9]{64}$/
 export const SOURCE_RE = /^[a-f0-9]{40}$/
 const SUPPORTED_TARGETS = new Set(['win32/x64', 'darwin/x64', 'darwin/arm64', 'linux/x64'])
 
 const SAFE_MAX = Number.MAX_SAFE_INTEGER
+const PROFILE_MEASUREMENT_DOMAIN = 'metis-persistence-profile-measurement/v2\n'
+const IMPLEMENTATION_INVENTORY_DOMAIN = 'metis-persistence-implementation-inventory/v1\n'
+const QA_CASE_ROSTER_DOMAIN = 'metis-persistence-qa-case-roster/v1\n'
+
+function compareTarget(left: { platform: string; arch: string }, right: { platform: string; arch: string }): number {
+  const leftKey = `${left.platform}/${left.arch}`
+  const rightKey = `${right.platform}/${right.arch}`
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -127,12 +178,260 @@ export function validString(value: unknown, max = 160): value is string {
 }
 
 export function profileDigest(profile: PersistenceProfile): string {
+  return persistenceProfileDigest(profile)
+}
+
+/** Frozen v1 report identity; do not reuse for the v2 measurement identity. */
+export function qualificationReportProfileDigestV1(profile: PersistenceProfile): string {
   const { qualification: _qualification, derived: _derived, ...core } = profile
   return sha256(canonical(core))
 }
 
 export function persistenceProfileDigest(profile: PersistenceProfile): string {
-  return profileDigest(profile)
+  let recomputed: PersistenceProfile['derived']
+  try {
+    recomputed = derive(profile)
+  } catch {
+    throw new Error('Persistence profile bounds are invalid')
+  }
+  if (canonical(recomputed) !== canonical(profile.derived)) throw new Error('Persistence derived bounds do not match')
+  const semantic = {
+    schema: 'metis-persistence-profile-measurement/v2',
+    id: profile.id,
+    supported: {
+      targets: [...profile.supported.targets].map((target) => ({ ...target })).sort(compareTarget)
+    },
+    implementationSha256: profile.implementationSha256,
+    speech: profile.speech,
+    legacy: profile.legacy,
+    journal: profile.journal,
+    worker: profile.worker,
+    consumers: profile.consumers,
+    maxHeldRoots: profile.maxHeldRoots
+  }
+  return sha256(`${PROFILE_MEASUREMENT_DOMAIN}${canonical(semantic)}`)
+}
+
+export function implementationInventoryDigest(inventory: ImplementationInventory): string {
+  return sha256(`${IMPLEMENTATION_INVENTORY_DOMAIN}${canonical(inventory)}`)
+}
+
+export function parseImplementationInventory(
+  bytes: Uint8Array,
+  expectedSourceCommit?: string
+): { inventory: ImplementationInventory; digest: string } | null {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > MAX_IMPLEMENTATION_INVENTORY_BYTES)
+    return null
+  try {
+    const parsed = strictJson(bytes, MAX_IMPLEMENTATION_INVENTORY_BYTES)
+    if (!isRecord(parsed) || !exactKeys(parsed, ['schema', 'sourceCommit', 'entries'])) return null
+    if (
+      parsed.schema !== 'metis-persistence-implementation-inventory/v1' ||
+      !SOURCE_RE.test(String(parsed.sourceCommit))
+    )
+      return null
+    if (expectedSourceCommit !== undefined && parsed.sourceCommit !== expectedSourceCommit) return null
+    if (
+      !Array.isArray(parsed.entries) ||
+      parsed.entries.length === 0 ||
+      parsed.entries.length > MAX_IMPLEMENTATION_INVENTORY_ENTRIES
+    )
+      return null
+    let previousPath = ''
+    const entries: ImplementationInventoryEntry[] = []
+    for (const item of parsed.entries) {
+      if (!isRecord(item) || !exactKeys(item, ['path', 'contentSha256', 'provenance'])) return null
+      if (
+        typeof item.path !== 'string' ||
+        item.path.length === 0 ||
+        item.path.trim() !== item.path ||
+        Buffer.byteLength(item.path, 'utf8') > MAX_IMPLEMENTATION_INVENTORY_ENTRY_PATH_BYTES ||
+        /[\u0000-\u001f\u007f]/.test(item.path) ||
+        /^[a-zA-Z]:/.test(item.path) ||
+        item.path.startsWith('/') ||
+        item.path.includes('\\') ||
+        item.path.split('/').some((part) => !part || part === '.' || part === '..') ||
+        item.path <= previousPath ||
+        typeof item.contentSha256 !== 'string' ||
+        !SHA_RE.test(item.contentSha256) ||
+        !['source', 'dependency', 'native', 'build-contract'].includes(String(item.provenance))
+      )
+        return null
+      previousPath = item.path
+      entries.push({
+        path: item.path,
+        contentSha256: item.contentSha256,
+        provenance: item.provenance as ImplementationInventoryEntry['provenance']
+      })
+    }
+    const inventory: ImplementationInventory = {
+      schema: 'metis-persistence-implementation-inventory/v1',
+      sourceCommit: parsed.sourceCommit as string,
+      entries
+    }
+    return { inventory, digest: implementationInventoryDigest(inventory) }
+  } catch {
+    return null
+  }
+}
+
+export function parseQaPersistenceCandidateManifest(
+  bytes: Uint8Array,
+  expectedSourceCommit?: string
+): QaPersistenceCandidateManifest | null {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > MAX_QA_CANDIDATE_MANIFEST_BYTES)
+    return null
+  try {
+    const value = strictJson(bytes, MAX_QA_CANDIDATE_MANIFEST_BYTES)
+    if (
+      !isRecord(value) ||
+      !exactKeys(value, [
+        'schema',
+        'purpose',
+        'sourceCommit',
+        'implementationInventorySha256',
+        'proposedCatalogSha256',
+        'profileId',
+        'profileMeasurementSha256',
+        'caseRosterSha256',
+        'qaIdentity',
+        'runtimes'
+      ]) ||
+      value.schema !== 'metis-persistence-qa-candidate/v1' ||
+      value.purpose !== 'isolated-persistence-qualification' ||
+      !SOURCE_RE.test(String(value.sourceCommit)) ||
+      (expectedSourceCommit !== undefined && value.sourceCommit !== expectedSourceCommit) ||
+      !SHA_RE.test(String(value.implementationInventorySha256)) ||
+      !SHA_RE.test(String(value.proposedCatalogSha256)) ||
+      !PROFILE_ID_RE.test(String(value.profileId)) ||
+      !SHA_RE.test(String(value.profileMeasurementSha256)) ||
+      !SHA_RE.test(String(value.caseRosterSha256))
+    )
+      return null
+    if (
+      !isRecord(value.qaIdentity) ||
+      !exactKeys(value.qaIdentity, ['appId', 'appName']) ||
+      value.qaIdentity.appId !== 'com.mantu.asktoto.qa' ||
+      value.qaIdentity.appName !== 'asktoto-qa' ||
+      !Array.isArray(value.runtimes) ||
+      value.runtimes.length === 0 ||
+      value.runtimes.length > 4
+    )
+      return null
+    const targets = new Set<string>()
+    const runtimes: QaPersistenceCandidateManifest['runtimes'] = []
+    for (const item of value.runtimes) {
+      if (
+        !isRecord(item) ||
+        !exactKeys(item, ['platform', 'arch', 'node', 'v8', 'modules', 'electron']) ||
+        !['win32', 'darwin', 'linux'].includes(String(item.platform)) ||
+        !['x64', 'arm64'].includes(String(item.arch)) ||
+        !validString(item.node, 32) ||
+        !validString(item.v8, 32) ||
+        !validString(item.modules, 32) ||
+        !validString(item.electron, 32)
+      )
+        return null
+      const platform = item.platform as RuntimePlatform
+      const arch = item.arch as 'x64' | 'arm64'
+      const target = `${platform}/${arch}`
+      if (!SUPPORTED_TARGETS.has(target) || targets.has(target)) return null
+      targets.add(target)
+      runtimes.push({
+        platform,
+        arch,
+        node: item.node,
+        v8: item.v8,
+        modules: item.modules,
+        electron: item.electron
+      })
+    }
+    return {
+      schema: 'metis-persistence-qa-candidate/v1',
+      purpose: 'isolated-persistence-qualification',
+      sourceCommit: value.sourceCommit as string,
+      implementationInventorySha256: value.implementationInventorySha256 as string,
+      proposedCatalogSha256: value.proposedCatalogSha256 as string,
+      profileId: value.profileId as string,
+      profileMeasurementSha256: value.profileMeasurementSha256 as string,
+      caseRosterSha256: value.caseRosterSha256 as string,
+      qaIdentity: { appId: 'com.mantu.asktoto.qa', appName: 'asktoto-qa' },
+      runtimes
+    }
+  } catch {
+    return null
+  }
+}
+
+export function parseQaPersistenceCaseRoster(
+  bytes: Uint8Array
+): { roster: QaPersistenceCaseRoster; digest: string } | null {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > MAX_QA_CASE_ROSTER_BYTES)
+    return null
+  try {
+    const value = strictJson(bytes, MAX_QA_CASE_ROSTER_BYTES)
+    if (
+      !isRecord(value) ||
+      !exactKeys(value, ['schema', 'cases']) ||
+      value.schema !== 'metis-persistence-qa-case-roster/v1' ||
+      !Array.isArray(value.cases) ||
+      value.cases.length === 0 ||
+      value.cases.length > 128
+    )
+      return null
+    let previous = ''
+    const cases: string[] = []
+    for (const item of value.cases) {
+      if (typeof item !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(item) || item <= previous) return null
+      previous = item
+      cases.push(item)
+    }
+    const roster: QaPersistenceCaseRoster = { schema: 'metis-persistence-qa-case-roster/v1', cases }
+    return { roster, digest: sha256(`${QA_CASE_ROSTER_DOMAIN}${canonical(roster)}`) }
+  } catch {
+    return null
+  }
+}
+
+export function verifyQaPersistenceCandidateBundle(input: {
+  catalogBytes: Uint8Array
+  inventoryBytes: Uint8Array
+  caseRosterBytes: Uint8Array
+  manifestBytes: Uint8Array
+}): {
+  manifest: QaPersistenceCandidateManifest
+  catalogDigest: string
+  implementationDigest: string
+  profileMeasurementDigest: string
+} | null {
+  const catalog = parseProfileCatalog(input.catalogBytes)
+  const manifest = parseQaPersistenceCandidateManifest(input.manifestBytes)
+  const inventory = parseImplementationInventory(input.inventoryBytes, manifest?.sourceCommit)
+  const roster = parseQaPersistenceCaseRoster(input.caseRosterBytes)
+  if (!catalog || !manifest || !inventory || !roster) return null
+  const profile = catalog.catalog.profiles.find((candidate) => candidate.id === manifest.profileId)
+  if (
+    !profile ||
+    profile.evidence !== 'PROPOSED' ||
+    profile.qualification.state !== 'PROPOSED' ||
+    profile.qualification.reportSha256 !== null ||
+    profile.implementationSha256 !== inventory.digest ||
+    catalog.digest !== manifest.proposedCatalogSha256 ||
+    inventory.digest !== manifest.implementationInventorySha256 ||
+    roster.digest !== manifest.caseRosterSha256
+  )
+    return null
+  const profileMeasurementDigest = persistenceProfileDigest(profile)
+  if (profileMeasurementDigest !== manifest.profileMeasurementSha256) return null
+  const profileRuntimes = [...profile.supported.targets].map((target) => ({ ...target })).sort(compareTarget)
+  const manifestRuntimes = [...manifest.runtimes].map((target) => ({ ...target })).sort(compareTarget)
+  if (canonical(profileRuntimes) !== canonical(manifestRuntimes)) return null
+  return {
+    manifest,
+    catalogDigest: catalog.digest,
+    implementationDigest: inventory.digest,
+    profileMeasurementDigest
+  }
 }
 
 export function qualificationReportDigest(reportBytes: Uint8Array): string {
@@ -328,8 +627,87 @@ export function strictJson(bytes: Uint8Array, maxBytes: number): unknown | null 
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
     if (Buffer.from(text, 'utf8').byteLength !== bytes.byteLength) return null
+    if (hasDuplicateObjectKeys(text)) return null
     return JSON.parse(text) as unknown
   } catch {
     return null
   }
+}
+
+function hasDuplicateObjectKeys(text: string): boolean {
+  let offset = 0
+  const whitespace = () => {
+    while (offset < text.length && /\s/.test(text[offset]!)) offset += 1
+  }
+  const stringEnd = (): string | null => {
+    const start = offset
+    if (text[offset] !== '"') return null
+    offset += 1
+    while (offset < text.length) {
+      const character = text[offset++]!
+      if (character === '"') {
+        try {
+          return JSON.parse(text.slice(start, offset)) as string
+        } catch {
+          return null
+        }
+      }
+      if (character === '\\') {
+        if (offset >= text.length) return null
+        offset += 1
+      }
+    }
+    return null
+  }
+  const parseValue = (depth: number): boolean => {
+    if (depth > 64) return false
+    whitespace()
+    const opening = text[offset]
+    if (opening === '{') {
+      offset += 1
+      whitespace()
+      if (text[offset] === '}') {
+        offset += 1
+        return true
+      }
+      const keys = new Set<string>()
+      while (offset < text.length) {
+        whitespace()
+        const key = stringEnd()
+        if (key === null || keys.has(key)) return false
+        keys.add(key)
+        whitespace()
+        if (text[offset++] !== ':') return false
+        if (!parseValue(depth + 1)) return false
+        whitespace()
+        const delimiter = text[offset++]
+        if (delimiter === '}') return true
+        if (delimiter !== ',') return false
+      }
+      return false
+    }
+    if (opening === '[') {
+      offset += 1
+      whitespace()
+      if (text[offset] === ']') {
+        offset += 1
+        return true
+      }
+      while (offset < text.length) {
+        if (!parseValue(depth + 1)) return false
+        whitespace()
+        const delimiter = text[offset++]
+        if (delimiter === ']') return true
+        if (delimiter !== ',') return false
+      }
+      return false
+    }
+    if (opening === '"') return stringEnd() !== null
+    const start = offset
+    while (offset < text.length && !/[\s,\[\]{}]/.test(text[offset]!)) offset += 1
+    return offset > start
+  }
+  if (!parseValue(0)) return true
+  whitespace()
+  return offset !== text.length
 }

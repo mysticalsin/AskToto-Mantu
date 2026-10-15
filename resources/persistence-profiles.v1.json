@@ -15,6 +15,7 @@
     "journal": { "recordMetadataBytes": 4096, "canonicalWrapperBytes": 1024, "indexEntryBytes": 1024, "manifestBytes": 16384 },
     "worker": { "inputBytes": 1048576, "outputBytes": 1048576, "operationDeadlineMs": 60000, "shutdownDeadlineMs": 5000 },
     "consumers": { "transferChunkBytes": 65536, "pageRecords": 64, "pageBytes": 1048576, "residentBytes": 134217728, "pendingWindowBytes": 65536, "exportOverlapBytes": 16777216, "graphifyStageBytes": 67108864 },
+    "maxHeldRoots": 4,
     "derived": { "physicalRecordBytes": 266284, "canonicalTotalBytes": 201326592, "journalBytes": 539770880, "stagingBytes": 1834582016 },
     "qualification": { "state": "PROPOSED", "reportSha256": null }
   }]

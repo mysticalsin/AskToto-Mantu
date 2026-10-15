@@ -23,6 +23,7 @@ import { createIncrementalMeetingJournalFileStorage } from '../features/meetings
 import {
   readAdminPolicyReceipt,
   readBundledPersistenceReceipt,
+  resolveBundledPersistenceCandidate,
   resolvePersistenceResourcePolicy,
   toMeetingSpeechPolicy,
   type ResourcePolicyResult,
@@ -572,7 +573,9 @@ function createMainPersistenceBootstrapInternal(
               resolvedPolicy.status === 'refused' &&
               ['PROFILE_UNQUALIFIED', 'QUALIFICATION_MISSING', 'QUALIFICATION_INVALID'].includes(resolvedPolicy.code)
             ) {
-              const candidate = resolvePolicy({ ...inputs, mode: 'qualification' })
+              const candidate = sourceFixture
+                ? resolvePolicy({ ...inputs, mode: 'qualification' })
+                : resolveBundledPersistenceCandidate(bundledReceipt, inputs)
               if (candidate.status === 'candidate' && candidate.profile.qualification.state === 'PROPOSED') {
                 resolvedPolicy = candidate
                 policy = resolvedPolicy
