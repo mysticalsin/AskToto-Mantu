@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import {
@@ -16,12 +17,26 @@ import { getSettings, setSettings } from './store'
 import { readTrustedAdminManaged } from './win-security'
 
 vi.mock('electron')
+// Node exposes these APIs through non-configurable ESM namespace properties on Windows. Delegate to
+// the real modules while making the few filesystem probes in the lease hot-path test spyable on every OS.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) }
+})
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) }
+})
 // Stub only the admin-trusted managed-config read so tests never inherit this machine's real ProgramData
 // policy (default null = no admin policy). All other win-security exports stay real — store.ts imports
 // adminManagedConfigPath from here. The MQA-107 admin-managed gate test overrides readTrustedAdminManaged.
 vi.mock('./win-security', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./win-security')>()
-  return { ...actual, readTrustedAdminManaged: vi.fn((): string | null => null) }
+  return {
+    ...actual,
+    adminManagedConfigPath: vi.fn(() => join(app.getPath('userData'), 'admin-managed-config.json')),
+    readTrustedAdminManaged: vi.fn((): string | null => null)
+  }
 })
 
 // Shape Entra actually issues in the id-token `tid` claim, and the only tenantId the sign-in gate can
@@ -36,9 +51,7 @@ describe('auth trust boundary — requireAuth / authStatus', () => {
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
   afterEach(() => {
@@ -92,9 +105,7 @@ describe('MQA-027 — tenant id shape / sign-in gate cannot brick the install', 
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-tenant-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
   afterEach(() => {
@@ -132,7 +143,9 @@ describe('MQA-027 — tenant id shape / sign-in gate cannot brick the install', 
   it('rejects a non-GUID tenant id from managed-config, not just env', () => {
     writeFileSync(
       join(ud, 'managed-config.json'),
-      JSON.stringify({ azure: { clientId: 'client-id', tenantId: 'mantu.onmicrosoft.com', allowedDomain: 'mantu.com' } }),
+      JSON.stringify({
+        azure: { clientId: 'client-id', tenantId: 'mantu.onmicrosoft.com', allowedDomain: 'mantu.com' }
+      }),
       'utf8'
     )
     expect(authStatus().configured).toBe(false)
@@ -171,9 +184,7 @@ describe('MQA-107 — SignInWall reset escape hatch recovers a wrong-tenant self
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-reset-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null) // default: no admin policy
   })
@@ -266,9 +277,7 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-bootstrap-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
   afterEach(() => {
@@ -342,13 +351,27 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
 describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
   // The single-flight latch stops CONCURRENT flows; this pins the SEQUENTIAL control: escalating
   // backoff after consecutive failures, reset on success, gate checked before the latch is taken.
-  it('escalates 2s -> 4s -> 8s capped at 60s and resets on success (source-pinned wiring)', async () => {
+  it('escalates 2s -> 4s -> 8s capped at 60s and resets on success', async () => {
     const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
     const { join } = await vi.importActual<typeof import('node:path')>('node:path')
     const src = readFileSync(join(__dirname, 'auth.ts'), 'utf8')
-    expect(src).toMatch(/SIGNIN_BACKOFF_BASE_MS = 2_000/)
-    expect(src).toMatch(/SIGNIN_BACKOFF_MAX_MS = 60_000/)
-    expect(src).toMatch(/SIGNIN_BACKOFF_BASE_MS \* 2 \*\* \(signInFailures - 1\)/)
+    const { INITIAL_SIGN_IN_BACKOFF, resetSignInBackoff, signInBackoffAfterFailure, signInBackoffRemaining } =
+      await import('./auth-session-policy')
+    let state = INITIAL_SIGN_IN_BACKOFF
+    state = signInBackoffAfterFailure(state, 10_000)
+    expect(signInBackoffRemaining(state, 10_000)).toBe(2_000)
+    state = signInBackoffAfterFailure(state, 12_000)
+    expect(signInBackoffRemaining(state, 12_000)).toBe(4_000)
+    state = signInBackoffAfterFailure(state, 16_000)
+    expect(signInBackoffRemaining(state, 16_000)).toBe(8_000)
+    let cappedDelayStartedAt = 0
+    for (let failure = 4; failure <= 7; failure += 1) {
+      const attemptAt = state.blockedUntil
+      state = signInBackoffAfterFailure(state, attemptAt)
+      if (failure === 7) cappedDelayStartedAt = attemptAt
+    }
+    expect(signInBackoffRemaining(state, cappedDelayStartedAt)).toBe(60_000)
+    expect(signInBackoffRemaining(resetSignInBackoff(), 16_000)).toBe(0)
     // The gate runs inside signIn() BEFORE the latch is taken, and failure/success both update state.
     const signInBody = src.slice(src.indexOf('export async function signIn('), src.indexOf('MQA-107 escape hatch'))
     const gate = signInBody.indexOf('signInBackoffRemainingMs()')
@@ -358,7 +381,7 @@ describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
     expect(signInBody).toMatch(/recordSignInFailure\(\)/)
     expect(signInBody).toMatch(/recordSignInSuccess\(\)/)
     // The failure count reaches the audit trail so a hammering loop is visible, not silent.
-    expect(signInBody).toMatch(/consecutive: signInFailures/)
+    expect(signInBody).toMatch(/consecutive: signInBackoff\.failures/)
   })
 
   it('reports remaining wait to the caller in whole seconds', async () => {
@@ -449,5 +472,623 @@ describe('tenant rotation ends a session whose tid no longer matches the configu
     process.env.AZURE_TENANT_ID = TENANT_GUID.toUpperCase()
     const auth = await import('./auth')
     expect(auth.authStatus().signedIn).toBe(true)
+  })
+})
+
+// Speech authorization uses the real auth module as its source. The lease is only a short-lived,
+// opaque capability: its per-frame check must stay in memory and must retire with the auth owner.
+describe('speech auth lease (auth module authority)', () => {
+  const AZURE_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH']
+  let ud: string
+  let saved: Record<string, string | undefined>
+  let settingsEpoch = 0
+  let policyRevision = 'profile-a|policy-a'
+  let settingsBoundaryReads = 0
+  let adminBoundaryReads = 0
+  let policyRevisionReads = 0
+  let activeProfilePath: string
+
+  beforeEach(async () => {
+    vi.resetModules()
+    settingsEpoch = 0
+    policyRevision = 'profile-a|policy-a'
+    settingsBoundaryReads = 0
+    adminBoundaryReads = 0
+    policyRevisionReads = 0
+    ud = mkdtempSync(join(tmpdir(), 'asktoto-speech-auth-lease-'))
+    activeProfilePath = ud
+    const electron = await import('electron')
+    const readProfilePath = (n: string): string => (n === 'userData' ? activeProfilePath : join(activeProfilePath, n))
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
+    // The cached win-security mock closes over the initially imported Electron app. Keep its policy
+    // path on the same isolated profile as the fresh auth/store modules created by resetModules().
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
+    saved = {}
+    for (const k of AZURE_ENV) {
+      saved[k] = process.env[k]
+      delete process.env[k]
+    }
+  })
+
+  afterEach(() => {
+    rmSync(ud, { recursive: true, force: true })
+    for (const k of AZURE_ENV) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  async function writeSessionFile(tid = TENANT_GUID, email = 'user@example.com', at = Date.now()): Promise<void> {
+    const { encryptSecret } = await import('./secrets')
+    const session = { email, domain: 'example.com', tid, at }
+    writeFileSync(join(ud, 'auth-session.bin'), encryptSecret(JSON.stringify(session)), { mode: 0o600 })
+  }
+
+  function configureTenant(): void {
+    process.env.AZURE_CLIENT_ID = 'client-id'
+    process.env.AZURE_TENANT_ID = TENANT_GUID
+    process.env.ASKTOTO_ALLOWED_DOMAIN = 'example.com'
+  }
+
+  async function prepareAuth(adminReader?: (path: string) => Promise<Uint8Array | null>) {
+    // vi.resetModules() also recreates the Electron mock module. Rebind its profile path before loading
+    // auth/store so the newly imported modules read the same isolated files the test prepared.
+    const electron = await import('electron')
+    const readProfilePath = (n: string): string => (n === 'userData' ? activeProfilePath : join(activeProfilePath, n))
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
+    const auth = await import('./auth')
+    const { getSettings } = await import('./store')
+    const { readTrustedAdminManagedBytes } = await import('./win-security')
+    auth.configureSpeechAuthLeaseReaders({
+      readSettingsAtBoundary: async () => {
+        settingsBoundaryReads += 1
+        return { settings: getSettings(), readable: true, epoch: settingsEpoch }
+      },
+      readSettingsEpoch: () => settingsEpoch,
+      readPolicyPathsRevision: () => {
+        policyRevisionReads += 1
+        return policyRevision
+      },
+      readTrustedAdminManagedBytes: async (path) => {
+        adminBoundaryReads += 1
+        return adminReader ? adminReader(path) : readTrustedAdminManagedBytes(path)
+      }
+    })
+    return auth
+  }
+
+  it('allows the real unconfigured developer mode and performs 600 pure in-memory checks', async () => {
+    const unconfiguredAuth = await import('./auth')
+    expect(await unconfiguredAuth.refreshSpeechAuthLease()).toBeNull() // no verified boundary yet
+    expect(unconfiguredAuth.isSpeechAuthLeaseCurrent({} as never)).toBe(false)
+    const auth = await prepareAuth()
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    const repeatedLease = await auth.refreshSpeechAuthLease()
+    expect(repeatedLease).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(true)
+    expect(auth.isSpeechAuthLeaseCurrent(repeatedLease)).toBe(true)
+
+    const fs = await import('node:fs')
+    const fsPromises = await import('node:fs/promises')
+    const winSecurity = await import('./win-security')
+    const electron = await import('electron')
+    const reads = vi.mocked(fs.readFileSync)
+    const lstatReads = vi.mocked(fsPromises.lstat)
+    const openReads = vi.mocked(fsPromises.open)
+    const pathReads = vi.mocked(electron.app.getPath)
+    const adminPathReads = vi.mocked(winSecurity.adminManagedConfigPath)
+    reads.mockClear()
+    lstatReads.mockClear()
+    openReads.mockClear()
+    pathReads.mockClear()
+    adminPathReads.mockClear()
+    const settingsReadsBefore = settingsBoundaryReads
+    const adminReadsBefore = adminBoundaryReads
+    const policyRevisionReadsBefore = policyRevisionReads
+    for (let i = 0; i < 600; i += 1) {
+      expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(true)
+    }
+    expect(reads).not.toHaveBeenCalled()
+    expect(lstatReads).not.toHaveBeenCalled()
+    expect(openReads).not.toHaveBeenCalled()
+    expect(pathReads).not.toHaveBeenCalled()
+    expect(adminPathReads).not.toHaveBeenCalled()
+    expect(settingsBoundaryReads).toBe(settingsReadsBefore)
+    expect(adminBoundaryReads).toBe(adminReadsBefore)
+    expect(policyRevisionReads).toBe(policyRevisionReadsBefore)
+    expect(JSON.stringify(lease)).not.toMatch(/user@example\.com|client-id|example\.com|72f988bf/i)
+  })
+
+  it('keeps enforced org auth closed without a session, and accepts only a real in-bound session', async () => {
+    configureTenant()
+    const auth = await prepareAuth()
+    expect(await auth.refreshSpeechAuthLease()).toBeNull()
+
+    await writeSessionFile()
+    vi.resetModules()
+    const freshAuth = await prepareAuth()
+    const lease = await freshAuth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    expect(freshAuth.isSpeechAuthLeaseCurrent(lease)).toBe(true)
+  })
+
+  it('keeps env, user managed, and admin managed enforcement fail-closed without SSO config', async () => {
+    process.env.ASKTOTO_REQUIRE_AUTH = '1'
+    let auth = await prepareAuth()
+    expect(await auth.refreshSpeechAuthLease()).toBeNull()
+
+    vi.resetModules()
+    delete process.env.ASKTOTO_REQUIRE_AUTH
+    writeFileSync(join(ud, 'managed-config.json'), JSON.stringify({ requireAuth: true }), 'utf8')
+    auth = await prepareAuth()
+    expect(await auth.refreshSpeechAuthLease()).toBeNull()
+
+    vi.resetModules()
+    rmSync(join(ud, 'managed-config.json'), { force: true })
+    writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
+    auth = await prepareAuth(async () => new TextEncoder().encode(JSON.stringify({ requireAuth: true })))
+    expect(await auth.refreshSpeechAuthLease()).toBeNull()
+  })
+
+  it('does not make an unused malformed LKG file change valid fresh-config behavior', async () => {
+    configureTenant()
+    await writeSessionFile()
+    writeFileSync(join(ud, 'auth-lkg-config.json'), '{not-json', 'utf8')
+    const auth = await prepareAuth()
+    expect(await auth.refreshSpeechAuthLease()).not.toBeNull()
+  })
+
+  it('preserves the full-invalid-admin precedence over a valid per-user Azure block', async () => {
+    const adminPath = join(ud, 'admin-managed-config.json')
+    const admin = { azure: { clientId: 'bad value', tenantId: TENANT_GUID, allowedDomain: 'example.com' } }
+    const user = { azure: { clientId: 'client-id', tenantId: TENANT_GUID, allowedDomain: 'example.com' } }
+    writeFileSync(adminPath, JSON.stringify(admin), 'utf8')
+    writeFileSync(join(ud, 'managed-config.json'), JSON.stringify(user), 'utf8')
+    const auth = await prepareAuth(async () => new TextEncoder().encode(JSON.stringify(admin)))
+
+    // The resolver selects a complete admin Azure block before validating it; it does not fall
+    // through to per-user config. With no Settings config or enforcement, this is a dev install.
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(true)
+  })
+
+  it('keeps acknowledged unrelated updates but retires across a missed settings observation', async () => {
+    const auth = await prepareAuth()
+    const { getSettings } = await import('./store')
+    const settings = getSettings()
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+
+    settingsEpoch += 1
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(true)
+
+    // No frame or observer saw this intervening store epoch; identical final values cannot prove there
+    // was no A → B → A interval, so the prior owner must be retired before refresh republishes.
+    settingsEpoch += 1
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    settingsEpoch += 1
+    const next = await auth.refreshSpeechAuthLease()
+    expect(next).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    expect(auth.isSpeechAuthLeaseCurrent(next)).toBe(true)
+  })
+
+  it('retires on actual tenant/domain/age failures and on sticky sign-out', async () => {
+    configureTenant()
+    await writeSessionFile()
+    const auth = await prepareAuth()
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+
+    process.env.AZURE_TENANT_ID = '00000000-0000-4000-8000-000000000001'
+    expect(await auth.refreshSpeechAuthLease()).toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+
+    vi.resetModules()
+    configureTenant()
+    await writeSessionFile()
+    const domainAuth = await prepareAuth()
+    const domainLease = await domainAuth.refreshSpeechAuthLease()
+    expect(domainLease).not.toBeNull()
+    // The real authStatus path rejects the cached identity under a changed allowed domain.
+    process.env.ASKTOTO_ALLOWED_DOMAIN = 'other.example'
+    expect(await domainAuth.refreshSpeechAuthLease()).toBeNull()
+    expect(domainAuth.isSpeechAuthLeaseCurrent(domainLease)).toBe(false)
+
+    vi.resetModules()
+    configureTenant()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))
+    await writeSessionFile()
+    const ageAuth = await prepareAuth()
+    const ageLease = await ageAuth.refreshSpeechAuthLease()
+    expect(ageLease).not.toBeNull()
+    vi.setSystemTime(new Date('2026-10-22T00:00:00.001Z'))
+    expect(await ageAuth.refreshSpeechAuthLease()).toBeNull()
+    expect(ageAuth.isSpeechAuthLeaseCurrent(ageLease)).toBe(false)
+  })
+
+  it('invalidates on observer policy/path changes and profile recovery, including a held refresh result', async () => {
+    configureTenant()
+    await writeSessionFile()
+    const auth = await prepareAuth()
+    const invalidated = vi.fn()
+    auth.subscribeSpeechAuthLeaseInvalidation(invalidated)
+    const afterThrow = vi.fn()
+    auth.subscribeSpeechAuthLeaseInvalidation(() => {
+      throw new Error('teardown fixture')
+    })
+    auth.subscribeSpeechAuthLeaseInvalidation(afterThrow)
+    const { getSettings } = await import('./store')
+    const settings = getSettings()
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
+    const first = await auth.refreshSpeechAuthLease()
+    expect(first).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(first)).toBe(true)
+    policyRevision = 'profile-a|policy-b'
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch + 1 }, policyRevision)
+    expect(auth.isSpeechAuthLeaseCurrent(first)).toBe(false)
+    expect(invalidated).toHaveBeenCalled()
+    expect(afterThrow).toHaveBeenCalled()
+
+    const pending = auth.refreshSpeechAuthLease()
+    auth.invalidateSpeechAuthLease()
+    const held = await pending
+    expect(auth.isSpeechAuthLeaseCurrent(held)).toBe(false)
+
+    settingsEpoch += 1
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
+    const second = await auth.refreshSpeechAuthLease()
+    expect(second).not.toBeNull()
+    auth.setSessionClearedHandler(() => {
+      // The root teardown can synchronously re-enter the legacy auth path before profile files archive.
+      auth.authStatus()
+    })
+    const nextProfile = join(ud, 'profile-b')
+    mkdirSync(nextProfile)
+    auth.resetSpeechAuthProfile()
+    expect(auth.isSpeechAuthLeaseCurrent(second)).toBe(false)
+    expect(auth.authStatus().signedIn).toBe(false)
+
+    // Root archives profile A after its pre-archive reset and then switches userData to profile B.
+    const app = (await import('electron')).app
+    activeProfilePath = nextProfile
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
+      n === 'userData' ? nextProfile : join(nextProfile, n)
+    )
+    auth.completeSpeechAuthProfileReset()
+    const { encryptSecret } = await import('./secrets')
+    writeFileSync(
+      join(nextProfile, 'auth-session.bin'),
+      encryptSecret(
+        JSON.stringify({ email: 'profile-b@example.com', domain: 'example.com', tid: TENANT_GUID, at: Date.now() })
+      ),
+      { mode: 0o600 }
+    )
+    const profileBLease = await auth.refreshSpeechAuthLease()
+    expect(profileBLease).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(second)).toBe(false)
+    expect(auth.isSpeechAuthLeaseCurrent(profileBLease)).toBe(true)
+  })
+
+  it('preserves sticky/LKG enforcement and revokes the owner on sign-out', async () => {
+    await writeSessionFile()
+    writeFileSync(join(ud, 'auth-configured.flag'), '1', { mode: 0o600 })
+    writeFileSync(
+      join(ud, 'auth-lkg-config.json'),
+      JSON.stringify({ clientId: 'client-id', tenantId: TENANT_GUID, allowedDomain: 'example.com' }),
+      { mode: 0o600 }
+    )
+    const auth = await prepareAuth()
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    auth.signOut()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    expect(await auth.refreshSpeechAuthLease()).not.toBeNull() // genuine sign-out clears sticky enforcement
+
+    vi.resetModules()
+    for (const k of AZURE_ENV) delete process.env[k]
+    writeFileSync(join(ud, 'auth-configured.flag'), '1', { mode: 0o600 })
+    const stickyAuth = await prepareAuth()
+    expect(await stickyAuth.refreshSpeechAuthLease()).toBeNull()
+  })
+
+  it('rejects a held real admin-policy read when sign-out changes the captured session epoch', async () => {
+    configureTenant()
+    await writeSessionFile()
+    writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
+    const { readTrustedAdminManagedBytes } = await import('./win-security')
+    let began!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      began = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const auth = await prepareAuth(async (path) => {
+      began()
+      await gate
+      return readTrustedAdminManagedBytes(path)
+    })
+    const pending = auth.refreshSpeechAuthLease()
+    await started
+    auth.signOut()
+    release()
+    expect(await pending).toBeNull()
+  })
+
+  it('rejects a held boundary across settings A-to-B-to-A observations', async () => {
+    configureTenant()
+    await writeSessionFile()
+    writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
+    const { readTrustedAdminManagedBytes } = await import('./win-security')
+    let began!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      began = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const auth = await prepareAuth(async (path) => {
+      began()
+      await gate
+      return readTrustedAdminManagedBytes(path)
+    })
+    const pending = auth.refreshSpeechAuthLease()
+    await started
+    const { getSettings } = await import('./store')
+    const original = getSettings()
+    for (const [index, clientId] of ['client-a', 'client-b', 'client-a'].entries()) {
+      settingsEpoch += 1
+      auth.observeSpeechAuthSettings(
+        { settings: { ...original, azureClientId: clientId }, readable: true, epoch: settingsEpoch },
+        policyRevision
+      )
+      if (index < 2) expect(auth.isSpeechAuthLeaseCurrent(null)).toBe(false)
+    }
+    expect(auth.refreshSpeechAuthLease()).toBe(pending)
+    release()
+    expect(await pending).toBeNull()
+  })
+
+  it('does not treat a present admin policy removed during raw read as absent', async () => {
+    const adminPath = join(ud, 'admin-managed-config.json')
+    writeFileSync(adminPath, JSON.stringify({ requireAuth: true }), 'utf8')
+    let began!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      began = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const auth = await prepareAuth(async () => {
+      began()
+      await gate
+      rmSync(adminPath, { force: true })
+      return null
+    })
+    const pending = auth.refreshSpeechAuthLease()
+    await started
+    release()
+    expect(await pending).toBeNull()
+  })
+
+  it('shares one held boundary read across concurrent identical refresh requests', async () => {
+    configureTenant()
+    await writeSessionFile()
+    const adminPath = join(ud, 'admin-managed-config.json')
+    writeFileSync(adminPath, '{}', 'utf8')
+    const { readTrustedAdminManagedBytes } = await import('./win-security')
+    let began!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      began = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const auth = await prepareAuth(async (path) => {
+      began()
+      await gate
+      return readTrustedAdminManagedBytes(path)
+    })
+
+    const older = auth.refreshSpeechAuthLease()
+    await started
+    const newer = auth.refreshSpeechAuthLease()
+    expect(newer).toBe(older)
+    release()
+    const freshLease = await newer
+    expect(freshLease).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(freshLease)).toBe(true)
+    expect(adminBoundaryReads).toBe(1)
+  })
+
+  it('closes a boundary whose initial observer reentrantly replaces its readers', async () => {
+    const auth = await prepareAuth()
+    let unsubscribe = (): void => undefined
+    unsubscribe = auth.subscribeSpeechAuthLeaseInvalidation(() => {
+      unsubscribe()
+      auth.resetSpeechAuthLeaseReaders()
+    })
+
+    expect(await auth.refreshSpeechAuthLease()).toBeNull()
+    const retry = await prepareAuth()
+    const lease = await retry.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    expect(retry.isSpeechAuthLeaseCurrent(lease)).toBe(true)
+  })
+
+  it('retires the old owner when actual sign-in replaces the in-memory session', async () => {
+    configureTenant()
+    await writeSessionFile()
+    writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
+    let callbackUrl = ''
+    let state = ''
+    let replacementEmail = 'replacement@example.com'
+    const msalRequire = createRequire(import.meta.url)
+    const msal = msalRequire('@azure/msal-node') as typeof import('@azure/msal-node')
+    vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockResolvedValue({
+      verifier: 'verifier',
+      challenge: 'challenge'
+    })
+    vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
+      callbackUrl = options.redirectUri || ''
+      state = options.state || ''
+      return 'https://login.example.test/authorize'
+    })
+    vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockImplementation(
+      async () =>
+        ({
+          account: { username: replacementEmail, name: 'Replacement' },
+          idTokenClaims: { tid: TENANT_GUID }
+        }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>
+    )
+    const { readTrustedAdminManagedBytes } = await import('./win-security')
+    let adminReads = 0
+    let began!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      began = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const auth = await prepareAuth(async (path) => {
+      adminReads += 1
+      if (adminReads === 2) {
+        began()
+        await gate
+      }
+      return readTrustedAdminManagedBytes(path)
+    })
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    const heldRefresh = auth.refreshSpeechAuthLease()
+    await started
+    let invalidatedBeforeReplacement = false
+    const unsubscribe = auth.subscribeSpeechAuthLeaseInvalidation(() => {
+      invalidatedBeforeReplacement =
+        !auth.isSpeechAuthLeaseCurrent(lease) && auth.authStatus().email === 'user@example.com'
+    })
+    const { shell } = await import('electron')
+    vi.spyOn(shell, 'openExternal').mockImplementation(async () => {
+      const response = await fetch(`${callbackUrl}/?code=auth-code&state=${state}`)
+      expect(response.status).toBe(200)
+    })
+
+    expect((await auth.signIn()).ok).toBe(true)
+    expect(auth.authStatus().email).toBe('replacement@example.com')
+    unsubscribe()
+    expect(invalidatedBeforeReplacement).toBe(true)
+    release()
+    expect(await heldRefresh).toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    const replacementLease = await auth.refreshSpeechAuthLease()
+    expect(replacementLease).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(replacementLease)).toBe(true)
+    replacementEmail = 'user@example.com'
+    expect((await auth.signIn()).ok).toBe(true)
+    expect(auth.authStatus().email).toBe('user@example.com')
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    expect(auth.isSpeechAuthLeaseCurrent(replacementLease)).toBe(false)
+    const returnedLease = await auth.refreshSpeechAuthLease()
+    expect(returnedLease).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(returnedLease)).toBe(true)
+  })
+
+  it('does not publish a held boundary after wall-clock rollback', async () => {
+    configureTenant()
+    vi.useFakeTimers()
+    const start = new Date('2026-10-14T00:00:00.000Z').getTime()
+    vi.setSystemTime(start)
+    await writeSessionFile(TENANT_GUID, 'user@example.com', start - 1_000)
+    writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
+    let began!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      began = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { readTrustedAdminManagedBytes } = await import('./win-security')
+    const auth = await prepareAuth(async (path) => {
+      began()
+      await gate
+      return readTrustedAdminManagedBytes(path)
+    })
+    const pending = auth.refreshSpeechAuthLease()
+    await started
+    vi.setSystemTime(start - 1)
+    release()
+    expect(await pending).toBeNull()
+  })
+
+  it('retires an owner when its session reaches seven days before its lease expires', async () => {
+    configureTenant()
+    vi.useFakeTimers()
+    const start = new Date('2026-10-14T00:00:00.000Z').getTime()
+    vi.setSystemTime(start)
+    await writeSessionFile(TENANT_GUID, 'user@example.com', start - 7 * 24 * 60 * 60 * 1000 + 100)
+    const auth = await prepareAuth()
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    vi.advanceTimersByTime(101)
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+  })
+
+  it('does not retire a fresh latest owner during identical t0/t30/t61 refreshes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))
+    const auth = await prepareAuth()
+    const { getSettings } = await import('./store')
+    auth.observeSpeechAuthSettings({ settings: getSettings(), readable: true, epoch: settingsEpoch }, policyRevision)
+    const invalidated = vi.fn()
+    auth.subscribeSpeechAuthLeaseInvalidation(invalidated)
+    const first = await auth.refreshSpeechAuthLease()
+    expect(first).not.toBeNull()
+    vi.advanceTimersByTime(30_000)
+    const second = await auth.refreshSpeechAuthLease()
+    expect(second).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(first)).toBe(true)
+    vi.advanceTimersByTime(31_000)
+    const third = await auth.refreshSpeechAuthLease()
+    expect(third).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(second)).toBe(true)
+    expect(invalidated).not.toHaveBeenCalled()
+  })
+
+  it('rejects a rolled-back clock and expires at the one-minute boundary', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))
+    const auth = await prepareAuth()
+    const lease = await auth.refreshSpeechAuthLease()
+    expect(lease).not.toBeNull()
+    vi.setSystemTime(new Date('2026-10-13T23:59:59.999Z'))
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+    vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))
+    const fresh = await auth.refreshSpeechAuthLease()
+    expect(fresh).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false) // an observed rollback cannot revive the old owner
+    vi.advanceTimersByTime(60_000)
+    expect(auth.isSpeechAuthLeaseCurrent(fresh)).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(auth.isSpeechAuthLeaseCurrent(fresh)).toBe(false)
+    const recovered = await auth.refreshSpeechAuthLease()
+    expect(recovered).not.toBeNull()
+    expect(auth.isSpeechAuthLeaseCurrent(fresh)).toBe(false) // idle expiry retires the old owner before recovery
   })
 })

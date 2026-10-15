@@ -79,12 +79,12 @@ function statusErrorCode(status: number): GatewayPrivacyErrorCode {
  * Metadata-only usage continues through the Operator's ask-meter; no source text
  * belongs in this management response, a log export, or a response cache.
  */
-function assertSensitiveRouteConfiguration(data: unknown): void {
+function assertSensitiveRouteConfiguration(data: unknown, gatewayId: string): void {
   if (!isRecord(data) || data.success !== true || !isRecord(data.result)) {
     throw new GatewayPrivacyError('GATEWAY_RESPONSE_UNVERIFIED')
   }
   const result = data.result
-  if (result.id !== DEFAULT_AI_GATEWAY_ID) {
+  if (result.id !== gatewayId) {
     throw new GatewayPrivacyError('GATEWAY_RESPONSE_UNVERIFIED')
   }
   if (
@@ -102,10 +102,7 @@ function assertSensitiveRouteConfiguration(data: unknown): void {
  * Never buffers past the cap, even when the server omits or understates content-length.
  * `race` bounds each individual read the same way the caller bounded the fetch itself.
  */
-async function readBoundedJsonBody(
-  response: Response,
-  race: <T>(pending: Promise<T>) => Promise<T>
-): Promise<unknown> {
+async function readBoundedJsonBody(response: Response, race: <T>(pending: Promise<T>) => Promise<T>): Promise<unknown> {
   const reader = response.body?.getReader()
   if (!reader) throw new GatewayPrivacyError('GATEWAY_RESPONSE_UNVERIFIED')
   const chunks: Uint8Array[] = []
@@ -139,15 +136,21 @@ async function readBoundedJsonBody(
   }
 }
 
-export async function verifyDefaultGatewayPrivacy(
+async function verifyGatewayPrivacy(
   token: string,
   accountId: string,
+  gatewayId: string,
   fetchImpl: typeof fetch,
   options: { timeoutMs?: number } = {}
 ): Promise<'CONFIGURED'> {
   const id = accountId.trim()
   const secret = token.trim()
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || !secret || /[\r\n]/.test(secret)) {
+  if (
+    !/^[A-Za-z0-9_-]{1,128}$/.test(id) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(gatewayId) ||
+    !secret ||
+    /[\r\n]/.test(secret)
+  ) {
     throw new GatewayPrivacyError('GATEWAY_CREDENTIALS_REQUIRED')
   }
   const timeoutMs = options.timeoutMs ?? VERIFY_TIMEOUT_MS
@@ -155,17 +158,15 @@ export async function verifyDefaultGatewayPrivacy(
     throw new GatewayPrivacyError('GATEWAY_CHECK_OPTIONS_INVALID')
   }
 
-  const url = `${API_ORIGIN}/client/v4/accounts/${encodeURIComponent(id)}/ai-gateway/gateways/${DEFAULT_AI_GATEWAY_ID}`
+  const url = `${API_ORIGIN}/client/v4/accounts/${encodeURIComponent(id)}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}`
   const controller = new AbortController()
   let rejectTimedOut!: (error: GatewayPrivacyError) => void
   const timedOut = new Promise<never>((_, reject) => {
     rejectTimedOut = reject
   })
-  controller.signal.addEventListener(
-    'abort',
-    () => rejectTimedOut(new GatewayPrivacyError('GATEWAY_CHECK_TIMEOUT')),
-    { once: true }
-  )
+  controller.signal.addEventListener('abort', () => rejectTimedOut(new GatewayPrivacyError('GATEWAY_CHECK_TIMEOUT')), {
+    once: true
+  })
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const race = <T>(pending: Promise<T>): Promise<T> => Promise.race([pending, timedOut])
 
@@ -212,7 +213,7 @@ export async function verifyDefaultGatewayPrivacy(
       throw new GatewayPrivacyError('GATEWAY_RESPONSE_UNVERIFIED')
     }
     const data = await readBoundedJsonBody(response, race)
-    assertSensitiveRouteConfiguration(data)
+    assertSensitiveRouteConfiguration(data, gatewayId)
     return 'CONFIGURED'
   } catch (error) {
     if (error instanceof GatewayPrivacyError) throw error
@@ -221,6 +222,26 @@ export async function verifyDefaultGatewayPrivacy(
   } finally {
     clearTimeout(timer)
   }
+}
+
+export function verifyDefaultGatewayPrivacy(
+  token: string,
+  accountId: string,
+  fetchImpl: typeof fetch,
+  options: { timeoutMs?: number } = {}
+): Promise<'CONFIGURED'> {
+  return verifyGatewayPrivacy(token, accountId, DEFAULT_AI_GATEWAY_ID, fetchImpl, options)
+}
+
+/** Reads back a pre-provisioned named gateway without changing the existing Ask/default route. */
+export function verifyNamedGatewayPrivacy(
+  token: string,
+  accountId: string,
+  gatewayId: string,
+  fetchImpl: typeof fetch,
+  options: { timeoutMs?: number } = {}
+): Promise<'CONFIGURED'> {
+  return verifyGatewayPrivacy(token, accountId, gatewayId, fetchImpl, options)
 }
 
 export function isCloudflareVaultPaste(provider: string, accountId: string | undefined): boolean {

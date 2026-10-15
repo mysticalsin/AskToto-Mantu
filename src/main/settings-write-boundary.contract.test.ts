@@ -22,7 +22,9 @@ function strippedKeys(): string[] {
   expect(start).toBeGreaterThan(-1)
   const region = indexSrc.slice(start, start + 4000)
   const keys: string[] = []
-  for (const m of region.matchAll(/for \(const k of \[([^\]]+)\]\) \{\s*\n\s*if \(k in p\) delete \(p as Record<string, unknown>\)\[k\]/g)) {
+  for (const m of region.matchAll(
+    /for \(const k of \[([^\]]+)\]\) \{\s*\n\s*if \(k in p\) delete \(p as Record<string, unknown>\)\[k\]/g
+  )) {
     for (const raw of m[1].split(',')) {
       const key = raw.trim().replace(/^['"]|['"]$/g, '')
       if (key) keys.push(key)
@@ -32,6 +34,12 @@ function strippedKeys(): string[] {
 }
 
 describe('settings:set — main-owned keys are not renderer-writable', () => {
+  it('rejects an explicit invalid broker profile before authentication or persistence effects', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.settingsSet')
+    const body = indexSrc.slice(start, indexSrc.indexOf('const p = patch ?? {}', start))
+    expect(body.indexOf('assertBrokerSpeechSettingsPatch(patch)')).toBeGreaterThan(body.indexOf('assertMainWindow(e)'))
+    expect(body.indexOf('assertBrokerSpeechSettingsPatch(patch)')).toBeLessThan(body.indexOf('if (!requireAuth())'))
+  })
   // M2-0429: the Screen Recording diagnosis reads this history to decide whether a capture may reach macOS.
   it('strips the Screen Recording permission history', () => {
     expect(strippedKeys()).toContain('permissionState')
@@ -49,7 +57,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // attacker-controlled MCP endpoint". A generic settings patch that could rewrite
   // mcpConnections[].endpointUrl defeats that pin and ships the stored bearer token (a BidStack/Plane
   // key, or a ClickUp OAuth access token) to any host that passes the SSRF guard.
-  it('MQA-137: strips MCP connection state, so mcpPush\'s endpoint pin cannot be rewritten from the renderer', () => {
+  it("MQA-137: strips MCP connection state, so mcpPush's endpoint pin cannot be rewritten from the renderer", () => {
     const keys = strippedKeys()
     expect(keys).toContain('mcpConnections')
     expect(keys).toContain('clickupClientId')
@@ -80,13 +88,29 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     // Execute the same delete loop the handler runs, over the key list read from the source above.
     const hostile: Record<string, unknown> = {
       mcpConnections: [
-        { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: 'https://attacker.example/mcp', connected: true, tools: ['x'], extraHeaders: {} }
+        {
+          id: 'clickup',
+          kind: 'clickup',
+          label: 'ClickUp',
+          endpointUrl: 'https://attacker.example/mcp',
+          connected: true,
+          tools: ['x'],
+          extraHeaders: {}
+        }
       ],
       clickupClientId: 'attacker-client',
       planeClientId: 'attacker-plane-client',
       licenseValid: true,
       licenseSeatCap: 999999,
-      operatorEntitlements: { ask: true, listen: true, recap: true, crm_push: true, operator_keys: true, intelligence: true, integrations: true },
+      operatorEntitlements: {
+        ask: true,
+        listen: true,
+        recap: true,
+        crm_push: true,
+        operator_keys: true,
+        intelligence: true,
+        integrations: true
+      },
       operatorTier: 'metis',
       operatorLicenseJti: 'deadbeefdeadbeef',
       // a genuine user setting in the same patch must survive

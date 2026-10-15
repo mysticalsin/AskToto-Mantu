@@ -28,6 +28,9 @@ build/cloudflare-embed/*
 # Operator-local build inputs that may hold credentials are never tracked.
 build/*.local.json
 build/*.ps1
+# Per-target lean package staging output (profile marker, core inventory and builder inputs).
+build/lean-stage/
+build/lean-measurements/
 # Pre-sized tray images, generated from build/icon.png by scripts/make-tray-icons.mjs in prebuild.
 build/tray/
 .vite/

@@ -114,7 +114,8 @@ function meetingMd(opts: { date: string; title?: string; confidential?: boolean;
     '',
     '## Notes & follow-ups',
     '',
-    opts.recap ?? '## Overview\n\nDiscussed the renewal.\n\n## Decisions\n\n- Proceed with the pilot\n\n## Action items\n\n- Send the proposal (You)',
+    opts.recap ??
+      '## Overview\n\nDiscussed the renewal.\n\n## Decisions\n\n- Proceed with the pilot\n\n## Action items\n\n- Send the proposal (You)',
     '',
     '## Full transcript',
     '',
@@ -124,7 +125,11 @@ function meetingMd(opts: { date: string; title?: string; confidential?: boolean;
   return lines.join('\n')
 }
 
-function writeMeetingFile(folder: string, name: string, opts: { date: string; title?: string; confidential?: boolean; recap?: string }): void {
+function writeMeetingFile(
+  folder: string,
+  name: string,
+  opts: { date: string; title?: string; confidential?: boolean; recap?: string }
+): void {
   writeFileSync(join(folder, name), meetingMd(opts), 'utf8')
 }
 
@@ -414,45 +419,49 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       expect(index).not.toContain('Secret Meeting')
     })
 
-    it('readConfidentialMeetings picks up exactly the meetings flagged in their frontmatter', () => {
+    it('readConfidentialMeetings picks up exactly the meetings flagged in their frontmatter', async () => {
       writeMeetingFile(folder, 'a.md', { date: '2026-01-01' })
       writeMeetingFile(folder, 'b.md', { date: '2026-01-02', confidential: true })
-      const set = readConfidentialMeetings(s)
+      const set = await readConfidentialMeetings(s)
       expect(set.has('b.md')).toBe(true)
       expect(set.has('a.md')).toBe(false)
     })
 
-    it('readConfidentialMeetings excludes a CRLF meeting flagged confidential (a synced/edited file keeps its flag)', () => {
+    it('readConfidentialMeetings excludes a CRLF meeting flagged confidential (a synced/edited file keeps its flag)', async () => {
       writeMeetingFile(folder, 'open.md', { date: '2026-01-01' })
-      writeFileSync(join(folder, 'crlf-secret.md'), meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n/g, '\r\n'), 'utf8')
-      const set = readConfidentialMeetings(s)
+      writeFileSync(
+        join(folder, 'crlf-secret.md'),
+        meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n/g, '\r\n'),
+        'utf8'
+      )
+      const set = await readConfidentialMeetings(s)
       expect(set.has('crlf-secret.md')).toBe(true)
       expect(set.has('open.md')).toBe(false)
     })
 
-    it('readConfidentialMeetings excludes a confidential meeting whose closing delimiter has trailing whitespace', () => {
+    it('readConfidentialMeetings excludes a confidential meeting whose closing delimiter has trailing whitespace', async () => {
       writeFileSync(
         join(folder, 'spaced-secret.md'),
         meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\n--- \n'),
         'utf8'
       )
-      expect(readConfidentialMeetings(s).has('spaced-secret.md')).toBe(true)
+      expect((await readConfidentialMeetings(s)).has('spaced-secret.md')).toBe(true)
     })
 
-    it('readConfidentialMeetings excludes a meeting when any duplicated confidential line is true', () => {
+    it('readConfidentialMeetings excludes a meeting when any duplicated confidential line is true', async () => {
       writeFileSync(
         join(folder, 'dup-secret.md'),
         meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\nconfidential: false\n---\n'),
         'utf8'
       )
-      expect(readConfidentialMeetings(s).has('dup-secret.md')).toBe(true)
+      expect((await readConfidentialMeetings(s)).has('dup-secret.md')).toBe(true)
     })
   })
 
   // ── MQA-074 / MQA-077: the confidential gate must fail CLOSED on a meeting it cannot read ────────────
 
   describe('MQA-074 / MQA-077 — a meeting the publisher cannot read is never published as non-confidential', () => {
-    it('readConfidentialMeetings excludes a file whose read throws, and one that decrypts to nothing', () => {
+    it('readConfidentialMeetings excludes a file whose read throws, and one that decrypts to nothing', async () => {
       writeMeetingFile(folder, 'readable.md', { date: '2026-01-01' })
       writeMeetingFile(folder, 'locked.md', { date: '2026-01-02' })
       writeMeetingFile(folder, 'foreign-key.md', { date: '2026-01-03' })
@@ -461,7 +470,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       readFaults.throwOn.add('locked.md')
       readFaults.emptyOn.add('foreign-key.md')
 
-      const set = readConfidentialMeetings(s)
+      const set = await readConfidentialMeetings(s)
       expect(set.has('locked.md')).toBe(true)
       expect(set.has('foreign-key.md')).toBe(true)
       expect(set.has('readable.md')).toBe(false)
@@ -537,8 +546,14 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
 
   describe('determinism — publishing twice over the same brain state is byte-identical', () => {
     it('publishAll run twice produces identical bytes for every wiki file', async () => {
-      writeMeetingFile(folder, join('2026-01-01_100000-kickoff.md'), { date: '2026-01-01T10:00:00.000Z', title: 'Kickoff call' })
-      writeMeetingFile(folder, join('2026-02-01_110000-followup.md'), { date: '2026-02-01T11:00:00.000Z', title: 'Follow-up call' })
+      writeMeetingFile(folder, join('2026-01-01_100000-kickoff.md'), {
+        date: '2026-01-01T10:00:00.000Z',
+        title: 'Kickoff call'
+      })
+      writeMeetingFile(folder, join('2026-02-01_110000-followup.md'), {
+        date: '2026-02-01T11:00:00.000Z',
+        title: 'Follow-up call'
+      })
 
       const meeting1: MeetingExtraction = MeetingExtractionSchema.parse({
         account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
@@ -551,8 +566,18 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
         people: [{ name: 'Maria Silva', role: 'CFO', org: null, confidence: 'EXTRACTED' }],
         deal: { name: 'Acme Core Banking', stage: 'proposal' }
       })
-      await ingestExtraction(s, meeting1, readFileSync(join(folder, '2026-01-01_100000-kickoff.md'), 'utf8'), join(folder, '2026-01-01_100000-kickoff.md'))
-      await ingestExtraction(s, meeting2, readFileSync(join(folder, '2026-02-01_110000-followup.md'), 'utf8'), join(folder, '2026-02-01_110000-followup.md'))
+      await ingestExtraction(
+        s,
+        meeting1,
+        readFileSync(join(folder, '2026-01-01_100000-kickoff.md'), 'utf8'),
+        join(folder, '2026-01-01_100000-kickoff.md')
+      )
+      await ingestExtraction(
+        s,
+        meeting2,
+        readFileSync(join(folder, '2026-02-01_110000-followup.md'), 'utf8'),
+        join(folder, '2026-02-01_110000-followup.md')
+      )
 
       await publishAll(s)
       const first = snapshotDir(wikiDir(s))
@@ -587,15 +612,31 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       writeMeetingFile(folder, MEETINGS[1], { date: '2026-02-01', title: 'Bravo' })
       writeMeetingFile(folder, MEETINGS[2], { date: '2026-03-01', title: 'Charlie', confidential: true })
       const refs = MEETINGS.map((file, i) => ({ file, date: `2026-0${i + 1}-01`, title: file }))
-      await writeAccount(s, 'acme', AccountEntitySchema.parse({ id: 'acme', name: 'Acme', aliases: [], meetings: refs }))
-      await writePerson(s, 'maria-silva', PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva', aliases: [], meetings: refs }))
-      await writePerson(s, 'jean-dupont', PersonEntitySchema.parse({ id: 'jean-dupont', name: 'Jean Dupont', aliases: [], meetings: refs }))
+      await writeAccount(
+        s,
+        'acme',
+        AccountEntitySchema.parse({ id: 'acme', name: 'Acme', aliases: [], meetings: refs })
+      )
+      await writePerson(
+        s,
+        'maria-silva',
+        PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva', aliases: [], meetings: refs })
+      )
+      await writePerson(
+        s,
+        'jean-dupont',
+        PersonEntitySchema.parse({ id: 'jean-dupont', name: 'Jean Dupont', aliases: [], meetings: refs })
+      )
       await writeDeal(s, 'acme-renewal', baseDeal({ id: 'acme-renewal', name: 'Acme Renewal', meetings: refs }))
       for (const file of MEETINGS) {
         await writeMeetingExtraction(
           s,
           slugify(file),
-          MeetingExtractionSchema.parse({ account: { name: 'Acme' }, people: [{ name: 'Maria Silva' }], source_file: file })
+          MeetingExtractionSchema.parse({
+            account: { name: 'Acme' },
+            people: [{ name: 'Maria Silva' }],
+            source_file: file
+          })
         )
       }
     }
@@ -646,13 +687,21 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
      *  unmistakable against one scan for the whole run. */
     async function seedCards(): Promise<void> {
       await writeAccount(s, 'acme', AccountEntitySchema.parse({ id: 'acme', name: 'Acme', aliases: [] }))
-      await writePerson(s, 'maria-silva', PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva', aliases: [] }))
+      await writePerson(
+        s,
+        'maria-silva',
+        PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva', aliases: [] })
+      )
       for (const [i, file] of CARDS.entries()) {
         writeMeetingFile(folder, file, { date: `2026-0${i + 1}-01`, title: `Card ${i}` })
         await writeMeetingExtraction(
           s,
           slugify(file),
-          MeetingExtractionSchema.parse({ account: { name: 'Acme' }, people: [{ name: 'Maria Silva' }], source_file: file })
+          MeetingExtractionSchema.parse({
+            account: { name: 'Acme' },
+            people: [{ name: 'Maria Silva' }],
+            source_file: file
+          })
         )
       }
     }
@@ -683,7 +732,9 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       await publishForExtraction(s, x, { file: CARDS[0], date: '2026-01-01', title: 'Card 0' }, aliasMap)
 
       expect(aliasScans.n).toBe(0)
-      expect(readFileSync(join(wikiDir(s), 'meetings', `${slugify(CARDS[0])}.md`), 'utf8')).toContain('../people/maria-silva.md')
+      expect(readFileSync(join(wikiDir(s), 'meetings', `${slugify(CARDS[0])}.md`), 'utf8')).toContain(
+        '../people/maria-silva.md'
+      )
     })
   })
 
@@ -733,7 +784,11 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
     }
 
     it('MQA-159 — a team-folder meeting flagged confidential is excluded from every published page', async () => {
-      writeMeetingFile(teamFolder, 'alice-pricing.md', { date: '2026-02-01', title: 'Alice Pricing Negotiation', confidential: true })
+      writeMeetingFile(teamFolder, 'alice-pricing.md', {
+        date: '2026-02-01',
+        title: 'Alice Pricing Negotiation',
+        confidential: true
+      })
       await seedDealFromTeamMeeting()
 
       await publishAll(s)
@@ -815,7 +870,16 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
 
       expect(existsSync(mine)).toBe(true)
       expect(readFileSync(join(wikiDir(s), 'personal', 'journal.md'), 'utf8')).toBe('private\n')
-      for (const own of ['accounts', 'people', 'deals', 'meetings', 'index.md', 'AGENTS.md', 'README.md', 'CLAUDE.md']) {
+      for (const own of [
+        'accounts',
+        'people',
+        'deals',
+        'meetings',
+        'index.md',
+        'AGENTS.md',
+        'README.md',
+        'CLAUDE.md'
+      ]) {
         expect(existsSync(join(wikiDir(s), own)), own).toBe(false)
       }
       expect(r.ok).toBe(true)

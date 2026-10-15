@@ -51,6 +51,7 @@ describe('Listen capture contract state', () => {
   it('maps actual cloud providers distinctly and refuses unknown or unconfigured engines', () => {
     expect(listenSpeechEngine('cloud', 'cloudflare-nova3')).toBe('cloudflare-nova3')
     expect(listenSpeechEngine('cloud', 'soniox')).toBe('soniox')
+    expect(listenSpeechEngine('cloud', 'deepgram-nova3')).toBe('deepgram-nova3')
     expect(listenSpeechEngine('cloud', 'unconfigured')).toBeNull()
     expect(listenSpeechEngine('cloud', 'future-provider')).toBeNull()
     expect(listenSpeechEngine('parakeet')).toBe('parakeet')

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
-* MQA-255 — see docs/qa/BUG-LEDGER.md for why this suite snapshots settings and reports 'not exercised'.
+ * MQA-255 — see docs/qa/BUG-LEDGER.md for why this suite snapshots settings and reports 'not exercised'.
  * Métis physical QA suite — drives a REAL running app over CDP and exercises every major workflow.
  *
  * This is deliberately not a unit test. Unit tests prove functions; this proves the shipped app: real
@@ -51,7 +51,9 @@ let page = null
 function record(group, name, status, detail) {
   results.push({ group, name, status, detail })
   const mark = status === 'pass' ? 'PASS' : status === 'fail' ? 'FAIL' : 'INFO'
-  console.log(`[${mark}] ${group} :: ${name}${detail ? ` — ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`)
+  console.log(
+    `[${mark}] ${group} :: ${name}${detail ? ` — ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`
+  )
 }
 
 /** Run one check. A throw is a FAIL, never an abort — the suite always completes so one broken
@@ -94,11 +96,18 @@ async function ask(req, timeoutMs = 240000) {
         const finish = (err) => {
           out.error = err ?? null
           out.doneAt = Date.now() - started
-          offMeta(); offDelta(); offDone(); offErr()
+          offMeta()
+          offDelta()
+          offDone()
+          offErr()
           resolve(out)
         }
-        const offDone = window.toto.onDone((d) => { if (d.id === req.id) finish(null) })
-        const offErr = window.toto.onError((e) => { if (e.id === req.id) finish(e.message) })
+        const offDone = window.toto.onDone((d) => {
+          if (d.id === req.id) finish(null)
+        })
+        const offErr = window.toto.onError((e) => {
+          if (e.id === req.id) finish(e.message)
+        })
         window.toto.ask(req).catch((e) => finish(String(e)))
         setTimeout(() => finish(`TIMEOUT after ${timeoutMs}ms`), timeoutMs)
       }),
@@ -114,7 +123,9 @@ const patch = (p) => page.evaluate((p) => window.toto.setSettings(p), p)
 async function stubbornKeys() {
   try {
     const s = await settings()
-    return Object.entries(s.hasKeys ?? {}).filter(([, v]) => v === true).map(([k]) => k)
+    return Object.entries(s.hasKeys ?? {})
+      .filter(([, v]) => v === true)
+      .map(([k]) => k)
   } catch {
     return []
   }
@@ -127,7 +138,10 @@ const clearAllKeys = () =>
     return (await window.toto.getSettings()).hasKeys
   })
 
-const uid = (() => { let n = 0; return (p) => `qa-${p}-${Date.now()}-${n++}` })()
+const uid = (() => {
+  let n = 0
+  return (p) => `qa-${p}-${Date.now()}-${n++}`
+})()
 
 /**
  * Arm the on-device answer floor the way a user would (Settings → Local AI: enable + turn on fallback),
@@ -196,7 +210,9 @@ async function groupBoot() {
     const models = await page.evaluate(() => window.toto.localModelsList())
     const ready = models.filter((m) => m.ready)
     if (ready.length > 0) return ready.map((m) => m.id)
-    const fetching = models.find((m) => m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded')
+    const fetching = models.find(
+      (m) => m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded'
+    )
     if (fetching) {
       localModelReady = false
       const pct = Math.round((fetching.downloadProgress ?? 0) * 100)
@@ -213,10 +229,15 @@ async function groupBoot() {
   await check(g, 'screen-capture readiness reports a committed answer, not a permanent unknown (MQA-002)', async () => {
     const perms = await page.evaluate(() => window.toto.getPermissions())
     if (process.platform === 'win32') {
-      assert(perms.screenRecording !== 'unknown',
-        'Windows screen readiness is still "unknown" — the boot probe did not run, so the checklist cannot tell the user whether screenshots work')
+      assert(
+        perms.screenRecording !== 'unknown',
+        'Windows screen readiness is still "unknown" — the boot probe did not run, so the checklist cannot tell the user whether screenshots work'
+      )
     }
-    assert(['granted', 'denied', 'unknown', 'not-required'].includes(perms.screenRecording), `bad status: ${perms.screenRecording}`)
+    assert(
+      ['granted', 'denied', 'unknown', 'not-required'].includes(perms.screenRecording),
+      `bad status: ${perms.screenRecording}`
+    )
     return { platform: process.platform, ...perms }
   })
 
@@ -239,11 +260,14 @@ async function groupBoot() {
   await check(g, 'ASR ships bundled, and the on-device LLM is either ready or visibly arriving', async () => {
     const out = await page.evaluate(async () => ({
       models: await window.toto.localModelsList(),
-      asr: await window.toto.asrBundled?.().catch?.(() => null) ?? null,
+      asr: (await window.toto.asrBundled?.().catch?.(() => null)) ?? null,
       settings: await window.toto.getSettings()
     }))
     if (out.models.length === 0) {
-      return { __info: 'not exercised — this build ships no on-device LLM runtime; llama-server + the Qwen weights are provisioned only by predist/dist, so a dev/unpackaged build has neither to report on. Run against a packaged build.' }
+      return {
+        __info:
+          'not exercised — this build ships no on-device LLM runtime; llama-server + the Qwen weights are provisioned only by predist/dist, so a dev/unpackaged build has neither to report on. Run against a packaged build.'
+      }
     }
     // The IPC field is `downloadProgress` + `unavailableReason` (shared/ipc.ts LocalModelSummarySchema).
     // The old `m.progress` read was always undefined, so a first-run profile whose weights were still
@@ -251,9 +275,7 @@ async function groupBoot() {
     // paragraph above exists to prevent.
     const ready = out.models.some((m) => m.ready)
     const arriving = out.models.some(
-      (m) =>
-        !m.ready &&
-        (m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded')
+      (m) => !m.ready && (m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded')
     )
     const ramLocked = out.models.every((m) => m.unavailableReason === 'insufficient-ram')
     if (!ready) {
@@ -306,8 +328,10 @@ async function groupSettings() {
   await check(g, 'DeepSeek resolves to a live V4 model id, not a retired one (MQA-001)', async () => {
     const s = await settings()
     const persisted = s.providerModels?.deepseek ?? ''
-    assert(persisted !== 'deepseek-chat' && persisted !== 'deepseek-reasoner',
-      `persisted a retired DeepSeek id: ${persisted}`)
+    assert(
+      persisted !== 'deepseek-chat' && persisted !== 'deepseek-reasoner',
+      `persisted a retired DeepSeek id: ${persisted}`
+    )
     return { persisted: persisted || '(registry default)' }
   })
   await check(g, 'switching the active provider persists across a settings round-trip', async () => {
@@ -329,7 +353,10 @@ async function groupSettings() {
     if (!on.localReady) {
       assert(on.localSummaryReady === false, 'localSummaryReady came on without localReady — the derived flag lied')
       await patch({ localLlm: before })
-      return { __info: 'not exercised — local is not ready on this profile (Local AI off, or llama-server/weights missing), so localSummaryReady correctly stayed false; the toggle itself persisted' }
+      return {
+        __info:
+          'not exercised — local is not ready on this profile (Local AI off, or llama-server/weights missing), so localSummaryReady correctly stayed false; the toggle itself persisted'
+      }
     }
     assert(on.localSummaryReady === true, 'localSummaryReady did not follow useFor.summary')
     await patch({ localLlm: before })
@@ -347,7 +374,10 @@ async function groupSettings() {
     if (!on.localReady) {
       assert(on.localFallbackReady === false, 'localFallbackReady came on without localReady — the derived flag lied')
       await patch({ localLlm: before })
-      return { __info: 'not exercised — local is not ready on this profile, so localFallbackReady correctly stayed false; the toggle itself persisted' }
+      return {
+        __info:
+          'not exercised — local is not ready on this profile, so localFallbackReady correctly stayed false; the toggle itself persisted'
+      }
     }
     assert(on.localFallbackReady === true, 'localFallbackReady did not follow fallback=true')
     await patch({ localLlm: { ...before, fallback: false } })
@@ -406,8 +436,11 @@ async function groupAsk() {
     try {
       if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
       const r = await ask({
-        id: uid('suggest'), mode: 'suggest', prompt: '',
-        transcript: 'THEM: What does your pricing look like for a 500-seat rollout?', history: []
+        id: uid('suggest'),
+        mode: 'suggest',
+        prompt: '',
+        transcript: 'THEM: What does your pricing look like for a 500-seat rollout?',
+        history: []
       })
       // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
       // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
@@ -420,7 +453,9 @@ async function groupAsk() {
       // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
       const stuck = await stubbornKeys()
       if (stuck.length) {
-        return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+        return {
+          __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path`
+        }
       }
       assert(!r.error, `errored: ${r.error}`)
       assert(r.providers.at(-1) === 'local', `answered by ${r.providers.at(-1)}, expected local`)
@@ -434,7 +469,9 @@ async function groupAsk() {
     const id = uid('cancel')
     const out = await page.evaluate(async (id) => {
       let errored = null
-      const offErr = window.toto.onError((e) => { if (e.id === id) errored = e.message })
+      const offErr = window.toto.onError((e) => {
+        if (e.id === id) errored = e.message
+      })
       window.toto.ask({ id, mode: 'suggest', prompt: '', transcript: 'THEM: hello there', history: [] })
       await new Promise((r) => setTimeout(r, 1500))
       await window.toto.cancel(id)
@@ -457,7 +494,10 @@ async function groupAsk() {
     const floor = await armLocalFloor()
     try {
       if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
-      const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 180000)
+      const r = await ask(
+        { id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] },
+        180000
+      )
       assert(!r.error || !/TIMEOUT/.test(r.error), 'answer mode HUNG instead of reaching the on-device floor')
       // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
       // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
@@ -470,7 +510,9 @@ async function groupAsk() {
       // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
       const stuck = await stubbornKeys()
       if (stuck.length) {
-        return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+        return {
+          __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path`
+        }
       }
       assert(!r.error, `answer mode dead-ended instead of falling to local: "${r.error}"`)
       assert(r.providers.at(-1) === 'local', `expected the on-device floor to serve it, got ${r.providers.at(-1)}`)
@@ -513,8 +555,8 @@ async function groupWindow() {
   })
   await check(g, 'import job list answers (empty is fine)', async () => {
     const jobs = await page.evaluate(() => window.toto.importJobsList())
-    assert(Array.isArray(jobs), 'import jobs did not return a list')
-    return { jobs: jobs.length }
+    assert(Array.isArray(jobs.jobs), 'import jobs did not return a snapshot')
+    return { jobs: jobs.jobs.length }
   })
 }
 
@@ -557,7 +599,10 @@ async function groupScreen() {
       await sleep(300)
       const applied = await settings()
       if (!applied.privateView) {
-        return { __info: 'not exercised — the app reports Private View still off after the toggle (dev build with ASKTOTO_DISABLE_CP strips enforcement); run a packaged build without that flag to cover the refusal' }
+        return {
+          __info:
+            'not exercised — the app reports Private View still off after the toggle (dev build with ASKTOTO_DISABLE_CP strips enforcement); run a packaged build without that flag to cover the refusal'
+        }
       }
       const r = await page.evaluate(async () => {
         try {
@@ -592,7 +637,20 @@ async function groupScreen() {
   }
 }
 
-const GROUP_ORDER = ['boot', 'settings', 'ask', 'screen', 'cloudflare', 'degrade', 'meetings', 'brain', 'window', 'intelligence', 'accuracy', 'latency']
+const GROUP_ORDER = [
+  'boot',
+  'settings',
+  'ask',
+  'screen',
+  'cloudflare',
+  'degrade',
+  'meetings',
+  'brain',
+  'window',
+  'intelligence',
+  'accuracy',
+  'latency'
+]
 
 if (args.includes('--list')) {
   console.log(GROUP_ORDER.join('\n'))
@@ -652,7 +710,12 @@ try {
   process.exit(2)
 }
 
-const selected = only ? only.split(',').map((s) => s.trim()).filter((s) => GROUPS[s]) : Object.keys(GROUPS)
+const selected = only
+  ? only
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => GROUPS[s])
+  : Object.keys(GROUPS)
 if (only && !selected.length) {
   console.error(`unknown group "${only}". Known: ${Object.keys(GROUPS).join(', ')}`)
   process.exit(2)
@@ -697,7 +760,6 @@ async function restoreSettingsSnapshot() {
   }
 }
 
-
 console.log(`Running QA groups: ${selected.join(', ')}\n`)
 for (const name of selected) {
   console.log(`\n=== ${name} ===`)
@@ -718,7 +780,9 @@ const skipped = results.filter((r) => r.status === 'info').length
 const summary = { at: new Date().toISOString(), groups: selected, passed, failed, skipped, results }
 writeFileSync(OUT, JSON.stringify(summary, null, 2))
 
-console.log(`\n──────────────\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} not exercised` : ''}. Report: ${OUT}`)
+console.log(
+  `\n──────────────\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} not exercised` : ''}. Report: ${OUT}`
+)
 if (failed) {
   console.log('\nFAILURES:')
   for (const r of results.filter((x) => x.status === 'fail')) console.log(`  ${r.group} :: ${r.name} — ${r.detail}`)

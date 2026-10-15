@@ -1,0 +1,135 @@
+name: Lean packaging candidates
+
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-candidates-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  profile-contract:
+    name: Lean packaging contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Verify lean profile, inventory, exclusions, architecture, and staging-path contracts
+        run: >-
+          npx vitest run
+          scripts/lib/package-inventory.test.ts
+          scripts/lib/contained-tree-copy.test.ts
+          scripts/lib/runtime-trust-pins.test.ts
+          scripts/lib/forbidden-inference-path.test.ts
+          scripts/lib/macho-architecture.test.ts
+          scripts/lib/lean-checker-args.test.ts
+          scripts/lib/lean-package-stage.test.ts
+          scripts/lean-builder-exclusions.test.ts
+
+  candidate:
+    name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate
+    needs: profile-contract
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac
+            arch: arm64
+            runner: macos-latest
+          - target: mac
+            arch: x64
+            runner: macos-latest
+          - target: win
+            arch: x64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Provision reviewed FFmpeg decoder
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "resources/ffmpeg/${{ matrix.target == 'win' && 'win32' || 'darwin' }}-${{ matrix.arch }}"
+          asset="ffmpeg-${{ matrix.target == 'win' && 'win32' || 'darwin' }}-${{ matrix.arch }}${{ matrix.target == 'win' && '.exe' || '' }}"
+          gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir resources/ffmpeg --clobber
+          if [ "${{ matrix.target }}" = win ]; then
+            mv "resources/ffmpeg/$asset" "resources/ffmpeg/win32-x64/ffmpeg.exe"
+          else
+            mv "resources/ffmpeg/$asset" "resources/ffmpeg/darwin-${{ matrix.arch }}/ffmpeg"
+            chmod +x "resources/ffmpeg/darwin-${{ matrix.arch }}/ffmpeg"
+          fi
+      - run: npm ci
+      - name: Verify reviewed FFmpeg decoder
+        shell: bash
+        run: node scripts/check-ffmpeg-sidecar.mjs ${{ matrix.target }} ${{ matrix.arch }}
+      - name: Provision architecture-specific Electron distribution
+        if: matrix.target == 'mac'
+        run: node scripts/provision-electron-dist.mjs ${{ matrix.arch }}
+      - name: Build and verify mac capture helper
+        if: matrix.target == 'mac'
+        run: |
+          node scripts/build-mac-helper.mjs
+          node scripts/check-mac-helper.mjs mac
+      - name: Provision managed Node and Windows VC++ runtime
+        run: npm run fetch:managed-node -- ${{ matrix.target }}
+      - name: Build Mantu Intelligence resources
+        run: npm run build:intelligence
+      - name: Build profile-compiled application
+        run: npm run build
+        shell: bash
+        env:
+          METIS_PACKAGE_PROFILE: lean
+      - name: Build unsigned macOS DMG candidate
+        if: matrix.target == 'mac'
+        shell: bash
+        env:
+          METIS_PACKAGE_PROFILE: lean
+          METIS_PACKAGE_ARCH: ${{ matrix.arch }}
+        run: >-
+          npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+          -c.npmRebuild=false -c.electronDist=resources/electron-dist
+          -c.mac.identity=null -c.directories.output=release/lean-mac-${{ matrix.arch }}
+      - name: Build unsigned Windows x64 installer candidate
+        if: matrix.target == 'win'
+        shell: bash
+        env:
+          METIS_PACKAGE_PROFILE: lean
+          METIS_PACKAGE_ARCH: x64
+        run: >-
+          npx electron-builder --config electron-builder.win.yml --win nsis --x64 --publish never
+          -c.npmRebuild=false -c.directories.output=release/lean-win-x64
+      - name: Measure final installer and app tree
+        shell: bash
+        run: node scripts/measure-lean-candidate.mjs ${{ matrix.target }} ${{ matrix.arch }} release/lean-${{ matrix.target }}-${{ matrix.arch }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: metis-lean-${{ matrix.target }}-${{ matrix.arch }}-unsigned
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          path: |
+            release/lean-${{ matrix.target }}-${{ matrix.arch }}/*.dmg
+            release/lean-${{ matrix.target }}-${{ matrix.arch }}/*.exe
+            release/lean-${{ matrix.target }}-${{ matrix.arch }}/*.blockmap
+            build/lean-measurements/${{ matrix.target }}-${{ matrix.arch }}.json

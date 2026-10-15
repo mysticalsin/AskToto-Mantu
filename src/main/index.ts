@@ -38,7 +38,7 @@ import {
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
-import { randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import {
@@ -101,7 +101,6 @@ import {
   type Settings,
   type CalendarEvent,
   type AskStart,
-  type ImportJobView,
   type ImportAssetsProgress,
   type ListeningStatePayload,
   type ScreenContextResult,
@@ -132,6 +131,8 @@ import {
   dustSelectedAgentVision,
   recordMeetingSummarized,
   getAdminLocalSpeechPackPolicy,
+  getLocalModelProvisioningIdentity,
+  readSettingsAtAuthorityBoundary,
   getSonioxApiKey,
   setSonioxApiKey,
   clearSonioxApiKey
@@ -186,6 +187,7 @@ import {
 } from '@shared/ask-routing'
 import {
   getActiveModelPolicy,
+  getSpeechPolicyAuthorityStatus,
   modelPolicyCapabilitiesForSettings,
   narrowAllowedForCapability,
   resolveLocalSpeechPackPolicy,
@@ -314,9 +316,11 @@ type ImportSpeakerOwner = {
 const LIVE_SPEAKER_RECEIPT_TTL_MS = 30 * 60_000
 let activeLiveSpeakerStartedAt: number | null = null
 let legacyListeningActive = false
+let speechPackCaptureRevision = 0
 function setLegacyListeningActive(on: boolean): void {
   if (legacyListeningActive === on) return
   legacyListeningActive = on
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
@@ -556,11 +560,19 @@ async function observeOperatorAudio(samples: Float32Array, key: string | null): 
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, isDownloaded as localModelDownloaded } from './llm/local-models'
 import { ensureLocalModel, localModelDownloadState } from './llm/local-model-download'
-import { provisionLocalModel } from './local-model-provisioning'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
+import { createQuitTrace, observeClosedCleanup, observeQuitWindow } from './lifecycle/quit-trace'
+import { createFatalHandler } from './lifecycle/fatal-handler'
+import {
+  isCurrentCloudSttSender,
+  shouldClearCloudSttIpcOwner,
+  shouldInvalidateCloudSttOwner,
+  type CloudSttWindowOwner
+} from './lifecycle/cloud-stt-window-owner'
+import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -681,12 +693,7 @@ import {
   type SecurityLimitBucket
 } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
-import {
-  asrModelDownloadState,
-  ensureHighTierAsrModel,
-  isHighTierAsrModelReady,
-  removeHighTierAsrModel
-} from './asr-model-download'
+import { asrModelDownloadState, isHighTierAsrModelReady, removeHighTierAsrModel } from './asr-model-download'
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
@@ -712,6 +719,7 @@ import {
   withBootFirstShowDeferred
 } from './lifecycle/first-show'
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
+import { getPublishedSettingsObservation } from './settings-observation'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -729,9 +737,12 @@ import {
   signOut as authSignOut,
   requireAuth,
   setSessionClearedHandler,
+  resetSpeechAuthProfile,
+  completeSpeechAuthProfileReset,
   ssoBootstrapAllowed
 } from './auth'
 import { calendarToday } from './calendar'
+import * as importJobsSnapshotIpc from './import-jobs-snapshot-ipc'
 import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
   parakeetModelReady,
@@ -764,6 +775,11 @@ import {
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
+import { assertBrokerSpeechSettingsPatch } from '@shared/broker-speech-settings'
+import { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
+import { registerListenDisplayMedia } from './capture-permissions/listen-display-media'
+import { startSpeechDesktopBootstrap } from './speech-desktop-bootstrap'
+import { speechDesktopBoundaryOptions } from './speech-desktop-boundary'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -787,7 +803,12 @@ import {
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
-import { startSpeechPackDesktop } from './speech-pack-bootstrap'
+import {
+  prepareSpeechPackRuntime,
+  registerOptionalModelProvisioningIpc,
+  startSpeechPackDesktopFromMain
+} from './speech-pack-bootstrap'
+import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
 import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
 import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
 import {
@@ -1098,6 +1119,8 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+const speechCaptureGrants = new SpeechCaptureGrantRegistry()
+let speechNavigationEpoch = 1
 const commandControl = new CommandConfirmation({
   execute: executeDesktopAction,
   isAuthenticated: requireAuth,
@@ -1165,23 +1188,26 @@ let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
   if (cloudSttIpcOwner === owner) return
   cloudSttIpcOwner = owner
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(owner: CloudSttIpcOwner, sender: { id: number; isDestroyed: () => boolean }): boolean {
-  return (
-    cloudSttIpcOwner === owner &&
-    win?.webContents === sender &&
-    !sender.isDestroyed() &&
-    owner.webContentsId === sender.id
-  )
+  return cloudSttIpcOwner === owner && isCurrentCloudSttSender(win, owner.webContentsId, sender)
 }
 
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
-function invalidateCloudSttOwner(webContentsId?: number): void {
-  if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
+function invalidateCloudSttOwner(owner?: CloudSttWindowOwner<BrowserWindow, Electron.WebContents>): void {
+  const context = speechCaptureGrants.getAcceptedListenContext()
+  if (shouldInvalidateCloudSttOwner(win, context?.webContents as Electron.WebContents | undefined, owner)) {
+    speechNavigationEpoch += 1
+    speechPackCaptureRevision += 1
+    speechCaptureGrants.invalidateAll()
+    speechDesktop?.invalidate('renderer-navigation')
+  }
+  if (!shouldClearCloudSttIpcOwner(cloudSttIpcOwner?.webContentsId, owner)) return
   cloudSttIpcGeneration += 1
   setCloudSttIpcOwner(null)
   void stopCloudSttLive()
@@ -1191,18 +1217,43 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
-let speechPackDesktop: ReturnType<typeof startSpeechPackDesktop> | null = null
+let speechPackDesktop: ReturnType<typeof startSpeechPackDesktopFromMain> | null = null
+let speechDesktop: ReturnType<typeof startSpeechDesktopBootstrap> | null = null
 
 function setListeningActive(on: boolean): void {
+  if (on && win && !win.isDestroyed() && activeLiveSpeakerStartedAt !== null) {
+    const prior = speechCaptureGrants.getAcceptedListenContext()
+    if (
+      prior &&
+      (prior.webContents !== win.webContents ||
+        prior.frame !== win.webContents.mainFrame ||
+        prior.navigationEpoch !== speechNavigationEpoch ||
+        prior.listenStartedAt !== activeLiveSpeakerStartedAt)
+    )
+      speechDesktop?.runtime.invalidateCurrent()
+    speechCaptureGrants.reconcileListenContext({
+      webContents: win.webContents,
+      frame: win.webContents.mainFrame,
+      navigationEpoch: speechNavigationEpoch,
+      listenStartedAt: activeLiveSpeakerStartedAt
+    })
+  } else if (!on) {
+    const context = speechCaptureGrants.getAcceptedListenContext()
+    if (context) speechCaptureGrants.normalStop(context)
+    speechDesktop?.runtime.closeInput()
+  }
   if (listeningActive === on) return
   listeningActive = on
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
 function setAudioArmed(on: boolean): void {
+  speechCaptureGrants.setArmed(on)
   if (audioArmed === on) return
   audioArmed = on
+  speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
@@ -1336,35 +1387,7 @@ function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
   assertMainWindow(event)
 }
 
-function importJobView(job: ImportJob): ImportJobView {
-  let pct: number | null = null
-  if (job.state === 'done') pct = 100
-  else if (job.progressPct !== undefined) pct = Math.min(99, Math.max(0, Math.round(job.progressPct)))
-  else if (job.totalChunks > 0) pct = Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
-  let queuePosition: number | undefined
-  if (job.state === 'queued' && importJobs) {
-    const waiting = importJobs
-      .list()
-      .filter((j) => j.state === 'queued')
-      .sort((a, b) => a.createdAt - b.createdAt)
-    const i = waiting.findIndex((j) => j.jobId === job.jobId)
-    if (i >= 0) queuePosition = i + 1
-  }
-  return {
-    jobId: job.jobId,
-    title: job.title,
-    state: job.state,
-    cursor: job.cursor,
-    totalChunks: job.totalChunks,
-    pct,
-    error: job.error,
-    recapError: job.recapError,
-    file: job.file,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    queuePosition
-  }
-}
+const importJobView = importJobsSnapshotIpc.createImportJobView(() => importJobs?.list() ?? [])
 
 function publishAsrAssetsProgress(progress = asrAssetsProgress()): void {
   if (win && !win.isDestroyed()) {
@@ -1960,7 +1983,7 @@ function initializeImportJobs(): void {
     onChange: publishImportJob,
     onCancel: closeImportDecoder,
     personaMode: () => getSettings().mode,
-    newId: () => randomBytes(16).toString('hex'),
+    newId: randomUUID,
     concurrency: MAX_CONCURRENT_DECODES
   })
   const speechPackBlocked = resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
@@ -2422,7 +2445,8 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   clearCompletedOnboardingExitFallback(dying)
   streams.forEach((stream) => stream.abort())
   streams.clear()
-  invalidateCloudSttOwner(dying.webContents.id)
+  const dyingWebContents = dying.webContents
+  invalidateCloudSttOwner({ window: dying, webContents: dyingWebContents, webContentsId: dyingWebContents.id })
   try {
     dying.destroy()
   } catch {
@@ -2728,6 +2752,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
   // always-on-top, unreferenced.
   if (win && !win.isDestroyed()) return
+  if (quitTrace.quitRequested) quitTrace.mark('WINDOW_CREATE_DURING_QUIT')
   if (!emittedAppStarted) {
     observability = startRunObservability({
       userData: app.getPath('userData'),
@@ -2832,6 +2857,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     },
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
+  observeQuitWindow(win, quitTrace)
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, {
     transparent: chrome.transparent,
     windowVariant: BOOT_WINDOW_VARIANT
@@ -2906,28 +2932,40 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const self = win
   // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
   holdAppSuspensionWhileVisible(self, powerSaveBlocker)
-  // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
-  // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
-  const selfWebContentsId = self.webContents.id
+  // `closed` fires after Electron destroys WebContents. Capture the exact wrappers and owner ID while
+  // live so cleanup never reads a destroyed getter or revokes a replacement renderer.
+  const selfWebContents = self.webContents
+  const selfOwner: CloudSttWindowOwner<BrowserWindow, Electron.WebContents> = {
+    window: self,
+    webContents: selfWebContents,
+    webContentsId: selfWebContents.id
+  }
+  importJobsSnapshotIpc.trackMainDocument(
+    selfWebContents,
+    () => win === self,
+    () => invalidateCloudSttOwner(selfOwner)
+  )
   win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
   win.on('hide', () => commandControl.onWindowHidden(win === self))
-  win.on('closed', () => {
-    clearCompletedOnboardingExitFallback(self)
-    // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
-    // a selected recording. Their checkpointed state resumes even if the entire app exits. A retiring
-    // window can close after an opaque replacement has already become `win`; it must not cancel work
-    // owned by that replacement.
-    if (win !== self) return
-    commandControl.revokeForLifecycleEvent('window_closed')
-    // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
-    streams.forEach((s) => s.abort())
-    streams.clear()
-    invalidateCloudSttOwner(selfWebContentsId)
-    stopOverlayCursorWatch()
-    stopExclusiveBoundsWatch()
-    stopExclusiveBoundsEventGuard()
-    win = null
-  })
+  win.on('closed', () =>
+    observeClosedCleanup(quitTrace, () => {
+      clearCompletedOnboardingExitFallback(self)
+      // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
+      // a selected recording. Their checkpointed state resumes even if the entire app exits. A retiring
+      // window can close after an opaque replacement has already become `win`; it must not cancel work
+      // owned by that replacement.
+      if (win !== self) return
+      commandControl.revokeForLifecycleEvent('window_closed')
+      // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
+      streams.forEach((s) => s.abort())
+      streams.clear()
+      invalidateCloudSttOwner(selfOwner)
+      stopOverlayCursorWatch()
+      stopExclusiveBoundsWatch()
+      stopExclusiveBoundsEventGuard()
+      win = null
+    })
+  )
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
   // that inherit the privileged preload. External https links open in the real browser instead.
@@ -2990,7 +3028,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     responsiveness.markGone()
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
     // socket before reload so provider callbacks cannot bleed into the new renderer session.
-    invalidateCloudSttOwner(selfWebContentsId)
+    invalidateCloudSttOwner(selfOwner)
     // MQA-038: recovery reloads the SAME window, so createWindow()'s crash/recovery guard above never
     // runs and the renderer-OWNED module state survives the renderer that set it. The remounted renderer
     // starts idle and never sends the listeningState(false) it owed us, so `listeningActive` would stay
@@ -4129,6 +4167,7 @@ const revealController = createRevealController({
 })
 
 function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
+  if (quitTrace.quitRequested) quitTrace.mark('WINDOW_REVEAL_DURING_QUIT')
   reveals.trace(reason, () => {
     revealController.reveal(reason, options)
   })
@@ -4182,46 +4221,6 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   writeSmokeParkState(w)
   toggleVisible('tray')
   return true
-}
-
-let fatalHandled = false
-/**
- * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
- * never kills the overlay. No crashReporter upload by design (zero telemetry).
- */
-function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
-  // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
-  if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
-    return void mainLog.warn(
-      '[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)'
-    )
-  }
-  const detail = err instanceof Error ? err.stack || err.message : String(err)
-  persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
-  if (kind !== 'uncaughtException' || fatalHandled) return
-  fatalHandled = true
-  void showFatalDialog()
-}
-
-// M2-0037: split out of onFatal so the main thread is never blocked showing this — a synchronous native
-// dialog (showMessageBoxSync) froze every window, including whatever else the user was mid-click in,
-// until they dismissed it.
-async function showFatalDialog(): Promise<void> {
-  try {
-    const dialogOpts = {
-      type: 'error' as const,
-      title: 'Métis hit a problem',
-      message: 'Métis ran into an unexpected error.',
-      detail: 'A crash report was saved to your Métis data folder. Relaunch now, or keep going.',
-      buttons: ['Relaunch Métis', 'Continue'],
-      defaultId: 1,
-      cancelId: 1
-    }
-    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
-    if (response === 0) exitAndRelaunch()
-  } catch {
-    /* if the dialog itself fails, leave the app running */
-  }
 }
 
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
@@ -4797,6 +4796,11 @@ const shortcutActions: Record<string, () => void> = {
 // itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
+// Only the hosted, unpackaged QA smoke passes this fixed switch. The observer writes closed enum tokens only.
+const quitTrace = createQuitTrace(!app.isPackaged && app.commandLine.hasSwitch('metis-qa-quit-trace'), (line) => {
+  process.stdout.write(`${line}\n`)
+})
+
 // Every child process this app spawns that the OS does not end with it, in teardown order: the producers of
 // local-model work (screen pre-analysis, which owns the foreground watcher, import decodes, and the ASR/
 // speaker-embedding utilityProcess hosts they use) before the runtimes they feed. The packaged smoke
@@ -4816,12 +4820,30 @@ const stopAllSidecars = createStopAll(
 )
 
 const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
-  stopAll: stopAllSidecars,
+  stopAll: () => {
+    quitTrace.mark('WILL_QUIT_STOPALL_ENTER')
+    try {
+      stopAllSidecars()
+    } finally {
+      quitTrace.mark('WILL_QUIT_STOPALL_EXIT')
+    }
+  },
   closeBootWatch: () => {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
   },
   warn: (...args) => mainLog.warn(...args)
+})
+
+const { onFatal } = createFatalHandler({
+  quitTrace,
+  platform: process.platform,
+  isOrphanScreenSourcesRejection,
+  persistCrash,
+  warnCaptureRefusal: () =>
+    mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)'),
+  showMessageBox: (options) => (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)),
+  exitAndRelaunch
 })
 
 function registerEmergencyForceQuitShortcut(): boolean {
@@ -5256,12 +5278,19 @@ let lastAppliedManagedSnapshot: string | null = null
 let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
 
 function notifySettingsChanged(): void {
+  void speechDesktop?.refresh('settings-notification')
   speechPackDesktop?.refresh()
   if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
 }
 
-function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void>; onReadinessChanged: () => void } {
-  return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids), onReadinessChanged: notifySettingsChanged }
+function operatorRuntimeHooks() {
+  return {
+    onCrmRetry: (ids: string[]) => applyOperatorCrmRetries(ids),
+    onReadinessChanged: notifySettingsChanged,
+    beforePolicyRefresh: async () => {
+      await speechDesktop?.refresh('policy-refresh')
+    }
+  }
 }
 
 /** FITO-185-AB: set once registerIpc has installed its handlers, so the exclusive-onboarding
@@ -5272,6 +5301,17 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
+  speechDesktop = startSpeechDesktopBootstrap({
+    ipcMain,
+    assertMainWindow,
+    readListenContext: () => speechCaptureGrants.getAcceptedListenContext(),
+    isListening: () => listeningActive,
+    grants: speechCaptureGrants,
+    platform: process.platform,
+    enabled: () => true,
+    quitTrace,
+    ...speechDesktopBoundaryOptions()
+  })
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
@@ -5439,6 +5479,7 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
+    assertBrokerSpeechSettingsPatch(patch)
     // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
     // caller (DevTools/compromised renderer) when auth is enforced. Return the current (unchanged)
     // settings so the shape matches the normal success return exactly; nothing is persisted.
@@ -5588,6 +5629,7 @@ function registerIpc(): void {
       })
     }
     const next = setSettingsWithSpeakerPolicy(p)
+    speechPackDesktop?.refresh()
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Both onboarding transitions replace the window only after this handler replies: `onboarding:enter`
     // for Replay, `onboarding:exit` for Act 6. Never destroy this renderer in the middle of its invoke.
@@ -5667,15 +5709,6 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI opt-in or an explicit model change provisions the selected model. Disabled profiles
-    // never fetch optional LLM weights automatically; mandatory transcription is a separate path.
-    if (next.localLlm.enabled && (!cur.localLlm.enabled || cur.localLlm.modelId !== next.localLlm.modelId)) {
-      void provisionLocalModel(next.localLlm, getAllowedProviders(), ensureLocalModel)
-        .then((ready) => {
-          if (ready) refreshScreenPreprocess()
-        })
-        .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
-    }
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -5740,7 +5773,10 @@ function registerIpc(): void {
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, canceled: true }
     try {
+      speechDesktop?.invalidate('profile-recovery')
+      resetSpeechAuthProfile()
       const archive = archiveEncryptedProfile()
+      completeSpeechAuthProfileReset()
       auditLog('settings.profile_recovered', { movedFiles: archive.files.length })
       return {
         ok: true,
@@ -6779,8 +6815,9 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.authSignOut, async (e) => {
     assertMainWindow(e)
+    speechDesktop?.invalidate('auth-signout')
+    authSignOut()
     await importJobs?.cancelAll()
-    return authSignOut()
   })
   // --- Calendar ---
   ipcMain.handle(IPC.timeSavedRead, (e) => {
@@ -7451,20 +7488,6 @@ function registerIpc(): void {
     assertMainWindow(e)
     return listLocalModels(localModelDownloadState())
   })
-  // Explicit Download/Retry does not enable inference. Policy still applies; the selected model and
-  // its RAM/disk/integrity refusal stay visible rather than silently switching to a different model.
-  ipcMain.handle(IPC.localModelsEnsure, (e) => {
-    assertMainWindow(e)
-    const allowed = getAllowedProviders()
-    if (allowed && !allowed.includes('local')) return { ok: false }
-    void provisionLocalModel(getSettings().localLlm, allowed, ensureLocalModel, 'explicit')
-      .then((ready) => {
-        if (ready) refreshScreenPreprocess()
-      })
-      .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
-    return { ok: true }
-  })
-
   // MQA-247: the high-accuracy transcription model. Same shape as the LLM weights above — paths stay in
   // main, the renderer learns only readiness, a status word and a fraction.
   //
@@ -7474,11 +7497,18 @@ function registerIpc(): void {
     assertMainWindow(e)
     return { ...asrModelDownloadState(), ready: await isHighTierAsrModelReady(), bytes: asrModelBytes() }
   })
-  ipcMain.handle(IPC.asrModelFetch, async (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false }
-    auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })
-    return { ok: await ensureHighTierAsrModel() }
+  registerOptionalModelProvisioningIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    ensureLocalModel: (modelId, authorized, validateCurrent) => ensureLocalModel(modelId, authorized, validateCurrent),
+    captureActive: captureActiveForWindowRestart,
+    captureIdentity: () => `capture:${speechPackCaptureRevision}`,
+    localModelIdentity: getLocalModelProvisioningIdentity,
+    currentModelPolicyIdentity: () => getSpeechPolicyAuthorityStatus(getSettings()).identity,
+    refreshScreenPreprocess,
+    logProvisioningFailure: (error) => mainLog.warn('[localModels:ensure] provisioning failed:', error),
+    auditAsrTransfer: () => auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })
   })
   ipcMain.handle(IPC.asrModelRemove, (e) => {
     assertMainWindow(e)
@@ -9128,8 +9158,12 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) return []
-    return getImportJobs().list().map(importJobView)
+    return importJobsSnapshotIpc.listImportJobsSnapshot(
+      e,
+      () => win,
+      () => getImportJobs().snapshot(),
+      importJobView
+    )
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
@@ -9539,11 +9573,13 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, (e) => {
     assertMainWindow(e)
+    quitTrace.mark('IPC_QUIT_RECEIVED')
+    quitTrace.requestQuit()
     // App.tsx's quitApp() already `await`s flushLiveMeeting() (a best-effort saveTranscript) before
     // invoking this — the meeting is already on disk by the time we get here, so the before-quit
     // handler below must not add its own redundant flush-and-wait on top of an already-safe quit.
     quitFlushDone = true
-    app.quit()
+    quitTrace.call('IPC', () => app.quit())
   })
   // A fresh Screen Recording grant only takes effect for a NEW launch (macOS applies TCC changes to the
   // next process, not the already-running one) — this is the one-click recovery for that dead end, wired
@@ -9624,6 +9660,11 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
+      const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
+      const { packageRuntimeContract, verifiedPackageContract } = await prepareSpeechPackRuntime(
+        resourcesRoot,
+        app.isPackaged
+      )
       commandControl.initialize(powerMonitor, initLogging, mainLog)
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
@@ -9699,9 +9740,8 @@ if (!app.requestSingleInstanceLock()) {
           setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
         }
       }
-      // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
-      // selected model (including an explicitly smaller one), and never delay startup for its download.
-      // The downloader retains RAM/disk/hash gates. Transcription assets are provisioned independently.
+      // Local AI boot is readiness-only. We may warm an already-downloaded selected model after policy and
+      // memory checks, but startup never provisions a model on the user's behalf.
       {
         // Warm only an eligible, downloaded model. Re-read opt-in and policy because either can change
         // while provisioning is in flight. Startup never waits for this optional work.
@@ -9720,17 +9760,6 @@ if (!app.requestSingleInstanceLock()) {
             mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
           }
         }
-        // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-        // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
-        bootWork.run('provisionLocalModel', () =>
-          provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
-            .then((ready) => {
-              if (!ready) return
-              refreshScreenPreprocess()
-              void runAsMaintenance(warmLocalIfReady)
-            })
-            .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-        )
         void runAsMaintenance(warmLocalIfReady)
       }
       // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
@@ -9908,111 +9937,18 @@ if (!app.requestSingleInstanceLock()) {
       // hand back the system audio loopback device (the "Them" channel) only.
       // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
       runStep('initScreenPermission', screenPerm.initScreenPermission)
-      runStep('setDisplayMediaHandler', () => {
-        session.defaultSession.setDisplayMediaRequestHandler(
-          async (request, callback) => {
-            // Electron validates the callback argument against the request: denying a request that asked for
-            // video (our renderer requests a 1fps video track to bootstrap the macOS ScreenCaptureKit session
-            // for audio loopback) with callback({}) makes Electron throw "Video was requested, but no video
-            // stream was provided". Because this handler is async, that throw escapes as an unhandledRejection.
-            // Wrap every callback call: the deny still reaches the renderer (its getDisplayMedia rejects and
-            // listen.ts falls back to mic-only), we just don't let the validation throw crash the main process.
-            const respond = (spec: Parameters<typeof callback>[0]): void => {
-              try {
-                callback(spec)
-              } catch (err) {
-                mainLog.warn(`[display-media] callback rejected: ${err instanceof Error ? err.message : String(err)}`)
-              }
-            }
-            try {
-              await handleDisplayMedia(request, respond)
-            } catch (err) {
-              // Absolute backstop: nothing in the loopback grant path may escape as an unhandledRejection.
-              mainLog.warn(`[display-media] handler error: ${err instanceof Error ? err.message : String(err)}`)
-              respond({})
-            }
-          },
-          { useSystemPicker: false }
-        )
-
-        async function handleDisplayMedia(
-          request: Parameters<
-            NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>
-          >[0],
-          callback: Parameters<
-            NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>
-          >[1]
-        ): Promise<void> {
-          const frame = request.frame
-          const mainFrame = win?.webContents.mainFrame
-          const origin = request.securityOrigin
-          const mainUrl = win?.webContents.getURL() ?? ''
-          let expectedOrigin = ''
-          try {
-            expectedOrigin = new URL(mainUrl).origin
-          } catch {
-            expectedOrigin = mainUrl
-          }
-          const isMainFrame = !!frame && frame === mainFrame
-          // In the PACKAGED app the renderer is loaded from file://, whose origin is the opaque string
-          // "null" (from new URL(...).origin) while the request reports securityOrigin "file:///". Without
-          // this case the check denied EVERY system-audio request in production. The real identity guard is
-          // isMainFrame (frame === the main window's frame); the origin match is defense-in-depth.
-          const isFileOrigin = origin.startsWith('file://')
-          const originOk =
-            !mainUrl || origin === expectedOrigin || origin === mainUrl || (expectedOrigin === 'null' && isFileOrigin)
-          if (process.env.ASKTOTO_DEBUG) {
-            console.log('[display-media]', {
-              origin,
-              expectedOrigin,
-              frameUrl: frame?.url,
-              mainUrl,
-              mainFrame: isMainFrame,
-              originOk,
-              audioRequested: request.audioRequested,
-              videoRequested: request.videoRequested,
-              armed: audioArmed
-            })
-          }
-          if (!audioArmed) {
-            callback({}) // deny unless the user explicitly started Listen
-            return
-          }
-          if (!isMainFrame || !originOk) {
-            callback({}) // deny requests from unexpected origins or subframes
-            return
-          }
-          if (!request.audioRequested) {
-            callback({}) // must be an audio (loopback) request
-            return
-          }
-          // Windows loopback doesn't bind audio to a video stream the way macOS's ScreenCaptureKit does
-          // (see the comment below) — listen.ts's isWindows branch requests getDisplayMedia({ audio: true })
-          // with no video key at all, so request.videoRequested is false here. Skip desktopCapturer entirely
-          // in that case: no screen source is grabbed for a request that never wanted one.
-          // CAVEAT: Chromium's support for Windows loopback-audio-without-video hasn't been validated on real
-          // hardware yet. If it turns out a bound video track is still required, listen.ts already retries
-          // with { video: { frameRate: 1 }, audio: true }, which falls through to the video path below.
-          if (!request.videoRequested) {
-            callback({ audio: 'loopback' })
-            return
-          }
-          // macOS binds system-audio loopback to a ScreenCaptureKit screen stream, so the loopback only
-          // starts when a screen video source is attached. We grant one here (gated above on armed +
-          // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
-          // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
-          //
-          // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
-          // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
-          // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
-          // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
-          // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
-          // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
-          // and listen.ts falls back to the microphone with the diagnosis-backed note.
-          const screenSrc = await screenPerm.acquireListenScreenSource()
-          callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
-        }
-      })
+      runStep('setDisplayMediaHandler', () =>
+        registerListenDisplayMedia({
+          session: session.defaultSession,
+          getWindow: () => win,
+          isAudioArmed: () => audioArmed,
+          acquireScreenSource: screenPerm.acquireListenScreenSource,
+          denyDisplayMedia: screenPerm.DENY_DISPLAY_MEDIA,
+          warn: (message) => mainLog.warn(message),
+          grants: speechCaptureGrants,
+          readContext: () => speechCaptureGrants.getAcceptedListenContext()
+        })
+      )
 
       // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
       runStep('permissionHandlers', () => {
@@ -10025,22 +9961,22 @@ if (!app.requestSingleInstanceLock()) {
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
-      const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
       runStep('speechPackIpc', () => {
-        speechPackDesktop = startSpeechPackDesktop({
-          resourcesRoot: resourcesRoot,
+        speechPackDesktop = startSpeechPackDesktopFromMain({
+          resourcesRoot,
           packaged: app.isPackaged,
           rootDir: userDataSpeechPackRoot(),
           fixtureWavPath: join(resourcesRoot, 'speech-pack-fixtures', 'en.wav'),
-          selectedEngine: () => getSettings().asrEngine,
-          policyAllowsTransfer: () =>
-            resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
+          packageRuntimeContract,
+          verifiedPackageContract,
           captureActive: captureActiveForWindowRestart,
+          captureIdentity: () => `capture:${speechPackCaptureRevision}`,
           ipcMain,
           assertMainWindow,
           sendProgress: (progress) => {
             if (win && !win.isDestroyed()) win.webContents.send(IPC.speechPackProgress, progress)
-          }
+          },
+          quitTrace
         })
       })
       runStep('asrAssetsIpc', () => {
@@ -10051,6 +9987,9 @@ if (!app.requestSingleInstanceLock()) {
           readBundledStatus: async () => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(resourcesRoot)),
           getStatus: asrAssetsStatusSnapshot,
           ensureAllowed: () =>
+            verifiedPackageContract.status !== 'invalid' &&
+            verifiedPackageContract.profile !== 'lean' &&
+            getPublishedSettingsObservation()?.readable === true &&
             resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
           ensureAssets: ensureImportAsrAssets,
           getProgress: asrAssetsProgress,
@@ -10301,6 +10240,7 @@ if (!app.requestSingleInstanceLock()) {
       }, 15_000)
 
       app.on('activate', () => {
+        if (quitTrace.quitRequested) quitTrace.mark('APP_ACTIVATE_DURING_QUIT')
         reveal('activate', { focus: true })
         // Bar dock click still opens Settings. Hide/Island launch must stay parked
         // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
@@ -10322,81 +10262,25 @@ if (!app.requestSingleInstanceLock()) {
     })
 }
 
-app.on('window-all-closed', () => {
-  // Overlay app: stay alive in tray; quit only via tray/menu.
+installAppQuitLifecycle(app, {
+  speechPackDesktop: () => speechPackDesktop,
+  quitTrace,
+  isQuitFlushDone: () => quitFlushDone,
+  markQuitFlushDone: () => {
+    quitFlushDone = true
+  },
+  meetingFlushPending: () => !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed(),
+  window: () => win,
+  hotkeyChannel: IPC.hotkey,
+  speechDesktop: () => speechDesktop,
+  invalidateCloudSttOwner,
+  setBootPowerSaveBlock,
+  endBootWatch,
+  globalShortcut,
+  notifTimer: () => notifTimer,
+  backgroundTimers,
+  observability: () => observability,
+  uptime: () => process.uptime(),
+  wrapLifecycleListener: (name, listener) => commandControl.wrapLifecycleListener(name, listener),
+  warn: (message, error) => mainLog.warn(message, error)
 })
-
-// Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
-// tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
-// React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
-// up to 60s of a meeting or the entire thing for a sub-60s one. The in-app Settings "Quit" button is
-// already safe — App.tsx's quitApp() awaits flushLiveMeeting() before calling window.toto.quit(), which
-// marks quitFlushDone above and lets this handler no-op. For every other quit path, give the renderer one
-// bounded chance to save: recordingPowerSaveBlockerId is non-null for exactly the duration of an active
-// meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
-// main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
-// (App.tsx's reset()) — no new IPC channel needed.
-app.on('before-quit', (e) => {
-  speechPackDesktop?.beforeQuit(
-    e,
-    () => app.quit(),
-    !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed()
-  )
-})
-
-app.on('before-quit', (e) => {
-  if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
-  e.preventDefault()
-  quitFlushDone = true
-  try {
-    win.webContents.send(IPC.hotkey, 'reset')
-  } catch {
-    /* window may already be gone */
-  }
-  setTimeout(() => app.quit(), 2000)
-})
-
-app.on(
-  'will-quit',
-  commandControl.wrapLifecycleListener('app_quit', () => {
-    // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
-    invalidateCloudSttOwner()
-    // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
-    // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
-    // Own try, like every other step below: a failure here must never skip the sidecar kill.
-    try {
-      setBootPowerSaveBlock(false)
-      endBootWatch(app.getPath('userData'))
-    } catch (e) {
-      mainLog.warn('[will-quit] endBootWatch failed', e)
-    }
-    // will-quit may fire before readiness (startup abort or automation close); globalShortcut cannot be used then.
-    // Unregister only after readiness; cleanup steps handle errors independently, after owned sidecars stop.
-    // installExitPaths in lifecycle/exit-paths.ts registers the listener that stops owned sidecars first.
-    if (app.isReady()) {
-      try {
-        globalShortcut.unregisterAll()
-      } catch (e) {
-        mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
-      }
-    }
-    if (notifTimer) clearInterval(notifTimer)
-    // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
-    // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
-    for (const t of backgroundTimers) {
-      try {
-        clearInterval(t)
-      } catch {
-        /* already cleared */
-      }
-    }
-    backgroundTimers.length = 0
-    // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
-    // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
-    try {
-      observability?.shutdownClean(process.uptime())
-    } catch (e) {
-      mainLog.warn('[will-quit] observability.shutdownClean failed', e)
-    }
-  })
-)

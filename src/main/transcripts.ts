@@ -9,7 +9,8 @@ import {
   unlinkSync,
   renameSync
 } from 'node:fs'
-import { writeFile, rename, unlink } from 'node:fs/promises'
+import { unlink } from 'node:fs/promises'
+import { performance } from 'node:perf_hooks'
 import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
@@ -22,11 +23,28 @@ import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
-import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
+import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
-import { recordLocalWrite } from './infra/storage/local-writes'
+import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
 import type { FileClass } from './infra/storage/gateway'
-import { formatTranscript, speakerLabel } from './features/meetings/transcript-format'
+import { speakerLabel } from './features/meetings/transcript-format'
+import {
+  decryptMeetingEnvelopeAsync,
+  encryptMeetingEnvelopeAsync,
+  getMeetingSpeechReadLimitBytes,
+  isMeetingSpeechPersistenceConfigured,
+  reportMeetingSpeechTiming,
+  renderMeetingTranscriptAsync,
+  rewrapMeetingEnvelopeAsync
+} from './features/meetings/meeting-speech'
+import {
+  escapeSpeechMarkers,
+  meetingSpeechTailOffset,
+  refuseReservedSpeechProse
+} from './features/meetings/speech-provenance'
+import { buildMeetingSaveDocument } from './features/meetings/meeting-save-document'
+import { parseRecapMarkdown } from './transcripts-recap'
+import { readEnvelopeLocalKey } from './transcript-envelope-reader'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -213,6 +231,43 @@ function encryptEnvelopeV2(content: string): Buffer {
   return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
 }
 
+/** Meeting-framed documents offload bulk AES and envelope serialization after native key wrapping in main. */
+async function encryptSpeechEnvelopeV2(content: string): Promise<Buffer> {
+  const contentKey = randomBytes(32)
+  const iv = randomBytes(12)
+  let kLocalField: string
+  let kEscrow: string | undefined
+  const wrapStartedAt = performance.now()
+  try {
+    try {
+      if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
+        kLocalField = 'S:' + safeStorage.encryptString(contentKey.toString('base64')).toString('base64')
+      } else {
+        kLocalField = 'F:' + encryptSecret(contentKey.toString('base64')).toString('base64')
+      }
+      const pem = readEscrowPubKey()
+      if (pem) {
+        try {
+          kEscrow = publicEncrypt(
+            { key: pem, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+            contentKey
+          ).toString('base64')
+        } catch {
+          mainLog.warn('Métis: escrow public key configured but unusable; wrote transcript without escrow wrap')
+          auditLog('transcript.saved', { escrowFailed: true })
+        }
+      }
+    } finally {
+      // The resource harness replaces Electron's safeStorage boundary; this is not native OS-key evidence.
+      reportMeetingSpeechTiming('mock-native-key-wrap', performance.now() - wrapStartedAt)
+    }
+    return await encryptMeetingEnvelopeAsync(content, contentKey, iv, kLocalField, kEscrow)
+  } finally {
+    contentKey.fill(0)
+    iv.fill(0)
+  }
+}
+
 /** Decrypt a v2 envelope. Handles the 'S:' (safeStorage), 'F:' (file-backend), and legacy (bare
  *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved can turn it
  *  into a typed failure (SavedDecode) instead of crashing a read.
@@ -271,6 +326,39 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
   decipher.setAuthTag(Buffer.from(env.tag, 'base64'))
   return Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString('utf8')
+}
+
+/** Main unwraps only the small local key field; the child parses/base64-decodes/decrypts the bulk envelope. */
+async function decryptEnvelopeV2Async(buf: Buffer, allowKeychainRecovery = false, filePath?: string): Promise<string> {
+  const kLocal = readEnvelopeLocalKey(buf.subarray(MARKER_LEN))
+  let contentKeyB64: string
+  let recoveredLocalKey: string | undefined
+  if (kLocal.startsWith('F:')) {
+    contentKeyB64 = decryptSecret(Buffer.from(kLocal.slice(2), 'base64'))
+  } else {
+    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover)
+      throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
+    const raw = kLocal.startsWith('S:') ? kLocal.slice(2) : kLocal
+    contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
+    if (canRecover && filePath && useFileBackend())
+      recoveredLocalKey = 'F:' + encryptSecret(contentKeyB64).toString('base64')
+  }
+  const contentKey = Buffer.from(contentKeyB64, 'base64')
+  try {
+    const text = await decryptMeetingEnvelopeAsync(buf.subarray(MARKER_LEN), contentKey, kLocal)
+    if (recoveredLocalKey && filePath) {
+      try {
+        const rewritten = await rewrapMeetingEnvelopeAsync(buf.subarray(MARKER_LEN), recoveredLocalKey)
+        await writeSaved(filePath, Buffer.concat([ENC_MARKER_V2, rewritten]).toString('utf8'), false)
+      } catch {
+        // Self-heal is best effort; the user already received the decrypted contents.
+      }
+    }
+    return text
+  } finally {
+    contentKey.fill(0)
+  }
 }
 
 // Shown in place of a transcript that can't be decrypted on this device (e.g. encrypted under a different
@@ -344,6 +432,28 @@ export function decodeSaved(buf: Buffer): string {
   return r.ok ? r.text : ''
 }
 
+/** Meeting-only async decode; generic brain/import JSON readers retain their established sync contract. */
+export async function decodeSavedMeetingAsync(
+  buf: Buffer,
+  allowKeychainRecovery = false,
+  filePath?: string
+): Promise<SavedDecode> {
+  if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
+    if (!isMeetingSpeechPersistenceConfigured()) {
+      const legacy = tryDecodeSaved(buf, allowKeychainRecovery, filePath)
+      if (legacy.ok && legacy.text.includes('metis-speech-'))
+        return { ok: false, reason: 'Speech metadata is unavailable until its read budget is configured.' }
+      return legacy
+    }
+    try {
+      return { ok: true, text: await decryptEnvelopeV2Async(buf, allowKeychainRecovery, filePath) }
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+  }
+  return tryDecodeSaved(buf, allowKeychainRecovery, filePath)
+}
+
 /** Read a saved transcript/note (sync), transparently decrypting if it was written encrypted. */
 export function readSavedFile(path: string): string {
   return decodeSaved(readFileSync(path))
@@ -366,46 +476,44 @@ export function isEncryptedFile(path: string): boolean {
 /** Atomic write; encrypts at rest when `encrypt` is true. Cleans up temp on failure.
  *  Exported for the brain store (src/main/brain/) so derived knowledge files share the exact same
  *  at-rest encryption semantics as the transcripts they're built from. */
-export async function writeSaved(file: string, content: string, encrypt: boolean): Promise<void> {
+export async function writeSaved(
+  file: string,
+  content: string,
+  encrypt: boolean,
+  beforeReplace?: () => void
+): Promise<void> {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) {
     // encryptEnvelopeV2 always produces an ATKENC2-marked encrypted envelope — safeStorage path
     // when the keychain is available, AES-GCM file-backend path otherwise. Any error propagates
     // to the caller (fail-closed): plaintext is never silently written when encryption is on.
-    data = encryptEnvelopeV2(content)
+    data = content.includes('<!-- metis-speech-provenance:v1 -->')
+      ? await encryptSpeechEnvelopeV2(content)
+      : encryptEnvelopeV2(content)
   }
-  // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
-  // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
-  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
-  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
-    // The default meetings folder lives under OneDrive, which routinely holds a just-written file
-    // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
-    // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
-    // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await rename(tmp, file)
-        break
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code
-        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
-        await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
-      }
-    }
-    // These bytes are on this device: reading them back must not wait on a placeholder probe.
-    await recordLocalWrite(file)
-  } catch (e) {
-    if (existsSync(tmp)) await unlink(tmp).catch(() => {}) // don't leave an orphaned .tmp on failure
-    throw e
-  }
+  await atomicSavedWrite(file, data, beforeReplace)
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
 // permanent cleartext file behind (the name is randomized so it isn't a predictable target either).
 const decryptedTemps = new Set<string>()
 let tempCleanupHooked = false
+
+function trackDecryptedTemp(tmp: string): void {
+  decryptedTemps.add(tmp)
+  if (tempCleanupHooked) return
+  tempCleanupHooked = true
+  app.on('will-quit', () => {
+    for (const path of decryptedTemps) {
+      try {
+        if (existsSync(path)) unlinkSync(path)
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+    decryptedTemps.clear()
+  })
+}
 
 /** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor. The file
  *  lives under the per-user temp dir (user-scoped ACL), has a randomized name, and is unlinked on app
@@ -433,20 +541,26 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
   )
   writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
   lockPathToCurrentUserWin32(tmp) // mode bits are ignored on Windows; enforce owner-only via DACL
-  decryptedTemps.add(tmp)
-  if (!tempCleanupHooked) {
-    tempCleanupHooked = true
-    app.on('will-quit', () => {
-      for (const t of decryptedTemps) {
-        try {
-          if (existsSync(t)) unlinkSync(t)
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
-      decryptedTemps.clear()
-    })
+  trackDecryptedTemp(tmp)
+  return tmp
+}
+
+/** Meeting Open variant: decrypt the large ATKENC2 payload in the owned worker before writing temp. */
+export async function decryptMeetingToTempAsync(path: string, bytes: Buffer): Promise<string> {
+  let content: string
+  try {
+    const decoded = await decodeSavedMeetingAsync(bytes, true, path)
+    content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
+  } catch {
+    content = UNDECRYPTABLE_MSG
   }
+  const tmp = join(
+    app.getPath('temp'),
+    `asktoto-${randomBytes(6).toString('hex')}-${basename(path).replace(/\.md$/, '')}.md`
+  )
+  await writeSaved(tmp, content, false)
+  lockPathToCurrentUserWin32(tmp)
+  trackDecryptedTemp(tmp)
   return tmp
 }
 
@@ -615,7 +729,7 @@ export function meetingDurationMin(m: { startedAt: number; durationMs?: number; 
 }
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
-export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
+export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeReplace?: () => void): Promise<string> {
   const statusError = recapStatusValidationError(m.recap, m.recapStatus)
   if (statusError) throw new Error(statusError)
   // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
@@ -635,6 +749,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const recapParsed = m.recap ? parseRecapMarkdown(m.recap) : null
   const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
   const tags = recapParsed?.tags || []
+  refuseReservedSpeechProse(title, m.mode, ...tags)
 
   // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
   const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
@@ -648,35 +763,20 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
 
   // Enterprise-live SUMMARY_ONLY: omit fresh Full transcript section. Never rewrite/delete older files.
   const summaryOnly = isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))
-  const transcript = summaryOnly ? '' : formatTranscript(m.lines)
+  const transcript = summaryOnly ? '' : await renderMeetingTranscriptAsync(m.lines)
 
-  const frontmatter = [
-    '---',
-    summaryOnly ? 'type: meeting-summary' : 'type: meeting-transcript',
-    'source: Métis',
-    `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
-    `date: ${new Date(started).toISOString()}`,
-    `title: "${yamlSafeTitle(title)}"`,
-    `participants: [${participants.join(', ')}]`,
-    `duration_min: ${durMin}`,
-    ...(measuredDurationMs(m.durationMs) !== undefined ? [`duration_ms: ${measuredDurationMs(m.durationMs)}`] : []),
-    `lines: ${summaryOnly ? 0 : m.lines.length}`,
-    ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
-    ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
-    ...(summaryOnly ? ['retention: summary-only'] : []),
-    'status: ready-for-followup',
-    '---',
-    ''
-  ].join('\n')
-
-  const body =
-    `# ${title}\n\n_${new Date(started).toLocaleString()} · ${m.mode} · ${durMin} min · Métis_\n\n` +
-    (m.recap ? `## Notes & follow-ups\n\n${m.recap}\n\n` : '') +
-    (summaryOnly
-      ? `## Retention\n\n_Summary/action record — full transcript not retained under managed enterprise profile._\n`
-      : `## Full transcript\n\n${transcript || '_No speech captured._'}\n`)
-
-  await writeSaved(file, frontmatter + body, settings.encryptTranscripts) // atomic; encrypted at rest when on
+  const document = buildMeetingSaveDocument({
+    meeting: m,
+    title,
+    mode: cleanTitle(m.mode),
+    started,
+    durationMin: durMin,
+    participants,
+    tags,
+    summaryOnly,
+    transcript
+  })
+  await writeSaved(file, document, settings.encryptTranscripts, beforeReplace)
 
   if (!settings.encryptTranscripts) {
     const di = new Date(started)
@@ -725,19 +825,21 @@ export async function appendDebrief(
   const safeName = safeMeetingBasename(file)
   if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
   const path = join(folder, safeName)
-  const read = await storageAt(folder).read(safeName)
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  const read = await storageAt(folder).read(safeName, { ...(maxBytes ? { maxBytes } : {}) })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
-  const md = decodeSaved(read.bytes)
+  const decoded = await decodeSavedMeetingAsync(read.bytes, false, path)
+  const md = decoded.ok ? decoded.text : ''
   if (!md) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
-  const safeText = escapeHeadingLines(text.trim())
+  const safeText = escapeSpeechMarkers(escapeHeadingLines(text.trim()))
   const section =
     `${DEBRIEF_HEADING}\n\n_Captured right after the meeting — impressions, not transcript._\n\n` +
     `${safeText}\n${DEBRIEF_END_MARKER}\n`
-  const start = md.indexOf(DEBRIEF_HEADING)
+  const start = md.indexOf(DEBRIEF_HEADING, meetingSpeechTailOffset(md))
   let updated: string
   if (start < 0) {
     updated = md.trimEnd() + '\n\n' + section
@@ -785,7 +887,24 @@ const draftFilename = (started: number): string =>
  * draft is left on disk (dot-prefixed, so it doesn't clutter the meetings list) rather than auto-recovered
  * — that's a real, disclosed limitation: this closes the data-loss gap, it doesn't build recovery UX.
  */
-export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): Promise<void> {
+export async function saveDraftTranscript(
+  settings: Settings,
+  m: SaveMeeting,
+  beforeReplace?: () => void
+): Promise<void> {
+  let admissionFailed = false
+  let admissionFailure: unknown
+  const admitReplacement = beforeReplace
+    ? () => {
+        try {
+          beforeReplace()
+        } catch (error) {
+          admissionFailed = true
+          admissionFailure = error
+          throw error
+        }
+      }
+    : undefined
   // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
   // Leave previously permitted files untouched, as the normal summary-only save does.
   if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))) return
@@ -794,7 +913,8 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-    const transcript = formatTranscript(m.lines)
+    refuseReservedSpeechProse(title, m.mode)
+    const transcript = await renderMeetingTranscriptAsync(m.lines)
     // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
     // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
     // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
@@ -820,8 +940,9 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
       'save (crash / force quit). If Métis is still running this meeting, ignore this file — the real ' +
       'save replaces it when the meeting ends.\n\n' +
       `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
-    await writeSaved(file, frontmatter + body, settings.encryptTranscripts)
+    await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admitReplacement)
   } catch {
+    if (admissionFailed) throw admissionFailure
     /* best-effort — an autosave failure must never interrupt the meeting */
   }
 }
@@ -911,14 +1032,17 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
         // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
         // downgrade, with no prompt and no way back.
-        const read = await gateway.read(f)
+        const maxBytes = getMeetingSpeechReadLimitBytes()
+        const read = await gateway.read(f, { ...(maxBytes ? { maxBytes } : {}) })
         if (read.status !== 'ok') continue
         const wasEncrypted = isEncryptedBytes(read.bytes)
-        const text = decodeSaved(read.bytes)
+        const decoded = await decodeSavedMeetingAsync(read.bytes, false, draftPath)
+        const text = decoded.ok ? decoded.text : ''
         if (!text) continue // undecryptable on this device — leave it alone
         const promoted = text
           .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
           .replace('status: interrupted', 'status: recovered')
+          .replace(/^## Transcript so far$/m, '## Full transcript')
           .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
         let out = primaryOut
         for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
@@ -959,244 +1083,4 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   return { recovered }
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-/**
- * Minimal, deterministic markdown→HTML for RECAP_PROMPT's fixed shape only (## headings, "-"/"*" bullet
- * lists, plain paragraphs) — not a general markdown parser. Used solely to print a recap to PDF via
- * Electron's webContents.printToPDF(); no npm dependency needed for that one job.
- */
-export function recapMarkdownToHtml(markdown: string, title?: string): string {
-  const body: string[] = []
-  let inList = false
-  for (const raw of markdown.split('\n')) {
-    const line = raw.trimEnd()
-    const h2 = /^##\s+(.*)/.exec(line)
-    const bullet = /^[-*]\s+(.*)/.exec(line)
-    if (h2) {
-      if (inList) {
-        body.push('</ul>')
-        inList = false
-      }
-      body.push(`<h2>${escapeHtml(h2[1])}</h2>`)
-    } else if (bullet) {
-      if (!inList) {
-        body.push('<ul>')
-        inList = true
-      }
-      body.push(`<li>${escapeHtml(bullet[1])}</li>`)
-    } else if (line.trim()) {
-      if (inList) {
-        body.push('</ul>')
-        inList = false
-      }
-      body.push(`<p>${escapeHtml(line)}</p>`)
-    }
-  }
-  if (inList) body.push('</ul>')
-  const style =
-    'body{font-family:-apple-system,Helvetica,Arial,sans-serif;color:#1a1a1a;padding:32px;line-height:1.5}' +
-    'h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;text-transform:uppercase;letter-spacing:.02em;' +
-    'color:#444;margin:20px 0 8px}ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}p{margin:0 0 8px}'
-  const heading = title ? `<h1>${escapeHtml(title)}</h1>` : ''
-  const csp =
-    "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${style}</style></head><body>${heading}${body.join('\n')}</body></html>`
-}
-
-const RECAP_SECTION_ALIASES: Readonly<Record<string, string>> = {
-  titre: 'title',
-  etiquettes: 'tags',
-  'mots-cles': 'tags',
-  'mots cles': 'tags',
-  resume: 'recap',
-  synthese: 'overview',
-  apercu: 'overview',
-  "vue d'ensemble": 'overview',
-  sujets: 'topics',
-  'sujets abordes': 'topics',
-  themes: 'topics',
-  'themes abordes': 'topics',
-  'questions-reponses': 'key q&a',
-  'questions-reponses cles': 'key q&a',
-  'questions et reponses': 'key q&a',
-  'questions et reponses cles': 'key q&a',
-  actions: 'action items',
-  'actions a mener': 'action items',
-  "points d'action": 'action items',
-  "elements d'action": 'action items',
-  'prochaines etapes': 'next steps',
-  'etapes suivantes': 'next steps',
-  suivis: 'follow-ups',
-  'questions ouvertes': 'open questions',
-  'questions en suspens': 'open questions',
-  'citations notables': 'notable quotes',
-  'citations marquantes': 'notable quotes'
-}
-
-const foldRecapLabel = (text: string): string =>
-  text.trim().normalize('NFD').replace(/\p{M}/gu, '').replace(/[’‘]/g, "'").toLowerCase()
-
-export function recapSectionKey(text: string): string {
-  const folded = foldRecapLabel(text)
-  return Object.prototype.hasOwnProperty.call(RECAP_SECTION_ALIASES, folded) ? RECAP_SECTION_ALIASES[folded] : folded
-}
-
-/**
- * Parse a RECAP_PROMPT markdown document into a structured export (for piping into Jira/Asana/Notion).
- * Sections come from RECAP_PROMPT's fixed "## Name:" headings; action-item owners are pulled from the
- * common "task (Owner)" / "task — Owner" / "task - Owner" trailers when present. Best-effort: unknown or
- * reworded sections fall through to empty arrays, and the full original markdown is always included so
- * nothing is ever lost.
- */
-export function parseRecapMarkdown(markdown: string): RecapExport {
-  const md = typeof markdown === 'string' ? markdown : ''
-
-  // Split on "## " headings; map each heading (colon-trimmed, lowercased) to its body up to the next "## ".
-  // Models sometimes emit the content INLINE on the heading line ("## Title: Renault Contract Renewal")
-  // instead of on the next line — the prompt's own "## Title: 2 to 4 words…" template invites that shape.
-  // For KNOWN section names, split at the first colon and treat the remainder as the body's first line;
-  // unknown headings keep the strict whole-line key so a legitimate colon in prose isn't mis-split.
-  const KNOWN = new Set([
-    'title',
-    'tags',
-    'overview',
-    'topics',
-    'key q&a',
-    'key qa',
-    'decisions',
-    'action items',
-    'next steps',
-    'follow-ups',
-    'follow ups',
-    'open questions',
-    'notable quotes',
-    'recap',
-    'outcome',
-    'key numbers',
-    'deal snapshot',
-    'buying signals',
-    'objections',
-    'what the seller must know',
-    'stakeholders',
-    'candidate',
-    'background',
-    'motivations',
-    'projects',
-    'compensation and contract',
-    'availability',
-    'ratings',
-    'strengths and concerns',
-    'role',
-    'questions and answers',
-    'examples given',
-    'next rounds',
-    'positions',
-    'interests',
-    'concessions',
-    'agreed terms',
-    'still open',
-    'what landed',
-    'audience questions',
-    'confusion or pushback',
-    'follow-ups promised',
-    'reported problem',
-    'steps tried',
-    'resolution',
-    'how the call went',
-    'qualifying facts',
-    'commitment'
-  ])
-  const sections: Record<string, string> = {}
-  for (const part of md.split(/^##\s+/m)) {
-    const nl = part.indexOf('\n')
-    const headRaw = (nl === -1 ? part : part.slice(0, nl)).trim()
-    let body = nl === -1 ? '' : part.slice(nl + 1).trim()
-    let heading = recapSectionKey(headRaw.replace(/:\s*$/, ''))
-    const colon = headRaw.indexOf(':')
-    if (colon > 0 && colon < headRaw.length - 1) {
-      const maybeKey = recapSectionKey(headRaw.slice(0, colon))
-      if (KNOWN.has(maybeKey)) {
-        heading = maybeKey
-        const inline = headRaw.slice(colon + 1).trim()
-        body = body ? `${inline}\n${body}` : inline
-      }
-    }
-    if (heading) sections[heading] = body
-  }
-
-  const bullets = (text: string | undefined): string[] =>
-    (text || '')
-      .split('\n')
-      .map((l) => l.replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/, '').trim()) // strip bullet + optional [ ]/[x] checkbox
-      .filter((l) => l.length > 0 && !/^(?:none|aucun(?:e|s|es)?|neant)\.?$/.test(foldRecapLabel(l)))
-
-  // Best-effort trailing "by <phrase>" clause on the OWNER-STRIPPED text (e.g. "Send the deck by Friday"
-  // → dueDateText "Friday"). Never parsed into a Date — RECAP_PROMPT only asks the model for "an owner
-  // when stated", never a structured date, so this is display text only (see RecapExportSchema).
-  const splitDueDate = (text: string): { text: string; dueDateText: string | null } => {
-    const by = text.match(/^(.*\S)\s+by\s+(.+)$/i)
-    return by ? { text: by[1].trim(), dueDateText: by[2].trim() } : { text, dueDateText: null }
-  }
-
-  // Wave 1D / QA: SUMMARY_PROMPT uses "## Next steps" (and historically "**Follow-ups**"); RECAP_PROMPT
-  // uses "## Action items". Prefer the first non-empty body so local summaries feed Book-next-steps,
-  // wiki publish, and RecapExport the same way cloud recaps do.
-  const actionBody =
-    sections['action items'] ||
-    sections['next steps'] ||
-    sections['follow-ups'] ||
-    sections['follow ups'] ||
-    sections['follow-ups promised'] ||
-    sections['commitment'] ||
-    ''
-  const actionItems = bullets(actionBody).map((raw) => {
-    // "Do the thing (Alice)". Non-greedy text + a paren-free owner anchored to the end, so a stray inner
-    // paren (e.g. "(Alice (boss))") degrades gracefully to owner:null rather than a wrong split.
-    const paren = raw.match(/^(.*?\S)\s*\(([^()]+)\)\s*$/)
-    if (paren) return { ...splitDueDate(paren[1].trim()), owner: paren[2].trim() }
-    const dash = raw.match(/^(.*\S)\s+[—-]\s+(.+)$/) // "Do the thing — Alice" / "Do the thing - Alice"
-    if (dash) return { ...splitDueDate(dash[1].trim()), owner: dash[2].trim() }
-    return { ...splitDueDate(raw), owner: null as string | null }
-  })
-
-  // "## Title:" body — first line only, wrapping quotes/emphasis (models mirror the prompt's quoted
-  // example) and trailing punctuation stripped, capped for filename/UI safety.
-  const titleBody = (sections['title'] || '').split('\n')[0].trim()
-  const title24 = titleBody
-    .replace(/^["'“”*_\s]+|["'“”*_\s]+$/g, '')
-    .replace(/[.!?,;:]+$/, '')
-    .trim()
-    .slice(0, 60)
-
-  // "## Tags:" body — usually one comma-separated line, but tolerate the model emitting a bullet list.
-  // Tags feed unquoted YAML flow-sequence frontmatter and React keys, so strip quote/bracket/backslash
-  // characters, dedup case-insensitively, cap at 5.
-  const tagsSection = sections['tags'] || ''
-  const tagList = /^\s*[-*]/m.test(tagsSection) ? bullets(tagsSection) : [tagsSection]
-  const tags: string[] = []
-  const seenTags = new Set<string>()
-  for (const raw of tagList.flatMap((t) => t.split(/[,\n]/))) {
-    const tag = raw.replace(/["'“”\\[\]]/g, '').trim()
-    if (!tag || seenTags.has(tag.toLowerCase())) continue
-    seenTags.add(tag.toLowerCase())
-    tags.push(tag)
-    if (tags.length === 5) break
-  }
-
-  return {
-    title24,
-    tags,
-    // SUMMARY_PROMPT's first section used to be "**Recap**" / "## Recap"; RECAP uses "## Overview".
-    overview: sections['overview'] || sections['recap'] || sections['outcome'] || '',
-    topics: bullets(sections['topics']),
-    keyQA: bullets(sections['key q&a'] || sections['key qa']),
-    decisions: bullets(sections['decisions']),
-    actionItems,
-    openQuestions: bullets(sections['open questions']),
-    notableQuotes: bullets(sections['notable quotes']),
-    markdown: md
-  }
-}
+export { recapMarkdownToHtml, recapSectionKey, parseRecapMarkdown } from './transcripts-recap'

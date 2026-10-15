@@ -13,7 +13,13 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { attachOwnedCdp, killOwned, strictLaunchEnvironment, waitForChildExit } from './lib/app-driver.mjs'
+import {
+  attachOwnedCdp,
+  killOwned,
+  quitOwnedAppBeforeAutomationClose,
+  strictLaunchEnvironment
+} from './lib/app-driver.mjs'
+import { attachQuitTraceStdout, createQuitTraceCollector } from './lib/quit-trace.mjs'
 import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -49,7 +55,8 @@ function parseOptions(args) {
     driver,
     packageDir: resolve(packageDir),
     report: report ? resolve(report) : null,
-    keepOpen: args.includes('--keep-open')
+    keepOpen: args.includes('--keep-open'),
+    quitTrace: args.includes('--quit-trace')
   }
 }
 
@@ -61,7 +68,10 @@ function parseOptions(args) {
 export function selectSmokeDriver(platform, requested = null) {
   const expected = platform === 'darwin' ? 'agent-browser-cli' : platform === 'win32' ? 'playwright-cdp' : null
   if (!expected) throw new Error('unsupported-host')
-  if (requested !== null && requested !== expected) throw new Error('smoke-driver-platform-mismatch')
+  if (requested !== null && requested !== expected && !(platform === 'darwin' && requested === 'playwright-cdp')) {
+    throw new Error('smoke-driver-platform-mismatch')
+  }
+  if (requested === 'playwright-cdp') return 'playwright-cdp'
   return expected
 }
 
@@ -536,7 +546,7 @@ export function loopbackDebuggerWebSocket(value, port) {
   return url.href
 }
 
-export function electronLaunchArgs(port, appPath) {
+export function electronLaunchArgs(port, appPath, quitTrace = false) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65_535) {
     throw new Error('invalid-port')
   }
@@ -544,7 +554,12 @@ export function electronLaunchArgs(port, appPath) {
   // Electron treats the first positional argument as the app path. Keep Chromium switches ahead
   // of it so both Windows and macOS parse the debugging options as Electron switches. An absolute
   // target also avoids current-directory interpretation differences across hosted runners.
-  return [`--remote-debugging-address=${LOOPBACK_HOST}`, `--remote-debugging-port=${port}`, appPath]
+  return [
+    `--remote-debugging-address=${LOOPBACK_HOST}`,
+    `--remote-debugging-port=${port}`,
+    ...(quitTrace ? ['--metis-qa-quit-trace'] : []),
+    appPath
+  ]
 }
 
 async function waitForCdpEndpoint({ port, child, launchFailed, timeoutMs }) {
@@ -702,6 +717,7 @@ async function main() {
     composerVisibleInDom: false,
     diagnosticAccessVerified: { pageErrors: false, console: false, networkRequests: false },
     cleanShutdown: false,
+    quitOutcome: { request: 'not-attempted', exit: 'not-waited' },
     ownedProcessesCleaned: false,
     agentBrowserProcessesCleaned: true,
     preexistingOwnedProcessCount: 0,
@@ -711,10 +727,12 @@ async function main() {
     agentBrowserCleanupEvidence: null,
     startupDiagnostic: null,
     startupEvidence: null,
+    quitTrace: null,
     failure: null
   }
 
   let appChild = null
+  const quitTraceCollector = createQuitTraceCollector(options.quitTrace)
   let appOutput = { stdout: '', stderr: '' }
   let ownedBrowser = null
   let appPage = null
@@ -745,13 +763,14 @@ async function main() {
     report.preexistingOwnedProcessCount = existing.length
     if (existing.length > 0) throw new Error('worktree-app-already-running')
 
-    appChild = spawn(executable, electronLaunchArgs(options.port, ROOT), {
+    appChild = spawn(executable, electronLaunchArgs(options.port, ROOT, options.quitTrace), {
       cwd: ROOT,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       detached: process.platform !== 'win32'
     })
+    attachQuitTraceStdout(quitTraceCollector, appChild.stdout)
     appChild.stdout?.on('data', (chunk) => {
       appOutput.stdout = appendBounded(appOutput.stdout, chunk)
     })
@@ -850,32 +869,55 @@ async function main() {
         // stopOwnedProcessTree records an incomplete census if it cannot refresh the ownership snapshot.
       }
     }
-    if (connected && !leaveRunning) {
-      const close = await runAgentBrowser(['close'], 10_000, false)
-      if (close.code !== 0) {
-        report.agentBrowserProcessesCleaned = false
-        agentBrowserCloseFailure = failureClass(close)
-        report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
-        report.agentBrowserCleanupEvidence = safeCommandEvidence(close, ['close'])
-      }
-    }
-    if (ownedBrowser && !leaveRunning) {
-      try {
-        if (appPage) {
-          const quitRequested = await appPage.evaluate(() => {
-            if (!window.toto || typeof window.toto.quit !== 'function') return false
-            void window.toto.quit()
-            return true
-          })
-          if (quitRequested) {
-            const exited = await waitForChildExit(appChild, CHILD_STOP_TIMEOUT_MS)
-            report.cleanShutdown = exited && appChild.exitCode === 0 && appChild.signalCode === null
+    if (!leaveRunning) {
+      const quitOutcome = await quitOwnedAppBeforeAutomationClose(
+        appChild,
+        async () => {
+          if (!ownedBrowser || !appPage || appPage.isClosed()) return 'page-unavailable'
+          try {
+            return await appPage.evaluate(async () => {
+              if (!window.toto || typeof window.toto.quit !== 'function') return 'bridge-unavailable'
+              try {
+                await window.toto.quit()
+                return 'accepted'
+              } catch {
+                return 'ipc-rejected'
+              }
+            })
+          } catch {
+            return 'evaluation-failed'
           }
+        },
+        async () => {
+          try {
+            await ownedBrowser?.close()
+          } catch {
+            /* The app may have closed its browser target during a successful quit. */
+          }
+          if (connected) {
+            // The pinned CLI's `close` command closes the browser; run it only after the app's own quit
+            // IPC has been delivered and its clean process exit has been observed.
+            try {
+              const close = await runAgentBrowser(['close'], 10_000, false)
+              if (close.code === 0) return
+              report.agentBrowserProcessesCleaned = false
+              agentBrowserCloseFailure = failureClass(close)
+              report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
+              report.agentBrowserCleanupEvidence = safeCommandEvidence(close, ['close'])
+            } catch {
+              report.agentBrowserProcessesCleaned = false
+              agentBrowserCloseFailure = 'close-failed'
+              report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
+            }
+          }
+        },
+        CHILD_STOP_TIMEOUT_MS,
+        () => {
+          if (options.quitTrace) report.quitTrace = quitTraceCollector.snapshot()
         }
-      } catch {
-        // The owned process tree is stopped below if its normal quit path did not complete.
-      }
-      await ownedBrowser.close().catch(() => {})
+      )
+      report.quitOutcome = { request: quitOutcome.request, exit: quitOutcome.exit }
+      report.cleanShutdown = quitOutcome.cleanShutdown
     }
 
     if (appChild && !leaveRunning) {
@@ -885,6 +927,10 @@ async function main() {
     if (report.result === 'PASS' && agentBrowserCloseFailure) {
       report.result = 'FAIL'
       report.failure = `agent-browser-close-${agentBrowserCloseFailure}`
+    }
+    if (report.result === 'PASS' && options.quitTrace && report.quitTrace?.valid !== true) {
+      report.result = 'FAIL'
+      report.failure = 'quit-trace-invalid'
     }
     if (
       report.result === 'PASS' &&

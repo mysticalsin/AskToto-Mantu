@@ -34,6 +34,58 @@ describe('speech-pack preload boundary', () => {
     await expect(bridge.speechPackAction(request)).rejects.toThrow('Invalid speech pack response')
   })
 
+  it('uses separate fixed plan-preview and affirmative-execution channels', async () => {
+    const previewRequest = {
+      componentId: request.componentId,
+      manifestIdentity: request.manifestIdentity,
+      action: 'install' as const
+    }
+    const previewResponse = {
+      ok: true,
+      plan: {
+        planId: 'b7fdba89-6ddc-4168-a49b-aa6120f151be',
+        action: 'install',
+        feature: 'asr',
+        selectedComponent: request.componentId,
+        missingComponents: [
+          {
+            componentId: request.componentId,
+            manifestIdentity: request.manifestIdentity,
+            downloadBytes: 100,
+            storageBytes: 200,
+            license: null,
+            sourceHost: 'huggingface.co'
+          }
+        ],
+        totalDownloadBytes: 100,
+        totalStorageBytes: 200,
+        profile: 'full',
+        profileIdentity: null
+      }
+    }
+    const invoke = vi.fn().mockResolvedValueOnce(previewResponse).mockResolvedValueOnce({ ok: true })
+    const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
+    expect(await bridge.speechPackPlanPreview(previewRequest)).toEqual(previewResponse)
+    expect(invoke).toHaveBeenNthCalledWith(1, IPC.speechPackPlanPreview, previewRequest)
+    expect(await bridge.speechPackInstallWithPlan({ planId: previewResponse.plan.planId, action: 'install' })).toEqual({
+      ok: true
+    })
+    expect(invoke).toHaveBeenNthCalledWith(2, IPC.speechPackInstallWithPlan, {
+      planId: previewResponse.plan.planId,
+      action: 'install'
+    })
+  })
+
+  it('rejects plan inputs before they reach main', async () => {
+    const invoke = vi.fn()
+    const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
+    expect(await bridge.speechPackInstallWithPlan({ planId: 'invalid', action: 'install' } as never)).toEqual({
+      ok: false,
+      reason: 'invalid-request'
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('rejects invalid status with a fixed message and no private response contents', async () => {
     const invoke = vi.fn().mockResolvedValue({ nativeError: '/private/model' })
     const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
+import { ensureWhisperWorkerProfile } from './whisper-profile-admission'
 import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
 import { detectLanguage, detectLanguages } from '@shared/lang-id'
 import {
@@ -19,12 +20,24 @@ import {
 } from '@shared/cloud-stt-language'
 import { canUpgradeSpeakerLabel } from '@shared/speaker-names'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
+import { CLOUD_CAPTURE_WORKLET_SRC } from './cloud-capture-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
 import { withDiagnosedThemNote } from './screen-permission-copy'
 import { sysRetryDelayMs } from './loopback-retry'
+import type { CloudSpeechController } from './cloud-speech-controller'
+import type { CloudSpeechEvent } from '@shared/cloud-speech'
+import type { Capture, Track } from '@shared/contracts/speech'
+import type { BrokerSpeechSettingsLoaded } from '@shared/broker-speech-settings'
+import {
+  cloudSpeechTranscriptSegment,
+  cloudSpeechListenOwnerCallbacks,
+  cloudSpeechConsentMatches,
+  startCloudSpeechSession,
+  type CloudSpeechConsentAcknowledgement
+} from './cloud-speech-listen'
 import {
   captureHealthForTrack,
   captureHealthIfCurrent,
@@ -33,15 +46,28 @@ import {
   listenSpeechEngine,
   micSelectionOutcome,
   sameCaptureHealth,
+  speakerEmbedResultIsStale,
   shouldShowNoSpeechWarning,
   themRecoveryFailureIsNoop
 } from './listen-capture-state'
 import type { CaptureDegraded, CaptureHealth, CaptureSelectionOutcome } from './listen-capture-state'
+import {
+  createListenAudioChannels,
+  playListenChime,
+  type ListenAudioChannel,
+  type ListenMicCapture
+} from './listen-audio-channels'
+export { playListenChime } from './listen-audio-channels'
+import { acquireLoopback, acquireMic, createListenAudioRecovery } from './listen-audio-recovery'
+export { acquireLoopback } from './listen-audio-recovery'
+import { failBrokerCaptureRecovery, themDeviceChangeAction } from './listen-audio-recovery'
+export { themDeviceChangeAction, themTracksLookDead } from './listen-audio-recovery'
 export {
   captureHealthForTrack,
   captureHealthIfCurrent,
   degradedAfterMicRecovery,
   micSelectionOutcome,
+  speakerEmbedResultIsStale,
   shouldShowNoSpeechWarning,
   themRecoveryFailureIsNoop
 } from './listen-capture-state'
@@ -82,6 +108,13 @@ function whisperWorkletUrl(): string {
     _workletUrl = URL.createObjectURL(new Blob([WHISPER_WORKLET_SRC], { type: 'application/javascript' }))
   }
   return _workletUrl
+}
+let _cloudWorkletUrl: string | null = null
+function cloudCaptureWorkletUrl(): string {
+  if (!_cloudWorkletUrl) {
+    _cloudWorkletUrl = URL.createObjectURL(new Blob([CLOUD_CAPTURE_WORKLET_SRC], { type: 'application/javascript' }))
+  }
+  return _cloudWorkletUrl
 }
 const WINDOW_SEC = 6
 // ASR quality (1B.2a) — ~3.2 min of audio; drop oldest under backpressure if the model is slow/failed to
@@ -293,84 +326,9 @@ export function probeResultIsStale(
   return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
 }
 
-/** A speaker label belongs only to the meeting epoch that dispatched its async embedding request. */
-export function speakerEmbedResultIsStale(requestEpoch: number, currentEpoch: number): boolean {
-  return requestEpoch !== currentEpoch
-}
-
-/** What the 'them' (system-loopback) side must do when the OS reports an audio-device change. */
-export type ThemDeviceAction = 'ignore' | 'watch' | 'recover' | 'recycle'
-
-/**
- * Exported for unit testing — the pure decision behind the 'them'-side silent-death recovery (see
- * armThemProbation and the devicechange effect in useListen). Called twice per device change: with
- * `sawWindow: null` when the change is debounced, then with the observed boolean when the probation
- * window expires. A device change that kills the loopback leaves the track in readyState 'live' and fires
- * no 'ended' event, so a still-registered channel is only trustworthy once it has emitted a window SINCE
- * the change — the previous session-long "we heard them once" latch could never notice the death.
- *
- * `hasDeathEvidence` (read only on the expiry call, when sawWindow is a boolean) is the MQA-109 guard: an
- * absent window during probation is NOT proof of death for a channel that was ALREADY confirmed healthy.
- * An unrelated device blip during a normal quiet stretch (you talking, the remote briefly silent) emits no
- * window while the loopback stays perfectly alive; recycling it there tears down a working capture —
- * exactly what armThemProbation's own contract says must never happen. So an already-healthy channel is
- * recycled ONLY with positive evidence its tracks actually died; a channel that never proved itself keeps
- * the original prove-or-die probation. Defaults to true so the debounce call (which returns 'watch' before
- * ever reading it) and any legacy three-arg caller keep the historical behaviour.
- */
-export function themDeviceChangeAction(
-  wantsSystem: boolean,
-  hasThemChannel: boolean,
-  sawWindow: boolean | null,
-  hasDeathEvidence = true
-): ThemDeviceAction {
-  if (!wantsSystem) return 'ignore' // mic-only session — there is no loopback to keep alive
-  if (!hasThemChannel) return 'recover' // nothing to wait on (start-time failure, or a channel already closed)
-  if (sawWindow === null) return 'watch' // registered channel — let it prove itself before tearing it down
-  if (sawWindow) return 'ignore' // proved itself again — no gratuitous teardown on a device blip
-  return hasDeathEvidence ? 'recycle' : 'ignore' // MQA-109: quiet ≠ dead for an already-healthy channel
-}
-
-/**
- * Exported for unit testing — positive death evidence for an already-healthy 'them' channel (MQA-109).
- * The device-change probation recycles a confirmed-healthy loopback only when its audio actually died, not
- * merely because it went quiet: every remaining audio track has ended, or its source went muted (an empty
- * list means the channel is already gone, which also counts as dead so recovery still fires). Only AUDIO
- * tracks are passed in — the macOS/Windows loopback stream carries a 1fps video track that stays live and
- * would otherwise mask a dead audio track.
- */
-export function themTracksLookDead(tracks: { readyState: string; muted: boolean }[]): boolean {
-  if (tracks.length === 0) return true
-  return tracks.every((t) => t.readyState === 'ended' || t.muted)
-}
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
 type LiveAudioWindow = { audio: Float32Array; speaker: Speaker; partial?: boolean; startedAt?: number }
-
-/** Soft audible chime generated in-browser (no asset file). */
-export function playListenChime(): void {
-  try {
-    const AudioCtx =
-      window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!AudioCtx) return
-    const ctx = new AudioCtx()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = 'sine'
-    osc.frequency.setValueAtTime(523.25, ctx.currentTime) // C5
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08)
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25)
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start(ctx.currentTime)
-    osc.stop(ctx.currentTime + 0.28)
-    setTimeout(() => void ctx.close(), 350)
-  } catch {
-    /* ignore */
-  }
-}
 
 const QWORDS =
   /^(what|why|how|when|where|who|which|can|could|would|do|does|did|are|is|have|has|tell me|walk me|describe|explain|give me)\b/i
@@ -402,14 +360,14 @@ export function isQuestion(t: string): boolean {
   return LATIN_CLAUSE.test(lastClause) && lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
 }
 
-interface Channel {
-  admissionEpoch: number
-  ctx: AudioContext
-  src: MediaStreamAudioSourceNode
-  worklet: AudioWorkletNode
-  stream: MediaStream
-  gain?: GainNode // present on 'them' only: boosts quiet system-loopback above the VAD floor
-  limiter?: DynamicsCompressorNode // 'them' only: flattens the overs the boost creates (MQA-267)
+type Channel = ListenAudioChannel
+type MicCapture = ListenMicCapture
+
+interface BrokerStartInput {
+  epoch: number
+  captureId: string
+  capture: Capture
+  consent: CloudSpeechConsentAcknowledgement
 }
 
 interface StopDrainOperation {
@@ -501,7 +459,8 @@ export interface ListenApi {
     quality?: 'best' | 'fast',
     engine?: 'whisper' | 'parakeet' | 'apple' | 'cloud',
     language?: string,
-    startedAt?: number
+    startedAt?: number,
+    cloudConsent?: CloudSpeechConsentAcknowledgement
   ) => Promise<void>
   /** onDrained (optional) fires when Stop reaches a terminal state: either every sealed window settled,
    *  or a bounded no-progress watchdog ended an incomplete drain (reported through `error`). `text()` is
@@ -522,97 +481,6 @@ export interface ListenApi {
 /** Escapes regex metacharacters so a user-typed correction word can't corrupt the pattern. */
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/**
- * Acquire the microphone, honouring a chosen deviceId when one is set. If that specific device has gone
- * away (e.g. AirPods disconnected), fall back to the system default so a meeting never loses its mic over
- * a device that vanished. Empty deviceId means "follow the system default" from the start.
- */
-interface MicCapture {
-  stream: MediaStream
-  /** Kept only in this renderer session; never copied into the public health DTO. */
-  track: MediaStreamTrack
-  health: CaptureHealth
-}
-
-async function acquireMic(deviceId: string): Promise<MicCapture> {
-  const base: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-  let stream: MediaStream
-  let usedFallback = false
-  if (!deviceId) {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: base })
-  } else {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } })
-    } catch {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: base })
-      usedFallback = true
-    }
-  }
-  const track = stream.getAudioTracks()[0]
-  if (!track) {
-    stream.getTracks().forEach((candidate) => candidate.stop())
-    throw new Error('no microphone audio track')
-  }
-  return {
-    stream,
-    track,
-    health: captureHealthForTrack(track, Boolean(deviceId), micSelectionOutcome(Boolean(deviceId), usedFallback))
-  }
-}
-
-/**
- * MQA-267 — voice processing must be OFF on the loopback ('them') track, and it defaulted ON.
- *
- * Probed on real Windows hardware (the index.ts CAVEAT said this path was never validated): the granted
- * loopback track came back with echoCancellation:true, noiseSuppression:true, autoGainControl:true.
- * Echo cancellation's entire purpose is to subtract the far-end audio playing through the speakers —
- * which on a loopback capture IS the signal. With the mic channel open beside it, the AEC reference
- * lines up and the 'them' audio is partially or wholly cancelled before it ever reaches ASR. That is the
- * reported symptom exactly: the main speaker transcribes, the other person intermittently vanishes, and
- * the transcript breaks mid-conversation. Noise suppression and AGC compound it — both are tuned for a
- * mouth near a microphone, not for rendered playout, so they pump and gate clean far-end speech.
- *
- * The MIC keeps its processing (acquireMic above): AEC on the mic is what stops the speakers bleeding
- * the other person's words into the 'you' channel as duplicates. The asymmetry is the design.
- */
-const LOOPBACK_AUDIO: MediaTrackConstraints = {
-  echoCancellation: false,
-  noiseSuppression: false,
-  autoGainControl: false
-}
-
-/** getDisplayMedia audio constraints are not reliably honored across Chromium versions, so the
- *  constraint is also applied to the LIVE track after the grant. applyConstraints on these three
- *  booleans works even where the initial request was ignored; a track that refuses is left as-is
- *  rather than failing the capture — degraded audio still beats no 'them' channel at all. */
-async function stripLoopbackProcessing(sys: MediaStream): Promise<void> {
-  for (const t of sys.getAudioTracks()) {
-    try {
-      await t.applyConstraints(LOOPBACK_AUDIO)
-    } catch {
-      /* keep the track — a processed 'them' is still better than none */
-    }
-  }
-}
-
-/** The one way a loopback stream is acquired. Windows tries audio-only first so no genuine screen
- *  source is grabbed (and no OS/EDR screen-recording indicator fires) for what the user intended as
- *  system audio; macOS must bind to a 1fps ScreenCaptureKit video stream or the audio never starts. */
-export async function acquireLoopback(): Promise<MediaStream> {
-  let sys: MediaStream
-  if (isWindows) {
-    try {
-      sys = await navigator.mediaDevices.getDisplayMedia({ audio: LOOPBACK_AUDIO })
-    } catch {
-      sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: LOOPBACK_AUDIO })
-    }
-  } else {
-    sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: LOOPBACK_AUDIO })
-  }
-  await stripLoopbackProcessing(sys)
-  return sys
 }
 
 export function useListen(
@@ -643,7 +511,8 @@ export function useListen(
   /** Settings.cloudSttProvider — Nova-3 / Soniox selection for managed cloud Listen. */
   cloudSttProvider?: string,
   /** Settings.profile.name for mic-side cloud speaker labels. */
-  micProfileName?: string
+  micProfileName?: string,
+  brokerSpeech?: BrokerSpeechSettingsLoaded
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -686,6 +555,8 @@ export function useListen(
   enterpriseLiveRef.current = enterpriseLive
   const cloudSttProviderRef = useRef<string | undefined>(cloudSttProvider)
   cloudSttProviderRef.current = cloudSttProvider
+  const brokerSpeechRef = useRef<BrokerSpeechSettingsLoaded | undefined>(brokerSpeech)
+  brokerSpeechRef.current = brokerSpeech
   const micProfileNameRef = useRef<string | undefined>(micProfileName)
   micProfileNameRef.current = micProfileName
   const cloudSttUnsubRef = useRef<(() => void) | null>(null)
@@ -698,6 +569,21 @@ export function useListen(
   // make the next meeting wait for its 180s no-progress ceiling before it can stop.
   const cloudSttPushesRef = useRef(new Map<number, Set<Promise<void>>>())
   const cloudSttFinalizingRef = useRef(false)
+  const activeBrokerSpeechRef = useRef<BrokerSpeechSettingsLoaded | null>(null)
+  const brokerConsentRef = useRef<CloudSpeechConsentAcknowledgement | null>(null)
+  const brokerRetainedStreamsRef = useRef<Partial<Record<Speaker, MediaStream>>>({})
+  const brokerPausedCompleteRef = useRef(false)
+  const brokerPausePromiseRef = useRef<Promise<void> | null>(null)
+  const brokerResumeAfterPauseRef = useRef(false)
+  const cloudSpeechControllerRef = useRef<CloudSpeechController | null>(null)
+  const cloudSegmentLinesRef = useRef(new Map<string, number>())
+  const brokerStopCallbacksRef = useRef<Array<() => void>>([])
+  const failAdmittedCaptureRef = useRef<
+    (error: string, options?: { forceCloudStop?: boolean; cloudCaptureId?: string }) => void
+  >(() => {})
+  const startBrokerSessionRef = useRef<((input: BrokerStartInput) => Promise<boolean>) | null>(null)
+  const resumeBrokerSessionRef = useRef<(() => Promise<void>) | null>(null)
+  const captureMonotonicStartRef = useRef(0)
 
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
@@ -946,49 +832,82 @@ export function useListen(
   // (phantom text, a suppressed dupe run, or a dead/stopped session), so a caller can skip that follow-up
   // work entirely instead of resolving a name for a line that was never shown.
   const commitLine = useCallback(
-    (text: string, speaker: Speaker, name?: string, provisional?: boolean): number | null => {
+    (
+      text: string,
+      speaker: Speaker,
+      name?: string,
+      provisional?: boolean,
+      options?: {
+        segmentId?: string
+        providerLanguage?: string
+        preserveProviderText?: boolean
+        speech?: Extract<CloudSpeechEvent, { type: 'segment' }>
+      }
+    ): number | null => {
       // Drop phantom/hallucinated lines + non-speech sound-event captions ("[BELL RINGS]", "(applause)",
       // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
       // Single chokepoint for both the Whisper worker and Parakeet paths.
-      if (isNonSpeechLine(text)) return null
+      if (!options?.preserveProviderText && isNonSpeechLine(text)) return null
       // Collapse an intra-line decoder loop BEFORE corrections/casing so those run on the short form.
-      let corrected = collapseRepeatedPhrase(text)
-      for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
-      // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
-      if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
+      let corrected = options?.preserveProviderText ? text : collapseRepeatedPhrase(text)
+      if (!options?.preserveProviderText) {
+        for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
+        // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
+        if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
+      }
       // During a cloud provider's bounded graceful close, main may still deliver the protocol's final
       // transcript. Accept only that explicitly marked tail window; all other stopped-session results stay
       // rejected so an old worker cannot bleed into the next meeting.
       if (!corrected || (!liveRef.current && !cloudSttFinalizingRef.current)) return null
       // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
-      const key = repeatKey(corrected)
-      const run = repeatRunRef.current
-      if (key && run.key === key && run.speaker === (speaker || 'you')) {
-        run.count += 1
-        if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
-      } else {
-        repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
+      if (!options?.preserveProviderText) {
+        const key = repeatKey(corrected)
+        const run = repeatRunRef.current
+        if (key && run.key === key && run.speaker === (speaker || 'you')) {
+          run.count += 1
+          if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
+        } else {
+          repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
+        }
       }
       // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
       // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
       // the single chokepoint — so Parakeet and Apple Speech lines get tagged exactly like Whisper's.
-      const lang = detectLanguage(corrected).lang ?? undefined
+      const lang = options?.preserveProviderText
+        ? options.providerLanguage
+        : (detectLanguage(corrected).lang ?? undefined)
+      const existingSegmentAt = options?.segmentId ? cloudSegmentLinesRef.current.get(options.segmentId) : undefined
       const line: TranscriptLine = {
         speaker: speaker || 'you',
         text: corrected,
-        t: Date.now(),
+        t: existingSegmentAt ?? Date.now(),
         ...(name ? { name } : {}),
         ...(lang ? { lang } : {}),
+        ...(options?.speech?.segment.final === true && options.speech.segment.text === corrected
+          ? { speech: options.speech }
+          : {}),
         ...(provisional ? { provisional: true } : {})
       }
       // A final window replaces any streaming partial from the same speaker; a newer partial replaces
       // the previous one so TTFC stays one live caption, not a stack of drafts.
-      const withoutStale = linesRef.current.filter((l) => !(l.provisional && l.speaker === line.speaker))
+      const withoutStale = linesRef.current.filter((l) => {
+        if (existingSegmentAt !== undefined) return l.t !== existingSegmentAt
+        if (options?.segmentId) return true
+        return !(l.provisional && l.speaker === line.speaker)
+      })
       const next = [...withoutStale, line]
       // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
       // includes the line that triggered the auto-answer.
       linesRef.current = next
       setLines(next)
+      if (options?.segmentId) {
+        cloudSegmentLinesRef.current.set(options.segmentId, line.t)
+        while (cloudSegmentLinesRef.current.size > 512) {
+          const oldest = cloudSegmentLinesRef.current.keys().next().value
+          if (oldest === undefined) break
+          cloudSegmentLinesRef.current.delete(oldest)
+        }
+      }
       // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
       // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
       // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
@@ -1280,6 +1199,7 @@ export function useListen(
 
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
+    ensureWhisperWorkerProfile()
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     readyRef.current = false
     w.onmessage = (e: MessageEvent): void => {
@@ -1408,6 +1328,9 @@ export function useListen(
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
+      for (const stream of Object.values(brokerRetainedStreamsRef.current))
+        stream?.getTracks().forEach((track) => track.stop())
+      brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
       if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
       setState((s) => ({
@@ -1558,487 +1481,233 @@ export function useListen(
     [pump, probeLanguageWindow]
   )
 
-  // Arms (or re-arms) the 'them'-silence watchdog: if no 'them' window has been emitted within
-  // THEM_WATCHDOG_MS of this call, surface the soft THEM_SILENT_MSG note. Shared by openChannel (channel
-  // just opened) and resume() (channel survives a pause, but the clock must restart from the resume point
-  // — see resume()'s comment for why it must not keep ticking through a pause). No-op once themHeardRef is
-  // already true, so it can never fire a false note after real 'them' audio has already been heard.
-  function armThemWatchdog(): void {
-    if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
-    if (themHeardRef.current) return
-    const originEpoch = sessionEpochRef.current
-    themWatchdogRef.current = setTimeout(() => {
-      themWatchdogRef.current = null
-      if (captureAdmissionIsOpen(originEpoch) && !pausedRef.current && channels.current.them) {
-        setState((s) => ({ ...s, error: THEM_SILENT_MSG }))
-      }
-    }, THEM_WATCHDOG_MS)
-  }
-
-  // Silent-death probation for a 'them' channel after an audio-device change. A default-output switch
-  // mid-meeting (headphones plugged in) can leave the loopback capture in readyState 'live' while it
-  // delivers nothing but silence: no 'ended' event fires, so the track handler never runs and
-  // recoverSystemAudio self-blocks on the still-registered channel — the remote half of the meeting was
-  // lost for good while the Bar kept showing the healthy "Heard live" chip. armThemWatchdog can't cover
-  // this: it disarms permanently once the channel has been heard. Give the channel THEM_WATCHDOG_MS to
-  // deliver ONE window, then recycle it if it delivered none. Armed only by a device change — a naturally
-  // quiet stretch (you talking for 20 s) must never tear down a healthy loopback.
-  function armThemProbation(): void {
-    if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
-    themWindowSeenRef.current = false
-    const originEpoch = sessionEpochRef.current
-    themWatchdogRef.current = setTimeout(() => {
-      themWatchdogRef.current = null
-      if (!captureAdmissionIsOpen(originEpoch) || pausedRef.current) return
-      // MQA-109: a channel that was already confirmed healthy (themHeardRef) must not be recycled just for
-      // going quiet during probation — only with positive evidence its audio tracks actually died (all
-      // ended, or the source went muted). A channel that never proved itself keeps the original prove-or-die
-      // probation, so its death evidence stays true. Reading the live track state here (not on the per-window
-      // audio callback) keeps the capture hot path allocation-free.
-      const ch = channels.current.them
-      const hasDeathEvidence = !themHeardRef.current || themTracksLookDead(ch ? ch.stream.getAudioTracks() : [])
-      const verdict = themDeviceChangeAction(wantsSystemRef.current, !!ch, themWindowSeenRef.current, hasDeathEvidence)
-      if (verdict !== 'recycle') return
-      console.warn('[listen] them silent since the device change — recycling the loopback capture')
-      closeChannel('them') // recoverSystemAudio refuses to run while a channel is still registered
-      themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
-      setState((s) => ({ ...s, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
-      void recoverSystemAudioRef.current?.()
-    }, THEM_WATCHDOG_MS)
-  }
-
-  /** MQA-268: per-speaker serialization for openChannel. The channel record is stored only AFTER the
-   *  `await addModule(...)` inside — so the Windows paced retry's `if (channels.current.them) return`
-   *  guard reads undefined while a first open is still in flight, slips past, and opens a SECOND channel
-   *  whose entry closeChannel closes nothing (the first record does not exist yet). Both worklets end up
-   *  live on the same system audio, each with its own VAD clock, and every utterance transcribes twice —
-   *  identical pairs when sentence pauses align the cuts, offset overlapping fragments when they do not.
-   *  Observed verbatim on packaged 1.6.5: a five-sentence call where every line appeared exactly twice.
-   *  Chaining opens per speaker makes the second open's closeChannel actually see (and stop) the first. */
-  const openSeqRef = useRef<Partial<Record<Speaker, Promise<void>>>>({})
-  // Ref-indirected like recoverSystemAudioRef below: openChannelNow's identity changes with pushAudio,
-  // and the serializing wrapper must always invoke the CURRENT one, not the render it was created in.
-  const openChannelNowRef = useRef<
-    ((sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture) => Promise<boolean>) | null
-  >(null)
-
-  const openChannel = useCallback(
-    (sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture): Promise<boolean> => {
-      const prev = openSeqRef.current[sp] ?? Promise.resolve()
-      // Chain regardless of the predecessor's outcome — a failed open must not wedge every later one.
-      const run = prev
-        .catch(() => {})
-        .then(() => {
-          const open = openChannelNowRef.current
-          if (open) return open(sp, stream, admissionEpoch, micCapture)
-          stream.getTracks().forEach((track) => track.stop())
-          return false
-        })
-      openSeqRef.current[sp] = run.catch(() => {}) as Promise<void> // keep the chain alive past a failure
-      return run
-    },
+  const failBrokerAudioRecovery = useCallback(
+    (side: 'microphone' | 'system'): boolean =>
+      failBrokerCaptureRecovery(
+        activeBrokerSpeechRef.current?.transport,
+        cloudCaptureIdRef.current,
+        side,
+        failAdmittedCaptureRef.current
+      ),
     []
   )
 
-  const openChannelNow = useCallback(
-    async (sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture): Promise<boolean> => {
-      if (!captureAdmissionIsOpen(admissionEpoch)) {
-        stream.getTracks().forEach((track) => track.stop())
-        return false
-      }
-      const channelStartedAt = sessionStartedAtRef.current
-      closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
-      const ctx = new AudioContext({ sampleRate: SR })
-      const src = ctx.createMediaStreamSource(stream)
-      try {
-        await ctx.audioWorklet.addModule(whisperWorkletUrl())
-      } catch (error) {
-        src.disconnect()
-        stream.getTracks().forEach((t) => t.stop())
-        void ctx.close().catch(() => {})
-        throw error
-      }
-      // Stop, a replacement session, or a serialized stale open may have won while addModule was loading.
-      if (!captureAdmissionIsOpen(admissionEpoch)) {
-        src.disconnect()
-        stream.getTracks().forEach((t) => t.stop())
-        void ctx.close().catch(() => {})
-        return false
-      }
-      const worklet = new AudioWorkletNode(ctx, 'whisper-worklet', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        channelCount: 1,
-        // Default channelCountMode is 'max', which IGNORES channelCount and passes through however many
-        // channels the upstream carries — 'them' (system loopback) is commonly stereo. 'explicit' +
-        // 'speakers' makes the graph itself downmix L+R to mono before process() runs, instead of the
-        // worklet silently reading only input[0] and dropping the right channel.
-        channelCountMode: 'explicit',
-        channelInterpretation: 'speakers',
-        // AudioContext's requested 16 kHz is advisory. The worklet receives this actual rate and
-        // converts its reusable quantum buffer before VAD or any ASR path sees PCM.
-        processorOptions: { sourceSampleRate: ctx.sampleRate }
-      })
-      // 'them' (system loopback): un-AGC'd call audio is typically 2–4× quieter than mic input and
-      // often never crosses the fixed VAD ON/EMIT_RMS thresholds. A GainNode lifts it into the
-      // detectable range without altering the mic channel or the VAD thresholds themselves.
-      // The boost also lifts steady background (hold music, fans) over those thresholds; the worklet's
-      // emit-time envelope-spread gate (isSpeechLikeWindow in ./vad) drops those windows before the ASR.
-      const gain = sp === 'them' ? ctx.createGain() : null
-      if (gain) gain.gain.value = 3.0 // ~10 dB boost for a genuinely quiet loopback (low system volume)
-      // MQA-267: the boost needs a limiter behind it now. The 3.0x was sized while the loopback ran
-      // through AGC (default-on voice processing, since removed) which held the signal small — "safe
-      // headroom" was true then. Un-processed loopback of a call at normal volume peaks near full scale,
-      // and 3.0x that is +-3.0 in the float graph: Web Audio does not clamp, so the overs survive to the
-      // ASR's [-1,1] PCM conversion and hard-clip there — distortion that degrades recognition the
-      // opposite way the boost intended. A limiter keeps the lift for quiet signals and flattens only
-      // the overs; ASR is robust to gain compression and terrible with clipping.
-      const limiter = gain ? ctx.createDynamicsCompressor() : null
-      if (limiter) {
-        limiter.threshold.value = -6 // dBFS; engage just before full scale
-        limiter.knee.value = 6
-        limiter.ratio.value = 20 // limiting, not gentle compression
-        limiter.attack.value = 0.001
-        limiter.release.value = 0.1
-      }
-
-      worklet.port.onmessage = (ev: MessageEvent): void => {
-        // Allow the current Stop's final PCM + ACK, but never attribute a retired channel to its replacement.
-        if (admissionEpoch !== sessionEpochRef.current) return
-        const data = ev.data as {
-          type?: string
-          requestId?: string
-          audio?: Float32Array
-          sampleRate?: number
-          partial?: boolean
-        }
-        if (data.type === 'flush-ack' && typeof data.requestId === 'string') {
-          stopFlushAckRef.current?.(sp, data.requestId)
-          return
-        }
-        if (data.audio) {
-          // All VAD/ASR consumers are fixed at 16 kHz; silently drop malformed worklet output rather
-          // than letting a device's native rate corrupt timing or transcription.
-          if (data.sampleRate !== SR) return
-          if (sp === 'them') {
-            // Rolling proof-of-life read by armThemProbation — one boolean store, nothing else, so the
-            // per-window path stays as cheap as it was before the probation existed.
+  // All AudioContext ownership, serialized channel replacement, event subscriptions and channel teardown
+  // live in this manager. The host is ref-indirected so asynchronous opens and device callbacks always
+  // observe the current capture admission and current hook callbacks.
+  const audioChannels = useMemo(
+    () =>
+      createListenAudioChannels(
+        () => ({
+          isAdmissionOpen: captureAdmissionIsOpen,
+          isLive: () => liveRef.current,
+          isStopping: () => stoppingRef.current,
+          isPaused: () => pausedRef.current,
+          isBrokerCapture: () => activeBrokerSpeechRef.current?.transport === 'broker-v1',
+          currentEpoch: () => sessionEpochRef.current,
+          startedAt: () => sessionStartedAtRef.current,
+          updateCaptureTrack,
+          publishMicCapture: (epoch, mic) => {
+            activeMicTrackRef.current = mic.track
+            publishCaptureHealth(epoch, mic.health)
+          },
+          armNoSpeechWarning,
+          clearNoSpeechWarning,
+          clearThemProbation: () => {
+            if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
+            themWatchdogRef.current = null
+          },
+          themHeard: () => themHeardRef.current,
+          themWatchdogDelay: () => THEM_WATCHDOG_MS,
+          onThemWatchdogExpired: () => setState((current) => ({ ...current, error: THEM_SILENT_MSG })),
+          onThemChannelOpened: () => {
+            themHeardRef.current = false
+          },
+          onFlushAck: (speaker, requestId) => stopFlushAckRef.current?.(speaker, requestId),
+          onAudio: pushAudio,
+          onThemWindow: () => {
+            // This hot path remains a single boolean store until the first window proves the channel alive.
             themWindowSeenRef.current = true
-            // First real emission from 'them' proves the channel is alive: cancel the watchdog AND clear
-            // the soft note if it's already showing (loopback can arrive AFTER the 20 s window — the note
-            // must not stay stuck for the rest of the session). Guarded by themHeardRef so this runs once.
-            if (!themHeardRef.current) {
-              themHeardRef.current = true
-              if (themWatchdogRef.current) {
-                clearTimeout(themWatchdogRef.current)
-                themWatchdogRef.current = null
+            if (themHeardRef.current) return
+            themHeardRef.current = true
+            if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
+            themWatchdogRef.current = null
+            setState((current) => (current.error === THEM_SILENT_MSG ? { ...current, error: null } : current))
+          },
+          onUnexpectedTrackEnd: (speaker, track, channel) => {
+            if (!liveRef.current || stoppingRef.current || audioChannels.current[speaker] !== channel) return
+            if (channel.brokerSpeech) {
+              const captureId = cloudCaptureIdRef.current
+              failAdmittedCapture('A cloud speech audio source ended unexpectedly.', {
+                cloudCaptureId: captureId ?? undefined
+              })
+              return
+            }
+            console.warn(`[listen] ${speaker} audio track ended unexpectedly (device change / sleep)`)
+            audioChannels.close(speaker, channel)
+            if (speaker === 'you') {
+              micSpeechAdmittedRef.current = false
+              clearNoSpeechWarning()
+              const micCapture = channel.micCapture
+              if (activeMicTrackRef.current === track && micCapture) {
+                publishCaptureHealth(
+                  channel.admissionEpoch,
+                  captureHealthForTrack(track, micCapture.health.requestedDevice, micCapture.health.selectionOutcome)
+                )
               }
-              setState((s) => (s.error === THEM_SILENT_MSG ? { ...s, error: null } : s))
+              setState((current) => ({
+                ...current,
+                error: MIC_LOST_MSG,
+                captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
+              }))
+              void recoverMicRef.current?.()
+            } else {
+              themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
+              setState((current) => ({ ...current, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
+              void recoverSystemAudioRef.current?.()
             }
-          }
-          pushAudio(sp, data.audio, !!data.partial, channelStartedAt)
-        }
-      }
-      const ch: Channel = {
-        admissionEpoch,
-        ctx,
-        src,
-        worklet,
-        stream,
-        gain: gain ?? undefined,
-        limiter: limiter ?? undefined
-      }
-      channels.current[sp] = ch
-      if (!updateCaptureTrack(admissionEpoch, sp, true)) return false
-      if (sp === 'you' && micCapture) {
-        activeMicTrackRef.current = micCapture.track
-        publishCaptureHealth(admissionEpoch, micCapture.health)
-        armNoSpeechWarning(admissionEpoch)
-      }
-      if (gain && limiter) {
-        // them: source -> boost -> limiter -> worklet. The limiter must sit AFTER the gain — it exists
-        // to flatten the overs the gain creates; upstream of it, it would do nothing.
-        src.connect(gain)
-        gain.connect(limiter)
-        limiter.connect(worklet)
-      } else {
-        src.connect(worklet)
-      }
-      worklet.connect(ctx.destination) // keeps the node processing; output stays silent
-      // If a pause is already in effect (e.g. this channel just finished mic/system-audio recovery mid-pause),
-      // suspend it immediately instead of leaving it running until the next resume()/stop(). The onstatechange
-      // handler below already guards on pausedRef.current, so it will correctly leave this suspended context alone.
-      if (pausedRef.current) void ctx.suspend().catch(() => {})
-
-      // Silent-death detection: a track that ends OUTSIDE our own teardown (Bluetooth disconnect,
-      // default-device switch, lid-close sleep terminating the SCStream) previously left the UI saying
-      // "Listening" while this side of the meeting was silently lost. (`track.stop()` from closeChannel
-      // does NOT fire 'ended' on the stopping context, and the identity guard covers replaced channels.)
-      // Both sides now surface a "reconnecting…" note and re-acquire automatically — mic via
-      // recoverMicRef, system audio via recoverSystemAudioRef (which re-runs the programmatic arm-dance
-      // getDisplayMedia; no user gesture is needed, so a blip no longer forces a "Toggle Listen" restart).
-      stream.getAudioTracks().forEach((t) => {
-        t.onended = (): void => {
-          if (!liveRef.current || stoppingRef.current || channels.current[sp] !== ch) return
-          console.warn(`[listen] ${sp} audio track ended unexpectedly (device change / sleep)`)
-          closeChannel(sp)
-          if (sp === 'you') {
-            micSpeechAdmittedRef.current = false
-            clearNoSpeechWarning()
-            if (activeMicTrackRef.current === t && micCapture) {
-              publishCaptureHealth(
-                admissionEpoch,
-                captureHealthForTrack(t, micCapture.health.requestedDevice, micCapture.health.selectionOutcome)
-              )
-            }
-            setState((s) => ({
-              ...s,
-              error: MIC_LOST_MSG,
-              captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
-            }))
-            void recoverMicRef.current?.()
-          } else {
-            themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
-            setState((s) => ({ ...s, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
-            void recoverSystemAudioRef.current?.()
-          }
-        }
-      })
-      // macOS can leave an AudioContext suspended after sleep/wake even when its tracks survive —
-      // resume it instead of processing silence forever. But pause() ALSO suspends this same ctx on
-      // purpose (see pause() below) — without the pausedRef check this handler would immediately
-      // resume it right back, so an intentional pause could never actually stay suspended. Only an
-      // UNEXPECTED suspension (OS/interruption) should be auto-resumed; a user-initiated pause must not.
-      ctx.onstatechange = (): void => {
-        if (
-          liveRef.current &&
-          !stoppingRef.current &&
-          !pausedRef.current &&
-          channels.current[sp] === ch &&
-          ctx.state === 'suspended'
-        ) {
-          void ctx.resume().catch(() => {})
-        }
-      }
-
-      // Watchdog: if 'them' is open for THEM_WATCHDOG_MS with zero windows the loopback is likely
-      // still too quiet or the SCKit session is misconfigured. Surface a soft, non-fatal note the UI
-      // can display — mic keeps working, teardown is NOT triggered.
-      if (sp === 'them') {
-        themHeardRef.current = false // fresh channel — re-arm first-emission detection
-        armThemWatchdog()
-      }
-      return true
-    },
-    [publishCaptureHealth, pushAudio]
+          },
+          onContextState: (_speaker, channel) => {
+            if (
+              liveRef.current &&
+              !stoppingRef.current &&
+              !pausedRef.current &&
+              !channel.brokerSpeech &&
+              audioChannels.current[_speaker] === channel &&
+              channel.ctx.state === 'suspended'
+            )
+              void channel.ctx.resume().catch(() => {})
+          },
+          whisperWorkletUrl,
+          cloudWorkletUrl: cloudCaptureWorkletUrl
+        }),
+        channels.current
+      ),
+    []
   )
-  openChannelNowRef.current = openChannelNow
+  const openChannel = useCallback(
+    (speaker: Speaker, stream: MediaStream, epoch: number, micCapture?: MicCapture): Promise<boolean> =>
+      audioChannels.open(speaker, stream, epoch, micCapture),
+    [audioChannels]
+  )
 
-  // Re-acquire the microphone after its track died (device disconnect / sleep) or the default input
-  // moved (Bluetooth headset on/off). Kept in a ref so openChannel (defined above) can call it without
-  // a circular useCallback dependency — same forward-reference pattern as pump/armNetworkRetry.
-  const micRecoveringRef = useRef(false)
+  // Recovery owns only retry/reentrancy mechanics. Acquisition, admission and UI projections remain
+  // injected from Listen so stale device callbacks cannot mutate a successor capture.
   const recoverMicRef = useRef<(() => Promise<void>) | null>(null)
-  recoverMicRef.current = async (): Promise<void> => {
-    const admissionEpoch = sessionEpochRef.current
-    if (!captureAdmissionIsOpen(admissionEpoch) || micRecoveringRef.current) return
-    micRecoveringRef.current = true
-    try {
-      const mic = await acquireMic(micDeviceIdRef.current)
-      if (!captureAdmissionIsOpen(admissionEpoch)) {
-        mic.stream.getTracks().forEach((t) => t.stop())
-        return
-      }
-      if (!(await openChannel('you', mic.stream, admissionEpoch, mic)) || !captureAdmissionIsOpen(admissionEpoch))
-        return
-      setState((s) => ({
-        ...s,
-        error: s.error === MIC_LOST_MSG ? null : s.error,
-        captureDegraded: degradedAfterMicRecovery(
-          s.captureDegraded,
-          themDegradedRef.current,
-          wantsSystemRef.current,
-          !!channels.current.them
-        )
-      }))
-    } catch {
-      if (!captureAdmissionIsOpen(admissionEpoch)) return
-      publishCaptureHealth(
-        admissionEpoch,
-        captureHealthForTrack(
-          null,
-          Boolean(micDeviceIdRef.current),
-          micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
-        )
-      )
-      // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
-      // retriggers recovery or the user restarts Listen.
-      setState((s) => ({
-        ...s,
-        error: MIC_LOST_MSG,
-        captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
-      }))
-    } finally {
-      micRecoveringRef.current = false
-    }
-  }
-
-  // Re-acquire system-audio ('them') after its loopback track died (display sleep, default-output swap,
-  // Bluetooth change). Mirrors recoverMicRef but re-runs the arm-dance getDisplayMedia acquisition that
-  // start() uses — this IS doable programmatically (armAudio + the main-process loopback handler need no
-  // user gesture), so a mid-meeting blip no longer forces a destructive "Toggle Listen" restart that would
-  // end the meeting and split it into two transcripts. Also invoked by the live permission watcher when
-  // Screen Recording flips to granted mid-session. Routed through openChannel so the them-watchdog + the
-  // themHeardRef first-emission detection re-arm for free.
-  const sysRecoveringRef = useRef(false)
-  // True while the current session requested system audio ('system'/'both') — gates the live permission
-  // watcher so a mic-only session never tries to grab the loopback.
   const wantsSystemRef = useRef(false)
-  // Pacing for the Windows arm of that watcher (see sysRetryDelayMs). Reset wherever recovery becomes
-  // plausible again — a new session, a successful re-acquire, a real device change — so the backoff only
-  // ever tracks a genuinely stuck loopback.
-  const sysRetryAttemptsRef = useRef(0)
-  const sysRetryNextAtRef = useRef(0)
   const recoverSystemAudioRef = useRef<(() => Promise<void>) | null>(null)
-  recoverSystemAudioRef.current = async (): Promise<void> => {
-    const admissionEpoch = sessionEpochRef.current
-    const systemAdmissionIsOpen = (): boolean => captureAdmissionIsOpen(admissionEpoch) && wantsSystemRef.current
-    if (!systemAdmissionIsOpen() || sysRecoveringRef.current) return
-    if (channels.current.them) return // already have a live 'them' channel — nothing to recover
-    sysRecoveringRef.current = true
-    try {
-      await window.toto.armAudio(true)
-      let sys: MediaStream
-      try {
-        if (!systemAdmissionIsOpen()) return
-        // MQA-267: acquired through the one shared path, which disables voice processing on the
-        // loopback — see acquireLoopback/LOOPBACK_AUDIO for why AEC on this track eats the far end.
-        sys = await acquireLoopback()
-      } finally {
-        await window.toto.armAudio(false)
-      }
-      const liveAudio = sys.getAudioTracks().filter((t) => t.readyState !== 'ended')
-      if (!systemAdmissionIsOpen() || !liveAudio.length) {
-        sys.getTracks().forEach((t) => t.stop())
-        return
-      }
-      if (!(await openChannel('them', sys, admissionEpoch)) || !systemAdmissionIsOpen()) return
-      themDegradedRef.current = null // 'them' is capturing again — nothing left to restore on a later mic blip
-      sysRetryAttemptsRef.current = 0 // recovered — a later loss starts its backoff from scratch
-      sysRetryNextAtRef.current = 0
-      setState((s) => ({
-        ...s,
-        // Clear the mid-session loss note AND the start-time mic-only note (held in captureDegraded.note):
-        // the permission-watcher path used to match only THEM_LOST_MSG here, leaving "System audio needs
-        // Screen Recording permission…" stuck for the rest of the session after a successful mid-meeting
-        // grant + recovery.
-        error:
-          s.error === THEM_LOST_MSG || (s.captureDegraded?.side === 'them' && s.error === s.captureDegraded.note)
-            ? null
-            : s.error,
-        captureDegraded: s.captureDegraded?.side === 'them' ? null : s.captureDegraded
-      }))
-    } catch {
-      if (!systemAdmissionIsOpen()) return
-      // Couldn't re-acquire (permission genuinely revoked, or no loopback available) — leave the sticky
-      // note so the live permission watcher / a devicechange can retrigger recovery later.
-      setState((s) =>
-        themRecoveryFailureIsNoop(s.error, s.captureDegraded)
-          ? s
-          : {
-              ...s,
-              error: s.error === null ? THEM_LOST_MSG : s.error,
-              captureDegraded: s.captureDegraded ?? { side: 'them', note: THEM_LOST_MSG, permission: false }
-            }
-      )
-    } finally {
-      sysRecoveringRef.current = false
-    }
-  }
-
-  // Follow the default input across device changes while the mic channel is live. A Bluetooth switch
-  // often leaves the old track "alive" but permanently silent (no 'ended' event) — the classic silent
-  // death. Debounced: connect+disconnect storms settle before we re-acquire once.
-  // The loopback ('them') side dies exactly the same way on a default-OUTPUT change — on Windows the old
-  // render endpoint stays valid, so capture keeps handing us zero-filled buffers with no error and no
-  // 'ended' — and used to have no detector at all past its first window, losing the whole remote side of
-  // the meeting. It is handled here too, but through themDeviceChangeAction rather than a blind restart:
-  // recycling on every device blip would needlessly tear down the macOS SCStream mid-meeting.
-  const devChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    const onDeviceChange = (): void => {
-      if (!liveRef.current || stoppingRef.current) return
-      const originEpoch = sessionEpochRef.current
-      if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
-      devChangeTimerRef.current = setTimeout(() => {
-        devChangeTimerRef.current = null
-        if (!captureAdmissionIsOpen(originEpoch)) return
-        if (channels.current.you) void recoverMicRef.current?.()
-        const action = themDeviceChangeAction(wantsSystemRef.current, !!channels.current.them, null)
-        if (action === 'watch') armThemProbation()
-        else if (action === 'recover') {
-          // A real device change is new evidence, not another blind retry — try immediately and drop
-          // whatever backoff the watcher had built up.
-          sysRetryAttemptsRef.current = 0
-          sysRetryNextAtRef.current = 0
+  const audioRecovery = useMemo(
+    () =>
+      createListenAudioRecovery(() => ({
+        currentEpoch: () => sessionEpochRef.current,
+        admissionOpen: captureAdmissionIsOpen,
+        wantsSystemAudio: () => wantsSystemRef.current,
+        micDeviceId: () => micDeviceIdRef.current,
+        acquireMic,
+        acquireLoopback,
+        armAudio: (armed) => window.toto.armAudio(armed),
+        openChannel,
+        hasChannel: (speaker) => !!channels.current[speaker],
+        stopStream: (stream) => stream.getTracks().forEach((track) => track.stop()),
+        publishMicRecoveryFailure: (epoch) =>
+          publishCaptureHealth(
+            epoch,
+            captureHealthForTrack(
+              null,
+              Boolean(micDeviceIdRef.current),
+              micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
+            )
+          ),
+        micRecoverySucceeded: () =>
+          setState((state) => ({
+            ...state,
+            error: state.error === MIC_LOST_MSG ? null : state.error,
+            captureDegraded: degradedAfterMicRecovery(
+              state.captureDegraded,
+              themDegradedRef.current,
+              wantsSystemRef.current,
+              !!channels.current.them
+            )
+          })),
+        micRecoveryFailed: () =>
+          setState((state) => ({
+            ...state,
+            error: MIC_LOST_MSG,
+            captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
+          })),
+        systemRecoverySucceeded: () => {
+          themDegradedRef.current = null
+          setState((state) => ({
+            ...state,
+            error:
+              state.error === THEM_LOST_MSG ||
+              (state.captureDegraded?.side === 'them' && state.error === state.captureDegraded.note)
+                ? null
+                : state.error,
+            captureDegraded: state.captureDegraded?.side === 'them' ? null : state.captureDegraded
+          }))
+        },
+        systemRecoveryFailed: () => {
+          setState((state) =>
+            themRecoveryFailureIsNoop(state.error, state.captureDegraded)
+              ? state
+              : {
+                  ...state,
+                  error: state.error === null ? THEM_LOST_MSG : state.error,
+                  captureDegraded: state.captureDegraded ?? { side: 'them', note: THEM_LOST_MSG, permission: false }
+                }
+          )
+        },
+        isLive: () => liveRef.current,
+        isStopping: () => stoppingRef.current,
+        isPaused: () => pausedRef.current,
+        isListening: () => liveRef.current,
+        scheduleThemProbation: (callback, delay) => {
+          audioChannels.clearThemWatchdog()
+          if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
+          themWindowSeenRef.current = false
+          themWatchdogRef.current = setTimeout(() => {
+            themWatchdogRef.current = null
+            callback()
+          }, delay)
+        },
+        themChannel: () => channels.current.them,
+        themHeard: () => themHeardRef.current,
+        themWindowSeen: () => themWindowSeenRef.current,
+        setThemWindowSeen: (seen) => {
+          themWindowSeenRef.current = seen
+        },
+        onThemProbationRecycle: () => {
+          if (failBrokerAudioRecovery('system')) return
+          console.warn('[listen] them silent since the device change — recycling the loopback capture')
+          audioChannels.close('them') // recoverSystemAudio refuses to run while a channel is still registered
+          themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
+          setState((current) => ({ ...current, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
           void recoverSystemAudioRef.current?.()
-        }
-      }, 800)
-    }
-    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
-    return () => {
-      navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange)
-      if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
-    }
-  }, [])
-
-  // Live Screen-Recording permission watcher. If a session wants system audio but the 'them' channel
-  // never opened (permission wasn't granted at start, so the user is on the mic-only fallback), poll for
-  // the permission flipping to 'granted' and auto-resume the them channel IN PLACE — no destructive
-  // "Toggle Listen" restart. This is the "set up automatically" behaviour: after the one unavoidable macOS
-  // Settings toggle, Métis picks up system audio on its own. Windows has no permission to wait on, so the
-  // same interval is a plain capture-state retry there. Only runs while listening + system was requested;
-  // the tick is skipped entirely once 'them' is live.
-  useEffect(() => {
-    if (!state.listening || !wantsSystemRef.current) return
-    const iv = setInterval(() => {
-      const originEpoch = sessionEpochRef.current
-      if (!captureAdmissionIsOpen(originEpoch) || !wantsSystemRef.current) return
-      if (channels.current.them || sysRecoveringRef.current) return // already have it / mid-recovery
-      // Windows never reports 'granted' here (windowsScreenStatus() hard-codes 'unknown' — there is no OS
-      // permission gate to poll), so the poll below can structurally never fire the retry there. Skipping
-      // the whole EFFECT on that basis, as this used to, deleted the retry along with the pointless IPC: a
-      // transient start-time loopback failure (default output mid-switch, another app holding the render
-      // endpoint) left the meeting mic-only until the user stopped and restarted Listen — which splits the
-      // meeting into two transcripts. Retry off actual capture state instead of a string that never flips.
-      // Paced, because there is no permission flip to wait on here and nothing else bounds the loop when
-      // the loopback is simply unavailable for the whole call — see sysRetryDelayMs.
-      if (isWindows) {
-        const now = Date.now()
-        if (now < sysRetryNextAtRef.current) return
-        sysRetryNextAtRef.current = now + sysRetryDelayMs(sysRetryAttemptsRef.current++)
-        void recoverSystemAudioRef.current?.()
-        return
-      }
-      void window.toto
-        .getPermissions()
-        .then((p) => {
-          if (
-            captureAdmissionIsOpen(originEpoch) &&
-            wantsSystemRef.current &&
-            p?.screenRecording === 'granted' &&
-            !channels.current.them
-          ) {
-            void recoverSystemAudioRef.current?.()
-          } else if (captureAdmissionIsOpen(originEpoch) && !channels.current.them) {
-            // M2-0429: say WHY the other side is missing, from main's diagnosis (names the holder, offers Repair).
-            setState((s) => withDiagnosedThemNote(s, p?.screenDiagnosis, themDegradedRef))
-          }
-        })
-        .catch(() => {})
-    }, 3000)
-    return () => clearInterval(iv)
-  }, [state.listening])
+        },
+        themProbationDuration: () => THEM_WATCHDOG_MS,
+        themDeviceChangeAction: (wantsSystem, hasSystemChannel, sawWindow, hasDeathEvidence) =>
+          themDeviceChangeAction(wantsSystem, hasSystemChannel, sawWindow ?? null, hasDeathEvidence),
+        recoverMicNow: () => {
+          if (failBrokerAudioRecovery('microphone')) return
+          void recoverMicRef.current?.()
+        },
+        recoverSystemNow: () => {
+          if (failBrokerAudioRecovery('system')) return
+          void recoverSystemAudioRef.current?.()
+        },
+        setSystemPermissionNote: (diagnosis) =>
+          setState((current) => withDiagnosedThemNote(current, diagnosis, themDegradedRef)),
+        getPermissions: () => window.toto.getPermissions(),
+        deviceChangeTarget: () => navigator.mediaDevices,
+        isWindows: () => isWindows
+      })),
+    [failBrokerAudioRecovery, openChannel, publishCaptureHealth]
+  )
+  recoverMicRef.current = audioRecovery.recoverMic
+  recoverSystemAudioRef.current = audioRecovery.recoverSystemAudio
+  useEffect(() => audioRecovery.watchDeviceChanges(), [audioRecovery])
+  useEffect(() => audioRecovery.watchSystemPermission(), [audioRecovery, state.listening])
 
   const start = useCallback(
     async (
@@ -2046,7 +1715,8 @@ export function useListen(
       quality: 'best' | 'fast' = 'best',
       engine: 'whisper' | 'parakeet' | 'apple' | 'cloud' = 'parakeet',
       language: string = 'auto',
-      startedAt?: number
+      startedAt?: number,
+      cloudConsent?: CloudSpeechConsentAcknowledgement
     ): Promise<void> => {
       // Re-entrancy guard: a rapid double-click/double-hotkey calls start() twice before React re-renders
       // listen.listening to true (that state flip is async), so this MUST be a synchronous ref check right
@@ -2056,6 +1726,27 @@ export function useListen(
       if (startingRef.current) return
       startingRef.current = true
       try {
+        const configuredBroker = brokerSpeechRef.current
+        const brokerMode = configuredBroker?.transport === 'broker-v1'
+        if (configuredBroker?.transport === 'refused' || (brokerMode && configuredBroker.engine === 'unconfigured')) {
+          setState((s) => ({ ...s, error: 'Broker speech settings are invalid or unconfigured.' }))
+          return
+        }
+        if (brokerMode && engine !== 'cloud') {
+          setState((s) => ({ ...s, error: 'Broker speech requires the selected cloud speech engine.' }))
+          return
+        }
+        if (
+          brokerMode &&
+          !cloudSpeechConsentMatches(
+            configuredBroker?.transport === 'broker-v1' ? configuredBroker.engine : null,
+            source,
+            cloudConsent
+          )
+        ) {
+          setState((s) => ({ ...s, error: 'Confirm cloud speech disclosure before starting Listen.' }))
+          return
+        }
         // Enterprise-live CLOUD_ONLY: refuse local Whisper/Parakeet/Apple before any host/worker boots.
         // Honest error — never silently fall through to another local engine.
         {
@@ -2079,7 +1770,9 @@ export function useListen(
         }
         const cloudProvider =
           engine === 'cloud'
-            ? effectiveCloudSttProvider(enterpriseLiveRef.current ?? {}, cloudSttProviderRef.current)
+            ? configuredBroker?.transport === 'broker-v1'
+              ? configuredBroker.engine
+              : effectiveCloudSttProvider(enterpriseLiveRef.current ?? {}, cloudSttProviderRef.current)
             : undefined
         if (!listenSpeechEngine(engine, cloudProvider)) {
           setState((s) => ({
@@ -2121,6 +1814,20 @@ export function useListen(
           // so a speaker the new source excludes cannot leak its AudioContext/MediaStream indefinitely.
           closeChannel('you')
           closeChannel('them')
+        }
+        if (activeBrokerSpeechRef.current?.transport === 'broker-v1') {
+          liveRef.current = false
+          const retiringController = cloudSpeechControllerRef.current
+          cloudSpeechControllerRef.current = null
+          cloudSttFinalizingRef.current = false
+          activeBrokerSpeechRef.current = null
+          void retiringController?.cancel()
+          retiringController?.dispose()
+          closeChannel('you')
+          closeChannel('them')
+          cloudSegmentLinesRef.current.clear()
+          brokerStopCallbacksRef.current = []
+          cloudCaptureIdRef.current = null
         }
         if (cloudSttFinalizingRef.current) {
           // A fresh session supersedes the old meeting's bounded provider close. This matters especially
@@ -2170,8 +1877,19 @@ export function useListen(
         // This identity lets a failed capture tear down only its own asynchronous cloud start.  A
         // force-stop can otherwise arrive in main before cloudSttStart has installed an owner, then
         // accidentally stop a later Listen session when the old start finally resolves.
-        const cloudCaptureId = `listen:${myEpoch}`
+        const cloudCaptureId = engine === 'cloud' && brokerMode ? crypto.randomUUID() : `listen:${myEpoch}`
         cloudCaptureIdRef.current = engine === 'cloud' ? cloudCaptureId : null
+        activeBrokerSpeechRef.current = brokerMode ? configuredBroker : null
+        brokerConsentRef.current = brokerMode ? (cloudConsent ?? null) : null
+        brokerPausedCompleteRef.current = false
+        for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
+          stream?.getTracks().forEach((track) => track.stop())
+        }
+        brokerRetainedStreamsRef.current = {}
+        cloudSpeechControllerRef.current?.dispose()
+        cloudSpeechControllerRef.current = null
+        cloudSegmentLinesRef.current.clear()
+        captureMonotonicStartRef.current = performance.now()
         sessionStartedAtRef.current = startedAt
         queue.current = []
         provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
@@ -2180,8 +1898,7 @@ export function useListen(
         busy.current = false
         liveRef.current = true
         wantsSystemRef.current = source === 'system' || source === 'both'
-        sysRetryAttemptsRef.current = 0 // fresh session → no carried-over loopback-retry backoff
-        sysRetryNextAtRef.current = 0
+        audioRecovery.resetSystemRetry() // fresh session → no carried-over loopback-retry backoff
         pausedRef.current = false
         disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
         crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
@@ -2223,6 +1940,16 @@ export function useListen(
         void window.toto.setListeningState(true, startedAt).catch(() => {})
 
         void (async () => {
+          if (engine === 'cloud' && activeBrokerSpeechRef.current?.transport === 'broker-v1') {
+            if (workerRef.current) {
+              workerRef.current.terminate()
+              workerRef.current = null
+            }
+            loadedQualityRef.current = null
+            readyRef.current = false
+            setState((s) => ({ ...s, loading: true, loadingPct: null }))
+            return
+          }
           if (engine === 'cloud') {
             // Cloud STT: capture stays local; inference is live Nova-3 / Soniox WS in main.
             // Do not boot Whisper/Parakeet/Apple. CLOUD_ONLY never falls back locally.
@@ -2585,6 +2312,21 @@ export function useListen(
           error: engineRef.current === 'whisper' ? (s.error ?? note) : note,
           loading: !readyRef.current && (engineRef.current !== 'whisper' || s.error === null || s.loading)
         }))
+
+        if (engineRef.current === 'cloud' && activeBrokerSpeechRef.current?.transport === 'broker-v1') {
+          const snapshot = captureStateRef.current.snapshot(myEpoch)
+          if (!snapshot.ok || !cloudConsent) {
+            failAdmittedCapture('Broker speech capture could not be validated.')
+            return
+          }
+          const started = await startBrokerSessionRef.current?.({
+            epoch: myEpoch,
+            captureId: cloudCaptureId,
+            capture: snapshot.state,
+            consent: cloudConsent
+          })
+          if (!started && captureAdmissionIsOpen(myEpoch)) failAdmittedCapture('Cloud speech capture did not start.')
+        }
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
@@ -2595,25 +2337,11 @@ export function useListen(
     [armNetworkRetry, disarmNetworkRetry, ensureWorker, getAsrBundled, openChannel, pump]
   )
 
-  const closeChannel = useCallback((sp: Speaker, expected?: Channel): void => {
-    const ch = channels.current[sp]
-    if (!ch || (expected && ch !== expected)) return
-    // Clear the 'them' watchdog so it cannot fire after the channel is gone.
-    if (sp === 'them' && themWatchdogRef.current) {
-      clearTimeout(themWatchdogRef.current)
-      themWatchdogRef.current = null
-    }
-    if (sp === 'you') clearNoSpeechWarning()
-    ch.worklet.disconnect()
-    ch.worklet.port.onmessage = null
-    ch.gain?.disconnect() // disconnect the boost node if present (them channel only)
-    ch.limiter?.disconnect()
-    ch.src.disconnect()
-    ch.stream.getTracks().forEach((t) => t.stop())
-    void ch.ctx.close().catch(() => {})
-    delete channels.current[sp]
-    updateCaptureTrack(ch.admissionEpoch, sp, false)
-  }, [])
+  const closeChannel = useCallback(
+    (sp: Speaker, expected?: Channel, options: { retainStream?: boolean; retainCaptureState?: boolean } = {}): void =>
+      audioChannels.close(sp, expected, options),
+    [audioChannels]
+  )
 
   /**
    * End a session that was admitted by main but then fails before a usable decoder is ready.
@@ -2628,6 +2356,18 @@ export function useListen(
       if (!captureAdmissionIsOpen(sessionEpochRef.current)) return
       const startedAt = sessionStartedAtRef.current
       liveRef.current = false
+      const brokerCapture = activeBrokerSpeechRef.current?.transport === 'broker-v1'
+      const brokerController = cloudSpeechControllerRef.current
+      if (brokerCapture) {
+        cloudSttFinalizingRef.current = false
+        cloudSpeechControllerRef.current = null
+        activeBrokerSpeechRef.current = null
+        if (brokerController) {
+          void brokerController.cancel()
+          brokerController.dispose()
+        }
+        cloudCaptureIdRef.current = null
+      }
       activeMicTrackRef.current = null
       clearNoSpeechWarning()
       pausedRef.current = false
@@ -2639,10 +2379,13 @@ export function useListen(
       pendingWhisperStartedAtRef.current = undefined
       themRunRef.current = ''
       disarmNetworkRetry()
-      closeChannel('you')
-      closeChannel('them')
+      for (const speaker of ['you', 'them'] as const) closeChannel(speaker)
+      Object.values(brokerRetainedStreamsRef.current).forEach((stream) =>
+        stream?.getTracks().forEach((track) => track.stop())
+      )
+      brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
-      if (options.forceCloudStop) {
+      if (options.forceCloudStop && !brokerCapture) {
         cloudSttFinalizingRef.current = false
         cloudSttUnsubRef.current?.()
         cloudSttUnsubRef.current = null
@@ -2667,11 +2410,134 @@ export function useListen(
     },
     [clearProvisional, closeChannel, disarmNetworkRetry]
   )
+  failAdmittedCaptureRef.current = failAdmittedCapture
+  const brokerOwnerCallbacks = cloudSpeechListenOwnerCallbacks(
+    (identity, reason) =>
+      captureAdmissionIsOpen(identity.epoch) &&
+      cloudCaptureIdRef.current === identity.captureId &&
+      activeBrokerSpeechRef.current?.transport === 'broker-v1' &&
+      (reason === 'ceiling' || !cloudSttFinalizingRef.current),
+    failAdmittedCapture
+  )
+  startBrokerSessionRef.current = (input) =>
+    startCloudSpeechSession(input, {
+      bridge: window.toto,
+      language: cloudSttNovaLangRef.current.language,
+      isAdmissionOpen: captureAdmissionIsOpen,
+      setController: (controller) => {
+        cloudSpeechControllerRef.current = controller
+      },
+      setCaptureId: (captureId) => {
+        cloudCaptureIdRef.current = captureId
+      },
+      applyEvent: (event, epoch) => {
+        if (sessionEpochRef.current !== epoch || (!captureAdmissionIsOpen(epoch) && !cloudSttFinalizingRef.current))
+          return
+        const segment = cloudSpeechTranscriptSegment(event)
+        if (segment)
+          commitLine(segment.text, segment.speaker, undefined, false, {
+            segmentId: segment.segmentId,
+            providerLanguage: segment.providerLanguage,
+            preserveProviderText: true,
+            speech: segment.speech
+          })
+      },
+      onFailure: brokerOwnerCallbacks.onFailure,
+      onStopped: brokerOwnerCallbacks.onStopped,
+      attachTrack: async (track, controller) => {
+        const speaker: Speaker = track === 'microphone' ? 'you' : 'them'
+        const channel = channels.current[speaker]
+        if (!channel?.brokerSpeech) return false
+        const offset = Math.floor((performance.now() - captureMonotonicStartRef.current) * 16)
+        if (!controller.attachTrack(track, channel.worklet.port, offset)) return false
+        try {
+          await channel.ctx.resume()
+          return true
+        } catch {
+          return false
+        }
+      },
+      fail: failAdmittedCapture,
+      setReady: () => {
+        readyRef.current = true
+        setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+      }
+    })
+  resumeBrokerSessionRef.current = async (): Promise<void> => {
+    const previous = captureStateRef.current.snapshot(sessionEpochRef.current)
+    const configured = activeBrokerSpeechRef.current
+    const consent = brokerConsentRef.current
+    if (!previous.ok || configured?.transport !== 'broker-v1' || !consent) {
+      failAdmittedCapture('Cloud speech could not resume safely.')
+      return
+    }
+    const requested = previous.state.requestedTracks
+    const source: AudioSource =
+      requested.length === 2
+        ? 'both'
+        : requested[0] === 'microphone'
+          ? 'mic'
+          : requested[0] === 'system'
+            ? 'system'
+            : 'both'
+    const generation = sessionEpochRef.current + 1
+    const captureId = crypto.randomUUID()
+    stoppingRef.current = false
+    pausedRef.current = false
+    brokerPausedCompleteRef.current = false
+    cloudSttFinalizingRef.current = false
+    liveRef.current = true
+    sessionEpochRef.current = generation
+    cloudCaptureIdRef.current = captureId
+    cloudSegmentLinesRef.current.clear()
+    const begun = captureStateRef.current.begin({
+      generation,
+      source,
+      engine: 'cloud',
+      cloudProvider: configured.engine
+    })
+    if (!begun.ok) {
+      failAdmittedCapture('Cloud speech capture could not be validated.')
+      return
+    }
+    setState((s) => ({ ...s, paused: false, capturing: false, ready: false, loading: true, loadingPct: null }))
+
+    const openRetained = async (speaker: Speaker, track: Track): Promise<boolean> => {
+      const stream = brokerRetainedStreamsRef.current[speaker]
+      if (!stream || !stream.getAudioTracks().some((candidate) => candidate.readyState === 'live')) return false
+      if (!(await openChannel(speaker, stream, generation))) return false
+      brokerRetainedStreamsRef.current[speaker] = undefined
+      return true
+    }
+    try {
+      for (const track of previous.state.capturedTracks) {
+        const speaker: Speaker = track === 'microphone' ? 'you' : 'them'
+        if (!(await openRetained(speaker, track))) {
+          failAdmittedCapture(`Cloud ${track} stream could not resume.`)
+          return
+        }
+      }
+      const capture = captureStateRef.current.snapshot(generation)
+      if (!capture.ok || capture.state.capturedTracks.length === 0) {
+        failAdmittedCapture('Cloud speech capture could not be validated.')
+        return
+      }
+      const started = await startBrokerSessionRef.current?.({
+        epoch: generation,
+        captureId,
+        capture: capture.state,
+        consent
+      })
+      if (!started && captureAdmissionIsOpen(generation)) failAdmittedCapture('Cloud speech could not resume.')
+    } catch {
+      if (captureAdmissionIsOpen(generation)) failAdmittedCapture('Cloud speech could not resume.')
+    }
+  }
   captureStateFailureRef.current = (epoch): void => {
     if (!captureAdmissionIsOpen(epoch)) return
     const cloudCaptureId = cloudCaptureIdRef.current
     failAdmittedCapture('Capture state could not be validated; Listen stopped.', {
-      forceCloudStop: engineRef.current === 'cloud',
+      forceCloudStop: engineRef.current === 'cloud' && activeBrokerSpeechRef.current?.transport !== 'broker-v1',
       cloudCaptureId: engineRef.current === 'cloud' ? (cloudCaptureId ?? undefined) : undefined
     })
   }
@@ -2682,7 +2548,7 @@ export function useListen(
   // session (see the IMPORTANT comment in start() above), and stopping any track there would kill the whole
   // session. Suspend/resume never touches tracks, so the loopback session survives a pause intact.
   const pause = useCallback((): void => {
-    if (!liveRef.current || pausedRef.current) return
+    if (!liveRef.current || pausedRef.current || stoppingRef.current) return
     pausedRef.current = true
     clearNoSpeechWarning()
     // The 'them' watchdog is armed once at channel-open and otherwise runs on a wall-clock timer that
@@ -2692,6 +2558,55 @@ export function useListen(
     if (themWatchdogRef.current) {
       clearTimeout(themWatchdogRef.current)
       themWatchdogRef.current = null
+    }
+    if (activeBrokerSpeechRef.current?.transport === 'broker-v1') {
+      cloudSttFinalizingRef.current = true
+      brokerPausedCompleteRef.current = false
+      const epoch = sessionEpochRef.current
+      const controller = cloudSpeechControllerRef.current
+      let pauseOperation!: Promise<void>
+      pauseOperation = (async () => {
+        let result: Awaited<ReturnType<CloudSpeechController['stop']>> | null = null
+        try {
+          if (controller) result = await controller.stop()
+        } catch {
+          result = null
+        }
+        if (sessionEpochRef.current !== epoch || !captureAdmissionIsOpen(epoch)) return
+        if (!result?.ok || !result.complete) {
+          cloudSttFinalizingRef.current = false
+          failAdmittedCapture('Cloud speech could not finish safely before Pause.')
+          return
+        }
+        for (const speaker of ['you', 'them'] as const) {
+          const channel = channels.current[speaker]
+          if (!channel) continue
+          if (channel.stream.getAudioTracks().some((track) => track.readyState === 'ended')) {
+            cloudSttFinalizingRef.current = false
+            failAdmittedCapture('An audio source ended while cloud speech was paused.')
+            return
+          }
+          brokerRetainedStreamsRef.current[speaker] = channel.stream
+          closeChannel(speaker, channel, { retainStream: true, retainCaptureState: true })
+        }
+        if (controller) controller.dispose()
+        if (cloudSpeechControllerRef.current === controller) cloudSpeechControllerRef.current = null
+        cloudCaptureIdRef.current = null
+        brokerPausedCompleteRef.current = true
+        readyRef.current = false
+        cloudSttFinalizingRef.current = false
+        setState((s) => ({ ...s, paused: true, capturing: false, ready: false, loading: false }))
+      })().finally(() => {
+        if (brokerPausePromiseRef.current === pauseOperation) brokerPausePromiseRef.current = null
+        if (brokerResumeAfterPauseRef.current) {
+          brokerResumeAfterPauseRef.current = false
+          if (liveRef.current && pausedRef.current && brokerPausedCompleteRef.current && !stoppingRef.current)
+            void resumeBrokerSessionRef.current?.()
+        }
+      })
+      brokerPausePromiseRef.current = pauseOperation
+      setState((s) => ({ ...s, paused: true }))
+      return
     }
     // Flush each worklet's partial PCM/VAD buffer before its AudioContext actually suspends. Without this,
     // whatever's mid-utterance in the worklet (buf/fill/vad hysteresis) survives the pause untouched, and
@@ -2729,18 +2644,26 @@ export function useListen(
     }
     setTimeout(waitThenSuspend, 80)
     setState((s) => ({ ...s, paused: true }))
-  }, [])
+  }, [closeChannel, failAdmittedCapture])
 
   const resume = useCallback((): void => {
-    if (!liveRef.current || !pausedRef.current) return
+    if (!liveRef.current || !pausedRef.current || stoppingRef.current) return
+    if (activeBrokerSpeechRef.current?.transport === 'broker-v1') {
+      if (brokerPausePromiseRef.current) {
+        brokerResumeAfterPauseRef.current = true
+        return
+      }
+      void resumeBrokerSessionRef.current?.()
+      return
+    }
     pausedRef.current = false
     for (const ch of Object.values(channels.current)) {
       void ch?.ctx.resume().catch(() => {})
     }
     // Re-arm the 'them' watchdog (paused above) so a still-silent 'them' channel gets a fresh
     // THEM_WATCHDOG_MS window post-resume instead of staying permanently disarmed. No-op if 'them' isn't
-    // open, or if it already emitted audio before the pause (armThemWatchdog checks themHeardRef).
-    if (channels.current.them) armThemWatchdog()
+    // open, or if it already emitted audio before the pause (the channel manager checks its first-window state).
+    if (channels.current.them) audioChannels.armThemWatchdog()
     if (captureHealthRef.current?.trackState === 'connected') armNoSpeechWarning(sessionEpochRef.current)
     setState((s) => ({ ...s, paused: false }))
   }, [])
@@ -2769,7 +2692,10 @@ export function useListen(
       if (stoppingRef.current) {
         // Join the exact active stop. "Already stopping" never means "already drained": the prior operation
         // may still own a worklet flush, queued PCM, or an in-flight decode.
-        if (onDrained) stopDrainRef.current?.callbacks.push(onDrained)
+        if (onDrained) {
+          if (activeBrokerSpeechRef.current?.transport === 'broker-v1') brokerStopCallbacksRef.current.push(onDrained)
+          else stopDrainRef.current?.callbacks.push(onDrained)
+        }
         return
       }
       stoppingRef.current = true
@@ -2777,6 +2703,60 @@ export function useListen(
       const cloudCaptureId = cloudCaptureIdRef.current
       const startedAt = sessionStartedAtRef.current
       const ownedSession = liveRef.current
+      if (activeBrokerSpeechRef.current?.transport === 'broker-v1') {
+        if (onDrained) brokerStopCallbacksRef.current.push(onDrained)
+        cloudSttFinalizingRef.current = true
+        const controller = cloudSpeechControllerRef.current
+        const wasPausedComplete = !controller && brokerPausedCompleteRef.current
+        void (async () => {
+          let result: Awaited<ReturnType<CloudSpeechController['stop']>> | null = null
+          try {
+            if (controller) result = await controller.stop()
+          } catch {
+            result = null
+          }
+          const complete = wasPausedComplete || (!!result?.ok && result.complete)
+          if (sessionEpochRef.current !== myEpoch) return
+          liveRef.current = false
+          cloudSttFinalizingRef.current = false
+          readyRef.current = false
+          activeMicTrackRef.current = null
+          clearNoSpeechWarning()
+          closeChannel('you')
+          closeChannel('them')
+          for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
+            stream?.getTracks().forEach((track) => track.stop())
+          }
+          brokerRetainedStreamsRef.current = {}
+          brokerPausedCompleteRef.current = false
+          captureStateRef.current.clear(myEpoch)
+          if (controller) controller.dispose()
+          if (cloudSpeechControllerRef.current === controller) cloudSpeechControllerRef.current = null
+          activeBrokerSpeechRef.current = null
+          if (cloudCaptureIdRef.current === cloudCaptureId) cloudCaptureIdRef.current = null
+          if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
+          setState((s) => ({
+            ...s,
+            listening: false,
+            capturing: false,
+            paused: false,
+            loading: false,
+            ready: false,
+            captureDegraded: null,
+            captureHealth: null,
+            error: !complete ? s.error || 'Cloud speech could not confirm a complete transcript before Stop.' : s.error
+          }))
+          stoppingRef.current = false
+          for (const callback of brokerStopCallbacksRef.current.splice(0)) {
+            try {
+              callback()
+            } catch {
+              // A caller callback cannot strand the completed Stop state.
+            }
+          }
+        })()
+        return
+      }
       const requestId = `stop:${myEpoch}:${nextStopRequestRef.current++}`
 
       // 0. A worklet's port message is handled on the audio-rendering thread — it won't run while that
@@ -2996,9 +2976,17 @@ export function useListen(
       // and would keep running (and re-arm a new workerIdleTimer) after this instance is gone with nothing
       // left able to cancel it. So this bypasses stop() entirely and tears everything down directly.
       const ownedSession = liveRef.current || stopDrainRef.current !== null
-      const cloudSession = engineRef.current === 'cloud' || cloudSttFinalizingRef.current
+      const brokerCapture = activeBrokerSpeechRef.current?.transport === 'broker-v1'
+      const cloudSession = (engineRef.current === 'cloud' || cloudSttFinalizingRef.current) && !brokerCapture
       const cloudCaptureId = cloudCaptureIdRef.current
       const startedAt = sessionStartedAtRef.current
+      const brokerController = cloudSpeechControllerRef.current
+      cloudSpeechControllerRef.current = null
+      activeBrokerSpeechRef.current = null
+      if (brokerController) {
+        void brokerController.cancel()
+        brokerController.dispose()
+      }
       if (drainTimerRef.current) {
         clearTimeout(drainTimerRef.current)
         drainTimerRef.current = null
@@ -3015,6 +3003,10 @@ export function useListen(
       disarmNetworkRetry()
       closeChannel('you')
       closeChannel('them')
+      for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
+        stream?.getTracks().forEach((track) => track.stop())
+      }
+      brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
       cloudSttUnsubRef.current?.()
       cloudSttUnsubRef.current = null

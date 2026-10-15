@@ -6,6 +6,7 @@ import { buildLaunchReport } from './launch-report.mjs'
 const fixtures = vi.hoisted(() => ({
   audit: '',
   onSpawn: undefined as (() => void) | undefined,
+  spawnWaiters: [] as Array<() => void>,
   child: undefined as unknown,
   spawn: vi.fn(),
   remove: vi.fn(),
@@ -14,6 +15,7 @@ const fixtures = vi.hoisted(() => ({
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => {
     fixtures.spawn(...args)
+    for (const resolve of fixtures.spawnWaiters.splice(0)) resolve()
     fixtures.onSpawn?.()
     return fixtures.child
   },
@@ -29,7 +31,9 @@ vi.mock('node:fs', () => ({
 }))
 
 class GateExit extends Error {
-  constructor(readonly code: number) { super(`gate exited ${code}`) }
+  constructor(readonly code: number) {
+    super(`gate exited ${code}`)
+  }
 }
 class FakeChild extends EventEmitter {
   pid = 1729
@@ -53,6 +57,7 @@ beforeEach(() => {
   vi.setSystemTime(0)
   fixtures.audit = ''
   fixtures.onSpawn = undefined
+  fixtures.spawnWaiters = []
   fixtures.spawn.mockClear()
   fixtures.remove.mockClear()
   fixtures.write.mockClear()
@@ -61,7 +66,9 @@ beforeEach(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' })
   process.argv = [process.execPath, 'check-packaged-launch.mjs', '/fixture/Metis.app', '--timeout-seconds', '6']
   vi.stubEnv('ASKTOTO_MAC_LAUNCH_GATE', '1')
-  vi.spyOn(process, 'exit').mockImplementation((code) => { throw new GateExit(Number(code ?? 0)) })
+  vi.spyOn(process, 'exit').mockImplementation((code) => {
+    throw new GateExit(Number(code ?? 0))
+  })
   vi.spyOn(process, 'kill').mockReturnValue(true)
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -79,28 +86,61 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function event(name: string): string { return JSON.stringify({ event: name }) + '\n' }
+function event(name: string): string {
+  return JSON.stringify({ event: name }) + '\n'
+}
 async function runGate(): Promise<number> {
+  const { result, spawned } = startGate()
+  await Promise.race([
+    spawned,
+    result.then(() => {
+      throw new Error('The launch gate completed before spawning the app')
+    })
+  ])
+  expect(fixtures.spawn).toHaveBeenCalledOnce()
+  await vi.runAllTimersAsync()
+  return result
+}
+
+function startGate(): { result: Promise<number>; spawned: Promise<void> } {
+  let resolveSpawn!: () => void
+  const spawned = new Promise<void>((resolve) => {
+    resolveSpawn = resolve
+  })
+  fixtures.spawnWaiters.push(resolveSpawn)
   const result = import('./check-packaged-launch.mjs').then(
-    () => { throw new Error('The launch gate did not report an exit status') },
+    () => {
+      throw new Error('The launch gate did not report an exit status')
+    },
     (error: unknown) => {
       if (!(error instanceof GateExit)) throw error
       return error.code
     }
   )
-  await vi.waitFor(() => expect(fixtures.spawn).toHaveBeenCalledOnce())
-  await vi.runAllTimersAsync()
-  return result
+  return { result, spawned }
 }
 
 describe('MQA-318 packaged Mac launch readiness', () => {
+  it('does not advance the launch deadline while waiting for module evaluation to reach spawn', async () => {
+    fixtures.audit = event('app.renderer.ready')
+    const { result, spawned } = startGate()
+    await spawned
+    expect(fixtures.spawn).toHaveBeenCalledOnce()
+    expect(Date.now()).toBe(0)
+    await vi.runAllTimersAsync()
+    expect(await result).toBe(0)
+  })
+
   it('does not accept app.started without a renderer-ready signal', async () => {
     fixtures.audit = event('app.started')
     expect(await runGate()).toBe(1)
   })
 
   it('requires three seconds of survival after actual renderer readiness', async () => {
-    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        fixtures.audit = event('app.renderer.ready')
+      }, 500)
     expect(await runGate()).toBe(0)
     expect(Date.now()).toBeGreaterThanOrEqual(3500)
     expect(Atomics.wait).not.toHaveBeenCalled()
@@ -122,7 +162,10 @@ describe('MQA-318 packaged Mac launch readiness', () => {
 
   it('also rejects an observed exit status before its exit event is delivered', async () => {
     fixtures.audit = event('app.renderer.ready')
-    fixtures.onSpawn = () => setTimeout(() => { child.exitCode = 1 }, 1000)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        child.exitCode = 1
+      }, 1000)
     expect(await runGate()).toBe(1)
   })
 
@@ -135,14 +178,20 @@ describe('MQA-318 packaged Mac launch readiness', () => {
 
   it.each(['app.crash', 'app.unresponsive'])('fails on %s after readiness', async (name) => {
     fixtures.audit = event('app.started') + event('app.renderer.ready')
-    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit += event(name) }, 1000)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        fixtures.audit += event(name)
+      }, 1000)
     expect(await runGate()).toBe(1)
   })
 
   // Invariant: the gate must launch the executable named after the bundle it was given, never a hardcoded name.
   it('launches the executable named after the bundle it was given, not a hardcoded name', async () => {
     process.argv = [process.execPath, 'check-packaged-launch.mjs', '/fixture/Metis QA.app', '--timeout-seconds', '6']
-    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        fixtures.audit = event('app.renderer.ready')
+      }, 500)
     expect(await runGate()).toBe(0)
     expect(fixtures.spawn).toHaveBeenCalledWith(
       join('/fixture/Metis QA.app', 'Contents', 'MacOS', 'Metis QA'),
@@ -153,7 +202,18 @@ describe('MQA-318 packaged Mac launch readiness', () => {
 })
 
 const SHA = 'ab'.repeat(32)
-const reportArgs = ['--report', '/runner/work/report.json', '--installer', 'Metis-1.9.7.zip', '--artifact-sha256', SHA, '--candidate-run', '4242', '--signature', 'ad-hoc']
+const reportArgs = [
+  '--report',
+  '/runner/work/report.json',
+  '--installer',
+  'Metis-1.9.7.zip',
+  '--artifact-sha256',
+  SHA,
+  '--candidate-run',
+  '4242',
+  '--signature',
+  'ad-hoc'
+]
 function writtenReport(): Record<string, unknown> {
   expect(fixtures.write).toHaveBeenCalledOnce()
   const [path, body] = fixtures.write.mock.calls[0] as [string, string]
@@ -163,14 +223,20 @@ function writtenReport(): Record<string, unknown> {
 
 describe('M2-0508 launch report', () => {
   it('writes nothing without --report', async () => {
-    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        fixtures.audit = event('app.renderer.ready')
+      }, 500)
     expect(await runGate()).toBe(0)
     expect(fixtures.write).not.toHaveBeenCalled()
   })
 
   it('writes a content-free PASS report for a healthy launch', async () => {
     process.argv = [...process.argv, ...reportArgs]
-    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        fixtures.audit = event('app.renderer.ready')
+      }, 500)
     expect(await runGate()).toBe(0)
     expect(writtenReport()).toEqual({
       installer: 'Metis-1.9.7.zip',
@@ -194,7 +260,10 @@ describe('M2-0508 launch report', () => {
 
   it('fails the gate rather than write a report with a malformed sha256', async () => {
     process.argv = [...process.argv, '--report', '/runner/work/report.json', '--artifact-sha256', 'not-a-hash']
-    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)
+    fixtures.onSpawn = () =>
+      setTimeout(() => {
+        fixtures.audit = event('app.renderer.ready')
+      }, 500)
     expect(await runGate()).toBe(1)
     expect(fixtures.write).not.toHaveBeenCalled()
   })

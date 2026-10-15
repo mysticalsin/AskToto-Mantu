@@ -10,8 +10,9 @@
  *     hydrates a file: only an explicit open does (recallRead in recall.ts, meetingOpenTarget).
  *   - A newer search aborts the one still queued at the gateway (searchMeetingsLatest).
  */
+import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from './features/meetings/meeting-speech'
 import { join } from 'node:path'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes } from './transcripts'
+import { resolveMeetingsFolder, decodeSavedMeetingAsync, isEncryptedBytes } from './transcripts'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import type { FileClass } from './infra/storage/gateway'
 import { getSettings } from './store'
@@ -151,7 +152,12 @@ function unavailableRow(file: string): Read | null {
  *  `fileClass` comes from the listing's one batched classify, so a file classified dataless or unknown is
  *  answered as a 'Not downloaded' row without ever being read. Served from readCache when the file is
  *  unchanged since the last read. */
-async function readMeeting(folder: string, file: string, fileClass: FileClass | undefined, signal?: AbortSignal): Promise<Read | null> {
+async function readMeeting(
+  folder: string,
+  file: string,
+  fileClass: FileClass | undefined,
+  signal?: AbortSignal
+): Promise<Read | null> {
   const path = join(folder, file)
   if (!fileClass || fileClass.status === 'missing') {
     readCache.delete(path)
@@ -189,7 +195,11 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
 
 /** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
  *  `signal` ends the queued classify and every queued read at the gateway, and the listing comes back empty. */
-export async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
+export async function readMeetings(
+  folder: string,
+  files: readonly string[],
+  signal?: AbortSignal
+): Promise<Array<Read | null>> {
   const gateway = storageAt(folder)
   const classes = await classifyAll({ ...gateway, classify: (paths) => gateway.classify(paths, { signal }) }, files)
   if (signal?.aborted) return []
@@ -201,8 +211,13 @@ export async function readMeetings(folder: string, files: readonly string[], sig
 /** The gateway says this file's bytes are not on this device (or would not arrive in time). */
 const NOT_LOCAL = Symbol('not-local')
 
-async function readMeetingUncached(folder: string, file: string, signal?: AbortSignal): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
-  const raw = await storageAt(folder).read(file, { signal })
+async function readMeetingUncached(
+  folder: string,
+  file: string,
+  signal?: AbortSignal
+): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
+  const maxBytes = getMeetingSpeechReadLimitBytes()
+  const raw = await storageAt(folder).read(file, { signal, ...(maxBytes ? { maxBytes } : {}) })
   if (raw.status !== 'ok') {
     if (raw.status === 'dataless' || raw.status === 'unknown' || raw.status === 'timeout') return NOT_LOCAL
     // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
@@ -211,7 +226,18 @@ async function readMeetingUncached(folder: string, file: string, signal?: AbortS
     return UNREADABLE
   }
   try {
-    const text = decodeSaved(raw.bytes)
+    const decoded = await decodeSavedMeetingAsync(raw.bytes, false, join(folder, file))
+    if (!decoded.ok) {
+      if (!isEncryptedBytes(raw.bytes)) return null
+      const stub = lockedStub(file)
+      return stub ? { text: '', sum: stub } : null
+    }
+    let text: string
+    try {
+      text = await publicMeetingTextAsync(decoded.text)
+    } catch {
+      return UNREADABLE
+    }
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
       // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
@@ -223,7 +249,10 @@ async function readMeetingUncached(folder: string, file: string, signal?: AbortS
     }
     const fm = frontmatter(text)
     if (!isMeetingDocumentType(fm.type)) return null
-    const topics = (fm.topics || '').split(',').map((s) => s.trim()).filter(Boolean)
+    const topics = (fm.topics || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
     return {
       text,
       sum: {
@@ -232,7 +261,10 @@ async function readMeetingUncached(folder: string, file: string, signal?: AbortS
         date: fm.date || '',
         mode: fm.mode || 'general',
         durationMin: Number(fm.duration_min || 0),
-        participants: (fm.participants || '').split(',').map((s) => s.trim()).filter(Boolean),
+        participants: (fm.participants || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
         ...(topics.length ? { topics } : {}),
         ...(fm.confidential === 'true' ? { confidential: true } : {})
       }
@@ -255,7 +287,10 @@ export async function listMeetings(): Promise<HistoryRow[]> {
 /** Keyword search across saved meetings; returns scored hits with a snippet. */
 export async function searchMeetings(query: string, signal?: AbortSignal): Promise<RecallHit[]> {
   const folder = resolveMeetingsFolder(getSettings())
-  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 1)
   if (!terms.length) return []
   const read = await readMeetings(folder, await meetingFiles(folder, signal), signal)
   const hits: RecallHit[] = []
@@ -279,7 +314,10 @@ export async function searchMeetings(query: string, signal?: AbortSignal): Promi
     const anchor = terms.find((t) => lc.includes(t)) ?? terms[0]
     const first = lc.indexOf(anchor)
     const start = Math.max(0, first - 60)
-    const snippet = body.slice(start, start + 200).replace(/\s+/g, ' ').trim()
+    const snippet = body
+      .slice(start, start + 200)
+      .replace(/\s+/g, ' ')
+      .trim()
     hits.push({ ...sum, snippet, score })
   }
   return hits.sort((a, b) => b.score - a.score).slice(0, 25)

@@ -30,7 +30,13 @@ async function health(e: Env): Promise<{ status: number; body: Health }> {
 
 afterEach(() => vi.restoreAllMocks())
 
-describe.each([undefined, 'production', 'staging', 'test', 'dev'])('Worker without a D1 binding (OPERATOR_ENV=%s)', (operatorEnv) => {
+describe.each([
+  undefined,
+  'production',
+  'staging',
+  'test',
+  'dev'
+])('Worker without a D1 binding (OPERATOR_ENV=%s)', (operatorEnv) => {
   const unbound = env({ OPERATOR_ENV: operatorEnv })
 
   it('refuses every non-health route with 503 instead of serving an ephemeral store', async () => {
@@ -80,6 +86,24 @@ describe('/health readiness against a bound D1', () => {
     expect(status).toBe(503)
     expect(body.ok).toBe(false)
     expect(body.schema).toContain('seats.license_jti')
+  })
+
+  it('is degraded when required speech consent authority columns are missing', async () => {
+    const db = migratedDb()
+    db.exec('ALTER TABLE speech_sessions DROP COLUMN consent_issued_at')
+    const { status, body } = await health(env({ DB: sqliteD1(db) }))
+    expect(status).toBe(503)
+    expect(body.ok).toBe(false)
+    expect(body.schema).toContain('speech_sessions.consent_issued_at')
+  })
+
+  it('is degraded when speech grant epoch inventory is missing', async () => {
+    const db = migratedDb()
+    db.exec('ALTER TABLE speech_grants DROP COLUMN stream_epoch')
+    const { status, body } = await health(env({ DB: sqliteD1(db) }))
+    expect(status).toBe(503)
+    expect(body.ok).toBe(false)
+    expect(body.schema).toContain('speech_grants.stream_epoch')
   })
 
   it('is degraded when D1 itself fails', async () => {

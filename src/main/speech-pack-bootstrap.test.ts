@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { startSpeechPackDesktop } from './speech-pack-bootstrap'
+import { DEFAULT_SETTINGS, IPC } from '@shared/ipc'
+import { createQuitTrace } from './lifecycle/quit-trace'
+import { registerOptionalModelProvisioningIpc, startSpeechPackDesktop } from './speech-pack-bootstrap'
 
 const mocks = vi.hoisted(() => {
   const service = {
@@ -13,11 +15,40 @@ const mocks = vi.hoisted(() => {
     service,
     unregister,
     createSpeechPackService: vi.fn((_options: unknown) => service),
-    registerSpeechPackIpc: vi.fn(() => unregister)
+    createPackageRuntimeContractProvider: vi.fn(() => async () => ({
+      status: 'legacy-full',
+      profile: 'full',
+      inventory: null
+    })),
+    configurePackageRuntimeContractProvider: vi.fn(),
+    registerSpeechPackIpc: vi.fn(() => unregister),
+    getPackageRuntimeContract: vi.fn(),
+    readSettingsAtAuthorityBoundary: vi.fn(),
+    getSpeechPolicyAuthorityStatus: vi.fn()
   }
 })
-vi.mock('./features/components', () => ({ createSpeechPackService: mocks.createSpeechPackService }))
+vi.mock('./features/components', () => ({
+  createSpeechPackService: mocks.createSpeechPackService,
+  createPackageRuntimeContractProvider: mocks.createPackageRuntimeContractProvider,
+  configurePackageRuntimeContractProvider: mocks.configurePackageRuntimeContractProvider
+}))
 vi.mock('./ipc/speech-pack-ipc', () => ({ registerSpeechPackIpc: mocks.registerSpeechPackIpc }))
+vi.mock('./features/components/speech-pack/package-runtime-state', () => ({
+  getPackageRuntimeContract: mocks.getPackageRuntimeContract
+}))
+vi.mock('./store', () => ({
+  configureFreshLeanSpeechDefaults: vi.fn(),
+  getAdminLocalSpeechPackPolicy: vi.fn(),
+  getSettings: vi.fn(),
+  getSpeechPackPolicyIdentity: vi.fn(),
+  getSpeechPackSelectionIdentity: vi.fn(),
+  readSettingsAtAuthorityBoundary: mocks.readSettingsAtAuthorityBoundary
+}))
+vi.mock('./model-policy-client', () => ({
+  getSpeechPolicyAuthorityStatus: mocks.getSpeechPolicyAuthorityStatus
+}))
+vi.mock('@shared/package-profile', () => ({ METIS_PACKAGE_PROFILE: 'full' }))
+vi.mock('electron', () => ({ app: { getVersion: () => '2.1.0' } }))
 
 afterEach(() => {
   vi.useRealTimers()
@@ -38,6 +69,61 @@ const options = () => ({
 })
 
 describe('speech-pack desktop lifecycle', () => {
+  it.each([
+    ['admitted', true],
+    ['unreadable policy', false]
+  ] as const)('wires explicit local-model readiness through the IPC helper for %s admission', async (_, readable) => {
+    const handlers = new Map<string, (...args: any[]) => Promise<unknown>>()
+    const ipcMain = {
+      handle: (channel: string, handler: (...args: any[]) => Promise<unknown>) => handlers.set(channel, handler)
+    } as unknown as Electron.IpcMain
+    const modelPolicyIdentity = 'policy:unmanaged:0'
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      localLlm: { ...DEFAULT_SETTINGS.localLlm, modelId: 'qwen3.5-0.8b' },
+      enterpriseLive: { ...DEFAULT_SETTINGS.enterpriseLive, managed: false, inferenceMode: 'legacy' as const },
+      operatorUrl: '',
+      operatorIngestSecret: '',
+      operatorLicenseToken: ''
+    }
+    mocks.getPackageRuntimeContract.mockResolvedValue({ status: 'legacy-full', profile: 'full', inventory: null })
+    mocks.readSettingsAtAuthorityBoundary.mockResolvedValue({
+      settings,
+      readable,
+      allowedProviders: null,
+      localSpeechPack: null
+    })
+    mocks.getSpeechPolicyAuthorityStatus.mockReturnValue({
+      status: 'unconfigured',
+      identity: modelPolicyIdentity
+    })
+    const ensureLocalModel = vi.fn(
+      async (_modelId: string, authorized: () => Promise<boolean>, validateCurrent: () => boolean) =>
+        (await authorized()) && validateCurrent()
+    )
+    const refreshScreenPreprocess = vi.fn()
+
+    registerOptionalModelProvisioningIpc({
+      ipcMain,
+      assertMainWindow: vi.fn(),
+      requireAuth: () => true,
+      ensureLocalModel,
+      captureActive: () => false,
+      captureIdentity: () => 'capture:0',
+      localModelIdentity: () => 'local-model:0',
+      currentModelPolicyIdentity: () => modelPolicyIdentity,
+      refreshScreenPreprocess,
+      logProvisioningFailure: vi.fn(),
+      auditAsrTransfer: vi.fn()
+    })
+
+    const handler = handlers.get(IPC.localModelsEnsure)
+    if (!handler) throw new Error('explicit model ensure handler was not registered')
+    await expect(handler({} as Electron.IpcMainInvokeEvent)).resolves.toEqual({ ok: readable })
+    expect(ensureLocalModel).toHaveBeenCalledTimes(readable ? 1 : 0)
+    expect(refreshScreenPreprocess).toHaveBeenCalledTimes(readable ? 1 : 0)
+  })
+
   it('refreshes current policy, selection and capture without starting a transfer', async () => {
     vi.useFakeTimers()
     const active = vi.fn().mockReturnValue(false)
@@ -113,6 +199,49 @@ describe('speech-pack desktop lifecycle', () => {
     event.preventDefault.mockClear()
     desktop.beforeQuit(event, quit)
     expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('resumes the original quit when no diagnostic observer is installed', async () => {
+    const desktop = startSpeechPackDesktop(options())
+    const event = { preventDefault: vi.fn() }
+    const quit = vi.fn()
+
+    desktop.beforeQuit(event, quit)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(quit).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+
+    expect(mocks.service.shutdown).toHaveBeenCalledOnce()
+  })
+
+  it('resumes the original quit when diagnostic tracing is disabled', async () => {
+    const lines: string[] = []
+    const desktop = startSpeechPackDesktop({
+      ...options(),
+      quitTrace: createQuitTrace(false, (line) => lines.push(line))
+    })
+    const event = { preventDefault: vi.fn() }
+    const quit = vi.fn()
+
+    desktop.beforeQuit(event, quit)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(quit).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+
+    expect(mocks.service.shutdown).toHaveBeenCalledOnce()
+    expect(lines).toEqual([])
+  })
+
+  it.each([
+    'absent',
+    'disabled'
+  ] as const)('preserves the service shutdown promise identity when tracing is %s', (traceMode) => {
+    const serviceShutdown = Promise.resolve()
+    mocks.service.shutdown.mockImplementationOnce(() => serviceShutdown)
+    const quitTrace = traceMode === 'disabled' ? createQuitTrace(false, () => undefined) : undefined
+    const desktop = startSpeechPackDesktop({ ...options(), quitTrace })
+
+    expect(desktop.shutdown()).toBe(serviceShutdown)
   })
 
   it('preserves the existing meeting flush window even when model shutdown finishes immediately', async () => {

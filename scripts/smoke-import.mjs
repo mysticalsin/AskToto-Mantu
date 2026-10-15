@@ -15,7 +15,8 @@ const packagedExecutable = process.env.ASKTOTO_SMOKE_EXECUTABLE ? resolve(proces
 if (!packagedExecutable && !existsSync(join(root, 'out/main/index.js'))) {
   throw new Error('Build the app first: npm run build')
 }
-if (packagedExecutable && !existsSync(packagedExecutable)) throw new Error(`Missing packaged executable: ${packagedExecutable}`)
+if (packagedExecutable && !existsSync(packagedExecutable))
+  throw new Error(`Missing packaged executable: ${packagedExecutable}`)
 if (!existsSync(fixture)) throw new Error(`Missing bundled audio fixture: ${fixture}`)
 
 const userData = mkdtempSync(join(tmpdir(), 'asktoto-import-smoke-'))
@@ -118,7 +119,11 @@ async function closeSmokeApp() {
     CONTROL_TIMEOUT_MS,
     'Timed out while requesting smoke-app shutdown.'
   ).catch(() => {})
-  await withTimeout(app?.close().catch(() => {}), CONTROL_TIMEOUT_MS, 'Timed out while closing the smoke app.').catch(() => {})
+  await withTimeout(
+    app?.close().catch(() => {}),
+    CONTROL_TIMEOUT_MS,
+    'Timed out while closing the smoke app.'
+  ).catch(() => {})
   try {
     app?.process()?.kill('SIGKILL')
   } catch {
@@ -127,9 +132,7 @@ async function closeSmokeApp() {
 }
 
 try {
-  app = await electron.launch(packagedExecutable
-    ? { executablePath: packagedExecutable, env }
-    : { args: [root], env })
+  app = await electron.launch(packagedExecutable ? { executablePath: packagedExecutable, env } : { args: [root], env })
   app.on('window', watchPage)
   let page
   try {
@@ -171,14 +174,18 @@ try {
   let job = started
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 500))
-    job = await page.evaluate(async (jobId) => (await window.toto.importJobsList()).find((entry) => entry.jobId === jobId), started.jobId)
+    job = await page.evaluate(
+      async (jobId) => (await window.toto.importJobsList()).jobs.find((entry) => entry.jobId === jobId),
+      started.jobId
+    )
     if (job?.state === 'done') break
     if (job?.state === 'failed') throw new Error(job.error || 'The import job failed.')
   }
   if (job?.state !== 'done' || !job.file) throw new Error('Import did not finish within two minutes.')
 
   const meeting = await page.evaluate(async (file) => window.toto.recallRead(file), job.file)
-  if (!meeting?.ok || !meeting.lines?.length) throw new Error('The imported meeting was not saved with transcript lines.')
+  if (!meeting?.ok || !meeting.lines?.length)
+    throw new Error('The imported meeting was not saved with transcript lines.')
   console.log(`[smoke-import] PASS ${job.file} (${meeting.lines.length} transcript lines)`)
 } finally {
   // Métis keeps the process alive after its last window closes so background meeting reconciliation

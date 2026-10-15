@@ -33,10 +33,17 @@ const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'
 // bytes; scripts/check-packaged-runtime.mjs verifies that on every package.
 const QA_IDENTITY = process.env.METIS_QA_IDENTITY === '1'
 const FEEDBACK_EMAIL = process.env.METIS_FEEDBACK_EMAIL?.trim() || ''
+const PACKAGE_PROFILE = process.env.METIS_PACKAGE_PROFILE ?? 'full'
+if (PACKAGE_PROFILE !== 'full' && PACKAGE_PROFILE !== 'lean') {
+  throw new Error(`METIS_PACKAGE_PROFILE must be exactly "full" or "lean"; received ${JSON.stringify(PACKAGE_PROFILE)}`)
+}
 
 export default defineConfig({
   main: {
-    define: { __METIS_QA_IDENTITY__: JSON.stringify(QA_IDENTITY) },
+    define: {
+      __METIS_QA_IDENTITY__: JSON.stringify(QA_IDENTITY),
+      __METIS_PACKAGE_PROFILE__: JSON.stringify(PACKAGE_PROFILE)
+    },
     // electron-vite compiles the main-process bundle to V8 bytecode (.jsc): the shipped app carries
     // no readable main-process JS at all — prompts, brain/ingest logic, and LLM orchestration can't be
     // read out of the asar. Renderer/preload stay minified-only (a sandboxed preload and a Chromium
@@ -62,7 +69,9 @@ export default defineConfig({
           'parakeet-extract-host': resolve(__dirname, 'src/main/parakeet-extract-host.ts'),
           // MQA-234: the whisper utilityProcess child. Its own entry so it never shares a chunk with
           // main — the whole point is that transformers/onnxruntime-node load ONLY in the child.
-          'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts')
+          'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts'),
+          // Large bounded meeting speech codec/AES work runs in this dedicated worker thread.
+          'meeting-speech-worker': resolve(__dirname, 'src/main/meeting-speech-worker.ts')
         }
       }
     },
@@ -91,7 +100,10 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
-    define: { __METIS_FEEDBACK_EMAIL__: JSON.stringify(FEEDBACK_EMAIL) },
+    define: {
+      __METIS_FEEDBACK_EMAIL__: JSON.stringify(FEEDBACK_EMAIL),
+      __METIS_PACKAGE_PROFILE__: JSON.stringify(PACKAGE_PROFILE)
+    },
     assetsInclude: ['**/*.mp4'],
     resolve: {
       alias: {
@@ -100,12 +112,16 @@ export default defineConfig({
       }
     },
     plugins: [react(), tailwindcss()],
+    // esbuild removes ordinary Rollup banner comments when minifying. Keep this profile banner as
+    // an inline legal comment so the packaged artifact checker can verify the compiled build profile.
+    esbuild: { legalComments: 'inline' },
     build: {
       // electron-vite defaults to minify:false — that shipped every bundle unminified (≈2x parse
       // bytes on the entry chunk and on every lazy view's first click). Main stays readable for
       // crash-log stack traces; the renderer is where the cold-start parse cost lives.
       minify: 'esbuild',
       rollupOptions: {
+        output: { banner: `/*! metis-package-profile:${PACKAGE_PROFILE} */` },
         // The QA-only design-capture entry joins only when METIS_DESIGN_CAPTURE=1 (scripts/design/renderer-inputs.ts).
         input: rendererInputs(resolve(__dirname, 'src/renderer'), process.env)
       }

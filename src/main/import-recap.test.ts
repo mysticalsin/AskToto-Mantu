@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/ipc'
+import { ImportJobManager, type ImportJob } from './import-jobs'
 import {
   IMPORT_RECAP_CACHE_KEY,
   IMPORT_RECAP_MAX_ATTEMPTS,
@@ -27,7 +28,9 @@ describe('import recap prefix and tier', () => {
   it('keeps a byte-stable cached system prefix with no Date.now', () => {
     expect(IMPORT_RECAP_SYSTEM_PREFIX.includes('Date.now')).toBe(false)
     expect(IMPORT_RECAP_SYSTEM_PREFIX).not.toMatch(/\d{13}/)
-    expect(importRecapSystem(true)).toBe(IMPORT_RECAP_SYSTEM_PREFIX + importRecapSystem(true).slice(IMPORT_RECAP_SYSTEM_PREFIX.length))
+    expect(importRecapSystem(true)).toBe(
+      IMPORT_RECAP_SYSTEM_PREFIX + importRecapSystem(true).slice(IMPORT_RECAP_SYSTEM_PREFIX.length)
+    )
     expect(importRecapSystem(false)).toBe(importRecapSystem(false))
     expect(importRecapSystem(true)).not.toBe(importRecapSystem(false))
     const a = IMPORT_RECAP_SYSTEM_PREFIX
@@ -80,7 +83,11 @@ describe('runImportedRecap critical path', () => {
 
     await expect(
       runImportedRecap(
-        { jobId: 'j1', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+        {
+          jobId: 'j1',
+          lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }],
+          mode: 'meeting'
+        },
         {
           getSettings: () => settings(),
           getApiKey: () => 'sk-test',
@@ -94,20 +101,26 @@ describe('runImportedRecap critical path', () => {
   })
 
   it('rejects text when the provider says the output token limit stopped completion', async () => {
-    const createStream = vi.fn((opts: {
-      handlers: {
-        onDelta: (d: string) => void
-        onDone: (usage: object, completion?: { status: 'complete' | 'incomplete'; reason?: string }) => void
+    const createStream = vi.fn(
+      (opts: {
+        handlers: {
+          onDelta: (d: string) => void
+          onDone: (usage: object, completion?: { status: 'complete' | 'incomplete'; reason?: string }) => void
+        }
+      }) => {
+        opts.handlers.onDelta('## Overview\nA useful but truncated recap')
+        opts.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
+        return { abort: () => {} }
       }
-    }) => {
-      opts.handlers.onDelta('## Overview\nA useful but truncated recap')
-      opts.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
-      return { abort: () => {} }
-    })
+    )
 
     await expect(
       runImportedRecap(
-        { jobId: 'j2', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+        {
+          jobId: 'j2',
+          lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }],
+          mode: 'meeting'
+        },
         {
           getSettings: () => settings(),
           getApiKey: () => 'sk-test',
@@ -121,19 +134,21 @@ describe('runImportedRecap critical path', () => {
   })
 
   it('sends the selected summary language without changing the cached prefix', async () => {
-    const createStream = vi.fn((opts: {
-      system: string
-      systemParts?: { cachedPrefix: string; volatile: string }
-      handlers: { onDelta: (d: string) => void; onDone: (usage: object) => void }
-    }) => {
-      expect(opts.system.startsWith(IMPORT_RECAP_SYSTEM_PREFIX)).toBe(true)
-      expect(opts.system).toContain('Always respond in French')
-      expect(opts.systemParts?.cachedPrefix).toBe(IMPORT_RECAP_SYSTEM_PREFIX)
-      expect(opts.systemParts?.volatile).toContain('Always respond in French')
-      opts.handlers.onDelta('## Overview\nLivraison approuvée.')
-      opts.handlers.onDone({})
-      return { abort: () => {} }
-    })
+    const createStream = vi.fn(
+      (opts: {
+        system: string
+        systemParts?: { cachedPrefix: string; volatile: string }
+        handlers: { onDelta: (d: string) => void; onDone: (usage: object) => void }
+      }) => {
+        expect(opts.system.startsWith(IMPORT_RECAP_SYSTEM_PREFIX)).toBe(true)
+        expect(opts.system).toContain('Always respond in French')
+        expect(opts.systemParts?.cachedPrefix).toBe(IMPORT_RECAP_SYSTEM_PREFIX)
+        expect(opts.systemParts?.volatile).toContain('Always respond in French')
+        opts.handlers.onDelta('## Overview\nLivraison approuvée.')
+        opts.handlers.onDone({})
+        return { abort: () => {} }
+      }
+    )
     const recap = await runImportedRecap(
       { jobId: 'j3', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
       {
@@ -147,19 +162,77 @@ describe('runImportedRecap critical path', () => {
     )
     expect(recap).toBe('## Overview\nLivraison approuvée.')
     expect(createStream).toHaveBeenCalled()
-    const arg = createStream.mock.calls[0][0] as { promptCacheKey?: string; systemCacheTtl?: string; reasoningEffort?: unknown }
+    const arg = createStream.mock.calls[0][0] as {
+      promptCacheKey?: string
+      systemCacheTtl?: string
+      reasoningEffort?: unknown
+    }
     expect(arg.promptCacheKey).toBe(IMPORT_RECAP_CACHE_KEY)
     expect(arg.systemCacheTtl).toBe('1h')
   })
 })
 
 describe('import recap is not polish-first', () => {
-  it('import-jobs finalize recaps before any polish pass', () => {
-    const src = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
-    const finalize = src.slice(src.indexOf('private async finalize'), src.indexOf('async failDecoder'))
-    expect(finalize.indexOf('generateRecap')).toBeGreaterThan(-1)
-    expect(finalize.indexOf('generateRecap')).toBeLessThan(finalize.indexOf('if (this.deps.polish)'))
-    expect(src).toMatch(/Polish is not on the import critical path/)
+  it('import-jobs durably finalize recaps before any polish pass', async () => {
+    const events: string[] = []
+    const saved = new Map<string, ImportJob>()
+    let releaseRecap!: (value: string) => void
+    let recapStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      recapStarted = resolve
+    })
+    const recap = new Promise<string>((resolve) => {
+      releaseRecap = resolve
+    })
+    const polish = vi.fn(async (lines) => {
+      events.push('polish')
+      return lines
+    })
+    const manager = new ImportJobManager({
+      store: {
+        save: async (job) => {
+          saved.set(job.jobId, structuredClone(job))
+        },
+        list: async () => [...saved.values()],
+        remove: async (jobId) => {
+          saved.delete(jobId)
+        }
+      },
+      decode: () => {},
+      transcribe: async () => 'recognized speech',
+      saveMeeting: async () => {
+        events.push('save')
+        return 'saved-import.md'
+      },
+      generateRecap: async () => {
+        events.push('recap')
+        recapStarted()
+        return recap
+      },
+      updateRecap: async () => {
+        events.push('update-recap')
+      },
+      polish,
+      enqueueIngest: () => {
+        events.push('ingest')
+      },
+      freeMemoryBytes: () => 0,
+      now: () => 1_700_000_000_000,
+      newId: () => 'recap-order'
+    })
+    await manager.start({ path: '/safe/recording.wav', name: 'recording.wav', sizeBytes: 42, mtimeMs: 1 })
+    await manager.acceptDecodedChunk('recap-order', 0, 1, new Float32Array(16_000))
+    const finishing = manager.finishDecoding('recap-order')
+    await started
+    expect(events).toEqual(['save', 'recap'])
+    expect(polish).not.toHaveBeenCalled()
+    expect(manager.get('recap-order')?.state).toBe('recapping')
+    releaseRecap('## Overview\nApproved outcome.')
+    await finishing
+    expect(events).toEqual(['save', 'recap', 'update-recap', 'polish', 'ingest'])
+    expect(polish).toHaveBeenCalledOnce()
+    expect(manager.get('recap-order')?.state).toBe('done')
+    expect(saved.has('recap-order')).toBe(false)
   })
 
   it('index.ts does not wire polish on import jobs', () => {

@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   SpeechPackActionRequest,
   SpeechPackActionResult,
   SpeechPackComponentSnapshot,
+  SpeechPackInstallWithPlanRequest,
+  SpeechPackPlanPreviewRequest,
+  SpeechPackPlanPreviewResult,
   SpeechPackProgress,
   SpeechPackSnapshot
 } from '@shared/speech-pack'
@@ -12,9 +15,15 @@ type PackState = SpeechPackComponentSnapshot['state']
 type PackProgress = SpeechPackProgress
 type PackSnapshot = SpeechPackSnapshot
 type Action = SpeechPackActionRequest['action']
+type PlanAction = SpeechPackPlanPreviewRequest['action']
+type SpeechPackPlan = Extract<SpeechPackPlanPreviewResult, { ok: true }>['plan']
+type ReviewedPlan = { value: SpeechPackPlan; manifestIdentity: string; engine: PackSnapshot['selectedEngine'] }
+type EngineReadiness = PackSnapshot['engineReadiness']
 export type SpeechPackBridge = {
   speechPackState: () => Promise<PackSnapshot>
   speechPackAction: (request: SpeechPackActionRequest) => Promise<SpeechPackActionResult>
+  speechPackPlanPreview: (request: SpeechPackPlanPreviewRequest) => Promise<SpeechPackPlanPreviewResult>
+  speechPackInstallWithPlan: (request: SpeechPackInstallWithPlanRequest) => Promise<SpeechPackActionResult>
   onSpeechPackProgress: (callback: (progress: PackProgress) => void) => () => void
 }
 
@@ -48,6 +57,25 @@ function labelFor(state: PackState): string {
   }
 }
 
+function readinessLabel(state: EngineReadiness['state']): string {
+  switch (state) {
+    case 'ready':
+      return 'Ready'
+    case 'model-needed':
+      return 'Model needed'
+    case 'runtime-needed':
+      return 'Runtime needed'
+    case 'not-configured':
+      return 'Runtime not configured'
+    case 'incompatible':
+      return 'Not compatible with this device'
+    case 'repair-needed':
+      return 'Needs repair'
+    case 'unavailable':
+      return 'Unavailable'
+  }
+}
+
 export function SpeechPackSection({
   bridge,
   selectedEngine
@@ -59,22 +87,30 @@ export function SpeechPackSection({
   const [progress, setProgress] = useState<PackProgress | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [plan, setPlan] = useState<ReviewedPlan | null>(null)
+  const selectionEpoch = useRef(0)
 
   useEffect(() => {
+    const epoch = ++selectionEpoch.current
     let current = true
+    setSnapshot(null)
+    setProgress(null)
+    setPlan(null)
+    setMessage(null)
+    setBusy(false)
     void bridge
       .speechPackState()
       .then((value) => {
-        if (current) {
+        if (current && epoch === selectionEpoch.current && value.selectedEngine === selectedEngine) {
           setSnapshot(value)
           setProgress(value.progress)
         }
       })
       .catch(() => {
-        if (current) setMessage('Speech-pack status is unavailable right now.')
+        if (current && epoch === selectionEpoch.current) setMessage('Speech-pack status is unavailable right now.')
       })
     const unsubscribe = bridge.onSpeechPackProgress((value) => {
-      if (current) setProgress(value)
+      if (current && epoch === selectionEpoch.current) setProgress(value)
     })
     return () => {
       current = false
@@ -82,13 +118,35 @@ export function SpeechPackSection({
     }
   }, [bridge, selectedEngine])
 
-  const selected = snapshot?.selectedComponent
-  const row = snapshot?.components.find((component) => component.componentId === selected)
-  const live = progress?.componentId === selected ? progress : null
+  const currentSnapshot = snapshot?.selectedEngine === selectedEngine ? snapshot : null
+  const selected = currentSnapshot?.selectedComponent
+  const row = currentSnapshot?.components.find((component) => component.componentId === selected)
+  const engineReadiness = currentSnapshot?.engineReadiness
+  const selectedReadiness = engineReadiness?.engine === currentSnapshot?.selectedEngine ? engineReadiness : undefined
+  const live =
+    progress && progress.componentId === selected && progress.manifestIdentity === row?.manifestIdentity
+      ? progress
+      : null
   const state = live?.state ?? row?.state ?? 'not-installed'
   const active = state === 'queued' || state === 'downloading' || state === 'verifying' || state === 'self-testing'
-  const run = async (action: Action): Promise<void> => {
+  const planAction: PlanAction =
+    state === 'repair-needed' ||
+    selectedReadiness?.state === 'repair-needed' ||
+    (state === 'ready' && selectedReadiness?.state === 'runtime-needed')
+      ? 'repair'
+      : 'install'
+  const canReviewPlan =
+    !!selectedReadiness &&
+    ['ready', 'model-needed', 'runtime-needed', 'repair-needed'].includes(selectedReadiness.state) &&
+    row?.state !== 'not-configured'
+  const displayedState = !selectedReadiness
+    ? 'Engine status unavailable'
+    : selectedReadiness.state !== 'ready' && !active
+      ? readinessLabel(selectedReadiness.state)
+      : labelFor(state)
+  const run = async (action: Extract<Action, 'pause' | 'cancel'>): Promise<void> => {
     if (!row) return
+    const epoch = selectionEpoch.current
     setBusy(true)
     setMessage(null)
     try {
@@ -97,24 +155,111 @@ export function SpeechPackSection({
         action,
         manifestIdentity: row.manifestIdentity
       })
-      if (!result.ok)
+      if (!result.ok && epoch === selectionEpoch.current)
         setMessage(
           result.reason === 'policy-blocked'
             ? 'Downloads are disabled by your organization.'
             : 'This action is not available right now.'
         )
-      else if (action === 'download' || action === 'retry' || action === 'repair')
+    } catch {
+      if (epoch === selectionEpoch.current) setMessage('Could not update this speech pack.')
+    } finally {
+      if (epoch === selectionEpoch.current) setBusy(false)
+    }
+  }
+
+  const reviewPlan = async (action: PlanAction): Promise<void> => {
+    if (!row) {
+      setMessage('An approved install plan is not available for this component.')
+      return
+    }
+    const epoch = selectionEpoch.current
+    const reviewedSnapshot = currentSnapshot
+    if (!reviewedSnapshot) return
+    setBusy(true)
+    setMessage(null)
+    setPlan(null)
+    try {
+      const result = await bridge.speechPackPlanPreview({
+        componentId: row.componentId,
+        manifestIdentity: row.manifestIdentity,
+        action
+      })
+      if (epoch !== selectionEpoch.current) return
+      if (!result.ok) {
+        setMessage(
+          result.reason === 'policy-blocked'
+            ? 'Downloads are disabled by your organization.'
+            : result.reason === 'not-configured'
+              ? 'An approved runtime package is not configured for this component yet.'
+              : 'An install plan is not available right now.'
+        )
+      } else if (
+        result.plan.selectedComponent !== row.componentId ||
+        result.plan.action !== action ||
+        result.plan.profile !== reviewedSnapshot.profile ||
+        result.plan.profileIdentity !== reviewedSnapshot.packageProfile.identity
+      ) {
+        setMessage('The install plan no longer matches the selected speech component. Refresh and try again.')
+      } else {
+        setPlan({ value: result.plan, manifestIdentity: row.manifestIdentity, engine: reviewedSnapshot.selectedEngine })
+      }
+    } catch {
+      if (epoch === selectionEpoch.current) setMessage('Could not review an install plan for this speech component.')
+    } finally {
+      if (epoch === selectionEpoch.current) setBusy(false)
+    }
+  }
+
+  const executePlan = async (): Promise<void> => {
+    if (!plan || busy) return
+    const epoch = selectionEpoch.current
+    if (
+      !currentSnapshot ||
+      !row ||
+      row.componentId !== plan.value.selectedComponent ||
+      row.manifestIdentity !== plan.manifestIdentity ||
+      currentSnapshot.selectedEngine !== plan.engine ||
+      currentSnapshot.profile !== plan.value.profile ||
+      currentSnapshot.packageProfile.identity !== plan.value.profileIdentity
+    ) {
+      setPlan(null)
+      setMessage('The selected speech component changed. Review a new install plan.')
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      const result = await bridge.speechPackInstallWithPlan({ planId: plan.value.planId, action: plan.value.action })
+      if (epoch !== selectionEpoch.current) return
+      if (!result.ok) {
+        setMessage(
+          result.reason === 'policy-blocked'
+            ? 'Downloads are disabled by your organization.'
+            : 'This install plan expired or is no longer available. Review a new plan.'
+        )
+      } else {
         setProgress({
-          componentId: row.componentId,
+          componentId: plan.value.selectedComponent,
           manifestIdentity: row.manifestIdentity,
           bytesDone: 0,
-          bytesTotal: row.downloadBytes,
+          bytesTotal: Math.max(plan.value.totalDownloadBytes, 1),
           state: 'queued'
         })
+      }
+      setPlan(null)
+      const fresh = await bridge.speechPackState().catch(() => null)
+      if (fresh && epoch === selectionEpoch.current && fresh.selectedEngine === selectedEngine) {
+        setSnapshot(fresh)
+        setProgress(fresh.progress)
+      }
     } catch {
-      setMessage('Could not update this speech pack.')
+      if (epoch === selectionEpoch.current) {
+        setMessage('Could not start the reviewed speech-pack install plan.')
+        setPlan(null)
+      }
     } finally {
-      setBusy(false)
+      if (epoch === selectionEpoch.current) setBusy(false)
     }
   }
 
@@ -125,9 +270,9 @@ export function SpeechPackSection({
         Download is optional and starts only when you choose it. Métis checks the files and tests the model on this
         device before using it.
       </p>
-      {!snapshot ? (
+      {!currentSnapshot ? (
         <p className="mt-2 text-[11px]">Loading model status…</p>
-      ) : snapshot.profileError ? (
+      ) : currentSnapshot.profileError ? (
         <p role="alert" className="mt-2 text-[11px] text-amber-300">
           Speech-pack settings need repair. Reinstall the official Métis package.
         </p>
@@ -137,10 +282,30 @@ export function SpeechPackSection({
         <div className="mt-2 flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
             <span>
-              {snapshot.selectedEngine === 'whisper' ? 'Whisper base' : 'Parakeet'} · {labelFor(state)}
+              {currentSnapshot.selectedEngine === 'whisper' ? 'Whisper base' : 'Parakeet'} · {displayedState}
             </span>
             <span>{sizeLabel(row.downloadBytes)}</span>
           </div>
+          {selectedReadiness?.state === 'runtime-needed' && (
+            <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+              The selected model is present, but its compatible local runtime is missing.
+            </p>
+          )}
+          {!selectedReadiness && (
+            <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+              Engine availability could not be verified. Refresh status before using this model.
+            </p>
+          )}
+          {selectedReadiness?.state === 'not-configured' && (
+            <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+              An approved runtime package is not configured for this engine yet.
+            </p>
+          )}
+          {selectedReadiness?.state === 'incompatible' && (
+            <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+              This engine cannot run with the installed package on this device.
+            </p>
+          )}
           {state === 'not-configured' && (
             <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">
               A trusted download source is not configured for this pack yet.
@@ -163,14 +328,14 @@ export function SpeechPackSection({
             <p className="text-[10px] text-[color:var(--cl-muted-foreground)]">Files and model test passed.</p>
           )}
           <div className="flex flex-wrap gap-2">
-            {!active && state !== 'ready' && state !== 'not-configured' && (
+            {!active && state !== 'ready' && canReviewPlan && (
               <button
                 type="button"
-                disabled={busy || !snapshot.featureEnabled}
-                onClick={() => void run(state === 'error' || state === 'paused' ? 'retry' : 'download')}
+                disabled={busy || !currentSnapshot.featureEnabled}
+                onClick={() => void reviewPlan(planAction)}
                 className="rounded border px-2 py-1 text-[11px] disabled:opacity-50"
               >
-                {state === 'error' || state === 'paused' ? 'Retry' : 'Download'}
+                {planAction === 'repair' ? 'Review repair' : 'Review install'}
               </button>
             )}
             {active && (
@@ -193,15 +358,52 @@ export function SpeechPackSection({
                 Cancel
               </button>
             )}
-            {state === 'ready' && (
+            {state === 'ready' && canReviewPlan && (
               <button
                 type="button"
-                disabled={busy || !snapshot.featureEnabled}
-                onClick={() => void run('repair')}
+                disabled={busy || !currentSnapshot.featureEnabled}
+                onClick={() => void reviewPlan('repair')}
                 className="rounded border px-2 py-1 text-[11px] disabled:opacity-50"
               >
-                Repair
+                Review repair
               </button>
+            )}
+            {plan && (
+              <div className="basis-full rounded-lg border border-[var(--cl-border)] bg-white/[0.03] p-2.5 text-[11px]">
+                <p className="m-0 font-medium text-[color:var(--cl-foreground)]">Review this optional install</p>
+                <p className="mt-1 text-[color:var(--cl-muted-foreground)]">
+                  {sizeLabel(plan.value.totalDownloadBytes)} download · {sizeLabel(plan.value.totalStorageBytes)}{' '}
+                  storage
+                </p>
+                <ul className="my-1 list-disc pl-4 text-[color:var(--cl-muted-foreground)]">
+                  {plan.value.missingComponents.map((item) => (
+                    <li key={`${item.componentId}:${item.manifestIdentity}`}>
+                      {item.componentId} · {sizeLabel(item.downloadBytes)} download · {sizeLabel(item.storageBytes)}{' '}
+                      storage
+                      {item.sourceHost ? ` · ${item.sourceHost}` : ''}
+                      {item.license ? ` · ${item.license}` : ''}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void executePlan()}
+                    className="rounded border px-2 py-1 disabled:opacity-50"
+                  >
+                    {plan.value.action === 'repair' ? 'Repair selected components' : 'Install selected components'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setPlan(null)}
+                    className="rounded border px-2 py-1 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

@@ -35,17 +35,16 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
     expect(boot).toContain('refreshScreenPreprocess')
   })
 
-  it('MQA-178 — the local-model download re-arms it when the weights land mid-session', () => {
-    // An opted-in model fetch is unawaited, so boot can reconcile before localReady becomes true.
-    // Only a successful eligible provisioning result should re-arm the feature and warm the model.
-    const download = sliceBetween(
+  it('MQA-178 — explicit model installation re-arms it when weights land mid-session', () => {
+    // The owned IPC registration moved into speech-pack-bootstrap.ts; its admitted/denied onReady behavior
+    // is exercised at that helper's actual registration boundary.
+    const registration = sliceBetween(
       indexSrc,
-      "bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)",
-      'app.setAppUserModelId'
+      'registerOptionalModelProvisioningIpc({',
+      'ipcMain.handle(IPC.asrModelRemove'
     )
-    expect(download).toMatch(
-      /\.then\(\(ready\) => \{\s*if \(!ready\) return\s*refreshScreenPreprocess\(\)\s*void runAsMaintenance\(warmLocalIfReady\)/
-    )
+    expect(registration).toContain('refreshScreenPreprocess,')
+    expect(registration).toContain('registerOptionalModelProvisioningIpc({')
   })
 })
 

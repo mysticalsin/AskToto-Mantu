@@ -58,6 +58,7 @@ import {
   ensureWhisperFloorAssets,
   fetchBundleResponse,
   importAsrAssetsReady,
+  asrModelMetadataReadyForEngine,
   asrAssetsStatusSnapshot,
   parakeetFilesReady,
   parakeetUserDir,
@@ -395,6 +396,31 @@ describe('asr-bundled-ensure', () => {
     try {
       await expect(importAsrAssetsReady()).resolves.toBe(true)
       await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: true, status: 'ready' })
+      expect(modelOpenGuard.asyncCalls).toBe(0)
+      expect(modelOpenGuard.syncCalls).toBe(0)
+    } finally {
+      modelOpenGuard.active = false
+    }
+  })
+
+  it.each([
+    'parakeet',
+    'whisper'
+  ] as const)('selected %s readiness uses filesystem metadata without opening model files', async (engine) => {
+    paths.isPackaged = true
+    const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
+    mkdirSync(parakeet, { recursive: true })
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'model')
+    for (const parts of ASR_REQUIRED_FILES) {
+      const file = join(paths.resources, ...parts)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, 'model')
+    }
+    modelOpenGuard.syncCalls = 0
+    modelOpenGuard.asyncCalls = 0
+    modelOpenGuard.active = true
+    try {
+      await expect(asrModelMetadataReadyForEngine(engine, 'full')).resolves.toBe(true)
       expect(modelOpenGuard.asyncCalls).toBe(0)
       expect(modelOpenGuard.syncCalls).toBe(0)
     } finally {

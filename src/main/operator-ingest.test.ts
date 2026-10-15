@@ -70,8 +70,12 @@ vi.mock('./logger', () => ({
 
 const metadata = vi.hoisted(() => {
   const settings = {
-    operatorUrl: '', operatorIngestSecret: '', operatorTier: 'none', operatorEntitlements: null,
-    operatorEntitlementsAt: 0, operatorIntegrationsVersion: 0,
+    operatorUrl: '',
+    operatorIngestSecret: '',
+    operatorTier: 'none',
+    operatorEntitlements: null,
+    operatorEntitlementsAt: 0,
+    operatorIntegrationsVersion: 0,
     meetingsFolder: '/private/tmp/metis-operator-ingest-metadata-never-read'
   }
   return {
@@ -139,11 +143,13 @@ beforeEach(() => {
   // A heartbeat's success path fires a fire-and-forget integrations refresh (maybeRefreshOperatorIntegrations)
   // — stub its transport so tests never make a real network call, and reset its module-level cache/registry
   // so one test's fetched integrations can't leak into the next.
-  setOperatorIntegrationsFetchForTests((async () =>
-    new Response('{"ok":true,"version":0,"integrations":[]}', {
-      status: 200,
-      headers: { 'content-type': 'application/json' }
-    })) as typeof fetch)
+  setOperatorIntegrationsFetchForTests(
+    (async () =>
+      new Response('{"ok":true,"version":0,"integrations":[]}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })) as typeof fetch
+  )
   resetOperatorIntegrationsStateForTests()
   operatorKeysEntitled = true // matches today's ungated behavior unless a test says otherwise
   electronMock.app.reset()
@@ -215,7 +221,10 @@ describe('recordOperatorAsk question type', () => {
 
   it('does nothing without an https URL and a secret', async () => {
     const f = captureFetch()
-    await recordOperatorAsk({ operatorUrl: 'http://plain.test', operatorIngestSecret: 'x' }, { id: 'a', question: 'why' })
+    await recordOperatorAsk(
+      { operatorUrl: 'http://plain.test', operatorIngestSecret: 'x' },
+      { id: 'a', question: 'why' }
+    )
     await recordOperatorAsk({ operatorUrl: 'https://operator.test' }, { id: 'b', question: 'why' })
     expect(f.calls).toHaveLength(0)
   })
@@ -448,11 +457,13 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
 
   it('a heartbeat that reports fundedProviders still passes them through operatorFundedProviders when operator_keys is entitled', async () => {
     operatorKeysEntitled = true
-    setOperatorFetchForTests((async () =>
-      new Response(JSON.stringify({ ok: true, fundedProviders: ['groq'] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      })) as typeof fetch)
+    setOperatorFetchForTests(
+      (async () =>
+        new Response(JSON.stringify({ ok: true, fundedProviders: ['groq'] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })) as typeof fetch
+    )
     const beat = await operatorHeartbeat(SETTINGS)
     expect(beat.ok).toBe(true)
     expect(operatorFundedProviders()).toEqual(['groq'])
@@ -460,6 +471,42 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
 })
 
 describe('fleet model policy scheduler', () => {
+  it('awaits a fresh authority boundary before reading settings on every unchanged policy refresh', async () => {
+    const release: Array<() => void> = []
+    const readSettings = vi.fn(() => SETTINGS)
+    const beforePolicyRefresh = vi.fn(() => new Promise<void>((resolve) => release.push(resolve)))
+    captureFetch()
+    startOperatorRuntime(readSettings, { beforePolicyRefresh })
+    await flushPromises()
+    expect(beforePolicyRefresh).toHaveBeenCalledTimes(1)
+    expect(policyClientMock.refreshModelPolicy).not.toHaveBeenCalled()
+    const readsBeforeRelease = readSettings.mock.calls.length
+    release.shift()?.()
+    await vi.waitFor(() => expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1))
+    expect(readSettings.mock.calls.length).toBeGreaterThan(readsBeforeRelease)
+    electronMock.app.emit('browser-window-focus')
+    await vi.waitFor(() => expect(beforePolicyRefresh).toHaveBeenCalledTimes(2))
+    expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+    release.shift()?.()
+    await vi.waitFor(() => expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not refresh a retired runtime after its authority boundary settles', async () => {
+    const gate: { release?: () => void } = {}
+    captureFetch()
+    startOperatorRuntime(() => SETTINGS, {
+      beforePolicyRefresh: () =>
+        new Promise<void>((resolve) => {
+          gate.release = resolve
+        })
+    })
+    await flushPromises()
+    stopOperatorRuntime()
+    gate.release?.()
+    await flushPromises()
+    expect(policyClientMock.refreshModelPolicy).not.toHaveBeenCalled()
+  })
+
   it('asserts heartbeat and policy poll cadence divisibility at module load', () => {
     expect(HEARTBEAT_MS % POLICY_POLL_MS).toBe(0)
   })
@@ -565,7 +612,11 @@ describe('fleet model policy scheduler', () => {
       await flushPromises()
 
       expect(f.calls.filter((call) => call.url.endsWith('/v1/heartbeat'))).toHaveLength(1)
-      for (let elapsed = 0; policyClientMock.refreshModelPolicy.mock.calls.length < 2 && elapsed < 1_000; elapsed += 50) {
+      for (
+        let elapsed = 0;
+        policyClientMock.refreshModelPolicy.mock.calls.length < 2 && elapsed < 1_000;
+        elapsed += 50
+      ) {
         await vi.advanceTimersByTimeAsync(50)
         await flushPromises()
       }
@@ -674,7 +725,10 @@ describe('fleet model policy scheduler', () => {
       captureFetch()
       let release: (() => void) | undefined
       policyClientMock.refreshModelPolicy.mockImplementationOnce(
-        () => new Promise((resolve) => { release = () => resolve({ changed: false, ok: true }) })
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ changed: false, ok: true })
+          })
       )
       startOperatorRuntime(() => SETTINGS)
       await flushPromises()
@@ -775,7 +829,13 @@ describe('recordOperatorCrmSend credentialSource', () => {
     })
 
     const queued = loadQueueState(queueDir).items[0].body
-    expect(queued).toMatchObject({ event: 'crm', id: 'crm-queued-private', status: 'failed', attempt: 2, error: 'unknown' })
+    expect(queued).toMatchObject({
+      event: 'crm',
+      id: 'crm-queued-private',
+      status: 'failed',
+      attempt: 2,
+      error: 'unknown'
+    })
     expect(queued).not.toHaveProperty('title')
     expect(queued).not.toHaveProperty('remoteId')
     expect(queued).not.toHaveProperty('remoteUrl')
@@ -800,17 +860,18 @@ describe('recordOperatorRating explicit askId', () => {
     expect(f.calls[1].body.id).toBe('ask-C')
   })
 
-  it.each(['suggest', 'summary', 'recap'])(
-    'does not let a %s update replace the last answer used by legacy ratings',
-    async (mode) => {
-      const f = captureFetch()
-      await recordOperatorAsk(SETTINGS, { id: 'answer-to-rate', mode: 'answer', question: 'q' })
-      await recordOperatorAsk(SETTINGS, { id: `background-${mode}`, mode, question: 'q' })
+  it.each([
+    'suggest',
+    'summary',
+    'recap'
+  ])('does not let a %s update replace the last answer used by legacy ratings', async (mode) => {
+    const f = captureFetch()
+    await recordOperatorAsk(SETTINGS, { id: 'answer-to-rate', mode: 'answer', question: 'q' })
+    await recordOperatorAsk(SETTINGS, { id: `background-${mode}`, mode, question: 'q' })
 
-      await recordOperatorRating(SETTINGS, 'up')
+    await recordOperatorRating(SETTINGS, 'up')
 
-      expect(f.calls).toHaveLength(3)
-      expect(f.calls[2].body.id).toBe('answer-to-rate')
-    }
-  )
+    expect(f.calls).toHaveLength(3)
+    expect(f.calls[2].body.id).toBe('answer-to-rate')
+  })
 })

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createSpeechPackBridge } from './speech-pack'
+import { createCloudSpeechPreloadApi } from './cloud-speech'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import {
   IPC,
@@ -71,6 +72,7 @@ import {
   type RendererCrashReport,
   type AsrAssetsStatus,
   type ImportJobView,
+  type ImportJobsSnapshot,
   type LocalModelSummary,
   type ProfileRecoveryResult,
   type ScreenCaptureCheckResult,
@@ -93,6 +95,7 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   ...createSpeechPackBridge({ invoke: (channel, payload) => ipcRenderer.invoke(channel, payload), subscribe: sub }),
+  ...createCloudSpeechPreloadApi(ipcRenderer),
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
@@ -302,7 +305,7 @@ const api = {
   importAudioStart: (token: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importAudioStart, { token }),
   importAudioStartBatch: (tokens: string[]): Promise<ImportJobView[]> =>
     ipcRenderer.invoke(IPC.importAudioStartBatch, { tokens }),
-  importJobsList: (): Promise<ImportJobView[]> => ipcRenderer.invoke(IPC.importJobsList),
+  importJobsList: (): Promise<ImportJobsSnapshot> => ipcRenderer.invoke(IPC.importJobsList),
   importJobCancel: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobCancel, { jobId }),
   importJobResume: (jobId: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importJobResume, { jobId }),
   importJobRemove: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobRemove, { jobId }),

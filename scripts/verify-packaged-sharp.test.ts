@@ -74,6 +74,16 @@ function fixture(target: 'win' | 'mac' = 'win', arches = ['arm64']): Fixture {
   ]) {
     if (existsSync(join(repo, 'scripts', name))) copyFileSync(join(repo, 'scripts', name), join(root, 'scripts', name))
   }
+  copyFileSync(join(repo, 'scripts/lib/runtime-trust-pins.mjs'), join(root, 'scripts/lib/runtime-trust-pins.mjs'))
+  for (const name of [
+    'runtime-catalog.json',
+    'runtime-trust/sigstore-trusted-root.json',
+    'runtime-trust/acquisition-receipt.json'
+  ]) {
+    const destination = join(resources, name)
+    mkdirSync(dirname(destination), { recursive: true })
+    copyFileSync(join(repo, 'resources', name), destination)
+  }
   put(
     join(root, 'scripts/local-model-assets.mjs'),
     `export const REPO_ROOT = ${JSON.stringify(root)}; export const LOCAL_MODEL_PAYLOAD = [];`

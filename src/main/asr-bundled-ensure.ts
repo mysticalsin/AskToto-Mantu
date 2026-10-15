@@ -34,13 +34,18 @@ import {
 import { mainLog } from './logger'
 import { extractParakeetArchiveWindows } from './parakeet-extract'
 import { asrManifestComplete } from './asr-manifest'
-import { asrMetadataStatusReady, parakeetMetadataStatusReady } from './asr-metadata-readiness'
+import {
+  asrMetadataStatusReady,
+  parakeetMetadataStatusReady,
+  whisperMetadataStatusReady
+} from './asr-metadata-readiness'
 import { getSettings } from './store'
 import {
   PARAKEET_TDT_V3_INT8,
   WHISPER_BASE_Q8,
   readSpeechPackProfile,
   resolveSpeechPack,
+  legacyRuntimeClosureAvailable,
   type SpeechPackComponentId,
   type SpeechPackReadiness
 } from './features/components'
@@ -328,6 +333,7 @@ export async function asrModelProtocolSpeechPackOptions(): Promise<{
   speechPackModelsRoot?: string
 }> {
   const profile = await speechPackBuildProfile()
+  if (!(await legacyRuntimeClosureAvailable())) return { useOnlySpeechPackModels: true }
   if (profile.profile === 'full' || profile.profile === 'development') return { useOnlySpeechPackModels: false }
   if (profile.profile === null) return { useOnlySpeechPackModels: true }
   const selected = selectedAsrEngine()
@@ -363,7 +369,21 @@ async function importAsrAssetsReadyForProfile(
 
 export async function importAsrAssetsReady(): Promise<boolean> {
   const profile = await speechPackBuildProfile()
+  if (profile.profile === 'lean' && !(await legacyRuntimeClosureAvailable())) return false
   return asrMetadataStatusReady(asrMetadataOptions(profile))
+}
+
+/** Read the selected engine's actual model metadata without creating, probing, or warming a runtime. */
+export async function asrModelMetadataReadyForEngine(
+  engine: 'whisper' | 'parakeet' | 'apple',
+  verifiedProfile?: 'full' | 'lean' | 'development' | null
+): Promise<boolean> {
+  if (engine === 'apple') return process.platform === 'darwin'
+  if (verifiedProfile === null) return false
+  const profile = verifiedProfile === undefined ? await speechPackBuildProfile() : { profile: verifiedProfile }
+  if (profile.profile === null) return false
+  const options = { ...asrMetadataOptions(profile), selectedEngine: engine }
+  return engine === 'parakeet' ? parakeetMetadataStatusReady(options) : whisperMetadataStatusReady(options)
 }
 
 function asrMetadataOptions(
@@ -400,7 +420,8 @@ export async function asrAssetsStatusSnapshot(): Promise<AsrAssetsProgress & { r
       reason: 'invalid-profile'
     }
   }
-  const ready = await asrMetadataStatusReady(asrMetadataOptions(profile))
+  const runtimeReady = await legacyRuntimeClosureAvailable()
+  const ready = runtimeReady && (await asrMetadataStatusReady(asrMetadataOptions(profile)))
   if (profile.profile === 'lean' && !ready) {
     return {
       ready: false,
@@ -725,6 +746,9 @@ export function ensureImportAsrAssets(onProgress?: (pct: number) => void): Promi
 }
 
 async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
+  if (!(await legacyRuntimeClosureAvailable())) {
+    throw new Error('An ASR runtime is not configured for this package.')
+  }
   const profile = await speechPackBuildProfile()
   if (profile.profile === null) throw new AsrSpeechPackNotReadyError('invalid-profile')
   if (profile.profile === 'lean') {

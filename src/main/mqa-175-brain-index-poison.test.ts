@@ -419,10 +419,8 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(clear).toBeGreaterThan(stop) // stop power-save with the 15s backstop clear
     // Brain resume still inside the 15s timer (MQA-175).
     expect(slice.indexOf('resumeBackfillIfPending()')).toBeGreaterThan(-1)
-    const willQuit = source.search(/app\.on\(\s*['"]will-quit['"]\s*,/)
-    const willSlice = source.slice(willQuit, willQuit + 900)
-    expect(willSlice).toMatch(/setBootPowerSaveBlock\(false\)/)
-    expect(willSlice).toMatch(/endBootWatch\(/)
+    const lifecycleBinding = source.match(/installAppQuitLifecycle\(app,\s*\{([\s\S]*?)\n\}\)/)
+    expect(lifecycleBinding?.[1]).toMatch(/setBootPowerSaveBlock,\s*endBootWatch,/)
     expect(source).toMatch(/bootPowerSaveBlockerId/)
     expect(source).toMatch(/powerSaveBlocker\.start\('prevent-app-suspension'\)/)
   })

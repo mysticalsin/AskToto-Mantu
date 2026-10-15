@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
+import { CloudSpeechSettingsSchema, DEFAULT_CLOUD_SPEECH_SETTINGS } from './broker-speech-settings'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
@@ -264,6 +266,8 @@ export const IPC = {
   asrAssetsEnsure: 'asr:assets-ensure',
   speechPackState: 'speech-pack:state',
   speechPackAction: 'speech-pack:action',
+  speechPackPlanPreview: 'speech-pack:plan-preview',
+  speechPackInstallWithPlan: 'speech-pack:install-with-plan',
   speechPackProgress: 'speech-pack:progress',
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
@@ -440,27 +444,7 @@ export const ProfileSchema = z.object({
 })
 export type Profile = z.infer<typeof ProfileSchema>
 
-export const TranscriptLineSchema = z.object({
-  // Imported recordings have speech but no diarization. `unknown` prevents the UI and recap prompt from
-  // inventing that every imported sentence was spoken by the operator.
-  speaker: z.enum(['them', 'you', 'unknown']),
-  text: z.string(),
-  t: z.number(),
-  // Speaker Intelligence (Phase A) — the resolved human display name for this line's speaker, backfilled
-  // best-effort from the meeting's own Microsoft Teams transcript after the meeting ends (see
-  // main/graph-transcript.ts + shared/transcript-align.ts). Additive only: the SIDE (`speaker` — them/
-  // you/unknown) is never inferred or changed by this. Optional so every previously saved meeting, and
-  // any line no name was ever resolved for, still parses unchanged.
-  name: z.string().optional(),
-  // Detected spoken language of this line (shared/lang-id.ts display name, e.g. 'Portuguese') — tagged
-  // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
-  // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
-  // when detection wasn't confident, and on every line saved before this field existed.
-  lang: z.string().optional(),
-  // Streaming first-caption placeholder (docs/asr/QUALITY.md). Never persisted; transcriptToText drops it.
-  provisional: z.boolean().optional()
-})
-export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+export { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 
 /** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
  *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
@@ -575,34 +559,8 @@ export type ImportAudioOffer = z.infer<typeof ImportAudioOfferSchema>
 
 export type { ImportAssetsProgress, AsrAssetsStatus } from './asr-assets'
 
-export type ImportJobState =
-  | 'queued'
-  | 'decoding'
-  | 'transcribing'
-  | 'saving'
-  | 'recapping'
-  | 'done'
-  | 'failed'
-  | 'cancelled'
-
-/** Sanitised job state exposed to the overlay. Source paths remain main-process-only. */
-export interface ImportJobView {
-  jobId: string
-  title: string
-  state: ImportJobState
-  cursor: number
-  totalChunks: number
-  /** Null means the decoder has not supplied a trustworthy denominator yet. */
-  pct: number | null
-  error?: string
-  recapError?: string
-  file?: string
-  createdAt: number
-  updatedAt: number
-  queuePosition?: number
-}
-
-export const ImportJobIdSchema = z.object({ jobId: z.string().min(1).max(200) })
+export type { ImportJobState, ImportJobView, ImportJobsSnapshot, ImportAudioProgress } from './import-jobs'
+export { ImportJobIdSchema } from './import-jobs'
 
 /** Result of one import-audio:transcribe call. Only `file`/`title`/`lines` are populated on the final
  *  (done) chunk, once the accumulated transcript has actually been saved. */
@@ -612,12 +570,6 @@ export interface ImportAudioChunkResult {
   file?: string
   title?: string
   lines?: TranscriptLine[]
-}
-
-/** Pushed via webContents.send while a session is transcribing/saving — drives the "Import audio"
- *  button's progress label in RecallView. */
-export interface ImportAudioProgress {
-  job: ImportJobView
 }
 
 /** Main validates every one of these payloads again and accepts them only from the dedicated decoder. */
@@ -1184,24 +1136,7 @@ export const BaseSettingsSchema = z.object({
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
-  /**
-   * Managed enterprise-live profile (1.9.1). Trusted via managed-config defaults / org policy.
-   * CLOUD_ONLY disables local STT fallback; summaryOnly omits fresh Full transcript sections.
-   */
-  enterpriseLive: z
-    .object({
-      managed: z.boolean().default(false),
-      inferenceMode: z.enum(['legacy', 'cloud-only']).default('legacy'),
-      summaryOnly: z.boolean().default(false)
-    })
-    .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
-  /**
-   * Cloud speech provider for managed enterprise-live Listen.
-   * Under CLOUD_ONLY, Settings + Listen treat unconfigured as Cloudflare Nova-3
-   * (see shared/cloud-stt-provider.ts). Soniox is selectable when approved.
-   * Legacy profiles keep on-device asrEngine; this field stays unconfigured.
-   */
-  cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
+  ...CloudSpeechSettingsSchema.shape,
   /**
    * Cloudflare AI Gateway id for Nova-3 live WS (Operator verifyDefaultGatewayPrivacy uses `default`).
    * Blank → resolveCloudSttGatewayId falls through env then `default`. Not a secret.
@@ -1742,8 +1677,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
-  enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
-  cloudSttProvider: 'unconfigured',
+  ...DEFAULT_CLOUD_SPEECH_SETTINGS,
   cfAiGatewayId: '',
   cloudflareAccountId: '',
   asrLanguage: 'auto',

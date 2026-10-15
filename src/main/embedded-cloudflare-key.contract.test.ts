@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { isProfileRecoveryFileName } from './profile-recovery-files'
 
 const STORE = readFileSync(join(__dirname, 'store.ts'), 'utf8')
 const SEED = readFileSync(join(__dirname, 'embedded-cloudflare-key.ts'), 'utf8')
@@ -30,17 +31,15 @@ describe('MQA-260 — a rebuilt profile must be able to seed the embedded key ag
   it('clears the one-shot seed marker when the encrypted profile is archived', () => {
     const marker = "'.cloudflare-key-seeded'"
     expect(
-      STORE.includes(marker),
-      `${marker} must be in PROFILE_RECOVERY_FIXED_FILES, or a repaired profile inherits "already seeded" and can never hold the shipped key`
+      isProfileRecoveryFileName('.cloudflare-key-seeded') && STORE.includes('isProfileRecoveryFileName(entry.name)'),
+      `${marker} must be recognized by the shared profile-recovery predicate used by archive and fresh-profile checks`
     ).toBe(true)
   })
 
-  it('keeps the marker inside PROFILE_RECOVERY_FIXED_FILES specifically', () => {
-    // Guards against the string surviving only in a comment after a refactor.
-    const start = STORE.indexOf('const PROFILE_RECOVERY_FIXED_FILES')
-    expect(start).toBeGreaterThan(-1)
-    const block = STORE.slice(start, STORE.indexOf('])', start))
-    expect(block).toContain("'.cloudflare-key-seeded'")
+  it('keeps known profile artifacts in the shared recovery classifier', () => {
+    expect(isProfileRecoveryFileName('settings.json')).toBe(true)
+    expect(isProfileRecoveryFileName('key-openai.bin')).toBe(true)
+    expect(isProfileRecoveryFileName('ordinary-user-file.txt')).toBe(false)
   })
 
   it('does NOT weaken the marker itself — a user key must still win on an ordinary launch', () => {

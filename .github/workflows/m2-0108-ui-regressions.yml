@@ -1,0 +1,57 @@
+name: UI regression validation
+
+on:
+  push:
+    branches: [m2/M2-0108-ui-regressions]
+  pull_request:
+    paths:
+      - .github/workflows/m2-0108-ui-regressions.yml
+      - src/renderer/src/components/Onboarding*.test.ts
+      - src/renderer/src/components/import-queue*.test.ts
+      - src/renderer/src/features/settings/SpeechPackSection.browser.test.ts
+      - src/renderer/src/lib/onboarding-*.test.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-regressions-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rendered-behavior:
+    name: Rendered UI behavior (${{ matrix.os }})
+    if: github.repository == 'mysticalsin/AskToto-Mantu'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Install isolated browser dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Check complete affected UI suites without changing their deadlines
+        run: >-
+          npx vitest run
+          src/renderer/src/components/Onboarding.helpers.test.ts
+          src/renderer/src/components/OnboardingExperience.mqa283.test.ts
+          src/renderer/src/components/import-queue.test.ts
+          src/renderer/src/components/import-queue-actions.browser.test.ts
+          src/renderer/src/features/settings/SpeechPackSection.browser.test.ts
+          src/renderer/src/lib/onboarding-boot.test.ts
+          src/renderer/src/lib/onboarding-hero-video.test.ts
+          src/renderer/src/lib/onboarding-portal.test.ts
+          src/renderer/src/lib/onboarding-quality-bar.test.ts
+          src/renderer/src/lib/onboarding-welcome.browser.test.ts

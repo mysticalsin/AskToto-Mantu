@@ -35,8 +35,10 @@ describe('registerSpeechPackIpc', () => {
     })
     const snapshot = vi.fn(async () => ({ status: 'ready' }))
     const action = vi.fn(async (request: unknown) => ({ request }))
+    const planPreview = vi.fn(async (request: unknown) => ({ request, plan: true }))
+    const installWithPlan = vi.fn(async (request: unknown) => ({ request, installed: true }))
     const subscribe = vi.fn(() => vi.fn())
-    const service = { snapshot, action, subscribe } as unknown as SpeechPackService
+    const service = { snapshot, action, planPreview, installWithPlan, subscribe } as unknown as SpeechPackService
 
     registerSpeechPackIpc({
       ipcMain,
@@ -47,16 +49,29 @@ describe('registerSpeechPackIpc', () => {
 
     expect(snapshot).not.toHaveBeenCalled()
     expect(action).not.toHaveBeenCalled()
+    expect(planPreview).not.toHaveBeenCalled()
+    expect(installWithPlan).not.toHaveBeenCalled()
     expect(() => handlers.get(IPC.speechPackState)?.(eventFrom({}))).toThrow(denied)
     expect(snapshot).not.toHaveBeenCalled()
     expect(() => handlers.get(IPC.speechPackAction)?.(eventFrom({}), { consent: true })).toThrow(denied)
     expect(action).not.toHaveBeenCalled()
+    expect(() => handlers.get(IPC.speechPackPlanPreview)?.(eventFrom({}), { componentId: 'x' })).toThrow(denied)
+    expect(planPreview).not.toHaveBeenCalled()
+    expect(() => handlers.get(IPC.speechPackInstallWithPlan)?.(eventFrom({}), { planId: 'x' })).toThrow(denied)
+    expect(installWithPlan).not.toHaveBeenCalled()
 
     await expect(handlers.get(IPC.speechPackState)?.(trusted)).resolves.toEqual({ status: 'ready' })
     const request = { componentId: 'whisper-base-q8', action: 'download' }
     await expect(handlers.get(IPC.speechPackAction)?.(trusted, request)).resolves.toEqual({ request })
     expect(action).toHaveBeenCalledWith(request)
-    expect(assertMainWindow).toHaveBeenCalledTimes(4)
+    await expect(handlers.get(IPC.speechPackPlanPreview)?.(trusted, request)).resolves.toEqual({ request, plan: true })
+    await expect(handlers.get(IPC.speechPackInstallWithPlan)?.(trusted, request)).resolves.toEqual({
+      request,
+      installed: true
+    })
+    expect(planPreview).toHaveBeenCalledWith(request)
+    expect(installWithPlan).toHaveBeenCalledWith(request)
+    expect(assertMainWindow).toHaveBeenCalledTimes(8)
   })
 
   it('removes old handlers on registration and unsubscribes progress on cleanup', () => {
@@ -66,6 +81,8 @@ describe('registerSpeechPackIpc', () => {
     const service = {
       snapshot: vi.fn(),
       action: vi.fn(),
+      planPreview: vi.fn(),
+      installWithPlan: vi.fn(),
       subscribe: vi.fn((onProgress: (progress: SpeechPackProgress) => void) => {
         listener = onProgress
         return unsubscribe
@@ -79,9 +96,16 @@ describe('registerSpeechPackIpc', () => {
       service
     })
 
-    expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual([IPC.speechPackState, IPC.speechPackAction])
+    expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual([
+      IPC.speechPackState,
+      IPC.speechPackAction,
+      IPC.speechPackPlanPreview,
+      IPC.speechPackInstallWithPlan
+    ])
     expect(handlers.has(IPC.speechPackState)).toBe(true)
     expect(handlers.has(IPC.speechPackAction)).toBe(true)
+    expect(handlers.has(IPC.speechPackPlanPreview)).toBe(true)
+    expect(handlers.has(IPC.speechPackInstallWithPlan)).toBe(true)
     const progress: SpeechPackProgress = {
       componentId: 'asr.whisper-base-q8',
       manifestIdentity: 'a'.repeat(64),
@@ -93,9 +117,11 @@ describe('registerSpeechPackIpc', () => {
     expect(sendProgress).toHaveBeenCalledWith(progress)
     cleanup()
     expect(unsubscribe).toHaveBeenCalledOnce()
-    expect(removeHandler.mock.calls.slice(-2).map(([channel]) => channel)).toEqual([
+    expect(removeHandler.mock.calls.slice(-4).map(([channel]) => channel)).toEqual([
       IPC.speechPackState,
-      IPC.speechPackAction
+      IPC.speechPackAction,
+      IPC.speechPackPlanPreview,
+      IPC.speechPackInstallWithPlan
     ])
   })
 
@@ -105,6 +131,8 @@ describe('registerSpeechPackIpc', () => {
     const service = {
       snapshot: vi.fn(),
       action: vi.fn(),
+      planPreview: vi.fn(),
+      installWithPlan: vi.fn(),
       subscribe: vi.fn(() => unsubscribe)
     } as unknown as SpeechPackService
     const cleanup = registerSpeechPackIpc({
@@ -129,9 +157,11 @@ describe('registerSpeechPackIpc', () => {
     expect(didThrow).toBe(true)
     expect(thrown).toBeUndefined()
     expect(unsubscribe).toHaveBeenCalledOnce()
-    expect(removeHandler.mock.calls.slice(-2).map(([channel]) => channel)).toEqual([
+    expect(removeHandler.mock.calls.slice(-4).map(([channel]) => channel)).toEqual([
       IPC.speechPackState,
-      IPC.speechPackAction
+      IPC.speechPackAction,
+      IPC.speechPackPlanPreview,
+      IPC.speechPackInstallWithPlan
     ])
   })
 })

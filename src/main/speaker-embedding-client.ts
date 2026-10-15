@@ -3,6 +3,7 @@
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { mainLog } from './logger'
+import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
 import {
   SPEAKER_EMBEDDING_DIMENSIONS,
   SPEAKER_MAX_SAMPLES,
@@ -137,7 +138,9 @@ function terminateGeneration(generation: Generation, error: Error): Promise<void
   generation.exitTimer = setTimeout(() => {
     if (generation.state !== 'releasing') return
     generation.state = 'blocked'
-    const failure = new Error('Could not confirm that the speaker embedding helper exited; restart is blocked to prevent overlapping native extractors.')
+    const failure = new Error(
+      'Could not confirm that the speaker embedding helper exited; restart is blocked to prevent overlapping native extractors.'
+    )
     blockedRelease = { generation, error: failure }
     if (releaseGate === generation.termination) releaseGate = null
     generation.rejectTermination?.(failure)
@@ -195,14 +198,20 @@ async function requestHost(
   })
 }
 
-async function admitted<T>(owner: SpeakerEmbeddingOwner, bytes: number, run: (epoch: number) => Promise<T>): Promise<T> {
+async function admitted<T>(
+  owner: SpeakerEmbeddingOwner,
+  bytes: number,
+  run: (epoch: number) => Promise<T>
+): Promise<T> {
   if (admittedRequests >= MAX_PENDING_REQUESTS || admittedPcmBytes + bytes > MAX_QUEUED_PCM_BYTES) {
     throw new SpeakerEmbeddingBusyError()
   }
   const epoch = ownerEpoch[owner]
   let finishWork = (): void => {}
   const work: AdmittedWork = {
-    done: new Promise<void>((resolve) => { finishWork = resolve }),
+    done: new Promise<void>((resolve) => {
+      finishWork = resolve
+    }),
     finish: () => finishWork()
   }
   admittedRequests++
@@ -225,6 +234,7 @@ export async function speakerEmbeddingAvailable(
 ): Promise<boolean> {
   if (!model) return false
   try {
+    await assertLegacyRuntimeClosure('speaker embedding')
     await admitted(owner, 0, (epoch) => requestHost({ type: 'warmup', model }, owner, epoch))
     return true
   } catch (error) {
@@ -242,6 +252,11 @@ export async function computeSpeakerEmbedding(
   if (samples.length > SPEAKER_MAX_SAMPLES) throw new Error('Speaker PCM is too large.')
   for (const sample of samples) {
     if (!Number.isFinite(sample)) throw new Error('Speaker PCM samples must be finite.')
+  }
+  try {
+    await assertLegacyRuntimeClosure('speaker embedding')
+  } catch {
+    return null
   }
   // Immutable admission accounting: caller-owned views may be detached/resized while this awaits.
   const admittedBytes = samples.byteLength

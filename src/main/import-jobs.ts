@@ -1,147 +1,50 @@
 import { freemem, totalmem } from 'node:os'
 import { hasVadV2MemoryHeadroom } from '@shared/asr-hardware-preference'
-import { vadWindowsFromPcm } from '@shared/vad'
-import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
-import { estimateNoteTakingMinutes, wordsFromTexts } from '@shared/time-saved-events'
-import { meetingDurationMinutes } from '@shared/meeting-duration'
+import { IMPORT_CHUNK_SECONDS, type TranscriptLine } from '@shared/ipc'
+import { ImportRetentionBlockedError } from './import-retention-policy'
+import {
+  consumeVadPcm,
+  finalizeImportJob,
+  hasMemoryHeavyImportWork,
+  prepareImportCheckpoint,
+  reportImportProgress,
+  type ImportJobPipelineHost
+} from './import-job-pipelines'
+export { assembleVadPcmAndRelease } from './import-job-pipelines'
+import {
+  ImportJobRetentionCoordinator,
+  StaleImportJobWriteError,
+  type ImportRetentionHost,
+  type ImportResumeHost
+} from './import-job-retention-coordinator'
+import type {
+  ImportJobState,
+  ImportJobSource,
+  ImportJob,
+  ImportJobStore,
+  ImportSpeakerAttempt,
+  ImportDecodeMemoryAdmission,
+  ImportJobsSnapshot,
+  ImportJobManagerDeps,
+  ImportHoldInventory
+} from './import-job-types'
+export type {
+  ImportJobState,
+  ImportJobSource,
+  ImportJob,
+  ImportJobStore,
+  ImportSpeakerAttempt,
+  ImportDecodeMemoryAdmission,
+  ImportJobsSnapshot,
+  ImportJobManagerDeps,
+  ImportHoldInventory
+} from './import-job-types'
 
 /**
  * Main-process import queue. It deliberately persists text checkpoints, not decoded PCM: raw audio is
- * never left on disk and a restart simply asks the isolated decoder to replay the source from `cursor`.
+ * never left on disk. On boot, saved imports are inventoried without reading payloads and require an
+ * explicit Resume action before source validation or decoder admission.
  */
-export type ImportJobState =
-  | 'queued'
-  | 'decoding'
-  | 'transcribing'
-  | 'saving'
-  | 'recapping'
-  | 'done'
-  | 'failed'
-  | 'cancelled'
-
-export interface ImportJobSource {
-  path: string
-  name: string
-  sizeBytes: number
-  mtimeMs: number
-}
-
-export interface ImportJob {
-  jobId: string
-  sourcePath: string
-  sourceName: string
-  sourceSizeBytes: number
-  sourceMtimeMs: number
-  title: string
-  state: ImportJobState
-  /** Number of fully transcribed chunks. The decoder skips these after a restart. */
-  cursor: number
-  /** 0 while a streaming decoder is still discovering the recording length. */
-  totalChunks: number
-  /** Decoder-reported transcription progress. Kept separate from totalChunks because FFmpeg may learn the
-   * exact duration only after it has started streaming PCM. This value is monotonic and capped at 99 until
-   * the import reaches its terminal done state. */
-  progressPct?: number
-  lines: TranscriptLine[]
-  file?: string
-  error?: string
-  recapError?: string
-  /** Persona (settings.mode) captured at import start. The recap step runs later, queue-ordered — without
-   * this pin a persona switch mid-queue would shape an unrelated import's summary. Absent on jobs
-   * checkpointed by older builds; consumers fall back to the live mode. */
-  mode?: string
-  /** Decode chunk-window size (seconds, IMPORT_CHUNK_SECONDS) this job's cursor/lines/totalChunks were
-   *  checkpointed against. Stamped once at start() and never changed while a job is in flight. recover()
-   *  compares it against the CURRENT constant: a mismatch (older build, or the constant changed since)
-   *  means `cursor` no longer lines up with the decoder's actual chunk boundaries — resuming would splice
-   *  windows recorded at two different sizes into one transcript. Absent on jobs checkpointed before this
-   *  field existed, which recover() also treats as a mismatch. */
-  chunkSec?: number
-  /** MQA-235: which transcription pipeline this job's cursor/lines were checkpointed against.
-   *  'vad-v2' = the utterance pipeline (cursor counts VAD windows; resume re-decodes+re-segments —
-   *  deterministic — and skips windows < cursor). Absent = the legacy fixed-slab pipeline. */
-  pipeline?: 'vad-v1' | 'vad-v2'
-  /** Recording length measured from decoded PCM, not the start time of its last utterance. */
-  durationMs?: number
-  createdAt: number
-  updatedAt: number
-}
-
-export interface ImportJobStore {
-  save(job: ImportJob): Promise<void>
-  list(): Promise<ImportJob[]>
-  remove(jobId: string): Promise<void>
-}
-
-/** In-memory identity for one admitted decode attempt. A retry of the same durable job gets a new ID. */
-export interface ImportSpeakerAttempt {
-  readonly jobId: string
-  readonly attemptId: number
-}
-
-/** OS memory snapshot taken exactly when a queued job claims the sole decoder admission slot. */
-export interface ImportDecodeMemoryAdmission {
-  totalMemoryBytes: unknown
-  freeMemoryBytes: unknown
-}
-
-export interface ImportJobManagerDeps {
-  store: ImportJobStore
-  /** Starts an isolated decoder for the selected source. It must return immediately; completion arrives through finishDecoding. */
-  decode: (job: ImportJob) => void | Promise<void>
-  /** `language`, when set, is the whole-recording majority vote (see finishDecoding) — the engine may
-   *  hard-pin it instead of guessing per window. Null/absent = engine decides (legacy behavior). */
-  transcribe: (samples: Float32Array, opts?: { language?: string | null }) => Promise<string>
-  /** MQA-235: language-ID one utterance window (Parakeet text + lang-id in the live wiring). Used for
-   *  the whole-recording majority vote; absent = no vote, engines guess as before. */
-  probeLanguageName?: (samples: Float32Array) => Promise<string | null>
-  /** Synchronously admit exact transient speaker ownership for one fresh import attempt. */
-  beginSpeakers?: (attempt: ImportSpeakerAttempt) => boolean
-  /** MQA-235: diarize one utterance window — an enrolled profile name or a session cluster label
-   *  ("Speaker N"), null when the extractor is unavailable/degenerate. Requires beginSpeakers=true. */
-  speakerFor?: (samples: Float32Array, attempt: ImportSpeakerAttempt) => Promise<string | null>
-  /** MQA-238: whole-recording speaker-cluster merge, called once after the window loop. Returns the
-   *  old->final label mapping applied to every line's `name`; null/absent = no relabel. */
-  finalizeSpeakers?: (attempt: ImportSpeakerAttempt) => Map<string, string> | null
-  /** Release the exact transient session. Must be synchronous; native/model release is owned elsewhere. */
-  disposeSpeakers?: (attempt: ImportSpeakerAttempt) => void
-  /** Plaud-style cleanup pass over the finished lines (stutters/punctuation, never a paraphrase).
-   *  Fail-open: a throw keeps the raw lines. */
-  polish?: (lines: TranscriptLine[]) => Promise<TranscriptLine[]>
-  /** Fired when the FIFO goes idle (no active job) — the wiring uses it to stop the whisper helper
-   *  process and release its model memory between imports. */
-  onIdle?: () => void
-  saveMeeting: (meeting: SaveMeeting) => Promise<string>
-  /** Best-effort cleanup for a meeting file that finished saving after its job was already cancelled. */
-  deleteMeeting?: (file: string) => Promise<unknown>
-  /** Persists the background-intelligence intent before extraction starts; may resolve after local I/O. */
-  enqueueIngest: (file: string) => void | Promise<void>
-  /** Returns a persisted-meeting recap or undefined when no provider is configured. */
-  generateRecap: (job: ImportJob) => Promise<string | undefined>
-  updateRecap: (file: string, recap: string, recapStatus: 'complete') => Promise<void>
-  /** Credit the durable time-saved counters for one summarized meeting (main/store.ts). Optional so the
-   *  import-jobs unit tests need not wire it; the live app always provides it. */
-  recordMeetingSummarized?: (durationMin: number) => void
-  /** Honest note-taking estimate for an imported transcript (words / 180 wpm). */
-  recordTimeSavedNote?: (words: number, file: string) => void
-  onChange?: (job: ImportJob) => void
-  /** Resolve only after the owned decoder has stopped, preventing overlapping FIFO jobs. */
-  onCancel?: (jobId: string) => void | Promise<void>
-  /** Current persona (settings.mode), snapshotted into the job at start() — see ImportJob.mode. */
-  personaMode?: () => string
-  /** Current OS free memory in bytes. Injected by tests; production reads node:os freemem(). */
-  freeMemoryBytes?: () => unknown
-  /** Physical OS memory in bytes. Injected by tests; production reads node:os totalmem(). */
-  totalMemoryBytes?: () => unknown
-  /** Called at actual decoder admission, after any low-free-memory VAD downgrade. */
-  onDecodeAdmission?: (job: ImportJob, memory: ImportDecodeMemoryAdmission) => void | Promise<void>
-  now?: () => number
-  newId?: () => string
-  /** How many recordings may occupy the decoded-audio admission slot at once. ASR stays mutexed. The
-   *  slot remains occupied through PCM consumption; recap never counts. */
-  concurrency?: number
-}
-
 /** One decoded recording at a time, from decoder admission through retained-PCM consumption. */
 export const MAX_CONCURRENT_DECODES = 1
 /** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
@@ -156,7 +59,6 @@ const VAD_MAX_SAMPLES = SAMPLE_RATE * 60 * 90
 /** Majority-vote sample points across the recording's windows. Five spread probes beat the old single
  *  window-0 probe because window 0 is disproportionately a greeting in the OTHER language ("Hello" on a
  *  French call) — the documented 2026-08-05 failure that translated a whole meeting. */
-const LANGUAGE_VOTE_PROBES = 5
 const ATTEMPT_STOPPED = Symbol('import-attempt-stopped')
 
 interface SpeakerAttemptState {
@@ -168,7 +70,8 @@ interface SpeakerAttemptState {
   disposed: boolean
 }
 
-const terminal = (state: ImportJobState): boolean => state === 'done' || state === 'failed' || state === 'cancelled'
+const terminal = (state: ImportJobState): boolean =>
+  state === 'done' || state === 'failed' || state === 'policy-held' || state === 'cancelled'
 
 /** The singleton decoder may be reaped once the job is no longer in the decode phase.
  *  Transcribing / saving / recapping must not keep the next file waiting. */
@@ -196,32 +99,13 @@ function copy<T>(value: T): T {
 }
 
 /**
- * Assemble the one contiguous VAD input, then explicitly drop the slab references before VAD/ASR runs.
- * The copy itself necessarily overlaps both representations; retaining the slab array through the
- * long language, speaker, and transcription phases does not.
- */
-export function assembleVadPcmAndRelease(slabs: Float32Array[]): Float32Array {
-  try {
-    const total = slabs.reduce((n, slab) => n + slab.length, 0)
-    const pcm = new Float32Array(total)
-    let offset = 0
-    for (const slab of slabs) {
-      pcm.set(slab, offset)
-      offset += slab.length
-    }
-    return pcm
-  } finally {
-    slabs.length = 0
-  }
-}
-
-/**
  * Decoded-audio admission is 1. Each success checkpoint is durable before the decoder may submit the
  * next chunk, so closing the overlay can never discard already-recognized speech. ASR calls are mutexed
  * so Parakeet / the Whisper host stay single-threaded. Recap runs after PCM admission is released.
  */
 export class ImportJobManager {
   private readonly jobs = new Map<string, ImportJob>()
+  private readonly retention = new ImportJobRetentionCoordinator()
   private readonly queue: string[] = []
   /** In-memory only: decoded PCM slabs per in-flight vad-v2 job (never persisted; resume re-decodes). */
   private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
@@ -238,6 +122,42 @@ export class ImportJobManager {
   private loaded = false
   private readonly maxConcurrent: number
 
+  private get durableJobs(): Map<string, ImportJob> {
+    return this.retention.durableJobs
+  }
+
+  private get heldJobIds(): string[] {
+    return this.retention.heldJobIds
+  }
+
+  private set heldJobIds(value: string[]) {
+    this.retention.heldJobIds = value
+  }
+
+  private get policyHeldJobIds(): string[] {
+    return this.retention.policyHeldJobIds
+  }
+
+  private set policyHeldJobIds(value: string[]) {
+    this.retention.policyHeldJobIds = value
+  }
+
+  private get inventoryOverflow(): boolean {
+    return this.retention.inventoryOverflow
+  }
+
+  private set inventoryOverflow(value: boolean) {
+    this.retention.inventoryOverflow = value
+  }
+
+  private get policyHoldOverflow(): boolean {
+    return this.retention.policyHoldOverflow
+  }
+
+  private set policyHoldOverflow(value: boolean) {
+    this.retention.policyHoldOverflow = value
+  }
+
   constructor(private readonly deps: ImportJobManagerDeps) {
     const n = deps.concurrency ?? MAX_CONCURRENT_DECODES
     this.maxConcurrent = Number.isFinite(n) && n > 0 ? Math.min(1, Math.floor(n)) : 1
@@ -250,6 +170,7 @@ export class ImportJobManager {
 
   /** Create N durable jobs, then pump so as many as `maxConcurrent` begin decoding. */
   async startMany(sources: ImportJobSource[]): Promise<ImportJob[]> {
+    this.assertRetentionAllowed()
     const started: string[] = []
     for (const source of sources) {
       const now = this.now()
@@ -280,66 +201,33 @@ export class ImportJobManager {
     return started.map((id) => copy(this.requireJob(id)))
   }
 
-  /** Discard incompatible window checkpoints before admitting a fresh decode attempt. */
-  private prepareCheckpoint(job: ImportJob): void {
-    const oldVad = job.pipeline === 'vad-v1'
-    const oldSlabs = !job.pipeline && job.chunkSec !== IMPORT_CHUNK_SECONDS
-    if (!oldVad && !oldSlabs) return
-    // MQA-309: pause-aware segmentation changes window indices. Never apply a vad-v1 cursor to v2.
-    // Already-saved meetings are handled before this boundary and must not be imported twice.
-    if (oldVad) job.pipeline = 'vad-v2'
-    job.cursor = 0
-    job.lines = []
-    job.totalChunks = 0
-    job.progressPct = undefined
-    job.durationMs = undefined
-    job.chunkSec = IMPORT_CHUNK_SECONDS
-  }
-
-  /** Reloads unfinished jobs after an app restart. The caller verifies source identity before decoding. */
+  /** Boot records bounded held identities only; it never reads checkpoint payloads or starts decoding. */
   async recover(): Promise<ImportJob[]> {
     if (this.loaded) return this.list()
+    await this.retention.initialize(this.deps.store, this.retentionAllowed())
     this.loaded = true
-    for (const saved of await this.deps.store.list()) {
-      if (!saved?.jobId || !saved.sourcePath || !saved.sourceName) continue
-      const job = copy(saved)
-      this.jobs.set(job.jobId, job)
-      if (!terminal(job.state)) {
-        // The meeting file is already durable once `file` is present. A crash during recap must not
-        // replay the decoder and create a duplicate meeting; surface it as a completed transcript so
-        // the user can open the note and retry its summary manually.
-        // MQA-105: 'saving' joins 'recapping' here. Both states now only ever persist WITH a durable
-        // file (see the pump save ordering), so a crash in either window must surface the saved
-        // transcript rather than replay the decoder into a duplicate meeting.
-        if (job.file && (job.state === 'recapping' || job.state === 'saving')) {
-          job.state = 'done'
-          job.recapError = 'Automatic summary was interrupted. Open the meeting to retry it.'
-          await this.persist(job)
-          await this.removeCheckpoint(job.jobId)
-          continue
-        }
-        // A checkpoint written under a different decode chunk size (older build, or IMPORT_CHUNK_SECONDS
-        // changed since) has a cursor/totalChunks that no longer line up with the current decoder's chunk
-        // boundaries. Resuming would splice windows recorded at two different sizes into one transcript —
-        // wrong line timestamps at best, a rejected "decoder changed the recording chunk count" failure at
-        // worst (the browser-fallback decoder recomputes totalChunks from the new chunk size on its very
-        // first submitted chunk). Re-transcribing the whole file from scratch is slower but correct.
-        this.prepareCheckpoint(job)
-        job.state = 'queued'
-        job.error = undefined
-        await this.persist(job)
-        this.enqueue(job.jobId)
-      }
-    }
-    await this.pump()
-    return this.list()
+    return []
   }
 
   list(): ImportJob[] {
-    return [...this.jobs.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(copy)
+    if (!this.retentionAllowed()) return []
+    return [...this.jobs.values()]
+      .filter((job) => job.state !== 'policy-held')
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(copy)
+  }
+
+  async snapshot(): Promise<ImportJobsSnapshot> {
+    return this.retention.snapshot(
+      this.deps.store,
+      () => this.retentionAllowed(),
+      () => this.list(),
+      () => this.holdAllForPolicy()
+    )
   }
 
   get(jobId: string): ImportJob | undefined {
+    if (!this.retentionAllowed()) return undefined
     const job = this.jobs.get(jobId)
     return job ? copy(job) : undefined
   }
@@ -350,59 +238,27 @@ export class ImportJobManager {
    * decoded audio that has not yet been released.
    */
   hasMemoryHeavyWork(): boolean {
-    for (const jobId of this.decodeSlotIds) {
-      if (this.jobs.get(jobId)?.pipeline === 'vad-v2' || this.retainedPcmConsumerIds.has(jobId)) return true
-    }
-    return false
+    return hasMemoryHeavyImportWork(this.jobs, this.decodeSlotIds, this.retainedPcmConsumerIds)
   }
 
   /** Persist a decoder progress signal without pretending that 100% means the summary is ready. */
   async reportProgress(jobId: string, pct: number): Promise<void> {
     const job = this.requireJob(jobId)
-    if (!this.attemptAccepts(this.speakerAttempts.get(jobId))) return
-    if (terminal(job.state)) return
-    let normalized = Number.isFinite(pct) ? Math.max(0, Math.min(99, Math.round(pct))) : 0
-    // vad-v2: the decoder's 0-99 covers only phase 1 (decode+segment, seconds); phase 2 (ASR, minutes)
-    // owns 15..99 via the window loop. Unscaled, the bar would jump to 99 and sit there for the whole
-    // transcription.
-    if (job.pipeline === 'vad-v2' && job.state === 'decoding') normalized = Math.round(normalized * 0.15)
-    const next = Math.max(job.progressPct ?? 0, normalized)
-    if (job.progressPct !== undefined && next === job.progressPct) return
-    job.progressPct = next
-    await this.persist(job)
+    await reportImportProgress(
+      {
+        retentionAllowed: () => this.retentionAllowed(),
+        attemptAccepts: () => this.attemptAccepts(this.speakerAttempts.get(jobId)),
+        holdForPolicy: (heldJob) => this.holdForPolicy(heldJob),
+        persist: (updatedJob) => this.persist(updatedJob),
+        isTerminal: terminal
+      },
+      job,
+      pct
+    )
   }
 
   async resume(jobId: string): Promise<ImportJob> {
-    const job = this.requireJob(jobId)
-    if (job.state !== 'failed') throw new Error('Only a failed import can be resumed.')
-    // Same invariant recover() enforces at the crash path: once `file` is present the meeting is already
-    // durable. Replaying the decoder would run saveMeeting() a second time, and saveMeeting never
-    // overwrites — it picks a fresh non-colliding name, so the user would get a duplicate meeting file, a
-    // duplicate index.md row and a duplicate brain ingest of one conversation. Only the summary is missing.
-    if (job.file) {
-      job.state = 'done'
-      job.error = undefined
-      // Keep whatever the recap stage already reported; explain the interruption only when it never got
-      // that far, so the card says the transcript is safe and only its summary needs a manual retry.
-      job.recapError = job.recapError ?? 'Automatic summary was interrupted. Open the meeting to retry it.'
-      await this.persist(job)
-      await this.removeCheckpoint(job.jobId)
-      return copy(this.requireJob(jobId))
-    }
-    this.prepareCheckpoint(job)
-    job.state = 'queued'
-    job.error = undefined
-    job.recapError = undefined
-    await this.persist(job)
-    // A decoder timeout can fail while the retained consumer is still awaiting ASR/speaker work. Queue the
-    // retry behind that exact attempt even though enqueue() correctly refuses to overlap its admission slot.
-    if (this.decodeSlotIds.has(jobId) || this.activeJobIds.has(jobId)) {
-      if (!this.queue.includes(jobId)) this.queue.push(jobId)
-    } else {
-      this.enqueue(jobId)
-    }
-    await this.pump()
-    return copy(this.requireJob(jobId))
+    return this.retention.resume(jobId, this.deps.store, this.resumeHost())
   }
 
   async cancel(jobId: string, opts: { pump?: boolean } = {}): Promise<void> {
@@ -437,7 +293,14 @@ export class ImportJobManager {
    *  the in-memory job stays put so the card remains and the user can retry dismissing it, rather than
    *  silently reappearing after the next restart. */
   async remove(jobId: string): Promise<void> {
-    const job = this.requireJob(jobId)
+    const job = this.jobs.get(jobId)
+    if (!job && this.heldJobIds.includes(jobId)) {
+      await this.deps.store.remove(jobId)
+      this.heldJobIds = this.heldJobIds.filter((id) => id !== jobId)
+      this.policyHeldJobIds = this.policyHeldJobIds.filter((id) => id !== jobId)
+      return
+    }
+    if (!job) throw new Error('Import job not found.')
     if (!terminal(job.state)) throw new Error('Only a finished, failed, or cancelled import can be dismissed.')
     await this.deps.store.remove(jobId)
     this.jobs.delete(jobId)
@@ -456,6 +319,10 @@ export class ImportJobManager {
   /** Called only by the authenticated hidden decoder, one chunk at a time. */
   async acceptDecodedChunk(jobId: string, seq: number, totalChunks: number, samples: Float32Array): Promise<void> {
     const job = this.requireJob(jobId)
+    if (!this.retentionAllowed()) {
+      await this.holdForPolicy(job)
+      return
+    }
     const attempt = this.speakerAttempts.get(jobId)
     if (job.state === 'cancelled') throw new Error('Import was cancelled.')
     if (terminal(job.state)) throw new Error('Import is no longer accepting audio.')
@@ -554,20 +421,25 @@ export class ImportJobManager {
     if (seq < job.cursor) return true
     let text: string
     try {
-      text = await this.transcribeWithRetry(samples, undefined, () => this.attemptAccepts(attempt))
+      text = await this.transcribeWithRetry(
+        samples,
+        undefined,
+        () => this.retentionAllowed() && this.attemptAccepts(attempt)
+      )
     } catch (error) {
       if (error === ATTEMPT_STOPPED) return false
       throw error
     }
-    if (terminal(job.state) || !this.attemptAccepts(attempt)) return false
+    if (terminal(job.state) || !this.retentionAllowed() || !this.attemptAccepts(attempt)) return false
     if (text.trim()) {
       job.lines.push({ speaker: 'unknown', text: text.trim(), t: job.sourceMtimeMs + seq * CHUNK_MS })
     }
     job.cursor = seq + 1
     // Slabs before seq are fixed-length; the last slab may be partial. Assignment (not accumulation)
     // makes retries idempotent and also covers the bounded-memory legacy overflow path.
-    job.durationMs = seq * CHUNK_MS + Math.round(samples.length * 1000 / SAMPLE_RATE)
+    job.durationMs = seq * CHUNK_MS + Math.round((samples.length * 1000) / SAMPLE_RATE)
     await this.persist(job)
+    if (await this.stopIfPolicyHeld(job)) return false
     return this.attemptAccepts(attempt)
   }
 
@@ -594,9 +466,11 @@ export class ImportJobManager {
   }
 
   /** The decoder process/window is gone. Admission stays held while this job still owns decoded PCM. */
-  async releaseDecodeSlot(jobId: string): Promise<void> {
+  async releaseDecodeSlot(jobId: string, expectedAttempt?: SpeakerAttemptState, exactOwner = false): Promise<void> {
+    const attempt = exactOwner ? expectedAttempt : this.speakerAttempts.get(jobId)
+    if (exactOwner && this.speakerAttempts.get(jobId) !== attempt) return
     if (this.pcmByJob.has(jobId) || this.retainedPcmConsumerIds.has(jobId)) return
-    await this.releaseAdmissionSlot(jobId, this.speakerAttempts.get(jobId), true)
+    await this.releaseAdmissionSlot(jobId, attempt, true)
   }
 
   /** Release only after no buffered or locally-consumed whole-recording PCM remains reachable. */
@@ -618,6 +492,10 @@ export class ImportJobManager {
   /** Called by the hidden decoder only after it has submitted every non-skipped chunk. */
   async finishDecoding(jobId: string, discoveredTotalChunks?: number): Promise<void> {
     const job = this.requireJob(jobId)
+    if (!this.retentionAllowed()) {
+      await this.holdForPolicy(job)
+      return
+    }
     const attempt = this.speakerAttempts.get(jobId)
     if (!this.attemptCanFinish(attempt)) return
     if (job.state === 'cancelled' || terminal(job.state)) {
@@ -638,8 +516,8 @@ export class ImportJobManager {
         readyToFinalize = readyToFinalize && mayFinalize
       }
       const mayFinalize = readyToFinalize && job.state === 'transcribing' && this.attemptCanFinish(attempt)
+      if (mayFinalize) await this.finalize(job, attempt)
       this.retireAttempt(job.jobId, attempt)
-      if (mayFinalize) await this.finalize(job)
       return
     }
     // Decoder already exited (FFmpeg onComplete / hidden-window close). Legacy jobs can admit the next
@@ -649,7 +527,6 @@ export class ImportJobManager {
       this.retireAttempt(jobId, attempt)
       return
     }
-    this.retireAttempt(jobId, attempt)
     if (discoveredTotalChunks !== undefined) {
       if (!Number.isInteger(discoveredTotalChunks) || discoveredTotalChunks < 0) {
         await this.fail(job, 'Invalid final audio chunk count.')
@@ -673,7 +550,8 @@ export class ImportJobManager {
       return
     }
 
-    await this.finalize(job)
+    await this.finalize(job, attempt)
+    this.retireAttempt(jobId, attempt)
   }
 
   /**
@@ -684,224 +562,20 @@ export class ImportJobManager {
    * window-by-window with a durable cursor, diarizing each window off its own samples. Lines carry the
    * window's real offset into the recording. A final polish pass (fail-open) cleans stutters before save.
    */
-  private async consumeVadPcm(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
-    const pcm = assembleVadPcmAndRelease(this.takePcm(job.jobId))
-    const total = pcm.length
-    job.durationMs = Math.round(total * 1000 / SAMPLE_RATE)
-    const windows = vadWindowsFromPcm(pcm, SAMPLE_RATE)
-    if (windows.length === 0) {
-      await this.fail(job, 'No speech was recognized in this recording.')
-      return false
-    }
-    job.totalChunks = windows.length
-    job.state = 'transcribing'
-    await this.persist(job)
-    if (!this.attemptAccepts(attempt)) return false
-
-    // Whole-recording language vote (only meaningful when a prober is wired).
-    let votedLanguage: string | null = null
-    if (this.deps.probeLanguageName && windows.length > 0) {
-      const picks = new Set<number>()
-      // Short recordings (proven on a 60s clip that mis-voted): 5 spread picks over few windows collapse
-      // into 2-3 distinct probes and the vote abstains or lands wrong — probe EVERY window instead; the
-      // >=2 agreement floor below still guards a single garbled probe.
-      if (windows.length <= 2 * LANGUAGE_VOTE_PROBES) {
-        for (let i = 0; i < windows.length; i++) picks.add(i)
-      } else {
-        for (let i = 0; i < LANGUAGE_VOTE_PROBES; i++) {
-          picks.add(Math.min(windows.length - 1, Math.floor(((i + 0.5) / LANGUAGE_VOTE_PROBES) * windows.length)))
-        }
-      }
-      const tally = new Map<string, number>()
-      for (const idx of picks) {
-        if (terminal(job.state) || !this.attemptAccepts(attempt)) return false
-        try {
-          const w = windows[idx]
-          const lang = await this.deps.probeLanguageName(pcm.subarray(w.start, w.end))
-          if (!this.attemptAccepts(attempt)) return false
-          if (lang) tally.set(lang, (tally.get(lang) ?? 0) + 1)
-        } catch {
-          if (!this.attemptAccepts(attempt)) return false
-          /* a failed probe is an abstention */
-        }
-      }
-      let best: string | null = null
-      let bestCount = 0
-      for (const [lang, count] of tally) {
-        if (count > bestCount) {
-          best = lang
-          bestCount = count
-        }
-      }
-      // A majority, not a plurality of one: with fewer than 2 agreeing probes the vote abstains and the
-      // engine keeps its own per-window judgement.
-      if (best && bestCount >= 2) votedLanguage = best
-    }
-
-    for (let i = job.cursor; i < windows.length; i++) {
-      if (terminal(job.state)) return false
-      const w = windows[i]
-      const samples = pcm.subarray(w.start, w.end)
-      let text = ''
-      try {
-        text = await this.transcribeWithRetry(
-          samples,
-          { language: votedLanguage },
-          () => this.attemptAccepts(attempt)
-        )
-      } catch (error) {
-        if (error === ATTEMPT_STOPPED) return false
-        if (terminal(job.state)) return false
-        await this.fail(job, message(error))
-        return false
-      }
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return false
-      if (text.trim()) {
-        // Diarization rides the additive `name` field (same slot the Teams-name backfill uses); the
-        // SIDE stays 'unknown' — an imported recording has no mic/loopback split to infer you/them from.
-        let name: string | undefined
-        if (attempt?.speakerOwned && this.deps.speakerFor) {
-          try {
-            name = (await this.deps.speakerFor(samples, attempt.identity)) || undefined
-          } catch {
-            /* diarization is best-effort — an extractor fault must never fail the import */
-          }
-        }
-        if (terminal(job.state) || !this.attemptAccepts(attempt)) return false
-        job.lines.push({
-          speaker: 'unknown',
-          ...(name ? { name } : {}),
-          text: text.trim(),
-          t: job.sourceMtimeMs + Math.round((w.start / SAMPLE_RATE) * 1000)
-        })
-      }
-      job.cursor = i + 1
-      job.progressPct = Math.max(job.progressPct ?? 0, 15 + Math.round((84 * (i + 1)) / windows.length))
-      await this.persist(job)
-      if (!this.attemptAccepts(attempt)) return false
-    }
-
-    if (job.lines.length === 0) {
-      await this.fail(job, 'No speech was recognized in this recording.')
-      return false
-    }
-
-    // MQA-238: the online clusterer only looks backward, so one drifting voice fragments into several
-    // labels. Now that every window has been seen, merge the session's clusters and relabel the lines.
-    if (attempt?.speakerOwned && !attempt.finalized && this.deps.finalizeSpeakers) {
-      try {
-        attempt.finalized = true
-        const mapping = this.deps.finalizeSpeakers(attempt.identity)
-        if (mapping) {
-          for (const line of job.lines) {
-            if (line.name && mapping.has(line.name)) line.name = mapping.get(line.name)
-          }
-        }
-      } catch {
-        /* best-effort — fragmented labels beat a failed import */
-      }
-    }
-
-    // Polish is not on the import critical path. Sequential LLM batches of 8 with a 120s idle made
-    // one meeting take forever before the summary even started. Recap writes first; polish, if kept,
-    // is fail-open after the recap (see finalize) and never blocks the next decode.
-
-    return true
+  private consumeVadPcm(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
+    return consumeVadPcm(this.pipelineHost(), job, attempt)
   }
 
-  /** The shared save→recap→ingest→done tail, used by both pipelines. */
-  private async finalize(job: ImportJob): Promise<void> {
-    try {
-      // A completed transcript is intentionally 99% until the automatic summary has been attempted and
-      // persisted. The renderer can therefore transition cleanly from transcription to "Creating summary"
-      // instead of flashing 100% before the meeting is actually ready.
-      // MQA-105: do NOT persist state 'saving' BEFORE the file exists. The old order left a checkpoint
-      // reading 'saving' with no `file` for the whole span of saveMeeting AND the persist after it, so a
-      // crash once the file had landed replayed the decoder and produced a DUPLICATE meeting. Now 'saving'
-      // is only ever written together with the file, so a recovered 'saving' checkpoint always carries a
-      // durable file and recover() treats it as a completed transcript instead of re-decoding.
-      job.progressPct = Math.max(job.progressPct ?? 0, 99)
-      const file = await this.deps.saveMeeting({
-        title: job.title,
-        mode: 'meeting',
-        startedAt: job.sourceMtimeMs,
-        durationMs: job.durationMs,
-        lines: [...job.lines].sort((a, b) => a.t - b.t),
-        recap: ''
-      })
-      job.file = file
-      job.state = 'saving'
-      await this.persist(job) // the file is now durable AND recorded in the checkpoint, atomically enough
-      // cancel() flipped the job to 'cancelled' while saveMeeting() was in flight. The meeting file
-      // already landed on disk — delete it and drop the checkpoint we just wrote so a cancelled import
-      // never leaves an orphaned meeting OR a resurrectable checkpoint behind.
-      if (await this.abandonIfCancelled(job, file)) return
-      job.state = 'recapping'
-      await this.persist(job)
-      let recapPersisted = false
-      try {
-        const recap = await this.deps.generateRecap(copy(job))
-        if (await this.abandonIfCancelled(job, file)) return
-        if (recap?.trim()) {
-          await this.deps.updateRecap(file, recap, 'complete')
-          if (await this.abandonIfCancelled(job, file)) return
-          recapPersisted = true
-        } else {
-          job.recapError = 'No AI provider is configured to create the automatic summary.'
-        }
-      } catch (error) {
-        // A transcript is already safe. Keep the result visible and retryable rather than pretending it has a recap.
-        job.recapError = message(error)
-      }
-
-      // Fail-open polish AFTER recap so the summary is never waiting on sequential cleanup batches.
-      // Cheap local-only polish can still tidy the saved lines; a throw leaves the raw transcript.
-      if (this.deps.polish) {
-        try {
-          const polished = await this.deps.polish(copy(job.lines))
-          if (Array.isArray(polished) && polished.length === job.lines.length) job.lines = polished
-        } catch {
-          /* keep raw */
-        }
-      }
-
-      // Queue after the recap stage so Mantu Intelligence sees the durable transcript and summary together.
-      if (await this.abandonIfCancelled(job, file)) return
-      await this.deps.enqueueIngest(file)
-      // MQA-104: enqueueIngest does real file I/O (index.json tmp-write+rename), a genuine yield point, so
-      // a cancel racing it would otherwise fall straight through to the 'done' finalization below —
-      // resurrecting the cancelled job as done and never deleting its meeting file. Re-check here.
-      if (await this.abandonIfCancelled(job, file)) return
-
-      // The user summarized a meeting via import — credit the durable time-saved counters ONCE, now that
-      // the file is committed and past every cancel gate (the live-meeting path credits itself in the
-      // saveTranscript IPC handler). MQA-310: the decoded duration includes the last utterance and
-      // silence; sparse line-start timestamps are only a fallback for old checkpoints.
-      const durMin = meetingDurationMinutes(job)
-      if (recapPersisted) this.deps.recordMeetingSummarized?.(durMin)
-      {
-        const words = wordsFromTexts(...job.lines.map((l) => l.text))
-        if (estimateNoteTakingMinutes(words) > 0) this.deps.recordTimeSavedNote?.(words, file)
-      }
-
-      job.progressPct = 100
-      job.state = 'done'
-      await this.persist(job)
-      await this.removeCheckpoint(job.jobId)
-    } catch (error) {
-      if (!this.isCancelled(job)) await this.fail(job, message(error))
-    } finally {
-      await this.releaseDecodeSlot(job.jobId)
-      if (this.activeJobIds.has(job.jobId)) {
-        this.activeJobIds.delete(job.jobId)
-        await this.pump()
-        this.maybeIdle()
-      }
-    }
+  private finalize(job: ImportJob, attempt?: SpeakerAttemptState): Promise<void> {
+    return finalizeImportJob(this.pipelineHost(), job, attempt)
   }
 
   async failDecoder(jobId: string, error: unknown): Promise<void> {
     const job = this.requireJob(jobId)
+    if (!this.retentionAllowed()) {
+      await this.holdForPolicy(job)
+      return
+    }
     if (!this.attemptCanFinish(this.speakerAttempts.get(jobId))) return
     if (terminal(job.state)) return
     await this.fail(job, message(error))
@@ -947,6 +621,10 @@ export class ImportJobManager {
   }
 
   private async pump(): Promise<void> {
+    if (!this.retentionAllowed()) {
+      await this.holdAllForPolicy()
+      return
+    }
     while (this.decodeSlotIds.size < this.maxConcurrent && this.queue.length) {
       const jobId = this.queue.shift()!
       const job = this.jobs.get(jobId)
@@ -974,6 +652,7 @@ export class ImportJobManager {
       const attempt = this.createAttempt(job)
       job.state = 'decoding'
       await this.persist(job)
+      if (await this.stopIfPolicyHeld(job)) continue
       if (!this.attemptAccepts(attempt)) continue
       try {
         // A high-tier policy can release optional model memory before the decoder begins. Treat a
@@ -981,22 +660,28 @@ export class ImportJobManager {
         // its decoder slot is reclaimed instead of remaining indefinitely in "decoding".
         await this.deps.onDecodeAdmission?.(copy(job), memory)
       } catch (error) {
-        if (!this.isCancelled(job)) await this.fail(job, message(error))
+        if (this.isCurrentDecodeAttempt(job, attempt)) await this.fail(job, message(error))
         continue
       }
+      if (await this.stopIfPolicyHeld(job)) continue
       if (!this.attemptAccepts(attempt)) continue
       this.admitSpeakers(job, attempt)
       try {
         await this.deps.decode(copy(job))
       } catch (error) {
-        if (!this.isCancelled(job)) await this.fail(job, message(error))
+        if (this.isCurrentDecodeAttempt(job, attempt)) await this.fail(job, message(error))
       }
+      if (await this.stopIfPolicyHeld(job)) continue
       // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Admission stays
       // occupied through retained-PCM consumption; recap does not keep the next file waiting.
     }
   }
 
   private async fail(job: ImportJob, error: string): Promise<void> {
+    if (!this.retentionAllowed()) {
+      await this.holdForPolicy(job)
+      return
+    }
     const attempt = this.speakerAttempts.get(job.jobId)
     this.stopSpeakerAttempt(job.jobId)
     job.state = 'failed'
@@ -1047,6 +732,10 @@ export class ImportJobManager {
     return !!attempt && attempt.accepting && this.speakerAttempts.get(attempt.identity.jobId) === attempt
   }
 
+  private isCurrentDecodeAttempt(job: ImportJob, attempt: SpeakerAttemptState): boolean {
+    return this.jobs.get(job.jobId) === job && job.state === 'decoding' && this.attemptAccepts(attempt)
+  }
+
   private attemptCanFinish(attempt: SpeakerAttemptState | undefined): boolean {
     return !!attempt && attempt.tailAllowed && this.speakerAttempts.get(attempt.identity.jobId) === attempt
   }
@@ -1079,10 +768,122 @@ export class ImportJobManager {
     if (attempt && this.speakerAttempts.get(jobId) === attempt) this.speakerAttempts.delete(jobId)
   }
 
-  private async persist(job: ImportJob): Promise<void> {
-    job.updatedAt = this.now()
-    await this.deps.store.save(copy(job))
-    this.deps.onChange?.(copy(job))
+  private async persist(job: ImportJob, attempt?: SpeakerAttemptState): Promise<void> {
+    await this.retention.persist(
+      job,
+      () => this.retentionAllowed(),
+      () => this.holdForPolicy(job),
+      copy,
+      () =>
+        this.jobs.get(job.jobId) === job && job.state !== 'policy-held' && (!attempt || this.attemptCanFinish(attempt)),
+      () => this.assertJobWriteAllowed(job, attempt),
+      this.deps.store,
+      () => this.now(),
+      this.deps.onChange
+    )
+  }
+
+  private retentionAllowed(): boolean {
+    return this.deps.canRetainTranscript?.() !== false
+  }
+
+  private assertRetentionAllowed(): void {
+    if (!this.retentionAllowed()) throw new ImportRetentionBlockedError()
+  }
+
+  private assertJobWriteAllowed(job: ImportJob, attempt?: SpeakerAttemptState): void {
+    this.assertRetentionAllowed()
+    if (job.state === 'policy-held' || this.jobs.get(job.jobId) !== job) throw new StaleImportJobWriteError()
+    if (attempt && !this.attemptCanFinish(attempt)) {
+      throw new StaleImportJobWriteError()
+    }
+  }
+
+  private async holdForPolicy(job: ImportJob): Promise<void> {
+    await this.retention.hold(job, this.retentionHost(), this.deps.store)
+  }
+
+  /** An async continuation must not revive work after a policy hold, even if policy is later restored. */
+  private async stopIfPolicyHeld(job: ImportJob, attempt?: SpeakerAttemptState): Promise<boolean> {
+    if (job.state === 'policy-held' || (attempt && !this.attemptCanFinish(attempt))) return true
+    if (this.retentionAllowed()) return false
+    await this.holdForPolicy(job)
+    return true
+  }
+
+  private async holdAllForPolicy(): Promise<void> {
+    await this.retention.holdAll(this.jobs.values(), this.retentionHost(), this.deps.store)
+  }
+
+  private async releaseHold(job: ImportJob): Promise<void> {
+    await this.retention.release(job, this.deps.store)
+  }
+
+  private retentionHost(): ImportRetentionHost {
+    return {
+      jobs: this.jobs,
+      queue: this.queue,
+      activeJobIds: this.activeJobIds,
+      decodeSlotIds: this.decodeSlotIds,
+      retainedPcmConsumerIds: this.retainedPcmConsumerIds,
+      copy,
+      captureAttempt: (jobId) => this.speakerAttempts.get(jobId),
+      stopAttempt: (jobId, owner) => {
+        if (this.speakerAttempts.get(jobId) === owner) this.stopSpeakerAttempt(jobId)
+      },
+      takePcm: (jobId) => {
+        this.takePcm(jobId)
+      },
+      onCancel: (jobId) => this.deps.onCancel?.(jobId),
+      releaseDecodeSlot: (jobId, owner) =>
+        this.releaseDecodeSlot(jobId, owner as SpeakerAttemptState | undefined, true),
+      retireAttempt: (jobId, owner) => this.retireAttempt(jobId, owner as SpeakerAttemptState | undefined),
+      maybeIdle: () => this.maybeIdle()
+    }
+  }
+
+  private resumeHost(): ImportResumeHost {
+    return {
+      jobs: this.jobs,
+      queue: this.queue,
+      decodeSlotIds: this.decodeSlotIds,
+      activeJobIds: this.activeJobIds,
+      copy,
+      assertAllowed: () => this.assertRetentionAllowed(),
+      validateSource: (job) => this.deps.validateSource?.(job),
+      persist: (job) => this.persist(job),
+      releaseHold: (job) => this.releaseHold(job),
+      prepareCheckpoint: prepareImportCheckpoint,
+      removeCheckpoint: (jobId) => this.removeCheckpoint(jobId),
+      enqueue: (jobId) => this.enqueue(jobId),
+      pump: () => this.pump(),
+      requireJob: (jobId) => this.requireJob(jobId)
+    }
+  }
+
+  private pipelineHost(): ImportJobPipelineHost {
+    return {
+      deps: this.deps,
+      copy,
+      takePcm: (jobId) => this.takePcm(jobId),
+      fail: (job, error) => this.fail(job, error),
+      persist: (job, attempt) => this.persist(job, attempt),
+      attemptAccepts: (attempt) => this.attemptAccepts(attempt),
+      isAttemptStopped: (error) => error === ATTEMPT_STOPPED,
+      transcribeWithRetry: (samples, opts, stillCurrent) => this.transcribeWithRetry(samples, opts, stillCurrent),
+      retentionAllowed: () => this.retentionAllowed(),
+      assertRetentionAllowed: () => this.assertRetentionAllowed(),
+      assertJobWriteAllowed: (job, attempt) => this.assertJobWriteAllowed(job, attempt),
+      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt),
+      holdForPolicy: (job) => this.holdForPolicy(job),
+      isCurrentJob: (job, attempt) => this.jobs.get(job.jobId) === job && (!attempt || this.attemptCanFinish(attempt)),
+      abandonIfCancelled: (job, file) => this.abandonIfCancelled(job, file),
+      removeCheckpoint: (jobId) => this.removeCheckpoint(jobId),
+      releaseDecodeSlot: (jobId) => this.releaseDecodeSlot(jobId),
+      activeJobIds: this.activeJobIds,
+      pump: () => this.pump(),
+      maybeIdle: () => this.maybeIdle()
+    }
   }
 
   private async removeCheckpoint(jobId: string): Promise<void> {

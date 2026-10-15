@@ -7,7 +7,18 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BUNDLE_REPAIR } from '@shared/bundle-response'
-import { CaptureSchema } from '@shared/contracts/speech'
+import { CaptureSchema, type Track } from '@shared/contracts/speech'
+import {
+  CLOUD_SPEECH_FULL_FRAME_BYTES,
+  CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES,
+  CLOUD_SPEECH_MAX_PENDING_AUDIO_MS,
+  CLOUD_SPEECH_MAX_PENDING_BYTES,
+  CLOUD_SPEECH_MAX_PENDING_FRAMES,
+  type CloudSpeechEvent,
+  type CloudSpeechFinishRequest,
+  type CloudSpeechFrame,
+  type CloudSpeechStartRequest
+} from '@shared/cloud-speech'
 import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
@@ -33,6 +44,20 @@ const host = vi.hoisted(() => {
   }
   return {
     useRef: slot,
+    useMemo<T>(factory: () => T, dependencies?: readonly unknown[]): T {
+      const cached = slot<{ value: T; dependencies: readonly unknown[] | undefined } | undefined>(undefined)
+      const prior = cached.current
+      if (
+        !prior ||
+        !dependencies ||
+        !prior.dependencies ||
+        dependencies.length !== prior.dependencies.length ||
+        dependencies.some((value, index) => !Object.is(value, prior.dependencies?.[index]))
+      ) {
+        cached.current = { value: factory(), dependencies: dependencies ? [...dependencies] : undefined }
+      }
+      return cached.current!.value
+    },
     useState<T>(initial: T): [T, (value: T | ((previous: T) => T)) => void] {
       const state = slot(initial)
       return [
@@ -78,13 +103,17 @@ vi.mock('react', () => ({
   useRef: <T>(initial: T) => host.useRef(initial),
   useState: <T>(initial: T) => host.useState(initial),
   useEffect: (effect: () => void | (() => void)) => host.useEffect(effect),
-  useCallback: <T>(fn: T) => fn,
-  useMemo: <T>(fn: () => T) => fn()
+  useCallback: <T>(fn: T, dependencies?: readonly unknown[]) => host.useMemo(() => fn, dependencies),
+  useMemo: <T>(fn: () => T, dependencies?: readonly unknown[]) => host.useMemo(fn, dependencies)
 }))
 
 type WorkletMessage = {
   type?: string
   requestId?: string
+  finalSequence?: number
+  finalSampleOffset?: number
+  sequence?: number
+  sampleOffset?: number
   audio?: Float32Array
   sampleRate?: number
   partial?: boolean
@@ -105,7 +134,16 @@ let addModuleImpl: () => Promise<void>
 let getUserMediaImpl: () => Promise<MediaStream>
 let getDisplayMediaImpl: () => Promise<MediaStream>
 let getPermissionsImpl: () => Promise<{ screenRecording?: string; screenDiagnosis?: ScreenDiagnosis }>
+let failWorkletConstructor = false
+let failWorkletConnect = false
 let mediaDeviceListeners: Partial<Record<string, () => void>> = {}
+let cloudSpeechListeners = new Set<(event: CloudSpeechEvent) => void>()
+let cloudSpeechStreams = new Map<Track, { generation: number; track: Track; epoch: number }>()
+let cloudSpeechLastSequences = new Map<string, number>()
+
+function cloudSpeechStreamKey(stream: { generation: number; track: Track; epoch: number }): string {
+  return `${stream.generation}:${stream.track}:${stream.epoch}`
+}
 
 type FakeTrack = {
   stop: ReturnType<typeof vi.fn>
@@ -131,8 +169,17 @@ function makeStream(kind: 'mic' | 'system'): MediaStream {
 
 class FakeAudioWorkletNode {
   readonly posted: unknown[] = []
+  readonly messageListeners = new Set<(event: MessageEvent<WorkletMessage>) => void>()
   port = {
     onmessage: null as ((event: MessageEvent<WorkletMessage>) => void) | null,
+    addEventListener: (_type: string, listener: (event: MessageEvent<WorkletMessage>) => void): void => {
+      this.messageListeners.add(listener)
+    },
+    removeEventListener: (_type: string, listener: (event: MessageEvent<WorkletMessage>) => void): void => {
+      this.messageListeners.delete(listener)
+    },
+    close: vi.fn(),
+    start: vi.fn(),
     postMessage: (message: unknown): void => {
       this.posted.push(message)
       if (!message || typeof message !== 'object' || (message as { type?: string }).type !== 'seal-and-flush') return
@@ -141,22 +188,27 @@ class FakeAudioWorkletNode {
       const requestId = String((message as { requestId?: unknown }).requestId ?? '')
       setTimeout(() => {
         if (sealMode.audio) this.emit({ audio: sealMode.audio, partial: false })
-        this.emit({ type: 'flush-ack', requestId })
+        this.emit({ type: 'flush-ack', requestId, finalSequence: 0, finalSampleOffset: 0 })
       }, sealMode.delayMs)
     }
   }
 
   constructor() {
+    if (failWorkletConstructor) throw new Error('Synthetic AudioWorkletNode construction failure')
     worklets.push(this)
   }
 
   emit(message: WorkletMessage): void {
-    this.port.onmessage?.({
+    const event = {
       data: message.audio ? { sampleRate: 16000, ...message } : message
-    } as MessageEvent<WorkletMessage>)
+    } as MessageEvent<WorkletMessage>
+    this.port.onmessage?.(event)
+    for (const listener of this.messageListeners) listener(event)
   }
 
-  connect(): void {}
+  connect(): void {
+    if (failWorkletConnect) throw new Error('Synthetic AudioWorkletNode connect failure')
+  }
   disconnect(): void {}
 }
 
@@ -263,6 +315,29 @@ function render(engine: Engine = 'parakeet'): ListenApi {
   return renderWithEnterprise(engine, engine === 'cloud' ? cloudOnlyProfile : undefined)
 }
 
+const brokerSpeech = { transport: 'broker-v1', engine: 'deepgram-nova3' } as const
+const brokerConsent = {
+  engine: 'deepgram-nova3',
+  requestedTracks: ['microphone'] as Track[],
+  disclosureVersion: 'cloud-speech-v1' as const
+}
+function renderBroker(): ListenApi {
+  host.beginRender()
+  return useListen(
+    undefined,
+    undefined,
+    undefined,
+    '',
+    undefined,
+    'cloud',
+    'fast',
+    undefined,
+    undefined,
+    undefined,
+    brokerSpeech
+  )
+}
+
 function renderWithMicDevice(deviceId: string, engine: Engine = 'parakeet'): ListenApi {
   host.beginRender()
   return useListen(undefined, undefined, undefined, deviceId, undefined, engine, 'fast')
@@ -295,12 +370,17 @@ beforeEach(() => {
   workers = []
   contexts = []
   streams = []
+  cloudSpeechListeners = new Set()
+  cloudSpeechStreams = new Map()
+  cloudSpeechLastSequences = new Map()
   sealMode = { delayMs: 0, acknowledge: true, throwOnPost: false }
   addModuleImpl = async () => {}
   getUserMediaImpl = async () => makeStream('mic')
   getDisplayMediaImpl = async () => makeStream('system')
   getPermissionsImpl = async () => ({ screenRecording: 'denied' })
   mediaDeviceListeners = {}
+  failWorkletConstructor = false
+  failWorkletConnect = false
   vi.useFakeTimers()
   vi.setSystemTime(1_700_000_000_000)
 
@@ -320,6 +400,97 @@ beforeEach(() => {
       cloudSttStop: vi.fn(async () => ({ timedOut: false })),
       onCloudSttFinal: vi.fn(() => () => {}),
       onCloudSttError: vi.fn(() => () => {}),
+      cloudSpeechCapability: vi.fn(async () => ({
+        disclosureVersion: 'cloud-speech-v1' as const,
+        selected: { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
+        allowed: [{ engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }],
+        ready: true,
+        refusal: null
+      })),
+      cloudSpeechStart: vi.fn(async (request: CloudSpeechStartRequest) => {
+        const streams = request.capture.capturedTracks.map((track) => ({
+          generation: request.capture.generation,
+          track,
+          epoch: request.capture.generation
+        }))
+        cloudSpeechStreams = new Map(streams.map((stream) => [stream.track, stream]))
+        cloudSpeechLastSequences = new Map()
+        return {
+          ok: true as const,
+          captureId: request.captureId,
+          captureGeneration: request.capture.generation,
+          engine: request.capture.engine,
+          streams: streams.map(({ track, epoch }) => ({ track, streamEpoch: epoch })),
+          limits: {
+            frameBytes: CLOUD_SPEECH_FULL_FRAME_BYTES,
+            maxPendingFrames: CLOUD_SPEECH_MAX_PENDING_FRAMES,
+            maxPendingBytes: CLOUD_SPEECH_MAX_PENDING_BYTES,
+            maxPendingAudioMs: CLOUD_SPEECH_MAX_PENDING_AUDIO_MS
+          }
+        }
+      }),
+      cloudSpeechFrame: vi.fn(async (frame: CloudSpeechFrame) => ({
+        ok: true as const,
+        captureId: frame.captureId,
+        captureGeneration: frame.captureGeneration,
+        track: frame.track,
+        sequence: frame.sequence,
+        nextSequence: frame.sequence + 1,
+        nextSampleOffset: frame.sampleOffset + frame.pcm16le.byteLength / 2
+      })),
+      cloudSpeechFinish: vi.fn(async (request: CloudSpeechFinishRequest) => ({
+        ok: true as const,
+        captureId: request.captureId,
+        captureGeneration: request.captureGeneration,
+        complete: true,
+        reason: 'normal' as const,
+        tracks: request.tracks.map((track) => ({
+          stream: cloudSpeechStreams.get(track.track)!,
+          lastSequence: cloudSpeechLastSequences.get(cloudSpeechStreamKey(cloudSpeechStreams.get(track.track)!)) ?? 0,
+          closeConfirmed: true,
+          tail: 'complete' as const,
+          reason: 'normal' as const
+        }))
+      })),
+      cloudSpeechAckCaptureCeiling: vi.fn(
+        async (request: {
+          type: 'capture-ceiling-ack'
+          captureId: string
+          captureGeneration: number
+          ceilingId: string
+          tracks: Array<{ track: Track; finalSequence: number; finalSampleOffset: number }>
+        }) => ({
+          ok: true as const,
+          captureId: request.captureId,
+          captureGeneration: request.captureGeneration,
+          ceilingId: request.ceilingId,
+          tracks: request.tracks
+        })
+      ),
+      cloudSpeechCancel: vi.fn(async (identity: { captureId: string; captureGeneration: number }) => ({
+        ok: true as const,
+        captureId: identity.captureId,
+        captureGeneration: identity.captureGeneration,
+        closure: 'confirmed' as const
+      })),
+      cloudSpeechStatus: vi.fn(async () => ({ ok: false as const, code: 'CLOSED' as const })),
+      onCloudSpeechEvent: vi.fn(
+        (_captureId: string, _generation: number, callback: (event: CloudSpeechEvent) => void) => {
+          const listener = (event: CloudSpeechEvent): void => {
+            if (event.type === 'segment') {
+              cloudSpeechLastSequences.set(
+                cloudSpeechStreamKey(event.segment.stream),
+                Math.max(cloudSpeechLastSequences.get(cloudSpeechStreamKey(event.segment.stream)) ?? 0, event.sequence)
+              )
+            }
+            callback(event)
+          }
+          cloudSpeechListeners.add(listener)
+          return () => {
+            cloudSpeechListeners.delete(listener)
+          }
+        }
+      ),
       getPermissions: vi.fn(() => getPermissionsImpl())
     },
     addEventListener: () => {},
@@ -347,6 +518,88 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it.each(['Stop', 'unmount'] as const)('releases an in-flight channel setup synchronously on %s', async (cleanup) => {
+    let releaseModule!: () => void
+    addModuleImpl = () => new Promise((resolve) => void (releaseModule = resolve))
+    const api = render('parakeet')
+    const starting = api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const pending = streams[0]?.track
+    if (!pending || !releaseModule) throw new Error('channel setup did not reach the held module load')
+
+    if (cleanup === 'Stop') {
+      api.stop()
+      await settle()
+    } else {
+      host.unmount()
+    }
+    expect(pending.stop).toHaveBeenCalledOnce()
+    expect(contexts[0]?.state).toBe('closed')
+
+    releaseModule()
+    await starting
+    await settle()
+    expect(worklets).toHaveLength(0)
+    expect(pending.stop).toHaveBeenCalledOnce()
+    if (cleanup === 'Stop') expect(render('parakeet').capturing).toBe(false)
+  })
+
+  it('releases both the running and queued same-speaker acquisitions before module load settles', async () => {
+    let releaseModule!: () => void
+    let moduleLoads = 0
+    addModuleImpl = () => {
+      moduleLoads++
+      return new Promise((resolve) => void (releaseModule = resolve))
+    }
+    getPermissionsImpl = async () => ({ screenRecording: 'granted' })
+    const api = render('parakeet')
+    const starting = api.start('system', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    expect(moduleLoads).toBe(1)
+    expect(streams.map(({ kind }) => kind)).toEqual(['system'])
+
+    render('parakeet')
+    mediaDeviceListeners.devicechange?.()
+    await vi.advanceTimersByTimeAsync(800)
+    await settle()
+    expect(streams.map(({ kind }) => kind)).toEqual(['system', 'system'])
+    expect(moduleLoads).toBe(1)
+
+    api.stop()
+    await vi.advanceTimersByTimeAsync(2)
+    await settle()
+    expect(streams.every(({ track }) => track.stop.mock.calls.length === 1)).toBe(true)
+    expect(contexts[0]?.state).toBe('closed')
+    await starting
+
+    releaseModule()
+    await settle()
+    expect(worklets).toHaveLength(0)
+    expect(streams.every(({ track }) => track.stop.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('releases the owned stream and context when AudioWorkletNode construction fails before publish', async () => {
+    failWorkletConstructor = true
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(contexts[0]?.state).toBe('closed')
+    expect(api.capturing).toBe(false)
+  })
+
+  it('clears published capture state and releases resources when worklet connect fails', async () => {
+    failWorkletConnect = true
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(contexts[0]?.state).toBe('closed')
+    expect(api.capturing).toBe(false)
+  })
+
   it('marks both tracks captured only after both channels commit', async () => {
     const originalParse = CaptureSchema.safeParse.bind(CaptureSchema)
     const observedTracks: string[][] = []
@@ -423,6 +676,23 @@ describe('live audio transport identity', () => {
     oldEnded?.()
     expect(render('parakeet').capturing).toBe(true)
     expect(streams.at(-1)?.track.readyState).toBe('live')
+  })
+
+  it('tears down the owned audio channel and its track subscription after the final flush ACK', async () => {
+    const api = await start()
+    const track = streams[0].track
+    const context = contexts[0]
+    const worklet = worklets[0]
+    expect(track.onended).toBeTypeOf('function')
+
+    api.stop()
+    await vi.advanceTimersByTimeAsync(sealMode.delayMs)
+    await settle()
+
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(track.onended).toBeNull()
+    expect(worklet.port.onmessage).toBeNull()
+    expect(context.state).toBe('closed')
   })
 
   it('rejects an unconfigured cloud selection without hiding an existing live capture', async () => {
@@ -627,6 +897,23 @@ describe('live audio transport identity', () => {
       selectionOutcome: 'unavailable',
       trackState: 'unavailable'
     })
+  })
+
+  it('keeps the channel identity through track end so microphone recovery can reopen it', async () => {
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const original = streams.find((entry) => entry.kind === 'mic')
+    if (!original) throw new Error('expected an active microphone track')
+    original.track.readyState = 'ended'
+    original.track.onended?.()
+    await settle()
+
+    expect(streams.filter((entry) => entry.kind === 'mic')).toHaveLength(2)
+    expect(original.track.stop).toHaveBeenCalledOnce()
+    expect(render().captureHealth?.trackState).toBe('connected')
+    expect(render().capturing).toBe(true)
+    api.stop()
   })
 
   it('force-stops a delayed cloud start after both capture sources fail', async () => {
@@ -1004,6 +1291,18 @@ describe('live audio transport identity', () => {
     expect(offFinal).toHaveBeenCalledOnce()
   })
 
+  it('stops retained microphone tracks when a completed broker Pause is unmounted', async () => {
+    const api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 123, brokerConsent)
+    api.pause()
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(streams[0]?.track.stop).not.toHaveBeenCalled()
+
+    host.unmount()
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+  })
+
   it.each(['parakeet', 'apple'] as const)('%s queues the window owner and keeps legacy ASR usable', async (engine) => {
     const feed = engine === 'parakeet' ? window.toto.parakeetFeed : window.toto.appleSpeechFeed
     vi.mocked(feed).mockResolvedValue({ text: 'Identity-bound speech.' })
@@ -1241,6 +1540,391 @@ describe('worklet seal-and-flush protocol', () => {
     worklet.process([[modulatedTone(20_800)]]) // crosses the 1.2s partial threshold when unsealed
 
     expect(messages).toHaveLength(0)
+  })
+})
+
+describe('broker cloud speech Listen lifecycle', () => {
+  it.each([
+    'mic',
+    'system'
+  ] as const)('fails closed rather than replacing a broker %s channel on devicechange', async (side) => {
+    const source = side === 'mic' ? 'mic' : 'system'
+    const consent = side === 'mic' ? brokerConsent : { ...brokerConsent, requestedTracks: ['system'] as Track[] }
+    const api = renderBroker()
+    await api.start(source, 'fast', 'cloud', 'English', 789, consent)
+    await settle()
+    const initialStreams = streams.length
+    const initialWorklets = worklets.length
+
+    mediaDeviceListeners.devicechange?.()
+    await vi.advanceTimersByTimeAsync(800)
+    if (side === 'system') await vi.advanceTimersByTimeAsync(20_001)
+    await settle()
+
+    expect(streams).toHaveLength(initialStreams)
+    expect(worklets).toHaveLength(initialWorklets)
+    expect(window.toto.cloudSpeechCancel).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
+    expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false })
+    expect(streams.every(({ track }) => track.stop.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('finishes Pause once and Stop releases its retained stream without a second Finish', async () => {
+    const api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 123, brokerConsent)
+    await settle()
+    expect(renderBroker().capturing).toBe(true)
+    expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
+
+    api.pause()
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(renderBroker().paused).toBe(true)
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledTimes(1)
+    expect(streams[0]?.track.stop).not.toHaveBeenCalled()
+
+    renderBroker().stop()
+    await settle()
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledTimes(1)
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 123],
+      [false, 123]
+    ])
+  })
+
+  it('resumes a completed Pause with the retained tracks and a fresh capture generation', async () => {
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 456, brokerConsent)
+    const startRequest = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    const stream = cloudSpeechStreams.get('microphone')
+    if (!startRequest || !stream) throw new Error('expected active broker stream')
+    const finalEvent: CloudSpeechEvent = {
+      type: 'segment',
+      captureId: startRequest.captureId,
+      captureGeneration: startRequest.capture.generation,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'The final survives Pause.',
+        startMs: 0,
+        endMs: 700
+      }
+    }
+    for (const listener of cloudSpeechListeners) listener(finalEvent)
+    await settle()
+    api.pause()
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+
+    api = renderBroker()
+    api.resume()
+    await settle()
+    api = renderBroker()
+    expect(api.capturing).toBe(true)
+    expect(api.paused).toBe(false)
+    expect(streams).toHaveLength(1)
+    expect(contexts).toHaveLength(2)
+    expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2)
+    const starts = vi.mocked(window.toto.cloudSpeechStart).mock.calls.map(([request]) => request)
+    expect(starts.map(({ capture }) => capture.generation)).toEqual([1, 2])
+    expect(starts[1]?.capture).toMatchObject({ requestedTracks: ['microphone'], capturedTracks: ['microphone'] })
+  })
+
+  it('waits for the exact broker Pause drain before starting a resumed generation', async () => {
+    let releaseFinish!: () => void
+    const finish = vi.mocked(window.toto.cloudSpeechFinish).getMockImplementation()
+    if (!finish) throw new Error('expected cloud finish mock')
+    vi.mocked(window.toto.cloudSpeechFinish).mockImplementation(
+      async (request) =>
+        await new Promise<void>((resolve) => {
+          releaseFinish = resolve
+        }).then(() => finish(request))
+    )
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 456, brokerConsent)
+    const startRequest = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    const stream = cloudSpeechStreams.get('microphone')
+    if (!startRequest || !stream) throw new Error('expected active broker stream')
+    const finalEvent: CloudSpeechEvent = {
+      type: 'segment',
+      captureId: startRequest.captureId,
+      captureGeneration: startRequest.capture.generation,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'The final survives Pause.',
+        startMs: 0,
+        endMs: 700
+      }
+    }
+    api.pause()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
+    for (const listener of cloudSpeechListeners) listener(finalEvent)
+    await settle()
+
+    api = renderBroker()
+    api.resume()
+    await settle()
+    expect(window.toto.cloudSpeechStart).toHaveBeenCalledOnce()
+
+    releaseFinish()
+    await vi.waitFor(() => expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2))
+    api = renderBroker()
+    expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2)
+    expect(api.capturing).toBe(true)
+    expect(api.paused).toBe(false)
+    expect(api.lines).toContainEqual(expect.objectContaining({ text: 'The final survives Pause.', speech: finalEvent }))
+  })
+
+  it('stores exact provider final text and event provenance for the correct track', async () => {
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'French', 789, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    const stream = cloudSpeechStreams.get('microphone')
+    if (!request || !stream) throw new Error('mock broker start did not capture the microphone')
+    const event: CloudSpeechEvent = {
+      type: 'segment',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'Oui. Oui.',
+        startMs: 0,
+        endMs: 900
+      },
+      languages: ['fr-CA']
+    }
+    for (const listener of cloudSpeechListeners) listener(event)
+    await settle()
+    api = renderBroker()
+    expect(api.lines).toContainEqual(expect.objectContaining({ text: 'Oui. Oui.', lang: 'fr-CA', speech: event }))
+  })
+
+  it('keeps Listen active through a ceiling drain, then tears down after the final result is applied', async () => {
+    let releaseFinish!: () => void
+    const finish = vi.mocked(window.toto.cloudSpeechFinish).getMockImplementation()
+    if (!finish) throw new Error('expected cloud finish mock')
+    vi.mocked(window.toto.cloudSpeechFinish).mockImplementation(
+      async (request) => await new Promise<void>((resolve) => (releaseFinish = resolve)).then(() => finish(request))
+    )
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 321, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    const stream = cloudSpeechStreams.get('microphone')
+    if (!request || !stream) throw new Error('expected active broker capture')
+
+    const ceiling: CloudSpeechEvent = {
+      type: 'capture-ceiling',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000901',
+      maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
+    }
+    for (const listener of cloudSpeechListeners) listener(ceiling)
+    await vi.waitFor(() => expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce())
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
+    expect(renderBroker()).toMatchObject({ listening: true, capturing: true, ready: true })
+    expect(streams[0]?.track.stop).not.toHaveBeenCalled()
+    expect(window.toto.setListeningState.mock.calls).toEqual([[true, 321]])
+
+    const finalEvent: CloudSpeechEvent = {
+      type: 'segment',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'The final ceiling result is retained.',
+        startMs: 0,
+        endMs: 700
+      }
+    }
+    for (const listener of cloudSpeechListeners) listener(finalEvent)
+    await settle()
+    api = renderBroker()
+    expect(api.lines).toContainEqual(expect.objectContaining({ text: finalEvent.segment.text, speech: finalEvent }))
+    expect(streams[0]?.track.stop).not.toHaveBeenCalled()
+
+    releaseFinish()
+    await vi.waitFor(() => expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false }))
+    api = renderBroker()
+    expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
+    expect(api.error).toContain('four-hour capture limit')
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 321],
+      [false, 321]
+    ])
+  })
+
+  it('reports an incomplete ceiling tail honestly while releasing the current Listen capture', async () => {
+    vi.mocked(window.toto.cloudSpeechFinish).mockImplementation(async (request) => ({
+      ok: true,
+      captureId: request.captureId,
+      captureGeneration: request.captureGeneration,
+      complete: false,
+      reason: 'incomplete',
+      tracks: request.tracks.map(({ track }) => ({
+        stream: cloudSpeechStreams.get(track)!,
+        lastSequence: 0,
+        closeConfirmed: false,
+        tail: 'incomplete',
+        reason: 'unknown' as const
+      }))
+    }))
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 654, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    if (!request) throw new Error('expected active broker capture')
+    const ceiling: CloudSpeechEvent = {
+      type: 'capture-ceiling',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000902',
+      maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
+    }
+    for (const listener of cloudSpeechListeners) listener(ceiling)
+    await vi.waitFor(() => expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false }))
+
+    api = renderBroker()
+    expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
+    expect(api.error).toContain('final transcript could not be confirmed')
+    expect(streams[0]?.track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 654],
+      [false, 654]
+    ])
+  })
+
+  it('lets an active Pause drain the ceiling result before final capture teardown', async () => {
+    sealMode = { delayMs: 80, acknowledge: true, throwOnPost: false }
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 987, brokerConsent)
+    await settle()
+    const request = vi.mocked(window.toto.cloudSpeechStart).mock.calls[0]?.[0]
+    if (!request) throw new Error('expected active broker capture')
+    const track = streams[0]?.track
+    if (!track) throw new Error('expected active microphone track')
+
+    api.pause()
+    await settle()
+    expect(window.toto.cloudSpeechFinish).not.toHaveBeenCalled()
+    const ceiling: CloudSpeechEvent = {
+      type: 'capture-ceiling',
+      captureId: request.captureId,
+      captureGeneration: request.capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000903',
+      maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
+    }
+    for (const listener of cloudSpeechListeners) listener(ceiling)
+
+    await vi.advanceTimersByTimeAsync(80)
+    await settle()
+    api = renderBroker()
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
+    expect(api).toMatchObject({ listening: false, capturing: false, paused: false, ready: false })
+    expect(api.error).toContain('four-hour capture limit')
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 987],
+      [false, 987]
+    ])
+  })
+
+  it('fails closed and cancels broker speech when an acquired track ends', async () => {
+    const api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 789, brokerConsent)
+    const track = streams[0]?.track
+    if (!track) throw new Error('expected broker microphone track')
+
+    track.readyState = 'ended'
+    track.onended?.()
+    await settle()
+
+    expect(window.toto.cloudSpeechCancel).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSpeechFinish).not.toHaveBeenCalled()
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(renderBroker().capturing).toBe(false)
+    expect(window.toto.cloudSpeechStart).toHaveBeenCalledOnce()
+  })
+
+  it('releases the current broker capture after a live frame transport failure', async () => {
+    const api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 789, brokerConsent)
+    const worklet = worklets[0]
+    const track = streams[0]?.track
+    if (!worklet || !track) throw new Error('expected an active broker microphone channel')
+    vi.mocked(window.toto.cloudSpeechFrame).mockRejectedValue(new Error('synthetic frame transport failure'))
+
+    worklet.emit({
+      type: 'pcm-frame',
+      sequence: 1,
+      sampleOffset: 0,
+      sampleRate: 16_000,
+      audio: new Float32Array(1_600)
+    })
+    await settle()
+
+    expect(window.toto.cloudSpeechFrame).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSpeechCancel).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSpeechFinish).not.toHaveBeenCalled()
+    expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(contexts[0]?.state).toBe('closed')
+    expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false })
+  })
+
+  it('ignores an old broker frame failure after a replacement capture owns the hook', async () => {
+    let rejectOldFrame!: (error: Error) => void
+    vi.mocked(window.toto.cloudSpeechFrame).mockImplementation(
+      () => new Promise((_resolve, reject) => void (rejectOldFrame = reject))
+    )
+    let api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 789, brokerConsent)
+    const oldWorklet = worklets[0]
+    if (!oldWorklet) throw new Error('expected the first broker microphone channel')
+    oldWorklet.emit({
+      type: 'pcm-frame',
+      sequence: 1,
+      sampleOffset: 0,
+      sampleRate: 16_000,
+      audio: new Float32Array(1_600)
+    })
+    await settle()
+    expect(window.toto.cloudSpeechFrame).toHaveBeenCalledOnce()
+
+    api = renderBroker()
+    await api.start('mic', 'fast', 'cloud', 'English', 790, brokerConsent)
+    const replacementTrack = streams.at(-1)?.track
+    if (!replacementTrack) throw new Error('expected replacement broker stream')
+    rejectOldFrame(new Error('stale frame transport failure'))
+    await settle()
+
+    expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2)
+    expect(replacementTrack.stop).not.toHaveBeenCalled()
+    expect(renderBroker()).toMatchObject({ listening: true, capturing: true, ready: true })
   })
 })
 

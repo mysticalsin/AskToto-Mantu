@@ -1,17 +1,9 @@
 import { basename, join } from 'node:path'
 import type { Settings, AskStart } from '@shared/ipc'
+import { PROVIDERS, providerBaseUrl, requiresUserBaseUrl, resolveModelTier, type ProviderId } from '@shared/providers'
 import {
-  PROVIDERS,
-  providerBaseUrl,
-  requiresUserBaseUrl,
-  resolveModelTier,
-  type ProviderId
-} from '@shared/providers'
-import {
-  BRAIN_EXTRACTION_PROMPT,
   BRAIN_SCHEMA_VERSION,
   classifyMeetingSourceUse,
-  MeetingExtractionSchema,
   type MeetingExtraction,
   type MeetingRef,
   type BrainGraph,
@@ -21,10 +13,7 @@ import {
   type ProvenantField,
   type EntityKind
 } from '@shared/brain'
-import { INJECTION_GUARD } from '@shared/prompts'
-import { redactSecrets } from '@shared/redact'
 import { fnv1a } from '@shared/hash'
-import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
 import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
@@ -35,10 +24,14 @@ import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@share
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { parse, readMeetingFields } from '../features/meetings/meeting-document'
-import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
+import { isLocalPreemption, whenLocalInteractiveIdle } from '../llm/local'
 import {
-  EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
-  assertLocalWindowsFit, fitWindowChars, isContextOverflow
+  EXTRACTION_REMINDER,
+  ExtractionDoesNotFitError,
+  LOCAL_EXTRACTION_OUTPUT_TOKENS,
+  MIN_LOCAL_WINDOW_CHARS,
+  assertLocalWindowsFit,
+  isContextOverflow
 } from './local-extraction-fit'
 import {
   scanMeetingSources,
@@ -104,14 +97,45 @@ import {
   loadMeetingExtraction,
   withEntityLock,
   cloneEntity,
-  purgeBrain, rebuildUnavailableError,
+  purgeBrain,
+  rebuildUnavailableError,
   BRAIN_INDEX_ERROR_CODE,
   BrainIndexRebuildError
 } from './store'
-import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
+import {
+  applyCorrections,
+  readAliasMap,
+  resolveEntitySlug,
+  replayCorrections,
+  readCorrectionsJournalSafe
+} from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { pickIntelligencePassCandidates, type IntelligencePassCandidate } from './intelligence-pass-route'
+import {
+  buildExtractionSystem,
+  combineWindowExtractions,
+  extractionWindowSize as resolveExtractionWindowSize,
+  extractJsonObject,
+  localExtractionWindowChars,
+  parseExtractionPayload,
+  prepareMeetingWindows,
+  verifyBandEvidence,
+  verifyDealAmount,
+  verifyDealCloseDate,
+  verifyExtraction
+} from './extraction-normalization'
+
+export {
+  buildExtractionSystem,
+  combineWindowExtractions,
+  extractJsonObject,
+  parseExtractionPayload,
+  splitIntoWindows,
+  verifyExtraction
+} from './extraction-normalization'
+
+export { localExtractionWindowChars } from './extraction-normalization'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -142,10 +166,7 @@ export function hasUsableProvider(s: Settings): boolean {
  *  keep on-device. Otherwise, when localLlm.fallback is on and local is ready, local is appended as
  *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
  *  provider is down or none is configured, instead of never being indexed at all. */
-function pickProviderCandidates(
-  s: Settings,
-  route: IngestRoute = 'default'
-): IntelligencePassCandidate[] {
+function pickProviderCandidates(s: Settings, route: IngestRoute = 'default'): IntelligencePassCandidate[] {
   // Update Intelligence button only: Local first when ready, configured API once as failover.
   // Must not reuse the default cloud-first waterfall, or a ready Local would be skipped.
   if (route === 'intelligence-pass') return pickIntelligencePassCandidates(s)
@@ -372,329 +393,16 @@ async function runCompletion(
     } catch (e) {
       const hasNext = i < pool.length - 1
       if (!hasNext || !isIngestTransportFailure(e)) throw e
-      mainLog.warn(`[brain] ${picked.provider} transport failure during extraction, failing over:`, e instanceof Error ? e.message : e)
+      mainLog.warn(
+        `[brain] ${picked.provider} transport failure during extraction, failing over:`,
+        e instanceof Error ? e.message : e
+      )
     }
   }
   // Unreachable — the loop above always either returns or throws — but keeps the function's return type
   // honest for TypeScript's control-flow analysis.
   throw new Error('No configured AI provider for brain ingest.')
 }
-
-/** Strip markdown fences / stray prose around the JSON object a model may still emit. */
-export function extractJsonObject(raw: string): string {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
-  const body = fenced ? fenced[1] : raw
-  const start = body.indexOf('{')
-  if (start === -1) throw new Error('No JSON object in model output')
-
-  // Small on-device models occasionally append a second JSON fragment or a prose note after the
-  // requested object. `lastIndexOf('}')` made the whole concatenation invalid JSON; scan for the first
-  // balanced object instead, respecting braces and escapes inside JSON strings.
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let i = start; i < body.length; i++) {
-    const ch = body[i]
-    if (inString) {
-      if (escaped) escaped = false
-      else if (ch === '\\') escaped = true
-      else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') {
-      inString = true
-      continue
-    }
-    if (ch === '{') depth++
-    else if (ch === '}') {
-      depth--
-      if (depth === 0) return body.slice(start, i + 1)
-    }
-  }
-  throw new Error('No complete JSON object in model output')
-}
-
-/** Lead with the injection guard, exactly like personas.ts's buildSystem does for its other untrusted-
- *  transcript modes (suggest/summary/recap/vision) — the meeting transcript is third-party data the
- *  model must never treat as instructions. Exported so the assembly itself is directly testable. */
-export const buildExtractionSystem = (extra = ''): string =>
-  INJECTION_GUARD.trimStart() + '\n\n' + BRAIN_EXTRACTION_PROMPT + extra
-
-// ── Windowed extraction (Task MI-4, kills D2 — the old hard 24k truncation) ──────────────────────────
-
-// Same size as the old hardcoded `.slice(0, 24000)` — a transcript at or under this length takes the
-// EXACT single-completion-call path it always has (see splitIntoWindows's own byte-identity guarantee).
-const WINDOW_SIZE = 24000
-// ~1k of trailing context carried into the next window so a fact split across a window boundary (a
-// number stated in one line, its supporting clause in the next) still has a chance to align in EITHER
-// window — small relative to WINDOW_SIZE, so it never meaningfully multiplies completion-call volume.
-const WINDOW_OVERLAP = 1000
-
-/** The largest window (chars) whose local extraction request fits a slot of `slotTokens` (INV-FIT in
- *  local-extraction-fit.ts), capped at WINDOW_SIZE. */
-export function localExtractionWindowChars(slotTokens: number): number {
-  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
-}
-
-/** Window size for this route: fitted to the local slot when Métis Local is asked first, else WINDOW_SIZE.
- *  `local` says whether the size came from the slot, which is what makes a context overflow permanent. */
-function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
-  const first = pickProviderCandidates(s, route)[0]
-  if (first?.provider !== 'local') return { size: WINDOW_SIZE, local: false }
-  let slotTokens: number
-  try {
-    slotTokens = localSlotTokens(first.model)
-  } catch {
-    // An unknown persisted model id: the local call itself reports that, so size as before.
-    return { size: WINDOW_SIZE, local: false }
-  }
-  return { size: localExtractionWindowChars(slotTokens), local: true }
-}
-
-/** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
- *  never splits a transcript line, with `overlap` chars of trailing context carried into the next
- *  window. Returns `[text]` UNCHANGED when `text.length <= size` — the single-window path every
- *  transcript at or under the threshold takes, byte-identical to pre-MI-4 behavior (a 1-element array's
- *  `.join()` below reproduces `text` exactly, so no downstream branching is needed for that case). */
-export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WINDOW_OVERLAP): string[] {
-  if (text.length <= size) return [text]
-  const lines = text.split('\n')
-  const windows: string[] = []
-  let cur: string[] = []
-  let curLen = 0
-  let i = 0
-  while (i < lines.length) {
-    const line = lines[i]
-    const lineLen = line.length + 1 // +1 for the '\n' this line will rejoin with
-    if (curLen + lineLen > size && cur.length > 0) {
-      windows.push(cur.join('\n'))
-      // Seed the next window with the last `overlap` chars' worth of lines from the one just closed.
-      const ov: string[] = []
-      let ovLen = 0
-      for (let j = cur.length - 1; j >= 0 && ovLen < overlap; j--) {
-        ov.unshift(cur[j])
-        ovLen += cur[j].length + 1
-      }
-      // MQA-017: `i` only advances on the push path below, so the reseeded window MUST be able to accept
-      // this line — otherwise the same branch fires again on the same `i`, pushes an identical window,
-      // and reseeds identical state forever: an infinite loop that grows `windows` without bound and
-      // wedges the main process (this runs synchronously on it, via extractMeeting). Reachable whenever
-      // one line's overlap seed plus the next line exceeds `size` — e.g. two adjacent very long lines.
-      // Dropping the overlap guarantees forward progress: with an empty `cur` the guard below is false,
-      // so the line is always consumed, and a single line longer than `size` becomes its own oversized
-      // window rather than looping. Losing overlap context on that boundary is the correct trade against
-      // hanging the app.
-      if (ovLen + lineLen > size) {
-        cur = []
-        curLen = 0
-      } else {
-        cur = ov
-        curLen = ovLen
-      }
-      continue // re-evaluate this same line against the freshly-seeded window
-    }
-    cur.push(line)
-    curLen += lineLen
-    i++
-  }
-  if (cur.length > 0) windows.push(cur.join('\n'))
-  return windows
-}
-
-type Deal = NonNullable<MeetingExtraction['deal']>
-type Account = NonNullable<MeetingExtraction['account']>
-
-/** The window whose title/topics/sentiment/account should anchor the combined extraction — these are
- *  meeting-level descriptive fields that must read as ONE coherent view, not a patchwork of windows. */
-function pickAnchorWindow(windows: MeetingExtraction[]): number {
-  const extractedIdx = windows.findIndex((w) => w.account?.confidence === 'EXTRACTED')
-  if (extractedIdx !== -1) return extractedIdx
-  const nonNullIdx = windows.findIndex((w) => w.account !== null)
-  return nonNullIdx !== -1 ? nonNullIdx : 0
-}
-
-/** Deal combiner: stage/win_likelihood_band(+evidence)/velocity each take the LAST window with a
- *  non-null value — the meeting's final state on that field, positionally deterministic regardless of
- *  how many windows actually mention it. `name`/`account` come from the first window that names them
- *  (identity shouldn't flip mid-combine just because a later window's extraction omitted it). */
-function combineDeal(windows: MeetingExtraction[]): Deal | null {
-  const withDeal = windows.filter((w): w is MeetingExtraction & { deal: Deal } => w.deal !== null)
-  if (withDeal.length === 0) return null
-  const name = withDeal.find((w) => w.deal.name)?.deal.name ?? ''
-  let stage = ''
-  let win_likelihood_band: Deal['win_likelihood_band'] = null
-  let band_evidence = ''
-  let velocity: Deal['velocity'] = { signal: 'no-hard-date-found', evidence: '' }
-  let amount: Deal['amount']
-  let close_date: Deal['close_date']
-  for (const w of withDeal) {
-    if (w.deal.stage) stage = w.deal.stage
-    if (w.deal.win_likelihood_band) {
-      win_likelihood_band = w.deal.win_likelihood_band
-      band_evidence = w.deal.band_evidence
-    }
-    if (w.deal.velocity.signal !== 'no-hard-date-found') velocity = w.deal.velocity
-    if (w.deal.amount) amount = w.deal.amount
-    if (w.deal.close_date) close_date = w.deal.close_date
-  }
-  return { name, stage, win_likelihood_band, band_evidence, velocity, amount, close_date }
-}
-
-/** Deterministically combine one meeting's per-window extractions into a single MeetingExtraction.
- *  Called only when a transcript needed more than one window — the caller keeps the single-window
- *  result untouched otherwise, so this function's own quirks can never affect a ≤24k transcript. */
-export function combineWindowExtractions(windows: MeetingExtraction[]): MeetingExtraction {
-  if (windows.length <= 1) return windows[0]
-  const anchor = windows[pickAnchorWindow(windows)]
-
-  const people: MeetingExtraction['people'] = []
-  for (const w of windows) for (const p of w.people) pushUnique(people, p, (x) => slugify(x.name))
-
-  const commitments: MeetingExtraction['commitments'] = []
-  for (const w of windows) for (const c of w.commitments) pushUnique(commitments, c, (x) => commitmentKey(x.text))
-
-  const signals: MeetingExtraction['signals'] = []
-  for (const w of windows) for (const sig of w.signals) pushUnique(signals, sig, (x) => `${x.kind}|${x.statement}`)
-
-  const missed_signals: MeetingExtraction['missed_signals'] = []
-  for (const w of windows) for (const m of w.missed_signals) pushUnique(missed_signals, m, (x) => x.statement)
-
-  const feedback: MeetingExtraction['feedback'] = []
-  for (const w of windows) for (const f of w.feedback) pushUnique(feedback, f, (x) => x.note)
-
-  const numeric_facts: MeetingExtraction['numeric_facts'] = []
-  for (const w of windows) {
-    for (const n of w.numeric_facts) pushUnique(numeric_facts, n, (x) => `${x.kind}|${x.value}|${x.unit ?? ''}|${x.quote}`)
-  }
-
-  return {
-    ...anchor,
-    title24: anchor.title24,
-    topics: anchor.topics,
-    sentiment: anchor.sentiment,
-    account: anchor.account as Account | null,
-    people,
-    deal: combineDeal(windows),
-    signals,
-    missed_signals,
-    commitments,
-    feedback,
-    numeric_facts
-  }
-}
-
-// ── Verification (Task MI-4 — "no unverified figure ever shown") ────────────────────────────────────
-
-/** Every numeric_fact + every commitment quote checked against the EXACT prepared text sent to the
- *  model (post-redaction, post-window-concatenation) — never the raw transcript (defect D10): a
- *  redacted-away or fabricated quote must fail verification even if it happens to appear in the
- *  original file. Demotes confidence to AMBIGUOUS on failure; never strips the item (quarantined, not
- *  dropped, so a human can still review and pin it). Pure and exported so it is directly unit-testable
- *  without going through the full createStream/runCompletion machinery. */
-/** Language-switch markers ("_[conversation switches to X]_", written by transcripts.ts's
- *  formatTranscript) are renderer-injected prose, not speech — a quote must never VERIFY against one.
- *  Applied to the grounding reference in EVERY alignment check in this module (verifyExtraction,
- *  verifyDealAmount, verifyDealCloseDate, verifyBandEvidence), never to the text sent to the model.
- *  D10 note: for alignQuote's exact-substring path this is strictly conservative (whatever aligns
- *  post-strip aligned pre-strip); the fuzzy/LCS path's slack window can in principle shift by the few
- *  removed marker tokens, but a quote exploiting that would need ~23+ verbatim tokens stitched across
- *  a switch boundary — accepted as out of threat model, same as fuzzy matching's other tolerances. */
-function stripLanguageMarkers(text: string): string {
-  return text.replace(/^_?\[conversation switches to [^\]]+\]_?$/gm, '')
-}
-
-export function verifyExtraction(x: MeetingExtraction, preparedText: string): MeetingExtraction {
-  const grounding = stripLanguageMarkers(preparedText)
-  const numeric_facts = x.numeric_facts.map((f) => {
-    const outcome = verifyNumericFact({ value: f.value, quote: f.quote, unit: f.unit ?? undefined }, grounding)
-    return outcome === 'verified' ? f : { ...f, confidence: 'AMBIGUOUS' as const }
-  })
-  const commitments = x.commitments.map((c) => {
-    if (!c.quote) return c // '' is the documented "paraphrase-only" case — nothing to verify
-    return alignQuote(c.quote, grounding) ? c : { ...c, confidence: 'AMBIGUOUS' as const }
-  })
-  return { ...x, numeric_facts, commitments }
-}
-
-/** Deal amount verification: the full three-rule verifyNumericFact guarantee (quote aligns + value
- *  derivable from the quote + from the aligned span), currency treated as the unit. */
-function verifyDealAmount(amount: Deal['amount'], transcript: string): boolean {
-  if (!amount) return false
-  return (
-    verifyNumericFact(
-      { value: amount.value, quote: amount.quote, unit: amount.currency },
-      stripLanguageMarkers(transcript)
-    ) === 'verified'
-  )
-}
-
-/** Deal close_date verification: `value` is a free-form date string (not a single scalar+unit), so the
- *  full verifyNumericFact rule doesn't fit — instead, alignQuote the quote, then require every numeral
- *  ACTUALLY STATED IN the date value (extractNumerals — e.g. "2026-06-15" -> 2026, 6, 15; "Q3 2026" ->
- *  3, 2026) to be independently derivable from the quote itself (numeralDerivable, matching
- *  verifyNumericFact's own rule (b): the value must be claimed by the quote, not just co-located with
- *  it). Deterministic; fails closed when the date carries no numeral to check at all. */
-function verifyDealCloseDate(closeDate: Deal['close_date'], transcript: string): boolean {
-  if (!closeDate || !closeDate.quote) return false
-  if (!alignQuote(closeDate.quote, stripLanguageMarkers(transcript))) return false
-  const nums = extractNumerals(closeDate.value)
-  if (nums.length === 0) return false
-  return nums.every((n) => numeralDerivable(n.value, closeDate.quote))
-}
-
-/** Deal band_evidence verification: just alignment (band is a qualitative judgement, not a number) —
- *  an evidence string that doesn't verbatim appear in the transcript is not real evidence. */
-function verifyBandEvidence(bandEvidence: string, transcript: string): boolean {
-  return !!bandEvidence && !!alignQuote(bandEvidence, stripLanguageMarkers(transcript))
-}
-
-/**
- * Local models occasionally emit `null` for an optional numeric fact instead of omitting the fact.
- * A numeric fact without a numeric value cannot be verified or safely shown, but it must not reject
- * the rest of a valid meeting extraction. Preserve the strict persisted schema by removing only those
- * malformed optional entries before validation.
- */
-export function parseExtractionPayload(raw: string): MeetingExtraction {
-  const payload: unknown = JSON.parse(extractJsonObject(raw))
-  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-    const extraction = payload as Record<string, unknown>
-    if ('numeric_facts' in extraction) {
-      const numericFacts = extraction.numeric_facts
-      extraction.numeric_facts = Array.isArray(numericFacts)
-        ? numericFacts.filter((fact) => {
-            if (!fact || typeof fact !== 'object' || Array.isArray(fact)) return false
-            const value = (fact as Record<string, unknown>).value
-            return typeof value === 'number' && Number.isFinite(value)
-          })
-        : []
-    }
-  }
-  // MQA-114: a ZodError's `.message` is the ENTIRE issue array serialized as JSON. That string was flowing
-  // straight into the ingest_failed attention item's user-facing detail ("Failed to index: [ { code: ... "),
-  // dumping a raw schema error at the user. Summarize the first issue into a short, honest reason instead;
-  // the full validation failure is still recoverable from the model output on a manual retry.
-  const result = MeetingExtractionSchema.safeParse(payload)
-  if (!result.success) {
-    const issue = result.error.issues[0]
-    const where = issue?.path?.length ? issue.path.join('.') : 'the response'
-    throw new Error(`The model's summary did not match the expected meeting shape (at ${where}).`)
-  }
-  // MQA-116: the model sometimes lists the transcript's speaker-ROLE labels ('You'/'Them') as if they were
-  // real participants, so they land in people[] and become fake entities the brain then flags as
-  // "linked to multiple accounts". Drop them here.
-  //
-  // This used to claim a commitment spoken "by them"/"by you" still routed "correctly through
-  // mergeExtraction's own by='them'/'you' handling". No such handling existed (MQA-244) — the claim was
-  // written as if it were true and nothing tested it, so dropping these names silently dropped their
-  // commitments in every deal-less meeting. mergeExtraction now routes anything no ledger claimed to the
-  // user's own ledger; see the SELF_PERSON_SLUG block there. A comment asserting a safety property the
-  // code does not have is worse than no comment: it stops the next reader from checking.
-  result.data.people = result.data.people.filter((p) => !SPEAKER_ROLE_LABELS.has(p.name.trim().toLowerCase()))
-  return result.data
-}
-
-/** Transcript speaker-role labels that are never real person names (MQA-116). */
-const SPEAKER_ROLE_LABELS = new Set(['you', 'them', 'me', 'unknown', 'speaker', 'participant', 'other'])
 
 /** The user's own ledger (MQA-244). Deliberately one of the role labels above, so extraction can never
  *  mint a competing person entity with this slug — those names are filtered out before they reach the
@@ -711,9 +419,9 @@ async function extractMeeting(
   // Same redaction discipline as the live ask path (index.ts's askStart handler): the locally-saved
   // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
   // extraction is stripped of high-confidence secrets, and only when the user has redaction enabled.
-  const fit = extractionWindowSize(s, route)
+  const fit = resolveExtractionWindowSize(pickProviderCandidates(s, route)[0])
   if (fit.local && fit.size < MIN_LOCAL_WINDOW_CHARS) throw new ExtractionDoesNotFitError()
-  const windows = prepareMeetingWindows(s, transcriptMd, fit.size)
+  const windows = prepareMeetingWindows(s.redactSensitive, transcriptMd, fit.size)
   if (fit.local) assertLocalWindowsFit(fit.size, windows)
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
@@ -773,15 +481,13 @@ async function extractMeeting(
 }
 
 /** The exact redacted/windowed transcript representation used for extraction-grounding checks. */
-function prepareMeetingWindows(s: Settings, transcriptMd: string, size: number): string[] {
-  // Overlap scales down with a small local window so the carried context never dominates it.
-  const overlap = Math.min(WINDOW_OVERLAP, Math.floor(size / 8))
-  return splitIntoWindows(s.redactSensitive ? redactSecrets(transcriptMd) : transcriptMd, size, overlap)
-}
-
 /** Exported for checkpoint repair: it must verify against the same text a normal extraction receives. */
 export function prepareMeetingText(s: Settings, transcriptMd: string): string {
-  return prepareMeetingWindows(s, transcriptMd, extractionWindowSize(s, 'default').size).join('\n')
+  return prepareMeetingWindows(
+    s.redactSensitive,
+    transcriptMd,
+    resolveExtractionWindowSize(pickProviderCandidates(s, 'default')[0]).size
+  ).join('\n')
 }
 
 // ── Deterministic merge ──────────────────────────────────────────────────────
@@ -856,7 +562,12 @@ function mergeProvenant<T>(
       ...current,
       superseded: pushSuperseded(
         current.superseded,
-        { value: incoming.value, date: incoming.date, source_file: incoming.source_file, confidence: incoming.confidence },
+        {
+          value: incoming.value,
+          date: incoming.date,
+          source_file: incoming.source_file,
+          confidence: incoming.confidence
+        },
         current.value,
         valuesEqual
       )
@@ -896,7 +607,12 @@ function mergeProvenant<T>(
     ...current,
     superseded: pushSuperseded(
       current.superseded,
-      { value: incoming.value, date: incoming.date, source_file: incoming.source_file, confidence: incoming.confidence },
+      {
+        value: incoming.value,
+        date: incoming.date,
+        source_file: incoming.source_file,
+        confidence: incoming.confidence
+      },
       current.value,
       valuesEqual
     )
@@ -931,8 +647,12 @@ export async function mergeExtraction(
   const graph = cloneEntity(readGraph(s))
   const addNode = (id: string, type: 'account' | 'person' | 'deal' | 'sector' | 'meeting', label: string): void =>
     pushUnique(graph.nodes, { id, type, label }, (n) => n.id)
-  const addEdge = (from: string, to: string, rel: string, confidence: MeetingExtraction['people'][number]['confidence']): void =>
-    pushUnique(graph.edges, { from, to, rel, confidence }, (e) => `${e.from}|${e.to}|${e.rel}`)
+  const addEdge = (
+    from: string,
+    to: string,
+    rel: string,
+    confidence: MeetingExtraction['people'][number]['confidence']
+  ): void => pushUnique(graph.edges, { from, to, rel, confidence }, (e) => `${e.from}|${e.to}|${e.rel}`)
 
   const meetingId = `meeting:${slugify(ref.file)}`
   addNode(meetingId, 'meeting', ref.title || ref.file)
@@ -966,7 +686,12 @@ export async function mergeExtraction(
     pushUnique(acc.meetings, ref, (m) => m.file)
     for (const sig of x.signals) {
       const bucket = sig.kind === 'positive' ? acc.win_reasons : sig.kind === 'objection' ? acc.loss_reasons : null
-      if (bucket) pushUnique(bucket, { statement: sig.statement, quote: sig.quote, meeting: ref.file }, (r) => r.statement + r.meeting)
+      if (bucket)
+        pushUnique(
+          bucket,
+          { statement: sig.statement, quote: sig.quote, meeting: ref.file },
+          (r) => r.statement + r.meeting
+        )
     }
     addNode(`account:${accountSlug}`, 'account', acc.name)
     addNode(`sector:${acc.sector}`, 'sector', acc.sector)
@@ -1018,7 +743,12 @@ export async function mergeExtraction(
     }
     pushUnique(person.meetings, ref, (m) => m.file)
     for (const sig of x.signals) {
-      if (sig.quote) pushUnique(person.stance_trail, { meeting: ref.file, kind: sig.kind, statement: sig.statement }, (t) => t.meeting + t.statement)
+      if (sig.quote)
+        pushUnique(
+          person.stance_trail,
+          { meeting: ref.file, kind: sig.kind, statement: sig.statement },
+          (t) => t.meeting + t.statement
+        )
     }
     // Commitments spoken BY this person (matched by name) join their personal ledger — over time this
     // yields a kept-promise read per counterpart, a signal no transcript-only tool can compute.
@@ -1029,7 +759,9 @@ export async function mergeExtraction(
     for (const c of x.commitments) {
       if (c.by.toLowerCase() === p.name.toLowerCase()) {
         routedCommitments.add(commitmentKey(c.text))
-        pushUnique(person.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) => commitmentKey(t.text))
+        pushUnique(person.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) =>
+          commitmentKey(t.text)
+        )
       }
     }
     addNode(`person:${pslug}`, 'person', p.name)
@@ -1079,10 +811,20 @@ export async function mergeExtraction(
       // on a fabricated/unaligned quote); every pre-MI-4 caller (preparedText omitted) keeps the old
       // hardcoded EXTRACTED, unchanged.
       const bandConfidence: Confidence =
-        preparedText === undefined ? 'EXTRACTED' : verifyBandEvidence(x.deal.band_evidence, preparedText) ? 'EXTRACTED' : 'AMBIGUOUS'
+        preparedText === undefined
+          ? 'EXTRACTED'
+          : verifyBandEvidence(x.deal.band_evidence, preparedText)
+            ? 'EXTRACTED'
+            : 'AMBIGUOUS'
       deal.win_likelihood_band_provenance = mergeProvenant(
         deal.win_likelihood_band_provenance,
-        { value: x.deal.win_likelihood_band, source_file: ref.file, date: ref.date, quote: x.deal.band_evidence, confidence: bandConfidence },
+        {
+          value: x.deal.win_likelihood_band,
+          source_file: ref.file,
+          date: ref.date,
+          quote: x.deal.band_evidence,
+          confidence: bandConfidence
+        },
         eqStrict
       )
       deal.win_likelihood_band = deal.win_likelihood_band_provenance.value
@@ -1141,15 +883,14 @@ export async function mergeExtraction(
     }
     pushUnique(deal.meetings, ref, (m) => m.file)
     for (const sig of x.signals) pushUnique(deal.signals, { ...sig, meeting: ref.file }, (t) => t.meeting + t.statement)
-    for (const ms of x.missed_signals) pushUnique(deal.missed_signals, { ...ms, meeting: ref.file }, (t) => t.meeting + t.statement)
+    for (const ms of x.missed_signals)
+      pushUnique(deal.missed_signals, { ...ms, meeting: ref.file }, (t) => t.meeting + t.statement)
     // Commitment Ledger: promises spoken in this meeting join the deal's ledger as open obligations.
     // Status stays 'open' until later evidence or a human marks it — the merge never guesses.
     for (const c of x.commitments) {
       routedCommitments.add(commitmentKey(c.text))
-      pushUnique(
-        deal.commitments,
-        { ...c, meeting: ref.file, date: ref.date, status: 'open' as const },
-        (t) => commitmentKey(t.text)
+      pushUnique(deal.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) =>
+        commitmentKey(t.text)
       )
     }
     for (const f of x.feedback) pushUnique(deal.feedback, { ...f, meeting: ref.file }, (t) => t.meeting + t.note)
@@ -1199,10 +940,8 @@ export async function mergeExtraction(
     pushUnique(self.meetings, ref, (m) => m.file)
     self.commitments ??= []
     for (const c of unrouted) {
-      pushUnique(
-        self.commitments,
-        { ...c, meeting: ref.file, date: ref.date, status: 'open' as const },
-        (t) => commitmentKey(t.text)
+      pushUnique(self.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) =>
+        commitmentKey(t.text)
       )
     }
     await writePerson(s, SELF_PERSON_SLUG, self)
@@ -1417,7 +1156,13 @@ let sourceRefreshScanRetryKeys = new Set<string>()
 function completionError(error: CompletionError): void {
   const observer = backfillObserver
   if (!observer) return
-  const priority: Record<CompletionError, number> = { incomplete: 0, 'no-provider': 1, 'scan-failed': 2, 'publication-failed': 3, 'write-failed': 4 }
+  const priority: Record<CompletionError, number> = {
+    incomplete: 0,
+    'no-provider': 1,
+    'scan-failed': 2,
+    'publication-failed': 3,
+    'write-failed': 4
+  }
   if (!observer.error || priority[error] > priority[observer.error]) observer.error = error
 }
 
@@ -1440,7 +1185,13 @@ function observeClaimedSourceRefreshWork(): void {
 function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
   observeClaimedSourceRefreshWork()
   for (const key of sourceRefreshScanRetryKeys) observeSource(key)
-  if (sourceRefreshWorkKeys.size > 0 || sourceRefreshScanRetryKeys.size > 0 || !idx.sourceRefreshRequested || idx.replayPending) return
+  if (
+    sourceRefreshWorkKeys.size > 0 ||
+    sourceRefreshScanRetryKeys.size > 0 ||
+    !idx.sourceRefreshRequested ||
+    idx.replayPending
+  )
+    return
   for (const key of claimSourceRefreshWork(idx)) observeSource(key)
 }
 
@@ -1456,14 +1207,20 @@ function preserveSourceRefreshRetryWork(keys: ReadonlySet<string>): void {
 }
 
 class PublicationFailure extends Error {
-  constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error))
+  }
 }
 class BackfillScanFailure extends Error {
-  constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function trackedPublication(work: () => Promise<unknown>): Promise<void> {
-  try { await work() } catch (error) {
+  try {
+    await work()
+  } catch (error) {
     completionError('publication-failed')
     throw new PublicationFailure(error)
   }
@@ -1507,7 +1264,9 @@ export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Pro
     mutate(idx)
     await writeIndex(s, idx)
   })
-  indexLock = run.catch(() => { completionError('write-failed') })
+  indexLock = run.catch(() => {
+    completionError('write-failed')
+  })
   return run
 }
 
@@ -1599,11 +1358,19 @@ function hasActiveLiveIngest(): boolean {
 }
 
 export function brainLiveIngestProgress(): { pending: number; running: boolean } {
-  const pending = queue.filter((job) => job.origin === 'live').length + [...inFlightJobs].filter((job) => job.origin === 'live').length
+  const pending =
+    queue.filter((job) => job.origin === 'live').length +
+    [...inFlightJobs].filter((job) => job.origin === 'live').length
   return { pending, running: pending > 0 }
 }
 
-export function brainBackfillProgress(): { total: number; done: number; failed?: number; preparing?: boolean; running: boolean } {
+export function brainBackfillProgress(): {
+  total: number
+  done: number
+  failed?: number
+  preparing?: boolean
+  running: boolean
+} {
   // A background ingest for a newly saved/imported meeting is intentionally excluded. It has its own
   // meeting-level status; presenting it as an Index batch leaves the historical-index control stuck at
   // “Mapping meetings…” when that batch actually has zero candidates.
@@ -1612,8 +1379,16 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     done: backfillDone,
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
     ...(backfillPreparing ? { preparing: true } : {}),
-    running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask ||
-      hasActiveBackfill() || backfillLintPending || !!backfillFinalization || (!!drainTask && drainTask === backfillTailDrain)
+    running:
+      backfillPreparing ||
+      sourceRefreshRunning ||
+      rebuildStarting ||
+      rebuildReplayQueued ||
+      !!rebuildReplayTask ||
+      hasActiveBackfill() ||
+      backfillLintPending ||
+      !!backfillFinalization ||
+      (!!drainTask && drainTask === backfillTailDrain)
   }
 }
 
@@ -1647,7 +1422,10 @@ export function isPendingIngestRecord(record: BrainIndex['ingested'][string]): b
  * BOTH, but only once it is shared by at least `minTopErrorCount` records — a one-off error naming itself
  * as "the" provider problem would be misleading noise, not signal.
  */
-export function ingestFailureCounts(idx: BrainIndex, minTopErrorCount = 3): { failed: number; exhausted: number; topError?: string } {
+export function ingestFailureCounts(
+  idx: BrainIndex,
+  minTopErrorCount = 3
+): { failed: number; exhausted: number; topError?: string } {
   let failed = 0
   let exhausted = 0
   const byError = new Map<string, number>()
@@ -1713,7 +1491,11 @@ export function readMeetingSourceMode(md: string): string {
   const doc = parse(md)
   if (!doc) return ''
 
-  const raw = doc.lines.join('\n').match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''
+  const raw =
+    doc.lines
+      .join('\n')
+      .match(/^mode:\s*(.*?)\s*$/m)?.[1]
+      ?.trim() ?? ''
   const quoted = raw.match(/^(['"])(.*)\1$/)
   const mode = (quoted ? quoted[2] : raw).trim()
   return mode.length <= 100 ? mode : ''
@@ -1850,7 +1632,8 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
   const s = getSettings()
   try {
     const source = await readSourceText(job.file)
-    if (source.status === 'missing') return { job, s, ok: false, error: new Error('Meeting file not found.'), unreadable: true }
+    if (source.status === 'missing')
+      return { job, s, ok: false, error: new Error('Meeting file not found.'), unreadable: true }
     if (source.status === 'not-on-device') {
       return { job, s, ok: false, error: new Error('Meeting file is not available on this device.'), unreadable: true }
     }
@@ -1884,7 +1667,16 @@ async function finishJob(result: JobResult): Promise<void> {
   try {
     try {
       if (!result.ok) throw result.error
-      await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
+      await ingestExtraction(
+        s,
+        result.x,
+        result.md,
+        job.file,
+        result.preparedText,
+        job.sourceVersion,
+        job.key,
+        job.label
+      )
       auditLog('brain.ingest', { ok: true, source: job.source })
       {
         // Time saved: 2 min per captured commitment, cap 15. Only when ingest actually extracted some.
@@ -1899,7 +1691,9 @@ async function finishJob(result: JobResult): Promise<void> {
       }
     } catch (e) {
       failed = true
-      completionError(e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete')
+      completionError(
+        e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete'
+      )
       const source = await observeSourceFile(job.file)
       await updateIndex(s, (idx) => {
         const key = jobKey(job)
@@ -1911,18 +1705,24 @@ async function finishJob(result: JobResult): Promise<void> {
           ok: false,
           error: e instanceof Error ? e.message : String(e),
           ...(version ? { sourceVersion: version } : {}),
-          ...retryStateAfterFailure(previous, {
-            unreadable: !result.ok && result.unreadable,
-            permanent: !result.ok && result.error instanceof ExtractionDoesNotFitError,
-            source
-          }, now)
+          ...retryStateAfterFailure(
+            previous,
+            {
+              unreadable: !result.ok && result.unreadable,
+              permanent: !result.ok && result.error instanceof ExtractionDoesNotFitError,
+              source
+            },
+            now
+          )
         }
         idx.revision += 1
       })
       auditLog('brain.ingest', { ok: false, source: job.source })
     }
     if (job.origin === 'live') {
-      await updateIndex(s, (idx) => { idx.warnings = lintBrain(s) })
+      await updateIndex(s, (idx) => {
+        idx.warnings = lintBrain(s)
+      })
       // Task MI-5: one index regen per live ingest, one per whole backfill drain, not per meeting.
       await trackedPublication(() => publishIndexes(s))
     }
@@ -1975,10 +1775,18 @@ function unregisterDrainCallback(cb?: () => void | Promise<void>): void {
 
 /** Finishes historical indexing once its own work has drained, independent of live meeting ingestion. */
 function maybeFinishBackfill(): void {
-  if (!hasActiveBackfill() && backfillLintPending && !backfillFinalization && backfillTotal > 0 && backfillDone >= backfillTotal) {
+  if (
+    !hasActiveBackfill() &&
+    backfillLintPending &&
+    !backfillFinalization &&
+    backfillTotal > 0 &&
+    backfillDone >= backfillTotal
+  ) {
     const sx = getSettings()
     backfillFinalization = withEntityLock(async () => {
-      await updateIndex(sx, (i) => { i.warnings = lintBrain(sx) })
+      await updateIndex(sx, (i) => {
+        i.warnings = lintBrain(sx)
+      })
       await trackedPublication(() => publishIndexes(sx))
       if (backfillObserver) backfillObserver.published = true
       const incomplete = await hasIncompleteMeetingSource(sx, await readIndexAsync(sx))
@@ -1986,15 +1794,17 @@ function maybeFinishBackfill(): void {
         // Checkpoint repairs may drain while other sources still await a configured provider.
         if (!backfillObserver && !incomplete) i.backfillRequested = false
       })
-    }).catch((error) => {
-      completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
-      mainLog.error('[brain] backfill finalization failed:', error)
-    }).finally(() => {
-      backfillLintPending = false
-      backfillFinalization = null
-      maybeFinishDrain()
-      backfillTailDrain = drainTask
     })
+      .catch((error) => {
+        completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
+        mainLog.error('[brain] backfill finalization failed:', error)
+      })
+      .finally(() => {
+        backfillLintPending = false
+        backfillFinalization = null
+        maybeFinishDrain()
+        backfillTailDrain = drainTask
+      })
   }
 }
 
@@ -2002,7 +1812,9 @@ async function currentMeetingSourceVersions(s: Settings): Promise<Map<string, st
   try {
     return sourceVersions(await scanMeetingSources(s))
   } catch (error) {
-    mainLog.warn(`[brain] could not inspect meeting source versions: ${error instanceof Error ? error.message : String(error)}`)
+    mainLog.warn(
+      `[brain] could not inspect meeting source versions: ${error instanceof Error ? error.message : String(error)}`
+    )
     return null
   }
 }
@@ -2011,7 +1823,9 @@ async function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): Promise<bool
   try {
     return hasSourceDrift(await scanMeetingSources(s), idx)
   } catch (error) {
-    mainLog.warn(`[brain] could not inspect meeting source drift: ${error instanceof Error ? error.message : String(error)}`)
+    mainLog.warn(
+      `[brain] could not inspect meeting source drift: ${error instanceof Error ? error.message : String(error)}`
+    )
     return false
   }
 }
@@ -2035,7 +1849,9 @@ async function hasIncompleteMeetingSource(s: Settings, idx: BrainIndex, scan?: S
   try {
     return hasIncompleteSource(scan ?? (await scanMeetingSources(s)), idx)
   } catch (error) {
-    mainLog.warn(`[brain] could not inspect meeting sources while preserving reconciliation state: ${error instanceof Error ? error.message : String(error)}`)
+    mainLog.warn(
+      `[brain] could not inspect meeting sources while preserving reconciliation state: ${error instanceof Error ? error.message : String(error)}`
+    )
     return true
   }
 }
@@ -2055,7 +1871,16 @@ async function hasSavedReconciliationCandidateForSettings(s: Settings, scan?: So
  *  trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
   maybeFinishBackfill()
-  if (queue.length === 0 && inFlightJobs.size === 0 && backfillScans === 0 && !backfillPreparing && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
+  if (
+    queue.length === 0 &&
+    inFlightJobs.size === 0 &&
+    backfillScans === 0 &&
+    !backfillPreparing &&
+    !rebuildStarting &&
+    !backfillLintPending &&
+    !backfillFinalization &&
+    !drainTask
+  ) {
     // A just-saved meeting persists `backfillRequested` before its background job starts so a quit or
     // crash cannot strand it. Once every job truly drains, clear that durable marker only when none of
     // the persisted records remain failed/pending. A failed job therefore survives restart and the next
@@ -2066,7 +1891,12 @@ function maybeFinishDrain(): void {
         const scan = await scanMeetingSources(s)
         await updateIndex(s, (idx) => {
           if (backfillObserver) return // observer owns the final source/gate-aware durability decision
-          if (!idx.backfillRequested || Object.values(idx.ingested).some((entry) => !entry.ok) || hasIncompleteSource(scan, idx)) return
+          if (
+            !idx.backfillRequested ||
+            Object.values(idx.ingested).some((entry) => !entry.ok) ||
+            hasIncompleteSource(scan, idx)
+          )
+            return
           idx.backfillRequested = false
         })
       } catch (error) {
@@ -2086,15 +1916,17 @@ function maybeFinishDrain(): void {
           }
         }
       }
-    })().catch((error) => {
-      completionError('write-failed')
-      mainLog.error('[brain] queue drain failed:', error)
-    }).finally(() => {
-      drainTask = null
-      maybeStartSourceRefresh()
-      maybeCompleteBackfillRun()
-      if (pendingDrainCallbacks.length > 0 && queue.length === 0 && inFlightJobs.size === 0) maybeFinishDrain()
-    })
+    })()
+      .catch((error) => {
+        completionError('write-failed')
+        mainLog.error('[brain] queue drain failed:', error)
+      })
+      .finally(() => {
+        drainTask = null
+        maybeStartSourceRefresh()
+        maybeCompleteBackfillRun()
+        if (pendingDrainCallbacks.length > 0 && queue.length === 0 && inFlightJobs.size === 0) maybeFinishDrain()
+      })
   }
   maybeCompleteBackfillRun()
 }
@@ -2114,9 +1946,7 @@ function pump(): void {
     const idx = queue.findIndex((j) => {
       if (j.origin !== 'backfill' || j.strategy === 'reconcile') return true
       s ??= getSettings()
-      return hasUsableProvider(s) &&
-        !localExtractionShouldYield(s) &&
-        (j.trigger === 'user' || deferral === null)
+      return hasUsableProvider(s) && !localExtractionShouldYield(s) && (j.trigger === 'user' || deferral === null)
     })
     if (idx === -1) {
       // Every queued backfill job is blocked. Two different reasons land here and they need different
@@ -2177,8 +2007,22 @@ onMaintenanceMayBegin(pump)
  */
 export async function enqueueIngest(
   file: string,
-  { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {}
+  { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {},
+  assertAdmission?: () => void
 ): Promise<void> {
+  let admissionRefused = false
+  const checkAdmission = () => {
+    try {
+      assertAdmission?.()
+    } catch (error) {
+      admissionRefused = true
+      throw error
+    }
+  }
+  // Import jobs pass their exact attempt owner here. It is checked both before any asynchronous work and
+  // again after source observation, so a held attempt cannot resume this continuation after policy is
+  // later restored.
+  checkAdmission()
   // MQA-278 — refuses Act 2 onboarding-demo-tagged data before it can reach the private meeting brain.
   // saveMeeting already refuses the same tag before a file could legitimately exist (see
   // transcripts.ts), so this is belt-and-suspenders for any other caller that hands enqueueIngest a
@@ -2195,6 +2039,7 @@ export async function enqueueIngest(
   }
   const key = basename(file)
   const sourceVersion = await meetingSourceVersion(file)
+  checkAdmission()
   const previous = readIndex(s).ingested[key]
   // Match by the namespaced jobKey, not bare basename: enqueueIngest only ever runs for own-meeting paths
   // (key = basename), but queue/inFlightJobs now also hold team jobs (jobKey "team/<owner>/<file>"). A
@@ -2206,30 +2051,38 @@ export async function enqueueIngest(
     // A write that lands while the prior extraction is active cannot be safely folded into that job.
     // Keep the old job's result from clobbering the newer source by rebuilding from durable sources.
     if (force || (sourceVersion && tracked.sourceVersion && sourceVersion !== tracked.sourceVersion)) {
-      await requestSourceRefresh(s)
+      await requestSourceRefresh(s, checkAdmission)
+      checkAdmission()
     }
     return
   }
   if (previous?.ok) {
     if (!force && sourceVersion && previous.sourceVersion === sourceVersion) return
-    await requestSourceRefresh(s)
+    await requestSourceRefresh(s, checkAdmission)
+    checkAdmission()
     return
   }
   observeSource(key)
   if (backfillObserver) backfillObserver.published = false
   try {
+    checkAdmission()
     await updateIndex(s, (idx) => {
       idx.backfillRequested = true
       // A retry must clear the previous error while leaving an honest durable pending record. The write
       // itself is tiny and local; extraction remains fully backgrounded after this point.
       idx.ingested[key] = { at: Date.now(), ok: false, ...(sourceVersion ? { sourceVersion } : {}), attempts: 0 }
     })
+    checkAdmission()
   } catch (error) {
+    if (admissionRefused) throw error
     // The transcript is already durable. Keep the in-memory attempt alive, but log that a sudden quit
     // cannot be recovered until the index store becomes writable again.
-    mainLog.warn(`[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`)
+    mainLog.warn(
+      `[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`
+    )
   }
   if (deferred) return
+  checkAdmission()
   queue.push({ file, source: 'meetings', origin: 'live', trigger: 'user', ...(sourceVersion ? { sourceVersion } : {}) })
   pump()
 }
@@ -2267,18 +2120,26 @@ function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>):
   if (rebuildReplayQueued || rebuildReplayTask) return undefined
   rebuildReplayQueued = true
   return async () => {
-    try { await finishRebuildReplay(s) } finally {
+    try {
+      await finishRebuildReplay(s)
+    } finally {
       rebuildReplayQueued = false
       await onFinished?.()
     }
   }
 }
 
-async function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): Promise<BackfillStartResult> {
+async function startReplayBackfill(
+  s: Settings,
+  options: BackfillStartOptions,
+  onFinished?: () => void | Promise<void>
+): Promise<BackfillStartResult> {
   const callback = replayAfterDrain(s, onFinished)
   const retryKeys = options.allowSourceRefresh ? new Set(sourceRefreshWorkKeys) : new Set<string>()
   preserveSourceRefreshRetryWork(retryKeys)
-  try { return await startBackfill(callback, options) } catch (error) {
+  try {
+    return await startBackfill(callback, options)
+  } catch (error) {
     // A failed scan must not leave a phantom queued replay that prevents a later repaired-folder retry
     // from registering the real callback.
     unregisterDrainCallback(callback)
@@ -2376,12 +2237,13 @@ async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
   }
 }
 
-const REBUILD_BUSY_ERROR = 'Intelligence indexing is already running. Wait for it to finish before rebuilding; nothing was reset.'
+const REBUILD_BUSY_ERROR =
+  'Intelligence indexing is already running. Wait for it to finish before rebuilding; nothing was reset.'
 
 function rebuildRefusalMessage(code: BrainIndexRebuildError['code']): string {
   switch (code) {
     case BRAIN_INDEX_ERROR_CODE.keystoreUnavailable:
-      return "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
+      return 'Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed.'
     case BRAIN_INDEX_ERROR_CODE.preserveFailed:
       return 'Could not save a safe copy of the unreadable index (disk full or permissions). Nothing was deleted.'
     case BRAIN_INDEX_ERROR_CODE.changedDuringRebuild:
@@ -2394,29 +2256,52 @@ function rebuildRefusalMessage(code: BrainIndexRebuildError['code']): string {
 }
 
 function rebuildWorkBusy(): boolean {
-  return queue.length > 0 || inFlightJobs.size > 0 || backfillPreparing || backfillLintPending ||
-    !!backfillFinalization || !!drainTask || rebuildReplayQueued || !!rebuildReplayTask || !!backfillObserver?.settling
+  return (
+    queue.length > 0 ||
+    inFlightJobs.size > 0 ||
+    backfillPreparing ||
+    backfillLintPending ||
+    !!backfillFinalization ||
+    !!drainTask ||
+    rebuildReplayQueued ||
+    !!rebuildReplayTask ||
+    !!backfillObserver?.settling
+  )
 }
 
-export async function startRebuild(s: Settings, options: StartRebuildOptions = {}): Promise<{ queued: number; error?: string }> {
+export async function startRebuild(
+  s: Settings,
+  options: StartRebuildOptions = {}
+): Promise<{ queued: number; error?: string }> {
   if (rebuildReplayQueued || rebuildReplayTask) return { queued: 0, error: REBUILD_BUSY_ERROR }
   await whenDrainSettles()
   // Own asynchronous preflight as well as the queue. A second rebuild must not purge active work or
   // have its onFinished lifecycle owner dropped by the already-queued replay callback.
   if (rebuildStarting || rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
   rebuildStarting = true
-  try { return await performStartRebuild(s, options) } finally {
+  try {
+    return await performStartRebuild(s, options)
+  } finally {
     rebuildStarting = false
     maybeFinishDrain()
   }
 }
 
-async function performStartRebuild(s: Settings, options: StartRebuildOptions): Promise<{ queued: number; error?: string }> {
+async function performStartRebuild(
+  s: Settings,
+  options: StartRebuildOptions
+): Promise<{ queued: number; error?: string }> {
   // Do not wipe usable derived data just to discover that no configured provider can recreate it.
   if (!hasUsableProvider(s)) {
-    return { queued: 0, error: intelligenceNoProviderMessage(s, 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.') }
+    return {
+      queued: 0,
+      error: intelligenceNoProviderMessage(
+        s,
+        'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.'
+      )
+    }
   }
-  const localOnlyError = await rebuildUnavailableError(s) ?? await localOnlyRebuildBlocked(s)
+  const localOnlyError = (await rebuildUnavailableError(s)) ?? (await localOnlyRebuildBlocked(s))
   if (localOnlyError) return { queued: 0, error: localOnlyError }
   const before = await readIndexAsync(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
@@ -2489,12 +2374,15 @@ export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{
 }
 
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */
-export async function requestSourceRefresh(s: Settings = getSettings()): Promise<void> {
+export async function requestSourceRefresh(s: Settings = getSettings(), assertAdmission?: () => void): Promise<void> {
+  assertAdmission?.()
   try {
     const idx = await readIndexAsync(s)
+    assertAdmission?.()
     sourceRefreshWorkKeys = claimSourceRefreshWork(idx)
     preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
     const scan = await scanMeetingSources(s)
+    assertAdmission?.()
     const localKeys = new Set(
       scan.flatMap((folder) =>
         folder.status === 'ok'
@@ -2505,6 +2393,7 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
     if (localKeys.size > 0) sourceRefreshWorkKeys = localKeys
     preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   } catch {
+    assertAdmission?.()
     if (sourceRefreshWorkKeys.size === 0) sourceRefreshWorkKeys = claimSourceRefreshWork(readIndex(s))
     preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   }
@@ -2512,21 +2401,26 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
     idx.sourceRefreshRequested = true
     idx.backfillRequested = true
   })
-  await maybeStartSourceRefreshAsync()
+  assertAdmission?.()
+  await maybeStartSourceRefreshAsync(assertAdmission)
+  assertAdmission?.()
 }
 
-async function maybeStartSourceRefreshAsync(): Promise<void> {
+async function maybeStartSourceRefreshAsync(assertAdmission?: () => void): Promise<void> {
   if (sourceRefreshRunning || rebuildStarting || rebuildWorkBusy()) return
   const s = getSettings()
   const unavailable = await indexUnavailableAsync(s)
+  assertAdmission?.()
   if (unavailable) {
     reportDeferred('backfill', 'ledger_unavailable')
     return
   }
   const idx = await readIndexAsync(s)
+  assertAdmission?.()
   if (!idx.sourceRefreshRequested || idx.replayPending || !hasUsableProvider(s)) return
   preserveSourceRefreshWork(idx)
   preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
+  assertAdmission?.()
   sourceRefreshRunning = true
   void startRebuild(s, {
     sourceRefresh: true,
@@ -2586,7 +2480,9 @@ export async function resumeBackfillIfPending(): Promise<void> {
       return
     }
     if (idx.backfillRequested) {
-      const r = idx.replayPending ? await startReplayBackfill(s, { allowSourceRefresh: true }) : await startBackfill(undefined, { trigger: 'automatic' })
+      const r = idx.replayPending
+        ? await startReplayBackfill(s, { allowSourceRefresh: true })
+        : await startBackfill(undefined, { trigger: 'automatic' })
       if (r.queued > 0) mainLog.info(`[brain] resuming interrupted backfill: ${r.queued} transcripts remaining`)
     } else if (idx.replayPending) {
       // The backfill portion of an interrupted rebuild already finished (or never had any work) before
@@ -2638,10 +2534,16 @@ export interface BackfillRun {
 export type BackfillStartHandle = Promise<BackfillStartResult> & BackfillStartResult
 export type BackfillRunHandle = Promise<BackfillRun> & BackfillRun
 
-function backfillStartHandle(promise: Promise<BackfillStartResult>, initial: BackfillStartResult = { queued: 0, preparing: true }): BackfillStartHandle {
+function backfillStartHandle(
+  promise: Promise<BackfillStartResult>,
+  initial: BackfillStartResult = { queued: 0, preparing: true }
+): BackfillStartHandle {
   const handle = promise as BackfillStartHandle
   Object.assign(handle, initial)
-  void promise.then((result) => Object.assign(handle, result), () => {})
+  void promise.then(
+    (result) => Object.assign(handle, result),
+    () => {}
+  )
   return handle
 }
 
@@ -2652,21 +2554,42 @@ function backfillRunHandle(promise: Promise<BackfillRun>): BackfillRunHandle {
   }
   const handle = promise as BackfillRunHandle
   Object.assign(handle, fallback)
-  void promise.then((run) => Object.assign(handle, run), () => {})
+  void promise.then(
+    (run) => Object.assign(handle, run),
+    () => {}
+  )
   return handle
 }
 
 /** A run observes the shared worker lane, not merely the synchronous scan/queue dispatch. A recap
  * prerequisite may run in parallel: only the final source-version check waits for it. */
-async function requestBackfillRunAsync(options: BackfillStartOptions = {}, beforeComplete?: Promise<unknown>): Promise<BackfillRun> {
+async function requestBackfillRunAsync(
+  options: BackfillStartOptions = {},
+  beforeComplete?: Promise<unknown>
+): Promise<BackfillRun> {
   if (options.trigger === 'user') promoteQueuedBackfill()
   if (backfillObserver) {
     addCompletionGate(backfillObserver, beforeComplete)
     return { result: { queued: 0, preparing: true }, completion: backfillObserver.run.completion }
   }
   let resolve!: (value: BackfillCompletion) => void
-  const run: BackfillRun = { result: { queued: 0, preparing: true }, completion: new Promise((done) => { resolve = done }) }
-  const observer: BackfillObserver = { run, resolve, s: getSettings(), sources: new Map(), preparing: true, gates: 0, settling: false, published: false, initialOkSourceVersions: new Map() }
+  const run: BackfillRun = {
+    result: { queued: 0, preparing: true },
+    completion: new Promise((done) => {
+      resolve = done
+    })
+  }
+  const observer: BackfillObserver = {
+    run,
+    resolve,
+    s: getSettings(),
+    sources: new Map(),
+    preparing: true,
+    gates: 0,
+    settling: false,
+    published: false,
+    initialOkSourceVersions: new Map()
+  }
   backfillObserver = observer
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
   observeClaimedSourceRefreshWork()
@@ -2682,13 +2605,23 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
     if (startingSourceRefresh) await maybeStartSourceRefreshAsync()
     // A source-refresh rebuild owns the follow-up scan. Do not race it with a plain forced backfill:
     // startRebuild's async preflight would otherwise see this request's scan as overlapping work.
-    run.result = startingSourceRefresh && sourceRefreshRunning ? { queued: 0, preparing: true } : await requestBackfill(options)
+    run.result =
+      startingSourceRefresh && sourceRefreshRunning ? { queued: 0, preparing: true } : await requestBackfill(options)
     const idx = await readIndexAsync(observer.s)
     observeSourceRefreshWorkFromIndex(idx)
     if (idx.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
-    if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
+    if (
+      run.result.preparing &&
+      !backfillPreparing &&
+      !sourceRefreshRunning &&
+      !rebuildStarting &&
+      !rebuildReplayTask &&
+      !hasActiveBackfill() &&
+      !backfillLintPending
+    )
+      completionError('incomplete')
   } catch (error) {
     await observeSourcesReachableDuringFailedScan(observer)
     await preserveSourceRefreshRetryWorkFromObserver(observer)
@@ -2701,7 +2634,10 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   return run
 }
 
-export function requestBackfillRun(options: BackfillStartOptions = {}, beforeComplete?: Promise<unknown>): BackfillRunHandle {
+export function requestBackfillRun(
+  options: BackfillStartOptions = {},
+  beforeComplete?: Promise<unknown>
+): BackfillRunHandle {
   return backfillRunHandle(requestBackfillRunAsync(options, beforeComplete))
 }
 
@@ -2734,12 +2670,17 @@ async function preserveSourceRefreshRetryWorkFromObserver(observer: BackfillObse
 function addCompletionGate(observer: BackfillObserver, prerequisite?: Promise<unknown>): void {
   if (!prerequisite) return
   observer.gates += 1
-  void prerequisite.then(() => {}, () => {
-    if (backfillObserver === observer) completionError('incomplete')
-  }).then(() => {
-    observer.gates -= 1
-    maybeCompleteBackfillRun()
-  })
+  void prerequisite
+    .then(
+      () => {},
+      () => {
+        if (backfillObserver === observer) completionError('incomplete')
+      }
+    )
+    .then(() => {
+      observer.gates -= 1
+      maybeCompleteBackfillRun()
+    })
 }
 
 /** This check never holds the drain callback lane: source-refresh replay itself needs that lane to
@@ -2747,8 +2688,20 @@ function addCompletionGate(observer: BackfillObserver, prerequisite?: Promise<un
 function maybeCompleteBackfillRun(): void {
   const observer = backfillObserver
   if (!observer || observer.settling) return
-  const busy = (): boolean => observer.preparing || backfillPreparing || observer.gates > 0 || sourceRefreshRunning || rebuildStarting || !!drainTask || !!backfillFinalization || !!rebuildReplayTask || inFlightJobs.size > 0
-  const providerBlocked = (): boolean => queue.length > 0 && !hasUsableProvider(getSettings()) && queue.every((job) => job.origin === 'backfill' && job.strategy !== 'reconcile')
+  const busy = (): boolean =>
+    observer.preparing ||
+    backfillPreparing ||
+    observer.gates > 0 ||
+    sourceRefreshRunning ||
+    rebuildStarting ||
+    !!drainTask ||
+    !!backfillFinalization ||
+    !!rebuildReplayTask ||
+    inFlightJobs.size > 0
+  const providerBlocked = (): boolean =>
+    queue.length > 0 &&
+    !hasUsableProvider(getSettings()) &&
+    queue.every((job) => job.origin === 'backfill' && job.strategy !== 'reconcile')
   if (busy() || (queue.length > 0 && !providerBlocked())) return
   observer.settling = true
   void (async () => {
@@ -2759,7 +2712,9 @@ function maybeCompleteBackfillRun(): void {
     if (providerBlocked()) completionError('no-provider')
     if (!observer.error && !observer.published) {
       await withEntityLock(async () => {
-        await updateIndex(observer.s, (idx) => { idx.warnings = lintBrain(observer.s) })
+        await updateIndex(observer.s, (idx) => {
+          idx.warnings = lintBrain(observer.s)
+        })
         await trackedPublication(() => publishIndexes(observer.s))
       })
       observer.published = true
@@ -2783,32 +2738,51 @@ function maybeCompleteBackfillRun(): void {
         // Check AFTER publication as well as recap prerequisites: either can overlap source writes.
         completionError(!record?.ok && !hasUsableProvider(getSettings()) ? 'no-provider' : 'incomplete')
       }
-      if (Object.keys(idx.ingested).some((key) => !current.has(key)) || idx.replayPending || idx.sourceRefreshRequested) completionError('incomplete')
+      if (Object.keys(idx.ingested).some((key) => !current.has(key)) || idx.replayPending || idx.sourceRefreshRequested)
+        completionError('incomplete')
     }
-    await updateIndex(observer.s, (idx) => { idx.backfillRequested = !!observer.error })
+    await updateIndex(observer.s, (idx) => {
+      idx.backfillRequested = !!observer.error
+    })
     if (busy() || (queue.length > 0 && !providerBlocked())) return
     finishCompletionObserver(observer)
-  })().catch(async (error) => {
-    completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
-    // Best effort after a failed write: preserve retry intent if the filesystem has recovered. A
-    // persistent disk failure still returns an explicit failed result, never an unhandled rejection.
-    try { await updateIndex(observer.s, (idx) => { idx.backfillRequested = true }) } catch { /* already recorded */ }
-    if (!busy() && (queue.length === 0 || providerBlocked())) finishCompletionObserver(observer)
-  }).finally(() => {
-    observer.settling = false
-    // A gate may have settled during an awaited write, after its own recheck saw settling=true.
-    if (backfillObserver === observer && !busy() && (queue.length === 0 || providerBlocked())) maybeCompleteBackfillRun()
-  })
+  })()
+    .catch(async (error) => {
+      completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
+      // Best effort after a failed write: preserve retry intent if the filesystem has recovered. A
+      // persistent disk failure still returns an explicit failed result, never an unhandled rejection.
+      try {
+        await updateIndex(observer.s, (idx) => {
+          idx.backfillRequested = true
+        })
+      } catch {
+        /* already recorded */
+      }
+      if (!busy() && (queue.length === 0 || providerBlocked())) finishCompletionObserver(observer)
+    })
+    .finally(() => {
+      observer.settling = false
+      // A gate may have settled during an awaited write, after its own recheck saw settling=true.
+      if (backfillObserver === observer && !busy() && (queue.length === 0 || providerBlocked()))
+        maybeCompleteBackfillRun()
+    })
 }
 
 function finishCompletionObserver(observer: BackfillObserver): void {
   if (backfillObserver !== observer) return
   backfillObserver = null
-  observer.resolve({ ok: !observer.error, ...(observer.error ? { error: observer.error } : {}), total: observer.sources.size, failed: [...observer.sources.values()].filter(Boolean).length })
+  observer.resolve({
+    ok: !observer.error,
+    ...(observer.error ? { error: observer.error } : {}),
+    total: observer.sources.size,
+    failed: [...observer.sources.values()].filter(Boolean).length
+  })
 }
 
-
-async function startBackfillAsync(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
+async function startBackfillAsync(
+  onDrained?: () => void | Promise<void>,
+  options: BackfillStartOptions = {}
+): Promise<BackfillStartResult> {
   backfillScans += 1
   const s = getSettings()
   registerDrainCallback(onDrained)
@@ -2826,115 +2800,125 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
     if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
     const idx = await readIndexAsync(s)
     const route = options.route ?? 'default'
-  const providerAvailable =
-    route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
-  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx))) {
-    void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
-    return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
-  }
-  if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
-  const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
-  // An extraction file is a resumable checkpoint, not proof of a successful ingest: a crash can land
-  // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
-  // disk below without another LLM call.
-  const extractedSlugs = new Set((await loadMeetingExtractionSlugs(s)) ?? [])
-  const trigger = effectiveBackfillTrigger(options)
-  if (trigger === 'user') promoteQueuedBackfill()
-  // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
-  // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file
-  // a second time while it's still being extracted (or is sitting in the withEntityLock lane). inFlightJobs covers
-  // both a backfill job and a live job (a live job can never collide with a backfill candidate by
-  // content, but checking it unconditionally is simpler than branching on origin and costs nothing).
-  const inFlight = new Set(queue.map(jobKey))
-  for (const j of inFlightJobs) inFlight.add(jobKey(j))
-  // A fresh run: no backfill-origin work left queued or in flight from a previous batch. Reset the
-  // progress counters here rather than accumulate onto a finished run's stale total/done — otherwise a
-  // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
-  // still pass the old `if (backfillTotal > 0)` check and corrupt backfill #2's freshly-started progress
-  // readout with counts left over from a completed, unrelated run.
-  const backfillInFlight = hasActiveBackfill()
-  if (!backfillInFlight) {
-    backfillTotal = 0
-    backfillDone = 0
-    backfillFailed = 0
-  }
-  const candidates: Job[] = []
-  let deferredByProvider = false
-  let notOnDevice = 0
-  const now = Date.now()
-  const held: Record<HoldReason, number> = { exhausted: 0, 'backed-off': 0, unreadable: 0 }
-  const toRevive: string[] = []
-  if (scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
-  for (const source of scan.flatMap((folder) => folder.sources)) {
-    if (already.has(source.key) || inFlight.has(source.key)) continue
-    if (!source.local) {
-      notOnDevice += 1
-      continue
+    const providerAvailable =
+      route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
+    if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx))) {
+      void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
+      return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
     }
-    observeSource(source.key)
-    const record = idx.ingested[source.key]
-    const admission = admitSource(record, { version: source.version, changedAtMs: source.changedAtMs }, trigger, now)
-    if (admission.action === 'hold') {
-      held[admission.reason] += 1
-      continue
-    }
-    if (admission.action === 'revive') toRevive.push(source.key)
-    const strategy = extractedSlugs.has(extractionSlug(source.key)) ? ('reconcile' as const) : undefined
-    if (providerAvailable || strategy === 'reconcile') {
-      candidates.push({
-        file: source.file,
-        source: source.source,
-        origin: 'backfill',
-        trigger,
-        ...(source.source === 'team' ? { key: source.key, label: source.label } : {}),
-        ...(source.version ? { sourceVersion: source.version } : {}),
-        ...(strategy ? { strategy } : {}),
-        ...(route !== 'default' ? { route } : {})
+    if (!idx.backfillRequested)
+      updateIndexDetached(s, (i) => {
+        i.backfillRequested = true
       })
-    } else {
-      deferredByProvider = true
+    const already = new Set(
+      Object.entries(idx.ingested)
+        .filter(([, v]) => v.ok)
+        .map(([k]) => k)
+    )
+    // An extraction file is a resumable checkpoint, not proof of a successful ingest: a crash can land
+    // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
+    // disk below without another LLM call.
+    const extractedSlugs = new Set((await loadMeetingExtractionSlugs(s)) ?? [])
+    const trigger = effectiveBackfillTrigger(options)
+    if (trigger === 'user') promoteQueuedBackfill()
+    // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
+    // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file
+    // a second time while it's still being extracted (or is sitting in the withEntityLock lane). inFlightJobs covers
+    // both a backfill job and a live job (a live job can never collide with a backfill candidate by
+    // content, but checking it unconditionally is simpler than branching on origin and costs nothing).
+    const inFlight = new Set(queue.map(jobKey))
+    for (const j of inFlightJobs) inFlight.add(jobKey(j))
+    // A fresh run: no backfill-origin work left queued or in flight from a previous batch. Reset the
+    // progress counters here rather than accumulate onto a finished run's stale total/done — otherwise a
+    // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
+    // still pass the old `if (backfillTotal > 0)` check and corrupt backfill #2's freshly-started progress
+    // readout with counts left over from a completed, unrelated run.
+    const backfillInFlight = hasActiveBackfill()
+    if (!backfillInFlight) {
+      backfillTotal = 0
+      backfillDone = 0
+      backfillFailed = 0
     }
-  }
-  if (notOnDevice > 0) mainLog.info(`[brain] ${notOnDevice} meetings are not on this device; Intelligence skips them until they are`)
-  if (deferredByProvider) {
-    mainLog.warn('[brain] backfill has meetings awaiting a configured AI provider; locally saved extractions will still be repaired')
-  }
-  auditLog('scheduler.job', {
-    kind: 'backfill',
-    trigger,
-    outcome: 'scanned',
-    queued: candidates.length,
-    revived: toRevive.length,
-    heldExhausted: held.exhausted,
-    heldBackedOff: held['backed-off'],
-    heldUnreadable: held.unreadable
-  })
-  if (toRevive.length > 0) {
-    await updateIndex(s, (i) => {
-      for (const k of toRevive) {
-        const r = i.ingested[k]
-        if (r) reviveExhausted(r)
+    const candidates: Job[] = []
+    let deferredByProvider = false
+    let notOnDevice = 0
+    const now = Date.now()
+    const held: Record<HoldReason, number> = { exhausted: 0, 'backed-off': 0, unreadable: 0 }
+    const toRevive: string[] = []
+    if (scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
+    for (const source of scan.flatMap((folder) => folder.sources)) {
+      if (already.has(source.key) || inFlight.has(source.key)) continue
+      if (!source.local) {
+        notOnDevice += 1
+        continue
       }
-      i.revision += 1
+      observeSource(source.key)
+      const record = idx.ingested[source.key]
+      const admission = admitSource(record, { version: source.version, changedAtMs: source.changedAtMs }, trigger, now)
+      if (admission.action === 'hold') {
+        held[admission.reason] += 1
+        continue
+      }
+      if (admission.action === 'revive') toRevive.push(source.key)
+      const strategy = extractedSlugs.has(extractionSlug(source.key)) ? ('reconcile' as const) : undefined
+      if (providerAvailable || strategy === 'reconcile') {
+        candidates.push({
+          file: source.file,
+          source: source.source,
+          origin: 'backfill',
+          trigger,
+          ...(source.source === 'team' ? { key: source.key, label: source.label } : {}),
+          ...(source.version ? { sourceVersion: source.version } : {}),
+          ...(strategy ? { strategy } : {}),
+          ...(route !== 'default' ? { route } : {})
+        })
+      } else {
+        deferredByProvider = true
+      }
+    }
+    if (notOnDevice > 0)
+      mainLog.info(`[brain] ${notOnDevice} meetings are not on this device; Intelligence skips them until they are`)
+    if (deferredByProvider) {
+      mainLog.warn(
+        '[brain] backfill has meetings awaiting a configured AI provider; locally saved extractions will still be repaired'
+      )
+    }
+    auditLog('scheduler.job', {
+      kind: 'backfill',
+      trigger,
+      outcome: 'scanned',
+      queued: candidates.length,
+      revived: toRevive.length,
+      heldExhausted: held.exhausted,
+      heldBackedOff: held['backed-off'],
+      heldUnreadable: held.unreadable
     })
-  }
-  // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
-  // tracking, not reset it out from under the jobs already queued.
-  if (candidates.length > 0) {
-    backfillLintPending = true
-    if (backfillObserver) backfillObserver.published = false
-  }
-  backfillTotal += candidates.length
-  queue.push(...candidates)
-  pump()
-  // There is nothing to resume when every historical meeting was already indexed, or when the only
-  // matching meeting is currently being handled by automatic live ingestion. The request flag was set
-  // above before scanning, so clear it again through the same serialized index lane.
-  if (providerAvailable && candidates.length === 0 && !backfillInFlight && !hasActiveLiveIngest()) {
-    updateIndexDetached(s, (i) => {
-      if (!backfillObserver && !hasIncompleteSource(scan, i)) i.backfillRequested = false
-    })
-  }
+    if (toRevive.length > 0) {
+      await updateIndex(s, (i) => {
+        for (const k of toRevive) {
+          const r = i.ingested[k]
+          if (r) reviveExhausted(r)
+        }
+        i.revision += 1
+      })
+    }
+    // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
+    // tracking, not reset it out from under the jobs already queued.
+    if (candidates.length > 0) {
+      backfillLintPending = true
+      if (backfillObserver) backfillObserver.published = false
+    }
+    backfillTotal += candidates.length
+    queue.push(...candidates)
+    pump()
+    // There is nothing to resume when every historical meeting was already indexed, or when the only
+    // matching meeting is currently being handled by automatic live ingestion. The request flag was set
+    // above before scanning, so clear it again through the same serialized index lane.
+    if (providerAvailable && candidates.length === 0 && !backfillInFlight && !hasActiveLiveIngest()) {
+      updateIndexDetached(s, (i) => {
+        if (!backfillObserver && !hasIncompleteSource(scan, i)) i.backfillRequested = false
+      })
+    }
     return deferredByProvider ? { queued: candidates.length, deferred: 'no-provider' } : { queued: candidates.length }
   } finally {
     backfillScans -= 1
@@ -2943,7 +2927,10 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   }
 }
 
-export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartHandle {
+export function startBackfill(
+  onDrained?: () => void | Promise<void>,
+  options: BackfillStartOptions = {}
+): BackfillStartHandle {
   return backfillStartHandle(startBackfillAsync(onDrained, options))
 }
 
@@ -2995,7 +2982,8 @@ async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise
     }
     return r
   }
-  if (backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayTask) return { queued: 0, preparing: true }
+  if (backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayTask)
+    return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
   if (hasActiveBackfill() || backfillLintPending) {
@@ -3027,7 +3015,10 @@ async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise
     pendingBackfillTrigger = 'automatic'
     throw error
   }
-  if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
+  if (!idx.backfillRequested)
+    updateIndexDetached(s, (i) => {
+      i.backfillRequested = true
+    })
   setImmediate(() => {
     void startBackfill(undefined, { ...options, trigger: pendingBackfillTrigger })
       .catch((error) => {
@@ -3069,7 +3060,7 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
     if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
     const idx = await readIndexAsync(s)
-    if (idx.sourceRefreshRequested || await hasMeetingSourceDrift(s, idx)) {
+    if (idx.sourceRefreshRequested || (await hasMeetingSourceDrift(s, idx))) {
       // The try/catch below only catches synchronous throws; an async rejection escaping here would be
       // reported as an unhandledRejection → a false app.crash record on EVERY 60s tick (same as MQA-155).
       void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
@@ -3078,6 +3069,8 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     if (!hasUsableProvider(s) && !(await hasSavedReconciliationCandidateForSettings(s))) return
     await requestBackfill()
   } catch (error) {
-    mainLog.warn(`[brain] background meeting reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`)
+    mainLog.warn(
+      `[brain] background meeting reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`
+    )
   }
 }

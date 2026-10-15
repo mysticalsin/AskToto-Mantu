@@ -121,6 +121,20 @@ describe('speech-pack engine', () => {
     expect(existsSync(join(root, '.staging', WHISPER, '1'))).toBe(false)
   })
 
+  it('keeps the rollback transaction alive when a ready listener synchronously cancels', async () => {
+    server = await serveFiles()
+    const c = whisper(server.base)
+    const engine = make([c])
+    engine.subscribe(({ id, state }) => {
+      if (id === WHISPER && state.status === 'ready') engine.cancel(id)
+    })
+    engine.enqueue([WHISPER])
+    await engine.whenIdle()
+    expect(engine.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+    expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+    expect(existsSync(marker(WHISPER))).toBe(false)
+  })
+
   it('refuses on a disk shortfall with the required and free bytes, and writes nothing', async () => {
     server = await serveFiles()
     const c = whisper(server.base)
@@ -488,11 +502,18 @@ describe('speech-pack engine', () => {
       const before = server.requests.length
       const next = make([c])
       await next.initialise()
-      expect(asideDirs()).toEqual([])
       if (step === 'old-moved-aside') {
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(packMatches(c, active)).toBe(false)
+        expect(asideDirs()).toHaveLength(1)
+      } else if (step === 'marker-written') {
         expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
         expect(packMatches(c, active)).toBe(true)
+      } else {
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
       }
+      // A complete but unmarked set is reusable only after this explicit install request re-verifies
+      // and self-tests it; startup never creates an activation receipt on the user's behalf.
       next.enqueue([WHISPER])
       await next.whenIdle()
       expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
@@ -524,10 +545,16 @@ describe('speech-pack engine', () => {
       }
       if (step !== 'marker-written') expect(existsSync(marker(WHISPER))).toBe(false)
 
-      // The next start recovers: a complete unmarked pack is adopted, an unfinished one is finished.
+      // Startup observes the disk without activating an unmarked pack; the explicit request below
+      // verifies and self-tests retained complete bytes without refetching them.
       const before = server.requests.length
       const next = make([c])
       await next.initialise()
+      if (step === 'marker-written') {
+        expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+      } else {
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+      }
       next.enqueue([WHISPER])
       await next.whenIdle()
       expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
@@ -535,6 +562,74 @@ describe('speech-pack engine', () => {
       expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).component).toBe(WHISPER)
       // Verified files are never fetched again.
       expect(server.requests.length).toBe(before)
+    })
+
+    it('rechecks fresh authority immediately before activation and preserves the previous marker', async () => {
+      server = await serveFiles()
+      const previous = whisper(server.base)
+      const first = make([previous])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      const previousMarker = readFileSync(marker(WHISPER))
+      const nextComponent = { ...previous, version: '2' }
+      let activationRevoked = false
+      const replacing = make([nextComponent], {
+        authorizeActivation: async () => !activationRevoked,
+        onActivationStep: (step) => {
+          if (step === 'self-tested') activationRevoked = true
+        }
+      })
+      replacing.enqueue([WHISPER])
+      await replacing.whenIdle()
+      expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+    })
+
+    it('keeps the prior marker and exact same-version backup when owned rollback is denied', async () => {
+      server = await serveFiles()
+      const previous = whisper(server.base)
+      const first = make([previous])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      const previousMarker = readFileSync(marker(WHISPER))
+      let activationRevoked = false
+      const replacing = make([previous], {
+        authorizeActivation: async () => !activationRevoked,
+        authorizeRollback: async () => false,
+        onActivationStep: (step) => {
+          if (step === 'renamed') activationRevoked = true
+        }
+      })
+      replacing.repair(WHISPER)
+      await replacing.whenIdle()
+      expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(activationRevoked).toBe(true)
+      expect(asideDirs()).toHaveLength(1)
+      expect(packMatches(previous, join(root, WHISPER, asideDirs()[0]))).toBe(true)
+    })
+
+    it('preserves the prior version directory and marker when a newer activation is revoked', async () => {
+      server = await serveFiles()
+      const previous = whisper(server.base)
+      const first = make([previous])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      const previousMarker = readFileSync(marker(WHISPER))
+      let activationRevoked = false
+      const newer = make([{ ...previous, version: '2' }], {
+        authorizeActivation: async () => !activationRevoked,
+        onActivationStep: (step) => {
+          if (step === 'renamed') activationRevoked = true
+        }
+      })
+      newer.enqueue([WHISPER])
+      await newer.whenIdle()
+      expect(newer.getState(WHISPER)).toMatchObject({ status: 'error', kind: 'policy' })
+      expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+      expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+      expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
     })
 
     describe('component version transitions', () => {

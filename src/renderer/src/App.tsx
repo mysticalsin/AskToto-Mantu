@@ -48,6 +48,7 @@ import { VisibilityToast, type VisibilityToastState } from './components/Visibil
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { OperatorGateToast } from './components/OperatorGateToast'
+import { CloudSpeechConsentPrompt } from './components/CloudSpeechConsentPrompt'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
@@ -100,10 +101,11 @@ import {
   type CircleRestSpring,
   type OverlaySpring
 } from './lib/overlay-motion'
-import { useListen, playListenChime } from './lib/listen'
+import { useListen, playListenChime, type AudioSource } from './lib/listen'
+import type { CloudSpeechConsentAcknowledgement } from './lib/cloud-speech-listen'
+import { useCloudSpeechConsent } from './lib/cloud-speech-consent'
 import { freshMeetingPauseClock, setMeetingPaused } from './lib/meeting-clock'
-import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
-import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
+import { listenOperatorGateNotice, resolveListenEngine } from './lib/listen-startup-policy'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
 import { WriteupSpans } from './lib/writeup-spans'
 import {
@@ -141,11 +143,6 @@ import {
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
-import {
-  emptyOperatorEntitlements,
-  operatorGate,
-  type OperatorEntitlementSnapshot
-} from '@shared/operator-entitlements'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
@@ -331,6 +328,8 @@ export function App(): JSX.Element {
     testKey,
     refresh
   } = useSettings()
+  const latestSettingsRef = useRef(settings)
+  latestSettingsRef.current = settings
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
   // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
@@ -464,7 +463,8 @@ export function App(): JSX.Element {
     settings?.asrQuality ?? 'best',
     settings?.enterpriseLive,
     settings?.cloudSttProvider,
-    settings?.profile?.name
+    settings?.profile?.name,
+    settings?.brokerSpeech
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —
@@ -586,6 +586,7 @@ export function App(): JSX.Element {
   // PLAN.md P2.2b #2: set when startListen refused because this seat's Operator entitlements don't
   // include Listen (or Operator hasn't confirmed the seat yet, or the grace window lapsed).
   const [operatorGateNotice, setOperatorGateNotice] = useState<string | null>(null)
+  const cloudConsentFlow = useCloudSpeechConsent(latestSettingsRef, setOperatorGateNotice)
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
   const [recapGenTarget, setRecapGenTarget] = useState<RecapPersistTarget | null>(null)
@@ -2407,25 +2408,19 @@ export function App(): JSX.Element {
   }, [listen.listening, listen.setLanguage, settings?.asrLanguage])
 
   const startListen = useCallback(
-    (rescueExisting = true) => {
+    (rescueExisting = true, acceptedCloudConsent?: CloudSpeechConsentAcknowledgement) => {
       // PLAN.md P2.2b #2: Listen is Operator-gated. Checked synchronously against the already-synced
       // `settings` object (never a fresh IPC round trip) so a refusal costs zero latency on the same-turn
       // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
       // mic. Only gated when Operator is actually configured; an unconfigured seat behaves exactly as
       // before this feature existed.
-      const operatorConfigured = settings?.operatorConfigured === true
-      const snapshot: OperatorEntitlementSnapshot | null = settings?.operatorEntitlementsAt
-        ? {
-            tier: settings.operatorTier ?? null,
-            entitlements: settings.operatorEntitlements ?? emptyOperatorEntitlements(),
-            at: settings.operatorEntitlementsAt
-          }
-        : null
-      const gate = operatorGate('listen', operatorConfigured, snapshot)
-      if (!gate.allowed) {
-        setOperatorGateNotice(gate.reason || 'Listen is not available.')
+      const refusal = listenOperatorGateNotice(settings ?? {})
+      if (refusal) {
+        setOperatorGateNotice(refusal)
         return
       }
+      const source = settings?.audioSource ?? 'both'
+      if (!cloudConsentFlow.authorizeSettingsStart(settings, rescueExisting, acceptedCloudConsent)) return
       stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
       writeupSpansRef.current.reset() // spans belong to the Stop of the session being left, never the next one
       // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
@@ -2476,14 +2471,14 @@ export function App(): JSX.Element {
       setTranscriptShown(settings?.showLiveTranscript ?? false)
       if (settings?.playListenChime ?? true) playListenChime()
       {
-        const profile = resolveEnterpriseLiveProfile(settings?.enterpriseLive)
-        const useCloud = shouldUseCloudSttEngine(profile, settings?.cloudSttProvider)
+        const engine = resolveListenEngine(settings)
         void listen.start(
-          settings?.audioSource ?? 'both',
+          source,
           settings?.asrQuality ?? 'best',
-          useCloud ? 'cloud' : (settings?.asrEngine ?? 'parakeet'),
+          engine,
           settings?.asrLanguage ?? 'auto',
-          meetingStartRef.current
+          meetingStartRef.current,
+          acceptedCloudConsent
         )
       }
     },
@@ -2503,6 +2498,8 @@ export function App(): JSX.Element {
       settings?.asrLanguage,
       settings?.enterpriseLive,
       settings?.cloudSttProvider,
+      settings?.brokerSpeech,
+      cloudConsentFlow.authorizeSettingsStart,
       settings?.playListenChime,
       settings?.showLiveTranscript,
       settings?.operatorUrl,
@@ -4345,6 +4342,7 @@ export function App(): JSX.Element {
       ].join(' ')}
     >
       <ConfirmSheet request={navigationGuardRequest} onChoose={(choice, id) => navigationGuard.choose(choice, id)} />
+      <CloudSpeechConsentPrompt flow={cloudConsentFlow} onStart={startListen} />
       {(() => {
         const toasts = (
           <>

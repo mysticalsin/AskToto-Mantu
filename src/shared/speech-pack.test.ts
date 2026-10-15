@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   SpeechPackActionRequestSchema,
   SpeechPackActionResultSchema,
+  SpeechPackInstallWithPlanRequestSchema,
+  SpeechPackPlanPreviewRequestSchema,
   SpeechPackProgressSchema,
   SpeechPackSnapshotSchema
 } from './speech-pack'
@@ -24,6 +26,21 @@ const snapshot = {
   profileError: null,
   selectedEngine: 'whisper',
   selectedComponent: componentId,
+  packageProfile: {
+    status: 'verified',
+    profile: 'lean',
+    identity,
+    platform: 'darwin',
+    arch: 'arm64',
+    reason: null
+  },
+  engineReadiness: {
+    engine: 'whisper',
+    state: 'not-configured',
+    modelComponentId: componentId,
+    runtimeComponentIds: ['runtime.asr-whisper-worker']
+  },
+  optionalRuntimeReadiness: { speakerEmbedding: 'not-configured', localLlm: 'not-configured' },
   components: [row],
   progress: null
 }
@@ -55,6 +72,21 @@ describe('speech pack boundary', () => {
         components: [{ ...row, sourceHost: null, state: 'not-configured' }]
       }).success
     ).toBe(true)
+  })
+
+  it('binds plan preview and execution to opaque main-owned plan identities', () => {
+    expect(SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity }).success).toBe(true)
+    expect(
+      SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity, action: 'repair' })
+        .success
+    ).toBe(true)
+    expect(
+      SpeechPackPlanPreviewRequestSchema.safeParse({ componentId, manifestIdentity: identity, url: 'https://x' })
+        .success
+    ).toBe(false)
+    expect(SpeechPackInstallWithPlanRequestSchema.safeParse({ planId: 'not-a-uuid', action: 'install' }).success).toBe(
+      false
+    )
   })
 
   it('rejects duplicate components, wrong selected engine and contradictory profiles', () => {
