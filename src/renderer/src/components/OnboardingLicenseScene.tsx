@@ -113,7 +113,7 @@ export function ActLicense({
         </label>
       </div>
       {error && (
-        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-destructive,#ff8080)]">
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-danger)]">
           <AlertCircle size={13} className="mt-px shrink-0" />
           <span>{error}</span>
         </div>
