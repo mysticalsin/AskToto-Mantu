@@ -1,0 +1,130 @@
+name: Speech ownership prerequisite RED controls
+
+on:
+  push:
+    paths:
+      - .github/workflows/speech-ownership-prerequisite-red.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - src/main/features/components/speech-pack/install-admission.ts
+      - src/main/features/components/speech-pack/install-admission.test.ts
+      - src/main/features/components/speech-pack/manifest.ts
+      - src/main/infra/storage/runtime-owned-tree.ts
+      - src/main/infra/storage/runtime-owned-tree.test.ts
+      - src/main/infra/storage/runtime-payload-plan.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-ownership-prerequisite-red-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prerequisite-red:
+    name: Focused prerequisite RED controls (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Select isolated report path
+        run: echo "REPORT=$RUNNER_TEMP/speech-ownership-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run only the two prerequisite control files
+        id: controls
+        continue-on-error: true
+        run: >-
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2
+          --reporter=default --reporter=json --outputFile="$REPORT"
+          src/main/features/components/speech-pack/install-admission.test.ts
+          src/main/infra/storage/runtime-owned-tree.test.ts
+      - name: Require exact expected RED cases and complete inventory
+        if: always()
+        env:
+          TEST_EXIT: ${{ steps.controls.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const report = JSON.parse(readFileSync(process.env.REPORT, 'utf8'))
+          const requiredFiles = [
+            'src/main/features/components/speech-pack/install-admission.test.ts',
+            'src/main/infra/storage/runtime-owned-tree.test.ts',
+          ]
+          const expectedFailures = new Map([
+            ['speech-pack install admission binds a current explicit action to one component, manifest, and transaction', 'currentSpeechPackInstallAdmissionBrand'],
+            ['speech-pack install admission expires when the captured consent authority changes', 'currentSpeechPackInstallAdmissionBrand'],
+            ['runtime owned tree capabilities creates the exact nested tree for compiled Whisper staging', 'RUNTIME_TREE_PLAN_ROOT_MISMATCH'],
+            ['runtime owned tree capabilities creates the exact nested tree for compiled Parakeet staging', 'RUNTIME_TREE_PLAN_ROOT_MISMATCH'],
+            ['runtime owned tree capabilities creates the exact nested tree for compiled Parakeet active', 'RUNTIME_TREE_PLAN_ROOT_MISMATCH'],
+            ['runtime owned tree capabilities creates a nested archive work tree for a test-only pinned fixture', 'RUNTIME_TREE_PLAN_ROOT_MISMATCH'],
+            ['runtime owned tree capabilities issues compiled Whisper staging and active plans at the exact unique-ancestor main budget', 'RUNTIME_PAYLOAD_PLAN_BUDGET_EX']
+          ])
+          const results = report.testResults ?? []
+          const normalized = (value) => String(value).replaceAll('\\', '/')
+          const paths = results.map((result) => normalized(result.name))
+          const assertions = results.flatMap((result) => result.assertionResults ?? [])
+          const failures = assertions.filter((assertion) => assertion.status === 'failed')
+          const actualFailureNames = failures.map((assertion) => assertion.fullName)
+          const exactFiles = results.length === requiredFiles.length && requiredFiles.every((file) =>
+            paths.filter((actual) => actual.endsWith(`/${file}`)).length === 1)
+          const exactCases = failures.length === expectedFailures.size &&
+            [...expectedFailures].every(([name, cause]) => {
+              const matches = failures.filter((failure) => failure.fullName === name)
+              return matches.length === 1 && (failureMessages(matches[0])).includes(cause)
+            }) && actualFailureNames.every((name) => expectedFailures.has(name))
+          const allAssertionsAccounted = assertions.length === report.numTotalTests &&
+            assertions.every((assertion) => assertion.status === 'passed' || assertion.status === 'failed')
+          const counts = [
+            report.numTotalTests, report.numPassedTests, report.numFailedTests,
+            report.numPendingTests ?? 0, report.numTodoTests ?? 0
+          ]
+          const suiteCounts = [
+            report.numTotalTestSuites, report.numPassedTestSuites, report.numFailedTestSuites,
+            report.numPendingTestSuites ?? 0
+          ]
+          const complete = report.success === false && process.env.TEST_EXIT === 'failure' && exactFiles &&
+            results.every((result) => result.status === 'passed' || result.status === 'failed') &&
+            results.every((result) => (result.assertionResults ?? []).length > 0) &&
+            assertions.filter((assertion) => assertion.status === 'pending' || assertion.status === 'todo').length === 0 &&
+            allAssertionsAccounted && exactCases && report.numTotalTests > 0 &&
+            report.numFailedTests === expectedFailures.size && report.numPassedTests + report.numFailedTests === report.numTotalTests &&
+            report.numTotalTests === 11 && counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
+            counts.slice(3).every((count) => count === 0) && suiteCounts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
+            report.numTotalTestSuites === 4 && report.numPassedTestSuites === 0 &&
+            report.numFailedTestSuites === 4 && report.numPendingTestSuites === 0
+          console.log(JSON.stringify({ files: results.length, total: report.numTotalTests,
+            passed: report.numPassedTests, failed: report.numFailedTests,
+            pending: report.numPendingTests, todo: report.numTodoTests,
+            expectedFailedCases: actualFailureNames }))
+          if (!complete) throw new Error('SPEECH_OWNERSHIP_PREREQUISITE_RED_REPORT_REJECTED')
+
+          function failureMessages(assertion) {
+            return JSON.stringify(assertion.failureMessages ?? [])
+          }
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: speech-ownership-prerequisite-red-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT }}
+          if-no-files-found: error
+          retention-days: 14

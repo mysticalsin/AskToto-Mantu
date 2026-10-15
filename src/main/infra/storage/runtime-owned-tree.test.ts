@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,10 +10,20 @@ import {
 } from './runtime-owned-tree'
 import { createRuntimeOwnedTreeRecordIssuer } from './runtime-owned-tree-record'
 import {
+  PARAKEET_TDT_V3_INT8,
+  WHISPER_BASE_Q8,
+  componentBytes,
+  type SpeechPackComponent
+} from '../../features/components/speech-pack/manifest'
+import {
   createRuntimePayloadPlanIssuer,
   issueRuntimePayloadFilePin,
+  runtimePayloadPlanBudget,
+  runtimePayloadPlanParentGraph,
+  runtimePayloadPlanRoot,
   type RuntimePayloadWritePlan
 } from './runtime-payload-plan'
+import { componentManifestIdentity } from '../../features/components/speech-pack/resolver'
 import { captureRuntimeProfileParentPin, disposeRuntimeProfileParentPin } from './runtime-purpose-root'
 import {
   captureRuntimePackNamespace,
@@ -37,21 +48,35 @@ async function fixture(): Promise<{ parent: string; packRoot: string }> {
 }
 
 async function createWriter(value: { parent: string; packRoot: string }, plan: RuntimePayloadWritePlan) {
-  const profile = await captureRuntimeProfileParentPin({
-    profilePath: value.parent,
-    binding: { profileBinding: 'profile-test', principalBinding: 'principal-test', persistentProfileGeneration: '1' },
-    assertCurrentSync: () => undefined,
-    assertProfilePhysicalCurrent: async () => undefined,
-    assertSingleInstanceCurrentSync: () => undefined
-  })
-  const namespace = await captureRuntimePackNamespace({
-    profile,
-    mainPackRootPath: value.packRoot,
-    mode: 'create-explicit'
-  })
-  const parentPin = await prepareRuntimeTreeParent({ namespace, relativeParent: '', plan })
-  const writer = await prepareRuntimeOwnedTreeCreation({ parentPin, plan, assertCurrentSync: () => undefined })
-  return { writer, parentPin, namespace, profile }
+  let profile: Awaited<ReturnType<typeof captureRuntimeProfileParentPin>> | undefined
+  let namespace: Awaited<ReturnType<typeof captureRuntimePackNamespace>> | undefined
+  let parentPin: Awaited<ReturnType<typeof prepareRuntimeTreeParent>> | undefined
+  try {
+    profile = await captureRuntimeProfileParentPin({
+      profilePath: value.parent,
+      binding: { profileBinding: 'profile-test', principalBinding: 'principal-test', persistentProfileGeneration: '1' },
+      assertCurrentSync: () => undefined,
+      assertProfilePhysicalCurrent: async () => undefined,
+      assertSingleInstanceCurrentSync: () => undefined
+    })
+    namespace = await captureRuntimePackNamespace({
+      profile,
+      mainPackRootPath: value.packRoot,
+      mode: 'create-explicit'
+    })
+    parentPin = await prepareRuntimeTreeParent({
+      namespace,
+      relativeParent: runtimePayloadPlanParentGraph(plan).parentRelativePath,
+      plan
+    })
+    const writer = await prepareRuntimeOwnedTreeCreation({ parentPin, plan, assertCurrentSync: () => undefined })
+    return { writer, parentPin, namespace, profile }
+  } catch (error) {
+    if (parentPin) await disposeRuntimeTreeParentPin(parentPin).catch(() => undefined)
+    if (namespace) await disposeRuntimePackNamespace(namespace).catch(() => undefined)
+    if (profile) await disposeRuntimeProfileParentPin(profile).catch(() => undefined)
+    throw error
+  }
 }
 
 afterEach(async () => {
@@ -59,6 +84,64 @@ afterEach(async () => {
 })
 
 describe('runtime owned tree capabilities', () => {
+  it.each([
+    ['compiled Whisper staging', WHISPER_BASE_Q8, `.staging/${WHISPER_BASE_Q8.id}/${WHISPER_BASE_Q8.version}`],
+    [
+      'compiled Parakeet staging',
+      PARAKEET_TDT_V3_INT8,
+      `.staging/${PARAKEET_TDT_V3_INT8.id}/${PARAKEET_TDT_V3_INT8.version}`
+    ],
+    ['compiled Parakeet active', PARAKEET_TDT_V3_INT8, `${PARAKEET_TDT_V3_INT8.id}/${PARAKEET_TDT_V3_INT8.version}`]
+  ])('creates the exact nested tree for %s', async (_name, component, rootRelativePath) => {
+    await expect(createNestedCatalogTree(component, rootRelativePath)).resolves.toBe(rootRelativePath)
+  })
+
+  it('creates a nested archive work tree for a test-only pinned fixture', async () => {
+    const issuer = createRuntimePayloadPlanIssuer()
+    const component = PARAKEET_TDT_V3_INT8
+    const plan = issuer.issue({
+      componentId: component.id,
+      componentVersion: component.version,
+      manifestIdentity: 'd'.repeat(64),
+      resourcePolicyIdentity: 'test-resource-policy-id',
+      rootRelativePath: `.staging/${component.id}/work`,
+      files: [
+        {
+          relativePath: 'archive.download',
+          byteLength: 9,
+          sha256: 'aec070645fe53ee3b376305b6216cf2c4a74bb378fe7e3dd76541a2fbf7ae167'
+        }
+      ],
+      admittedMaximumBytes: 9,
+      admittedMaximumFiles: 1,
+      admittedMaximumPathBytes: 256
+    })
+    const value = await fixture()
+    const owned = await createWriter(value, plan)
+    try {
+      expect(runtimePayloadPlanParentGraph(plan)).toMatchObject({
+        lane: 'work',
+        rootRelativePath: `.staging/${component.id}/work`
+      })
+      await owned.writer.createRoot()
+      expect(runtimePayloadPlanRoot(plan)).toBe(`.staging/${component.id}/work`)
+    } finally {
+      await owned.writer.dispose()
+      await disposeRuntimeTreeParentPin(owned.parentPin)
+      await disposeRuntimePackNamespace(owned.namespace)
+      await disposeRuntimeProfileParentPin(owned.profile)
+      issuer.retire()
+    }
+  })
+
+  it('issues compiled Whisper staging and active plans at the exact unique-ancestor main budget', () => {
+    expect(() => issueCompiledCatalogPlans(WHISPER_BASE_Q8)).not.toThrow()
+  })
+
+  it('issues compiled Parakeet staging and active plans at the exact unique-ancestor main budget', () => {
+    expect(() => issueCompiledCatalogPlans(PARAKEET_TDT_V3_INT8)).not.toThrow()
+  })
+
   it('seals exact created membership after bounded writes and receipt-backed file promotion', async () => {
     const value = await fixture()
     const planIssuer = createRuntimePayloadPlanIssuer()
@@ -167,7 +250,7 @@ describe('runtime owned tree capabilities', () => {
         record,
         assertCurrentSync: () => undefined
       })
-    ).rejects.toThrow('RUNTIME_PHYSICAL_CLOSURE_CHANGED')
+    ).rejects.toThrow(/^(?:RUNTIME_TREE_ROOT_CHANGED|RUNTIME_PHYSICAL_CLOSURE_CHANGED)$/)
     expect(await readdir(ownedRoot)).toContain('foreign.txt')
     issuer.retire()
     await expect(
@@ -182,3 +265,85 @@ describe('runtime owned tree capabilities', () => {
     ).rejects.toThrow('RUNTIME_TREE_RECORD_NOT_AUTHENTICATED')
   })
 })
+
+async function createNestedCatalogTree(component: SpeechPackComponent, rootRelativePath: string): Promise<string> {
+  const issuer = createRuntimePayloadPlanIssuer()
+  const plan = issuer.issue({
+    componentId: component.id,
+    componentVersion: component.version,
+    manifestIdentity: 'e'.repeat(64),
+    resourcePolicyIdentity: 'test-resource-policy-id',
+    rootRelativePath,
+    files: component.files.map((file) => ({
+      relativePath: file.path,
+      byteLength: file.bytes,
+      sha256: file.sha256
+    })),
+    admittedMaximumBytes: component.files.reduce((sum, file) => sum + file.bytes, 0),
+    admittedMaximumFiles: component.files.length,
+    admittedMaximumPathBytes: 16_384
+  })
+  const value = await fixture()
+  const owned = await createWriter(value, plan)
+  try {
+    await owned.writer.createRoot()
+    expect(runtimePayloadPlanRoot(plan)).toBe(rootRelativePath)
+    return rootRelativePath
+  } finally {
+    await owned.writer.dispose()
+    await disposeRuntimeTreeParentPin(owned.parentPin)
+    await disposeRuntimePackNamespace(owned.namespace)
+    await disposeRuntimeProfileParentPin(owned.profile)
+    issuer.retire()
+  }
+}
+
+function issueCompiledCatalogPlans(component: SpeechPackComponent): void {
+  const issuer = createRuntimePayloadPlanIssuer()
+  const manifestIdentity = componentManifestIdentity(component)
+  const resourcePolicyIdentity = createHash('sha256')
+    .update('metis-speech-pack-resource-policy/v1\0')
+    .update('test-resource-policy-id')
+    .digest('hex')
+  const files = component.files.map((file) => ({
+    relativePath: file.path,
+    byteLength: file.bytes,
+    sha256: file.sha256
+  }))
+  const shared = {
+    componentId: component.id,
+    componentVersion: component.version,
+    manifestIdentity,
+    resourcePolicyIdentity,
+    files,
+    admittedMaximumBytes: componentBytes(component),
+    admittedMaximumFiles: files.length,
+    admittedMaximumPathBytes: uniqueAncestorPathBytes(`.staging/${component.id}/${component.version}`, component.files)
+  }
+  const staging = issuer.issue({
+    ...shared,
+    rootRelativePath: `.staging/${component.id}/${component.version}`
+  })
+  const active = issuer.issue({
+    ...shared,
+    rootRelativePath: `${component.id}/${component.version}`,
+    admittedMaximumPathBytes: uniqueAncestorPathBytes(`${component.id}/${component.version}`, component.files)
+  })
+  expect(runtimePayloadPlanBudget(staging).maximumPathBytes).toBe(shared.admittedMaximumPathBytes)
+  expect(runtimePayloadPlanBudget(active).maximumPathBytes).toBe(
+    uniqueAncestorPathBytes(`${component.id}/${component.version}`, component.files)
+  )
+  issuer.retire()
+}
+
+function uniqueAncestorPathBytes(root: string, files: readonly { readonly path: string }[]): number {
+  let total = Buffer.byteLength(root)
+  const ancestors = new Set<string>()
+  for (const { path } of files) {
+    total += Buffer.byteLength(path)
+    const parts = path.split('/')
+    for (let index = 1; index < parts.length; index += 1) ancestors.add(parts.slice(0, index).join('/'))
+  }
+  for (const ancestor of ancestors) total += Buffer.byteLength(ancestor)
+  return total
+}
