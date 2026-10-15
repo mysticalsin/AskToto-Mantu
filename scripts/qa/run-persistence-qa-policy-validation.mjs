@@ -28,14 +28,21 @@ export const STDOUT_NAME = 'persistence-qa-policy-stdout.log'
 export const STDERR_NAME = 'persistence-qa-policy-stderr.log'
 export const STATUS_NAME = 'qualification-status.json'
 export const BASELINE = '230c8efef60dd847dc9f6e4b52b8f4d9c67e75f2'
-export const BASE_POLICY_SHA = '51a49146e6adf2b06a8e652f79f94109b7cc94cc5ade0727412fad2512975f69'
-export const PHASE = 'P15_BASELINE_RED'
+export const P0_COMMIT = '0d582cce4ce74bec1bad89229e37b247711ac5c1'
+export const BASE_POLICY_SHA = 'b0fcc1870499aba4233c0ee14711698490f5c369dfc4ea3c7146837b069d4c23'
+export const PHASE = 'P15_POLICY_GREEN'
 export const ALLOWED = [
   '.github/workflows/persistence-qa-policy-contract.yml',
   'scripts/qa/persistence-policy-reporter.mjs',
   'scripts/qa/run-persistence-qa-policy-validation.mjs',
-  POLICY_TEST_FILE
+  POLICY_TEST_FILE,
+  'src/main/persistence/resource-policy.ts'
 ].sort()
+const DIRECT_SUCCESSOR = [
+  'scripts/qa/run-persistence-qa-policy-validation.mjs',
+  'src/main/persistence/resource-policy.ts'
+].sort()
+const RUNNER_PATH = 'scripts/qa/run-persistence-qa-policy-validation.mjs'
 const LIMITS = new Map([
   [INITIAL_NAME, 4 * 1024],
   [RAW_NAME, 1024 * 1024],
@@ -44,9 +51,9 @@ const LIMITS = new Map([
   [STDERR_NAME, 2 * 1024 * 1024],
   [STATUS_NAME, 64 * 1024]
 ])
-const P_SOURCE = [
+const SOURCE_PINS = [
   ['src/main/persistence/resource-policy.ts', BASE_POLICY_SHA],
-  [POLICY_TEST_FILE, '474e73810677dd3b862a61f8a9c148ae50cf4ed6baf69979301954b8a83b0c2f'],
+  [POLICY_TEST_FILE, 'f623d0f8af9c25f9415f66a033f7eca8477edc0b0a16bb6d65fa48e8e4eb3242'],
   [
     'src/main/persistence/resource-policy-contract.ts',
     '86fe64d9cf9a86ffba7a3d854b76c5225f892e549f5de075a58d8226bc56b573'
@@ -54,12 +61,10 @@ const P_SOURCE = [
   ['resources/persistence-profiles.v1.json', '9d67a074e82a94a7e9dc10bc1c10190700830a7d4de4cb041f7cbacc11f7282f'],
   [
     '.github/workflows/persistence-qa-policy-contract.yml',
-    '9edcd7bc6047eb1b1a87cf163c3267940819f6fe8fdc6217f3ef150eda2e8a6b'
+    '22e1c2eae13ebb5d4b0264a500197ade2aff0bc98e5435b478479a62d92683c6'
   ],
-  [
-    'scripts/qa/run-persistence-qa-policy-validation.mjs',
-    '221ce5c9de743328de580cf7150b09e13771c9514f6f1a095f7cc9ed8e5391f2'
-  ],
+  [RUNNER_PATH, null],
+  ['scripts/qa/persistence-policy-reporter.mjs', '8e7e3e61ed0b2e85feeeedea40acad80de2946ffda1b0bb385281640be0e439f'],
   ['src/main/win-security.ts', '9286a7ebabdbc9985fbdcc95ffea1463df7251f98ea100a041909d2df48c3e85'],
   ['src/main/persistence/bootstrap.ts', 'af2f9f28e26c998798987b2eb4356c8b638d9947a5242329ea0fb252df6b38fa'],
   ['src/main/persistence/policy-high-water.ts', '31d2f2f1059ddc675131c0b163c6f1330c6585f83aaaebc9a7ed297c8f1d1ecb'],
@@ -477,40 +482,56 @@ function git(args, binary = false) {
   return result.stdout
 }
 
+function collectChangedPaths(from, to) {
+  return new TextDecoder('utf-8', { fatal: true })
+    .decode(git(['diff', '--no-renames', '--name-only', '-z', '--diff-filter=ACDMRTUXB', from, to], true))
+    .split('\0')
+    .filter(Boolean)
+    .sort()
+}
+
 function captureSource() {
   const head = git(['rev-parse', 'HEAD']).trim()
   if (!/^[0-9a-f]{40}$/.test(head) || process.env.GITHUB_SHA !== head) fail('checkout HEAD differs from workflow SHA')
   const status = git(['status', '--porcelain=v1', '--untracked-files=all'])
   if (status) fail('checkout is dirty')
-  let base
-  try {
-    base = git(['rev-parse', '--verify', `${BASELINE}^{commit}`]).trim()
-  } catch {
-    git(['fetch', '--no-tags', '--depth=1', 'origin', BASELINE])
-    base = git(['rev-parse', '--verify', `${BASELINE}^{commit}`]).trim()
+  for (const ref of [BASELINE, P0_COMMIT]) {
+    let commit
+    try {
+      commit = git(['rev-parse', '--verify', `${ref}^{commit}`]).trim()
+    } catch {
+      git(['fetch', '--no-tags', '--depth=1', 'origin', ref])
+      commit = git(['rev-parse', '--verify', `${ref}^{commit}`]).trim()
+    }
+    if (commit !== ref) fail('fixed predecessor commit identity mismatch')
   }
-  if (base !== BASELINE) fail('baseline commit identity mismatch')
-  const changedBytes = git(['diff', '--name-only', '-z', '--diff-filter=ACDMRTUXB', BASELINE, head], true)
-  const changedPaths = new TextDecoder('utf-8', { fatal: true }).decode(changedBytes).split('\0').filter(Boolean).sort()
-  if (JSON.stringify(changedPaths) !== JSON.stringify(ALLOWED)) fail('changed path set differs from P0 cohort')
+  const headers = git(['cat-file', '-p', head]).split('\n\n', 1)[0].split('\n')
+  const parents = headers.filter((line) => line.startsWith('parent ')).map((line) => line.slice(7))
+  if (JSON.stringify(parents) !== JSON.stringify([P0_COMMIT])) fail('HEAD is not the direct P0 successor')
+  const directPaths = collectChangedPaths(P0_COMMIT, head)
+  if (JSON.stringify(directPaths) !== JSON.stringify(DIRECT_SUCCESSOR)) fail('direct successor path set changed')
+  const changedPaths = collectChangedPaths(BASELINE, head)
+  if (JSON.stringify(changedPaths) !== JSON.stringify(ALLOWED)) fail('cumulative source path set changed')
   const source = new Map()
-  for (const [path, expected] of P_SOURCE) {
+  for (const [path, expected] of SOURCE_PINS) {
     const entry = digestPath(path)
-    if (!ALLOWED.includes(path) && entry.sha256 !== expected) fail(`protected P source changed: ${path}`)
+    if (path === RUNNER_PATH) {
+      const committed = git(['show', `HEAD:${RUNNER_PATH}`], true)
+      if (committed.byteLength > 1024 * 1024 || sha(committed) !== entry.sha256)
+        fail('runner source differs from committed blob')
+    } else if (typeof expected !== 'string' || entry.sha256 !== expected)
+      fail(`source differs from reviewed pin: ${path}`)
     source.set(path, entry)
   }
-  source.set('scripts/qa/persistence-policy-reporter.mjs', digestPath('scripts/qa/persistence-policy-reporter.mjs'))
   for (const [path, expected] of API_SOURCE) {
     const entry = digestPath(path)
     if (entry.sha256 !== expected) fail(`installed Vitest source differs from reviewed API pin: ${path}`)
     source.set(path, entry)
   }
   const entries = [...source.values()].sort((a, b) => a.path.localeCompare(b.path))
-  const requiredPaths = [
-    ...P_SOURCE.map(([path]) => path),
-    ...API_SOURCE.map(([path]) => path),
-    'scripts/qa/persistence-policy-reporter.mjs'
-  ].sort((a, b) => a.localeCompare(b))
+  const requiredPaths = [...SOURCE_PINS.map(([path]) => path), ...API_SOURCE.map(([path]) => path)].sort((a, b) =>
+    a.localeCompare(b)
+  )
   if (JSON.stringify(entries.map((entry) => entry.path)) !== JSON.stringify(requiredPaths))
     fail('source inventory is incomplete or oversized')
   return { baseline: BASELINE, head, changedPaths, entries }
@@ -585,7 +606,7 @@ function p15Outcome(p15) {
       row.rejection === 'none'
     )
   })
-  const malformedAtBaseline = malformed.every(
+  const malformedAreInvalid = malformed.every(
     (row) =>
       row.readerCalls === 1 &&
       row.readerArgs === 'exact' &&
@@ -593,8 +614,8 @@ function p15Outcome(p15) {
       row.terminal &&
       row.readerOutcome === 'present' &&
       row.receipt === 'opaque' &&
-      row.optional === 'candidate' &&
-      row.required === 'ENTERPRISE_REQUIRED' &&
+      row.optional === 'ENTERPRISE_INVALID' &&
+      row.required === 'ENTERPRISE_INVALID' &&
       row.rejection === 'none'
   )
   if (
@@ -603,9 +624,9 @@ function p15Outcome(p15) {
     readerCalls !== 18 ||
     receipts !== 16 ||
     resolverCalls !== 32 ||
-    resolverMismatches !== 20 ||
+    resolverMismatches !== 0 ||
     !controlsValid ||
-    !malformedAtBaseline
+    !malformedAreInvalid
   )
     return null
   return { enteredRows, terminalRows, readerCalls, receipts, resolverCalls }
@@ -640,7 +661,7 @@ function validateReporter(runtime, processResult, source, identity, raw) {
     runtime.nonce !== identity.nonce ||
     runtime.vitestVersion !== '4.1.11' ||
     runtime.apiValid !== true ||
-    runtime.reason !== 'failed' ||
+    runtime.reason !== 'passed' ||
     runtime.unhandledErrors !== 0 ||
     runtime.moduleErrors !== 0 ||
     runtime.suiteErrors !== 0 ||
@@ -670,30 +691,30 @@ function validateReporter(runtime, processResult, source, identity, raw) {
     )
       return null
     if (
-      test.state !== (index === 14 ? 'failed' : 'passed') ||
+      test.state !== 'passed' ||
       test.retryCount !== 0 ||
       test.repeatCount !== 0 ||
       test.flaky !== false ||
       !Number.isFinite(test.durationMs) ||
       test.durationMs < 0 ||
       !Number.isFinite(test.startTime) ||
-      test.errorCount !== (index === 14 ? 1 : 0) ||
-      test.errorKind !== (index === 14 ? 'assertion' : 'none') ||
-      test.causalLabelMatched !== (index === 14)
+      test.errorCount !== 0 ||
+      test.errorKind !== 'none' ||
+      test.causalLabelMatched !== false
     )
       return null
   }
-  if (processResult.error !== 'none' || processResult.exitCode !== 1 || processResult.signal !== null) return null
+  if (processResult.error !== 'none' || processResult.exitCode !== 0 || processResult.signal !== null) return null
   if (
-    raw.success !== false ||
+    raw.success !== true ||
     raw.numTotalTests !== 15 ||
-    raw.numPassedTests !== 14 ||
-    raw.numFailedTests !== 1 ||
+    raw.numPassedTests !== 15 ||
+    raw.numFailedTests !== 0 ||
     raw.numPendingTests !== 0 ||
     raw.numTodoTests !== 0 ||
     raw.numTotalTestSuites !== 2 ||
-    raw.numPassedTestSuites !== 0 ||
-    raw.numFailedTestSuites !== 2 ||
+    raw.numPassedTestSuites !== 2 ||
+    raw.numFailedTestSuites !== 0 ||
     raw.numPendingTestSuites !== 0 ||
     !Array.isArray(raw.testResults) ||
     raw.testResults.length !== 1
@@ -702,7 +723,7 @@ function validateReporter(runtime, processResult, source, identity, raw) {
   const file = raw.testResults[0]
   if (
     !file ||
-    file.status !== 'failed' ||
+    file.status !== 'passed' ||
     file.name !== resolve(POLICY_TEST_FILE).replaceAll('\\', '/') ||
     !Array.isArray(file.assertionResults) ||
     file.assertionResults.length !== 15
@@ -714,18 +735,14 @@ function validateReporter(runtime, processResult, source, identity, raw) {
       !assertion ||
       assertion.title !== test.title ||
       assertion.fullName !== `persistence resource policy contracts ${test.title}` ||
-      assertion.status !== (index === 14 ? 'failed' : 'passed') ||
+      assertion.status !== 'passed' ||
       JSON.stringify(assertion.ancestorTitles) !== JSON.stringify(['persistence resource policy contracts']) ||
       !Array.isArray(assertion.failureMessages) ||
-      (index === 14
-        ? assertion.failureMessages.length !== 1 ||
-          typeof assertion.failureMessages[0] !== 'string' ||
-          !assertion.failureMessages[0].includes('P15_MALFORMED_AUTHORITY_MUST_REMAIN_INVALID') ||
-          JSON.stringify(assertion.meta?.persistencePolicyP15) !== JSON.stringify(runtime.p15)
-        : assertion.failureMessages.length !== 0)
+      assertion.failureMessages.length !== 0
     )
       return null
   }
+  if (JSON.stringify(file.assertionResults[14].meta?.persistencePolicyP15) !== JSON.stringify(runtime.p15)) return null
   const expectedPlatform = { 'ubuntu-latest': 'linux', 'macos-latest': 'darwin', 'windows-latest': 'win32' }[
     identity.target
   ]
@@ -781,11 +798,11 @@ function validateStatus(status) {
     'moduleErrors',
     'suiteErrors'
   ]
-  const expectedCounts = [1, 2, 15, 14, 1, 0, 0, 0, 0, 0, 0]
+  const expectedCounts = [1, 2, 15, 15, 0, 0, 0, 0, 0, 0, 0]
   if (
     !exactKeys(status, keys) ||
     status.schema !== 'metis-persistence-policy-stage/v1' ||
-    status.state !== 'EXPECTED_P15_CAUSAL_RED' ||
+    status.state !== 'POLICY_ONLY_GREEN' ||
     status.phase !== PHASE ||
     !exactKeys(status.source, sourceKeys) ||
     status.source.baseline !== BASELINE ||
@@ -812,7 +829,7 @@ function validateStatus(status) {
     status.runtime.node !== 'v22.22.3' ||
     status.runtime.vitest !== '4.1.11' ||
     !exactKeys(status.process, ['exitCode', 'signal', 'error']) ||
-    status.process.exitCode !== 1 ||
+    status.process.exitCode !== 0 ||
     status.process.signal !== null ||
     status.process.error !== 'none' ||
     !exactKeys(status.counts, countKeys) ||
@@ -916,11 +933,11 @@ function runValidation(bound) {
   const stderrEvidence = writeOwnedArtifact(STDERR_NAME, output.stderr, bound)
   if (
     processState.error !== 'none' ||
-    processState.exitCode !== 1 ||
+    processState.exitCode !== 0 ||
     processState.signal !== null ||
     output.stderr.length !== 0
   )
-    fail('Vitest process did not terminate cleanly at causal RED')
+    fail('Vitest process did not terminate cleanly at policy GREEN')
   const { rawBytes, runtimeBytes } = extractReports(output.stdout, bound.init.nonce)
   const rawPublication = writeOwnedArtifact(RAW_NAME, rawBytes, bound)
   const runtimePublication = writeOwnedArtifact(RUNTIME_NAME, runtimeBytes, bound)
@@ -936,7 +953,7 @@ function runValidation(bound) {
   const raw = canonicalJson(rawRead.bytes, false)
   const observed = canonicalJson(runtimeRead.bytes, true)
   const p15 = validateReporter(observed, { ...processState }, source, identityRecord, raw)
-  if (!p15) fail('P15 actual runtime evidence is not the exact causal RED')
+  if (!p15) fail('P15 actual runtime evidence is not the exact policy GREEN')
   const evidenceByName = new Map([
     [RAW_NAME, { name: RAW_NAME, bytes: rawRead.bytes.byteLength, sha256: sha(rawRead.bytes) }],
     [RUNTIME_NAME, { name: RUNTIME_NAME, bytes: runtimeRead.bytes.byteLength, sha256: sha(runtimeRead.bytes) }],
@@ -947,7 +964,7 @@ function runValidation(bound) {
   const evidence = EVIDENCE_NAMES.map((name) => evidenceByName.get(name))
   const status = {
     schema: 'metis-persistence-policy-stage/v1',
-    state: 'EXPECTED_P15_CAUSAL_RED',
+    state: 'POLICY_ONLY_GREEN',
     phase: PHASE,
     source,
     workflow: { ...identityRecord, sha: identity.sha },
@@ -957,8 +974,8 @@ function runValidation(bound) {
       files: 1,
       recursiveSuites: 2,
       total: 15,
-      passed: 14,
-      failed: 1,
+      passed: 15,
+      failed: 0,
       pending: 0,
       todo: 0,
       skipped: 0,

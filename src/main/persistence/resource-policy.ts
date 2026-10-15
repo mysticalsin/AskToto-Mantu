@@ -320,6 +320,7 @@ export function classifyAdminPolicyDocument(value: unknown): {
   policy?: EnterpriseRestriction
   payloadSha256?: string
 } {
+  if (!isRecord(value)) return { state: 'invalid' }
   const nested =
     isRecord(value) && Object.hasOwn(value, 'persistenceResourcePolicy') ? value.persistenceResourcePolicy : undefined
   const attemptedStandalone = isRecord(value) && value.purpose === 'persistence-resource-policy'
