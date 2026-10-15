@@ -1,0 +1,87 @@
+name: Promote unsigned 1.9.7
+
+# After a successful main qa-candidate dispatch, publish only when that commit still carries the
+# ship arm. Other candidate dispatches stay manual. This workflow never builds installers.
+on:
+  workflow_run:
+    workflows: ["QA candidate"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  promote:
+    name: Dispatch promotion for the armed commit
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Continue only when this commit is armed
+        id: arm
+        run: |
+          if [ ! -f .github/ship-1.9.7 ] || [ ! -f .github/ship-1.9.7-residuals.md ]; then
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+            echo "This candidate has no ship arm. Leaving promotion to a manual dispatch."
+            exit 0
+          fi
+          echo "armed=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.arm.outputs.armed == 'true'
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.arm.outputs.armed == 'true'
+        with:
+          name: candidate-provenance
+          path: provenance
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.arm.outputs.armed == 'true'
+        with:
+          name: candidate-launch-mac
+          path: launch-mac
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.arm.outputs.armed == 'true'
+        with:
+          name: candidate-launch-win
+          path: launch-win
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Bind PASS evidence to the launch reports
+        if: steps.arm.outputs.armed == 'true'
+        run: |
+          version=$(jq -r .version provenance/provenance.json)
+          if [ "$version" != "1.9.7" ]; then
+            echo "::error::Armed ship is for 1.9.7; this candidate is $version."
+            exit 1
+          fi
+          node scripts/qa/launch-evidence.mjs \
+            provenance/provenance.json \
+            "$RUNNER_TEMP/evidence.jsonl" \
+            launch-mac \
+            launch-win
+      - name: Dispatch promote-candidate
+        if: steps.arm.outputs.armed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          jq -n \
+            --arg run "$CANDIDATE_RUN" \
+            --arg residuals "$(cat .github/ship-1.9.7-residuals.md)" \
+            --arg evidence "$(cat "$RUNNER_TEMP/evidence.jsonl")" \
+            '{ref:"main", inputs:{candidate_run_id:$run, publish:true, confirm_version:"1.9.7", residuals:$residuals, evidence:$evidence}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/promote-candidate.yml/dispatches" --input -
+          echo "Dispatched promote-candidate for run $CANDIDATE_RUN"
