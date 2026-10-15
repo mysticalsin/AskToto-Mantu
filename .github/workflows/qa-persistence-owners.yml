@@ -98,7 +98,7 @@ jobs:
         run: |
           rm -f "$REPORT" "$DIAGNOSTIC" "$QA_OWNER_FRAMEWORK_REPORT_PATH" "$QA_OWNER_FRAMEWORK_REPORT_PATH.pending"
           rm -rf "$DIAGNOSTIC_DIR"
-          mkdir -m 700 -p "$DIAGNOSTIC_DIR"
+          node --input-type=module -e 'import { mkdirSync } from "node:fs"; mkdirSync(process.env.DIAGNOSTIC_DIR, { mode: 0o700, recursive: true })'
           set +e
           if [[ "$OWNER_TARGET" == true ]]; then
             NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --reporter=./scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs --outputFile="$REPORT"
