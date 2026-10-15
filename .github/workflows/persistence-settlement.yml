@@ -72,6 +72,123 @@ jobs:
           set -e
           echo "VITEST_EXIT_CODE=$test_exit" >> "$GITHUB_ENV"
           echo "Vitest actual exit: $test_exit"
+      - name: Print bounded settlement report diagnostics
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+
+          const safeText = (value, limit = 180) => String(value)
+            .replace(/[\u0000-\u001f\u007f]/g, ' ')
+            .replace(/(?:[A-Za-z]:)?[/\\](?:[^\s:]+[/\\])+[^\s:]*/g, '<path>')
+            .replace(/\s+/g, ' ')
+            .slice(0, limit)
+          const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 'missing'
+          const status = (value) => ['passed', 'failed', 'pending', 'todo'].includes(value) ? value : 'unknown'
+          const outcomeStatus = (value) => ['fulfilled', 'rejected'].includes(value) ? value : 'unknown'
+          const allowedCases = new Set(['F05', 'F06', 'F07', 'F08', 'R04', 'R05'])
+          const counters = [
+            'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests',
+            'numTodoTests', 'numTotalTestSuites', 'numPendingTestSuites',
+            'numPassedTestSuites', 'numFailedTestSuites', 'numUnhandledErrors'
+          ]
+          const readBounded = (file, limit) => {
+            const info = fs.statSync(file)
+            if (!info.isFile() || info.size <= 0 || info.size > limit) throw new Error('invalid-size')
+            return fs.readFileSync(file, 'utf8')
+          }
+          const projectEvidence = (record) => {
+            const result = { caseId: record.caseId }
+            const numeric = [
+              'keySettlementAttemptsBeforeSuccessor', 'keySettlementAttemptsAfterDisposal',
+              'writerCloseAttemptsBeforeSuccessor', 'writerCloseAttemptsAfterDisposal',
+              'rootCloseAttemptsBeforeSuccessor', 'rootCloseAttemptsAfterDisposal',
+              'writerCloseAttemptsBeforeDisposal', 'writerCloseAttemptsAfterDisposal',
+              'failedOpenCloseAttempts', 'closeAttempts', 'maxHeldRoots'
+            ]
+            const booleans = [
+              'successorAdmitted', 'gatewayRejected', 'reopenedCapability',
+              'heldOriginalAdmitted', 'heldReopenedAdmitted',
+              'failedOriginalAdmitted', 'failedReopenedAdmitted'
+            ]
+            for (const key of numeric) if (key in record) result[key] = integer(record[key])
+            for (const key of booleans) if (typeof record[key] === 'boolean') result[key] = record[key]
+            for (const key of ['journalOutcome', 'successorOutcome', 'disposalOutcome', 'openingOutcome']) {
+              const value = record[key]
+              if (!value || typeof value !== 'object') continue
+              const outcome = { status: outcomeStatus(value.status) }
+              if (typeof value.errorName === 'string') outcome.errorName = safeText(value.errorName, 60)
+              if (typeof value.errorMessage === 'string') outcome.errorMessage = safeText(value.errorMessage)
+              if (Array.isArray(value.aggregateMessages)) outcome.aggregateMessages = value.aggregateMessages.slice(0, 3).map((item) => safeText(item))
+              result[key] = outcome
+            }
+            for (const key of ['aggregateMessages', 'rejectionMessages']) {
+              if (Array.isArray(record[key])) result[key] = record[key].slice(0, 4).map((item) => safeText(item))
+            }
+            return result
+          }
+
+          let report
+          try {
+            report = JSON.parse(readBounded(process.env.VITEST_REPORT_PATH, 16 * 1024 * 1024))
+            if (!report || typeof report !== 'object') throw new Error('invalid-report')
+          } catch {
+            console.log('SETTLEMENT_DIAGNOSTIC_ERROR report=missing-malformed-or-oversize')
+          }
+          if (report) {
+            const counts = Object.fromEntries(counters.map((key) => [key, integer(report[key])]))
+            console.log(`SETTLEMENT_DIAGNOSTIC_COUNTS ${JSON.stringify(counts)}`)
+            let shown = 0
+            for (const suite of Array.isArray(report.testResults) ? report.testResults.slice(0, 2) : []) {
+              const file = ['bootstrap-main-factory.integration.test.ts', 'root-registry.test.ts'].find((name) =>
+                typeof suite.name === 'string' && suite.name.replaceAll('\\', '/').endsWith(`/${name}`))
+              if (!file) continue
+              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 14) : []) {
+                if (shown++ >= 14) break
+                const title = typeof assertion.title === 'string' ? safeText(assertion.title, 160) : 'missing'
+                console.log(`SETTLEMENT_DIAGNOSTIC_CASE file=${file} status=${status(assertion.status)} title=${title}`)
+                if (status(assertion.status) === 'failed' && Array.isArray(assertion.failureMessages) && assertion.failureMessages[0]) {
+                  const firstLine = String(assertion.failureMessages[0]).split(/\r?\n/, 1)[0]
+                  const identity = /^(?:AssertionError|Error|TypeError|RangeError|ReferenceError|AggregateError)(?::\s*(.*))?$/.exec(firstLine)
+                  console.log(`SETTLEMENT_DIAGNOSTIC_FIRST_ERROR file=${file} title=${title} name=${identity ? firstLine.split(':', 1)[0] : 'unknown'} message=${safeText(identity?.[1] || firstLine)}`)
+                }
+              }
+              if (shown > 14) break
+            }
+          }
+
+          let log
+          try {
+            log = readBounded(process.env.VITEST_LOG_PATH, 4 * 1024 * 1024)
+          } catch {
+            console.log('SETTLEMENT_DIAGNOSTIC_ERROR log=missing-malformed-or-oversize')
+          }
+          if (log) {
+            let evidenceCount = 0
+            let evidenceErrorPrinted = false
+            for (const line of log.split(/\r?\n/)) {
+              const marker = 'PERSISTENCE_SETTLEMENT_EVIDENCE '
+              const index = line.indexOf(marker)
+              if (index < 0 || evidenceCount >= 6) continue
+              const payload = line.slice(index + marker.length).trim()
+              if (payload.length > 4096) {
+                if (!evidenceErrorPrinted) console.log('SETTLEMENT_DIAGNOSTIC_ERROR evidence=oversize')
+                evidenceErrorPrinted = true
+                continue
+              }
+              try {
+                const record = JSON.parse(payload)
+                if (!record || !allowedCases.has(record.caseId)) continue
+                console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE ${JSON.stringify(projectEvidence(record))}`)
+                evidenceCount++
+              } catch {
+                if (!evidenceErrorPrinted) console.log('SETTLEMENT_DIAGNOSTIC_ERROR evidence=malformed')
+                evidenceErrorPrinted = true
+              }
+            }
+            console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE_COUNT ${evidenceCount}`)
+          }
+          NODE
       - name: Validate only the six named causal settlement failures
         run: node scripts/qa/check-persistence-settlement-report.mjs
       - name: Retain the raw run, JSON and EXPECTED_RED receipt
