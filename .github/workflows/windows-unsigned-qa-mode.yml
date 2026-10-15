@@ -120,6 +120,374 @@ jobs:
           writeSync(openSync(process.env.GITHUB_OUTPUT, 'a'), output)
           process.exitCode = 0
           NODE
+      - name: Observe the unchanged fixture under the real root Vitest config
+        id: root_fixture
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          ROOT_DIR: ${{ runner.temp }}/windows-unsigned-qa-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          ROOT_TARGET: ${{ matrix.target }}
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/windows-unsigned-qa-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/vitest.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawn, execFileSync } from 'node:child_process'
+          import { createHash } from 'node:crypto'
+          import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
+          import { dirname, resolve } from 'node:path'
+
+          const dir = resolve(process.env.ROOT_DIR)
+          if (realpathSync(dirname(dir)) !== realpathSync(process.env.RUNNER_TEMP)) throw new Error('root-capture-parent')
+          mkdirSync(dir, { recursive: false, mode: 0o700 })
+          const owned = lstatSync(dir)
+          if (!owned.isDirectory() || owned.isSymbolicLink()) throw new Error('root-capture-directory')
+          const sha = (value) => createHash('sha256').update(value).digest('hex')
+          const encodedBound = (value) => {
+            if (value === null) return 4
+            if (typeof value === 'string') return 2 + 6 * Buffer.byteLength(value)
+            if (typeof value === 'boolean') return 5
+            if (Number.isSafeInteger(value)) return 24
+            if (Array.isArray(value)) return 2 + value.reduce((sum, entry) => sum + encodedBound(entry) + 1, 0)
+            if (!value || typeof value !== 'object') throw new Error('encoded-scalar-bound')
+            let cost = 2
+            for (const key in value) if (Object.hasOwn(value, key)) cost += encodedBound(key) + encodedBound(value[key]) + 2
+            return cost
+          }
+          const publish = (name, value, max) => {
+            if (encodedBound(value) + 1 > max) throw new Error('root-capture-encoded-bound:' + name)
+            const bytes = Buffer.from(JSON.stringify(value) + '\n')
+            if (bytes.length < 2 || bytes.length > max) throw new Error('root-capture-bound:' + name)
+            const path = resolve(dir, name)
+            const fd = openSync(path, 'wx+', 0o600)
+            let primary = null
+            try {
+              const held = fstatSync(fd)
+              const named = lstatSync(path)
+              if (!held.isFile() || !named.isFile() || named.isSymbolicLink() || held.dev !== named.dev || held.ino !== named.ino || held.size !== 0 || named.size !== 0) throw new Error('root-report-open-identity:' + name)
+              if (writeSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error('root-report-short-write:' + name)
+              const readback = Buffer.alloc(bytes.length)
+              if (readSync(fd, readback, 0, bytes.length, 0) !== bytes.length || !readback.equals(bytes) || readSync(fd, Buffer.alloc(1), 0, 1, bytes.length) !== 0) throw new Error('root-report-readback:' + name)
+              const after = fstatSync(fd)
+              const namedAfter = lstatSync(path)
+              if (after.dev !== held.dev || after.ino !== held.ino || after.size !== bytes.length || namedAfter.dev !== held.dev || namedAfter.ino !== held.ino || namedAfter.size !== bytes.length || namedAfter.isSymbolicLink()) throw new Error('root-report-final-identity:' + name)
+            } catch (error) { primary = error }
+            let closeError = null
+            try { closeSync(fd) } catch (error) { closeError = error }
+            if (primary && closeError) throw new AggregateError([primary, closeError], 'root-report-write-and-close:' + name)
+            if (primary) throw primary
+            if (closeError) throw closeError
+          }
+          // This literal is the only observer. It enters Vitest through its installed public API.
+          const bootstrap = String.raw`
+          import { closeSync, fstatSync, lstatSync, openSync, readSync, writeSync } from 'node:fs'
+          import { resolve } from 'node:path'
+          import { pathToFileURL } from 'node:url'
+          const dir = process.env.ROOT_DIR
+          const bootstrapSha256 = process.env.ROOT_BOOTSTRAP_SHA256
+          const encodedBound = (value) => {
+            if (value === null) return 4
+            if (typeof value === 'string') return 2 + 6 * Buffer.byteLength(value)
+            if (typeof value === 'boolean') return 5
+            if (Number.isSafeInteger(value)) return 24
+            if (Array.isArray(value)) return 2 + value.reduce((sum, entry) => sum + encodedBound(entry) + 1, 0)
+            if (!value || typeof value !== 'object') throw new Error('encoded-scalar-bound')
+            let cost = 2
+            for (const key in value) if (Object.hasOwn(value, key)) cost += encodedBound(key) + encodedBound(value[key]) + 2
+            return cost
+          }
+          const publish = (name, value, max) => {
+            if (encodedBound(value) + 1 > max) throw new Error('observer-encoded-bound:' + name)
+            const bytes = Buffer.from(JSON.stringify(value) + '\n')
+            if (bytes.length < 2 || bytes.length > max) throw new Error('observer-bound:' + name)
+            const path = resolve(dir, name)
+            const fd = openSync(path, 'wx+', 0o600)
+            let primary = null
+            try {
+              const held = fstatSync(fd)
+              const named = lstatSync(path)
+              if (!held.isFile() || !named.isFile() || named.isSymbolicLink() || held.dev !== named.dev || held.ino !== named.ino || held.size !== 0 || named.size !== 0) throw new Error('observer-open-identity:' + name)
+              if (writeSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error('observer-short-write:' + name)
+              const readback = Buffer.alloc(bytes.length)
+              if (readSync(fd, readback, 0, bytes.length, 0) !== bytes.length || !readback.equals(bytes) || readSync(fd, Buffer.alloc(1), 0, 1, bytes.length) !== 0) throw new Error('observer-readback:' + name)
+              const after = fstatSync(fd)
+              const namedAfter = lstatSync(path)
+              if (after.dev !== held.dev || after.ino !== held.ino || after.size !== bytes.length || namedAfter.dev !== held.dev || namedAfter.ino !== held.ino || namedAfter.size !== bytes.length || namedAfter.isSymbolicLink()) throw new Error('observer-final-identity:' + name)
+            } catch (error) { primary = error }
+            let closeError = null
+            try { closeSync(fd) } catch (error) { closeError = error }
+            if (primary && closeError) throw new AggregateError([primary, closeError], 'observer-write-and-close:' + name)
+            if (primary) throw primary
+            if (closeError) throw closeError
+          }
+          const scalar = (value, max, label) => {
+            if (typeof value !== 'string' || Buffer.byteLength(value) > max) throw new Error('observer-scalar:' + label)
+            return value
+          }
+          const observationBudget = { remaining: 256 * 1024 - 16384 }
+          const frameworkBudget = { remaining: 16 * 1024 }
+          const retain = (value, budget, max = budget.remaining) => {
+            const cost = encodedBound(value) + 1
+            if (cost > max || cost > budget.remaining) throw new Error('observer-encoded-overflow')
+            budget.remaining -= cost
+            return value
+          }
+          const err = (value) => ({ name: scalar(value?.name, 128, 'error-name'),
+            message: scalar(value?.message, 4096, 'error-message'), stack: scalar(value?.stack, 8192, 'error-stack') })
+          const projectErrors = (values, max, budget) => {
+            if (!Array.isArray(values) || values.length > max) throw new Error('observer-errors-bound')
+            const errors = []
+            for (const value of values) errors.push(retain(err(value), budget))
+            return errors
+          }
+          const meta = (value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('observer-meta-bound')
+            for (const key in value) if (Object.hasOwn(value, key) && key !== 'qaU0FixtureOwner') throw new Error('observer-meta-key')
+            return Object.hasOwn(value, 'qaU0FixtureOwner') ? { qaU0FixtureOwner: scalar(value.qaU0FixtureOwner, 128, 'meta-owner') } : {}
+          }
+          const record = {
+            schema: 'metis-u0-root-framework/v1', bootstrapSha256, sourceHead: scalar(process.env.GITHUB_SHA, 40, 'GITHUB_SHA'),
+            runId: scalar(process.env.GITHUB_RUN_ID, 32, 'GITHUB_RUN_ID'), runAttempt: scalar(process.env.GITHUB_RUN_ATTEMPT, 16, 'GITHUB_RUN_ATTEMPT'),
+            target: scalar(process.env.ROOT_TARGET, 32, 'ROOT_TARGET'), node: process.version,
+            initCount: 0, runEndCount: 0, closeCallbackCount: 0, cachedCloseObserved: false,
+            closeOutcome: null, runEndReason: null, runEndUnhandledCount: null, runEndUnhandledErrors: null,
+            finalUnhandledCount: null, finalUnhandledErrors: null, frameworkClosed: false,
+            timedOut: false, observerError: null, incomplete: null,
+            observed: { modules: null, suites: 0, tests: 0, hooks: 0, entityErrors: 0 }
+          }
+          frameworkBudget.remaining -= encodedBound(record) + 1024
+          let ctx = null
+          const hooks = []
+          const entityErrors = (values, budget = observationBudget) => {
+            if (Array.isArray(values)) record.observed.entityErrors += values.length
+            return projectErrors(values, 2, budget)
+          }
+          const captureHook = (hook, event) => {
+            record.observed.hooks++
+            if (hooks.length >= 8) { record.incomplete = 'observer-hook-overflow'; throw new Error(record.incomplete) }
+            try {
+              hooks.push(retain({ name: scalar(hook.name, 32, 'hook-name'), entityType: scalar(hook.entity.type, 16, 'hook-type'),
+                entityId: scalar(hook.entity.id, 512, 'hook-id'), event }, observationBudget))
+            } catch (error) { record.incomplete = 'hook-projection-incomplete'; throw error }
+          }
+          const observer = {
+            onInit(value) {
+              record.initCount++
+              ctx = value
+              value.onClose(() => {
+                record.closeCallbackCount++
+                queueMicrotask(() => {
+                  const closing = value.closingPromise
+                  if (!closing || typeof closing.then !== 'function') return
+                  record.cachedCloseObserved = true
+                  closing.then(() => { record.closeOutcome = 'fulfilled'; record.frameworkClosed = true }, () => { record.closeOutcome = 'rejected' })
+                })
+              })
+            },
+            onHookStart(hook) { captureHook(hook, 'start') },
+            onHookEnd(hook) { captureHook(hook, 'end') },
+            onProcessTimeout() { record.timedOut = true },
+            onTestRunEnd(modules, errors, reason) {
+              record.runEndCount++
+              record.runEndUnhandledCount = Array.isArray(errors) ? errors.length : null
+              try {
+                record.runEndReason = scalar(reason, 32, 'run-reason')
+                record.runEndUnhandledErrors = Array.isArray(errors) ? projectErrors(errors, 4, frameworkBudget) : null
+                if (record.runEndUnhandledErrors) retain(record.runEndUnhandledErrors, observationBudget)
+                record.observed.modules = Array.isArray(modules) ? modules.length : null
+                if (!Array.isArray(modules) || modules.length !== 1) throw new Error('observer-module-count')
+                const rows = modules.map((module) => {
+                  const row = retain({ id: scalar(module.id, 512, 'module-entity-id'), moduleId: scalar(module.moduleId, 1024, 'module-id').replaceAll('\\', '/'),
+                    state: scalar(module.state(), 32, 'module-state'), meta: meta(module.meta()), errors: [], suites: [], tests: [] }, observationBudget)
+                  const suites = []
+                  for (const suite of module.children.allSuites()) {
+                    record.observed.suites++
+                    if (suites.length >= 1) throw new Error('observer-suite-overflow')
+                    suites.push(retain({ id: scalar(suite.id, 512, 'suite-id'), fullName: scalar(suite.fullName, 512, 'suite-name'),
+                      state: scalar(suite.state(), 32, 'suite-state'), errors: entityErrors(suite.errors()), meta: meta(suite.meta()) }, observationBudget))
+                  }
+                  const tests = []
+                  for (const test of module.children.allTests()) {
+                    record.observed.tests++
+                    if (tests.length >= 50) throw new Error('observer-test-overflow')
+                    const diagnostic = test.diagnostic()
+                    const testMeta = test.meta()
+                    meta(testMeta)
+                    const testRow = { moduleId: scalar(test.module.moduleId, 1024, 'test-module').replaceAll('\\', '/'),
+                      fullName: scalar(test.fullName, 1024, 'test-name'), state: scalar(test.result().state, 32, 'test-state'),
+                      case: testMeta.qaU0Record ?? null, errors: [],
+                      retryCount: diagnostic?.retryCount ?? null, repeatCount: diagnostic?.repeatCount ?? null }
+                    const rowBudget = { remaining: 4096 - encodedBound(testRow) - 1 }
+                    testRow.errors = entityErrors(test.result().errors ?? [], rowBudget)
+                    tests.push(retain(testRow, observationBudget, 4096))
+                  }
+                  return { ...row, errors: entityErrors(module.errors()), suites, tests }
+                })
+                const config = ctx?.config
+                if (!config || !Array.isArray(config.include) || config.include.length !== 4 ||
+                    config.include.some((entry) => typeof entry !== 'string' || Buffer.byteLength(entry) > 128)) throw new Error('observer-config-include-bound')
+                const rootConfig = { configFile: scalar(ctx.vite.config.configFile, 1024, 'config-file'), include: config.include.slice(),
+                  identityLiteral: scalar(config.viteDefine?.__METIS_QA_IDENTITY__, 16, 'identity-literal'),
+                  identityRuntime: config.defines?.__METIS_QA_IDENTITY__, testTimeout: config.testTimeout,
+                  hookTimeout: config.hookTimeout, retry: config.retry === undefined ? null : config.retry,
+                  repeats: config.repeats === undefined ? null : config.repeats,
+                  effectiveRetryDefault: config.retry === undefined ? 0 : null, effectiveRepeatDefault: config.repeats === undefined ? 0 : null, pool: scalar(config.pool, 32, 'pool') }
+                if (typeof rootConfig.identityRuntime !== 'boolean' ||
+                    [rootConfig.testTimeout,rootConfig.hookTimeout].some((value) => !Number.isSafeInteger(value))) throw new Error('observer-config-scalar-bound')
+                if (rootConfig.retry !== null || rootConfig.repeats !== null) throw new Error('observer-unexpected-supplied-retry-repeat')
+                publish('observation.json', { schema: 'metis-u0-root-observation/v1', bootstrapSha256, sourceHead: scalar(process.env.GITHUB_SHA, 40, 'GITHUB_SHA'),
+                  runId: scalar(process.env.GITHUB_RUN_ID, 32, 'GITHUB_RUN_ID'), runAttempt: scalar(process.env.GITHUB_RUN_ATTEMPT, 16, 'GITHUB_RUN_ATTEMPT'), target: scalar(process.env.ROOT_TARGET, 32, 'ROOT_TARGET'),
+                  node: process.version, reason: record.runEndReason, unhandledCount: record.runEndUnhandledCount,
+                  errors: Array.isArray(errors) ? record.runEndUnhandledErrors : null, config: rootConfig,
+                  hooks, modules: rows }, 256 * 1024)
+              } catch (error) { record.incomplete = 'run-end-projection-incomplete'; console.error(error); throw error }
+            }
+          }
+          process.on('exit', () => {
+            try {
+              const errors = ctx?.state?.getUnhandledErrors?.()
+              record.finalUnhandledCount = Array.isArray(errors) ? errors.length : null
+              try { record.finalUnhandledErrors = Array.isArray(errors) ? projectErrors(errors, 4, frameworkBudget) : null }
+              catch (error) { record.incomplete = 'final-error-projection-incomplete'; console.error(error) }
+              record.exitCode = process.exitCode ?? 0
+              publish('framework.json', record, 16 * 1024)
+            } catch (error) { console.error('root-observer-exit-write', error); process.exitCode = 1 }
+          })
+          try {
+            const { startVitest } = await import(pathToFileURL(resolve('node_modules/vitest/dist/node.js')).href)
+            await startVitest('test', ['scripts/qa/windows-unsigned-qa-mode.test.ts'], {
+              config: 'vitest.config.ts', run: true, reporters: ['default', 'json', 'github-actions', observer]
+            })
+          } catch (error) {
+            try { record.observerError = retain(err(error), frameworkBudget) } catch { record.incomplete = 'observer-error-projection-incomplete' }
+            process.exitCode = 1; console.error(error)
+          }
+          `
+          const context = (value, max = 1024) => {
+            if (typeof value !== 'string' || Buffer.byteLength(value) > max) throw new Error('root-context-scalar-bound')
+            return value
+          }
+          const bootstrapSha256 = sha(bootstrap)
+          const keys = ['U0_DIR', 'QA_U0_RUN_DIR', 'QA_U0_CASE_REPORT', 'QA_U0_VITEST_JSON', 'QA_U0_TARGET', 'QA_OWNER_FRAMEWORK_REPORT_PATH', 'QA_OWNER_TARGET', 'QA_OWNER_SOURCE_SHA']
+          const childEnv = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', ROOT_BOOTSTRAP_SHA256: bootstrapSha256 }
+          const dedicatedPresence = Object.fromEntries(keys.map((key) => [key, Object.hasOwn(childEnv, key)]))
+          const unexpectedQaU0Keys = []
+          for (const key in childEnv) if (Object.hasOwn(childEnv, key) && key.startsWith('QA_U0_') && !keys.includes(key)) {
+            if (unexpectedQaU0Keys.length >= 16) throw new Error('root-unexpected-key-bound')
+            unexpectedQaU0Keys.push(context(key, 128))
+          }
+          unexpectedQaU0Keys.sort()
+          for (const key of [...keys, ...unexpectedQaU0Keys]) delete childEnv[key]
+          delete childEnv.ESBUILD_BINARY_PATH
+          const argv = ['--input-type=module']
+          const cwd = context(process.cwd())
+          const logPath = resolve(dir, 'default.log')
+          const logFd = openSync(logPath, 'wx+', 0o600)
+          const abortLog = (primary) => {
+            try { closeSync(logFd) } catch (closeError) { throw new AggregateError([primary, closeError], 'root-log-initial-and-close') }
+            throw primary
+          }
+          let logHeld
+          try {
+            logHeld = fstatSync(logFd)
+            const logNamed = lstatSync(logPath)
+            if (!logHeld.isFile() || !logNamed.isFile() || logNamed.isSymbolicLink() || logHeld.dev !== logNamed.dev ||
+                logHeld.ino !== logNamed.ino || logHeld.size !== 0 || logNamed.size !== 0) throw new Error('root-log-open-identity')
+          } catch (primary) { abortLog(primary) }
+          let logBytes = 0
+          const logChunks = []
+          let overflow = false
+          let streamError = false
+          let logPrimary = null, logCloseError = null
+          const logFault = (error) => { streamError = true; if (logPrimary === null) logPrimary = error }
+          let logClosed = false
+          const streams = { stdout: { end: false, close: false }, stderr: { end: false, close: false } }
+          let child
+          try { child = spawn(process.execPath, argv, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }) }
+          catch (error) { abortLog(error) }
+          for (const label of ['stdout', 'stderr']) {
+            const stream = child[label]
+            stream.on('data', (chunk) => {
+              const prefix = Buffer.from(label + ':')
+              if (streamError || overflow) return
+              if (prefix.length + chunk.length > 256 * 1024 - logBytes) { overflow = true; return }
+              const bytes = Buffer.concat([prefix, chunk], prefix.length + chunk.length)
+              try {
+                const written = writeSync(logFd, bytes, 0, bytes.length)
+                logBytes += written
+                logChunks.push(bytes.subarray(0, written))
+                if (written !== bytes.length) logFault(new Error('root-log-short-write'))
+              } catch (error) { logFault(error) }
+            })
+            stream.on('end', () => { streams[label].end = true })
+            stream.on('close', () => { streams[label].close = true })
+            stream.on('error', logFault)
+          }
+          let stdinSend = null
+          child.stdin.on('error', logFault)
+          const sent = new Promise((done) => child.stdin.end(bootstrap, 'utf8', (error) => { stdinSend = error ? 'failed' : 'complete'; if (error) logFault(error); done() }))
+          child.on('error', logFault)
+          const terminal = await new Promise((done) => child.once('close', (code, signal) => done({ code, signal })))
+          await sent
+          try {
+            const held = fstatSync(logFd), named = lstatSync(logPath)
+            const readback = Buffer.alloc(logBytes)
+            if (held.dev !== logHeld.dev || held.ino !== logHeld.ino || held.size !== logBytes ||
+                named.dev !== logHeld.dev || named.ino !== logHeld.ino || named.size !== logBytes || named.isSymbolicLink() ||
+                readSync(logFd, readback, 0, logBytes, 0) !== logBytes || !readback.equals(Buffer.concat(logChunks, logBytes)) ||
+                readSync(logFd, Buffer.alloc(1), 0, 1, logBytes) !== 0) throw new Error('root-log-readback')
+          } catch (error) { logFault(error) }
+          try { closeSync(logFd); logClosed = true } catch (error) { streamError = true; logCloseError = error }
+          if (logPrimary && logCloseError) throw new AggregateError([logPrimary, logCloseError], 'root-log-primary-and-close')
+          if (logPrimary) throw logPrimary
+          if (logCloseError) throw logCloseError
+          const workflowPath = '.github/workflows/windows-unsigned-qa-mode.yml'
+          const workflowGit = execFileSync('git', ['show', 'HEAD:' + workflowPath], { maxBuffer: 2 * 1024 * 1024 })
+          const workflowCheckout = execFileSync('git', ['rev-parse', 'HEAD:' + workflowPath], { encoding: 'utf8' }).trim()
+          const boundedCheckout = (path, max) => {
+            const named = lstatSync(path)
+            if (!named.isFile() || named.isSymbolicLink() || named.size < 1 || named.size > max) throw new Error('root-checkout-bound')
+            const fd = openSync(path, 'r')
+            let primary = null, result
+            try {
+              const held = fstatSync(fd)
+              if (held.dev !== named.dev || held.ino !== named.ino || held.size !== named.size) throw new Error('root-checkout-identity')
+              result = Buffer.alloc(held.size)
+              if (readSync(fd, result, 0, result.length, 0) !== result.length || readSync(fd, Buffer.alloc(1), 0, 1, result.length) !== 0) throw new Error('root-checkout-read')
+              const heldAfter = fstatSync(fd), after = lstatSync(path)
+              if (heldAfter.dev !== held.dev || heldAfter.ino !== held.ino || heldAfter.size !== held.size || after.dev !== held.dev || after.ino !== held.ino || after.size !== held.size || after.isSymbolicLink()) throw new Error('root-checkout-changed')
+            } catch (error) { primary = error }
+            let closeError = null
+            try { closeSync(fd) } catch (error) { closeError = error }
+            if (primary && closeError) throw new AggregateError([primary, closeError], 'root-checkout-read-and-close')
+            if (primary) throw primary
+            if (closeError) throw closeError
+            return result
+          }
+          publish('invocation.json', { schema: 'metis-u0-root-invocation/v1', phase: 'stage-a', controlId: 'R00',
+            sourceHead: context(process.env.GITHUB_SHA, 40), runId: context(process.env.GITHUB_RUN_ID, 32), runAttempt: context(process.env.GITHUB_RUN_ATTEMPT, 16),
+            job: context(process.env.GITHUB_JOB), repository: context(process.env.GITHUB_REPOSITORY),
+            workflowRef: context(process.env.GITHUB_WORKFLOW_REF), workspace: context(process.env.GITHUB_WORKSPACE),
+            runnerTemp: context(process.env.RUNNER_TEMP), githubActions: context(process.env.GITHUB_ACTIONS),
+            reportPath: context(process.env.METIS_CI_ROOT_REPORT), target: context(process.env.ROOT_TARGET, 32), node: process.version,
+            configPath: 'vitest.config.ts', filter: 'scripts/qa/windows-unsigned-qa-mode.test.ts',
+            bootstrapSha256, argv: [context(process.execPath), ...argv], cwd, workflowGitBlob: workflowCheckout,
+            workflowGitSha256: sha(workflowGit), workflowCheckoutSha256: sha(boundedCheckout(workflowPath, 2 * 1024 * 1024)),
+            dedicatedPresence, unexpectedQaU0Keys, removedEsbuildBinaryPath: true, environmentMutations: [],
+            exitCode: terminal.code, signal: terminal.signal, stdinSend, streams, logOverflow: overflow, streamError, logClosed }, 64 * 1024)
+          const output = 'exit_code=' + (Number.isInteger(terminal.code) ? terminal.code : 'null') + '\n'
+          const outputFd = openSync(process.env.GITHUB_OUTPUT, 'a')
+          const safe = stdinSend === 'complete' && streams.stdout.end && streams.stdout.close && streams.stderr.end && streams.stderr.close &&
+            logClosed && !overflow && !streamError && terminal.signal === null && Number.isInteger(terminal.code)
+          const outputs = output + 'capture_closed=' + safe + '\n'
+          let outputError = null
+          try { if (writeSync(outputFd, outputs) !== Buffer.byteLength(outputs)) throw new Error('root-exit-output-short-write') }
+          catch (error) { outputError = error }
+          let outputCloseError = null
+          try { closeSync(outputFd) } catch (error) { outputCloseError = error }
+          if (outputError && outputCloseError) throw new AggregateError([outputError, outputCloseError], 'root-output-write-and-close')
+          if (outputError) throw outputError
+          if (outputCloseError) throw outputCloseError
+          NODE
       - name: Check architecture independently
         id: architecture
         if: always() && steps.install.outcome == 'success'
@@ -465,6 +833,336 @@ jobs:
           }
           if (aggregateBytes < 1 || aggregateBytes > 24 * 1024 * 1024) fail('upload-aggregate-bound')
           NODE
+      - name: Replay the focused root-context failure independently
+        id: root_replay
+        if: always() && steps.install.outcome == 'success'
+        env:
+          ROOT_DIR: ${{ runner.temp }}/windows-unsigned-qa-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          ROOT_TARGET: ${{ matrix.target }}
+          ROOT_EXIT: ${{ steps.root_fixture.outputs.exit_code }}
+          ROOT_CAPTURE_CLOSED: ${{ steps.root_fixture.outputs.capture_closed }}
+          ARCH_OUTCOME: ${{ steps.architecture.outcome }}
+          TSC_NODE_OUTCOME: ${{ steps.tsc_node.outcome }}
+          TSC_WEB_OUTCOME: ${{ steps.tsc_web.outcome }}
+          TSC_TESTS_OUTCOME: ${{ steps.tsc_tests.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process'
+          import { createHash } from 'node:crypto'
+          import { closeSync, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync, writeSync } from 'node:fs'
+          import { createRequire } from 'node:module'
+          import { dirname, resolve } from 'node:path'
+
+          const fail = (reason) => { throw new Error('root-red-replay:' + reason) }
+          const same = (actual, expected, reason) => { if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(reason) }
+          const sha = (bytes) => createHash('sha256').update(bytes).digest('hex')
+          const bounded = (path, max, allowEmpty = false) => {
+            const named = lstatSync(path)
+            if (!named.isFile() || named.isSymbolicLink() || (!allowEmpty && named.size < 1) || named.size > max) fail('file-bound:' + path)
+            const fd = openSync(path, 'r')
+            let primary = null, bytes
+            try {
+              const held = fstatSync(fd)
+              if (held.dev !== named.dev || held.ino !== named.ino || held.size !== named.size) fail('file-identity:' + path)
+              bytes = Buffer.alloc(named.size)
+              if (readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length || readSync(fd, Buffer.alloc(1), 0, 1, bytes.length) !== 0) fail('file-read:' + path)
+              const heldAfter = fstatSync(fd)
+              const after = lstatSync(path)
+              if (heldAfter.dev !== held.dev || heldAfter.ino !== held.ino || heldAfter.size !== held.size ||
+                  after.dev !== held.dev || after.ino !== held.ino || after.size !== held.size || after.isSymbolicLink()) fail('file-changed:' + path)
+            } catch (error) { primary = error }
+            let closeError = null
+            try { closeSync(fd) } catch (error) { closeError = error }
+            if (primary && closeError) throw new AggregateError([primary, closeError], 'file-read-and-close:' + path)
+            if (primary) throw primary
+            if (closeError) throw closeError
+            return bytes
+          }
+          if (process.env.ROOT_CAPTURE_CLOSED !== 'true') fail('capture-not-completed')
+          const dir = process.env.ROOT_DIR
+          const dirStat = lstatSync(dir)
+          if (!dirStat.isDirectory() || dirStat.isSymbolicLink() ||
+              realpathSync(dirname(dir)) !== realpathSync(process.env.RUNNER_TEMP)) fail('capture-directory-identity')
+          const fileNames = ['default.log','framework.json','invocation.json','observation.json','vitest.json']
+          const limits = { 'default.log': 256 * 1024, 'framework.json': 16 * 1024,
+            'invocation.json': 64 * 1024, 'observation.json': 256 * 1024, 'vitest.json': 512 * 1024 }
+          const present = readdirSync(dir).sort()
+          if (present.some((name) => !fileNames.includes(name))) fail('pre-replay-roster')
+          const bytes = Object.fromEntries(present.map((name) => [name, bounded(resolve(dir, name), limits[name], true)]))
+          const writeReceipt = (receipt) => {
+            const output = Buffer.from(JSON.stringify(receipt) + '\n')
+            if (output.length > 256 * 1024) fail('receipt-bound')
+            const path = resolve(dir, 'replay.json')
+            const fd = openSync(path, 'wx+', 0o600)
+            let primary = null
+            try {
+              const held = fstatSync(fd), named = lstatSync(path)
+              if (!held.isFile() || !named.isFile() || named.isSymbolicLink() || held.dev !== named.dev || held.ino !== named.ino || held.size !== 0 || named.size !== 0) fail('receipt-open-identity')
+              if (writeSync(fd, output, 0, output.length, 0) !== output.length) fail('receipt-short-write')
+              const readback = Buffer.alloc(output.length)
+              if (readSync(fd, readback, 0, output.length, 0) !== output.length || !readback.equals(output) || readSync(fd, Buffer.alloc(1), 0, 1, output.length) !== 0) fail('receipt-readback')
+              const after = fstatSync(fd), namedAfter = lstatSync(path)
+              if (after.dev !== held.dev || after.ino !== held.ino || after.size !== output.length || namedAfter.dev !== held.dev || namedAfter.ino !== held.ino || namedAfter.size !== output.length || namedAfter.isSymbolicLink()) fail('receipt-final-identity')
+            } catch (error) { primary = error }
+            let closeError = null
+            try { closeSync(fd) } catch (error) { closeError = error }
+            if (primary && closeError) throw new AggregateError([primary, closeError], 'receipt-write-and-close')
+            if (primary) throw primary
+            if (closeError) throw closeError
+            same(readdirSync(dir).sort(), [...present,'replay.json'].sort(), 'upload-roster')
+            if (present.reduce((sum,name) => sum + bytes[name].length, output.length) > 1536 * 1024) fail('upload-bound')
+            const fdOutput = openSync(process.env.GITHUB_OUTPUT, 'a')
+            let outputError = null
+            try { if (writeSync(fdOutput, 'capture_safe=true\n') !== Buffer.byteLength('capture_safe=true\n')) fail('capture-output-short') }
+            catch (error) { outputError = error }
+            let outputCloseError = null
+            try { closeSync(fdOutput) } catch (error) { outputCloseError = error }
+            if (outputError && outputCloseError) throw new AggregateError([outputError, outputCloseError], 'capture-output-write-and-close')
+            if (outputError) throw outputError
+            if (outputCloseError) throw outputCloseError
+          }
+          try {
+          same(present, fileNames, 'complete-replay-roster')
+          const read = (name) => JSON.parse(bytes[name].toString('utf8'))
+          const invocation = read('invocation.json')
+          const observation = read('observation.json')
+          const framework = read('framework.json')
+          const raw = read('vitest.json')
+          const log = bytes['default.log'].toString('utf8')
+          const closed = (value, keys, label) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) fail('closed-object:' + label)
+            same(Object.keys(value).sort(), keys.slice().sort(), 'closed-keys:' + label)
+          }
+          closed(invocation, ['schema','phase','controlId','sourceHead','runId','runAttempt','job','repository','workflowRef',
+            'workspace','runnerTemp','githubActions','reportPath','target','node','configPath','filter','bootstrapSha256',
+            'argv','cwd','workflowGitBlob','workflowGitSha256','workflowCheckoutSha256','dedicatedPresence',
+            'unexpectedQaU0Keys','removedEsbuildBinaryPath','environmentMutations','exitCode','signal',
+            'stdinSend','streams','logOverflow','streamError','logClosed'], 'invocation')
+          closed(observation, ['schema','bootstrapSha256','sourceHead','runId','runAttempt','target','node','reason',
+            'unhandledCount','errors','config','hooks','modules'], 'observation')
+          closed(framework, ['schema','bootstrapSha256','sourceHead','runId','runAttempt','target','node','initCount',
+            'runEndCount','closeCallbackCount','cachedCloseObserved','closeOutcome','runEndReason',
+            'runEndUnhandledCount','runEndUnhandledErrors','finalUnhandledCount','finalUnhandledErrors',
+            'frameworkClosed','timedOut','observerError','incomplete','observed','exitCode'], 'framework')
+          closed(framework.observed, ['modules','suites','tests','hooks','entityErrors'], 'observed-counts')
+          same(framework.observed, { modules:1, suites:1, tests:50, hooks:2, entityErrors:2 }, 'observed-counts')
+          if (framework.incomplete !== null) fail('observer-incomplete')
+          closed(invocation.streams, ['stdout','stderr'], 'streams')
+          for (const label of ['stdout','stderr']) {
+            closed(invocation.streams[label], ['end','close'], 'stream:' + label)
+            if (invocation.streams[label].end !== true || invocation.streams[label].close !== true) fail('stream-not-closed:' + label)
+          }
+          const dedicatedKeys = ['U0_DIR','QA_U0_RUN_DIR','QA_U0_CASE_REPORT','QA_U0_VITEST_JSON','QA_U0_TARGET',
+            'QA_OWNER_FRAMEWORK_REPORT_PATH','QA_OWNER_TARGET','QA_OWNER_SOURCE_SHA']
+          closed(invocation.dedicatedPresence, dedicatedKeys, 'dedicated-presence')
+          if (dedicatedKeys.some((key) => invocation.dedicatedPresence[key] !== false) ||
+              !Array.isArray(invocation.unexpectedQaU0Keys) || invocation.unexpectedQaU0Keys.length !== 0 ||
+              !Array.isArray(invocation.environmentMutations) || invocation.environmentMutations.length !== 0) fail('dedicated-env-not-absent')
+          const checkError = (error, label) => {
+            closed(error, ['name','message','stack'], label)
+            if (typeof error.name !== 'string' || Buffer.byteLength(error.name) > 128 ||
+                typeof error.message !== 'string' || Buffer.byteLength(error.message) > 4096 ||
+                typeof error.stack !== 'string' || Buffer.byteLength(error.stack) > 8192) fail('error-shape:' + label)
+          }
+          const checkErrors = (errors, count, label) => {
+            if (!Array.isArray(errors) || errors.length !== count) fail('error-count:' + label)
+            errors.forEach((error, index) => checkError(error, label + index))
+          }
+          const checkMeta = (meta, label) => { closed(meta, [], label) }
+          const head = execFileSync('git', ['rev-parse','HEAD'], { encoding: 'utf8' }).trim()
+          if (head !== process.env.GITHUB_SHA || !/^[a-f0-9]{40}$/.test(head) || process.version !== 'v22.22.3') fail('runtime-source')
+          const sourcePaths = [
+            '.github/workflows/windows-unsigned-qa-mode.yml','vitest.windows-unsigned-qa-mode.config.ts',
+            'scripts/qa/windows-unsigned-qa-mode.test.ts','src/main/persistence/qa-run-protocol.ts',
+            'src/main/qa-identity.ts','src/main/persistence/resource-policy-contract.ts',
+            'scripts/hermetic/sandbox-env.mjs','scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs',
+            'package.json','package-lock.json','tsconfig.node.json','tsconfig.web.json','tsconfig.tests.json',
+            'scripts/check-architecture.mjs','vitest.config.ts','.github/workflows/build.yml',
+            'electron.vite.config.ts','scripts/design/renderer-inputs.ts','.nvmrc','scripts/architecture-baseline.json'
+          ]
+          const sources = {}
+          const checkoutBytes = {}, gitBytes = {}
+          for (const path of sourcePaths) {
+            const checkout = bounded(path, 2 * 1024 * 1024)
+            const git = execFileSync('git', ['show', 'HEAD:' + path], { maxBuffer: 2 * 1024 * 1024 })
+            checkoutBytes[path] = checkout
+            gitBytes[path] = git
+            const blob = execFileSync('git', ['rev-parse', 'HEAD:' + path], { encoding: 'utf8' }).trim()
+            const crlf = Buffer.from(git.toString('utf8').replaceAll('\r\n','\n').replaceAll('\n','\r\n'))
+            const transform = checkout.equals(git) ? 'identical' : checkout.equals(crlf) ? 'git-lf-to-checkout-crlf' : null
+            if (!transform) fail('source-checkout:' + path)
+            sources[path] = { gitBlob: blob, gitSha256: sha(git), checkoutSha256: sha(checkout), transform }
+          }
+          if (sourcePaths.length !== 20 || new Set(sourcePaths).size !== 20) fail('source-pin-count')
+          if (sources['scripts/qa/windows-unsigned-qa-mode.test.ts'].gitSha256 !== 'a19591e273606dfacab52c7e1071f429dc466439039994a7a964064091aa92fd' ||
+              sources['src/main/persistence/qa-run-protocol.ts'].gitBlob !== '707fc30a40d5a6cf01e4ac88d7ca93317457ebab') fail('frozen-fixture-or-protocol')
+          const pinned = {
+            'vitest.config.ts':'bd622050a3af3bce5e50e78b9fb5c63192b6d98150caa1b2fe34f84e96e6ac91',
+            '.github/workflows/build.yml':'609486decc8596cbe49fb4766064f262085c55a6ec631d0d3b882bdc893f85ce',
+            'electron.vite.config.ts':'37b18ad210db7fdb88bbc153579e6af17128e49a7fa7bde56a86eab4f4ff6d2c',
+            'scripts/design/renderer-inputs.ts':'668fe52adbe4b33d45e2a7081ff61b19093d313702e1e5c0e4ab6de944295ea3',
+            '.nvmrc':'9c579c4eab1d526e689fe7cda201a0ab2f39070304043bb55c459a3d90954250',
+            'scripts/architecture-baseline.json':'9748181c29643a43dcd4c19a2b10e060e07233a9ad0f0ca40bfa3f473be45881'
+          }
+          for (const [path, expected] of Object.entries(pinned)) if (sources[path].gitSha256 !== expected) fail('root-caller-pin:' + path)
+          const apiPins = {
+            'vitest/package.json':'a28126d97bcaf567da5bed69443b7f3bcd9a7a8c38c8b66e554686b6bb2c10e0',
+            'vitest/dist/node.js':'34be25dbabf478136f6ea1b1f7b9a075ab833a14df3da9fc69d39b671dc19551',
+            'vitest/dist/node.d.ts':'ca3113f2421944295a9609d068137e9b2fff4c17a1799d9acdc8702cc29455dc',
+            'vitest/dist/chunks/cli-api.CnMVyzaz.js':'a236001d048380e2c67d05423fc9ea3f26b07ee019ba8d6e622082f29d49102e', // gitleaks:allow -- SHA-256 of pinned public Vitest source
+            'vitest/dist/chunks/defaults.9aQKnqFk.js':'e500ba917d0d320a037b4ad92ae691462b50a939e21b1f98d0073c45d55466ab',
+            'vitest/dist/chunks/coverage.DM_a_rWm.js':'e509f3cc1bd81ae6426265253fa926cbde02be5cebfe35b1df422017bffdca31',
+            'vitest/dist/chunks/index.UpGiHP7g.js':'cdafaf8e508042dddba72f8c7bbae84e2836ddb6b06c7026520c35d91af4e798',
+            'vitest/dist/chunks/reporters.d.DtoKVV2s.d.ts':'7fa6fdc6eeeb3850e6b3166836f8c9199594c4f4bed3cee02cac0ca33d71894d',
+            '@vitest/runner/dist/chunk-artifact.js':'bf6af6d2f4469911879a67e83b8f9e7b20332cf42795032c53457b10ccc1c617',
+            '@vitest/runner/dist/tasks.d-DEYaIMIu.d.ts':'53cf4076f42b29b8d411259d168d51b3a0274c42c8814e5b44dfa8803a35d4fc'
+          }
+          const apiHashes = {}
+          for (const [path, expected] of Object.entries(apiPins)) {
+            const actual = sha(bounded(resolve('node_modules',path), 1024 * 1024))
+            if (actual !== expected) fail('pinned-api:' + path)
+            apiHashes[path] = actual
+          }
+          const esbuildPackageBytes = bounded('node_modules/esbuild/package.json',128 * 1024)
+          const esbuildPackage = JSON.parse(esbuildPackageBytes.toString('utf8'))
+          const esbuildPath = `node_modules/@esbuild/${process.platform}-${process.arch}/${process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'}`
+          const esbuildNativePackageBytes = bounded(`node_modules/@esbuild/${process.platform}-${process.arch}/package.json`,128 * 1024)
+          const esbuildNativePackage = JSON.parse(esbuildNativePackageBytes.toString('utf8'))
+          const selectedBinary = createRequire(resolve('node_modules/esbuild/lib/main.js')).resolve(`@esbuild/${process.platform}-${process.arch}/${process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'}`)
+          const lock = JSON.parse(checkoutBytes['package-lock.json'].toString('utf8'))
+          const nativeLock = lock.packages?.[`node_modules/@esbuild/${process.platform}-${process.arch}`]
+          const integrity = nativeLock?.integrity
+          if (selectedBinary !== resolve(esbuildPath) || esbuildPackage.version !== '0.25.12' ||
+              esbuildNativePackage.version !== esbuildPackage.version || lock.packages?.['node_modules/esbuild']?.version !== esbuildPackage.version ||
+              nativeLock?.version !== esbuildPackage.version ||
+              esbuildPackage.optionalDependencies?.[`@esbuild/${process.platform}-${process.arch}`] !== esbuildPackage.version ||
+              !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity ?? '')) fail('compiler-selection-binding')
+          const compiler = { version:esbuildPackage.version, packageSha256:sha(esbuildPackageBytes),
+            apiSha256:sha(bounded('node_modules/esbuild/lib/main.js',512 * 1024)), nativePackageSha256:sha(esbuildNativePackageBytes),
+            binaryPath:esbuildPath, binarySha256:sha(bounded(esbuildPath,32 * 1024 * 1024)), lockIntegrity:integrity }
+          const workflow = gitBytes['.github/workflows/windows-unsigned-qa-mode.yml'].toString('utf8')
+          const dedentedWorkflow = workflow.split('\n').map((line) => line.startsWith('          ') ? line.slice(10) : line).join('\n')
+          const bootstrap = /const bootstrap = String.raw`([\s\S]*?)`/.exec(dedentedWorkflow)
+          const bootstrapTransform = bootstrap && sha(Buffer.from(bootstrap[1])) === invocation.bootstrapSha256 ? 'git-lf' :
+            bootstrap && sha(Buffer.from(bootstrap[1].replaceAll('\n','\r\n'))) === invocation.bootstrapSha256 ? 'git-lf-to-runner-crlf' : null
+          if (!bootstrapTransform) fail('exact-bootstrap-source')
+          if (invocation.schema !== 'metis-u0-root-invocation/v1' || invocation.phase !== 'stage-a' || invocation.controlId !== 'R00' ||
+              invocation.sourceHead !== head || invocation.runId !== process.env.GITHUB_RUN_ID || invocation.runAttempt !== process.env.GITHUB_RUN_ATTEMPT ||
+              invocation.job !== process.env.GITHUB_JOB || invocation.target !== process.env.ROOT_TARGET || invocation.node !== process.version ||
+              invocation.repository !== process.env.GITHUB_REPOSITORY || invocation.workflowRef !== process.env.GITHUB_WORKFLOW_REF ||
+              invocation.workspace !== process.env.GITHUB_WORKSPACE || invocation.runnerTemp !== process.env.RUNNER_TEMP ||
+              invocation.githubActions !== 'true' || resolve(invocation.reportPath) !== resolve(dir,'vitest.json') ||
+              invocation.configPath !== 'vitest.config.ts' || invocation.filter !== 'scripts/qa/windows-unsigned-qa-mode.test.ts' ||
+              invocation.cwd !== process.cwd() || invocation.argv[0] !== process.execPath || invocation.argv[1] !== '--input-type=module' || invocation.argv.length !== 2 ||
+              invocation.workflowGitBlob !== sources['.github/workflows/windows-unsigned-qa-mode.yml'].gitBlob ||
+              invocation.workflowGitSha256 !== sources['.github/workflows/windows-unsigned-qa-mode.yml'].gitSha256 ||
+              invocation.workflowCheckoutSha256 !== sources['.github/workflows/windows-unsigned-qa-mode.yml'].checkoutSha256 ||
+              !/^[a-f0-9]{64}$/.test(invocation.bootstrapSha256) || invocation.exitCode !== 1 || process.env.ROOT_EXIT !== '1' || invocation.signal !== null ||
+              invocation.stdinSend !== 'complete' || invocation.logOverflow !== false || invocation.streamError !== false || invocation.logClosed !== true ||
+              process.env.ROOT_CAPTURE_CLOSED !== 'true' || invocation.removedEsbuildBinaryPath !== true) fail('invocation-binding')
+          if (observation.schema !== 'metis-u0-root-observation/v1' || framework.schema !== 'metis-u0-root-framework/v1' ||
+              observation.bootstrapSha256 !== invocation.bootstrapSha256 || framework.bootstrapSha256 !== invocation.bootstrapSha256 ||
+              observation.sourceHead !== head || observation.runId !== invocation.runId || observation.runAttempt !== invocation.runAttempt ||
+              observation.target !== invocation.target || observation.node !== process.version ||
+              framework.sourceHead !== head || framework.runId !== invocation.runId || framework.runAttempt !== invocation.runAttempt ||
+              framework.target !== invocation.target || framework.node !== process.version) fail('observer-binding')
+          const config = observation.config
+          closed(config, ['configFile','include','identityLiteral','identityRuntime','testTimeout','hookTimeout','retry','repeats','effectiveRetryDefault','effectiveRepeatDefault','pool'], 'root-config-projection')
+          if (typeof config.configFile !== 'string' || resolve(config.configFile) !== resolve('vitest.config.ts') ||
+              config.identityLiteral !== 'false' || config.identityRuntime !== false ||
+              JSON.stringify(config.include) !== JSON.stringify(['src/**/*.{test,spec}.{ts,tsx}','intelligence/src/**/*.{test,spec}.{ts,tsx}',
+                'scripts/**/*.{test,spec}.{ts,tsx}','eval/**/*.{test,spec}.{ts,tsx}']) || config.pool !== 'forks' ||
+              config.testTimeout !== 30000 || config.hookTimeout !== 30000 || config.retry !== null || config.repeats !== null ||
+              config.effectiveRetryDefault !== 0 || config.effectiveRepeatDefault !== 0) fail('real-root-config-projection')
+          if (!Array.isArray(observation.modules) || observation.modules.length !== 1 ||
+              !Array.isArray(observation.modules[0]?.tests) || !Array.isArray(observation.modules[0]?.suites) ||
+              observation.modules[0].suites.length !== 1) fail('module-structure')
+          const module = observation.modules?.[0]
+          const suite = module?.suites?.[0]
+          const suiteTitle = 'windows unsigned QA mode finite source fixture'
+          closed(module, ['id','moduleId','state','errors','meta','suites','tests'], 'module')
+          closed(suite, ['id','fullName','state','errors','meta'], 'describe')
+          for (const test of module.tests) closed(test, ['moduleId','fullName','state','case','errors','retryCount','repeatCount'], 'case')
+          checkMeta(module.meta, 'module-meta')
+          checkMeta(suite.meta, 'suite-meta')
+          checkErrors(module.errors, 2, 'module-errors')
+          checkErrors(suite.errors, 0, 'suite-errors')
+          for (const test of module.tests) checkErrors(test.errors, 0, 'test-errors')
+          if (observation.modules.length !== 1 || module.moduleId !== resolve('scripts/qa/windows-unsigned-qa-mode.test.ts').replaceAll('\\','/') ||
+              module.state !== 'failed' || module.suites.length !== 1 || suite.fullName !== suiteTitle || suite.state !== 'skipped' ||
+              typeof module.id !== 'string' || module.id.length < 1 || Buffer.byteLength(module.id) > 512 ||
+              typeof suite.id !== 'string' || suite.id.length < 1 || suite.id.length > 512 ||
+              module.errors.length !== 2 || module.errors[0].name !== 'Error' || module.errors[0].message !== 'fixture-context-incomplete' ||
+              module.errors[1].name !== 'Error' || module.errors[1].message !== 'fixture-manifest-bound-or-count' ||
+              module.tests.length !== 50 || module.tests.some((test) => test.state !== 'skipped' || test.case !== null ||
+                test.retryCount !== null || test.repeatCount !== null || test.errors.length !== 0)) fail('actual-hook-and-skipped-state')
+          const matrix = [
+            ['win32-x64','windows-authenticode'],['win32-x64','windows-unsigned-candidate'],['win32-x64','mac-adhoc'],['win32-x64','mac-developer-id'],
+            ['darwin-x64','windows-authenticode'],['darwin-x64','mac-adhoc'],['darwin-x64','mac-developer-id'],['darwin-x64','windows-unsigned-candidate'],
+            ['darwin-arm64','windows-authenticode'],['darwin-arm64','mac-adhoc'],['darwin-arm64','mac-developer-id'],['darwin-arm64','windows-unsigned-candidate']
+          ]
+          const titles = matrix.map(([target, mode], index) => 'U' + String(index + 1).padStart(2,'0') + ' ' + target + ' ' + mode)
+          for (let index = 1; index <= 13; index++) for (const mode of ['authenticode','unsigned']) titles.push('B' + String(index).padStart(2,'0') + '-' + mode + '-source-fixture')
+          for (let index = 1; index <= 4; index++) titles.push('S' + String(index).padStart(2,'0') + ' shipping and missing-stamp boundary')
+          for (let index = 1; index <= 3; index++) for (const mode of ['authenticode','unsigned']) titles.push('H' + String(index).padStart(2,'0') + '-' + mode + '-source-fixture')
+          titles.push('J01 canonical source control and malformed envelope cases','J02 unknown stamp and payload modes refuse without borrowing a valid stamp')
+          same(module.tests.map((test) => test.fullName), titles.map((title) => suiteTitle + ' > ' + title), 'api-title-roster')
+          if (module.tests.some((test) => test.moduleId !== module.moduleId) || new Set(module.tests.map((test) => test.fullName)).size !== 50) fail('api-roster-identity')
+          checkErrors(observation.errors, 0, 'observation-unhandled')
+          checkErrors(framework.runEndUnhandledErrors, 0, 'run-end-unhandled')
+          checkErrors(framework.finalUnhandledErrors, 0, 'final-unhandled')
+          if (!Array.isArray(observation.hooks) || observation.hooks.length !== 2) fail('hook-count')
+          observation.hooks.forEach((hook, index) => {
+            closed(hook, ['name','entityType','entityId','event'], 'hook:' + index)
+            if (hook.name !== (index === 0 ? 'beforeAll' : 'afterAll') || hook.event !== 'start' ||
+                hook.entityType !== 'module' || hook.entityId !== module.id) fail('hook-identity:' + index)
+          })
+          if (observation.reason !== 'failed' || observation.unhandledCount !== 0 ||
+              framework.initCount !== 1 || framework.runEndCount !== 1 || framework.closeCallbackCount !== 1 ||
+              framework.cachedCloseObserved !== true || framework.closeOutcome !== 'fulfilled' || framework.frameworkClosed !== true ||
+              framework.runEndReason !== 'failed' || framework.runEndUnhandledCount !== 0 || framework.finalUnhandledCount !== 0 ||
+              framework.exitCode !== 1 || framework.timedOut !== false || framework.observerError !== null) fail('framework-not-closed-zero')
+          if (raw.testResults?.length !== 1 || raw.testResults[0].assertionResults?.length !== 50 || raw.numTotalTests !== 50 ||
+              raw.numPassedTests !== 0 || raw.numFailedTests !== 0 || raw.numPendingTests !== 50 || raw.numTodoTests !== 0 ||
+              raw.numTotalTestSuites !== 2 || raw.numFailedTestSuites !== 1 || raw.numPendingTestSuites !== 0 || raw.numPassedTestSuites !== 1 ||
+              raw.testResults[0].name.replaceAll('\\','/') !== module.moduleId ||
+              raw.testResults[0].status !== 'failed' || raw.testResults[0].message !== 'fixture-context-incomplete' || raw.success !== false) fail('raw-hook-counts')
+          same(raw.testResults[0].assertionResults.map((test) => test.fullName), titles.map((title) => suiteTitle + ' ' + title), 'raw-title-roster')
+          raw.testResults[0].assertionResults.forEach((test, index) => {
+            if (test.title !== titles[index] || JSON.stringify(test.ancestorTitles) !== JSON.stringify([suiteTitle]) ||
+                test.fullName !== [...test.ancestorTitles, test.title].join(' ') ||
+                module.tests[index].fullName !== [suiteTitle, test.title].join(' > ') ||
+                module.tests[index].moduleId !== raw.testResults[0].name.replaceAll('\\','/') ||
+                test.status !== 'skipped' || !Array.isArray(test.failureMessages) || test.failureMessages.length !== 0) fail('raw-api-case-tuple:' + index)
+            checkMeta(test.meta, 'raw-meta:' + index)
+          })
+          if (log.includes('error during close') || /Failed to load custom Reporter|Failed to load.*test|Test timed out|Unhandled Error/.test(log) ||
+              !log.includes('fixture-context-incomplete') || !log.includes('fixture-manifest-bound-or-count')) fail('default-log-contradiction')
+          const staticOutcomes = { architecture:process.env.ARCH_OUTCOME, node:process.env.TSC_NODE_OUTCOME,
+            web:process.env.TSC_WEB_OUTCOME, tests:process.env.TSC_TESTS_OUTCOME }
+          if (Object.values(staticOutcomes).some((value) => !['success','failure','cancelled','skipped'].includes(value))) fail('static-outcomes-missing')
+          const receipt = { schema:'metis-u0-root-stage-a-replay/v1', phase:'CAUSAL_ROOT_CONTEXT_RED_ONLY', functionalStatus:'failed',
+            diagnosticStatus:'validated-original-two-hook-red', controlId:'R00', sourceHead:head, target:process.env.ROOT_TARGET,
+            runId:process.env.GITHUB_RUN_ID, runAttempt:process.env.GITHUB_RUN_ATTEMPT, node:process.version,
+            sources, apiHashes, compiler, bootstrapSha256:invocation.bootstrapSha256, bootstrapTransform,
+            hashes:Object.fromEntries(fileNames.map((name) => [name,{sha256:sha(bytes[name]),bytes:bytes[name].length}])),
+            actual:{exitCode:invocation.exitCode, modules:1, suites:2, cases:50, passed:0, failedAssertions:0, skipped:50,
+              nestedRowsReached:0, readbackArtifactsObserved:null, retryCount:null, repeatCount:null,
+              hookErrors:module.errors.map((error) => error.message), runEndUnhandledCount:framework.runEndUnhandledCount,
+              finalUnhandledCount:framework.finalUnhandledCount, frameworkClosed:framework.frameworkClosed}, independentStatic:staticOutcomes }
+          writeReceipt(receipt)
+          } catch (error) {
+            if (process.env.ROOT_CAPTURE_CLOSED !== 'true' || readdirSync(dir).includes('replay.json')) throw error
+            const diagnostic = { schema:'metis-u0-root-stage-a-replay/v1', phase:'CAUSAL_ROOT_CONTEXT_RED_ONLY',
+              functionalStatus:'failed', diagnosticStatus:'failed-diagnostic', controlId:'R00',
+              sourceHead:process.env.GITHUB_SHA, target:process.env.ROOT_TARGET, runId:process.env.GITHUB_RUN_ID,
+              runAttempt:process.env.GITHUB_RUN_ATTEMPT, node:process.version,
+              rejection:String(error?.message ?? error).slice(0, 1024), missing:fileNames.filter((name) => !present.includes(name)),
+              hashes:Object.fromEntries(present.map((name) => [name,{sha256:sha(bytes[name]),bytes:bytes[name].length}])) }
+            writeReceipt(diagnostic)
+            throw error
+          }
+          NODE
       - name: Upload the bounded source and CI evidence
         if: always() && steps.replay.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -473,10 +1171,20 @@ jobs:
           path: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 14
+      - name: Upload the bounded focused root-context observation
+        if: always() && steps.root_replay.outputs.capture_safe == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-unsigned-qa-root-stage-a-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-unsigned-qa-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 14
       - name: Enforce the independently replayed functional phase
         if: always()
         env:
           REPLAY_OUTCOME: ${{ steps.replay.outcome }}
+          ROOT_REPLAY_OUTCOME: ${{ steps.root_replay.outcome }}
+          ROOT_EXIT: ${{ steps.root_fixture.outputs.exit_code }}
           ARCH_OUTCOME: ${{ steps.architecture.outcome }}
           TSC_NODE_OUTCOME: ${{ steps.tsc_node.outcome }}
           TSC_WEB_OUTCOME: ${{ steps.tsc_web.outcome }}
@@ -484,6 +1192,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$REPLAY_OUTCOME" = success
+          test "$ROOT_REPLAY_OUTCOME" = success
+          test "$ROOT_EXIT" = 0
           test "$ARCH_OUTCOME" = success
           test "$TSC_NODE_OUTCOME" = success
           test "$TSC_WEB_OUTCOME" = success
