@@ -1,7 +1,22 @@
 import type { SaveMeeting, TranscriptLine } from '@shared/ipc'
 import type { ImportPersistenceState } from '@shared/import-jobs'
 import type { ImportRetentionState } from './import-retention-policy'
-import type { ImportAsrDecodeAdmission, ImportAsrLanguageProbe, ImportAsrTranscriber } from './import-asr-admission'
+
+export interface ImportAsrMemorySnapshot {
+  totalMemoryBytes: unknown
+  freeMemoryBytes: unknown
+}
+
+export type ImportAsrAttemptGuard = () => boolean
+export type ImportAsrTranscriber = (
+  samples: Float32Array,
+  opts?: { language?: string | null },
+  stillCurrent?: ImportAsrAttemptGuard
+) => Promise<string>
+export type ImportAsrLanguageProbe = (
+  samples: Float32Array,
+  stillCurrent?: ImportAsrAttemptGuard
+) => Promise<string | null>
 
 export interface ImportHoldInventory {
   jobIds: string[]
@@ -68,6 +83,12 @@ export interface ImportJob {
   createdAt: number
   updatedAt: number
 }
+
+export type ImportAsrDecodeAdmission = (
+  job: ImportJob,
+  memory: ImportAsrMemorySnapshot,
+  stillCurrent?: ImportAsrAttemptGuard
+) => void | Promise<void>
 
 export interface ImportJobStore {
   save(job: ImportJob, beforeReplace?: () => void): Promise<void>

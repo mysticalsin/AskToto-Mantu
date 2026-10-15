@@ -1,5 +1,13 @@
-import type { IncrementalJournalFileRecord, IncrementalJournalPageResult } from './incremental-meeting-journal-files'
-import type { IndexCore, ManifestCore } from './incremental-meeting-journal-format'
+import type { IndexCore, ManifestCore, RecordMetadata } from './incremental-meeting-journal-format'
+
+export interface IncrementalJournalFileRecord extends RecordMetadata {
+  revision: number
+  canonicalBytes: Uint8Array
+}
+
+export type IncrementalJournalPageResult =
+  | { status: 'ok'; nextRevision: number; durableRevision: number; complete: boolean }
+  | { status: 'stale-owner' | 'unavailable' }
 
 type ManifestRead = { status: 'ok'; core: ManifestCore; bytes: Buffer } | { status: 'missing' | 'unavailable' }
 type FileRead = { status: 'ok'; bytes: Buffer } | { status: 'missing' | 'unavailable' }

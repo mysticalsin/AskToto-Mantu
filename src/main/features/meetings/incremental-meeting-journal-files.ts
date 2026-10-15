@@ -10,7 +10,11 @@ import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journ
 import { consumeIncrementalRecordReceipt } from '../../infra/process/incremental-record-receipt'
 import { createApplicationMetadataStore } from './incremental-meeting-journal-application-metadata'
 import { createIncrementalJournalStateOperations } from './incremental-meeting-journal-state-operations'
-import { readIncrementalJournalPage } from './incremental-meeting-journal-page-reader'
+import {
+  readIncrementalJournalPage,
+  type IncrementalJournalFileRecord,
+  type IncrementalJournalPageResult
+} from './incremental-meeting-journal-page-reader'
 import {
   MAX_MANIFEST_BYTES,
   SHA256,
@@ -31,7 +35,7 @@ import {
   verifyIndex,
   verifyManifest
 } from './incremental-meeting-journal-format'
-import type { IndexCore, JournalState, ManifestCore, RecordMetadata } from './incremental-meeting-journal-format'
+import type { IndexCore, JournalState, ManifestCore } from './incremental-meeting-journal-format'
 import {
   type IncrementalAppendCommit,
   type IncrementalAppendCommitResult,
@@ -83,14 +87,10 @@ export interface IncrementalMeetingJournalFileStorage extends IncrementalMeeting
   dispose(): void
 }
 
-export interface IncrementalJournalFileRecord extends RecordMetadata {
-  revision: number
-  canonicalBytes: Uint8Array
-}
-
-export type IncrementalJournalPageResult =
-  | { status: 'ok'; nextRevision: number; durableRevision: number; complete: boolean }
-  | { status: 'stale-owner' | 'unavailable' }
+export type {
+  IncrementalJournalFileRecord,
+  IncrementalJournalPageResult
+} from './incremental-meeting-journal-page-reader'
 
 type BoundedManifestRead = { status: 'ok'; core: ManifestCore; bytes: Buffer } | { status: 'missing' | 'unavailable' }
 

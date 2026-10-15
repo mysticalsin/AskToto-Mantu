@@ -1,29 +1,17 @@
-import type { ImportJob } from './import-job-types'
+import type { ImportAsrAttemptGuard, ImportAsrMemorySnapshot } from './import-job-types'
+
+export type {
+  ImportAsrAttemptGuard,
+  ImportAsrDecodeAdmission,
+  ImportAsrLanguageProbe,
+  ImportAsrMemorySnapshot,
+  ImportAsrTranscriber
+} from './import-job-types'
 
 export interface ImportAsrAdmissionJob {
   jobId: string
 }
 
-export interface ImportAsrMemorySnapshot {
-  totalMemoryBytes: unknown
-  freeMemoryBytes: unknown
-}
-
-export type ImportAsrAttemptGuard = () => boolean
-export type ImportAsrTranscriber = (
-  samples: Float32Array,
-  opts?: { language?: string | null },
-  stillCurrent?: ImportAsrAttemptGuard
-) => Promise<string>
-export type ImportAsrLanguageProbe = (
-  samples: Float32Array,
-  stillCurrent?: ImportAsrAttemptGuard
-) => Promise<string | null>
-export type ImportAsrDecodeAdmission = (
-  job: ImportJob,
-  memory: ImportAsrMemorySnapshot,
-  stillCurrent?: ImportAsrAttemptGuard
-) => void | Promise<void>
 export interface ImportAsrAdmissionLease {
   settings: { asrEngine: string; asrLanguage: string }
   assertCurrent(): void
