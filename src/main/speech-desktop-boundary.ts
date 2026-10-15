@@ -2,11 +2,7 @@ import { app } from 'electron'
 import { join } from 'node:path'
 import { readSettingsAtAuthorityBoundary } from './store'
 import { getDurableMachineId } from './license'
-import {
-  observeSettingsSnapshot,
-  getSettingsObservationEpoch,
-  getPublishedSettingsObservation
-} from './settings-observation'
+import { observeSettingsSnapshot, getSettingsObservationEpoch } from './settings-observation'
 import {
   configureSpeechAuthLeaseReaders,
   resetSpeechAuthLeaseReaders,
@@ -35,8 +31,13 @@ export function speechDesktopBoundaryOptions() {
   let pathsRevision = actualPathsRevision()
   configureSpeechAuthLeaseReaders({
     readSettingsAtBoundary: async () => {
-      await readSettingsAtAuthorityBoundary()
-      return getPublishedSettingsObservation()
+      const snapshot = await readSettingsAtAuthorityBoundary()
+      return {
+        settings: snapshot.settings,
+        readable: snapshot.readable,
+        epoch: snapshot.epoch,
+        authoritySnapshot: snapshot
+      }
     },
     readSettingsEpoch: getSettingsObservationEpoch,
     readPolicyPathsRevision: () => pathsRevision,

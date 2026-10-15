@@ -16,6 +16,7 @@ function controllerFixture() {
     readSession: () => session,
     readSessionEpoch: () => sessionEpoch,
     readProfilePath: () => profilePath,
+    isPersistenceSettingsReceiptCurrent: () => true,
     readBoundary: async () => null,
     validateSession: () => undefined,
     sessionIsValid: (value, config, now) => expiryReasonAt(value, config, now) === null
@@ -36,10 +37,8 @@ function controllerFixture() {
 
 const authorizedInput = {
   config: { clientId: 'fixture-client', tenantId: 'tenant-a', allowedDomain: 'example.test' },
-  configured: true,
   enforced: true,
-  sticky: false,
-  authorized: true
+  sticky: false
 }
 
 describe('main persistence auth boundary', () => {
@@ -82,10 +81,8 @@ describe('main persistence auth boundary', () => {
     local.session = null
     const boundary = local.controller.captureMainPersistenceSessionBoundary({
       config: null,
-      configured: false,
       enforced: false,
-      sticky: false,
-      authorized: true
+      sticky: false
     })
     expect(boundary.configured).toBe(false)
     expect(boundary.principalAssociation).toBeNull()
@@ -93,11 +90,54 @@ describe('main persistence auth boundary', () => {
 
     const required = local.controller.captureMainPersistenceSessionBoundary({
       config: null,
-      configured: false,
       enforced: true,
-      sticky: false,
-      authorized: false
+      sticky: false
     })
     expect(required.isCurrent()).toBe(false)
+  })
+
+  it('does not mint cached authority from a caller supplied config or receipt', async () => {
+    const fixture = controllerFixture()
+    expect(await fixture.controller.refreshMainPersistenceSessionObservation()).toBeNull()
+    expect(fixture.controller.capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+  })
+
+  it('refuses preparation without the concrete verified boundary reader', async () => {
+    const fixture = controllerFixture()
+    expect(fixture.controller.capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    expect(await fixture.controller.refreshMainPersistenceSessionObservation()).toBeNull()
+  })
+
+  it('latches an in-place captured session value change at every original-fence call', async () => {
+    for (const field of ['email', 'domain', 'tid', 'at'] as const) {
+      const session: AuthSession = {
+        email: 'owner@example.test',
+        domain: 'example.test',
+        tid: 'tenant-a',
+        at: Date.now()
+      }
+      const original = session[field]
+      const replacement = field === 'at' ? Number(original) + 1 : `changed-${field}`
+      const fenceResults: boolean[] = []
+      const controller = new SpeechAuthLeaseController({
+        prepareSession: () => undefined,
+        readSession: () => session,
+        readSessionEpoch: () => 1,
+        readProfilePath: () => '/private/profile-a',
+        readBoundary: async () => null,
+        readMainPersistenceBoundary: async (isOriginalFenceCurrent) => {
+          Object.assign(session, { [field]: replacement })
+          fenceResults.push(isOriginalFenceCurrent())
+          Object.assign(session, { [field]: original })
+          fenceResults.push(isOriginalFenceCurrent())
+          return null
+        },
+        validateSession: () => undefined,
+        sessionIsValid: (value, config, now) => expiryReasonAt(value, config, now) === null
+      })
+      expect(await controller.refreshMainPersistenceSessionObservation()).toBeNull()
+      expect(fenceResults).toEqual([false, false])
+      expect(controller.capturePublishedMainPersistenceSessionBoundary()).toBeNull()
+    }
   })
 })

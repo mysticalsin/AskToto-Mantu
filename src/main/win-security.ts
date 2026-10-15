@@ -19,7 +19,7 @@
 import { execFileSync } from 'node:child_process'
 import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
 import { constants as fsConstants, lstat, open, type FileHandle } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { execFileNoShell } from './infra/process/exec-file'
 // Via logger.ts, never `electron-log` directly — see the note on the same import in updater.ts.
 import { mainLog as log } from './logger'
@@ -439,6 +439,180 @@ export type ManagedPolicyAuthorityRead =
   | { status: 'invalid' }
   | { status: 'present'; bytes: Uint8Array }
 
+type AuthorityStat = Readonly<{
+  kind: 'file' | 'directory'
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+  birthtimeMs: number
+  uid: number
+  gid: number
+  mode: number
+}>
+type AuthorityPathPinRecord = Readonly<{
+  path: string
+  target: AuthorityStat | null
+  ancestors: readonly Readonly<{ path: string; stat: AuthorityStat }>[]
+  missingBase: string
+  missing: readonly string[]
+}>
+declare const authoritySourcePinBrand: unique symbol
+export type AuthoritySourcePin = Readonly<{ [authoritySourcePinBrand]: true }>
+const authoritySourcePins = new WeakMap<object, AuthorityPathPinRecord>()
+const managedReadPins = new WeakMap<object, Readonly<{ pin: AuthoritySourcePin; requireAdminTrust: boolean }>>()
+
+function authorityStat(stats: Stats): AuthorityStat | null {
+  if (stats.isSymbolicLink()) return null
+  if (!stats.isFile() && !stats.isDirectory()) return null
+  return Object.freeze({
+    kind: stats.isFile() ? 'file' : 'directory',
+    dev: stats.dev,
+    ino: stats.ino,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+    birthtimeMs: stats.birthtimeMs,
+    uid: stats.uid,
+    gid: stats.gid,
+    mode: stats.mode
+  })
+}
+
+function sameAuthorityStat(left: AuthorityStat | null, right: AuthorityStat | null): boolean {
+  return (
+    !!left &&
+    !!right &&
+    left.kind === right.kind &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.birthtimeMs === right.birthtimeMs &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.mode === right.mode
+  )
+}
+
+function sameAuthorityPathPinRecord(left: AuthorityPathPinRecord, right: AuthorityPathPinRecord): boolean {
+  return (
+    left.path === right.path &&
+    ((left.target === null && right.target === null) || sameAuthorityStat(left.target, right.target)) &&
+    left.missingBase === right.missingBase &&
+    JSON.stringify(left.missing) === JSON.stringify(right.missing) &&
+    left.ancestors.length === right.ancestors.length &&
+    left.ancestors.every((ancestor, index) => {
+      const other = right.ancestors[index]
+      return !!other && ancestor.path === other.path && sameAuthorityStat(ancestor.stat, other.stat)
+    })
+  )
+}
+
+export function sameAuthoritySourcePinIdentity(left: AuthoritySourcePin, right: AuthoritySourcePin): boolean {
+  const leftRecord = authoritySourcePins.get(left as object)
+  const rightRecord = authoritySourcePins.get(right as object)
+  return !!leftRecord && !!rightRecord && sameAuthorityPathPinRecord(leftRecord, rightRecord)
+}
+
+/** Capture a private, non-payload pin for a regular file or a verified missing path. */
+export async function captureAuthoritySourcePin(path: string): Promise<AuthoritySourcePin | null> {
+  if (!path || typeof path !== 'string') return null
+  const absolute = resolve(path)
+  const parsed = parse(absolute)
+  const root = parsed.root
+  // Device namespace paths have different parsing and trust semantics (for example \\?\C:\).
+  if (!root || !isAbsolute(absolute) || root.startsWith('\\\\?\\') || root.startsWith('\\\\.\\')) return null
+  const parts = relative(root, absolute).split(sep).filter(Boolean)
+  if (parts.length > 64) return null
+  let current = root
+  let missingBase = root
+  const ancestors: Array<{ path: string; stat: AuthorityStat }> = []
+  let target: AuthorityStat | null = null
+  const missing: string[] = []
+  try {
+    const rootSnapshot = authorityStat(await lstat(root))
+    if (!rootSnapshot || rootSnapshot.kind !== 'directory') return null
+    ancestors.push(Object.freeze({ path: root, stat: rootSnapshot }))
+    for (let i = 0; i < parts.length; i += 1) {
+      const parent = current
+      current = join(current, parts[i])
+      let stats: Stats
+      try {
+        stats = await lstat(current)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+        // Revalidation must inspect the first missing component from its existing parent.
+        // Saving `current` here would append that same component a second time later.
+        missingBase = parent
+        missing.push(...parts.slice(i))
+        break
+      }
+      const snapshot = authorityStat(stats)
+      if (!snapshot) return null
+      if (i === parts.length - 1) {
+        if (snapshot.kind !== 'file') return null
+        target = snapshot
+      } else {
+        if (snapshot.kind !== 'directory') return null
+        ancestors.push(Object.freeze({ path: current, stat: snapshot }))
+      }
+    }
+    const pin = Object.freeze(Object.create(null)) as AuthoritySourcePin
+    authoritySourcePins.set(
+      pin as object,
+      Object.freeze({
+        path: absolute,
+        target,
+        ancestors: Object.freeze(ancestors),
+        missingBase,
+        missing: Object.freeze(missing)
+      })
+    )
+    return pin
+  } catch {
+    return null
+  }
+}
+
+/** Revalidate only the original namespace witness. A mismatch permanently retires that pin. */
+export async function assertAuthoritySourcePinCurrent(pin: AuthoritySourcePin): Promise<void> {
+  const record = authoritySourcePins.get(pin as object)
+  if (!record) throw new Error('Unknown authority source pin')
+  try {
+    for (const ancestor of record.ancestors) {
+      const current = authorityStat(await lstat(ancestor.path))
+      if (!sameAuthorityStat(ancestor.stat, current)) throw new Error('Authority parent changed')
+    }
+    if (record.target) {
+      const current = authorityStat(await lstat(record.path))
+      if (!sameAuthorityStat(record.target, current)) throw new Error('Authority source changed')
+    } else {
+      let current = record.missingBase
+      for (const component of record.missing) {
+        current = join(current, component)
+        try {
+          await lstat(current)
+          throw new Error('Previously absent authority source appeared')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+      }
+    }
+  } catch (error) {
+    authoritySourcePins.delete(pin as object)
+    throw error
+  }
+}
+
+/** Report whether this exact private pin proved a missing path at capture time. */
+export function isAuthoritySourcePinAbsent(pin: AuthoritySourcePin): boolean {
+  const record = authoritySourcePins.get(pin as object)
+  return !!record && record.target === null && record.missing.length > 0
+}
+
 /** Read bounded regular-file bytes from one verified descriptor; optionally require machine ACL trust. */
 export async function readManagedPolicyAuthorityFile(
   path: string,
@@ -458,7 +632,12 @@ export async function readManagedPolicyAuthorityFile(
   try {
     beforeOpen = await lstat(path)
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { status: 'absent' } : { status: 'invalid' }
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { status: 'invalid' }
+    const pin = await captureAuthoritySourcePin(path)
+    if (!pin || !isAuthoritySourcePinAbsent(pin)) return { status: 'invalid' }
+    const absent = Object.freeze({ status: 'absent' as const })
+    managedReadPins.set(absent, Object.freeze({ pin, requireAdminTrust }))
+    return absent
   }
   if (
     beforeOpen.isSymbolicLink() ||
@@ -468,6 +647,11 @@ export async function readManagedPolicyAuthorityFile(
     beforeOpen.size > maxBytes
   )
     return { status: 'invalid' }
+
+  const sourcePin = await captureAuthoritySourcePin(path)
+  const pinnedSource = sourcePin && authoritySourcePins.get(sourcePin as object)
+  const pinStat = pinnedSource?.target
+  if (!sourcePin || !pinStat || !sameAuthorityStat(pinStat, authorityStat(beforeOpen))) return { status: 'invalid' }
 
   let handle: FileHandle
   try {
@@ -481,6 +665,8 @@ export async function readManagedPolicyAuthorityFile(
     return { status: 'invalid' }
   }
 
+  let verifiedRead: Extract<ManagedPolicyAuthorityRead, { status: 'present' }> | null = null
+  let closeFailed = false
   try {
     const opened = await handle.stat()
     const pathAtOpen = await lstat(path)
@@ -521,16 +707,43 @@ export async function readManagedPolicyAuthorityFile(
     )
       return { status: 'invalid' }
 
-    return { status: 'present', bytes: Buffer.from(buffer.subarray(0, total)) }
+    await assertAuthoritySourcePinCurrent(sourcePin)
+    verifiedRead = Object.freeze({ status: 'present' as const, bytes: Buffer.from(buffer.subarray(0, total)) })
   } catch {
     return { status: 'invalid' }
   } finally {
     try {
       await handle.close()
     } catch {
-      // A close failure cannot make an otherwise untrusted read safe to return.
+      closeFailed = true
     }
   }
+  if (!verifiedRead || closeFailed) return { status: 'invalid' }
+  managedReadPins.set(verifiedRead, Object.freeze({ pin: sourcePin, requireAdminTrust }))
+  return verifiedRead
+}
+
+/** Revalidate the original checked source attached to this exact successful managed read object. */
+export async function assertManagedPolicyAuthorityReadCurrent(read: ManagedPolicyAuthorityRead): Promise<void> {
+  const retained = managedReadPins.get(read as object)
+  if (!retained) throw new Error('Unknown managed authority read')
+  const record = authoritySourcePins.get(retained.pin as object)
+  if (!record) throw new Error('Managed authority source pin retired')
+  await assertAuthoritySourcePinCurrent(retained.pin)
+  if (retained.requireAdminTrust && process.platform === 'win32' && record.target) {
+    const acl = readAcl(record.path)
+    if (acl === null || !evaluateAclTrust(acl)) throw new Error('Managed admin source trust changed')
+    await assertAuthoritySourcePinCurrent(retained.pin)
+  }
+}
+
+export function sameManagedPolicyAuthorityReadSource(
+  left: ManagedPolicyAuthorityRead,
+  right: ManagedPolicyAuthorityRead
+): boolean {
+  const leftPin = managedReadPins.get(left as object)?.pin
+  const rightPin = managedReadPins.get(right as object)?.pin
+  return !!leftPin && !!rightPin && sameAuthoritySourcePinIdentity(leftPin, rightPin)
 }
 
 /** Read exact bytes from one regular, non-symlink admin-policy file, failing closed on any race. */

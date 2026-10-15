@@ -282,6 +282,7 @@ export class FreshLeanSpeechAuthority {
     readable: () => boolean
     epoch: () => number
     withReadFrame: <T>(read: () => T) => T
+    onSnapshot?: (snapshot: SettingsPolicyAuthoritySnapshot) => void
   }): Promise<SettingsPolicyAuthoritySnapshot> {
     const result = this.authorityQueue.then(async () => {
       const reads = await options.readFiles()
@@ -291,13 +292,15 @@ export class FreshLeanSpeechAuthority {
         try {
           const settings = options.readSettings()
           const policy = options.readPolicy()
-          return {
+          const snapshot: SettingsPolicyAuthoritySnapshot = {
             settings,
             readable: options.readable(),
             epoch: options.epoch(),
             ...policy,
             history: getSettingsAuthorityHistory()
           }
+          options.onSnapshot?.(snapshot)
+          return snapshot
         } finally {
           options.setReads(null, null)
         }

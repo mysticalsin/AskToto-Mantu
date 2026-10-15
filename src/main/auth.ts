@@ -30,7 +30,7 @@ import {
   type AuthSession,
   type SignInBackoffState
 } from './auth-session-policy'
-import { readSpeechAuthBoundary as readVerifiedSpeechAuthBoundary } from './auth-speech-boundary'
+import { createMainAuthBoundaryReader, createSpeechAuthBoundaryReader } from './auth-boundary-adapters'
 import {
   SpeechAuthLeaseController,
   type SpeechAuthLease,
@@ -38,6 +38,7 @@ import {
   type SpeechAuthSettingsObservation,
   type MainPersistenceSessionBoundary
 } from './auth-speech-lease'
+import * as authPersistenceObservation from './auth-persistence-observation'
 
 export { tenantMatches } from './auth-session-policy'
 export type { MainPersistenceSessionBoundary, SpeechAuthLease, SpeechAuthLeaseReaders, SpeechAuthSettingsObservation }
@@ -619,6 +620,10 @@ export function authStatus(): AuthStatus {
   }
   // Bootstrap the background re-validation sweep on first status check (idempotent).
   ensureRevalidationTimer()
+  const enforced = authEnforced(),
+    sticky = isStickyConfigured()
+  authPersistenceObservation.retireAuthStatusPersistenceObservation(speechAuthLeaseController, cfg, enforced, sticky)
+  void refreshMainPersistenceSessionObservation().catch(() => null)
   return {
     configured: !!cfg,
     signedIn: !!session,
@@ -628,7 +633,7 @@ export function authStatus(): AuthStatus {
     // Lets the renderer gate the SignInWall even when `configured` is false (e.g. sticky-configured
     // survives a cleared Settings azure block) — mirrors requireAuth()'s own enforcement check exactly,
     // so the wall and the IPC gate can never disagree about whether sign-in is required.
-    enforced: authEnforced() || isStickyConfigured()
+    enforced: enforced || sticky
   }
 }
 
@@ -677,37 +682,28 @@ export function isAdminManagedEnforced(): boolean {
 /** Main-process trust gate; sticky configuration survives Settings edits and clears only on sign-out. */
 export function requireAuth(): boolean {
   const s = authStatus()
-  if (authEnforced()) return s.signedIn
-  if (isStickyConfigured()) return s.signedIn
-  return !s.configured || s.signedIn
+  return authEnforced() ? s.signedIn : isStickyConfigured() ? s.signedIn : !s.configured || s.signedIn
 }
 export const captureAuthSessionBoundary = () => speechAuthLeaseController.captureSessionBoundary(requireAuth)
 export const capturePersistencePrincipalAssociation = () => speechAuthLeaseController.capturePersistencePrincipal()
-export const captureMainPersistenceSessionBoundary = (): MainPersistenceSessionBoundary => {
-  const status = authStatus(),
-    config = readConfig(),
-    sticky = isStickyConfigured()
-  return speechAuthLeaseController.captureMainPersistenceSessionBoundary({
-    config,
-    configured: !!config,
-    enforced: status.enforced === true,
-    sticky,
-    authorized: status.enforced === true ? status.signedIn : !status.configured || status.signedIn
-  })
-}
+export const captureMainPersistenceSessionBoundary = (): MainPersistenceSessionBoundary =>
+  authPersistenceObservation.captureExplicitMainPersistenceSessionBoundary(
+    speechAuthLeaseController,
+    authStatus(),
+    readConfig(),
+    isStickyConfigured()
+  )
+export const capturePublishedMainPersistenceSessionBoundary = (): MainPersistenceSessionBoundary | null =>
+  authPersistenceObservation.capturePublishedMainPersistenceSessionBoundary(speechAuthLeaseController)
 speechAuthLeaseController = new SpeechAuthLeaseController({
   prepareSession: loadSession,
   readSession: () => session,
   readSessionEpoch: () => speechAuthSessionEpoch,
   readProfilePath: () => app.getPath('userData'),
-  readBoundary: (readers) =>
-    readVerifiedSpeechAuthBoundary(readers, {
-      readProfilePath: () => app.getPath('userData'),
-      readAdminPath: adminManagedConfigPath,
-      readSession: () => session,
-      resolveConfig: resolveLeaseConfig,
-      isEnforced: leaseEnforced
-    }),
+  isPersistenceSettingsReceiptCurrent: authPersistenceObservation.isPersistenceSettingsReceiptCurrent,
+  isAuthEnvironmentSnapshotCurrent: authPersistenceObservation.isAuthEnvironmentSnapshotCurrent,
+  readBoundary: createSpeechAuthBoundaryReader(() => session),
+  readMainPersistenceBoundary: createMainAuthBoundaryReader(() => session),
   validateSession: (config) => {
     if (session && expiryReasonAt(session, config, Date.now()) !== null) {
       clearSession()
@@ -719,6 +715,10 @@ speechAuthLeaseController = new SpeechAuthLeaseController({
 
 export function refreshSpeechAuthLease(): Promise<SpeechAuthLease | null> {
   return speechAuthLeaseController.refresh()
+}
+
+export function refreshMainPersistenceSessionObservation(): Promise<MainPersistenceSessionBoundary | null> {
+  return speechAuthLeaseController.refreshMainPersistenceSessionObservation()
 }
 
 export function isSpeechAuthLeaseCurrent(lease: SpeechAuthLease | null): boolean {

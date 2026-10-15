@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -10,7 +20,13 @@ const probes = vi.hoisted(() => ({ count: 0 }))
 const managedBytesRace = vi.hoisted(() => ({
   afterOpen: null as ((path: string) => void) | null,
   beforeRead: null as ((path: string) => void) | null,
-  aclOutput: null as string | null
+  aclOutput: null as string | null,
+  failClose: false
+}))
+const authorityPinRace = vi.hoisted(() => ({
+  stableParentPath: null as string | null,
+  stableParentSnapshot: null as unknown,
+  stableParentReads: 0
 }))
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
@@ -37,6 +53,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      const stats = await actual.lstat(...args)
+      if (authorityPinRace.stableParentPath === String(args[0])) {
+        authorityPinRace.stableParentReads += 1
+        authorityPinRace.stableParentSnapshot ??= stats
+        return authorityPinRace.stableParentSnapshot as typeof stats
+      }
+      return stats
+    },
     open: async (...args: Parameters<typeof actual.open>) => {
       const [filePath] = args
       const handle = await actual.open(...args)
@@ -50,6 +75,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
               managedBytesRace.beforeRead = null
               beforeRead?.(String(filePath))
               return read(...readArgs)
+            }
+          if (property === 'close')
+            return async () => {
+              await handle.close()
+              if (managedBytesRace.failClose) throw new Error('injected close failure')
             }
           const value = Reflect.get(target, property, target)
           return typeof value === 'function' ? value.bind(target) : value
@@ -66,6 +96,9 @@ import {
   isAdminManagedTrusted,
   readAclForTest,
   readManagedPolicyAuthorityFile,
+  assertManagedPolicyAuthorityReadCurrent,
+  captureAuthoritySourcePin,
+  assertAuthoritySourcePinCurrent,
   readTrustedAdminManaged,
   readTrustedAdminManagedBytes,
   preparePrivateCurrentUserAcl,
@@ -86,6 +119,9 @@ afterEach(() => {
   managedBytesRace.afterOpen = null
   managedBytesRace.beforeRead = null
   managedBytesRace.aclOutput = null
+  authorityPinRace.stableParentPath = null
+  authorityPinRace.stableParentSnapshot = null
+  authorityPinRace.stableParentReads = 0
 })
 
 // The ACL verdict memo is a module singleton; clear it before every test so the probe-count assertions
@@ -274,6 +310,76 @@ describe('evaluateAclTrust — the Windows managed-config trust decision', () =>
         ]
       })
     ).toBe(true)
+  })
+})
+
+describe('managed authority source membership and pins', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'managed-authority-pin-'))
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('revalidates the exact verified read and rejects clones and detected A to B to A replacement', async () => {
+    const path = join(root, 'managed-config.json')
+    writeFileSync(path, '{"requireAuth":true}')
+    const read = await readManagedPolicyAuthorityFile(path)
+    expect(read.status).toBe('present')
+    await expect(assertManagedPolicyAuthorityReadCurrent(read)).resolves.toBeUndefined()
+    await expect(assertManagedPolicyAuthorityReadCurrent({ ...read })).rejects.toThrow()
+    renameSync(path, `${path}.original`)
+    writeFileSync(path, '{"requireAuth":false}')
+    rmSync(path)
+    renameSync(`${path}.original`, path)
+    await expect(assertManagedPolicyAuthorityReadCurrent(read)).rejects.toThrow()
+  })
+
+  it('keeps a verified absence tied to its original namespace witness', async () => {
+    const path = join(root, 'missing-policy.json')
+    const pin = await captureAuthoritySourcePin(path)
+    expect(pin).not.toBeNull()
+    if (!pin) throw new Error('Expected a verified absence pin')
+    writeFileSync(path, '{}')
+    rmSync(path)
+    await expect(assertAuthoritySourcePinCurrent(pin)).rejects.toThrow()
+  })
+
+  it('detects absent to present while the captured ancestor stat stays unchanged', async () => {
+    const path = join(root, 'appeared-policy.json')
+    authorityPinRace.stableParentPath = root
+    const pin = await captureAuthoritySourcePin(path)
+    expect(pin).not.toBeNull()
+    if (!pin) throw new Error('Expected a verified absence pin')
+    writeFileSync(path, '{}')
+    await expect(assertAuthoritySourcePinCurrent(pin)).rejects.toThrow('Previously absent authority source appeared')
+    expect(authorityPinRace.stableParentReads).toBeGreaterThan(1)
+  })
+
+  it('refuses a managed authority read when descriptor close fails', async () => {
+    const path = join(root, 'close-failure.json')
+    writeFileSync(path, '{}')
+    managedBytesRace.failClose = true
+    try {
+      expect(await readManagedPolicyAuthorityFile(path)).toEqual({ status: 'invalid' })
+    } finally {
+      managedBytesRace.failClose = false
+    }
+  })
+
+  it('pins a normal Windows drive-rooted source on the real Windows lane', async () => {
+    if (process.platform !== 'win32') return
+    const path = join(root, 'drive-rooted-policy.json')
+    writeFileSync(path, '{}')
+    const first = await readManagedPolicyAuthorityFile(path)
+    expect(first.status).toBe('present')
+    await expect(assertManagedPolicyAuthorityReadCurrent(first)).resolves.toBeUndefined()
+    const absent = await readManagedPolicyAuthorityFile(join(root, 'absent-policy.json'))
+    expect(absent.status).toBe('absent')
+    renameSync(path, `${path}.old`)
+    writeFileSync(path, '{}')
+    rmSync(path)
+    renameSync(`${path}.old`, path)
+    await expect(assertManagedPolicyAuthorityReadCurrent(first)).rejects.toThrow()
   })
 })
 
