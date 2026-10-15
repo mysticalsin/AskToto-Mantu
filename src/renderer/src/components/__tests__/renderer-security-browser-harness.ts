@@ -35,14 +35,26 @@ const MIME: Record<string, string> = {
 
 type BrowserOptions = { width?: number; height?: number }
 type BrowserPayload = { markdown?: string; caseId?: string }
+type OriginCandidate = {
+  importer: string
+  kind: 'static' | 'dynamic'
+  target: string
+  assetKind: 'asset' | 'runtime' | 'other'
+  chunk: string | null
+  renderedLength: number
+  renderedExports: string[]
+}
 type Origins = {
   katexDirect: string
   katexFromMermaid: string
   mermaidCore: string
   katexVersion: string
   browserVersion: string
-  directEdge: { importer: string; target: string; chunk: string }
-  mermaidEdge: { importer: string; target: string; chunk: string }
+  directImporterPresent: boolean
+  directCandidates: OriginCandidate[]
+  mermaidCandidates: OriginCandidate[]
+  directEdge: OriginCandidate | null
+  mermaidEdge: OriginCandidate | null
   shikiChunks: string[]
 }
 type Diagnostics = {
@@ -126,6 +138,17 @@ async function renderMermaid(source, config = {}) {
   result.bindFunctions?.(container)
   return result.svg
 }
+const cspProbe = {
+  started: false,
+  completed: false,
+  evalErrorName: '',
+  evalSentinel: false,
+  inlineSentinel: false,
+  frameAdded: false,
+  objectAdded: false,
+  connectErrorName: '',
+  returnedErrors: []
+}
 window.__rendererSecurity = {
   renderMarkdown,
   updateMarkdown: renderMarkdown,
@@ -137,6 +160,47 @@ window.__rendererSecurity = {
   unmount: () => flushSync(() => root.unmount()),
   events
 }
+const cspProbeButton = document.createElement('button')
+cspProbeButton.type = 'button'
+cspProbeButton.textContent = 'Run CSP probes'
+cspProbeButton.addEventListener('click', async () => {
+  if (cspProbe.started) return
+  cspProbe.started = true
+  try {
+    try {
+      new Function('window.__cspEvalRan=true')()
+    } catch (error) {
+      cspProbe.evalErrorName = error?.name || 'Error'
+    }
+    cspProbe.evalSentinel = Boolean(window.__cspEvalRan)
+    const script = document.createElement('script')
+    script.textContent = 'window.__cspInlineRan=true'
+    document.body.append(script)
+    cspProbe.inlineSentinel = Boolean(window.__cspInlineRan)
+    const frame = document.createElement('iframe')
+    frame.src = 'https://frame.invalid/'
+    document.body.append(frame)
+    cspProbe.frameAdded = frame.isConnected
+    const object = document.createElement('object')
+    object.data = 'https://object.invalid/'
+    document.body.append(object)
+    cspProbe.objectAdded = object.isConnected
+    await fetch('https://connect.invalid/probe').catch((error) => {
+      cspProbe.connectErrorName = error?.name || 'Error'
+    })
+  } catch (error) {
+    cspProbe.returnedErrors.push(String(error?.name || 'Error'))
+  } finally {
+    cspProbe.completed = true
+  }
+})
+document.body.append(cspProbeButton)
+window.__rendererSecurityCspProbe = () => ({
+  ...cspProbe,
+  returnedErrors: [...cspProbe.returnedErrors],
+  evalSentinel: Boolean(window.__cspEvalRan),
+  inlineSentinel: Boolean(window.__cspInlineRan)
+})
 renderMarkdown(window.__rendererSecurityConfig?.markdown || '')
 `
 }
@@ -147,22 +211,58 @@ function originPlugin(): Plugin {
     generateBundle(_options, bundle) {
       const chunks = Object.values(bundle).filter((item): item is Rollup.OutputChunk => item.type === 'chunk')
       const ids = chunks.flatMap((item) => Object.keys(item.modules))
-      const emitted = new Map<string, string>()
-      for (const chunk of chunks) for (const id of Object.keys(chunk.modules)) emitted.set(id, chunk.fileName)
+      const emitted = new Map<string, { chunk: string; renderedLength: number; renderedExports: string[] }>()
+      for (const chunk of chunks) {
+        for (const [id, module] of Object.entries(chunk.modules))
+          emitted.set(id, {
+            chunk: chunk.fileName,
+            renderedLength: module.renderedLength,
+            renderedExports: [...module.renderedExports].sort()
+          })
+      }
       const directInfo = this.getModuleInfo(HARNESS_ID)
-      const directTargets = [...(directInfo?.importedIds || []), ...(directInfo?.dynamicallyImportedIds || [])].filter(
-        (id) => /(?:^|\/)katex(?:\/|$)/u.test(id.replaceAll('\\', '/')) && emitted.has(id)
-      )
-      const mermaidCandidates = ids.filter((id) =>
+      const isKatexId = (id: string) => /(?:^|\/)katex(?:\/|$)/u.test(id.replaceAll('\\', '/'))
+      const candidate = (importer: string, kind: 'static' | 'dynamic', target: string): OriginCandidate => {
+        const emittedModule = emitted.get(target)
+        const normalizedTarget = target.replaceAll('\\', '/')
+        const asset = /\.(?:css|scss|sass|less|wasm|svg|woff2?)(?:$|[?#])/iu.test(normalizedTarget)
+        const javascript = /\.(?:m?js)(?:$|[?#])/iu.test(normalizedTarget)
+        const renderedLength = emittedModule?.renderedLength || 0
+        const assetKind: OriginCandidate['assetKind'] = asset
+          ? 'asset'
+          : javascript &&
+              renderedLength > 0 &&
+              emittedModule?.renderedExports.includes('renderToString') &&
+              emittedModule.renderedExports.includes('version')
+            ? 'runtime'
+            : 'other'
+        return {
+          importer,
+          kind,
+          target,
+          assetKind,
+          chunk: emittedModule?.chunk || null,
+          renderedLength,
+          renderedExports: emittedModule?.renderedExports || []
+        }
+      }
+      const packageEdges = (
+        importer: string,
+        info: { importedIds: readonly string[]; dynamicallyImportedIds: readonly string[] } | null
+      ) => {
+        if (!info) return []
+        return [
+          ...info.importedIds.map((target) => candidate(importer, 'static', target)),
+          ...info.dynamicallyImportedIds.map((target) => candidate(importer, 'dynamic', target))
+        ].filter((entry) => isKatexId(entry.target))
+      }
+      const directCandidates = packageEdges(HARNESS_ID, directInfo)
+      const mermaidImporters = ids.filter((id) =>
         /\/mermaid\/dist\/chunks\/mermaid\.core\//u.test(id.replaceAll('\\', '/'))
       )
-      const mermaidEdges = mermaidCandidates.flatMap((importer) => {
-        const info = this.getModuleInfo(importer)
-        return [...(info?.importedIds || []), ...(info?.dynamicallyImportedIds || [])]
-          .filter((id) => /(?:^|\/)katex(?:\/|$)/u.test(id.replaceAll('\\', '/')) && emitted.has(id))
-          .map((target) => ({ importer, target, chunk: emitted.get(target)! }))
-      })
-      const directEdges = directTargets.map((target) => ({ importer: HARNESS_ID, target, chunk: emitted.get(target)! }))
+      const mermaidCandidates = mermaidImporters.flatMap((importer) =>
+        packageEdges(importer, this.getModuleInfo(importer))
+      )
       const core = ids.find((id) =>
         /\/node_modules\/mermaid\/dist\/mermaid\.core\.mjs$/u.test(id.replaceAll('\\', '/'))
       )
@@ -170,17 +270,20 @@ function originPlugin(): Plugin {
         ...new Set(
           ids
             .filter((id) => /(?:\/shiki\/|\/oniguruma|\/onig\/|\.wasm$)/iu.test(id.replaceAll('\\', '/')))
-            .map((id) => emitted.get(id)!)
-            .filter(Boolean)
+            .map((id) => emitted.get(id)?.chunk)
+            .filter((chunk): chunk is string => typeof chunk === 'string' && chunk.length > 0)
         )
       ].sort()
+      if (!shikiChunks.length || shikiChunks.some((chunk) => typeof chunk !== 'string' || chunk.length === 0))
+        throw new Error('renderer-harness:shiki-chunk-map')
       this.emitFile({
         type: 'asset',
         fileName: 'renderer-module-origins.json',
         source: JSON.stringify(
           {
-            directEdges,
-            mermaidEdges,
+            directImporterPresent: Boolean(directInfo),
+            directCandidates,
+            mermaidCandidates,
             mermaidCore: core || null,
             shikiChunks
           },
@@ -241,6 +344,17 @@ function serve(
       response.end(JSON.stringify(origins))
       return
     }
+    if (url.pathname === '/owned-local-image.svg') {
+      const image =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#1260a8"/></svg>'
+      response.writeHead(200, {
+        'content-type': 'image/svg+xml; charset=utf-8',
+        'content-length': Buffer.byteLength(image),
+        'cache-control': 'no-store'
+      })
+      response.end(image)
+      return
+    }
     const normalized = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\]|\.\.(?:[/\\]|$))+/gu, '')
     const file = resolve(root, normalized)
     if (!file.startsWith(`${root}${sep}`) || !existsSync(file)) {
@@ -299,20 +413,36 @@ export async function startRendererSecurityHarness(): Promise<Harness> {
       throw new Error('renderer-harness:external-entry-missing')
     const manifestPath = join(output, 'renderer-module-origins.json')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-      directEdges: Array<{ importer: string; target: string; chunk: string }>
-      mermaidEdges: Array<{ importer: string; target: string; chunk: string }>
+      directImporterPresent: boolean
+      directCandidates: OriginCandidate[]
+      mermaidCandidates: OriginCandidate[]
       mermaidCore: string | null
       shikiChunks: string[]
     }
-    const direct = manifest.directEdges
-    const dynamic = manifest.mermaidEdges
+    if (
+      !Array.isArray(manifest.shikiChunks) ||
+      manifest.shikiChunks.length === 0 ||
+      manifest.shikiChunks.some((chunk) => typeof chunk !== 'string' || chunk.length === 0)
+    )
+      throw new Error('renderer-harness:shiki-chunk-map-schema')
+    const directRuntimes = manifest.directCandidates.filter(
+      (entry) => entry.assetKind === 'runtime' && entry.chunk !== null
+    )
+    const mermaidRuntimes = manifest.mermaidCandidates.filter(
+      (entry) => entry.assetKind === 'runtime' && entry.chunk !== null
+    )
+    const direct = directRuntimes.length === 1 ? directRuntimes[0] : null
+    const dynamic = mermaidRuntimes.length === 1 ? mermaidRuntimes[0] : null
     const pkg = JSON.parse(readFileSync(join(ROOT, 'node_modules/katex/package.json'), 'utf8')) as { version: string }
     const origins: Origins = {
-      katexDirect: direct.length === 1 ? direct[0].target : '',
-      katexFromMermaid: dynamic.length === 1 ? dynamic[0].target : '',
+      katexDirect: direct?.target || '',
+      katexFromMermaid: dynamic?.target || '',
       mermaidCore: manifest.mermaidCore || '',
-      directEdge: direct.length === 1 ? direct[0] : { importer: '', target: '', chunk: '' },
-      mermaidEdge: dynamic.length === 1 ? dynamic[0] : { importer: '', target: '', chunk: '' },
+      directImporterPresent: manifest.directImporterPresent,
+      directCandidates: manifest.directCandidates,
+      mermaidCandidates: manifest.mermaidCandidates,
+      directEdge: direct,
+      mermaidEdge: dynamic,
       shikiChunks: manifest.shikiChunks,
       katexVersion: pkg.version,
       browserVersion: ''

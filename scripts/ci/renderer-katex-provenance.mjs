@@ -1,10 +1,31 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const BASE = '15fcfa376feda44531596218a3751c6ea37f98ef'
+const HARNESS_BASELINE = 'c7901c5551c820171401ff4669b5af4b394eb5b9'
+const IMAGE_POLICY_COMMIT = '0b10ac4badd4811685bb376f1a6ee8aab8212490'
+const IMAGE_POLICY_PATH = 'src/renderer/src/components/Markdown.tsx'
+const IMAGE_POLICY_SHA256 = '5f1d8910947f5b33de58b759d7bebf72088c1dfab26d013a8c9724640a62d994'
+const HARNESS_BASELINE_FILES = Object.freeze([
+  '.github/workflows/renderer-katex-security.yml',
+  'scripts/ci/renderer-katex-provenance.mjs',
+  'scripts/ci/renderer-katex-unhandled-reporter.mjs',
+  'src/renderer/src/components/Markdown.katex.browser.test.ts',
+  'src/renderer/src/components/Markdown.mermaid.browser.test.ts',
+  'src/renderer/src/components/Markdown.security.browser.test.ts',
+  'src/renderer/src/components/__tests__/renderer-security-browser-harness.ts'
+])
+const HARNESS_REPAIR_FILES = Object.freeze([
+  '.github/workflows/renderer-katex-security.yml',
+  'scripts/ci/renderer-katex-provenance.mjs',
+  'src/renderer/src/components/Markdown.mermaid.browser.test.ts',
+  'src/renderer/src/components/Markdown.security.browser.test.ts',
+  'src/renderer/src/components/__tests__/renderer-security-browser-harness.ts'
+])
 const BASE_HASHES = Object.freeze({
   'package.json': '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122',
   'package-lock.json': '88425a099d638387d1bf14fd06348002e3ced36f29ca25296d00f7e5b92b0393'
@@ -73,6 +94,57 @@ function parseArgs(args) {
 function fileHash(root, path) {
   const bytes = readFileSync(resolve(root, path))
   return { bytes: bytes.byteLength, sha256: sha256(bytes) }
+}
+function gitText(root, args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+}
+function gitBytes(root, args) {
+  return execFileSync('git', args, { cwd: root, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+}
+function changedPaths(root, range) {
+  return gitText(root, ['diff', '--name-only', range]).split('\n').filter(Boolean).sort()
+}
+function requireExactPaths(actual, expected, code) {
+  if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) fail(code)
+}
+function requireAncestor(root, ancestor, head, code) {
+  try {
+    gitText(root, ['merge-base', '--is-ancestor', ancestor, head])
+  } catch {
+    fail(code)
+  }
+}
+function checkSourceLineage(root) {
+  const head = gitText(root, ['rev-parse', 'HEAD'])
+  if (head !== (process.env.GITHUB_SHA || head)) fail('CHECKOUT_SHA_MISMATCH')
+  if (gitText(root, ['rev-parse', `${IMAGE_POLICY_COMMIT}^`]) !== HARNESS_BASELINE)
+    fail('IMAGE_POLICY_PARENT')
+  requireAncestor(root, BASE, head, 'DEPENDENCY_BASELINE_ANCESTRY')
+  requireAncestor(root, HARNESS_BASELINE, head, 'HARNESS_BASELINE_ANCESTRY')
+  requireAncestor(root, IMAGE_POLICY_COMMIT, head, 'IMAGE_POLICY_ANCESTRY')
+  requireExactPaths(changedPaths(root, `${BASE}..${HARNESS_BASELINE}`), HARNESS_BASELINE_FILES, 'HARNESS_BASELINE_PATHS')
+  requireExactPaths(changedPaths(root, `${HARNESS_BASELINE}..${IMAGE_POLICY_COMMIT}`), [IMAGE_POLICY_PATH], 'IMAGE_POLICY_PATHS')
+  requireExactPaths(changedPaths(root, `${IMAGE_POLICY_COMMIT}..${head}`), HARNESS_REPAIR_FILES, 'HARNESS_REPAIR_PATHS')
+  requireExactPaths(changedPaths(root, `${BASE}..${head}`), [...HARNESS_BASELINE_FILES, IMAGE_POLICY_PATH], 'COMPOSED_CHANGE_PATHS')
+  const reviewedBytes = gitBytes(root, ['show', `${IMAGE_POLICY_COMMIT}:${IMAGE_POLICY_PATH}`])
+  const currentBytes = readFileSync(resolve(root, IMAGE_POLICY_PATH))
+  const parentBytes = gitBytes(root, ['show', `${HARNESS_BASELINE}:${IMAGE_POLICY_PATH}`])
+  if (
+    sha256(reviewedBytes) !== IMAGE_POLICY_SHA256 ||
+    sha256(currentBytes) !== IMAGE_POLICY_SHA256 ||
+    sha256(parentBytes) !== 'b012099ba2a8d66cc29caee8555d5a92ff82b3c7b32c205273a90de2c5d67eaa'
+  )
+    fail('IMAGE_POLICY_BYTES')
+  return {
+    dependencyBaseline: BASE,
+    originalHarnessBaseline: HARNESS_BASELINE,
+    reviewedImagePolicyCommit: IMAGE_POLICY_COMMIT,
+    imagePolicyParent: HARNESS_BASELINE,
+    imagePolicyPath: IMAGE_POLICY_PATH,
+    imagePolicySha256: IMAGE_POLICY_SHA256,
+    harnessRepairFiles: [...HARNESS_REPAIR_FILES],
+    composedPaths: changedPaths(root, `${BASE}..${head}`)
+  }
 }
 function assertionId(assertion) {
   const name = assertion.title || assertion.fullName || ''
@@ -218,7 +290,7 @@ function checkHarnessOrigins(directory) {
   const origins = names.map((name) => {
     const path = resolve(directory, name)
     const stat = statSync(path)
-    if (stat.size > 16_384) fail('HARNESS_ORIGIN_SIZE')
+    if (stat.size > 65_536) fail('HARNESS_ORIGIN_SIZE')
     let value
     try {
       value = JSON.parse(readFileSync(path, 'utf8'))
@@ -230,6 +302,57 @@ function checkHarnessOrigins(directory) {
     const directEdge = value.directEdge
     const mermaidEdge = value.mermaidEdge
     const normalize = (text) => String(text || '').replaceAll('\\', '/')
+    const validCandidate = (candidate) =>
+      candidate &&
+      typeof candidate.importer === 'string' &&
+      typeof candidate.target === 'string' &&
+      ['static', 'dynamic'].includes(candidate.kind) &&
+      ['asset', 'runtime', 'other'].includes(candidate.assetKind) &&
+      (candidate.chunk === null || typeof candidate.chunk === 'string') &&
+      Number.isSafeInteger(candidate.renderedLength) &&
+      candidate.renderedLength >= 0 &&
+      Array.isArray(candidate.renderedExports) &&
+      candidate.renderedExports.every((name) => typeof name === 'string')
+    if (
+      value.directImporterPresent !== true ||
+      !Array.isArray(value.directCandidates) ||
+      value.directCandidates.length === 0 ||
+      value.directCandidates.length > 64 ||
+      !value.directCandidates.every((candidate) => validCandidate(candidate) && candidate.importer === '\0renderer-katex-security-harness') ||
+      !Array.isArray(value.mermaidCandidates) ||
+      value.mermaidCandidates.length === 0 ||
+      value.mermaidCandidates.length > 128 ||
+      !value.mermaidCandidates.every(
+        (candidate) =>
+          validCandidate(candidate) &&
+          /\/node_modules\/mermaid\/dist\/chunks\/mermaid\.core\//u.test(normalize(candidate.importer))
+      )
+    )
+      fail('HARNESS_CANDIDATE_INVENTORY')
+    const directRuntimeCandidates = value.directCandidates.filter(
+      (candidate) =>
+        candidate.assetKind === 'runtime' &&
+        typeof candidate.chunk === 'string' &&
+        candidate.chunk &&
+        candidate.renderedLength > 0
+    )
+    const mermaidRuntimeCandidates = value.mermaidCandidates.filter(
+      (candidate) =>
+        candidate.assetKind === 'runtime' &&
+        typeof candidate.chunk === 'string' &&
+        candidate.chunk &&
+        candidate.renderedLength > 0
+    )
+    if (
+      directRuntimeCandidates.length !== 1 ||
+      mermaidRuntimeCandidates.length !== 1 ||
+      !value.directCandidates.some(
+        (candidate) => candidate.assetKind === 'asset' && /katex\.min\.css(?:$|[?#])/iu.test(candidate.target)
+      )
+    )
+      fail('HARNESS_RUNTIME_EDGE_CARDINALITY')
+    const selectedDirect = directRuntimeCandidates[0]
+    const selectedMermaid = mermaidRuntimeCandidates[0]
     if (
       !directEdge ||
       directEdge.importer !== '\0renderer-katex-security-harness' ||
@@ -239,8 +362,14 @@ function checkHarnessOrigins(directory) {
       !mermaidEdge.importer ||
       !mermaidEdge.target ||
       !mermaidEdge.chunk ||
+      JSON.stringify(directEdge) !== JSON.stringify(selectedDirect) ||
+      JSON.stringify(mermaidEdge) !== JSON.stringify(selectedMermaid) ||
       directEdge.target !== mermaidEdge.target ||
       directEdge.chunk !== mermaidEdge.chunk ||
+      !directEdge.renderedExports.includes('renderToString') ||
+      !directEdge.renderedExports.includes('version') ||
+      !mermaidEdge.renderedExports.includes('renderToString') ||
+      !mermaidEdge.renderedExports.includes('version') ||
       value.katexDirect !== directEdge.target ||
       value.katexFromMermaid !== mermaidEdge.target ||
       !/(?:^|\/)node_modules\/katex\//u.test(normalize(directEdge.target)) ||
@@ -263,6 +392,9 @@ function checkHarnessOrigins(directory) {
       katexDirect: value.katexDirect,
       katexFromMermaid: value.katexFromMermaid,
       mermaidCore: value.mermaidCore,
+      directImporterPresent: value.directImporterPresent,
+      directCandidates: value.directCandidates,
+      mermaidCandidates: value.mermaidCandidates,
       directEdge,
       mermaidEdge,
       shikiChunks: value.shikiChunks
@@ -302,6 +434,7 @@ function checkRunErrors(reportPath, expectedPath) {
 function main() {
   const args = parseArgs(process.argv.slice(2))
   const root = process.cwd()
+  const lineage = checkSourceLineage(root)
   const manifest = Object.fromEntries(Object.keys(BASE_HASHES).map((path) => [path, fileHash(root, path)]))
   for (const [path, expected] of Object.entries(BASE_HASHES))
     if (manifest[path].sha256 !== expected) fail(`BASELINE_${path.replaceAll('.', '_').toUpperCase()}_MISMATCH`)
@@ -342,6 +475,10 @@ function main() {
     source: {
       commit: process.env.GITHUB_SHA || null,
       baseline: BASE,
+      originalHarnessBaseline: HARNESS_BASELINE,
+      reviewedImagePolicyCommit: IMAGE_POLICY_COMMIT,
+      productionUnchangedReplayOfDependencyBaseline: false,
+      lineage,
       runId: process.env.GITHUB_RUN_ID || null,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT || null,
       job: process.env.GITHUB_JOB || null,

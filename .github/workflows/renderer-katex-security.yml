@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 35
     env:
       BASELINE: 15fcfa376feda44531596218a3751c6ea37f98ef
+      HARNESS_BASELINE: c7901c5551c820171401ff4669b5af4b394eb5b9
+      IMAGE_POLICY_COMMIT: 0b10ac4badd4811685bb376f1a6ee8aab8212490
     steps:
       - name: Preserve committed bytes on Windows checkouts
         if: runner.os == 'Windows'
@@ -47,7 +49,7 @@ jobs:
         with:
           node-version: 22.22.3
 
-      - name: Refuse stale source, manifest changes, or files outside the seven-file RED roster
+      - name: Verify immutable dependency, harness, and reviewed image-policy ancestry
         shell: bash
         env:
           REPORT_DIR: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
@@ -64,13 +66,23 @@ jobs:
             echo 'renderer-katex-red:WRONG_REPOSITORY_OR_REF'
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$BASELINE" "$GITHUB_SHA"; then
+          if ! git merge-base --is-ancestor "$BASELINE" "$GITHUB_SHA" || ! git merge-base --is-ancestor "$HARNESS_BASELINE" "$GITHUB_SHA" || ! git merge-base --is-ancestor "$IMAGE_POLICY_COMMIT" "$GITHUB_SHA"; then
             echo 'renderer-katex-red:BASELINE_NOT_ANCESTOR'
             exit 1
           fi
-          expected="$RUNNER_TEMP/renderer-katex-expected-paths.txt"
-          actual="$RUNNER_TEMP/renderer-katex-actual-paths.txt"
-          cat > "$expected" <<'PATHS'
+          if [ "$(git rev-parse "$IMAGE_POLICY_COMMIT^")" != "$HARNESS_BASELINE" ]; then
+            echo 'renderer-katex-red:IMAGE_POLICY_PARENT_MISMATCH'
+            exit 1
+          fi
+          original="$RUNNER_TEMP/renderer-katex-original-harness-paths.txt"
+          original_actual="$RUNNER_TEMP/renderer-katex-original-harness-actual.txt"
+          policy="$RUNNER_TEMP/renderer-katex-image-policy-paths.txt"
+          policy_actual="$RUNNER_TEMP/renderer-katex-image-policy-actual.txt"
+          repair="$RUNNER_TEMP/renderer-katex-repair-paths.txt"
+          repair_actual="$RUNNER_TEMP/renderer-katex-repair-actual.txt"
+          composed="$RUNNER_TEMP/renderer-katex-composed-paths.txt"
+          composed_actual="$RUNNER_TEMP/renderer-katex-composed-actual.txt"
+          cat > "$original" <<'PATHS'
           .github/workflows/renderer-katex-security.yml
           scripts/ci/renderer-katex-provenance.mjs
           scripts/ci/renderer-katex-unhandled-reporter.mjs
@@ -79,11 +91,30 @@ jobs:
           src/renderer/src/components/Markdown.security.browser.test.ts
           src/renderer/src/components/__tests__/renderer-security-browser-harness.ts
           PATHS
-          LC_ALL=C sort -o "$expected" "$expected"
-          git diff --name-only "$BASELINE" "$GITHUB_SHA" | LC_ALL=C sort > "$actual"
-          diff -u "$expected" "$actual"
+          LC_ALL=C sort -o "$original" "$original"
+          git diff --name-only "$BASELINE" "$HARNESS_BASELINE" | LC_ALL=C sort > "$original_actual"
+          diff -u "$original" "$original_actual"
+          printf '%s\n' 'src/renderer/src/components/Markdown.tsx' > "$policy"
+          git diff --name-only "$HARNESS_BASELINE" "$IMAGE_POLICY_COMMIT" | LC_ALL=C sort > "$policy_actual"
+          diff -u "$policy" "$policy_actual"
+          cat > "$repair" <<'PATHS'
+          .github/workflows/renderer-katex-security.yml
+          scripts/ci/renderer-katex-provenance.mjs
+          src/renderer/src/components/Markdown.mermaid.browser.test.ts
+          src/renderer/src/components/Markdown.security.browser.test.ts
+          src/renderer/src/components/__tests__/renderer-security-browser-harness.ts
+          PATHS
+          LC_ALL=C sort -o "$repair" "$repair"
+          git diff --name-only "$IMAGE_POLICY_COMMIT" "$GITHUB_SHA" | LC_ALL=C sort > "$repair_actual"
+          diff -u "$repair" "$repair_actual"
+          cat "$original" > "$composed"
+          printf '%s\n' 'src/renderer/src/components/Markdown.tsx' >> "$composed"
+          LC_ALL=C sort -o "$composed" "$composed"
+          git diff --name-only "$BASELINE" "$GITHUB_SHA" | LC_ALL=C sort > "$composed_actual"
+          diff -u "$composed" "$composed_actual"
           node --input-type=module <<'NODE'
           import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
           import { readFileSync } from 'node:fs'
           const expected = new Map([
             ['package.json', '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122'],
@@ -93,8 +124,16 @@ jobs:
             const actual = createHash('sha256').update(readFileSync(file)).digest('hex')
             if (actual !== hash) throw new Error(`renderer-katex-red:PACKAGE_BYTES_MISMATCH:${file}`)
           }
+          const policyPath = 'src/renderer/src/components/Markdown.tsx'
+          const reviewed = execFileSync('git', ['show', `${process.env.IMAGE_POLICY_COMMIT}:${policyPath}`])
+          const current = readFileSync(policyPath)
+          const expectedPolicy = '5f1d8910947f5b33de58b759d7bebf72088c1dfab26d013a8c9724640a62d994'
+          if (
+            createHash('sha256').update(reviewed).digest('hex') !== expectedPolicy ||
+            createHash('sha256').update(current).digest('hex') !== expectedPolicy
+          ) throw new Error('renderer-katex-red:REVIEWED_IMAGE_POLICY_BYTES_MISMATCH')
           NODE
-          echo 'renderer-katex-red:BASELINE_INPUTS_VALID'
+          echo 'renderer-katex-red:COMPOSED_BASELINES_AND_REPAIR_PATHS_VALID'
 
       - name: Pin the lock producer-compatible npm version
         shell: bash
