@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -322,7 +323,7 @@ describe('evaluateAclTrust — the Windows managed-config trust decision', () =>
 describe('managed authority source membership and pins', () => {
   let root: string
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'managed-authority-pin-'))
+    root = mkdtempSync(join(realpathSync(tmpdir()), 'managed-authority-pin-'))
   })
   afterEach(() => rmSync(root, { recursive: true, force: true }))
 
@@ -651,6 +652,10 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
   it('forces a new descriptor-bound ACL probe at an explicit authority boundary', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(Date.now())
+    managedBytesRace.aclOutput = JSON.stringify({
+      owner: SYSTEM,
+      aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }]
+    })
     const first = readTrustedAdminManaged(file)
     const fresh = await readManagedPolicyAuthorityFile(file, undefined, true)
     expect(fresh.status).toBe('present')

@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, statSync, utimesSync } from 'node:fs'
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  utimesSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
@@ -150,7 +160,7 @@ describe('store', () => {
     expect(original).not.toBeNull()
 
     writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['anthropic', 'openai', 'openai'] }), 'utf8')
-    expect(getAllowedProviders()).toEqual(['anthropic', 'openai', 'openai'])
+    expect(getAllowedProviders()).toEqual(['anthropic', 'openai'])
     expect(isSettingsAuthorityCurrent(original!)).toBe(true)
 
     writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['anthropic'] }), 'utf8')
@@ -266,9 +276,14 @@ describe('store', () => {
 
     const authority = await readSettingsAtAuthorityBoundary()
     expect(authority.readable).toBe(false)
+    expect(authority.history.persistence).toBeNull()
+    expect(readSettingsAuthAuthorityFrame(authority)).toBeNull()
     expect(getPublishedSettingsObservation()?.readable).toBe(false)
     expect(getSettings().onboardingDone).toBe(true)
     expect(getPublishedSettingsObservation()?.readable).toBe(false)
+    const auth = await import('./auth')
+    expect(await auth.refreshMainPersistenceSessionObservation()).toBeNull()
+    expect(auth.capturePublishedMainPersistenceSessionBoundary()).toBeNull()
   })
 
   it('keeps an invalid admin snapshot unreadable when its path is absent at the later legacy read', async () => {
@@ -280,7 +295,12 @@ describe('store', () => {
       const authority = await readSettingsAtAuthorityBoundary()
       expect(reader).toHaveBeenCalled()
       expect(authority.readable).toBe(false)
+      expect(authority.history.persistence).toBeNull()
+      expect(readSettingsAuthAuthorityFrame(authority)).toBeNull()
       expect(getPublishedSettingsObservation()?.readable).toBe(false)
+      const auth = await import('./auth')
+      expect(await auth.refreshMainPersistenceSessionObservation()).toBeNull()
+      expect(auth.capturePublishedMainPersistenceSessionBoundary()).toBeNull()
     } finally {
       reader.mockRestore()
     }
@@ -327,7 +347,7 @@ describe('store', () => {
     hardware.totalmem.mockReset().mockReturnValue(16 * 1024 ** 3)
     resetAsrHardwarePreferenceForTests()
     resetSettingsCacheForTests()
-    userData = mkdtempSync(join(tmpdir(), 'asktoto-store-test-'))
+    userData = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-store-test-'))
     // store.ts's getApiKey() short-circuits on the provider's env var BEFORE it ever touches the
     // profile on disk (`const env = process.env[ENV_VAR[provider]]; if (env) return env`). That is
     // intended product behaviour, but it makes these tests read the developer's ambient shell instead

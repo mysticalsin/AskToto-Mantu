@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -18,6 +18,10 @@ import {
 import { getSettings, setSettings } from './store'
 import { publishSettingsSnapshot } from './settings-observation'
 import { readTrustedAdminManaged } from './win-security'
+import {
+  assertSettingsAuthAuthorityFrameCurrent,
+  readSettingsAuthAuthorityFrame
+} from './settings-auth-authority-frame'
 
 const authFileReadRace = vi.hoisted(() => ({
   path: null as string | null,
@@ -85,7 +89,7 @@ describe('auth trust boundary — requireAuth / authStatus', () => {
   const AZURE_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH']
 
   beforeEach(() => {
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-test-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-test-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
@@ -124,7 +128,7 @@ describe('auth trust boundary — requireAuth / authStatus', () => {
 describe('C1 coherent auth publication producer', () => {
   let ud: string
   beforeEach(() => {
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-publication-test-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-publication-test-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const key of ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH'])
       delete process.env[key]
@@ -152,6 +156,19 @@ describe('C1 coherent auth publication producer', () => {
       { mode: 0o600 }
     )
   }
+
+  it('diagnoses the real fresh-profile settings frame before the cold auth producer case', async () => {
+    const store = await import('./store')
+    const diagnosticSnapshot = await store.readSettingsAtAuthorityBoundary()
+    expect(diagnosticSnapshot.readable).toBe(true)
+    expect(diagnosticSnapshot.history.persistence).not.toBeNull()
+    const diagnosticFrame = readSettingsAuthAuthorityFrame(diagnosticSnapshot)
+    expect(diagnosticFrame).not.toBeNull()
+    if (!diagnosticFrame) throw new Error('Expected a privately associated settings auth frame')
+    expect(diagnosticFrame.snapshot).toBe(diagnosticSnapshot)
+    expect(diagnosticFrame.persistenceReceipt).toBe(diagnosticSnapshot.history.persistence)
+    await expect(assertSettingsAuthAuthorityFrameCurrent(diagnosticSnapshot)).resolves.toBeUndefined()
+  })
 
   it('shares authStatus preparation and publishes only a non-null coherent unconfigured-local boundary', async () => {
     expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
@@ -255,13 +272,44 @@ describe('C1 coherent auth publication producer', () => {
       return snapshot
     })
     const attempt = refreshMainPersistenceSessionObservation()
-    await frameReached
-    writeFileSync(managedPath, '{"requireAuth":true}')
-    writeFileSync(managedPath, original)
-    releaseFrame?.()
-    expect(await attempt).toBeNull()
+    let outcome: 'frame' | 'settled' | 'timeout' = 'timeout'
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let settled:
+      | { status: 'settled'; value: Awaited<typeof attempt> }
+      | { status: 'rejected'; error: unknown }
+      | { status: 'timeout' }
+      | undefined
+    try {
+      outcome = await Promise.race([
+        frameReached.then(() => 'frame' as const),
+        attempt.then(() => 'settled' as const),
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), 10_000)
+        })
+      ])
+      expect(outcome).toBe('frame')
+      if (outcome === 'frame') {
+        writeFileSync(managedPath, '{"requireAuth":true}')
+        writeFileSync(managedPath, original)
+      }
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      releaseFrame?.()
+      settled = await Promise.race([
+        attempt.then(
+          (value) => ({ status: 'settled' as const, value }),
+          (error: unknown) => ({ status: 'rejected' as const, error })
+        ),
+        new Promise<{ status: 'timeout' }>((resolve) => {
+          timeout = setTimeout(() => resolve({ status: 'timeout' }), 5_000)
+        })
+      ])
+      if (timeout) clearTimeout(timeout)
+      hold.mockRestore()
+    }
+    expect(settled?.status).toBe('settled')
+    if (settled?.status === 'settled') expect(settled.value).toBeNull()
     expect(capturePublishedMainPersistenceSessionBoundary()).toBeNull()
-    hold.mockRestore()
   })
 
   it.each([
@@ -315,7 +363,6 @@ describe('C1 coherent auth publication producer', () => {
       '{"clientId":"changed"}'
     ]
   ])('retires the actual producer when %s changes during its held bounded read', async (_label, name, original, replacement) => {
-    signOut()
     await seedConfiguredSession()
     if (name === 'auth-configured.flag')
       writeFileSync(
@@ -357,7 +404,7 @@ describe('C1 coherent auth publication producer', () => {
   it('retires the actual producer when the captured profile changes during a held store frame', async () => {
     const store = await import('./store')
     const readFrame = store.readSettingsAtAuthorityBoundary
-    const alternateProfile = mkdtempSync(join(tmpdir(), 'asktoto-auth-profile-b-'))
+    const alternateProfile = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-profile-b-'))
     let reachedFrame: (() => void) | undefined
     const frameReached = new Promise<void>((resolve) => {
       reachedFrame = resolve
@@ -373,18 +420,50 @@ describe('C1 coherent auth publication producer', () => {
       return snapshot
     })
     const attempt = refreshMainPersistenceSessionObservation()
-    await frameReached
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
-      name === 'userData' ? alternateProfile : join(alternateProfile, name)
-    )
-    releaseFrame?.()
-    expect(await attempt).toBeNull()
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
-      name === 'userData' ? ud : join(ud, name)
-    )
-    hold.mockRestore()
+    let outcome: 'frame' | 'settled' | 'timeout' = 'timeout'
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let settled:
+      | { status: 'settled'; value: Awaited<typeof attempt> }
+      | { status: 'rejected'; error: unknown }
+      | { status: 'timeout' }
+      | undefined
+    try {
+      outcome = await Promise.race([
+        frameReached.then(() => 'frame' as const),
+        attempt.then(() => 'settled' as const),
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), 10_000)
+        })
+      ])
+      expect(outcome).toBe('frame')
+      if (outcome === 'frame') {
+        ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+          name === 'userData' ? alternateProfile : join(alternateProfile, name)
+        )
+      }
+      releaseFrame?.()
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      releaseFrame?.()
+      settled = await Promise.race([
+        attempt.then(
+          (value) => ({ status: 'settled' as const, value }),
+          (error: unknown) => ({ status: 'rejected' as const, error })
+        ),
+        new Promise<{ status: 'timeout' }>((resolve) => {
+          timeout = setTimeout(() => resolve({ status: 'timeout' }), 5_000)
+        })
+      ])
+      if (timeout) clearTimeout(timeout)
+      ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+        name === 'userData' ? ud : join(ud, name)
+      )
+      hold.mockRestore()
+      rmSync(alternateProfile, { recursive: true, force: true })
+    }
+    expect(settled?.status).toBe('settled')
+    if (settled?.status === 'settled') expect(settled.value).toBeNull()
     expect(await refreshMainPersistenceSessionObservation()).not.toBeNull()
-    rmSync(alternateProfile, { recursive: true, force: true })
   })
 
   it('retires a held actual producer after the original auth environment changes', async () => {
@@ -503,7 +582,7 @@ describe('MQA-027 — tenant id shape / sign-in gate cannot brick the install', 
   }
 
   beforeEach(() => {
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-tenant-test-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-tenant-test-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
@@ -582,7 +661,7 @@ describe('MQA-107 — SignInWall reset escape hatch recovers a wrong-tenant self
   }
 
   beforeEach(() => {
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-reset-test-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-reset-test-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null) // default: no admin policy
@@ -675,7 +754,7 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
   const WRONG_TENANT = '72f988bf-86f1-41af-91ab-2d7cd011db74'
 
   beforeEach(() => {
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-bootstrap-test-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-bootstrap-test-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
@@ -803,7 +882,7 @@ describe('tenant rotation ends a session whose tid no longer matches the configu
 
   beforeEach(async () => {
     vi.resetModules()
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-tenant-rotate-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-auth-tenant-rotate-'))
     const electron = await import('electron')
     ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
       n === 'userData' ? ud : join(ud, n)
@@ -894,7 +973,7 @@ describe('speech auth lease (auth module authority)', () => {
     settingsBoundaryReads = 0
     adminBoundaryReads = 0
     policyRevisionReads = 0
-    ud = mkdtempSync(join(tmpdir(), 'asktoto-speech-auth-lease-'))
+    ud = mkdtempSync(join(realpathSync(tmpdir()), 'asktoto-speech-auth-lease-'))
     activeProfilePath = ud
     const electron = await import('electron')
     const readProfilePath = (n: string): string => (n === 'userData' ? activeProfilePath : join(activeProfilePath, n))

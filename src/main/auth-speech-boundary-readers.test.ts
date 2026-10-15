@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -50,7 +50,7 @@ import { assertBoundedTextReadCurrent, readBoundedTextFile } from './auth-speech
 
 const roots: string[] = []
 function profile(): string {
-  const root = mkdtempSync(join(tmpdir(), 'auth-source-pin-'))
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'auth-source-pin-'))
   roots.push(root)
   return root
 }

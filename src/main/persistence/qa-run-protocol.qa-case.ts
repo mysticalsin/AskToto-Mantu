@@ -132,7 +132,13 @@ describe('compiled hosted persistence protocol fixture', () => {
                 : mutation === 'runAttempt'
                   ? { ...payload, buildContext: { ...payload.buildContext, runAttempt: 2 } }
                   : mutation === 'target'
-                    ? { ...payload, buildContext: { ...payload.buildContext, target: 'darwin-arm64' } }
+                    ? {
+                        ...payload,
+                        buildContext: {
+                          ...payload.buildContext,
+                          target: payload.buildContext.target === 'darwin-arm64' ? 'darwin-x64' : 'darwin-arm64'
+                        }
+                      }
                     : mutation === 'runtime'
                       ? { ...payload, runtime: { ...payload.runtime, node: '22.0.0' } }
                       : mutation === 'qaIdentity'

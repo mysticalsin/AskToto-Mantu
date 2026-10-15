@@ -544,6 +544,7 @@ export function readSettingsAtAuthorityBoundary(): Promise<SettingsPolicyAuthori
       if (!sourcePins || !authorityReads) throw new Error('Settings authority frame was not captured')
       if (dir() !== capturedProfilePath || adminManagedConfigPath() !== capturedAdminPath)
         throw new Error('Settings authority paths changed before frame attachment')
+      if (snapshot.readable === false && snapshot.history.persistence === null) return
       attachSettingsAuthAuthorityFrame(snapshot, {
         profilePath: capturedProfilePath,
         adminPath: capturedAdminPath,
