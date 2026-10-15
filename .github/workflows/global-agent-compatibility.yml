@@ -50,6 +50,8 @@ jobs:
         with:
           node-version: 22.22.3
           cache: npm
+      - name: Record npm resolver version
+        run: npm --version
       - name: Install the pinned dependency graph without install hooks
         run: npm ci --ignore-scripts
       - name: Verify actual global-agent parent behavior
@@ -70,13 +72,13 @@ jobs:
           path: global-agent-compatibility.tap
           if-no-files-found: error
           retention-days: 7
-      - name: Require the complete eight-test report
+      - name: Require the complete ten-test report
         if: always()
         shell: bash
         env:
           TEST_EXIT_CODE: ${{ steps.compatibility-tests.outputs.exit-code }}
         run: |
-          node -e 'const fs = require("node:fs"); const report = fs.readFileSync("global-agent-compatibility.tap", "utf8"); const expected = ["# tests 8", "# pass 8", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"]; for (const line of expected) { if (!report.split(/\r?\n/).includes(line)) throw new Error(`missing exact TAP summary: ${line}`); } if (process.env.TEST_EXIT_CODE !== "0") throw new Error(`compatibility test process failed: ${process.env.TEST_EXIT_CODE || "no exit status"}`);'
+          node -e 'const fs = require("node:fs"); const report = fs.readFileSync("global-agent-compatibility.tap", "utf8"); const expected = ["# tests 10", "# pass 10", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"]; for (const line of expected) { if (!report.split(/\r?\n/).includes(line)) throw new Error(`missing exact TAP summary: ${line}`); } if (process.env.TEST_EXIT_CODE !== "0") throw new Error(`compatibility test process failed: ${process.env.TEST_EXIT_CODE || "no exit status"}`);'
 
   derivative-source:
     name: Verify bounded derivative source

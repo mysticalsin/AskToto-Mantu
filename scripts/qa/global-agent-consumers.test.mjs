@@ -1,16 +1,26 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { createServer as createHttpServer, request as requestHttp } from 'node:http'
 import { connect as connectNet } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, relative, sep } from 'node:path'
 import { createServer as createTlsServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import test from 'node:test'
 
-const repositoryRequire = createRequire(fileURLToPath(new URL('../../package.json', import.meta.url)))
+const repositoryRoot = dirname(fileURLToPath(new URL('../../package.json', import.meta.url)))
+const repositoryRequire = createRequire(join(repositoryRoot, 'package.json'))
+const repositoryManifest = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'))
+const repositoryLock = JSON.parse(readFileSync(join(repositoryRoot, 'package-lock.json'), 'utf8'))
+const derivativeUrl =
+  'https://raw.githubusercontent.com/mysticalsin/AskToto-Mantu/cffe92f93fd440243766924c9e08f67df6652861/vendor/global-agent/4.1.3-metis-ip-host.tgz'
+const derivativeIntegrity =
+  'sha512-p+KdYIWfdrsO/BPB3nN/b5Rr3/8c+3dP2bdF0O/bVk/+ReJIZXLxLFAxt75fAinv1LAdsWxZKDXDW8nzeJM+rQ=='
+const derivativeArchivePath = join(repositoryRoot, 'vendor', 'global-agent', '4.1.3-metis-ip-host.tgz')
+const derivativeModuleSha256 = '2548c955fc8fc40615a6722af6627b6d563a1dd586791d4f486feb9b4bfafaa0'
 const onnxEntry = repositoryRequire.resolve('onnxruntime-node')
 const onnxRequire = createRequire(onnxEntry)
 const onnxGlobalAgentEntry = onnxRequire.resolve('global-agent')
@@ -46,12 +56,14 @@ const consumers = [
   {
     id: 'onnx',
     label: 'onnxruntime-node install parent',
+    overrideParent: 'onnxruntime-node@1.21.0',
     parentEntry: onnxEntry,
     globalAgentEntry: onnxGlobalAgentEntry
   },
   {
     id: 'electron-get',
     label: 'app-builder-lib @electron/get parent',
+    overrideParent: '@electron/get@3.1.0',
     electronGetEntry,
     globalAgentEntry: electronGetGlobalAgentEntry
   }
@@ -139,7 +151,7 @@ async function main() {
   }
 
   const httpsUrl = process.env.METIS_GA_HTTPS_URL
-  if (process.env.METIS_GA_ACTION === 'untrusted-tls') {
+  if (process.env.METIS_GA_ACTION === 'untrusted-tls' || process.env.METIS_GA_ACTION === 'wrong-name-tls') {
     requestPhase = 'https'
     let code = null
     try {
@@ -173,9 +185,11 @@ main().catch((error) => {
 let temporaryRoot
 let httpOrigin
 let tlsOrigin
+let wrongNameTlsOrigin
 let proxy
 let httpPort
 let tlsPort
+let wrongNameTlsPort
 let proxyPort
 const sockets = new Set()
 const tunnelSockets = new Set()
@@ -208,13 +222,13 @@ function closeServer(server) {
   return new Promise((resolve) => server.close(() => resolve()))
 }
 
-function createCertificate(directory) {
-  const keyPath = join(directory, 'loopback-key.pem')
-  const certificatePath = join(directory, 'loopback-cert.pem')
-  const configPath = join(directory, 'loopback-openssl.cnf')
+function createCertificate(directory, name, subjectAltName) {
+  const keyPath = join(directory, `${name}-key.pem`)
+  const certificatePath = join(directory, `${name}-cert.pem`)
+  const configPath = join(directory, `${name}-openssl.cnf`)
   writeFileSync(
     configPath,
-    '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=127.0.0.1\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n'
+    `[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=${name}\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\nsubjectAltName=${subjectAltName}\n`
   )
   const result = spawnSync(
     'openssl',
@@ -242,7 +256,8 @@ function createCertificate(directory) {
 
 test.before(async () => {
   temporaryRoot = mkdtempSync(join(tmpdir(), 'metis-global-agent-compat-'))
-  const certificate = createCertificate(temporaryRoot)
+  const certificate = createCertificate(temporaryRoot, 'loopback', 'IP:127.0.0.1')
+  const wrongNameCertificate = createCertificate(temporaryRoot, 'wrong-name', 'IP:192.0.2.99')
 
   httpOrigin = createHttpServer((request, response) => {
     traffic.httpOrigin.push(request.url)
@@ -250,6 +265,11 @@ test.before(async () => {
     response.end(`http:${request.url}`)
   })
   tlsOrigin = createTlsServer(certificate, (request, response) => {
+    traffic.tlsOrigin.push(request.url)
+    response.writeHead(200, { 'content-type': 'text/plain' })
+    response.end(`https:${request.url}`)
+  })
+  wrongNameTlsOrigin = createTlsServer(wrongNameCertificate, (request, response) => {
     traffic.tlsOrigin.push(request.url)
     response.writeHead(200, { 'content-type': 'text/plain' })
     response.end(`https:${request.url}`)
@@ -292,7 +312,7 @@ test.before(async () => {
   proxy.on('connect', (request, clientSocket, head) => {
     traffic.proxyConnect.push(request.url)
     const target = new URL(`http://${request.url}`)
-    if (target.hostname !== '127.0.0.1' || Number(target.port) !== tlsPort) {
+    if (target.hostname !== '127.0.0.1' || ![tlsPort, wrongNameTlsPort].includes(Number(target.port))) {
       clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n')
       return
     }
@@ -310,16 +330,22 @@ test.before(async () => {
     upstream.on('error', () => clientSocket.destroy())
   })
 
-  for (const server of [httpOrigin, tlsOrigin, proxy]) trackConnections(server)
+  for (const server of [httpOrigin, tlsOrigin, wrongNameTlsOrigin, proxy]) trackConnections(server)
   httpPort = await listenLoopback(httpOrigin)
   tlsPort = await listenLoopback(tlsOrigin)
+  wrongNameTlsPort = await listenLoopback(wrongNameTlsOrigin)
   proxyPort = await listenLoopback(proxy)
 })
 
 test.after(async () => {
   for (const socket of tunnelSockets) socket.destroy()
   for (const socket of sockets) socket.destroy()
-  await Promise.all([closeServer(proxy), closeServer(tlsOrigin), closeServer(httpOrigin)])
+  await Promise.all([
+    closeServer(proxy),
+    closeServer(wrongNameTlsOrigin),
+    closeServer(tlsOrigin),
+    closeServer(httpOrigin)
+  ])
   if (temporaryRoot) rmSync(temporaryRoot, { recursive: true, force: true })
 })
 
@@ -382,6 +408,10 @@ function childEnvironment(consumer, { noProxy, trustedTls = false, action = 'req
     environment.NO_PROXY = noProxy
   }
   if (trustedTls) environment.NODE_EXTRA_CA_CERTS = join(temporaryRoot, 'loopback-cert.pem')
+  if (action === 'wrong-name-tls') {
+    environment.METIS_GA_HTTPS_URL = `https://127.0.0.1:${wrongNameTlsPort}/wrong-name`
+    environment.NODE_EXTRA_CA_CERTS = join(temporaryRoot, 'wrong-name-cert.pem')
+  }
   if (mode === 'onnx-install') environment.ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip'
   return environment
 }
@@ -447,8 +477,30 @@ async function runRequests(consumer, options = {}) {
 test('actual ONNX and @electron/get parent resolution uses the exact scoped global-agent pin', () => {
   assert.equal(onnxVersion, '1.21.0', 'test must exercise the installed onnxruntime-node parent')
   assert.equal(electronGetVersion, '3.1.0', 'test must exercise the installed app-builder-lib @electron/get parent')
-  for (const consumer of consumers)
+  const archive = readFileSync(derivativeArchivePath)
+  assert.equal(archive.byteLength, 17_984, 'vendored derivative archive must have its approved byte length')
+  assert.equal(
+    createHash('sha256').update(archive).digest('hex'),
+    'd8980b684aa265bb4398b472fb70d41e0475c5d430189eb917f3ce646edf8492'
+  )
+  assert.equal(`sha512-${createHash('sha512').update(archive).digest('base64')}`, derivativeIntegrity)
+  for (const consumer of consumers) {
     assert.equal(packageVersion(consumer.globalAgentEntry, 'global-agent'), '4.1.3', consumer.label)
+    const globalAgentRoot = findPackageRoot(consumer.globalAgentEntry, 'global-agent')
+    const lockPath = relative(repositoryRoot, globalAgentRoot).split(sep).join('/')
+    const lockEntry = repositoryLock.packages[lockPath]
+    assert.ok(lockEntry, `${consumer.label} package root must map to its exact lock record: ${lockPath}`)
+    assert.equal(lockEntry.version, '4.1.3', `${consumer.label} lock version`)
+    assert.equal(lockEntry.resolved, derivativeUrl, `${consumer.label} must resolve from the immutable derivative URL`)
+    assert.equal(lockEntry.integrity, derivativeIntegrity, `${consumer.label} must match the derivative archive SRI`)
+    assert.equal(repositoryManifest.overrides[consumer.overrideParent]['global-agent'], derivativeUrl)
+    const httpsProxyAgent = readFileSync(join(globalAgentRoot, 'dist', 'classes', 'HttpsProxyAgent.js'))
+    assert.equal(
+      createHash('sha256').update(httpsProxyAgent).digest('hex'),
+      derivativeModuleSha256,
+      `${consumer.label} installed patched module bytes`
+    )
+  }
 })
 
 for (const consumer of consumers) {
@@ -496,6 +548,26 @@ for (const consumer of consumers) {
     assert.equal(traffic.proxyConnect.length, connectBefore + 1)
     assert.deepEqual(traffic.proxyConnect.at(-1), `127.0.0.1:${tlsPort}`)
   })
+
+  test(
+    `${consumer.label} rejects a trusted TLS origin with the wrong IP SAN while proxying`,
+    { timeout: 30_000 },
+    async () => {
+      const connectBefore = traffic.proxyConnect.length
+      const result = await runIsolated(consumer, {
+        noProxy: '192.0.2.88',
+        action: 'wrong-name-tls'
+      })
+      assert.equal(result.code, 0, 'isolated parent must report the trusted certificate name rejection')
+      const line = result.stdout.split('\n').find((entry) => entry.startsWith('METIS_GA_RESULT='))
+      assert.ok(line, 'isolated parent must return its TLS rejection result')
+      const report = JSON.parse(line.slice('METIS_GA_RESULT='.length))
+      assert.equal(report.tlsRejected, true)
+      assert.equal(report.tlsErrorCode, 'ERR_TLS_CERT_ALTNAME_INVALID')
+      assert.equal(traffic.proxyConnect.length, connectBefore + 1)
+      assert.deepEqual(traffic.proxyConnect.at(-1), `127.0.0.1:${wrongNameTlsPort}`)
+    }
+  )
 }
 
 test(
