@@ -14,7 +14,18 @@ const hashedSources = [
   ...requiredFiles,
   'src/main/persistence/bootstrap.ts',
   'src/main/persistence/root-registry.ts',
-  'src/main/persistence/protected-meeting-keys.ts'
+  'src/main/persistence/protected-meeting-keys.ts',
+  'src/main/infra/process/meeting-speech-host.ts',
+  'src/main/meeting-speech-worker.ts',
+  'src/main/features/meetings/incremental-meeting-journal.ts',
+  'src/main/features/meetings/incremental-record-receipt.ts',
+  'src/main/auth-speech-lease.ts',
+  'src/main/settings-authority-history.ts',
+  'src/main/settings-observation.ts',
+  'src/main/persistence/resource-policy.ts',
+  'resources/persistence-profiles.v1.json',
+  'scripts/qa/check-persistence-settlement-report.mjs',
+  '.github/workflows/persistence-settlement.yml'
 ]
 
 const cases = [
@@ -28,7 +39,8 @@ const cases = [
     file: requiredFiles[0],
     caseId: 'F02',
     title: 'creates, appends, settles, freshly reopens read-only, and preserves the durable frontier',
-    expected: 'passed'
+    expected: 'failed',
+    cause: 'F02 main-owned speech owner dependency'
   },
   {
     file: requiredFiles[0],
@@ -180,7 +192,60 @@ function requireCausalEvidence(evidence, assertion) {
   const causeEvidence = evidence.get(assertion.caseId)
   requireValue(causeEvidence, `actual injected-boundary evidence is missing for ${assertion.caseId}`)
 
-  if (assertion.caseId === 'F05') {
+  if (assertion.caseId === 'F02') {
+    const expectedKeys = [
+      'caseId',
+      'readyProfile',
+      'openedRealJournal',
+      'ownerPredicate',
+      'journalOwnerBeforeControl',
+      'journalOwnerAfterControl',
+      'recordInputsEqual',
+      'policyInputsEqual',
+      'controlCanonicalDispatches',
+      'controlReceiptValid',
+      'copiedReceiptRejected',
+      'controlDisposal',
+      'controlBindingIdentitySame',
+      'controlOwnerTokenIdentitySame',
+      'controlCallbackIdentitySame',
+      'controlPhysicalExit',
+      'controlReceiptDiscarded',
+      'bootstrapCanonicalCalls',
+      'bootstrapCanonicalDispatches',
+      'bootstrapHostError',
+      'appendStatus',
+      'appendReason'
+    ].sort()
+    requireValue(
+      Object.keys(causeEvidence).sort().join(',') === expectedKeys.join(','),
+      'F02 owner-dependency witness fields differ from the closed schema'
+    )
+    requireValue(
+      causeEvidence.readyProfile === true &&
+        causeEvidence.openedRealJournal === true &&
+        causeEvidence.ownerPredicate === 'missing' &&
+        causeEvidence.journalOwnerBeforeControl === true &&
+        causeEvidence.journalOwnerAfterControl === true &&
+        causeEvidence.recordInputsEqual === true &&
+        causeEvidence.policyInputsEqual === true &&
+        causeEvidence.controlCanonicalDispatches === 1 &&
+        causeEvidence.controlReceiptValid === true &&
+        causeEvidence.copiedReceiptRejected === true &&
+        causeEvidence.controlBindingIdentitySame === true &&
+        causeEvidence.controlOwnerTokenIdentitySame === true &&
+        causeEvidence.controlCallbackIdentitySame === true &&
+        causeEvidence.controlDisposal === 'fulfilled' &&
+        causeEvidence.controlPhysicalExit === true &&
+        causeEvidence.controlReceiptDiscarded === true &&
+        causeEvidence.bootstrapCanonicalCalls === 1 &&
+        causeEvidence.bootstrapCanonicalDispatches === 0 &&
+        causeEvidence.bootstrapHostError === 'UNCONFIGURED' &&
+        causeEvidence.appendStatus === 'refused' &&
+        causeEvidence.appendReason === 'UNAVAILABLE',
+      'F02 did not prove a healthy real control and the original ownerless host refusal'
+    )
+  } else if (assertion.caseId === 'F05') {
     requireValue(
       causeEvidence.keySettlementAttemptsBeforeSuccessor === 1 &&
         causeEvidence.journalOutcome?.status === 'rejected' &&
@@ -252,7 +317,7 @@ function validate() {
   const logPath = process.env.VITEST_LOG_PATH
   const receiptPath = process.env.SETTLEMENT_RECEIPT_PATH
   requireValue(reportPath && logPath && receiptPath, 'report/log/receipt paths are missing')
-  requireValue(process.env.PERSISTENCE_SETTLEMENT_PHASE === 'expected-red', 'phase is not expected-red')
+  requireValue(process.env.PERSISTENCE_SETTLEMENT_PHASE === 'owner-dependency-red', 'phase is not owner-dependency-red')
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? ''), 'run attempt is invalid')
@@ -271,15 +336,15 @@ function validate() {
   const evidence = readCaseEvidence(log)
   requireValue(
     evidence.size === cases.filter((entry) => entry.expected === 'failed').length,
-    'actual evidence does not contain exactly the six causal witnesses'
+    'actual evidence does not contain exactly the seven causal witnesses'
   )
 
   const { bytes, report } = readReport(reportPath)
   requireValue(report.success === false, 'Vitest JSON does not record a failed run')
   const expectedCounters = {
     numTotalTests: 14,
-    numPassedTests: 8,
-    numFailedTests: 6,
+    numPassedTests: 7,
+    numFailedTests: 7,
     numPendingTests: 0,
     numTodoTests: 0,
     numTotalTestSuites: 4,
@@ -370,8 +435,8 @@ function validate() {
   const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
     schema: 'metis-persistence-settlement-source-receipt/v1',
-    disposition: 'EXPECTED_RED',
-    phase: 'test-first',
+    disposition: 'EXPECTED_OWNER_DEPENDENCY_RED',
+    phase: 'owner-dependency-red',
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
@@ -393,7 +458,9 @@ function validate() {
     cases: cases.map((entry) => ({ file: entry.file, title: entry.title, status: entry.expected }))
   }
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  console.log('persistence-settlement:EXPECTED_RED 14 cases; 8 positive controls passed; 6 named settlement failures')
+  console.log(
+    'persistence-settlement:EXPECTED_OWNER_DEPENDENCY_RED 14 cases; 7 positive controls passed; 7 named causal failures'
+  )
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }
 

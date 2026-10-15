@@ -9,10 +9,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { processMeetingSpeechRequest } from '../meeting-speech-worker'
 import {
   createMeetingSpeechPersistenceService,
+  type MeetingSpeechPersistenceService,
   type MeetingSpeechWorkerFactory,
   type MeetingSpeechWorkerPort
 } from '../infra/process/meeting-speech-host'
 import type { MeetingSpeechRequest } from '../infra/process/meeting-speech-protocol'
+import {
+  discardIncrementalRecordReceipt,
+  inspectIncrementalRecordReceipt,
+  type IncrementalRecordReceipt,
+  type IncrementalRecordReceiptBinding
+} from '../features/meetings/incremental-record-receipt'
 import { commitManagedAuthorityDocument } from '../settings-authority-history'
 import { publishSettingsSnapshot } from '../settings-observation'
 
@@ -171,9 +178,17 @@ async function closeFixtureHandle(path: string): Promise<void> {
 }
 
 class SourceWorker extends EventEmitter implements MeetingSpeechWorkerPort {
+  constructor(
+    private readonly onRequest?: (request: MeetingSpeechRequest) => void,
+    private readonly onPhysicalExit?: () => void
+  ) {
+    super()
+  }
+
   postMessage(request: MeetingSpeechRequest): void
   postMessage(request: MeetingSpeechRequest, transferList: ArrayBuffer[]): void
   postMessage(request: MeetingSpeechRequest): void {
+    this.onRequest?.(request)
     queueMicrotask(() => {
       const reply = processMeetingSpeechRequest(request)
       if (reply) this.emit('message', reply)
@@ -181,6 +196,7 @@ class SourceWorker extends EventEmitter implements MeetingSpeechWorkerPort {
   }
   async terminate(): Promise<number> {
     this.emit('exit', 0)
+    this.onPhysicalExit?.()
     return 0
   }
 }
@@ -190,7 +206,15 @@ const fixtureSourceCommit = 'a'.repeat(40)
 function sourceFixture(
   readBundledReceipt: MainPersistenceBootstrapSourceFixture['readBundledReceipt'] = async () => null,
   workerFactory?: MeetingSpeechWorkerFactory,
-  maxHeldRoots?: number
+  maxHeldRoots?: number,
+  speechObserver?: (
+    service: MeetingSpeechPersistenceService,
+    context: {
+      admittedProfile: ResolvedPersistenceProfile
+      policy: ReturnType<typeof toMeetingSpeechPolicy>
+      suppliedIsCurrent: (() => boolean) | undefined
+    }
+  ) => MeetingSpeechPersistenceService
 ): MainPersistenceBootstrapSourceFixture {
   const maxHeldRootsForFixture = maxHeldRoots ?? 4
   if (!Number.isSafeInteger(maxHeldRootsForFixture) || maxHeldRootsForFixture < 1 || maxHeldRootsForFixture > 8)
@@ -248,9 +272,9 @@ function sourceFixture(
         return value.slice('source-fixture:'.length)
       }
     },
-    createSpeech: (admittedProfile) => {
+    createSpeech: (admittedProfile, suppliedIsCurrent?: () => boolean) => {
       const policy = toMeetingSpeechPolicy(admittedProfile)
-      return createMeetingSpeechPersistenceService({
+      const service = createMeetingSpeechPersistenceService({
         readLimits: () => policy.limits,
         readBounds: () => ({
           maxInputBytes: policy.maxInputBytes,
@@ -258,8 +282,10 @@ function sourceFixture(
           operationDeadlineMs: policy.operationDeadlineMs,
           shutdownDeadlineMs: policy.shutdownDeadlineMs
         }),
+        ...(suppliedIsCurrent ? { isCurrent: suppliedIsCurrent } : {}),
         workerFactory: workerFactory ?? (() => new SourceWorker())
       })
+      return speechObserver ? speechObserver(service, { admittedProfile, policy, suppliedIsCurrent }) : service
     }
   }
 }
@@ -322,7 +348,102 @@ describe('main persistence factory source fixture', () => {
     commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
     commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
     publishSettingsSnapshot(settings, true)
-    const services = sourceFixture()
+    let bootstrapCanonicalCalls = 0
+    let bootstrapCanonicalDispatches = 0
+    let controlCanonicalDispatches = 0
+    let controlPhysicalExit = false
+    let controlDisposal = 'pending'
+    let controlReceiptValid = false
+    let copiedReceiptRejected = false
+    let controlReceiptDiscarded = false
+    let controlRecordInputsEqual = false
+    let controlPolicyInputsEqual = false
+    let controlBindingIdentitySame = false
+    let controlOwnerTokenIdentitySame = false
+    let controlCallbackIdentitySame = false
+    let journalOwnerBeforeControl = false
+    let journalOwnerAfterControl = false
+    let ownerPredicate = 'missing'
+    let bootstrapHostError = 'NONE'
+    let instrumented = false
+    const services = sourceFixture(
+      async () => null,
+      () =>
+        new SourceWorker((request) => {
+          if (request.operation === 'canonical-record') bootstrapCanonicalDispatches += 1
+        }),
+      undefined,
+      (service, { policy, suppliedIsCurrent }) => {
+        if (instrumented) return service
+        instrumented = true
+        ownerPredicate = suppliedIsCurrent ? 'present' : 'missing'
+        const originalCanonicalize = service.canonicalizeIncrementalRecord.bind(service)
+        return {
+          ...service,
+          async canonicalizeIncrementalRecord(recordJson, binding) {
+            bootstrapCanonicalCalls += 1
+            journalOwnerBeforeControl = binding.isCurrent() === true
+            const ownedCopy = Uint8Array.from(recordJson)
+            controlRecordInputsEqual =
+              ownedCopy.byteLength === recordJson.byteLength && Buffer.from(ownedCopy).equals(Buffer.from(recordJson))
+            controlPolicyInputsEqual =
+              policy.limits.maxRecords === binding.limits.maxRecords &&
+              policy.limits.maxWords === binding.limits.maxWords &&
+              policy.limits.maxFieldBytes === binding.limits.maxFieldBytes &&
+              policy.limits.maxRecordBytes === binding.limits.maxRecordBytes &&
+              policy.limits.maxPayloadBytes === binding.limits.maxPayloadBytes
+            const controlBinding: IncrementalRecordReceiptBinding = binding
+
+            const controlWorker = new SourceWorker(
+              (request) => {
+                if (request.operation === 'canonical-record') controlCanonicalDispatches += 1
+              },
+              () => {
+                controlPhysicalExit = true
+              }
+            )
+            const controlService = createMeetingSpeechPersistenceService({
+              readLimits: () => policy.limits,
+              readBounds: () => ({
+                maxInputBytes: policy.maxInputBytes,
+                maxOutputBytes: policy.maxOutputBytes,
+                operationDeadlineMs: policy.operationDeadlineMs,
+                shutdownDeadlineMs: policy.shutdownDeadlineMs
+              }),
+              isCurrent: controlBinding.isCurrent,
+              workerFactory: () => controlWorker
+            })
+            controlBindingIdentitySame = controlBinding === binding
+            controlOwnerTokenIdentitySame = controlBinding.ownerToken === binding.ownerToken
+            controlCallbackIdentitySame = controlBinding.isCurrent === binding.isCurrent
+            let controlReceipt: IncrementalRecordReceipt | undefined
+            try {
+              controlReceipt = await controlService.canonicalizeIncrementalRecord(ownedCopy, controlBinding)
+              copiedReceiptRejected = inspectIncrementalRecordReceipt({ ...controlReceipt }, controlBinding) === null
+              controlReceiptValid = inspectIncrementalRecordReceipt(controlReceipt, controlBinding) !== null
+            } finally {
+              if (controlReceipt) {
+                discardIncrementalRecordReceipt(controlReceipt)
+                controlReceiptDiscarded = true
+              }
+              await controlService.dispose()
+              controlDisposal = 'fulfilled'
+            }
+            journalOwnerAfterControl = binding.isCurrent() === true
+
+            try {
+              return await originalCanonicalize(recordJson, binding)
+            } catch (error) {
+              bootstrapHostError =
+                error instanceof Error && ['UNCONFIGURED', 'CANCELLED', 'WORKER_FAILED'].includes(error.name)
+                  ? error.name
+                  : 'OTHER'
+              throw error
+            }
+          }
+        }
+      }
+    )
     const first = createMainPersistenceBootstrapWithSourceFixture(
       { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
       services
@@ -338,7 +459,64 @@ describe('main persistence factory source fixture', () => {
           line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
         })
       )
-      await expect(writable.append(record, 0)).resolves.toMatchObject({
+      const appendResult = await writable.append(record, 0)
+      expect({
+        journalOwnerBeforeControl,
+        journalOwnerAfterControl,
+        controlRecordInputsEqual,
+        controlPolicyInputsEqual,
+        controlBindingIdentitySame,
+        controlOwnerTokenIdentitySame,
+        controlCallbackIdentitySame,
+        controlCanonicalDispatches,
+        controlReceiptValid,
+        copiedReceiptRejected,
+        controlReceiptDiscarded,
+        controlDisposal,
+        controlPhysicalExit,
+        bootstrapCanonicalCalls,
+        bootstrapCanonicalDispatches
+      }).toEqual({
+        journalOwnerBeforeControl: true,
+        journalOwnerAfterControl: true,
+        controlRecordInputsEqual: true,
+        controlPolicyInputsEqual: true,
+        controlBindingIdentitySame: true,
+        controlOwnerTokenIdentitySame: true,
+        controlCallbackIdentitySame: true,
+        controlCanonicalDispatches: 1,
+        controlReceiptValid: true,
+        copiedReceiptRejected: true,
+        controlReceiptDiscarded: true,
+        controlDisposal: 'fulfilled',
+        controlPhysicalExit: true,
+        bootstrapCanonicalCalls: 1,
+        bootstrapCanonicalDispatches: ownerPredicate === 'present' ? 1 : 0
+      })
+      recordSettlementEvidence('F02', {
+        readyProfile: true,
+        openedRealJournal: true,
+        ownerPredicate,
+        journalOwnerBeforeControl,
+        journalOwnerAfterControl,
+        recordInputsEqual: controlRecordInputsEqual,
+        policyInputsEqual: controlPolicyInputsEqual,
+        controlBindingIdentitySame,
+        controlOwnerTokenIdentitySame,
+        controlCallbackIdentitySame,
+        controlCanonicalDispatches,
+        controlReceiptValid,
+        copiedReceiptRejected,
+        controlDisposal,
+        controlPhysicalExit,
+        controlReceiptDiscarded,
+        bootstrapCanonicalCalls,
+        bootstrapCanonicalDispatches,
+        bootstrapHostError,
+        appendStatus: appendResult.status,
+        appendReason: appendResult.status === 'refused' ? appendResult.reason : null
+      })
+      expect(appendResult, 'F02 main-owned speech owner dependency: durable append is required').toMatchObject({
         status: 'durable',
         revision: 1,
         duplicate: false

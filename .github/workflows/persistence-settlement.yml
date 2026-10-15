@@ -1,4 +1,4 @@
-name: Persistence settlement source RED
+name: Persistence owner dependency source RED
 
 on:
   push:
@@ -13,6 +13,15 @@ on:
       - src/main/persistence/root-registry.ts
       - src/main/persistence/bootstrap-main-factory.integration.test.ts
       - src/main/persistence/root-registry.test.ts
+      - src/main/infra/process/meeting-speech-host.ts
+      - src/main/meeting-speech-worker.ts
+      - src/main/features/meetings/incremental-meeting-journal.ts
+      - src/main/features/meetings/incremental-record-receipt.ts
+      - src/main/auth-speech-lease.ts
+      - src/main/settings-authority-history.ts
+      - src/main/settings-observation.ts
+      - src/main/persistence/resource-policy.ts
+      - resources/persistence-profiles.v1.json
   workflow_dispatch:
 
 permissions:
@@ -28,12 +37,12 @@ defaults:
 
 jobs:
   test-first:
-    name: F0219 settlement causal RED
+    name: F3424 owner dependency causal RED
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: expected-red
+      PERSISTENCE_SETTLEMENT_PHASE: owner-dependency-red
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -86,7 +95,7 @@ jobs:
           const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 'missing'
           const status = (value) => ['passed', 'failed', 'pending', 'todo'].includes(value) ? value : 'unknown'
           const outcomeStatus = (value) => ['fulfilled', 'rejected'].includes(value) ? value : 'unknown'
-          const allowedCases = new Set(['F05', 'F06', 'F07', 'F08', 'R04', 'R05'])
+          const allowedCases = new Set(['F02', 'F05', 'F06', 'F07', 'F08', 'R04', 'R05'])
           const counters = [
             'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests',
             'numTodoTests', 'numTotalTestSuites', 'numPendingTestSuites',
@@ -104,15 +113,27 @@ jobs:
               'writerCloseAttemptsBeforeSuccessor', 'writerCloseAttemptsAfterDisposal',
               'rootCloseAttemptsBeforeSuccessor', 'rootCloseAttemptsAfterDisposal',
               'writerCloseAttemptsBeforeDisposal', 'writerCloseAttemptsAfterDisposal',
-              'failedOpenCloseAttempts', 'closeAttempts', 'maxHeldRoots'
+              'failedOpenCloseAttempts', 'closeAttempts', 'maxHeldRoots',
+              'controlCanonicalDispatches', 'bootstrapCanonicalCalls', 'bootstrapCanonicalDispatches'
             ]
             const booleans = [
               'successorAdmitted', 'gatewayRejected', 'reopenedCapability',
               'heldOriginalAdmitted', 'heldReopenedAdmitted',
-              'failedOriginalAdmitted', 'failedReopenedAdmitted'
+              'failedOriginalAdmitted', 'failedReopenedAdmitted',
+              'readyProfile', 'openedRealJournal', 'journalOwnerBeforeControl', 'journalOwnerAfterControl',
+              'recordInputsEqual', 'policyInputsEqual', 'controlReceiptValid', 'copiedReceiptRejected',
+              'controlBindingIdentitySame', 'controlOwnerTokenIdentitySame', 'controlCallbackIdentitySame',
+              'controlPhysicalExit', 'controlReceiptDiscarded'
             ]
             for (const key of numeric) if (key in record) result[key] = integer(record[key])
             for (const key of booleans) if (typeof record[key] === 'boolean') result[key] = record[key]
+            if (['missing', 'present'].includes(record.ownerPredicate)) result.ownerPredicate = record.ownerPredicate
+            if (['fulfilled', 'rejected', 'pending'].includes(record.controlDisposal)) result.controlDisposal = record.controlDisposal
+            if (['NONE', 'UNCONFIGURED', 'CANCELLED', 'WORKER_FAILED', 'OTHER'].includes(record.bootstrapHostError)) {
+              result.bootstrapHostError = record.bootstrapHostError
+            }
+            if (['durable', 'duplicate', 'refused'].includes(record.appendStatus)) result.appendStatus = record.appendStatus
+            if (record.appendReason === null || record.appendReason === 'UNAVAILABLE') result.appendReason = record.appendReason
             for (const key of ['journalOutcome', 'successorOutcome', 'disposalOutcome', 'openingOutcome']) {
               const value = record[key]
               if (!value || typeof value !== 'object') continue
@@ -169,7 +190,7 @@ jobs:
             for (const line of log.split(/\r?\n/)) {
               const marker = 'PERSISTENCE_SETTLEMENT_EVIDENCE '
               const index = line.indexOf(marker)
-              if (index < 0 || evidenceCount >= 6) continue
+              if (index < 0 || evidenceCount >= 7) continue
               const payload = line.slice(index + marker.length).trim()
               if (payload.length > 4096) {
                 if (!evidenceErrorPrinted) console.log('SETTLEMENT_DIAGNOSTIC_ERROR evidence=oversize')
@@ -189,13 +210,13 @@ jobs:
             console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE_COUNT ${evidenceCount}`)
           }
           NODE
-      - name: Validate only the six named causal settlement failures
+      - name: Validate only the seven named owner and settlement failures
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain the raw run, JSON and EXPECTED_RED receipt
+      - name: Retain the raw run, JSON and EXPECTED_OWNER_DEPENDENCY_RED receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-settlement-expected-red-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persistence-owner-dependency-red-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
           retention-days: 14
