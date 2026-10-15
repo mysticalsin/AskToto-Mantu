@@ -290,7 +290,7 @@ describe('import jobs IPC adapter', () => {
     authenticated = false
     release(job)
 
-    await expect(pending).rejects.toThrow('Not signed in.')
+    await expect(pending).rejects.toThrow('The original import authority is no longer current.')
     expect(context.consumePickedAudio).toHaveBeenCalledOnce()
   })
 
@@ -373,7 +373,7 @@ describe('import jobs IPC adapter', () => {
     authenticated = false
     release([job])
 
-    await expect(pending).rejects.toThrow('Not signed in.')
+    await expect(pending).rejects.toThrow('The original import authority is no longer current.')
     expect(context.consumePickedAudio).toHaveBeenCalledOnce()
   })
 
@@ -542,7 +542,9 @@ describe('import jobs IPC adapter', () => {
       assertImportAdmissionCurrent: current
     })
 
-    await expect(context.invoke(IPC.importJobResume, { jobId: 'job-1' })).rejects.toThrow('Not signed in.')
+    await expect(context.invoke(IPC.importJobResume, { jobId: 'job-1' })).rejects.toThrow(
+      'The original import authority is no longer current.'
+    )
     expect(context.manager.resume).toHaveBeenCalledOnce()
     expect(current).not.toHaveBeenCalled()
   })

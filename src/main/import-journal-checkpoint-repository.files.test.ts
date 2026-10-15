@@ -239,7 +239,7 @@ describe('encrypted import checkpoint repository recovery', () => {
         }
       )
     ).resolves.toMatchObject({ records: 1, nextRecordId: '1', complete: true })
-    expect(page).toEqual([{ speaker: 'unknown', text: 'durable transcript', t: 1_700_000_000_000 }])
+    expect(page).toEqual([change.record])
     await repository.settle(resumed.checkpoint.transcript)
   })
 })

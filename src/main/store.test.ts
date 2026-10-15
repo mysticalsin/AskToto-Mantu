@@ -146,7 +146,7 @@ describe('store', () => {
     expect(original).not.toBeNull()
 
     writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['anthropic', 'openai', 'openai'] }), 'utf8')
-    expect(getAllowedProviders()).toEqual(['anthropic', 'openai', 'openai'])
+    expect(getAllowedProviders()).toEqual(['anthropic', 'openai'])
     expect(isSettingsAuthorityCurrent(original!)).toBe(true)
 
     writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['anthropic'] }), 'utf8')
