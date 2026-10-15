@@ -1,13 +1,14 @@
 import { build } from 'esbuild'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createRequire } from 'node:module'
-import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, writeSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { createHash, createPrivateKey, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
+declare const __METIS_QA_IDENTITY__: boolean
 
 const ROOT = process.cwd()
-const OUT = process.env.QA_U0_RUN_DIR
+let OUT = ''
 const NATIVE_BINARY = createRequire(resolve(ROOT, 'node_modules/esbuild/lib/main.js')).resolve(
   `@esbuild/${process.platform}-${process.arch}/${process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'}`
 )
@@ -34,7 +35,26 @@ type RecordValue = Record<string, any>
 declare module '@vitest/runner' {
   interface TaskMeta {
     qaU0Record?: RecordValue | null
+    qaU0FixtureOwner?: FixtureOwner
   }
+}
+type FixtureOwner = {
+  schema: 'metis-u0-fixture-owner/v2'
+  mode: 'unadmitted' | 'dedicated' | 'ordinary-root'
+  directory: string | null
+  setup: 'pending' | 'complete' | 'failed'
+  closing: boolean
+  join: 'not-started' | 'pending' | 'fulfilled' | 'rejected'
+  sameSetupPromise: boolean
+  manifest: 'unpublished' | 'published' | 'failed'
+  namespaces: number
+  buildStarted: number
+  buildFulfilled: number
+  buildRejected: number
+  outputOpened: number
+  outputClosed: number
+  compiledModules: number
+  outputBytes: number
 }
 type FixtureModule = Record<string, (...args: any[]) => any> & { __fixture: FixtureInfo }
 type FixtureInfo = {
@@ -60,10 +80,169 @@ const sourceHashes: Record<string, { gitBlob: string; gitSha256: string; checkou
 const bundles = new Map<string, FixtureInfo>()
 const evidenceRows: RecordValue[] = []
 const compiledArtifacts: RecordValue[] = []
+let caseBytesTotal = 0
 let totalOutputBytes = 0
 let compiledModules = 0
 let fixtureRoot = ''
+let ownedIdentity:
+  | {
+      parent: { dev: number; ino: number }
+      output: { dev: number; ino: number }
+      compiled: { dev: number; ino: number }
+    }
+  | undefined
 let currentCaseRecord: RecordValue | null = null
+let setupPromise: Promise<void> | undefined
+let beforeAllPromise: Promise<void> | undefined
+let setupFailure: unknown
+const owner: FixtureOwner = {
+  schema: 'metis-u0-fixture-owner/v2',
+  mode: 'unadmitted',
+  directory: null,
+  setup: 'pending',
+  closing: false,
+  join: 'not-started',
+  sameSetupPromise: false,
+  manifest: 'unpublished',
+  namespaces: 0,
+  buildStarted: 0,
+  buildFulfilled: 0,
+  buildRejected: 0,
+  outputOpened: 0,
+  outputClosed: 0,
+  compiledModules: 0,
+  outputBytes: 0
+}
+const DEDICATED = [
+  'U0_DIR',
+  'QA_U0_RUN_DIR',
+  'QA_U0_CASE_REPORT',
+  'QA_U0_VITEST_JSON',
+  'QA_U0_TARGET',
+  'QA_OWNER_FRAMEWORK_REPORT_PATH',
+  'QA_OWNER_TARGET',
+  'QA_OWNER_SOURCE_SHA'
+] as const
+
+function within(parent: string, child: string): boolean {
+  const part = relative(parent, child)
+  return (
+    part !== '' &&
+    part !== '..' &&
+    !part.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
+    !isAbsolute(part)
+  )
+}
+function realDirectory(path: string): string {
+  const named = lstatSync(path)
+  if (!named.isDirectory() || named.isSymbolicLink()) throw new Error('fixture-directory-substitution')
+  return realpathSync(path)
+}
+function selectedOutput(): { mode: 'dedicated' | 'ordinary-root'; parent: string; basename: string } {
+  const env = process.env
+  const dedicated = Object.keys(env).some(
+    (key) => DEDICATED.includes(key as (typeof DEDICATED)[number]) || key.startsWith('QA_U0_')
+  )
+  const fail = (label: string): never => {
+    throw new Error(label)
+  }
+  const sane = (value: string | undefined, max = 1024): value is string =>
+    typeof value === 'string' && value.length > 0 && Buffer.byteLength(value) <= max
+  const temp = env.RUNNER_TEMP
+  if (dedicated) {
+    if (
+      Object.keys(env).some(
+        (key) => key.startsWith('QA_U0_') && !DEDICATED.includes(key as (typeof DEDICATED)[number])
+      ) ||
+      DEDICATED.some((key) => !Object.hasOwn(env, key) || !sane(env[key]))
+    )
+      fail('fixture-dedicated-context-incomplete')
+    if (
+      process.version !== 'v22.22.3' ||
+      !sane(temp) ||
+      !isAbsolute(temp) ||
+      !sane(env.U0_DIR) ||
+      !isAbsolute(env.U0_DIR) ||
+      !sane(env.GITHUB_SHA, 40) ||
+      !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA) ||
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim() !== env.GITHUB_SHA ||
+      env.QA_OWNER_SOURCE_SHA !== env.GITHUB_SHA ||
+      !['linux-shipping', 'windows-x64', 'macos-arm64'].includes(env.QA_U0_TARGET!) ||
+      env.QA_U0_TARGET !==
+        (process.platform === 'win32'
+          ? 'windows-x64'
+          : process.platform === 'darwin'
+            ? 'macos-arm64'
+            : 'linux-shipping') ||
+      env.QA_OWNER_TARGET !== env.QA_U0_TARGET
+    )
+      fail('fixture-dedicated-context-incomplete')
+    const root = realDirectory(temp!)
+    const parent = realDirectory(env.U0_DIR!)
+    if (
+      !within(root, parent) ||
+      ![
+        [env.QA_U0_RUN_DIR!, 'fixture'],
+        [env.QA_U0_CASE_REPORT!, 'cases.json'],
+        [env.QA_U0_VITEST_JSON!, 'vitest.json'],
+        [env.QA_OWNER_FRAMEWORK_REPORT_PATH!, 'framework.json']
+      ].every(
+        ([actual, name]) =>
+          isAbsolute(actual) && basename(resolve(actual)) === name && realDirectory(dirname(resolve(actual))) === parent
+      )
+    )
+      fail('fixture-dedicated-context-incomplete')
+    return { mode: 'dedicated', parent, basename: 'fixture' }
+  }
+  if (
+    env.GITHUB_ACTIONS !== 'true' ||
+    process.version !== 'v22.22.3' ||
+    typeof __METIS_QA_IDENTITY__ === 'undefined' ||
+    __METIS_QA_IDENTITY__ !== false ||
+    !sane(env.GITHUB_SHA, 40) ||
+    !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA) ||
+    !sane(env.GITHUB_RUN_ID, 32) ||
+    !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID) ||
+    !Number.isSafeInteger(Number(env.GITHUB_RUN_ID)) ||
+    !sane(env.GITHUB_RUN_ATTEMPT, 16) ||
+    !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT) ||
+    !Number.isSafeInteger(Number(env.GITHUB_RUN_ATTEMPT)) ||
+    !sane(env.GITHUB_REPOSITORY) ||
+    !sane(env.GITHUB_JOB) ||
+    !sane(env.GITHUB_WORKFLOW_REF) ||
+    !sane(env.GITHUB_WORKSPACE) ||
+    !sane(temp) ||
+    !isAbsolute(temp) ||
+    !sane(env.METIS_CI_ROOT_REPORT) ||
+    !isAbsolute(env.METIS_CI_ROOT_REPORT) ||
+    !env.METIS_CI_ROOT_REPORT.endsWith('.json') ||
+    !sane(env.HOME) ||
+    env.HOME !== env.USERPROFILE ||
+    env.HOME !== env.METIS_TEST_HOME ||
+    env.HOME !== env.ASKTOTO_TEST_SANDBOX_ROOT ||
+    ![env.TMPDIR, env.TMP, env.TEMP].every((value) => value === join(env.HOME!, 'tmp')) ||
+    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim() !== env.GITHUB_SHA
+  )
+    fail('fixture-root-context-incomplete')
+  const workflow = env.GITHUB_WORKFLOW_REF
+  if (
+    !['build.yml', 'windows-unsigned-qa-mode.yml'].some((name) => {
+      const prefix = `${env.GITHUB_REPOSITORY}/.github/workflows/${name}@`
+      return workflow!.startsWith(prefix) && workflow!.length > prefix.length
+    })
+  )
+    fail('fixture-root-context-incomplete')
+  if (realpathSync(ROOT) !== realpathSync(env.GITHUB_WORKSPACE!)) fail('fixture-root-context-incomplete')
+  const runner = realDirectory(temp!)
+  const parent = realDirectory(dirname(env.METIS_CI_ROOT_REPORT!))
+  if (
+    !(runner === parent || within(runner, parent)) ||
+    realDirectory(env.HOME!) === runner ||
+    !within(realDirectory(env.HOME!), realDirectory(env.TMPDIR!))
+  )
+    fail('fixture-root-context-incomplete')
+  return { mode: 'ordinary-root', parent, basename: `u0-root-${randomUUID()}` }
+}
 
 function sha(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex')
@@ -193,6 +372,124 @@ function safeModuleName(id: string): string {
   return `u0-${sha(id)}.cjs`
 }
 
+function writeReport(path: string, bytes: Buffer, limit: number): void {
+  if (bytes.byteLength < 2 || bytes.byteLength > limit) throw new Error('fixture-report-bound')
+  if (owner.closing && owner.join !== 'fulfilled') throw new Error('fixture-report-closing')
+  verifyOwned()
+  const fd = openSync(path, 'wx+', 0o600)
+  owner.outputOpened++
+  let primary: unknown
+  try {
+    const held = fstatSync(fd)
+    const named = lstatSync(path)
+    if (
+      !held.isFile() ||
+      !named.isFile() ||
+      named.isSymbolicLink() ||
+      held.dev !== named.dev ||
+      held.ino !== named.ino ||
+      held.size !== 0 ||
+      named.size !== 0
+    )
+      throw new Error('fixture-report-open-identity')
+    let offset = 0
+    while (offset < bytes.length) {
+      const count = writeSync(fd, bytes, offset, bytes.length - offset, offset)
+      if (count <= 0) throw new Error('fixture-report-short-write')
+      offset += count
+    }
+    const copy = Buffer.alloc(bytes.length)
+    offset = 0
+    while (offset < copy.length) {
+      const count = readSync(fd, copy, offset, copy.length - offset, offset)
+      if (count <= 0) throw new Error('fixture-report-short-read')
+      offset += count
+    }
+    if (!copy.equals(bytes) || readSync(fd, Buffer.alloc(1), 0, 1, bytes.length) !== 0)
+      throw new Error('fixture-report-readback')
+    const after = fstatSync(fd)
+    const namedAfter = lstatSync(path)
+    if (
+      after.dev !== held.dev ||
+      after.ino !== held.ino ||
+      after.size !== bytes.length ||
+      namedAfter.dev !== held.dev ||
+      namedAfter.ino !== held.ino ||
+      namedAfter.size !== bytes.length ||
+      namedAfter.isSymbolicLink()
+    )
+      throw new Error('fixture-report-final-identity')
+  } catch (error) {
+    primary = error
+  }
+  let closeError: unknown
+  try {
+    closeSync(fd)
+    owner.outputClosed++
+  } catch (error) {
+    closeError = error
+  }
+  if (primary && closeError) throw new AggregateError([primary, closeError], 'fixture-report-and-close')
+  if (primary) throw primary
+  if (closeError) throw closeError
+}
+
+function verifyOwned(): void {
+  if (!ownedIdentity || !OUT || !fixtureRoot) throw new Error('fixture-namespace-unowned')
+  for (const [path, expected] of [
+    [dirname(OUT), ownedIdentity.parent],
+    [OUT, ownedIdentity.output],
+    [fixtureRoot, ownedIdentity.compiled]
+  ] as const) {
+    const current = lstatSync(path)
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      current.dev !== expected.dev ||
+      current.ino !== expected.ino
+    )
+      throw new Error('fixture-namespace-substituted')
+  }
+}
+
+function exactJsonSize(value: unknown, limit: number, maxNodes: number): number {
+  const seen = new Set<object>()
+  let nodes = 0
+  const scalar = (text: string): number => {
+    if (Buffer.byteLength(text) > 8192) throw new Error('fixture-json-scalar-bound')
+    return Buffer.byteLength(JSON.stringify(text))
+  }
+  const size = (item: unknown, depth: number): number => {
+    if (++nodes > maxNodes || depth > 8) throw new Error('fixture-json-structure-bound')
+    if (item === null) return 4
+    if (typeof item === 'string') return scalar(item)
+    if (typeof item === 'boolean') return item ? 4 : 5
+    if (typeof item === 'number' && Number.isFinite(item)) return Buffer.byteLength(JSON.stringify(item))
+    if (!item || typeof item !== 'object' || seen.has(item)) throw new Error('fixture-json-value-bound')
+    seen.add(item)
+    let total = 2
+    if (Array.isArray(item)) {
+      if (item.length > 50) throw new Error('fixture-json-array-bound')
+      for (let index = 0; index < item.length; index++) {
+        if (!Object.hasOwn(item, index)) throw new Error('fixture-json-hole')
+        total += (index ? 1 : 0) + size(item[index], depth + 1)
+      }
+    } else {
+      const keys = Object.keys(item)
+      if (keys.length > 32) throw new Error('fixture-json-object-bound')
+      for (const [index, key] of keys.entries()) {
+        const property = Object.getOwnPropertyDescriptor(item, key)
+        if (!property || !Object.hasOwn(property, 'value')) throw new Error('fixture-json-accessor')
+        total += (index ? 1 : 0) + scalar(key) + 1 + size(property.value, depth + 1)
+      }
+    }
+    seen.delete(item)
+    if (total > limit) throw new Error('fixture-json-byte-bound')
+    return total
+  }
+  return size(value, 0)
+}
+
 async function compileModule(
   id: string,
   stamp: RecordValue | null,
@@ -201,9 +498,10 @@ async function compileModule(
   overrideProtocol?: Buffer,
   identityBuild = stamp !== null
 ): Promise<{ module: FixtureModule; hashes: Record<string, string> }> {
-  if (!OUT) throw new Error('missing-QA_U0_RUN_DIR')
+  if (!OUT || owner.closing) throw new Error('fixture-compile-closing-or-unadmitted')
   if (compiledModules >= LIMITS.modules) throw new Error('fixture-module-bound')
   compiledModules += 1
+  owner.compiledModules = compiledModules
   const protocol = overrideProtocol ?? source(sourcePath)
   const compiledProtocol = overrideProtocol ? Buffer.concat([protocol, Buffer.from(SUFFIX)]) : protocol
   const identity = source(QA_IDENTITY)
@@ -222,29 +520,41 @@ async function compileModule(
   }
   const absProtocol = resolve(ROOT, PROTOCOL)
   const safeName = safeModuleName(id)
-  const result = await build({
-    absWorkingDir: ROOT,
-    entryPoints: overrideProtocol ? undefined : [absProtocol],
-    stdin: overrideProtocol
-      ? {
-          contents: compiledProtocol.toString('utf8'),
-          resolveDir: dirname(absProtocol),
-          sourcefile: absProtocol,
-          loader: 'ts'
-        }
-      : undefined,
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    target: 'node22',
-    loader: { '.ts': 'ts' },
-    write: false,
-    metafile: true,
-    sourcemap: false,
-    outfile: resolve(fixtureRoot, safeName),
-    define: defines,
-    logLevel: 'silent'
-  })
+  if (owner.closing) throw new Error('fixture-compile-closing')
+  verifyOwned()
+  owner.buildStarted++
+  let result: Awaited<ReturnType<typeof build>>
+  try {
+    const originalBuild = build({
+      absWorkingDir: ROOT,
+      entryPoints: overrideProtocol ? undefined : [absProtocol],
+      stdin: overrideProtocol
+        ? {
+            contents: compiledProtocol.toString('utf8'),
+            resolveDir: dirname(absProtocol),
+            sourcefile: absProtocol,
+            loader: 'ts'
+          }
+        : undefined,
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      target: 'node22',
+      loader: { '.ts': 'ts' },
+      write: false,
+      metafile: true,
+      sourcemap: false,
+      outfile: resolve(fixtureRoot, safeName),
+      define: defines,
+      logLevel: 'silent'
+    })
+    result = await originalBuild
+    owner.buildFulfilled++
+  } catch (error) {
+    owner.buildRejected++
+    throw error
+  }
+  if (owner.closing) throw new Error('fixture-compile-closing')
   if (!result.metafile || !result.outputFiles) throw new Error('fixture-build-output-missing')
   const inputs = Object.keys(result.metafile.inputs)
     .map((path) => (isAbsolute(path) ? relative(ROOT, path) : path).replaceAll('\\', '/').replace(/^\.\//, ''))
@@ -261,10 +571,13 @@ async function compileModule(
   )
     throw new Error('fixture-output-bound')
   totalOutputBytes += outputs[0].contents.byteLength
+  owner.outputBytes = totalOutputBytes
   const outPath = resolve(fixtureRoot, safeName)
+  verifyOwned()
   const expectedOutput = outputs[0].contents
   const expectedOutputSha256 = sha(expectedOutput)
   const fd = openSync(outPath, 'wx+', 0o600)
+  owner.outputOpened++
   let module: FixtureModule | undefined
   let finalBytes: Buffer | undefined
   let opened: ReturnType<typeof fstatSync> | undefined
@@ -352,6 +665,7 @@ async function compileModule(
   try {
     closeSync(fd)
     originalFdClosed = true
+    owner.outputClosed++
   } catch (error) {
     closeError = error
     closeFailed = true
@@ -368,16 +682,11 @@ async function compileModule(
     namedIdentityMatched,
     originalFdClosed
   }
+  if (exactJsonSize(result.metafile, 64 * 1024 - 1, 8192) + 1 > 64 * 1024) throw new Error('fixture-metafile-bound')
   const metaBytes = Buffer.from(`${JSON.stringify(result.metafile)}\n`)
   if (metaBytes.byteLength < 2 || metaBytes.byteLength > 64 * 1024) throw new Error('fixture-metafile-bound')
   const metaPath = resolve(fixtureRoot, `${safeName}.meta.json`)
-  const metaFd = openSync(metaPath, 'wx', 0o600)
-  try {
-    if (writeSync(metaFd, metaBytes, 0, metaBytes.length, 0) !== metaBytes.length)
-      throw new Error('fixture-meta-short-write')
-  } finally {
-    closeSync(metaFd)
-  }
+  writeReport(metaPath, metaBytes, 64 * 1024)
   const inputHashes = Object.fromEntries(inputs.map((path) => [path, sha(source(path))]))
   if (overrideProtocol && compiledProtocol.subarray(protocol.byteLength).compare(Buffer.from(SUFFIX)) !== 0)
     throw new Error('fixture-augmentation-mismatch')
@@ -539,12 +848,9 @@ function record(
       )
     }
   }
-  const bytes = Buffer.byteLength(JSON.stringify(row))
-  if (
-    bytes > 4096 ||
-    evidenceRows.reduce((sum, value) => sum + Buffer.byteLength(JSON.stringify(value)), bytes) > 256 * 1024
-  )
-    throw new Error('case-evidence-bound')
+  const bytes = exactJsonSize(row, 4096, 512)
+  if (caseBytesTotal + bytes > 256 * 1024) throw new Error('case-evidence-bound')
+  caseBytesTotal += bytes
   evidenceRows.push(row)
   currentCaseRecord = row
 }
@@ -580,113 +886,150 @@ const CASE_IDS = [
   'J02'
 ]
 
-beforeAll(async () => {
-  if (!OUT || !/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? '') || process.version !== 'v22.22.3')
-    throw new Error('fixture-context-incomplete')
-  const expectedBinary = resolve(
-    ROOT,
-    'node_modules',
-    `@esbuild/${process.platform}-${process.arch}`,
-    process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'
-  )
-  if (process.env.ESBUILD_BINARY_PATH !== undefined || NATIVE_BINARY !== expectedBinary)
-    throw new Error('fixture-esbuild-selection-mismatch')
-  mkdirSync(OUT, { recursive: false, mode: 0o700 })
-  if (!process.env.HOME) throw new Error('hermetic-fixture-home-missing')
-  fixtureRoot = join(OUT, 'compiled')
-  mkdirSync(fixtureRoot, { recursive: false, mode: 0o700 })
-  source(PROTOCOL)
-  source(QA_IDENTITY)
-  source(RESOURCE)
-  for (const item of MATRIX) await prepare(item.target, item.mode)
-  // Four QA=false or missing-stamp controls.
-  for (const [id, target, mode, stamp] of [
-    ['S01', 'win32-x64', 'windows-authenticode', true],
-    ['S02', 'win32-x64', 'windows-unsigned-candidate', true],
-    ['S03', 'win32-x64', 'windows-authenticode', false],
-    ['S04', 'win32-x64', 'windows-authenticode', false]
-  ] as const) {
-    const keyPair = generateKeyPairSync('ed25519')
-    const pub = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url')
-    const signedStamp = stamp ? fixtureStamp(target, mode, pub) : null
-    const idKey = compileLabel(target, mode, id)
-    const qaBuild = id === 'S04'
-    const pair = await compileModule(`${idKey}-public`, signedStamp, false, PROTOCOL, undefined, qaBuild)
-    const context = signedStamp?.context ?? {}
-    let challenge = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-    if (qaBuild) challenge = pair.module.newQaPersistenceBootChallenge()
-    const keyPem = keyPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString()
-    bundles.set(id, {
-      id,
-      target,
-      mode,
-      stamp: Boolean(stamp),
-      keyPem,
-      keyDer: pub,
-      context,
-      runtime: signedStamp?.runtime ?? {},
-      identity: signedStamp?.qaIdentity ?? {},
-      fields: signedStamp ?? {},
-      hashes: pair.hashes,
-      publicModule: pair.module,
-      payloadModule: pair.module,
-      challenge
-    })
+async function setupFixture(): Promise<void> {
+  try {
+    const selected = selectedOutput()
+    const expectedName = selected.basename
+    const directory = join(selected.parent, expectedName)
+    const parentBefore = lstatSync(selected.parent)
+    if (!parentBefore.isDirectory() || parentBefore.isSymbolicLink()) throw new Error('fixture-parent-changed')
+    const expectedBinary = resolve(
+      ROOT,
+      'node_modules',
+      `@esbuild/${process.platform}-${process.arch}`,
+      process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'
+    )
+    if (process.env.ESBUILD_BINARY_PATH !== undefined || NATIVE_BINARY !== expectedBinary)
+      throw new Error('fixture-esbuild-selection-mismatch')
+    mkdirSync(directory, { recursive: false, mode: 0o700 })
+    owner.namespaces++
+    owner.mode = selected.mode
+    owner.directory = expectedName
+    const acquired = lstatSync(directory)
+    const parentAfter = lstatSync(selected.parent)
+    if (
+      !acquired.isDirectory() ||
+      acquired.isSymbolicLink() ||
+      parentAfter.dev !== parentBefore.dev ||
+      parentAfter.ino !== parentBefore.ino ||
+      !within(realDirectory(selected.parent), realDirectory(directory))
+    )
+      throw new Error('fixture-namespace-changed')
+    OUT = directory
+    if (!process.env.HOME) throw new Error('hermetic-fixture-home-missing')
+    fixtureRoot = join(OUT, 'compiled')
+    mkdirSync(fixtureRoot, { recursive: false, mode: 0o700 })
+    ownedIdentity = {
+      parent: { dev: parentAfter.dev, ino: parentAfter.ino },
+      output: { dev: acquired.dev, ino: acquired.ino },
+      compiled: { dev: lstatSync(fixtureRoot).dev, ino: lstatSync(fixtureRoot).ino }
+    }
+    source(PROTOCOL)
+    source(QA_IDENTITY)
+    source(RESOURCE)
+    for (const item of MATRIX) await prepare(item.target, item.mode)
+    // Four QA=false or missing-stamp controls.
+    for (const [id, target, mode, stamp] of [
+      ['S01', 'win32-x64', 'windows-authenticode', true],
+      ['S02', 'win32-x64', 'windows-unsigned-candidate', true],
+      ['S03', 'win32-x64', 'windows-authenticode', false],
+      ['S04', 'win32-x64', 'windows-authenticode', false]
+    ] as const) {
+      const keyPair = generateKeyPairSync('ed25519')
+      const pub = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url')
+      const signedStamp = stamp ? fixtureStamp(target, mode, pub) : null
+      const idKey = compileLabel(target, mode, id)
+      const qaBuild = id === 'S04'
+      const pair = await compileModule(`${idKey}-public`, signedStamp, false, PROTOCOL, undefined, qaBuild)
+      const context = signedStamp?.context ?? {}
+      let challenge = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+      if (qaBuild) challenge = pair.module.newQaPersistenceBootChallenge()
+      const keyPem = keyPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString()
+      bundles.set(id, {
+        id,
+        target,
+        mode,
+        stamp: Boolean(stamp),
+        keyPem,
+        keyDer: pub,
+        context,
+        runtime: signedStamp?.runtime ?? {},
+        identity: signedStamp?.qaIdentity ?? {},
+        fields: signedStamp ?? {},
+        hashes: pair.hashes,
+        publicModule: pair.module,
+        payloadModule: pair.module,
+        challenge
+      })
+    }
+    // Two unknown-mode stamp bundles. These test the current closed enum and its post-repair boundary.
+    for (const [id, target] of [
+      ['J02-windows-unknown', 'win32-x64'],
+      ['J02-darwin-unknown', 'darwin-x64']
+    ] as const) {
+      const mode = 'future-unknown-mode' as Mode
+      const keyPair = generateKeyPairSync('ed25519')
+      const pub = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url')
+      const stamp = fixtureStamp(target, target === 'win32-x64' ? 'windows-authenticode' : 'mac-adhoc', pub)
+      stamp.qaIdentity.signingMode = mode
+      const key = compileLabel(target, mode, id)
+      const publicBuild = await compileModule(`${key}-public`, stamp, false)
+      bundles.set(id, {
+        id,
+        target,
+        mode,
+        stamp: true,
+        keyPem: keyPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        keyDer: pub,
+        context: stamp.context,
+        runtime: stamp.runtime,
+        identity: stamp.qaIdentity,
+        fields: stamp,
+        hashes: publicBuild.hashes,
+        publicModule: publicBuild.module,
+        payloadModule: publicBuild.module,
+        challenge: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+      })
+    }
+    // B04 coherent alternate Windows contexts under each tested mode; public-only bundles.
+    for (const mode of ['windows-authenticode', 'windows-unsigned-candidate'] as const) {
+      const target: Target = 'win32-x64'
+      const base = bundles.get(compileLabel(target, mode, 'matrix'))!
+      const altStamp = fixtureStamp(target, mode, base.keyDer, 'b'.repeat(40))
+      const publicBuild = await compileModule(`B04-alt-${mode}`, altStamp, false)
+      bundles.set(`B04-alt-${mode}`, {
+        id: `B04-alt-${mode}`,
+        target,
+        mode,
+        stamp: true,
+        keyPem: base.keyPem,
+        keyDer: base.keyDer,
+        context: altStamp.context,
+        runtime: altStamp.runtime,
+        identity: altStamp.qaIdentity,
+        fields: altStamp,
+        hashes: publicBuild.hashes,
+        publicModule: publicBuild.module,
+        payloadModule: publicBuild.module,
+        challenge: publicBuild.module.newQaPersistenceBootChallenge()
+      })
+    }
+    if (compiledModules !== LIMITS.modules || bundles.size !== 20 || totalOutputBytes > LIMITS.allOutputs)
+      throw new Error(`fixture-module-count:${compiledModules}`)
+    owner.setup = 'complete'
+  } catch (error) {
+    owner.setup = 'failed'
+    setupFailure = error
+    throw error
   }
-  // Two unknown-mode stamp bundles. These test the current closed enum and its post-repair boundary.
-  for (const [id, target] of [
-    ['J02-windows-unknown', 'win32-x64'],
-    ['J02-darwin-unknown', 'darwin-x64']
-  ] as const) {
-    const mode = 'future-unknown-mode' as Mode
-    const keyPair = generateKeyPairSync('ed25519')
-    const pub = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url')
-    const stamp = fixtureStamp(target, target === 'win32-x64' ? 'windows-authenticode' : 'mac-adhoc', pub)
-    stamp.qaIdentity.signingMode = mode
-    const key = compileLabel(target, mode, id)
-    const publicBuild = await compileModule(`${key}-public`, stamp, false)
-    bundles.set(id, {
-      id,
-      target,
-      mode,
-      stamp: true,
-      keyPem: keyPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
-      keyDer: pub,
-      context: stamp.context,
-      runtime: stamp.runtime,
-      identity: stamp.qaIdentity,
-      fields: stamp,
-      hashes: publicBuild.hashes,
-      publicModule: publicBuild.module,
-      payloadModule: publicBuild.module,
-      challenge: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-    })
-  }
-  // B04 coherent alternate Windows contexts under each tested mode; public-only bundles.
-  for (const mode of ['windows-authenticode', 'windows-unsigned-candidate'] as const) {
-    const target: Target = 'win32-x64'
-    const base = bundles.get(compileLabel(target, mode, 'matrix'))!
-    const altStamp = fixtureStamp(target, mode, base.keyDer, 'b'.repeat(40))
-    const publicBuild = await compileModule(`B04-alt-${mode}`, altStamp, false)
-    bundles.set(`B04-alt-${mode}`, {
-      id: `B04-alt-${mode}`,
-      target,
-      mode,
-      stamp: true,
-      keyPem: base.keyPem,
-      keyDer: base.keyDer,
-      context: altStamp.context,
-      runtime: altStamp.runtime,
-      identity: altStamp.qaIdentity,
-      fields: altStamp,
-      hashes: publicBuild.hashes,
-      publicModule: publicBuild.module,
-      payloadModule: publicBuild.module,
-      challenge: publicBuild.module.newQaPersistenceBootChallenge()
-    })
-  }
-  if (compiledModules !== LIMITS.modules || bundles.size !== 20 || totalOutputBytes > LIMITS.allOutputs)
-    throw new Error(`fixture-module-count:${compiledModules}`)
+}
+
+beforeAll((_ctx, suite) => {
+  suite.meta.qaU0FixtureOwner = owner
+  const original = setupFixture()
+  setupPromise = original
+  beforeAllPromise = original
+  return original
 })
 
 afterEach(({ task }) => {
@@ -694,7 +1037,38 @@ afterEach(({ task }) => {
   currentCaseRecord = null
 })
 
-afterAll(() => {
+afterAll(async (_ctx, suite) => {
+  owner.closing = true
+  owner.sameSetupPromise = setupPromise !== undefined && setupPromise === beforeAllPromise
+  owner.join = 'pending'
+  try {
+    if (!setupPromise) throw new Error('fixture-setup-promise-absent')
+    await setupPromise
+    owner.join = 'fulfilled'
+  } catch (error) {
+    owner.join = 'rejected'
+    const expectedGuard =
+      error instanceof Error &&
+      ['fixture-dedicated-context-incomplete', 'fixture-root-context-incomplete'].includes(error.message) &&
+      owner.mode === 'unadmitted' &&
+      owner.directory === null &&
+      owner.namespaces === 0 &&
+      owner.buildStarted === 0 &&
+      owner.outputOpened === 0
+    if (error !== setupFailure || !expectedGuard) throw error
+    return
+  }
+  if (suite.result?.hooks?.beforeAll !== 'pass') throw new Error('fixture-before-all-not-passed')
+  if (
+    owner.setup !== 'complete' ||
+    !owner.sameSetupPromise ||
+    owner.outputOpened !== 64 ||
+    owner.outputClosed !== 64 ||
+    owner.buildStarted !== 32 ||
+    owner.buildFulfilled !== 32 ||
+    owner.buildRejected !== 0
+  )
+    throw new Error('fixture-setup-incomplete')
   const manifest = {
     schema: 'metis-windows-unsigned-qa-source-fixture/v1',
     subject: 'synthetic-parser-fixture',
@@ -721,16 +1095,19 @@ afterAll(() => {
       hashes: f.hashes
     })),
     totalOutputBytes,
-    cases: evidenceRows
+    cases: evidenceRows,
+    owner: { mode: owner.mode, directory: owner.directory }
   }
-  const bytes = Buffer.from(`${JSON.stringify(manifest)}\n`)
-  if (bytes.byteLength > 256 * 1024 || evidenceRows.length !== 50) throw new Error('fixture-manifest-bound-or-count')
-  const path = join(OUT!, 'source-fixture.json')
-  const fd = openSync(path, 'wx', 0o600)
   try {
-    writeSync(fd, bytes, 0, bytes.byteLength, 0)
-  } finally {
-    closeSync(fd)
+    if (evidenceRows.length !== 50 || compiledArtifacts.length !== 32 || manifest.modules.length !== 20)
+      throw new Error('fixture-manifest-count')
+    if (exactJsonSize(manifest, 256 * 1024 - 1, 8192) + 1 > 256 * 1024) throw new Error('fixture-manifest-bound')
+    const bytes = Buffer.from(`${JSON.stringify(manifest)}\n`)
+    writeReport(join(OUT, 'source-fixture.json'), bytes, 256 * 1024)
+    owner.manifest = 'published'
+  } catch (error) {
+    owner.manifest = 'failed'
+    throw error
   }
 })
 
