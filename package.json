@@ -172,5 +172,8 @@
     "vite": "7.3.6",
     "vitest": "^4.1.11",
     "wrangler": "4.131.1"
+  },
+  "optionalDependencies": {
+    "@img/sharp-wasm32": "0.35.5"
   }
 }

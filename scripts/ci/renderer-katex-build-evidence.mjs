@@ -1010,8 +1010,53 @@ function parseCssUrlFunction(value, openIndex, sourcePath, budget, onUrl) {
   return index + 1
 }
 
-function cssIdentifier(value) {
-  return /^-?(?:[A-Za-z_][A-Za-z0-9_-]*|--[A-Za-z0-9_-]+)$/u.test(value)
+function isCssDigit(value, index) {
+  const code = value.charCodeAt(index)
+  return code >= 0x30 && code <= 0x39
+}
+
+function isCssNameStart(value, index) {
+  const code = value.charCodeAt(index)
+  return (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || code === 0x5f || code >= 0x80
+}
+
+function isCssNameCharacter(value, index) {
+  return isCssNameStart(value, index) || isCssDigit(value, index) || value[index] === '-'
+}
+
+function startsCssIdentifier(value, index) {
+  return value[index] === '-'
+    ? isCssNameStart(value, index + 1) || value[index + 1] === '-'
+    : isCssNameStart(value, index)
+}
+
+function startsCssNumber(value, index) {
+  if (value[index] === '+' || value[index] === '-') index += 1
+  return isCssDigit(value, index) || (value[index] === '.' && isCssDigit(value, index + 1))
+}
+
+function consumeCssNumber(value, index) {
+  if (value[index] === '+' || value[index] === '-') index += 1
+  while (isCssDigit(value, index)) index += 1
+  if (value[index] === '.' && isCssDigit(value, index + 1)) {
+    index += 1
+    while (isCssDigit(value, index)) index += 1
+  }
+  if (value[index] === 'e' || value[index] === 'E') {
+    let exponent = index + 1
+    if (value[exponent] === '+' || value[exponent] === '-') exponent += 1
+    if (isCssDigit(value, exponent)) {
+      index = exponent + 1
+      while (isCssDigit(value, index)) index += 1
+    }
+  }
+  if (value[index] === '%') index += 1
+  else if (startsCssIdentifier(value, index)) {
+    do {
+      index += 1
+    } while (isCssNameCharacter(value, index))
+  }
+  return index
 }
 
 function scanCssComponents(value, sourcePath, budget, onUrl) {
@@ -1055,54 +1100,47 @@ function scanCssComponents(value, sourcePath, budget, onUrl) {
       index += 1
       continue
     }
-    if (character === ',' || character === ':' || character === ';') {
+    if (character === '\\') cssUnsupported(sourcePath)
+    if (startsCssNumber(value, index)) {
+      chargeCssComponent(budget, sourcePath)
+      index = consumeCssNumber(value, index)
+      if (value[index] === '(') cssUnsupported(sourcePath)
+      continue
+    }
+    if (startsCssIdentifier(value, index)) {
+      chargeCssComponent(budget, sourcePath)
+      const nameStart = index
+      do {
+        index += 1
+      } while (isCssNameCharacter(value, index))
+      const name = asciiLower(value.slice(nameStart, index))
+      if (value[index] === '(') {
+        if (name === 'url') {
+          index = parseCssUrlFunction(value, index, sourcePath, budget, onUrl)
+          continue
+        }
+        if (!CSS_FUNCTIONS.has(name)) cssUnsupported(sourcePath)
+      } else if (name === 'url') {
+        const next = nextAfterCssSeparators(value, index, sourcePath)
+        if (value[next] === '(') cssUnsupported(sourcePath)
+      }
+      continue
+    }
+    if (character === '#' && isCssNameCharacter(value, index + 1)) {
+      chargeCssComponent(budget, sourcePath)
+      index += 1
+      do {
+        index += 1
+      } while (isCssNameCharacter(value, index))
+      if (value[index] === '(') cssUnsupported(sourcePath)
+      continue
+    }
+    if ('!#$%&*+-./:;<=>?@^|~,'.includes(character)) {
       chargeCssComponent(budget, sourcePath)
       index += 1
       continue
     }
-    if (character === '\\') cssUnsupported(sourcePath)
-
-    const atomStart = index
-    while (index < value.length) {
-      const atomCharacter = value[index]
-      const atomCode = value.charCodeAt(index)
-      if (
-        isCssWhitespaceCode(atomCode) ||
-        atomCharacter === '"' ||
-        atomCharacter === "'" ||
-        atomCharacter === '(' ||
-        atomCharacter === ')' ||
-        atomCharacter === '[' ||
-        atomCharacter === ']' ||
-        atomCharacter === '{' ||
-        atomCharacter === '}' ||
-        atomCharacter === ',' ||
-        atomCharacter === ':' ||
-        atomCharacter === ';' ||
-        atomCharacter === '\\' ||
-        (atomCharacter === '/' && value[index + 1] === '*')
-      )
-        break
-      if (isAsciiControlCode(atomCode)) cssUnsupported(sourcePath)
-      index += 1
-    }
-    if (index === atomStart) cssUnsupported(sourcePath)
-    chargeCssComponent(budget, sourcePath)
-    const atom = value.slice(atomStart, index)
-    if (value[index] === '(') {
-      if (!cssIdentifier(atom)) cssUnsupported(sourcePath)
-      const functionName = asciiLower(atom)
-      if (functionName === 'url') {
-        index = parseCssUrlFunction(value, index, sourcePath, budget, onUrl)
-        continue
-      }
-      if (!CSS_FUNCTIONS.has(functionName)) cssUnsupported(sourcePath)
-      continue
-    }
-    if (asciiLower(atom) === 'url') {
-      const next = nextAfterCssSeparators(value, index, sourcePath)
-      if (value[next] === '(') cssUnsupported(sourcePath)
-    }
+    cssUnsupported(sourcePath)
   }
   if (delimiters.length !== 0) cssUnsupported(sourcePath)
 }

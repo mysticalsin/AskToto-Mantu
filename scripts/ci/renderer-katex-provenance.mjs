@@ -9,9 +9,14 @@ import { compareInventories, validateGraph } from './renderer-katex-build-eviden
 const BASE = '15fcfa376feda44531596218a3751c6ea37f98ef'
 const DEPENDENCY_BASELINE = 'cf2889b0c46b001140b7ccd346ffa6010eeec7a1'
 const DEPENDENCY_COMMIT = 'af7da32a46e2edb084c70f41823e7df48a13df9a'
+const RETAINED_FALLBACK_BASE = '3544b519eaff8336b3b1bee25c742d5c7392d476'
 const REMEDIATION_BRANCH = 'fix/renderer-katex-remediation'
 const APPROVED_REPOSITORY = 'mysticalsin/AskToto-Mantu'
 const REMEDIATION_PACKAGE_HASHES = Object.freeze({
+  'package.json': 'dddf43f8fcd0a8b353b5b29ed9fa316486a668955ad56161e707f71f56b2ad06',
+  'package-lock.json': 'f2cedcad1b2b67c9f9fb780d24ab6c8dde6dfa65ae0a76432038450d2a41746c'
+})
+const RETAINED_FALLBACK_BASE_PACKAGE_HASHES = Object.freeze({
   'package.json': '587bae986ba457a255a7e52943586401327e3c5c6c9ae1a32f6d120a3bdf280e',
   'package-lock.json': 'a381ca5f8cce8042c5fca6a8aaf256e97c5a9c5540a0bb9abd149b10b7d07ced'
 })
@@ -24,6 +29,14 @@ const REMEDIATION_FILES = Object.freeze([
   'src/renderer/src/components/Markdown.katex.browser.test.ts',
   'src/renderer/src/components/Markdown.mermaid.browser.test.ts'
 ])
+const PACKAGE_METADATA_FILES = Object.freeze(['package.json', 'package-lock.json'])
+const RETAINED_FALLBACK_FILES = Object.freeze([
+  'scripts/ci/renderer-katex-build-evidence.mjs',
+  'scripts/ci/renderer-katex-provenance.mjs',
+  'scripts/ci/renderer-katex-evidence.test.ts',
+  ...PACKAGE_METADATA_FILES
+])
+const AMENDED_REMEDIATION_FILES = Object.freeze([...new Set([...REMEDIATION_FILES, ...PACKAGE_METADATA_FILES])])
 const EVIDENCE_TEST_PATH = 'scripts/ci/renderer-katex-evidence.test.ts'
 const EVIDENCE_TEST_COUNT = 14
 const GREEN_SUITE_COUNT = 10
@@ -1278,14 +1291,17 @@ export function validateRemediationLineageFacts(facts) {
     if (facts.ancestors?.[commit] !== true) fail(`GREEN_HISTORICAL_ANCESTRY:${commit}`)
   if (facts.ancestors?.[facts.head] !== true || facts.ancestors?.[DEPENDENCY_COMMIT] !== true)
     fail('GREEN_DEPENDENCY_ANCESTRY')
+  if (facts.ancestors?.[RETAINED_FALLBACK_BASE] !== true) fail('GREEN_FALLBACK_BASE_ANCESTRY')
   const pathPredicates = [
     ['baseToHarness', HARNESS_BASELINE_FILES, 'GREEN_HARNESS_BASELINE_PATHS'],
     ['harnessToPolicy', [IMAGE_POLICY_PATH], 'GREEN_IMAGE_POLICY_PATHS'],
     ['policyToR', HARNESS_REPAIR_FILES, 'GREEN_HISTORICAL_REPAIR_PATHS'],
     ['baseToR', [...new Set([...HARNESS_BASELINE_FILES, IMAGE_POLICY_PATH])], 'GREEN_HISTORICAL_COMPOSED_PATHS'],
     ['rToD', ['package.json', 'package-lock.json'], 'GREEN_R_TO_D_PATHS'],
-    ['dToG', REMEDIATION_FILES, 'GREEN_D_TO_G_PATHS'],
-    ['rToG', ['package.json', 'package-lock.json', ...REMEDIATION_FILES], 'GREEN_R_TO_G_PATHS']
+    ['dToFallbackBase', REMEDIATION_FILES, 'GREEN_D_TO_FALLBACK_BASE_PATHS'],
+    ['fallbackBaseToG', RETAINED_FALLBACK_FILES, 'GREEN_FALLBACK_AMENDMENT_PATHS'],
+    ['dToG', AMENDED_REMEDIATION_FILES, 'GREEN_D_TO_G_PATHS'],
+    ['rToG', AMENDED_REMEDIATION_FILES, 'GREEN_R_TO_G_PATHS']
   ]
   for (const [key, expected, code] of pathPredicates) {
     const actual = facts.paths?.[key]
@@ -1294,6 +1310,8 @@ export function validateRemediationLineageFacts(facts) {
   if (
     facts.historicalPackageHashes?.manifest !== BASE_HASHES['package.json'] ||
     facts.historicalPackageHashes?.lock !== BASE_HASHES['package-lock.json'] ||
+    facts.fallbackBasePackageHashes?.manifest !== RETAINED_FALLBACK_BASE_PACKAGE_HASHES['package.json'] ||
+    facts.fallbackBasePackageHashes?.lock !== RETAINED_FALLBACK_BASE_PACKAGE_HASHES['package-lock.json'] ||
     facts.policyHashes?.parent !== 'b012099ba2a8d66cc29caee8555d5a92ff82b3c7b32c205273a90de2c5d67eaa' ||
     facts.policyHashes?.reviewed !== IMAGE_POLICY_SHA256 ||
     facts.policyHashes?.atR !== IMAGE_POLICY_SHA256
@@ -1303,10 +1321,12 @@ export function validateRemediationLineageFacts(facts) {
     head: facts.head,
     dependencyBaseline: DEPENDENCY_BASELINE,
     dependencyCommit: DEPENDENCY_COMMIT,
+    retainedFallbackBase: RETAINED_FALLBACK_BASE,
     repository: facts.repository,
     ref: facts.ref,
     historicalPaths: facts.paths,
     historicalPackageHashes: facts.historicalPackageHashes,
+    fallbackBasePackageHashes: facts.fallbackBasePackageHashes,
     policyHashes: facts.policyHashes
   }
 }
@@ -1327,12 +1347,18 @@ function checkRemediationLineage(root) {
     policyToR: changedPaths(root, `${IMAGE_POLICY_COMMIT}..${DEPENDENCY_BASELINE}`),
     baseToR: changedPaths(root, `${BASE}..${DEPENDENCY_BASELINE}`),
     rToD: changedPaths(root, `${DEPENDENCY_BASELINE}..${DEPENDENCY_COMMIT}`),
+    dToFallbackBase: changedPaths(root, `${DEPENDENCY_COMMIT}..${RETAINED_FALLBACK_BASE}`),
+    fallbackBaseToG: changedPaths(root, `${RETAINED_FALLBACK_BASE}..${head}`),
     dToG: changedPaths(root, `${DEPENDENCY_COMMIT}..${head}`),
     rToG: changedPaths(root, `${DEPENDENCY_BASELINE}..${head}`)
   }
   const historicalPackageHashes = {
     manifest: showHash(`${DEPENDENCY_BASELINE}:package.json`),
     lock: showHash(`${DEPENDENCY_BASELINE}:package-lock.json`)
+  }
+  const fallbackBasePackageHashes = {
+    manifest: showHash(`${RETAINED_FALLBACK_BASE}:package.json`),
+    lock: showHash(`${RETAINED_FALLBACK_BASE}:package-lock.json`)
   }
   const policyHashes = {
     parent: showHash(`${HARNESS_BASELINE}:${IMAGE_POLICY_PATH}`),
@@ -1348,13 +1374,19 @@ function checkRemediationLineage(root) {
     imagePolicyParent: gitText(root, ['rev-parse', `${IMAGE_POLICY_COMMIT}^`]),
     dirty: gitText(root, ['status', '--porcelain=v1']) !== '',
     ancestors: Object.fromEntries(
-      [BASE, HARNESS_BASELINE, IMAGE_POLICY_COMMIT, DEPENDENCY_BASELINE, DEPENDENCY_COMMIT, head].map((commit) => [
-        commit,
-        isAncestor(commit, head)
-      ])
+      [
+        BASE,
+        HARNESS_BASELINE,
+        IMAGE_POLICY_COMMIT,
+        DEPENDENCY_BASELINE,
+        DEPENDENCY_COMMIT,
+        RETAINED_FALLBACK_BASE,
+        head
+      ].map((commit) => [commit, isAncestor(commit, head)])
     ),
     paths,
     historicalPackageHashes,
+    fallbackBasePackageHashes,
     policyHashes
   })
   const protectedHashes = {
@@ -1814,6 +1846,58 @@ export function validateLockDelta(baseLock, currentLock) {
     fail('GREEN_PATCHED_KATEX_IDENTITY')
   return { packageNodeCount: beforeKeys.length, changedPackageKeys: ['node_modules/katex'] }
 }
+export function validateRetainedSharpFallbackAmendment(beforeManifest, beforeLock, afterManifest, afterLock) {
+  const beforeRoot = beforeLock.packages?.['']
+  if (
+    !beforeRoot ||
+    Object.hasOwn(beforeManifest, 'optionalDependencies') ||
+    Object.hasOwn(beforeRoot, 'optionalDependencies')
+  )
+    fail('GREEN_FALLBACK_AMENDMENT_BASE')
+  const wasm = beforeLock.packages['node_modules/@img/sharp-wasm32']
+  const runtime = beforeLock.packages['node_modules/@emnapi/runtime']
+  const tslib = beforeLock.packages['node_modules/tslib']
+  if (
+    wasm?.version !== '0.35.5' ||
+    wasm.resolved !== 'https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.5.tgz' ||
+    wasm.integrity !==
+      'sha512-Ptsga1su4tQx+LLF1ECS9U6nz5kmrXKo6XVbtR48Ke3ZRxxgaWBu7IDtEe1quo8hiupwm6WFqxVlXaSf7IINGQ==' ||
+    wasm.optional !== true ||
+    wasm.dependencies?.['@emnapi/runtime'] !== '^1.11.3' ||
+    runtime?.version !== '1.11.3' ||
+    runtime.resolved !== 'https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.3.tgz' ||
+    runtime.integrity !==
+      'sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==' ||
+    runtime.optional !== true ||
+    runtime.dependencies?.tslib !== '^2.4.0' ||
+    tslib?.version !== '2.8.1' ||
+    tslib.resolved !== 'https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz' ||
+    tslib.integrity !==
+      'sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==' ||
+    lockDependencyPath(beforeLock, 'node_modules/@img/sharp-wasm32', '@emnapi/runtime') !==
+      'node_modules/@emnapi/runtime' ||
+    lockDependencyPath(beforeLock, 'node_modules/@emnapi/runtime', 'tslib') !== 'node_modules/tslib'
+  )
+    fail('GREEN_FALLBACK_BASE_CHAIN')
+  const optionalDependencies = { '@img/sharp-wasm32': '0.35.5' }
+  const expectedManifest = { ...beforeManifest, optionalDependencies }
+  const expectedLock = {
+    ...beforeLock,
+    packages: { ...beforeLock.packages, '': { ...beforeRoot, optionalDependencies } }
+  }
+  if (
+    JSON.stringify(stableJson(afterManifest)) !== JSON.stringify(stableJson(expectedManifest)) ||
+    JSON.stringify(stableJson(afterLock)) !== JSON.stringify(stableJson(expectedLock))
+  )
+    fail('GREEN_FALLBACK_AMENDMENT_EXACT')
+  return {
+    manifestChangedField: 'optionalDependencies',
+    lockChangedField: 'packages[""].optionalDependencies',
+    optionalDependencies,
+    preservedPackageNodeCount: Object.keys(beforeLock.packages).length,
+    preservedNonRootPackageNodeCount: Object.keys(beforeLock.packages).length - 1
+  }
+}
 function platformAllowed(values, current) {
   if (!Array.isArray(values) || values.length === 0) return true
   const positive = values.filter((value) => !value.startsWith('!'))
@@ -2092,9 +2176,9 @@ export function checkNpmInstalledGraph(
       (dependent) =>
         dependent.name === 'mermaid' &&
         dependent.type === 'prod' &&
-        dependent.spec === streamdown.dependencies.mermaid &&
-        dependent.rawSpec === undefined &&
-        dependent.overridden !== true &&
+        dependent.spec === '11.17.0' &&
+        dependent.rawSpec === streamdown.dependencies.mermaid &&
+        dependent.overridden === true &&
         !Object.hasOwn(dependent, 'error') &&
         dependent?.from?.name === 'streamdown' &&
         dependent.from.version === '2.5.0' &&
@@ -2133,14 +2217,30 @@ function checkRemediationPackage(root) {
   const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
   const lock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8'))
   const baseLock = JSON.parse(gitBytes(root, ['show', `${DEPENDENCY_BASELINE}:package-lock.json`]).toString('utf8'))
-  const lockDelta = validateLockDelta(baseLock, lock)
+  const beforeManifestBytes = gitBytes(root, ['show', `${RETAINED_FALLBACK_BASE}:package.json`])
+  const beforeLockBytes = gitBytes(root, ['show', `${RETAINED_FALLBACK_BASE}:package-lock.json`])
+  if (
+    sha256(beforeManifestBytes) !== RETAINED_FALLBACK_BASE_PACKAGE_HASHES['package.json'] ||
+    sha256(beforeLockBytes) !== RETAINED_FALLBACK_BASE_PACKAGE_HASHES['package-lock.json']
+  )
+    fail('GREEN_FALLBACK_BASE_BYTES')
+  const beforeManifest = JSON.parse(beforeManifestBytes.toString('utf8'))
+  const beforeLock = JSON.parse(beforeLockBytes.toString('utf8'))
+  const historicalKaTeXLockDelta = validateLockDelta(baseLock, beforeLock)
+  const retainedSharpFallbackAmendment = validateRetainedSharpFallbackAmendment(
+    beforeManifest,
+    beforeLock,
+    manifest,
+    lock
+  )
   const installedPath = realpathSync(resolve(root, 'node_modules/katex'))
   const installed = JSON.parse(readFileSync(resolve(installedPath, 'package.json'), 'utf8'))
   validateRemediationPackageRecords(manifest, lock, installed.version)
   return {
     lockSha256: fileHash(root, 'package-lock.json').sha256,
     manifestSha256: fileHash(root, 'package.json').sha256,
-    lockDelta,
+    historicalKaTeXLockDelta,
+    retainedSharpFallbackAmendment,
     installedKaTeX: {
       version: installed.version,
       realpath: installedPath,

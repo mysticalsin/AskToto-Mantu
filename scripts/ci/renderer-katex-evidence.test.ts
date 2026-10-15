@@ -1,5 +1,6 @@
 import { createPackageWithOptions } from '@electron/asar'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import {
@@ -35,6 +36,7 @@ import {
   checkRunErrors,
   checkSbom,
   validateLockDelta,
+  validateRetainedSharpFallbackAmendment,
   validateRemediationPackageRecords,
   validateRemediationLineageFacts
 } from './renderer-katex-provenance.mjs'
@@ -799,6 +801,39 @@ describe('renderer remediation evidence validators', () => {
 
     restoreBase()
     expectThreeReferences()
+    const compactDeclarations = [
+      '--glass-fill:rgb(34 14 60/calc(.6 * var(--overlay-opacity-scale)))',
+      '--glass-fill-strong:rgb(28 11 52/calc(.8 * var(--overlay-opacity-scale)))',
+      '--glass-scrim-bar:rgb(13 4 28/calc(.68 * var(--overlay-opacity-scale)))',
+      '--glass-fill-listening:rgb(20 8 40/calc(.82 * var(--overlay-opacity-scale)))',
+      '--glass-fill-strong-listening:rgb(16 6 34/calc(.88 * var(--overlay-opacity-scale)))'
+    ]
+    for (const css of [
+      'a{' + compactDeclarations.join(';') + '}',
+      'a{--probe:calc(1px*var(--scale)/2)}',
+      'a{--probe:calc(-.6e+2%/2 + 1.2E-3px);--name:éurl}',
+      'a{--probe:1/*url("https://unreviewed.invalid/probe.woff2")*/}',
+      'a{--probe:1/"url(https://unreviewed.invalid/probe.woff2)"}'
+    ]) {
+      restoreBase()
+      put(join(root, 'assets/style.css'), baseCss + css)
+      expectThreeReferences()
+    }
+    restoreBase()
+    put(join(root, 'index.html'), baseHtml + '<div style="--probe:calc(1px*var(--scale)/2)"></div>')
+    expectThreeReferences()
+    for (const [css, code] of [
+      ['a{--probe:1/url("https://unreviewed.invalid/probe.woff2")}', 'EXTERNAL_EXECUTABLE_REFERENCE'],
+      ['a{--probe:1/u\\72l("https://unreviewed.invalid/probe.woff2")}', 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED'],
+      ['a{--probe:1/image-set("https://unreviewed.invalid/probe.woff2")}', 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED'],
+      ['a{--probe:1px(2)}', 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED'],
+      ['a{--probe:1/éurl("https://unreviewed.invalid/probe.woff2")}', 'CSS_REFERENCE_GRAMMAR_UNSUPPORTED']
+    ]) {
+      restoreBase()
+      put(join(root, 'assets/style.css'), baseCss + css)
+      reject(() => validateLocalAssetReferences(root, inventory), code)
+    }
+    restoreBase()
     reject(
       () =>
         validateLocalAssetReferences(
@@ -1450,7 +1485,12 @@ describe('renderer remediation evidence validators', () => {
     reject(() => checkNpmProducer(producerPath, audit, 'audit', 0), 'NPM_AUDIT_PRODUCER_MISMATCH')
     const lock = {
       packages: {
-        '': { name: 'asktoto', version: '1.9.7', devDependencies: { streamdown: '^2.5.0', khroma: '^2.1.0' } },
+        '': {
+          name: 'asktoto',
+          version: '1.9.7',
+          devDependencies: { streamdown: '^2.5.0', khroma: '^2.1.0' },
+          optionalDependencies: { mermaid: '11.17.0' }
+        },
         'node_modules/khroma': {
           version: '2.1.0',
           resolved: 'https://registry.npmjs.org/khroma/-/khroma-2.1.0.tgz',
@@ -1514,7 +1554,10 @@ describe('renderer remediation evidence validators', () => {
         }
       }),
       dependencies: [
-        { ref: 'asktoto@1.9.7', dependsOn: [ref('streamdown', '2.5.0'), ref('khroma', '2.1.0')] },
+        {
+          ref: 'asktoto@1.9.7',
+          dependsOn: [ref('streamdown', '2.5.0'), ref('khroma', '2.1.0'), ref('mermaid', '11.17.0')]
+        },
         { ref: ref('khroma', '2.1.0'), dependsOn: [] },
         { ref: ref('katex', '0.18.2'), dependsOn: [] },
         { ref: ref('mermaid', '11.17.0'), dependsOn: [ref('katex', '0.18.2')] },
@@ -1529,6 +1572,13 @@ describe('renderer remediation evidence validators', () => {
         materialSha256: '66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49'
       })
     )
+    const missingRootOptionalEdge = structuredClone(sbom)
+    missingRootOptionalEdge.dependencies[0].dependsOn = missingRootOptionalEdge.dependencies[0].dependsOn.filter(
+      (edge) => edge !== ref('mermaid', '11.17.0')
+    )
+    put(sbomPath, JSON.stringify(missingRootOptionalEdge))
+    reject(() => checkSbom(sbomPath, lock, 0, sourceRoot), 'SBOM_DEPENDENCY_EDGE_MISMATCH:asktoto@1.9.7')
+    put(sbomPath, JSON.stringify(sbom))
     const wrongDisplayName = structuredClone(sbom)
     wrongDisplayName.metadata.component.name = 'asktoto'
     put(sbomPath, JSON.stringify(wrongDisplayName))
@@ -1599,6 +1649,88 @@ describe('renderer remediation evidence validators', () => {
       integrity: 'sha512-3snve4y0SXTMequLim1FMiPvLGElySam0blN5xQZBqEY3lOJz1TnuaaiugnBZBqHzlSAGmFTYL7MCQkORuLKCA=='
     }
     const realLock = JSON.parse(readFileSync(resolve(process.cwd(), 'package-lock.json'), 'utf8'))
+    const realManifest = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'))
+    const fallbackBase = '3544b519eaff8336b3b1bee25c742d5c7392d476'
+    const beforeManifestBytes = execFileSync('git', ['show', `${fallbackBase}:package.json`])
+    const beforeLockBytes = execFileSync('git', ['show', `${fallbackBase}:package-lock.json`])
+    expect(sha(beforeManifestBytes)).toBe('587bae986ba457a255a7e52943586401327e3c5c6c9ae1a32f6d120a3bdf280e')
+    expect(sha(beforeLockBytes)).toBe('a381ca5f8cce8042c5fca6a8aaf256e97c5a9c5540a0bb9abd149b10b7d07ced')
+    const beforeManifest = JSON.parse(beforeManifestBytes.toString('utf8'))
+    const beforeLock = JSON.parse(beforeLockBytes.toString('utf8'))
+    const amendment = validateRetainedSharpFallbackAmendment(beforeManifest, beforeLock, realManifest, realLock)
+    expect(amendment).toEqual({
+      manifestChangedField: 'optionalDependencies',
+      lockChangedField: 'packages[""].optionalDependencies',
+      optionalDependencies: { '@img/sharp-wasm32': '0.35.5' },
+      preservedPackageNodeCount: 1039,
+      preservedNonRootPackageNodeCount: 1038
+    })
+    const amendmentMutations: Array<(manifest: any, lock: any) => void> = [
+      (manifest) => {
+        delete manifest.optionalDependencies
+      },
+      (_manifest, lock) => {
+        delete lock.packages[''].optionalDependencies
+      },
+      (manifest) => {
+        manifest.optionalDependencies['@img/sharp-wasm32'] = '^0.35.5'
+      },
+      (_manifest, lock) => {
+        lock.packages[''].optionalDependencies['@img/sharp-wasm32'] = '0.35.4'
+      },
+      (manifest) => {
+        manifest.optionalDependencies.extra = '1.0.0'
+      },
+      (_manifest, lock) => {
+        lock.packages[''].optionalDependencies.extra = '1.0.0'
+      },
+      (manifest) => {
+        manifest.dependencies.undici = '0.0.0'
+      },
+      (manifest) => {
+        manifest.scripts.postinstall += ' && echo changed'
+      },
+      (manifest) => {
+        manifest.overrides['mermaid@11.17.0'].katex = '0.18.3'
+      },
+      (_manifest, lock) => {
+        lock.packages['node_modules/@img/sharp-wasm32'].version = '0.35.4'
+      },
+      (_manifest, lock) => {
+        lock.packages['node_modules/@img/sharp-wasm32'].integrity = 'sha512-wrong'
+      },
+      (_manifest, lock) => {
+        lock.packages['node_modules/@img/sharp-wasm32'].optional = false
+      },
+      (_manifest, lock) => {
+        delete lock.packages['node_modules/@emnapi/runtime']
+      },
+      (_manifest, lock) => {
+        lock.packages['node_modules/extra'] = { version: '1.0.0' }
+      },
+      (_manifest, lock) => {
+        lock.lockfileVersion = 2
+      }
+    ]
+    for (const mutate of amendmentMutations) {
+      const changedManifest = structuredClone(realManifest)
+      const changedLock = structuredClone(realLock)
+      mutate(changedManifest, changedLock)
+      reject(
+        () => validateRetainedSharpFallbackAmendment(beforeManifest, beforeLock, changedManifest, changedLock),
+        'GREEN_FALLBACK_AMENDMENT_EXACT'
+      )
+    }
+    reject(
+      () => validateRetainedSharpFallbackAmendment(realManifest, beforeLock, realManifest, realLock),
+      'GREEN_FALLBACK_AMENDMENT_BASE'
+    )
+    const changedBeforeLock = structuredClone(beforeLock)
+    changedBeforeLock.packages['node_modules/@emnapi/runtime'].integrity = 'sha512-wrong'
+    reject(
+      () => validateRetainedSharpFallbackAmendment(beforeManifest, changedBeforeLock, realManifest, realLock),
+      'GREEN_FALLBACK_BASE_CHAIN'
+    )
     const current = {
       packages: Object.fromEntries(
         [
@@ -1607,7 +1739,7 @@ describe('renderer remediation evidence validators', () => {
           'node_modules/mermaid',
           'node_modules/streamdown',
           'node_modules/katex/node_modules/commander'
-        ].map((path) => [path, realLock.packages[path]])
+        ].map((path) => [path, beforeLock.packages[path]])
       )
     }
     const base = { packages: { ...current.packages, 'node_modules/katex': old } }
@@ -1667,6 +1799,7 @@ describe('renderer remediation evidence validators', () => {
           '0b10ac4badd4811685bb376f1a6ee8aab8212490',
           'cf2889b0c46b001140b7ccd346ffa6010eeec7a1',
           'af7da32a46e2edb084c70f41823e7df48a13df9a',
+          fallbackBase,
           'b'.repeat(40)
         ].map((commit) => [commit, true])
       ),
@@ -1699,12 +1832,23 @@ describe('renderer remediation evidence validators', () => {
           'src/renderer/src/components/__tests__/renderer-security-browser-harness.ts'
         ].sort(),
         rToD: packageFiles,
-        dToG: remediationFiles,
+        dToFallbackBase: remediationFiles,
+        fallbackBaseToG: [
+          'scripts/ci/renderer-katex-build-evidence.mjs',
+          'scripts/ci/renderer-katex-provenance.mjs',
+          'scripts/ci/renderer-katex-evidence.test.ts',
+          ...packageFiles
+        ].sort(),
+        dToG: [...packageFiles, ...remediationFiles].sort(),
         rToG: [...packageFiles, ...remediationFiles].sort()
       },
       historicalPackageHashes: {
         manifest: '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122',
         lock: '88425a099d638387d1bf14fd06348002e3ced36f29ca25296d00f7e5b92b0393'
+      },
+      fallbackBasePackageHashes: {
+        manifest: '587bae986ba457a255a7e52943586401327e3c5c6c9ae1a32f6d120a3bdf280e',
+        lock: 'a381ca5f8cce8042c5fca6a8aaf256e97c5a9c5540a0bb9abd149b10b7d07ced'
       },
       policyHashes: {
         parent: 'b012099ba2a8d66cc29caee8555d5a92ff82b3c7b32c205273a90de2c5d67eaa',
@@ -1730,7 +1874,7 @@ describe('renderer remediation evidence validators', () => {
       () =>
         validateRemediationLineageFacts({
           ...facts,
-          paths: { ...facts.paths, dToG: [...remediationFiles, 'unrelated.txt'] }
+          paths: { ...facts.paths, dToG: [...packageFiles, ...remediationFiles, 'unrelated.txt'].sort() }
         }),
       'GREEN_D_TO_G_PATHS'
     )
@@ -1738,7 +1882,11 @@ describe('renderer remediation evidence validators', () => {
       (path) => path !== 'src/renderer/src/components/Markdown.katex.browser.test.ts'
     )
     reject(
-      () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, dToG: withoutKatexTest } }),
+      () =>
+        validateRemediationLineageFacts({
+          ...facts,
+          paths: { ...facts.paths, dToG: [...packageFiles, ...withoutKatexTest].sort() }
+        }),
       'GREEN_D_TO_G_PATHS'
     )
     reject(
@@ -1748,6 +1896,30 @@ describe('renderer remediation evidence validators', () => {
           paths: { ...facts.paths, rToG: [...packageFiles, ...withoutKatexTest].sort() }
         }),
       'GREEN_R_TO_G_PATHS'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, dToFallbackBase: withoutKatexTest } }),
+      'GREEN_D_TO_FALLBACK_BASE_PATHS'
+    )
+    reject(
+      () =>
+        validateRemediationLineageFacts({
+          ...facts,
+          paths: { ...facts.paths, fallbackBaseToG: [...facts.paths.fallbackBaseToG, 'extra.txt'].sort() }
+        }),
+      'GREEN_FALLBACK_AMENDMENT_PATHS'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, ancestors: { ...facts.ancestors, [fallbackBase]: false } }),
+      'GREEN_FALLBACK_BASE_ANCESTRY'
+    )
+    reject(
+      () =>
+        validateRemediationLineageFacts({
+          ...facts,
+          fallbackBasePackageHashes: { ...facts.fallbackBasePackageHashes, lock: '0'.repeat(64) }
+        }),
+      'GREEN_HISTORICAL_BYTES'
     )
   })
 
@@ -1810,24 +1982,24 @@ describe('renderer remediation evidence validators', () => {
     ]
     put(lsPath, JSON.stringify(tree))
     put(explainPath, JSON.stringify(explain))
-    put(
-      mermaidExplainPath,
-      JSON.stringify([
-        {
-          name: 'mermaid',
-          version: '11.17.0',
-          location: 'node_modules/mermaid',
-          dependents: [
-            {
-              name: 'mermaid',
-              type: 'prod',
-              spec: '^11.12.2',
-              from: { name: 'streamdown', version: '2.5.0', location: 'node_modules/streamdown' }
-            }
-          ]
-        }
-      ])
-    )
+    const mermaidExplain = [
+      {
+        name: 'mermaid',
+        version: '11.17.0',
+        location: 'node_modules/mermaid',
+        dependents: [
+          {
+            name: 'mermaid',
+            type: 'prod',
+            spec: '11.17.0',
+            rawSpec: '^11.12.2',
+            overridden: true,
+            from: { name: 'streamdown', version: '2.5.0', location: 'node_modules/streamdown' }
+          }
+        ]
+      }
+    ]
+    put(mermaidExplainPath, JSON.stringify(mermaidExplain))
     const checkGraph = (lsExit = 0, explainExit = 0) =>
       checkNpmInstalledGraph(lsPath, lsExit, explainPath, explainExit, lock, root, mermaidExplainPath, 0)
     expect(checkGraph().npmLs.katexCopies).toHaveLength(1)
@@ -1850,6 +2022,119 @@ describe('renderer remediation evidence validators', () => {
     expect(checkGraph().npmLs.absentOptionalPeers).toEqual([
       { parent: 'node_modules/mermaid', name: 'msw', declaredSpec: '^2.0.0' }
     ])
+    const mermaidMutations: Array<(entry: any) => void> = [
+      (entry) => {
+        delete entry.dependents[0].rawSpec
+      },
+      (entry) => {
+        entry.dependents[0].rawSpec = '^11.17.0'
+      },
+      (entry) => {
+        delete entry.dependents[0].overridden
+      },
+      (entry) => {
+        entry.dependents[0].overridden = false
+      },
+      (entry) => {
+        entry.dependents[0].spec = '^11.12.2'
+      },
+      (entry) => {
+        entry.dependents[0].from.name = 'other-parent'
+      },
+      (entry) => {
+        entry.dependents[0].from.location = 'node_modules/other-streamdown'
+      },
+      (entry) => {
+        entry.dependents[0].error = 'invalid'
+      },
+      (entry) => {
+        entry.location = 'node_modules/other-mermaid'
+      }
+    ]
+    for (const mutate of mermaidMutations) {
+      const changed = structuredClone(mermaidExplain)
+      mutate(changed[0])
+      put(mermaidExplainPath, JSON.stringify(changed))
+      reject(() => checkGraph(), 'NPM_EXPLAIN_MERMAID_CHAIN')
+    }
+    put(mermaidExplainPath, JSON.stringify(mermaidExplain))
+    const sharedLock = structuredClone(graphLock)
+    const fallback = '@img/sharp-wasm32'
+    const runtime = '@emnapi/runtime'
+    const wrappers = ['@img/sharp-freebsd-wasm32', '@img/sharp-webcontainers-wasm32']
+    Object.assign(
+      sharedLock.packages[''].optionalDependencies,
+      Object.fromEntries(wrappers.map((name) => [name, '0.35.5']))
+    )
+    for (const [index, name] of wrappers.entries())
+      sharedLock.packages[`node_modules/${name}`] = {
+        version: '0.35.5',
+        optional: true,
+        ...(index === 0 ? { os: ['freebsd'] } : { cpu: ['wasm32'] }),
+        dependencies: { [fallback]: '0.35.5' }
+      }
+    sharedLock.packages[`node_modules/${fallback}`] = {
+      version: '0.35.5',
+      optional: true,
+      dependencies: { [runtime]: '^1.11.3' }
+    }
+    sharedLock.packages[`node_modules/${runtime}`] = {
+      version: '1.11.3',
+      optional: true,
+      dependencies: { tslib: '^2.4.0' }
+    }
+    sharedLock.packages['node_modules/tslib'] = { version: '2.8.1', optional: true }
+    for (const [name, version] of [
+      [fallback, '0.35.5'],
+      [runtime, '1.11.3'],
+      ['tslib', '2.8.1']
+    ])
+      put(join(root, 'node_modules', name, 'package.json'), JSON.stringify({ name, version }))
+    const checkSharedGraph = () =>
+      checkNpmInstalledGraph(lsPath, 0, explainPath, 0, sharedLock, root, mermaidExplainPath, 0)
+    expect(checkSharedGraph().npmLs.physicalPackageCount).toBe(3)
+    const runtimeNode = {
+      version: '1.11.3',
+      path: packagePath(runtime),
+      dependencies: { tslib: { version: '2.8.1', path: packagePath('tslib') } }
+    }
+    const fallbackNode = { version: '0.35.5', path: packagePath(fallback), dependencies: { [runtime]: runtimeNode } }
+    const sharedTree = { ...tree, dependencies: { ...tree.dependencies, [fallback]: fallbackNode } }
+    put(lsPath, JSON.stringify(sharedTree))
+    reject(() => checkSharedGraph(), 'NPM_INSTALLED_LOCK_NODE_COUNT')
+    put(lsPath, JSON.stringify({ ...sharedTree, problems: ['extraneous: @img/sharp-wasm32@0.35.5'] }))
+    reject(() => checkSharedGraph(), 'NPM_LS_INVALID_OR_PROBLEMS')
+    put(
+      lsPath,
+      JSON.stringify({
+        ...sharedTree,
+        problems: [],
+        dependencies: { ...sharedTree.dependencies, [fallback]: { ...fallbackNode, extraneous: true } }
+      })
+    )
+    reject(() => checkSharedGraph(), 'NPM_LS_NODE_INVALID')
+    sharedLock.packages[''].optionalDependencies[fallback] = '0.35.5'
+    put(lsPath, JSON.stringify(sharedTree))
+    expect(checkSharedGraph().npmLs.physicalPackageCount).toBe(6)
+    put(lsPath, JSON.stringify(tree))
+    reject(() => checkSharedGraph(), 'NPM_INSTALLED_LOCK_NODE_COUNT')
+    put(
+      lsPath,
+      JSON.stringify({
+        ...sharedTree,
+        dependencies: { ...tree.dependencies, [fallback]: { ...fallbackNode, dependencies: {} } }
+      })
+    )
+    reject(() => checkSharedGraph(), 'NPM_INSTALLED_LOCK_NODE_COUNT')
+    put(
+      lsPath,
+      JSON.stringify({
+        ...sharedTree,
+        dependencies: { ...sharedTree.dependencies, extra: { version: '1.0.0', path: packagePath('extra') } }
+      })
+    )
+    reject(() => checkSharedGraph(), 'NPM_LS_UNDECLARED_EDGE')
+    put(lsPath, JSON.stringify(tree))
     const forgedExplain = structuredClone(explain)
     forgedExplain[0].dependents[0].rawSpec = '^0.18.2'
     put(explainPath, JSON.stringify(forgedExplain))
