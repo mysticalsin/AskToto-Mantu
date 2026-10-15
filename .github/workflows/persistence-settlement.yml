@@ -1,4 +1,4 @@
-name: Persistence unreturned writer source RED
+name: Persistence owned cleanup source RED
 
 on:
   push:
@@ -39,12 +39,12 @@ defaults:
 
 jobs:
   test-first:
-    name: F10 unreturned writer causal RED
+    name: R06/R07 owned cleanup causal RED
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: settlement-red-unreturned-writer
+      PERSISTENCE_SETTLEMENT_PHASE: settlement-red-owned-cleanup
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -98,9 +98,10 @@ jobs:
             .replace(/\s+/g, ' ')
             .slice(0, limit)
           const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 'missing'
+          const smallCount = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 8 ? value : 'missing'
           const status = (value) => ['passed', 'failed', 'pending', 'todo'].includes(value) ? value : 'unknown'
           const outcomeStatus = (value) => ['fulfilled', 'rejected'].includes(value) ? value : 'unknown'
-          const allowedCases = new Set(['F02', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'F05', 'F06', 'F07', 'F08', 'F10', 'R04', 'R05'])
+          const allowedCases = new Set(['F02', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'F05', 'F06', 'F07', 'F08', 'F10', 'R04', 'R05', 'R06', 'R07'])
           const counters = [
             'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests',
             'numTodoTests', 'numTotalTestSuites', 'numPendingTestSuites',
@@ -199,6 +200,69 @@ jobs:
                 }
               }
             }
+            if (record.caseId === 'R06' && Array.isArray(record.cases)) {
+              result.cases = record.cases.slice(0, 4).map((item) => ({
+                id: ['returned-owned', 'returned-foreign', 'prereturn-owned', 'prereturn-foreign'].includes(item?.id) ? item.id : 'unknown',
+                boundary: {
+                  exclusive: item?.boundary?.exclusive === true,
+                  writeCalls: smallCount(item?.boundary?.writeCalls),
+                  writeFaults: smallCount(item?.boundary?.writeFaults),
+                  leases: smallCount(item?.boundary?.leases),
+                  sameHandle: item?.boundary?.sameHandle === true,
+                  named: ['owned', 'foreign-inode'].includes(item?.boundary?.named) ? item.boundary.named : 'unknown'
+                },
+                entry: {
+                  foreignSurvived: item?.entry?.foreignSurvived === null ? null : item?.entry?.foreignSurvived === true,
+                  originalSurvived: item?.entry?.originalSurvived === null ? null : item?.entry?.originalSurvived === true,
+                  lockAbsent: item?.entry?.lockAbsent === true
+                },
+                settlement: {
+                  status: outcomeStatus(item?.settlement?.status),
+                  originalError: item?.settlement?.originalError === true,
+                  cleanupError: item?.settlement?.cleanupError === true,
+                  aggregate: Array.isArray(item?.settlement?.aggregate) && item.settlement.aggregate.length === 2 && item.settlement.aggregate[0] === 'write' && item.settlement.aggregate[1] === 'cleanup' ? ['write', 'cleanup'] : [],
+                  repeat: ['fulfilled', 'same-rejection', 'not-applicable'].includes(item?.settlement?.repeat) ? item.settlement.repeat : 'unknown',
+                  closes: Array.isArray(item?.settlement?.closes) ? item.settlement.closes.slice(0, 2).map(smallCount) : [],
+                  confirmed: smallCount(item?.settlement?.confirmed),
+                  extraIo: smallCount(item?.settlement?.extraIo)
+                },
+                root: {
+                  heldProbe: ['descriptor-limit', 'admitted', 'other'].includes(item?.root?.heldProbe) ? item.root.heldProbe : 'other',
+                  status: outcomeStatus(item?.root?.status),
+                  sameCleanupError: item?.root?.sameCleanupError === null ? null : item?.root?.sameCleanupError === true,
+                  repeat: ['fulfilled', 'same-rejection'].includes(item?.root?.repeat) ? item.root.repeat : 'unknown',
+                  closes: Array.isArray(item?.root?.closes) ? item.root.closes.slice(0, 2).map(smallCount) : [],
+                  extraIo: smallCount(item?.root?.extraIo),
+                  postProbe: ['descriptor-limit', 'admitted', 'other'].includes(item?.root?.postProbe) ? item.root.postProbe : 'other',
+                  successorSettled: item?.root?.successorSettled === null ? null : item?.root?.successorSettled === true
+                }
+              }))
+            }
+            if (record.caseId === 'R07') {
+              for (const name of ['confirmedClose', 'failedClose']) {
+                const item = record[name]
+                if (!item || typeof item !== 'object') continue
+                result[name] = {
+                  captured: item.captured === true,
+                  sameHandle: item.sameHandle === true,
+                  maxRoots: smallCount(item.maxRoots),
+                  openingAtHold: ['pending', 'fulfilled', 'rejected'].includes(item.openingAtHold) ? item.openingAtHold : 'unknown',
+                  heldProbe: ['descriptor-limit', 'admitted', 'other'].includes(item.heldProbe) ? item.heldProbe : 'other',
+                  publicAtHold: Array.isArray(item.publicAtHold) ? item.publicAtHold.slice(0, 2).map((value) => ['pending', 'fulfilled', 'rejected'].includes(value) ? value : 'unknown') : [],
+                  closeAttempts: Array.isArray(item.closeAttempts) ? item.closeAttempts.slice(0, 3).map(smallCount) : [],
+                  confirmed: smallCount(item.confirmed),
+                  openingOriginalError: item.openingOriginalError === true,
+                  openingCleanupError: item.openingCleanupError === true,
+                  openingAggregate: Array.isArray(item.openingAggregate) && item.openingAggregate.length === 2 && item.openingAggregate[0] === 'bind' && item.openingAggregate[1] === 'close' ? ['bind', 'close'] : [],
+                  publicOutcomes: Array.isArray(item.publicOutcomes) ? item.publicOutcomes.slice(0, 4).map(outcomeStatus) : [],
+                  samePublicError: item.samePublicError === true,
+                  firstCloseError: item.firstCloseError === true,
+                  repeatExtraIo: smallCount(item.repeatExtraIo),
+                  postProbe: ['descriptor-limit', 'admitted', 'other'].includes(item.postProbe) ? item.postProbe : 'other',
+                  successorSettled: item.successorSettled === null ? null : item.successorSettled === true
+                }
+              }
+            }
             for (const key of ['aggregateMessages', 'rejectionMessages']) {
               if (Array.isArray(record[key])) result[key] = record[key].slice(0, 4).map((item) => safeText(item))
             }
@@ -220,8 +284,8 @@ jobs:
               const file = ['bootstrap-main-factory.integration.test.ts', 'root-registry.test.ts'].find((name) =>
                 typeof suite.name === 'string' && suite.name.replaceAll('\\', '/').endsWith(`/${name}`))
               if (!file) continue
-              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 21) : []) {
-                if (shown++ >= 21) break
+              for (const assertion of Array.isArray(suite.assertionResults) ? suite.assertionResults.slice(0, 23) : []) {
+                if (shown++ >= 23) break
                 const title = typeof assertion.title === 'string' ? safeText(assertion.title, 160) : 'missing'
                 console.log(`SETTLEMENT_DIAGNOSTIC_CASE file=${file} status=${status(assertion.status)} title=${title}`)
                 if (status(assertion.status) === 'failed' && Array.isArray(assertion.failureMessages) && assertion.failureMessages[0]) {
@@ -230,7 +294,7 @@ jobs:
                   console.log(`SETTLEMENT_DIAGNOSTIC_FIRST_ERROR file=${file} title=${title} name=${identity ? firstLine.split(':', 1)[0] : 'unknown'} message=${safeText(identity?.[1] || firstLine)}`)
                 }
               }
-              if (shown > 21) break
+              if (shown > 23) break
             }
           }
 
@@ -246,7 +310,7 @@ jobs:
             for (const line of log.split(/\r?\n/)) {
               const marker = 'PERSISTENCE_SETTLEMENT_EVIDENCE '
               const index = line.indexOf(marker)
-              if (index < 0 || evidenceCount >= 14) continue
+              if (index < 0 || evidenceCount >= 16) continue
               const payload = line.slice(index + marker.length).trim()
               if (payload.length > 4096) {
                 if (!evidenceErrorPrinted) console.log('SETTLEMENT_DIAGNOSTIC_ERROR evidence=oversize')
@@ -266,13 +330,13 @@ jobs:
             console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE_COUNT ${evidenceCount}`)
           }
           NODE
-      - name: Validate exact owner witnesses and seven named settlement failures
+      - name: Validate exact owner witnesses and nine named settlement failures
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain the raw run, JSON and EXPECTED_SETTLEMENT_RED_UNRETURNED_WRITER receipt
+      - name: Retain the raw run, JSON and EXPECTED_SETTLEMENT_RED_OWNED_CLEANUP receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-settlement-red-unreturned-writer-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persistence-settlement-red-owned-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
           retention-days: 14

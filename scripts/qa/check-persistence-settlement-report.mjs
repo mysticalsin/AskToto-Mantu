@@ -171,6 +171,22 @@ const cases = [
     title: 'keeps the writer reservation after unlink until descriptor settlement',
     expected: 'failed',
     cause: 'injected held writer close failure'
+  },
+  {
+    file: requiredFiles[1],
+    caseId: 'R06',
+    title: 'retains owned cleanup failure for foreign writer entries before and after lease return',
+    expected: 'failed',
+    cause: 'R06 observed foreign writer entry must retain owned cleanup failure',
+    secondCause: 'injected pre-return writer write failure'
+  },
+  {
+    file: requiredFiles[1],
+    caseId: 'R07',
+    title: 'joins one failed-open root close through the captured binder capability',
+    expected: 'failed',
+    cause: 'injected captured-root binder failure',
+    secondCause: 'injected captured-root directory close failure'
   }
 ]
 
@@ -697,6 +713,238 @@ function validateStructuredEvidence(evidence, assertion) {
         causeEvidence.failedReopenedAdmitted === true,
       'R05 did not show one close fault and physical-root writer admission through both capabilities'
     )
+  } else if (assertion.caseId === 'R06') {
+    requireEvidenceKeys(causeEvidence, ['cases'], 'R06')
+    requireValue(
+      Array.isArray(causeEvidence.cases) && causeEvidence.cases.length === 4,
+      'R06 must contain four ordered subcases'
+    )
+    const ids = ['returned-owned', 'returned-foreign', 'prereturn-owned', 'prereturn-foreign']
+    const exactKeys = (value, keys) =>
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      Object.keys(value).sort().join(',') === keys.slice().sort().join(',')
+    for (const [index, item] of causeEvidence.cases.entries()) {
+      requireValue(
+        exactKeys(item, ['id', 'boundary', 'entry', 'settlement', 'root']),
+        `R06/${ids[index]} fields are invalid`
+      )
+      requireValue(item.id === ids[index], 'R06 subcase order differs from the fixed roster')
+      requireValue(
+        exactKeys(item.boundary, ['exclusive', 'writeCalls', 'writeFaults', 'leases', 'sameHandle', 'named']),
+        `R06/${item.id} boundary fields are invalid`
+      )
+      requireValue(
+        exactKeys(item.entry, ['foreignSurvived', 'originalSurvived', 'lockAbsent']),
+        `R06/${item.id} entry fields are invalid`
+      )
+      requireValue(
+        exactKeys(item.settlement, [
+          'status',
+          'originalError',
+          'cleanupError',
+          'aggregate',
+          'repeat',
+          'closes',
+          'confirmed',
+          'extraIo'
+        ]),
+        `R06/${item.id} settlement fields are invalid`
+      )
+      requireValue(
+        exactKeys(item.root, [
+          'heldProbe',
+          'status',
+          'sameCleanupError',
+          'repeat',
+          'closes',
+          'extraIo',
+          'postProbe',
+          'successorSettled'
+        ]),
+        `R06/${item.id} root fields are invalid`
+      )
+      const preReturn = item.id.startsWith('prereturn')
+      const foreign = item.id.endsWith('foreign')
+      const smallCounters = [
+        item.boundary.writeCalls,
+        item.boundary.writeFaults,
+        item.boundary.leases,
+        item.settlement.confirmed,
+        item.settlement.extraIo,
+        item.root.extraIo,
+        ...(Array.isArray(item.settlement.closes) ? item.settlement.closes : []),
+        ...(Array.isArray(item.root.closes) ? item.root.closes : [])
+      ]
+      requireValue(
+        smallCounters.every((value) => Number.isSafeInteger(value) && value >= 0 && value <= 8),
+        `R06/${item.id} counters exceed the finite schema`
+      )
+      requireValue(
+        item.boundary.exclusive === true &&
+          item.boundary.writeCalls === 1 &&
+          item.boundary.writeFaults === (preReturn ? 1 : 0) &&
+          item.boundary.leases === (preReturn ? 0 : 1) &&
+          item.boundary.sameHandle === true &&
+          item.boundary.named === (foreign ? 'foreign-inode' : 'owned'),
+        `R06/${item.id} did not reach the delegated matching boundary`
+      )
+      requireValue(
+        item.entry.foreignSurvived === (foreign ? true : null) &&
+          item.entry.originalSurvived === (foreign ? true : null) &&
+          item.entry.lockAbsent === !foreign,
+        `R06/${item.id} entry identity witness is invalid`
+      )
+      requireValue(
+        ['fulfilled', 'rejected'].includes(item.settlement.status) &&
+          typeof item.settlement.originalError === 'boolean' &&
+          typeof item.settlement.cleanupError === 'boolean' &&
+          (JSON.stringify(item.settlement.aggregate) === '[]' ||
+            JSON.stringify(item.settlement.aggregate) === '["write","cleanup"]') &&
+          ['fulfilled', 'same-rejection', 'not-applicable'].includes(item.settlement.repeat) &&
+          Array.isArray(item.settlement.closes) &&
+          item.settlement.closes.length === 2 &&
+          item.settlement.closes[0] === 1 &&
+          item.settlement.closes[1] === 1 &&
+          item.settlement.confirmed === 1 &&
+          item.settlement.extraIo === 0,
+        `R06/${item.id} writer descriptor settlement differs`
+      )
+      requireValue(
+        item.root.heldProbe === 'descriptor-limit' &&
+          ['fulfilled', 'rejected'].includes(item.root.status) &&
+          (item.root.sameCleanupError === null || typeof item.root.sameCleanupError === 'boolean') &&
+          ['fulfilled', 'same-rejection'].includes(item.root.repeat) &&
+          Array.isArray(item.root.closes) &&
+          item.root.closes.length === 2 &&
+          item.root.closes[0] === 1 &&
+          item.root.closes[1] === 1 &&
+          ['descriptor-limit', 'admitted', 'other'].includes(item.root.postProbe) &&
+          (item.root.successorSettled === true || item.root.successorSettled === null) &&
+          item.root.extraIo === 0,
+        `R06/${item.id} root cleanup schema is invalid`
+      )
+      if (!foreign) {
+        requireValue(
+          item.settlement.status === (preReturn ? 'rejected' : 'fulfilled') &&
+            item.settlement.originalError === preReturn &&
+            item.settlement.cleanupError === false &&
+            item.settlement.aggregate.length === 0 &&
+            item.settlement.repeat === (preReturn ? 'not-applicable' : 'fulfilled') &&
+            item.root.status === 'fulfilled' &&
+            item.root.sameCleanupError === null &&
+            item.root.repeat === 'fulfilled' &&
+            item.root.postProbe === 'admitted' &&
+            item.root.successorSettled === true,
+          `R06/${item.id} healthy control failed`
+        )
+      } else {
+        requireValue(
+          item.settlement.status === (preReturn ? 'rejected' : 'fulfilled') &&
+            item.settlement.originalError === preReturn &&
+            item.settlement.cleanupError === false &&
+            item.settlement.aggregate.length === 0 &&
+            item.settlement.repeat === (preReturn ? 'not-applicable' : 'fulfilled') &&
+            item.root.status === 'fulfilled' &&
+            item.root.sameCleanupError === null &&
+            item.root.repeat === 'fulfilled' &&
+            item.root.postProbe === 'admitted' &&
+            item.root.successorSettled === true,
+          `R06/${item.id} does not show the accepted 05a2 negative`
+        )
+      }
+    }
+  } else if (assertion.caseId === 'R07') {
+    requireEvidenceKeys(causeEvidence, ['confirmedClose', 'failedClose'], 'R07')
+    const expectedFields = [
+      'captured',
+      'sameHandle',
+      'maxRoots',
+      'openingAtHold',
+      'heldProbe',
+      'publicAtHold',
+      'closeAttempts',
+      'confirmed',
+      'openingOriginalError',
+      'openingCleanupError',
+      'openingAggregate',
+      'publicOutcomes',
+      'samePublicError',
+      'firstCloseError',
+      'repeatExtraIo',
+      'postProbe',
+      'successorSettled'
+    ]
+    for (const id of ['confirmedClose', 'failedClose']) {
+      const item = causeEvidence[id]
+      requireValue(
+        item &&
+          typeof item === 'object' &&
+          !Array.isArray(item) &&
+          Object.keys(item).sort().join(',') === expectedFields.slice().sort().join(','),
+        `R07/${id} fields differ from the closed schema`
+      )
+      requireValue(
+        item.captured === true &&
+          item.sameHandle === true &&
+          item.maxRoots === 1 &&
+          item.openingAtHold === 'pending' &&
+          item.heldProbe === 'descriptor-limit' &&
+          item.openingOriginalError === true &&
+          item.repeatExtraIo === 0,
+        `R07/${id} did not reach the real held root boundary`
+      )
+      const smallCounters = [
+        ...(Array.isArray(item.closeAttempts) ? item.closeAttempts : []),
+        item.confirmed,
+        item.repeatExtraIo
+      ]
+      requireValue(
+        smallCounters.every((value) => Number.isSafeInteger(value) && value >= 0 && value <= 8) &&
+          Array.isArray(item.closeAttempts) &&
+          item.closeAttempts.length === 3 &&
+          item.closeAttempts.join(',') === '1,1,1' &&
+          Array.isArray(item.publicAtHold) &&
+          Array.isArray(item.publicOutcomes) &&
+          [...item.publicAtHold, ...item.publicOutcomes].every((value) =>
+            ['pending', 'fulfilled', 'rejected'].includes(value)
+          ) &&
+          (JSON.stringify(item.openingAggregate) === '[]' ||
+            JSON.stringify(item.openingAggregate) === '["bind","close"]') &&
+          ['descriptor-limit', 'admitted', 'other'].includes(item.postProbe) &&
+          (item.successorSettled === true || item.successorSettled === null),
+        `R07/${id} counters, enums, or outcome arrays are invalid`
+      )
+    }
+    const control = causeEvidence.confirmedClose
+    const failure = causeEvidence.failedClose
+    requireValue(
+      control.publicAtHold.length === 0 &&
+        control.closeAttempts.join(',') === '1,1,1' &&
+        control.confirmed === 1 &&
+        control.openingCleanupError === false &&
+        control.openingAggregate.length === 0 &&
+        control.publicOutcomes.join(',') === 'fulfilled,fulfilled' &&
+        control.samePublicError === false &&
+        control.firstCloseError === false &&
+        control.postProbe === 'admitted' &&
+        control.successorSettled === true,
+      'R07 confirmed-close control failed'
+    )
+    requireValue(
+      failure.publicAtHold.join(',') === 'fulfilled,fulfilled' &&
+        failure.closeAttempts.join(',') === '1,1,1' &&
+        failure.confirmed === 0 &&
+        failure.openingCleanupError === false &&
+        failure.openingAggregate.length === 0 &&
+        failure.publicOutcomes.join(',') === 'fulfilled,fulfilled,fulfilled,fulfilled' &&
+        failure.samePublicError === false &&
+        failure.firstCloseError === false &&
+        failure.postProbe === 'admitted' &&
+        failure.successorSettled === true,
+      'R07 does not show the accepted 05a2 failed-close negative'
+    )
   }
 }
 
@@ -710,8 +958,8 @@ function validate() {
     'report/log/unhandled/receipt paths are missing'
   )
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-red-unreturned-writer',
-    'phase is not settlement-red-unreturned-writer'
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-red-owned-cleanup',
+    'phase is not settlement-red-owned-cleanup'
   )
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
@@ -747,24 +995,26 @@ function validate() {
     'O05',
     'O06',
     'R04',
-    'R05'
+    'R05',
+    'R06',
+    'R07'
   ]
   requireValue(
     expectedWitnessIds.join(',') === requiredWitnessIds.join(','),
-    'closed case inventory does not produce the exact fourteen-witness roster'
+    'closed case inventory does not produce the exact sixteen-witness roster'
   )
   requireValue(
     evidence.size === requiredWitnessIds.length && requiredWitnessIds.every((caseId) => evidence.has(caseId)),
-    'actual evidence does not contain exactly the fourteen unique closed witnesses'
+    'actual evidence does not contain exactly the sixteen unique closed witnesses'
   )
 
   const { bytes, report } = readReport(reportPath)
   const { bytes: unhandledBytes, report: unhandledReport } = readUnhandledReport(unhandledReportPath)
   requireValue(report.success === false, 'Vitest JSON does not record a failed run')
   const expectedCounters = {
-    numTotalTests: 21,
+    numTotalTests: 23,
     numPassedTests: 14,
-    numFailedTests: 7,
+    numFailedTests: 9,
     numPendingTests: 0,
     numTodoTests: 0,
     numTotalTestSuites: 4,
@@ -833,7 +1083,7 @@ function validate() {
     report.testResults.length + suiteTitles.size === report.numTotalTestSuites,
     'recursive suite total is not four'
   )
-  requireValue(actualCases.size === cases.length, 'actual assertion count is not twenty-one')
+  requireValue(actualCases.size === cases.length, 'actual assertion count is not twenty-three')
 
   for (const expected of cases) {
     const found = actualCases.get(expected.title)
@@ -873,8 +1123,8 @@ function validate() {
   const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
     schema: 'metis-persistence-settlement-source-receipt/v1',
-    disposition: 'EXPECTED_SETTLEMENT_RED_UNRETURNED_WRITER',
-    phase: 'settlement-red-unreturned-writer',
+    disposition: 'EXPECTED_SETTLEMENT_RED_OWNED_CLEANUP',
+    phase: 'settlement-red-owned-cleanup',
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
@@ -899,7 +1149,7 @@ function validate() {
   }
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   console.log(
-    'persistence-settlement:EXPECTED_SETTLEMENT_RED_UNRETURNED_WRITER 21 cases; 14 passed; 7 named settlement failures'
+    'persistence-settlement:EXPECTED_SETTLEMENT_RED_OWNED_CLEANUP 23 cases; 14 passed; 9 named settlement failures'
   )
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }
