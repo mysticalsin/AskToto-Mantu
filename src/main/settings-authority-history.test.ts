@@ -93,16 +93,36 @@ describe('settings authority history', () => {
     const prior = history.captureSettingsAuthority('persistence')!
     const original = structuredClone(DEFAULT_SETTINGS)
     const changed = { ...original, encryptTranscripts: !original.encryptTranscripts }
-    let calls = 0
-    bus.observeSettingsSnapshot(() => {
-      if (calls++ === 0) return
+    let callbackCount = 0
+    let nestedPublicationCount = 0
+    let armed = false
+    const dispose = bus.observeSettingsSnapshot(() => {
+      callbackCount += 1
+      if (!armed) return
+
+      // Disarm before invoking the real publisher: nested notifications must not recurse.
+      armed = false
       bus.publishSettingsSnapshot(changed, true)
+      nestedPublicationCount += 1
       bus.publishSettingsSnapshot(original, true)
+      nestedPublicationCount += 1
       expect(history.isSettingsAuthorityCurrent(prior)).toBe(false)
     })
-    bus.publishSettingsSnapshot(changed, true)
-    expect(bus.getPublishedSettingsObservation()?.settings).toBe(original)
-    expect(history.isSettingsAuthorityCurrent(prior)).toBe(false)
+    try {
+      armed = true
+      bus.publishSettingsSnapshot(changed, true)
+      expect(nestedPublicationCount).toBe(2)
+      // Immediate subscription plus the outer and two nested real publications.
+      expect(callbackCount).toBe(4)
+      expect(bus.getPublishedSettingsObservation()?.settings).toBe(original)
+      expect(history.isSettingsAuthorityCurrent(prior)).toBe(false)
+      const refreshed = history.captureSettingsAuthority('persistence')
+      expect(refreshed).not.toBeNull()
+      expect(refreshed).not.toBe(prior)
+      expect(history.isSettingsAuthorityCurrent(refreshed!)).toBe(true)
+    } finally {
+      dispose()
+    }
   })
 
   it('keeps a nested publication followed by a legacy callback throw unreadable and revoked', async () => {
