@@ -1,0 +1,147 @@
+name: Manual 1.9.7 rollback
+
+# Hosted exact-artifact recovery check. This is a manual installer reinstall, not an updater rollback:
+# 1.9.6 Setup seeds synthetic encrypted data, the selected 1.9.7 Setup opens it, then the pinned 1.9.6
+# Setup is reinstalled over the same app directory and must reopen the same data. Windows is exercised
+# on an ephemeral hosted account. Static evidence shows direct macOS downgrade is unsupported after the
+# PR #614 key/settings migration; macOS stays BLOCKED/NEVER_RUN until a separate snapshot-restore lane passes.
+run-name: Manual 1.9.7 rollback ${{ github.event_name == 'pull_request' && '(registration)' || format('{0} attempt {1}', inputs.candidate_run, inputs.candidate_attempt) }}
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/manual-rollback.yml
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Successful QA candidate run id from main
+        required: true
+        type: string
+      candidate_attempt:
+        description: Exact successful attempt number for that run
+        required: true
+        type: string
+      candidate_sha256:
+        description: SHA-256 of that attempt's Metis-Setup-1.9.7.exe from candidate provenance
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-rollback-${{ github.ref }}-${{ inputs.candidate_run }}-${{ inputs.candidate_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  windows-manual-rollback:
+    name: Windows manual reinstall with encrypted synthetic profile
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Validate dispatch inputs and create clean staging directories
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:CANDIDATE_RUN -notmatch '^[1-9][0-9]*$') { throw 'candidate_run must be a positive run id.' }
+          if ($env:CANDIDATE_ATTEMPT -notmatch '^[1-9][0-9]*$') { throw 'candidate_attempt must be a positive attempt number.' }
+          if ($env:CANDIDATE_SHA256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'candidate_sha256 must be 64 hex characters.' }
+          $inputRoot = Join-Path $env:RUNNER_TEMP 'metis-manual-rollback-input'
+          $outputRoot = Join-Path $env:GITHUB_WORKSPACE 'rollback-output'
+          if (Test-Path $inputRoot) { Remove-Item $inputRoot -Recurse -Force }
+          if (Test-Path $outputRoot) { Remove-Item $outputRoot -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $inputRoot, $outputRoot | Out-Null
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - run: npm ci
+
+      - name: Download exact candidate attempt and pinned public baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputRoot = Join-Path $env:RUNNER_TEMP 'metis-manual-rollback-input'
+          $runJson = Join-Path $inputRoot 'candidate-run.json'
+          $route = "repos/$env:GITHUB_REPOSITORY/actions/runs/$($env:CANDIDATE_RUN)/attempts/$($env:CANDIDATE_ATTEMPT)"
+          gh api $route | Set-Content -Path $runJson -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the requested candidate attempt.' }
+
+          foreach ($name in @('candidate-provenance', 'candidate-win')) {
+            $target = Join-Path $inputRoot $name
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            gh run download $env:CANDIDATE_RUN --repo $env:GITHUB_REPOSITORY --name $name --dir $target
+            if ($LASTEXITCODE -ne 0) { throw "Could not download $name for the requested run." }
+          }
+
+          $baseline = Join-Path $inputRoot 'baseline-release'
+          New-Item -ItemType Directory -Force -Path $baseline | Out-Null
+          gh release download v1.9.6-unsigned --repo mysticalsin/Metis-Releases --pattern 'Metis-Setup-1.9.6.exe' --dir $baseline
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the pinned public 1.9.6 Setup installer.' }
+          gh release download v1.9.6-unsigned --repo mysticalsin/Metis-Releases --pattern 'SHA256SUMS.txt' --dir $baseline
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the pinned public release checksum manifest.' }
+
+      - name: Exercise manual baseline reinstall and write strict evidence
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputRoot = Join-Path $env:RUNNER_TEMP 'metis-manual-rollback-input'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'rollback-output/manual-rollback.json'
+          node scripts/qa/manual-rollback.mjs run `
+            --candidate-run $env:CANDIDATE_RUN `
+            --candidate-attempt $env:CANDIDATE_ATTEMPT `
+            --candidate-sha256 $env:CANDIDATE_SHA256 `
+            --input-root $inputRoot `
+            --run-metadata (Join-Path $inputRoot 'candidate-run.json') `
+            --provenance (Join-Path $inputRoot 'candidate-provenance/provenance.json') `
+            --candidate-dir (Join-Path $inputRoot 'candidate-win') `
+            --candidate-installer (Join-Path $inputRoot 'candidate-win/Metis-Setup-1.9.7.exe') `
+            --baseline-installer (Join-Path $inputRoot 'baseline-release/Metis-Setup-1.9.6.exe') `
+            --baseline-sums (Join-Path $inputRoot 'baseline-release/SHA256SUMS.txt') `
+            --output $output
+          if ($LASTEXITCODE -ne 0) { throw 'Manual rollback lane reported a failure.' }
+
+      - name: Reject missing, failing, skipped, mismatched, or unclean evidence
+        if: always()
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+        run: |
+          $output = Join-Path $env:GITHUB_WORKSPACE 'rollback-output/manual-rollback.json'
+          node scripts/qa/manual-rollback.mjs verify `
+            --candidate-run $env:CANDIDATE_RUN `
+            --candidate-attempt $env:CANDIDATE_ATTEMPT `
+            --candidate-sha256 $env:CANDIDATE_SHA256 `
+            --report $output
+          if ($LASTEXITCODE -ne 0) { throw 'Strict manual rollback report validation failed.' }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: manual-rollback-windows-${{ inputs.candidate_run }}-attempt-${{ inputs.candidate_attempt }}
+          path: rollback-output/
+          if-no-files-found: error
+          retention-days: 30
