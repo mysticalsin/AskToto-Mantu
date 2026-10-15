@@ -1,0 +1,63 @@
+name: Import legacy stream reader
+
+on:
+  push:
+    branches: [m2/M2-0108-legacy-stream-reader, m2/M2-0108-reviewed-import-legacy-integration]
+  pull_request:
+    paths:
+      - .github/workflows/import-legacy-stream-reader.yml
+      - electron.vite.config.ts
+      - vitest.import-legacy-worker.config.ts
+      - scripts/qa/run-import-legacy-worker-validation.mjs
+      - scripts/qa/fixtures/import-legacy-checkpoint-reader.integration.electron-case.ts
+      - src/main/import-legacy-checkpoint-*.ts
+      - src/main/infra/process/import-legacy-checkpoint-host.ts
+      - src/main/import-job-types.ts
+      - src/shared/transcript-line.ts
+      - package-lock.json
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-legacy-stream-reader-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Legacy reader and compiled worker (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node scripts/ensure-electron-runtime.mjs
+      - run: npm run build
+      - name: Run pure codec checks
+        env:
+          IMPORT_LEGACY_REPORT_DIR: ${{ runner.temp }}/import-legacy-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+        run: node scripts/qa/run-import-legacy-pure-validation.mjs
+      - name: Qualify the compiled Electron worker
+        env:
+          IMPORT_LEGACY_REPORT_DIR: ${{ runner.temp }}/import-legacy-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+        run: node scripts/qa/run-import-legacy-worker-validation.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: import-legacy-reports-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/import-legacy-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}/
+          if-no-files-found: warn
+          retention-days: 14
