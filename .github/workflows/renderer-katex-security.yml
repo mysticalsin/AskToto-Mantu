@@ -1,10 +1,11 @@
-name: Renderer KaTeX advisory baseline RED
-run-name: Renderer KaTeX baseline RED ${{ github.run_id }} attempt ${{ github.run_attempt }}
+name: Renderer KaTeX advisory evidence
+run-name: Renderer KaTeX evidence ${{ github.run_id }} attempt ${{ github.run_attempt }}
 
 on:
   push:
     branches:
       - fix/renderer-katex-security
+      - fix/renderer-katex-remediation
   workflow_dispatch:
 
 permissions:
@@ -205,3 +206,356 @@ jobs:
         run: |
           echo 'renderer-katex-red:EXPECTED_RED_EVIDENCE_RETAINED_NOT_SECURITY_QUALIFIED'
           exit 1
+
+  remediation-green:
+    name: Remediation browser, build, and full dependency evidence (${{ matrix.name }})
+    if: github.ref == 'refs/heads/fix/renderer-katex-remediation'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux
+            target: linux-x64
+            universal: '0'
+          - os: windows-2025
+            name: windows
+            target: win-x64
+            universal: '0'
+          - os: macos-15
+            name: macos
+            target: mac-universal
+            universal: '1'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      NPM_VERSION: 10.9.8
+      METIS_PACKAGE_PROFILE: full
+      RENDERER_PACKAGE_TARGET: ${{ matrix.target }}
+      ASKTOTO_MAC_UNIVERSAL: ${{ matrix.universal }}
+    steps:
+      - name: Preserve committed bytes on Windows checkouts
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+
+      - name: Create an attempt-owned evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT_DIR="$RUNNER_TEMP/renderer-katex-green-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.name }}"
+          mkdir -p "$REPORT_DIR"
+          printf 'REPORT_DIR=%s\n' "$REPORT_DIR" >> "$GITHUB_ENV"
+          printf 'METIS_RENDERER_EVIDENCE_DIR=%s\n' "$REPORT_DIR" >> "$GITHUB_ENV"
+          printf 'RENDERER_KATEX_UNHANDLED_REPORT=%s/vitest-run-errors.json\n' "$REPORT_DIR" >> "$GITHUB_ENV"
+          test -z "$(git status --porcelain)"
+          printf 'head=%s\nrun=%s\nattempt=%s\nos=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$RUNNER_OS" > "$REPORT_DIR/source-identity.txt"
+
+      - name: Pin Node and lock-producer npm versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --ignore-scripts --no-audit --no-fund
+          node --version | tee "$REPORT_DIR/node-version.txt"
+          npm --version | tee "$REPORT_DIR/npm-version.txt"
+          test "$(node --version)" = 'v22.22.3'
+          test "$(npm --version)" = '10.9.8'
+
+      - name: Install the exact frozen candidate graph
+        run: npm ci --no-audit --no-fund
+
+      - name: Retain full installed graph and KaTeX dependency explanation
+        shell: bash
+        run: |
+          set +e
+          npm ls --all --long --json > "$REPORT_DIR/npm-ls.json" 2> "$REPORT_DIR/npm-ls.stderr.log"
+          ls_exit=$?
+          set -e
+          printf '%s\n' "$ls_exit" > "$REPORT_DIR/npm-ls-exit.txt"
+          set +e
+          npm explain katex --json > "$REPORT_DIR/npm-explain-katex.json" 2> "$REPORT_DIR/npm-explain.stderr.log"
+          explain_exit=$?
+          set -e
+          printf '%s\n' "$explain_exit" > "$REPORT_DIR/npm-explain-exit.txt"
+          set +e
+          npm explain mermaid --json > "$REPORT_DIR/npm-explain-mermaid.json" 2> "$REPORT_DIR/npm-explain-mermaid.stderr.log"
+          mermaid_explain_exit=$?
+          set -e
+          printf '%s\n' "$mermaid_explain_exit" > "$REPORT_DIR/npm-explain-mermaid-exit.txt"
+
+      - name: Fetch the pinned KaTeX tarball and verify its lockfile SRI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR/katex-archive"
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { writeFileSync } from 'node:fs'
+          const url = 'https://registry.npmjs.org/katex/-/katex-0.18.2.tgz'
+          const expected = 'sha512-3snve4y0SXTMequLim1FMiPvLGElySam0blN5xQZBqEY3lOJz1TnuaaiugnBZBqHzlSAGmFTYL7MCQkORuLKCA=='
+          const response = await fetch(url, { redirect: 'error' })
+          if (!response.ok || !response.body) throw new Error(`KaTeX archive HTTP status ${response.status}`)
+          const reader = response.body.getReader()
+          const chunks = []
+          let bytes = 0
+          for (;;) {
+            const part = await reader.read()
+            if (part.done) break
+            bytes += part.value.byteLength
+            if (bytes > 32 * 1024 * 1024) throw new Error('KaTeX archive exceeds the bounded download size')
+            chunks.push(Buffer.from(part.value))
+          }
+          const archive = Buffer.concat(chunks)
+          const integrity = `sha512-${createHash('sha512').update(archive).digest('base64')}`
+          if (integrity !== expected) throw new Error('KaTeX archive SRI mismatch')
+          writeFileSync(`${process.env.REPORT_DIR}/katex-archive/katex-0.18.2.tgz`, archive, { flag: 'wx' })
+          writeFileSync(`${process.env.REPORT_DIR}/katex-archive/identity.json`, JSON.stringify({ url, bytes, sha256: createHash('sha256').update(archive).digest('hex'), integrity }, null, 2) + '\n', { flag: 'wx' })
+          NODE
+          printf 'RENDERER_KATEX_TARBALL=%s/katex-archive/katex-0.18.2.tgz\n' "$REPORT_DIR" >> "$GITHUB_ENV"
+
+      - name: Run repository type checks and ordinary production build
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck 2>&1 | tee "$REPORT_DIR/typecheck.log"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs'
+          import { resolve } from 'node:path'
+          const root = process.cwd()
+          const files = [
+            'src/renderer/src/components/Markdown.security.browser.test.ts',
+            'src/renderer/src/components/Markdown.katex.browser.test.ts',
+            'src/renderer/src/components/Markdown.mermaid.browser.test.ts',
+            'src/renderer/src/components/Markdown.warmup.test.ts',
+            'src/renderer/src/components/CodeBlock.test.ts'
+          ]
+          writeFileSync(resolve(process.env.REPORT_DIR, 'browser-tests.tsconfig.json'), JSON.stringify({
+            extends: resolve(root, 'tsconfig.web.json'),
+            compilerOptions: { composite: false, noEmit: true, types: [resolve(root, 'node_modules/vite/client')] },
+            include: files.map((file) => resolve(root, file)),
+            exclude: []
+          }, null, 2) + '\n', { flag: 'wx' })
+          NODE
+          node node_modules/typescript/bin/tsc --noEmit -p "$REPORT_DIR/browser-tests.tsconfig.json" 2>&1 | tee "$REPORT_DIR/browser-tests-typecheck.log"
+          npm run build 2>&1 | tee "$REPORT_DIR/ordinary-build.log"
+          printf 'RENDERER_ORDINARY_BUILD_EXIT=0\n' >> "$GITHUB_ENV"
+          test -s out/renderer/index.html
+          test -s out/renderer/decoder.html
+
+      - name: Observe the same production renderer build and compare every output byte
+        id: observed-build
+        continue-on-error: true
+        shell: bash
+        env:
+          ORDINARY_RENDERER: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/ordinary-renderer
+          GRAPH_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/renderer-graph.json
+          BUILD_EVIDENCE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/build-evidence.json
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { cpSync } from 'node:fs'
+          cpSync('out/renderer', process.env.ORDINARY_RENDERER, { recursive: true, errorOnExist: true })
+          NODE
+          node scripts/ci/renderer-katex-build-evidence.mjs --observe "$GRAPH_REPORT"
+          node scripts/ci/renderer-katex-build-evidence.mjs \
+            --ordinary "$ORDINARY_RENDERER" --observed out/renderer \
+            --graph "$GRAPH_REPORT" --out "$BUILD_EVIDENCE" \
+            --katex-tarball "$RENDERER_KATEX_TARBALL"
+
+      - name: Record graph-evidence outcome without relabeling a failed proof
+        if: always()
+        shell: bash
+        env:
+          OBSERVER_OUTCOME: ${{ steps.observed-build.outcome }}
+        run: |
+          printf '{"schema":1,"stepOutcome":"%s","claim":"%s"}\n' \
+            "$OBSERVER_OUTCOME" \
+            "$([ "$OBSERVER_OUTCOME" = success ] && printf 'ordinary-and-observed-renderer-bytes-equal' || printf 'UNKNOWN')" \
+            > "$REPORT_DIR/renderer-graph-status.json"
+
+      - name: Install the frozen Playwright Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            node node_modules/playwright/cli.js install --with-deps chromium
+          else
+            node node_modules/playwright/cli.js install chromium
+          fi
+
+      - name: Run the unchanged 30-case cohort without retries
+        shell: bash
+        env:
+          RUN_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest.json
+          RUN_LOG: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest.log
+          RUN_ERRORS: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-run-errors.json
+          RENDERER_ATTEMPT_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/attempt-evidence.json
+          REPORT_DIR: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-exit.txt
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run \
+            src/renderer/src/components/Markdown.security.browser.test.ts \
+            src/renderer/src/components/Markdown.katex.browser.test.ts \
+            src/renderer/src/components/Markdown.mermaid.browser.test.ts \
+            src/renderer/src/components/Markdown.warmup.test.ts \
+            src/renderer/src/components/CodeBlock.test.ts \
+            --maxWorkers=2 --retry=0 --reporter=default --reporter=json --reporter=./scripts/ci/renderer-katex-unhandled-reporter.mjs --reporter=./scripts/ci/renderer-katex-provenance.mjs --outputFile="$RUN_REPORT" \
+            > "$RUN_LOG" 2>&1
+          test_exit=$?
+          set -e
+          printf '%s\n' "$test_exit" > "$EXIT_FILE"
+          printf 'renderer-katex-green:VITEST_EXIT=%s\n' "$test_exit"
+
+      - name: Run the independent evidence-checker controls without retries
+        shell: bash
+        env:
+          RENDERER_KATEX_UNHANDLED_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-run-errors.json
+          RENDERER_ATTEMPT_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-attempt.json
+          REPORT_DIR: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          EVIDENCE_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-tests.json
+          EVIDENCE_LOG: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-tests.log
+          EVIDENCE_EXIT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-tests-exit.txt
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run \
+            scripts/ci/renderer-katex-evidence.test.ts \
+            --maxWorkers=2 --retry=0 --reporter=default --reporter=json --reporter=./scripts/ci/renderer-katex-unhandled-reporter.mjs --reporter=./scripts/ci/renderer-katex-provenance.mjs --outputFile="$EVIDENCE_REPORT" \
+            > "$EVIDENCE_LOG" 2>&1
+          test_exit=$?
+          set -e
+          printf '%s\n' "$test_exit" > "$EVIDENCE_EXIT"
+
+      - name: Run the full dependency audit and pinned npm lock SBOM
+        shell: bash
+        run: |
+          audit_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          effective_omit="$(npm config get omit)"
+          test -z "$effective_omit"
+          set +e
+          npm audit --include=dev --include=optional --include=peer --json > "$REPORT_DIR/audit.json" 2> "$REPORT_DIR/audit.stderr.log"
+          audit_exit=$?
+          set -e
+          printf '%s\n' "$audit_exit" > "$REPORT_DIR/audit-exit.txt"
+          audit_finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sbom_started="$audit_finished"
+          set +e
+          npm sbom --sbom-format=cyclonedx --package-lock-only --include=dev --include=optional --include=peer > "$REPORT_DIR/lock.sbom.json" 2> "$REPORT_DIR/sbom.stderr.log"
+          sbom_exit=$?
+          set -e
+          printf '%s\n' "$sbom_exit" > "$REPORT_DIR/sbom-exit.txt"
+          sbom_finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export audit_started audit_finished sbom_started sbom_finished audit_exit sbom_exit effective_omit
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          const root = process.env.REPORT_DIR
+          for (const [kind, file, argv, started, finished, exit] of [
+            ['audit', 'audit.json', ['audit', '--include=dev', '--include=optional', '--include=peer', '--json'], process.env.audit_started, process.env.audit_finished, Number(process.env.audit_exit)],
+            ['sbom', 'lock.sbom.json', ['sbom', '--sbom-format=cyclonedx', '--package-lock-only', '--include=dev', '--include=optional', '--include=peer'], process.env.sbom_started, process.env.sbom_finished, Number(process.env.sbom_exit)]
+          ]) {
+            const bytes = readFileSync(join(root, file))
+            writeFileSync(join(root, `${kind}-producer.json`), JSON.stringify({
+              schema: 1, producer: 'npm', version: '10.9.8', kind, argv,
+              sourceCommit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT, job: process.env.GITHUB_JOB,
+              startedAt: started, finishedAt: finished, effectiveOmit: process.env.effective_omit,
+              exitCode: exit, outputSha256: createHash('sha256').update(bytes).digest('hex')
+            }, null, 2) + '\n', { flag: 'wx' })
+          }
+          NODE
+
+      - name: Validate current-attempt GREEN browser and dependency evidence
+        if: always()
+        shell: bash
+        env:
+          RUN_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest.json
+          RUN_LOG: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest.log
+          RUN_ERRORS: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-run-errors.json
+          ATTEMPT_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/attempt-evidence.json
+          EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/vitest-exit.txt
+          AUDIT_EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/audit-exit.txt
+          SBOM_EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/sbom-exit.txt
+          AUDIT_PRODUCER: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/audit-producer.json
+          SBOM_PRODUCER: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/sbom-producer.json
+          NPM_LS_EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/npm-ls-exit.txt
+          NPM_EXPLAIN_EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/npm-explain-exit.txt
+          NPM_EXPLAIN_MERMAID_EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/npm-explain-mermaid-exit.txt
+          EVIDENCE_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-tests.json
+          EVIDENCE_LOG: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-tests.log
+          EVIDENCE_ERRORS: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-run-errors.json
+          EVIDENCE_ATTEMPT_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-attempt.json
+          EVIDENCE_EXIT_FILE: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/evidence-tests-exit.txt
+          EVIDENCE_OUT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/browser-evidence.json
+          GRAPH_REPORT: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}/renderer-graph.json
+        run: |
+          set -euo pipefail
+          test "$(cat "$AUDIT_EXIT_FILE")" = 0
+          test "$(cat "$SBOM_EXIT_FILE")" = 0
+          node scripts/ci/renderer-katex-provenance.mjs \
+            --mode remediation-green --report "$RUN_REPORT" --log "$RUN_LOG" \
+            --run-errors "$RUN_ERRORS" --attempt-report "$ATTEMPT_REPORT" --out "$EVIDENCE_OUT" \
+            --audit "$REPORT_DIR/audit.json" --audit-exit "$(cat "$AUDIT_EXIT_FILE")" \
+            --audit-producer "$AUDIT_PRODUCER" \
+            --sbom "$REPORT_DIR/lock.sbom.json" --sbom-exit "$(cat "$SBOM_EXIT_FILE")" \
+            --sbom-producer "$SBOM_PRODUCER" \
+            --npm-ls "$REPORT_DIR/npm-ls.json" --npm-ls-exit "$(cat "$NPM_LS_EXIT_FILE")" \
+            --npm-explain "$REPORT_DIR/npm-explain-katex.json" --npm-explain-exit "$(cat "$NPM_EXPLAIN_EXIT_FILE")" \
+            --npm-explain-mermaid "$REPORT_DIR/npm-explain-mermaid.json" --npm-explain-mermaid-exit "$(cat "$NPM_EXPLAIN_MERMAID_EXIT_FILE")" \
+            --evidence-report "$EVIDENCE_REPORT" --evidence-log "$EVIDENCE_LOG" \
+            --evidence-errors "$EVIDENCE_ERRORS" --evidence-attempt-report "$EVIDENCE_ATTEMPT_REPORT" --evidence-exit "$(cat "$EVIDENCE_EXIT_FILE")" \
+            --build-evidence "$REPORT_DIR/build-evidence.json" --build-graph "$GRAPH_REPORT" \
+            --test-exit "$(cat "$EXIT_FILE")"
+
+      - name: Upload complete per-platform GREEN evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: renderer-katex-green-${{ matrix.name }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/renderer-katex-green-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 30
+
+  remediation-qualification:
+    name: Qualification status
+    if: always() && github.ref == 'refs/heads/fix/renderer-katex-remediation'
+    needs: [remediation-green]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: State the bounded result and preserve incomplete evidence
+        shell: bash
+        env:
+          GREEN_RESULT: ${{ needs.remediation-green.result }}
+          OUT: ${{ runner.temp }}/renderer-katex-qualification-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: |
+          set -euo pipefail
+          if [ "$GREEN_RESULT" = success ]; then
+            node --input-type=module -e 'import { writeFileSync } from "node:fs"; writeFileSync(process.env.OUT, JSON.stringify({ schema: 1, evidence: "RENDERER_BROWSER_GREEN_ONLY", securityQualification: false, sourceCommit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, browserBuildAuditJob: "success", shippingStatus: "UNKNOWN: same-final-SHA packaged candidates and installer readback were not supplied", finalStatus: "NOT_QUALIFIED" }, null, 2) + "\n", { flag: "wx" })'
+            cat "$OUT"
+            echo 'renderer-katex-qualification:RENDERER_BROWSER_GREEN_ONLY'
+          else
+            node --input-type=module -e 'import { writeFileSync } from "node:fs"; writeFileSync(process.env.OUT, JSON.stringify({ schema: 1, evidence: "INCOMPLETE_OR_FAILED", securityQualification: false, sourceCommit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, browserBuildAuditJob: process.env.GREEN_RESULT, shippingStatus: "UNKNOWN", finalStatus: "BLOCKED" }, null, 2) + "\n", { flag: "wx" })'
+            cat "$OUT"
+            echo 'renderer-katex-qualification:BLOCKED'
+            exit 1
+          fi
+
+      - name: Upload run qualification record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: renderer-katex-qualification-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/renderer-katex-qualification-${{ github.run_id }}-${{ github.run_attempt }}.json
+          if-no-files-found: error
+          retention-days: 30

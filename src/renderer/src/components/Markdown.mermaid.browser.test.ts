@@ -316,7 +316,7 @@ describe('actual Mermaid core and production CSP browser regressions', () => {
           async () => {
             finalEvents = await test.page.evaluate(() => [...(window as any).__rendererSecurity.events.csp])
             finalProbe = await test.page.evaluate(() => (window as any).__rendererSecurityCspProbe())
-            return finalProbe.completed && finalEvents.length === expectedCspEvents.length
+            return finalProbe !== undefined && finalProbe.completed && finalEvents.length === expectedCspEvents.length
           },
           { timeout: 5_000 }
         )
