@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -55,6 +55,8 @@ import {
   evaluateAclTrust,
   isAdminManagedTrusted,
   readAclForTest,
+  aclProbeCommand,
+  parseAclOutput,
   readManagedPolicyAuthorityFile,
   readTrustedAdminManaged,
   readTrustedAdminManagedBytes,
@@ -93,11 +95,46 @@ const AUTH_USERS = 'S-1-5-11'
 const EVERYONE = 'S-1-1-0'
 const ATTACKER = 'S-1-5-21-111-222-333-1005' // a normal domain/local user RID
 
+describe('ACL probe transport and parser', () => {
+  it('passes a quoted Unicode path as UTF-8 data to a pinned encoded command', () => {
+    const path = String.raw`C:\temp\Métis $() &; ' quote\policy.json`
+    const spec = aclProbeCommand(path)
+    expect(spec.command).toBe(WINDOWS_POWERSHELL)
+    expect(spec.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    expect(spec.input).toEqual(Buffer.from(path, 'utf8'))
+    const script = Buffer.from(spec.args[3], 'base64').toString('utf16le')
+    expect(script).not.toContain(path)
+    expect(script).toContain('Get-Acl -LiteralPath $path')
+    expect(script).toContain('Microsoft.PowerShell.Security.psd1')
+  })
+
+  it('accepts a real SID and a single complete ACE', () => {
+    expect(parseAclOutput(JSON.stringify({ owner: SYSTEM, aces: { sid: SYSTEM, rights: FULL, type: 'Allow' } }))).toEqual({
+      owner: SYSTEM,
+      aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }]
+    })
+  })
+
+  it.each([
+    '',
+    'not json',
+    '{}',
+    JSON.stringify({ owner: '', aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] }),
+    JSON.stringify({ owner: SYSTEM, aces: [] }),
+    JSON.stringify({ owner: SYSTEM, aces: [{ sid: 'BUILTIN\\Users', rights: FULL, type: 'Allow' }] }),
+    JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: 'FullControl', type: 'Allow' }] })
+  ])('rejects incomplete or malformed ACL output: %s', (output) => {
+    expect(parseAclOutput(output)).toBeNull()
+  })
+})
+
 /** Distinguish a failed Get-Acl invocation from a failed script transport without logging a file path. */
 function probeTransportDiagnostic(path: string, mode: 'command' | 'encoded'): string {
   const inputPath = mode === 'encoded' ? '$path' : JSON.stringify(path)
   const script = [
     "$ErrorActionPreference='Stop'",
+    "$env:PSModulePath=$PSHOME+'\\Modules'",
+    "Import-Module ($PSHOME+'\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop",
     ...(mode === 'encoded'
       ? [
           '$bytes = New-Object System.IO.MemoryStream',
@@ -435,6 +472,41 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     expect(probe?.aces.length).toBeGreaterThan(0)
   }, 45_000) // four 8s probes plus their backoff, worst case
 
+  it('reads a Unicode and quoted literal path without treating its characters as PowerShell code', () => {
+    mkdirSync(dir, { recursive: true })
+    const literalPath = join(dir, "policy Métis $() &; ' quote.json")
+    writeFileSync(literalPath, JSON.stringify({ requireAuth: true }))
+    const probe = readAclForTest(literalPath)
+    expect(probe?.owner).toMatch(/^S-1-\d+(-\d+)+$/)
+    expect(probe?.aces.length).toBeGreaterThan(0)
+  }, 20_000)
+
+  it('accepts exact bytes from a synthetic hardened admin-owned policy', async () => {
+    mkdirSync(dir, { recursive: true })
+    const hardened = join(dir, 'hardened-policy.json')
+    const bytes = JSON.stringify({ requireAuth: true })
+    writeFileSync(hardened, bytes)
+    const icacls = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
+    try {
+      for (const args of [
+        [hardened, '/inheritance:r'],
+        [hardened, '/grant:r', '*S-1-5-18:(F)', '*S-1-5-32-544:(F)'],
+        [hardened, '/setowner', '*S-1-5-32-544']
+      ]) {
+        execFileSync(icacls, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 })
+      }
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException & { status?: number }
+      throw new Error(`synthetic ACL hardening failed: status=${failure.status ?? 'none'};code=${failure.code ?? 'none'}`)
+    }
+    const probe = readAclForTest(hardened)
+    expect(probe?.owner).toBe(ADMINS)
+    expect(probe && evaluateAclTrust(probe)).toBe(true)
+    const read = await readManagedPolicyAuthorityFile(hardened, undefined, true)
+    expect(read.status).toBe('present')
+    if (read.status === 'present') expect(Buffer.from(read.bytes).toString('utf8')).toBe(bytes)
+  }, 30_000)
+
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
@@ -491,7 +563,9 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
   it('forces a new descriptor-bound ACL probe at an explicit authority boundary', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(Date.now())
+    managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] })
     const first = readTrustedAdminManaged(file)
+    expect(first).toBe(CONTENT)
     const fresh = await readManagedPolicyAuthorityFile(file, undefined, true)
     expect(fresh.status).toBe('present')
     if (fresh.status === 'present') expect(Buffer.from(fresh.bytes).toString('utf8')).toBe(first)
