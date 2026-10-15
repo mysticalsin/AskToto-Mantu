@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import {
+  createReadStream,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  readdirSync,
+  realpathSync,
+  statSync
+} from 'node:fs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { dirname, join, posix, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,45 +96,99 @@ async function verifyExtractedArchive(archivePath, destination, binaryName, libr
     extractArchive(archivePath, scratch)
     const archiveDirectory = findDirContaining(scratch, binaryName)
     if (!archiveDirectory) throw new Error(`Pinned archive is missing ${binaryName}`)
+    const archiveDirectoryReal = realpathSync(archiveDirectory)
     const archiveEntries = readdirSync(archiveDirectory, { withFileTypes: true })
     const archiveMembers = archiveEntries
-      .filter((entry) => entry.isFile() && (entry.name === binaryName || entry.name.endsWith(libraryExtension)))
-      .map((entry) => entry.name)
-      .sort()
-    if (!archiveMembers.includes(binaryName)) throw new Error(`Pinned archive is missing runtime ${binaryName}`)
-    if (archiveMembers.filter((name) => name.endsWith(libraryExtension)).length === 0)
+      .filter((entry) => entry.name === binaryName || entry.name.endsWith(libraryExtension))
+      .map((entry) => {
+        const archiveMemberPath = join(archiveDirectory, entry.name)
+        if (entry.isFile()) return { name: entry.name, kind: 'regular' }
+        if (process.platform !== 'darwin' || libraryExtension !== '.dylib' || !entry.isSymbolicLink())
+          throw new Error(`Pinned runtime member has an unsupported archive type: ${entry.name}`)
+
+        const linkTarget = readlinkSync(archiveMemberPath)
+        const resolvedPath = realpathSync(archiveMemberPath)
+        const resolvedRelative = paths.relative(archiveDirectoryReal, resolvedPath)
+        if (
+          !resolvedRelative ||
+          resolvedRelative === '..' ||
+          resolvedRelative.startsWith(`..${paths.sep}`) ||
+          paths.isAbsolute(resolvedRelative) ||
+          resolvedRelative.includes('/') ||
+          resolvedRelative.includes('\\')
+        )
+          throw new Error(`Pinned runtime library alias escapes its verified archive directory: ${entry.name}`)
+        const targetStat = statSync(resolvedPath)
+        if (!targetStat.isFile())
+          throw new Error(`Pinned runtime library alias does not resolve to a regular file: ${entry.name}`)
+        return { name: entry.name, kind: 'symlink', linkTarget, resolvedTarget: resolvedRelative }
+      })
+      .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+    const archiveMemberNames = archiveMembers.map((member) => member.name)
+    const archiveMemberByName = new Map(archiveMembers.map((member) => [member.name, member]))
+    if (!archiveMemberNames.includes(binaryName)) throw new Error(`Pinned archive is missing runtime ${binaryName}`)
+    if (archiveMemberNames.filter((name) => name.endsWith(libraryExtension)).length === 0)
       throw new Error(`Pinned archive has no ${libraryExtension} runtime libraries`)
     const destinationEntries = readdirSync(destination, { withFileTypes: true })
     const runtimeDestinationEntries = destinationEntries.filter((entry) => entry.name !== '.sha256')
     const destinationNames = runtimeDestinationEntries.map((entry) => entry.name).sort()
-    if (JSON.stringify(destinationNames) !== JSON.stringify(archiveMembers))
+    if (JSON.stringify(destinationNames) !== JSON.stringify(archiveMemberNames))
       throw new Error(
-        `Extracted runtime inventory differs from pinned archive: expected ${archiveMembers.join(',')}, got ${destinationNames.join(',')}`
+        `Extracted runtime inventory differs from pinned archive: expected ${archiveMemberNames.join(',')}, got ${destinationNames.join(',')}`
       )
     const marker = join(destination, '.sha256')
     if (!existsSync(marker) || !lstatSync(marker).isFile() || readFileSync(marker, 'utf8').trim() !== archiveSha)
       throw new Error(`Runtime archive marker does not match pinned archive ${archiveSha}`)
     const members = []
-    for (const name of archiveMembers) {
+    const verifiedMembers = new Map()
+    for (const { name, kind, linkTarget, resolvedTarget } of archiveMembers) {
       const extractedEntry = runtimeDestinationEntries.find((entry) => entry.name === name)
       if (!extractedEntry?.isFile()) throw new Error(`Extracted runtime member is not a regular file: ${name}`)
       const archiveMemberPath = join(archiveDirectory, name)
       const extractedPath = join(destination, name)
-      const archiveStat = statSync(archiveMemberPath)
-      const extractedStat = statSync(extractedPath)
-      if (!archiveStat.isFile() || !extractedStat.isFile())
+      const archiveMemberStat = lstatSync(archiveMemberPath)
+      if (kind === 'regular' && (!archiveMemberStat.isFile() || archiveMemberStat.isSymbolicLink()))
+        throw new Error(`Runtime archive member changed type during verification: ${name}`)
+      if (kind === 'symlink' && (!archiveMemberStat.isSymbolicLink() || readlinkSync(archiveMemberPath) !== linkTarget))
+        throw new Error(`Runtime archive library alias changed during verification: ${name}`)
+      const actualArchivePath = kind === 'symlink' ? join(archiveDirectoryReal, resolvedTarget) : archiveMemberPath
+      const archiveStat = statSync(actualArchivePath)
+      const extractedStat = lstatSync(extractedPath)
+      if (!archiveStat.isFile() || !extractedStat.isFile() || extractedStat.isSymbolicLink())
         throw new Error(`Runtime member is not a regular file: ${name}`)
       if (archiveStat.size !== extractedStat.size) throw new Error(`Extracted runtime member size differs: ${name}`)
-      const archiveDigest = await sha256(archiveMemberPath)
+      const archiveDigest = await sha256(actualArchivePath)
       const extractedDigest = await sha256(extractedPath)
       requireEqual(extractedDigest, archiveDigest, `Extracted runtime member ${name} SHA-256`)
-      members.push({
+      const member = {
         archiveMember: name,
         bytes: extractedStat.size,
         sha256: extractedDigest,
         path: paths.relative(root, extractedPath).replaceAll('\\', '/')
-      })
+      }
+      if (kind === 'regular') member.archiveEntryType = 'regular'
+      else {
+        const target = archiveMemberByName.get(resolvedTarget)
+        if (!target || !resolvedTarget.endsWith(libraryExtension))
+          throw new Error(`Pinned runtime library alias resolves outside the exact runtime roster: ${name}`)
+        member.archiveEntryType = 'symlink'
+        member.archiveLinkTarget = linkTarget
+        member.archiveResolvedTarget = resolvedTarget
+        member.archiveResolvedTargetBytes = archiveStat.size
+        member.archiveResolvedTargetSha256 = archiveDigest
+      }
+      verifiedMembers.set(name, member)
     }
+    for (const { name, kind, resolvedTarget } of archiveMembers) {
+      if (kind !== 'symlink') continue
+      const member = verifiedMembers.get(name)
+      const target = verifiedMembers.get(resolvedTarget)
+      if (!member || !target || member.bytes !== target.bytes || member.sha256 !== target.sha256)
+        throw new Error(`Extracted runtime alias does not match its resolved archive target: ${name}`)
+      members.push(member)
+    }
+    for (const { name, kind } of archiveMembers) if (kind === 'regular') members.push(verifiedMembers.get(name))
+    members.sort((left, right) => left.archiveMember.localeCompare(right.archiveMember))
     return { archive: paths.relative(root, archivePath).replaceAll('\\', '/'), members }
   } finally {
     await rm(scratch, { recursive: true, force: true })

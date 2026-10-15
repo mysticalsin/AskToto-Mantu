@@ -128,6 +128,7 @@ for (const inventory of inputs.runtimeInventories) {
   const names = inventory.members.map((member) => member.archiveMember)
   if (new Set(names).size !== names.length)
     throw new Error(`Runtime archive inventory has duplicate members: ${inventory.archive}`)
+  const memberByArchiveName = new Map(inventory.members.map((member) => [member.archiveMember, member]))
   const winVariant = inventory.archive.includes('-win-cpu-') ? 'cpu' : 'vulkan'
   const binaryName = windows ? 'llama-server.exe' : 'llama-server'
   const librarySuffix = windows ? '.dll' : '.dylib'
@@ -136,12 +137,40 @@ for (const inventory of inputs.runtimeInventories) {
   for (const member of inventory.members) {
     if (
       typeof member.archiveMember !== 'string' ||
+      member.archiveMember.includes('/') ||
+      member.archiveMember.includes('\\') ||
       (member.archiveMember !== binaryName && !member.archiveMember.endsWith(librarySuffix)) ||
       !Number.isSafeInteger(member.bytes) ||
       member.bytes < 1 ||
       !/^[0-9a-f]{64}$/.test(member.sha256 ?? '')
     )
       throw new Error(`Runtime archive inventory has invalid member metadata: ${inventory.archive}`)
+    if (member.archiveEntryType === 'regular') {
+      if (
+        Object.hasOwn(member, 'archiveLinkTarget') ||
+        Object.hasOwn(member, 'archiveResolvedTarget') ||
+        Object.hasOwn(member, 'archiveResolvedTargetBytes') ||
+        Object.hasOwn(member, 'archiveResolvedTargetSha256')
+      )
+        throw new Error(`Regular runtime member has unexpected alias metadata: ${member.archiveMember}`)
+    } else if (
+      member.archiveEntryType !== 'symlink' ||
+      platform !== 'darwin' ||
+      !member.archiveMember.endsWith('.dylib') ||
+      typeof member.archiveLinkTarget !== 'string' ||
+      member.archiveLinkTarget.length === 0 ||
+      typeof member.archiveResolvedTarget !== 'string' ||
+      member.archiveResolvedTarget.includes('/') ||
+      member.archiveResolvedTarget.includes('\\') ||
+      member.archiveResolvedTarget === member.archiveMember ||
+      !member.archiveResolvedTarget.endsWith('.dylib') ||
+      !Number.isSafeInteger(member.archiveResolvedTargetBytes) ||
+      member.archiveResolvedTargetBytes !== member.bytes ||
+      !/^[0-9a-f]{64}$/.test(member.archiveResolvedTargetSha256 ?? '') ||
+      member.archiveResolvedTargetSha256 !== member.sha256
+    ) {
+      throw new Error(`Runtime library alias metadata is invalid: ${member.archiveMember}`)
+    }
     const expectedPath = windows
       ? `resources/llama/win/${winVariant}/${member.archiveMember}`
       : `resources/llama/${arch === 'arm64' ? 'mac/arm64' : 'mac/x64'}/${member.archiveMember}`
@@ -151,6 +180,19 @@ for (const inventory of inputs.runtimeInventories) {
     if (!input || input.bytes !== member.bytes || input.sha256 !== member.sha256)
       throw new Error(`Runtime member does not match input file evidence: ${member.path}`)
     expectedRuntimePaths.add(member.path)
+  }
+  for (const member of inventory.members) {
+    if (member.archiveEntryType !== 'symlink') continue
+    const resolved = memberByArchiveName.get(member.archiveResolvedTarget)
+    if (
+      !resolved ||
+      resolved.archiveEntryType !== 'regular' ||
+      resolved.bytes !== member.archiveResolvedTargetBytes ||
+      resolved.sha256 !== member.archiveResolvedTargetSha256 ||
+      resolved.bytes !== member.bytes ||
+      resolved.sha256 !== member.sha256
+    )
+      throw new Error(`Runtime library alias does not match its regular archive target: ${member.archiveMember}`)
   }
 }
 if (

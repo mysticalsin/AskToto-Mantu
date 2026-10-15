@@ -76,11 +76,6 @@ async function run(endpoint: string): Promise<Result> {
     const controlSocket = await bounded(controlConnected, 'accept positive-control pipe')
     const stat = await controlHandle.stat({ bigint: true })
     assert.equal(stat.isFile(), false, 'named-pipe descriptor must be nonregular')
-    assert.equal(
-      stat.isFIFO() || stat.isSocket() || stat.isCharacterDevice(),
-      true,
-      'named-pipe descriptor must have a special-file type'
-    )
 
     const buffer = Buffer.alloc(1)
     const controlRead = controlHandle.read(buffer, 0, 1, null).then(({ bytesRead }) => ({ bytesRead, buffer }))

@@ -103,7 +103,7 @@ jobs:
             files+=(src/main/features/components/speech-pack/runtime-archive.windows-pipe.test.ts)
           fi
           set -o pipefail
-          ./node_modules/.bin/vitest run "${files[@]}" --reporter=json --outputFile="$RUNNER_TEMP/native-vitest.json" --testTimeout=60000 --dangerouslyIgnoreUnhandledErrors=false 2>&1 | tee "$RUNNER_TEMP/native-vitest.log"
+          ./node_modules/.bin/vitest run "${files[@]}" --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/native-vitest.json" --testTimeout=60000 --dangerouslyIgnoreUnhandledErrors=false 2>&1 | tee "$RUNNER_TEMP/native-vitest.log"
       - name: Require exact, nonempty, all-pass reports
         if: always()
         env:
