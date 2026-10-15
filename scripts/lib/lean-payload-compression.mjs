@@ -67,8 +67,30 @@ export function archiveMembers(slt) {
     seen.add(path)
     folded.add(lower)
     const linkText = row['Symbolic Link'] ?? row['Symbolic Link Path'] ?? null
-    const type = row.Folder === '+' ? 'directory' : linkText !== null ? 'symlink' : 'file'
-    const bytes = type === 'directory' ? 0 : type === 'symlink' ? Buffer.byteLength(linkText) : Number(row.Size)
+    const hasFolder = Object.hasOwn(row, 'Folder')
+    if (hasFolder && row.Folder !== '+' && row.Folder !== '-')
+      throw new Error(`Invalid archive member Folder flag: ${path}`)
+    const nativeDirectory = !hasFolder && row.Attributes === 'D'
+    const legacyDirectory = hasFolder && row.Folder === '+'
+    if (
+      (row.Attributes === 'D' && row.Folder === '-') ||
+      (row.Attributes === 'A' && legacyDirectory) ||
+      ((nativeDirectory || legacyDirectory) && linkText !== null)
+    )
+      throw new Error(`Conflicting archive member type flags: ${path}`)
+    const type = nativeDirectory || legacyDirectory ? 'directory' : linkText !== null ? 'symlink' : 'file'
+    let bytes
+    if (type === 'directory') {
+      if (row.Size === undefined && legacyDirectory) {
+        bytes = 0
+      } else if (typeof row.Size === 'string' && /^\d+$/u.test(row.Size) && Number(row.Size) === 0) {
+        bytes = 0
+      } else {
+        throw new Error(`Invalid archive directory byte count: ${path}`)
+      }
+    } else {
+      bytes = type === 'symlink' ? Buffer.byteLength(linkText) : Number(row.Size)
+    }
     if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error(`Invalid archive member byte count: ${path}`)
     members.push({ path, bytes, type, ...(type === 'symlink' ? { linkText } : {}) })
   }
