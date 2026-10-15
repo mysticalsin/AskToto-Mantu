@@ -1,0 +1,84 @@
+name: Persistence settlement source RED
+
+on:
+  push:
+    paths:
+      - .github/workflows/persistence-settlement.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - scripts/qa/check-persistence-settlement-report.mjs
+      - src/main/persistence/bootstrap.ts
+      - src/main/persistence/bootstrap-settlement.ts
+      - src/main/persistence/root-registry.ts
+      - src/main/persistence/bootstrap-main-factory.integration.test.ts
+      - src/main/persistence/root-registry.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persistence-settlement-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test-first:
+    name: F0219 settlement causal RED
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
+      PERSISTENCE_SETTLEMENT_PHASE: expected-red
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Create a fresh, exclusively owned report directory before install
+        run: |
+          set -euo pipefail
+          SETTLEMENT_REPORT_DIR="$RUNNER_TEMP/persistence-settlement-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 700 "$SETTLEMENT_REPORT_DIR"
+          test ! -e "$SETTLEMENT_REPORT_DIR/vitest.json"
+          test ! -e "$SETTLEMENT_REPORT_DIR/receipt.json"
+          echo "SETTLEMENT_REPORT_DIR=$SETTLEMENT_REPORT_DIR" >> "$GITHUB_ENV"
+          echo "VITEST_REPORT_PATH=$SETTLEMENT_REPORT_DIR/vitest.json" >> "$GITHUB_ENV"
+          echo "VITEST_LOG_PATH=$SETTLEMENT_REPORT_DIR/vitest.log" >> "$GITHUB_ENV"
+          echo "SETTLEMENT_RECEIPT_PATH=$SETTLEMENT_REPORT_DIR/receipt.json" >> "$GITHUB_ENV"
+          echo "REPORT_STARTED_AT_MS=$(date -u +%s%3N)" >> "$GITHUB_ENV"
+      - name: Install the frozen Node 22 test dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run the exact factory and root-registry suites with actual exit and JSON
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 ./node_modules/.bin/vitest run \
+            src/main/persistence/bootstrap-main-factory.integration.test.ts \
+            src/main/persistence/root-registry.test.ts \
+            --retry=0 \
+            --reporter=default \
+            --reporter=json \
+            --outputFile="$VITEST_REPORT_PATH" \
+            > "$SETTLEMENT_REPORT_DIR/vitest.log" 2>&1
+          test_exit=$?
+          set -e
+          echo "VITEST_EXIT_CODE=$test_exit" >> "$GITHUB_ENV"
+          echo "Vitest actual exit: $test_exit"
+      - name: Validate only the six named causal settlement failures
+        run: node scripts/qa/check-persistence-settlement-report.mjs
+      - name: Retain the raw run, JSON and EXPECTED_RED receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: persistence-settlement-expected-red-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14
