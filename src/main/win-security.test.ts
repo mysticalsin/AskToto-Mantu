@@ -420,7 +420,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
   const dir = join(process.env.ProgramData || 'C:\\ProgramData', 'Metis__wsectest')
   const file = join(dir, 'managed-config.json')
   const icacls = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
-  function makeFixtureNonAdminWritable(): void {
+  async function makeFixtureNonAdminWritable(): Promise<void> {
     try {
       execFileSync(icacls, [file, '/grant', `*${USERS}:(W)`], {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -430,7 +430,14 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
       const failure = error as NodeJS.ErrnoException & { status?: number }
       throw new Error(`synthetic ACL grant failed: status=${failure.status ?? 'none'};code=${failure.code ?? 'none'}`)
     }
-    const probe = readAclForTest(file)
+    // A saturated hosted runner can hit the production 8s spawn cap. A null probe is never a
+    // qualifying verdict: retry the live reader, then fail if the ACL still cannot be observed.
+    let probe = readAclForTest(file)
+    for (let attempt = 0; probe === null && attempt < 4; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
+      probe = readAclForTest(file)
+    }
+    if (probe === null) throw new Error('synthetic Users:Write ACL was not readable after five live probes')
     expect(probe).not.toBeNull()
     expect(probe?.aces.some((ace) => ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0)).toBe(
       true
@@ -445,16 +452,16 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     }
   })
 
-  it('rejects a policy file explicitly writable by non-admin Users', () => {
+  it('rejects a policy file explicitly writable by non-admin Users', async () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
-    makeFixtureNonAdminWritable()
+    await makeFixtureNonAdminWritable()
     // The file exists and parses, but the real ACL reader sees Users write.
     expect(isAdminManagedTrusted(file)).toBe(false)
     // Budget must clear the code's OWN limit: the ACL read spawns System32 powershell.exe with an
     // 8s execFileSync timeout, which already exceeds vitest's 5s per-test default — so on a cold CI
     // runner, where PowerShell start-up is the slow part, this failed as a timeout rather than a verdict.
-  }, 20_000)
+  }, 60_000)
 
   // MQA-008 (docs/qa/BUG-LEDGER.md). The probe built its owner from FileSecurity.Owner, which is a
   // System.String rather than an IdentityReference — .Translate() threw, the fallback read .Value off a
@@ -529,15 +536,15 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     if (read.status === 'present') expect(Buffer.from(read.bytes).toString('utf8')).toBe(bytes)
   }, 30_000)
 
-  it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
+  it('readTrustedAdminManaged never returns content for that same untrusted file', async () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
-    makeFixtureNonAdminWritable()
+    await makeFixtureNonAdminWritable()
     // Content must not leak even though the file exists and parses — the ACL is untrusted, so the
     // held-fd read is refused before ever handing the caller a string to JSON.parse.
     expect(readTrustedAdminManaged(file)).toBeNull()
     // Same 8s-PowerShell-vs-5s-budget reason as the case above.
-  }, 20_000)
+  }, 60_000)
 })
 
 // MQA-028 (docs/qa/BUG-LEDGER.md). Every probe is a synchronous powershell.exe spawn, and nothing
