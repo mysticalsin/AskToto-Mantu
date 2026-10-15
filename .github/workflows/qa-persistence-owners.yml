@@ -2,6 +2,9 @@ name: QA persistence run owners
 
 on:
   push:
+    branches:
+      - fix/qa-c2-owned-settlement-diagnostics
+      - fix/qa-c2-instance-fixtures
     paths:
       - .github/workflows/qa-persistence-owners.yml
       - vitest.qa-persistence-owners.config.ts
@@ -83,9 +86,23 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install frozen test dependencies without lifecycle scripts
+        id: install
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check architecture independently
+        if: always() && steps.install.outcome == 'success'
+        run: node scripts/check-architecture.mjs
+      - name: Type-check Node configuration independently
+        if: always() && steps.install.outcome == 'success'
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.node.json
+      - name: Type-check web configuration independently
+        if: always() && steps.install.outcome == 'success'
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.web.json
+      - name: Type-check tests configuration independently
+        if: always() && steps.install.outcome == 'success'
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.tests.json
       - name: Remove stale report and run the explicitly selected finite fixtures
         id: run
+        if: always() && steps.install.outcome == 'success'
         env:
           REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
           DIAGNOSTIC: ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
@@ -306,15 +323,15 @@ jobs:
             }
             if (caseResults.size !== 26) failDiagnostic('missing-case')
           }
-          const stages = new Set(['transport-open','read-start','read-done','write-start','write-done','destroy-request','stream-end','stream-close','stream-error','native-close-start','native-close-done','file-open','file-close-start','file-close-done','settle-start','settle-fulfilled','settle-rejected','gate-held','gate-released','prototype-hook-armed','parent-input-end','parent-output-destroy','child-exit','fixture-refusal','aggregate-member','aggregate-overflow'])
+          const stages = new Set(['transport-open','read-start','read-done','write-start','write-done','destroy-request','stream-end','stream-close','stream-error','native-close-start','native-close-done','file-open','file-close-start','file-close-done','settle-start','settle-fulfilled','settle-rejected','gate-held','gate-released','instance-hook-armed','parent-input-end','parent-output-destroy','child-exit','fixture-refusal','aggregate-member','aggregate-overflow'])
           const roles = new Set(['reader3','writer4','profile-parent','profile','registry-root','writer-lock','probe','other','none'])
           const states = new Set(['not-started','pending','fulfilled','rejected'])
-          const errors = new Set(['none','EPIPE','EBADF','ECANCELED','EIO','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE','known-qa-refusal','known-profile-refusal','injected-close','aggregate','other'])
+          const errors = new Set(['none','EPIPE','EBADF','ECANCELED','EIO','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE','known-qa-refusal','root-descriptor-limit','known-profile-refusal','injected-close','aggregate','other'])
           const commands = new Set(['check','create-root','registry-negative','settle','hide-check','navigate-aba','duplicate-prepare','successor','stale-owner','create-root-held','change-userdata-resume','retire-during-preparation','registry-cleanup','hold-profile-preparation','release-profile-preparation','fail-profile-close','release-failed-close','create-root-physical-held','retire-window-resume','release-profile-physical-check','prepare','none'])
-          const reportTypes = new Set(['preparing','refused','active','current','hidden','navigation-aba','duplicate-prepare','successor-active','successor-refused','stale-owner','root-held','gateway-held','preparation-window-retired','profile-preparation-stat-held','profile-preparation-hold-ready','profile-preparation-descriptors-settled','registry-profile-physical-held','registry-profile-physical-result','profile-close-failure-armed','root','registry-negative','registry-cleanup','settled','settlement-failed','fixture-error'])
+          const reportTypes = new Set(['preparing','refused','active','current','hidden','navigation-aba','duplicate-prepare','successor-active','successor-refused','stale-owner','root-held','gateway-held','preparation-window-retired','profile-preparation-stat-held','profile-preparation-hold-ready','profile-preparation-descriptors-settled','registry-profile-physical-held','registry-profile-physical-result','profile-close-failure-armed','profile-close-fault-observed','profile-other-close-observed','profile-failed-handle-release','root','registry-negative','registry-cleanup','settled','settlement-failed','fixture-error'])
           const observationKeys = ['schema','sequence','command','stage','role','handleOrdinal','state','error','ownClose','hookInvoked','teardown']
           const summaryKeys = ['settlement','settlementSamePromise','readerIo','writerIo','readerClose','writerClose','profileClose','destroyRequested','nativeClose','streamCloseObserved','parentInputEnd','parentOutputDestroy','perHandleClose','hookInvocationCount']
-          const childKeys = ['caseId','childOrdinal','sourceHead','runId','runAttempt','target','node','observations','overflow','stderrBytes','stderrOverflow','unexpectedTerminalReports','settlementPromiseObservation','preTeardown','final','childExit']
+          const childKeys = ['caseId','childOrdinal','sourceHead','runId','runAttempt','target','node','observations','f0Reports','preTeardownObservedEvents','overflow','stderrBytes','stderrOverflow','unexpectedTerminalReports','settlementPromiseObservation','preTeardown','final','childExit']
           const emptySummary = () => ({settlement:'not-started',settlementSamePromise:null,readerIo:'not-started',writerIo:'not-started',readerClose:'not-started',writerClose:'not-started',profileClose:'not-started',destroyRequested:false,nativeClose:'not-started',streamCloseObserved:false,parentInputEnd:false,parentOutputDestroy:false,perHandleClose:Object.create(null),hookInvocationCount:0})
           const reduceSummary = (events, samePromise) => {
             const summary = emptySummary()
@@ -322,7 +339,8 @@ jobs:
             const heldGates = new Map()
             const pendingOperations = new Map()
             const rejectedFileCloses = new Set()
-            const armedHooks = new Set()
+            const armedHooks = new Map()
+            const preparationEntries = new Set()
             const handleOwnClose = new Map()
             let settleStarted = false
             for (const event of events) {
@@ -357,13 +375,34 @@ jobs:
               if (stage === 'stream-close' && (role === 'reader3' || role === 'writer4')) summary.streamCloseObserved = true
               if (stage === 'parent-input-end') summary.parentInputEnd = true
               if (stage === 'parent-output-destroy') summary.parentOutputDestroy = true
-              if (stage === 'prototype-hook-armed') {
-                if (event.hookInvoked === true && state === 'fulfilled') {
-                  if (!armedHooks.has('profile') && !armedHooks.has('registry-root')) failDiagnostic('invalid-observation')
-                  if (handleOrdinal === 0 || seenHandles.get(String(handleOrdinal)) !== role) failDiagnostic('invalid-observation')
-                  summary.hookInvocationCount += 1
-                } else if (event.hookInvoked === false && state === 'pending') armedHooks.add(role)
-                else failDiagnostic('invalid-observation')
+              if (stage === 'instance-hook-armed') {
+                if (event.ownClose !== null) failDiagnostic('invalid-observation')
+                if (event.hookInvoked === false && state === 'pending') {
+                  if (handleOrdinal === 0 && event.command === 'hold-profile-preparation' && ['profile-parent','profile'].includes(role)) {
+                    const key = `prep:${role}`
+                    if (armedHooks.has(key)) failDiagnostic('invalid-observation')
+                    else armedHooks.set(key,{role,ordinal:0,command:event.command,used:false})
+                  } else if (handleOrdinal > 0 && ((event.command === 'fail-profile-close' && role === 'profile-parent') || (event.command === 'registry-cleanup' && role === 'registry-root')) && seenHandles.get(String(handleOrdinal)) === role && handleOwnClose.get(String(handleOrdinal)) === true) {
+                    const key = `${event.command}:${role}:${handleOrdinal}`
+                    if (armedHooks.has(key)) failDiagnostic('invalid-observation')
+                    else armedHooks.set(key,{role,ordinal:handleOrdinal,command:event.command,used:false})
+                  } else failDiagnostic('invalid-observation')
+                } else if (event.hookInvoked === true && state === 'fulfilled' && handleOrdinal > 0 && seenHandles.get(String(handleOrdinal)) === role && handleOwnClose.get(String(handleOrdinal)) === true) {
+                  const currentClose = summary.perHandleClose[String(handleOrdinal)]
+                  const exactKey = `${event.command}:${role}:${handleOrdinal}`
+                  const exactArm = armedHooks.get(exactKey)
+                  const prepArm = role === 'profile-parent' || role === 'profile' ? armedHooks.get(`prep:${role}`) : null
+                  const arm = exactArm ?? (event.command === 'release-profile-preparation' ? prepArm : null)
+                  if (!currentClose || currentClose.count < 1 || currentClose.state !== 'pending' || !arm || arm.used || exactArm && arm.command !== event.command || prepArm && !exactArm && event.command !== 'release-profile-preparation') failDiagnostic('invalid-observation')
+                  else {
+                    arm.used = true
+                    if (prepArm && arm === prepArm) {
+                      if (preparationEntries.has(role)) failDiagnostic('invalid-observation')
+                      preparationEntries.add(role)
+                    }
+                    summary.hookInvocationCount += 1
+                  }
+                } else failDiagnostic('invalid-observation')
               } else if (event.hookInvoked !== null) failDiagnostic('invalid-observation')
               if (stage === 'gate-held') heldGates.set(`${role}:${handleOrdinal}`, (heldGates.get(`${role}:${handleOrdinal}`) ?? 0) + 1)
               if (stage === 'gate-released') {
@@ -404,14 +443,88 @@ jobs:
             if (!exact(actual, summaryKeys) || summaryKeys.some((key) => key !== 'perHandleClose' && JSON.stringify(actual[key]) !== JSON.stringify(expected[key]))) { failDiagnostic('invalid-envelope'); return }
             if (!exact(actual.perHandleClose, Object.keys(expected.perHandleClose)) || Object.keys(actual.perHandleClose).some((key) => !/^[1-8]$/.test(key) || !exact(actual.perHandleClose[key], ['role','state','count']) || JSON.stringify(actual.perHandleClose[key]) !== JSON.stringify(expected.perHandleClose[key]))) failDiagnostic('invalid-envelope')
           }
+          const f0PhaseRows = []
+          let f0GlobalCount = 0
+          const replayF0 = (child,boundary) => {
+            const preparationIds = new Set(['R08','R09','R10','R11','R19','R20'])
+            const expectedTypes = preparationIds.has(child.caseId) ? ['profile-preparation-descriptors-settled'] : child.caseId === 'R22' ? ['profile-close-failure-armed','profile-close-fault-observed','profile-other-close-observed','settlement-failed','duplicate-prepare','profile-failed-handle-release'] : child.caseId === 'G02' ? ['registry-cleanup'] : []
+            const expected = {
+              'profile-preparation-descriptors-settled': {type:'profile-preparation-descriptors-settled',settledDescriptorCount:2,parentCloseCount:1,profileCloseCount:1,distinctHandles:true},
+              'profile-close-failure-armed': {type:'profile-close-failure-armed',targetRole:'profile-parent',ownClose:true},
+              'profile-close-fault-observed': {type:'profile-close-fault-observed',targetRole:'profile-parent',hookInvocations:1,originalCloseCalls:0,retained:true,error:'injected-close'},
+              'profile-other-close-observed': {type:'profile-other-close-observed',targetRole:'profile',fulfilled:true},
+              'settlement-failed': {type:'settlement-failed',available:true,samePromise:true,sameInjectedError:true},
+              'duplicate-prepare': {type:'duplicate-prepare',refusal:'run-already-owned'},
+              'profile-failed-handle-release': {type:'profile-failed-handle-release',state:'fulfilled',retained:true},
+              'registry-cleanup': {type:'registry-cleanup',foreignReplacementPreserved:true,closeCapacityRetained:true,hookRole:'registry-root',hookInvocations:1,repeatedRejected:true,sameError:true,capacityRefusal:'root-descriptor-limit',probeClosed:true,fixtureCloseFulfilled:true,postCleanupSameError:true}
+            }
+            if (!Array.isArray(child.f0Reports) || child.f0Reports.length > 6 || (f0GlobalCount += child.f0Reports.length) > 16) { failDiagnostic('invalid-envelope'); return }
+            const seen = new Map()
+            let lastIndex = -1
+            let receiverTeardown = false
+            for (const item of child.f0Reports) {
+              if (!exact(item,['report','observedEvents','receiverTeardown']) || !Number.isSafeInteger(item.observedEvents) || item.observedEvents < 0 || item.observedEvents < lastIndex || item.observedEvents > child.observations.length || typeof item.receiverTeardown !== 'boolean' || (receiverTeardown && !item.receiverTeardown) || (item.receiverTeardown ? item.observedEvents < boundary : item.observedEvents > boundary) || !item.report || typeof item.report !== 'object' || Array.isArray(item.report)) { failDiagnostic('invalid-envelope'); continue }
+              lastIndex = item.observedEvents
+              receiverTeardown = item.receiverTeardown
+              const type = item.report.type
+              const exemplar = expected[type]
+              if (!expectedTypes.includes(type) || seen.has(type) || !exemplar || !exact(item.report,Object.keys(exemplar)) || Object.keys(exemplar).some((key)=>key !== 'state' && item.report[key] !== exemplar[key]) || type === 'profile-failed-handle-release' && !['fulfilled','rejected'].includes(item.report.state)) { failDiagnostic('invalid-envelope'); continue }
+              seen.set(type,item)
+              const prior = child.observations.slice(0,item.observedEvents)
+              const count = (stage,role,state,command,ordinal) => prior.filter((event)=>event.stage===stage && event.role===role && event.state===state && (command===null || event.command===command) && (ordinal===null || event.handleOrdinal===ordinal)).length
+              const opens = (role) => prior.filter((event)=>event.stage==='file-open' && event.role===role && event.ownClose===true).map((event)=>event.handleOrdinal)
+              const parent = opens('profile-parent')
+              const profile = opens('profile')
+              const root = opens('registry-root')
+              if (type === 'profile-preparation-descriptors-settled') {
+                if (parent.length !== 1 || profile.length !== 1 || parent[0]===profile[0] || count('file-close-done','profile-parent','fulfilled',null,parent[0])!==1 || count('file-close-done','profile','fulfilled',null,profile[0])!==1 || count('instance-hook-armed','profile-parent','fulfilled','release-profile-preparation',parent[0])!==1 || count('instance-hook-armed','profile','fulfilled','release-profile-preparation',profile[0])!==1) failDiagnostic('invalid-observation')
+              } else if (type === 'profile-close-failure-armed') {
+                if (parent.length!==1 || count('instance-hook-armed','profile-parent','pending','fail-profile-close',parent[0])!==1) failDiagnostic('invalid-observation')
+              } else if (type === 'profile-close-fault-observed') {
+                if (parent.length!==1 || count('instance-hook-armed','profile-parent','fulfilled','fail-profile-close',parent[0])!==1 || count('file-close-done','profile-parent','rejected','settle',parent[0])!==1 || count('file-close-start','profile-parent','pending','settle',parent[0])!==1 || !prior.some((event)=>event.stage==='file-close-done' && event.role==='profile-parent' && event.handleOrdinal===parent[0] && event.error==='injected-close' && event.command==='settle') || prior.some((event)=>event.command==='release-failed-close')) failDiagnostic('invalid-observation')
+              } else if (type === 'profile-other-close-observed') {
+                if (profile.length!==1 || count('file-close-done','profile','fulfilled','settle',profile[0])!==1) failDiagnostic('invalid-observation')
+              } else if (type === 'settlement-failed') {
+                const terminalEvent = prior.findIndex((event)=>event.stage==='settle-rejected' && event.role==='profile' && event.state==='rejected' && event.command==='settle')
+                if (!seen.has('profile-close-fault-observed') || !seen.has('profile-other-close-observed') || count('settle-rejected','profile','rejected','settle',null)!==1 || terminalEvent<0 || prior[terminalEvent].error!=='injected-close' || child.settlementPromiseObservation!==true || item.report.samePromise!==child.settlementPromiseObservation) failDiagnostic('invalid-observation')
+              } else if (type === 'duplicate-prepare') {
+                const terminalEvent = child.observations.findIndex((event)=>event.stage==='settle-rejected' && event.role==='profile' && event.state==='rejected' && event.command==='settle')
+                const terminalReportCount = seen.get('settlement-failed')?.observedEvents ?? -1
+                const capacityEvent = prior.findIndex((event)=>event.stage==='fixture-refusal' && event.role==='profile' && event.state==='rejected' && event.command==='duplicate-prepare' && event.error==='known-qa-refusal')
+                if (!seen.has('settlement-failed') || count('fixture-refusal','profile','rejected','duplicate-prepare',null)!==1 || capacityEvent<0 || !(terminalEvent<terminalReportCount && terminalReportCount<=capacityEvent && capacityEvent<item.observedEvents)) failDiagnostic('invalid-observation')
+              } else if (type === 'profile-failed-handle-release') {
+                const nativeStart = prior.findIndex((event)=>event.stage==='file-close-start' && event.role==='profile-parent' && event.command==='release-failed-close' && event.handleOrdinal===parent[0])
+                const nativeDone = prior.findIndex((event)=>event.stage==='file-close-done' && event.role==='profile-parent' && event.command==='release-failed-close' && event.handleOrdinal===parent[0] && event.state===item.report.state)
+                const terminalEvent = child.observations.findIndex((event)=>event.stage==='settle-rejected' && event.role==='profile' && event.state==='rejected' && event.command==='settle')
+                const terminalReportCount = seen.get('settlement-failed')?.observedEvents ?? -1
+                const capacityEvent = child.observations.findIndex((event)=>event.stage==='fixture-refusal' && event.role==='profile' && event.state==='rejected' && event.command==='duplicate-prepare' && event.error==='known-qa-refusal')
+                const duplicateReportCount = seen.get('duplicate-prepare')?.observedEvents ?? -1
+                if (!seen.has('duplicate-prepare') || !seen.has('settlement-failed') || parent.length!==1 || count('file-close-start','profile-parent','pending','release-failed-close',parent[0])!==1 || count('file-close-done','profile-parent',item.report.state,'release-failed-close',parent[0])!==1 || !(terminalEvent<terminalReportCount && terminalReportCount<=capacityEvent && capacityEvent<duplicateReportCount && duplicateReportCount<=nativeStart && nativeStart<nativeDone && nativeDone<item.observedEvents) || item.report.state==='rejected' && caseResults.get(child.caseId)!=='failed') failDiagnostic('invalid-observation')
+              } else if (type === 'registry-cleanup') {
+                const selected = root.find((ordinal)=>count('instance-hook-armed','registry-root','pending','registry-cleanup',ordinal)===1)
+                const probe = opens('probe')
+                const probeDone = prior.findIndex((event)=>event.stage==='file-close-done' && event.role==='probe' && event.handleOrdinal===probe[0] && event.state==='fulfilled')
+                const arm = prior.findIndex((event)=>event.stage==='instance-hook-armed' && event.role==='registry-root' && event.handleOrdinal===selected && event.hookInvoked===false)
+                const injected = prior.findIndex((event)=>event.stage==='file-close-done' && event.role==='registry-root' && event.handleOrdinal===selected && event.error==='injected-close')
+                const capacity = prior.findIndex((event)=>event.stage==='fixture-refusal' && event.role==='registry-root' && event.command==='registry-cleanup' && event.error==='root-descriptor-limit')
+                const nativeStart = prior.findLastIndex((event)=>event.stage==='file-close-start' && event.role==='registry-root' && event.handleOrdinal===selected)
+                const nativeDone = prior.findIndex((event)=>event.stage==='file-close-done' && event.role==='registry-root' && event.handleOrdinal===selected && event.state==='fulfilled')
+                if (!selected || count('instance-hook-armed','registry-root','fulfilled','registry-cleanup',selected)!==1 || count('file-close-done','registry-root','rejected','registry-cleanup',selected)!==1 || count('file-close-start','registry-root','pending','registry-cleanup',selected)!==2 || count('file-close-done','registry-root','fulfilled','registry-cleanup',selected)!==1 || count('fixture-refusal','registry-root','rejected','registry-cleanup',null)!==1 || probe.length!==1 || count('file-close-done','probe','fulfilled','registry-cleanup',probe[0])!==1 || !(probeDone < arm && arm < injected && injected < capacity && capacity < nativeStart && nativeStart < nativeDone)) failDiagnostic('invalid-observation')
+              }
+            }
+            const phases = Object.fromEntries(expectedTypes.map((type)=>[type,seen.has(type) ? seen.get(type).receiverTeardown ? 'teardown' : 'reached' : 'unreached']))
+            if (caseResults.get(child.caseId)==='passed' && expectedTypes.some((type)=>phases[type]!=='reached')) failDiagnostic('incomplete-shard')
+            if (seen.has('profile-failed-handle-release') && !seen.has('settlement-failed')) failDiagnostic('invalid-observation')
+            f0PhaseRows.push({caseId:child.caseId,localOrdinal:child.childOrdinal,phases})
+          }
           const validateChild = (child, localOrdinal, role) => {
-            if (!exact(child, childKeys) || !ownerIds.has(child.caseId) || child.childOrdinal !== localOrdinal || child.sourceHead !== sourceHead || child.sourceHead !== process.env.SOURCE_SHA || child.runId !== process.env.RUN_ID || child.runAttempt !== Number(process.env.RUN_ATTEMPT) || child.target !== process.env.TARGET || child.node !== process.version || child.node !== `v${process.env.EXPECTED_NODE}` || child.overflow !== false || child.stderrOverflow !== false || !Number.isSafeInteger(child.stderrBytes) || child.stderrBytes < 0 || child.stderrBytes > 65536 || !Array.isArray(child.observations) || child.observations.length > 64 || !Array.isArray(child.unexpectedTerminalReports) || child.unexpectedTerminalReports.length > 8 || child.unexpectedTerminalReports.some((value) => !reportTypes.has(value)) || (role === 'run-owner' ? !child.caseId.startsWith('R') : !child.caseId.startsWith('G'))) { failDiagnostic('invalid-envelope'); return }
+            if (!exact(child, childKeys) || !ownerIds.has(child.caseId) || child.childOrdinal !== localOrdinal || child.sourceHead !== sourceHead || child.sourceHead !== process.env.SOURCE_SHA || child.runId !== process.env.RUN_ID || child.runAttempt !== Number(process.env.RUN_ATTEMPT) || child.target !== process.env.TARGET || child.node !== process.version || child.node !== `v${process.env.EXPECTED_NODE}` || child.overflow !== false || child.stderrOverflow !== false || !Number.isSafeInteger(child.stderrBytes) || child.stderrBytes < 0 || child.stderrBytes > 65536 || !Array.isArray(child.observations) || child.observations.length > 64 || !Array.isArray(child.f0Reports) || child.f0Reports.length > 6 || !Array.isArray(child.unexpectedTerminalReports) || child.unexpectedTerminalReports.length > 8 || child.unexpectedTerminalReports.some((value) => !reportTypes.has(value)) || (role === 'run-owner' ? !child.caseId.startsWith('R') : !child.caseId.startsWith('G'))) { failDiagnostic('invalid-envelope'); return }
             let aggregateRun = null
             for (const [index, event] of child.observations.entries()) {
               if (!exact(event, observationKeys) || event.schema !== 'metis-qa-owner-diagnostic/v1' || event.sequence !== index || !commands.has(event.command) || !stages.has(event.stage) || !roles.has(event.role) || !Number.isSafeInteger(event.handleOrdinal) || event.handleOrdinal < 0 || event.handleOrdinal > 8 || !states.has(event.state) || !errors.has(event.error) || !(event.ownClose === null || typeof event.ownClose === 'boolean') || !(event.hookInvoked === null || typeof event.hookInvoked === 'boolean') || typeof event.teardown !== 'boolean') { failDiagnostic('invalid-observation'); return }
               const transport = ['transport-open','destroy-request','stream-end','stream-close','stream-error','native-close-start','native-close-done'].includes(event.stage)
               const files = ['file-open','file-close-start','file-close-done'].includes(event.stage)
-              if ((transport && !['reader3','writer4'].includes(event.role)) || (['read-start','read-done','parent-input-end'].includes(event.stage) && event.role !== 'reader3') || (['write-start','write-done','parent-output-destroy'].includes(event.stage) && event.role !== 'writer4') || (files && (event.role === 'none' || event.handleOrdinal === 0 || typeof event.ownClose !== 'boolean')) || (!files && event.ownClose !== null) || (event.stage.startsWith('settle-') && (event.role !== 'profile' || event.command !== 'settle')) || (event.stage === 'prototype-hook-armed' && event.hookInvoked === false && !['profile','registry-root'].includes(event.role)) || (event.stage === 'prototype-hook-armed' && event.hookInvoked === true && (event.role === 'none' || event.handleOrdinal === 0)) || (event.stage === 'gate-held' && !['profile-parent','profile','registry-root'].includes(event.role)) || (event.stage === 'gate-released' && !['profile-parent','profile','registry-root'].includes(event.role)) || (event.stage === 'child-exit' && event.role !== 'none')) failDiagnostic('invalid-observation')
+              if ((transport && !['reader3','writer4'].includes(event.role)) || (['read-start','read-done','parent-input-end'].includes(event.stage) && event.role !== 'reader3') || (['write-start','write-done','parent-output-destroy'].includes(event.stage) && event.role !== 'writer4') || (files && (event.role === 'none' || event.handleOrdinal === 0 || typeof event.ownClose !== 'boolean')) || (!files && event.ownClose !== null) || (event.stage.startsWith('settle-') && (event.role !== 'profile' || event.command !== 'settle')) || (event.stage === 'gate-held' && !['profile-parent','profile','registry-root'].includes(event.role)) || (event.stage === 'gate-released' && !['profile-parent','profile','registry-root'].includes(event.role)) || (event.stage === 'child-exit' && event.role !== 'none')) failDiagnostic('invalid-observation')
               if ((['read-start','write-start','native-close-start','file-close-start','destroy-request','gate-held'].includes(event.stage) && event.state !== 'pending') || (['transport-open','stream-end','stream-close','file-open','parent-input-end','parent-output-destroy','gate-released'].includes(event.stage) && event.state !== 'fulfilled') || (['read-done','write-done','native-close-done','file-close-done'].includes(event.stage) && !['fulfilled','rejected'].includes(event.state)) || (event.stage === 'stream-error' && event.state !== 'rejected')) failDiagnostic('invalid-observation')
               if (['read-done','write-done','native-close-done','file-close-done'].includes(event.stage) && (event.state === 'fulfilled' ? event.error !== 'none' : event.error === 'none')) failDiagnostic('invalid-observation')
               if (event.stage === 'aggregate-member' || event.stage === 'aggregate-overflow') {
@@ -421,7 +534,9 @@ jobs:
             }
             let boundary = child.observations.findIndex((event) => event?.teardown === true || event?.stage === 'child-exit')
             if (boundary < 0) { failDiagnostic('incomplete-shard'); boundary = child.observations.length }
+            if (!Number.isSafeInteger(child.preTeardownObservedEvents) || child.preTeardownObservedEvents !== boundary) failDiagnostic('invalid-envelope')
             if (child.observations.slice(0,boundary).some((event) => event.teardown) || child.observations.slice(boundary).some((event) => !event.teardown)) failDiagnostic('invalid-observation')
+            replayF0(child,boundary)
             const preHasSettle = child.observations.slice(0,boundary).some((event) => event.stage === 'settle-start')
             const finalHasSettle = child.observations.some((event) => event.stage === 'settle-start')
             if (!(child.settlementPromiseObservation === null || typeof child.settlementPromiseObservation === 'boolean') || (!finalHasSettle && child.settlementPromiseObservation !== null) || preHasSettle !== (typeof child.preTeardown?.settlementSamePromise === 'boolean') || finalHasSettle !== (typeof child.final?.settlementSamePromise === 'boolean') || finalHasSettle !== (typeof child.settlementPromiseObservation === 'boolean')) failDiagnostic('invalid-envelope')
@@ -520,11 +635,11 @@ jobs:
             }
             if (children.length > 32 || children.length < 26) failDiagnostic('child-bound')
             if (diagnosticFailures.size > 16) { diagnosticFailures.clear(); failDiagnostic('overflow') }
-            diagnostic = {schema:'metis-qa-owner-diagnostic-artifact/v2',sourceHead,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),target:process.env.TARGET,node:process.version,sourceHashes:hashes,frameworkEvidenceSha256:frameworkRaw ? sha(frameworkRaw) : null,diagnosticStatus:diagnosticFailures.size === 0 ? 'valid' : 'invalid',diagnosticFailures:[...diagnosticFailures].sort(),overflow:diagnosticFailures.has('overflow'),shards:provenance,children}
+            diagnostic = {schema:'metis-qa-owner-diagnostic-artifact/v2',sourceHead,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),target:process.env.TARGET,node:process.version,sourceHashes:hashes,frameworkEvidenceSha256:frameworkRaw ? sha(frameworkRaw) : null,diagnosticStatus:diagnosticFailures.size === 0 ? 'valid' : 'invalid',diagnosticFailures:[...diagnosticFailures].sort(),overflow:diagnosticFailures.has('overflow'),shards:provenance,f0Phases:f0PhaseRows,children}
             let aggregateRaw = Buffer.from(JSON.stringify(diagnostic)+'\n')
             if (aggregateRaw.byteLength > 256 * 1024) {
               failDiagnostic('size-limit')
-              diagnostic = {...diagnostic,diagnosticStatus:'invalid',diagnosticFailures:[...diagnosticFailures].sort(),overflow:true,shards:[],children:[]}
+              diagnostic = {...diagnostic,diagnosticStatus:'invalid',diagnosticFailures:[...diagnosticFailures].sort(),overflow:true,shards:[],f0Phases:[],children:[]}
               aggregateRaw = Buffer.from(JSON.stringify(diagnostic)+'\n')
             }
             writeFileSync(process.env.DIAGNOSTIC,aggregateRaw,{mode:0o600})
@@ -541,7 +656,7 @@ jobs:
           writeFileSync(process.env.EVIDENCE, JSON.stringify(evidence,null,2)+'\n',{mode:0o600})
           if (functionalError || diagnosticError) { console.error(functionalError ?? diagnosticError); process.exitCode = 1 }
           } catch {
-            const fallback = {schema:'metis-qa-owner-diagnostic-artifact/v2',sourceHead:null,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),target:process.env.TARGET,node:process.version,sourceHashes:{},diagnosticStatus:'invalid',diagnosticFailures:['invalid-envelope'],overflow:true,shards:[],children:[]}
+            const fallback = {schema:'metis-qa-owner-diagnostic-artifact/v2',sourceHead:null,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),target:process.env.TARGET,node:process.version,sourceHashes:{},diagnosticStatus:'invalid',diagnosticFailures:['invalid-envelope'],overflow:true,shards:[],f0Phases:[],children:[]}
             let fallbackHash = null
             try {
               if (process.env.OWNER_TARGET === 'true') {

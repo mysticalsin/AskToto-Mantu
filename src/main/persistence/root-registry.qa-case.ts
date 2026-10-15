@@ -17,7 +17,11 @@ describe('actual RootRegistry hosted-run guard', () => {
   let fixtureOutput: string | undefined
 
   afterEach(async () => {
-    await child?.terminate()
+    try {
+      await child?.releaseFixtureGates()
+    } finally {
+      await child?.terminate()
+    }
     child = undefined
     await profile?.cleanup()
     profile = undefined
@@ -38,8 +42,6 @@ describe('actual RootRegistry hosted-run guard', () => {
     await child.sendFrame(signQaFixtureLaunch(hello.bootChallenge, profile))
     await expect(child.waitForReport('active')).resolves.toMatchObject({ current: true })
 
-    child.sendCommand('create-root')
-    await expect(child.waitForReport('root')).resolves.toMatchObject({ created: true })
     child.sendCommand('registry-negative')
     await expect(child.waitForReport('registry-negative')).resolves.toMatchObject({
       missingRefused: true,
@@ -50,6 +52,8 @@ describe('actual RootRegistry hosted-run guard', () => {
       totalScopeCallbacks: 0,
       baseCallbacks: 0
     })
+    child.sendCommand('create-root')
+    await expect(child.waitForReport('root')).resolves.toMatchObject({ created: true })
 
     child.sendCommand('settle')
     await expect(child.waitForReport('settled')).resolves.toMatchObject({ available: true })
@@ -64,9 +68,18 @@ describe('actual RootRegistry hosted-run guard', () => {
     await expect(child.waitForReport('active')).resolves.toMatchObject({ current: true })
 
     child.sendCommand('registry-cleanup')
-    await expect(child.waitForReport('registry-cleanup')).resolves.toMatchObject({
+    await expect(child.waitForReport('registry-cleanup')).resolves.toEqual({
+      type: 'registry-cleanup',
       foreignReplacementPreserved: true,
-      closeCapacityRetained: true
+      closeCapacityRetained: true,
+      hookRole: 'registry-root',
+      hookInvocations: 1,
+      repeatedRejected: true,
+      sameError: true,
+      capacityRefusal: 'root-descriptor-limit',
+      probeClosed: true,
+      fixtureCloseFulfilled: true,
+      postCleanupSameError: true
     })
     child.sendCommand('settle')
     await expect(child.waitForReport('settled')).resolves.toMatchObject({ available: true })

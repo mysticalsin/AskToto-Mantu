@@ -61,6 +61,7 @@ type DiagnosticError =
   | 'ERR_STREAM_DESTROYED'
   | 'ERR_STREAM_PREMATURE_CLOSE'
   | 'known-qa-refusal'
+  | 'root-descriptor-limit'
   | 'known-profile-refusal'
   | 'injected-close'
   | 'aggregate'
@@ -85,7 +86,7 @@ type DiagnosticStage =
   | 'settle-rejected'
   | 'gate-held'
   | 'gate-released'
-  | 'prototype-hook-armed'
+  | 'instance-hook-armed'
   | 'parent-input-end'
   | 'parent-output-destroy'
   | 'child-exit'
@@ -155,6 +156,7 @@ function diagnosticError(error: unknown): DiagnosticError {
     return code as DiagnosticError
   if (typeof code === 'string' && qaRefusals.has(code)) return 'known-qa-refusal'
   if (typeof message === 'string' && qaRefusals.has(message)) return 'known-qa-refusal'
+  if (error instanceof Error && message === 'Persistence root descriptor limit reached') return 'root-descriptor-limit'
   if (typeof code === 'string' && profileRefusals.has(code)) return 'known-profile-refusal'
   if (typeof message === 'string' && profileRefusals.has(message)) return 'known-profile-refusal'
   if (
@@ -173,6 +175,39 @@ let diagnosticHandleOrdinal = 0
 let diagnosticInvalid = false
 let diagnosticSamePromise: boolean | null = null
 const observedHandles = new WeakMap<object, { role: DiagnosticRole; ordinal: number }>()
+type ObservedFileHandle = {
+  role: DiagnosticRole
+  ordinal: number
+  path: string
+  nativeClose: (...args: unknown[]) => Promise<void>
+}
+const retainedHandles = new Map<number, { handle: object; record: ObservedFileHandle }>()
+const injectedCloseHandles = new WeakMap<
+  object,
+  {
+    error: Error
+    role: DiagnosticRole
+    command: DiagnosticCommand
+    hookInvocations: number
+    originalCloseCalls: number
+  }
+>()
+let profilePreparationCloseObservation = false
+let profilePreparationStatGate: { entered: boolean; release?: () => void } | undefined
+let physicalStatGate: { handle?: object; entered: boolean; release?: () => void; releasedEarly?: boolean } | undefined
+let injectedCloseEntry:
+  | { role: DiagnosticRole; ordinal: number; command: DiagnosticCommand; emitted: boolean }
+  | undefined
+let retainedProfileCloseError: Error | undefined
+const preparationClosedHandles = new Map<DiagnosticRole, number>()
+const preparationHookInvokedHandles = new Set<number>()
+let preparationCloseReported = false
+let heldPreparationRole: DiagnosticRole = 'none'
+let heldPreparationOrdinal = 0
+let heldPhysicalRole: DiagnosticRole = 'none'
+let heldPhysicalOrdinal = 0
+let releaseHeldPhysicalGate: (() => void) | undefined
+let gatewayReleaseRequested = false
 
 function diagnosticRole(path: unknown): DiagnosticRole {
   if (typeof path !== 'string') return 'other'
@@ -267,6 +302,49 @@ function markDiagnosticOverflow(): void {
   sendDiagnosticMessage({ type: 'owner-diagnostic-overflow' })
 }
 
+function installPhysicalStatGate(
+  handle: object,
+  gate: { handle?: object; entered: boolean; release?: () => void; releasedEarly?: boolean }
+): void {
+  const target = handle as { stat?: (...args: unknown[]) => Promise<unknown> }
+  const originalStat = target.stat
+  const identity = observedHandles.get(handle)
+  if (typeof originalStat !== 'function' || identity?.role !== 'profile-parent') {
+    diagnosticInvalid = true
+    return
+  }
+  gate.handle = handle
+  target.stat = async function (this: unknown, ...args: unknown[]) {
+    const result = await originalStat.apply(this, args)
+    if (!gate.entered) {
+      gate.entered = true
+      heldPhysicalRole = identity.role
+      heldPhysicalOrdinal = identity.ordinal
+      emitDiagnostic('gate-held', {
+        role: identity.role,
+        handleOrdinal: identity.ordinal,
+        state: 'pending',
+        command: 'create-root-physical-held'
+      })
+      report({ type: 'registry-profile-physical-held' })
+      if (gate.releasedEarly) {
+        emitDiagnostic('gate-released', {
+          role: identity.role,
+          handleOrdinal: identity.ordinal,
+          state: 'fulfilled',
+          command: 'change-userdata-resume'
+        })
+        return result
+      }
+      await new Promise<void>((resolve) => {
+        gate.release = resolve
+        releaseHeldPhysicalGate = resolve
+      })
+    }
+    return result
+  }
+}
+
 function emitClassifiedFailure(
   stage: DiagnosticStage,
   error: unknown,
@@ -303,6 +381,9 @@ function observeFileHandle(
   observedHandles.set(handle, { role, ordinal })
   const originalClose = handle.close
   const ownClose = Object.prototype.hasOwnProperty.call(handle, 'close')
+  const handlePath = typeof path === 'string' ? path.replaceAll('\\', '/') : ''
+  const record: ObservedFileHandle = { role, ordinal, path: handlePath, nativeClose: originalClose }
+  retainedHandles.set(ordinal, { handle, record })
   emitDiagnostic('file-open', { role, state: 'fulfilled', handleOrdinal: ordinal, ownClose, command: operationCommand })
   handle.close = function (this: typeof handle, ...args: unknown[]) {
     const operationCommand = diagnosticCommand
@@ -313,6 +394,55 @@ function observeFileHandle(
       ownClose,
       command: operationCommand
     })
+    if (
+      profilePreparationCloseObservation &&
+      (role === 'profile-parent' || role === 'profile') &&
+      !preparationHookInvokedHandles.has(ordinal)
+    ) {
+      preparationHookInvokedHandles.add(ordinal)
+      emitDiagnostic('instance-hook-armed', {
+        role,
+        state: 'fulfilled',
+        handleOrdinal: ordinal,
+        hookInvoked: true,
+        command: operationCommand
+      })
+    }
+    const injected = injectedCloseHandles.get(this)
+    if (injected) {
+      injected.hookInvocations += 1
+      const entry = injectedCloseEntry
+      if (entry && entry.role === role && entry.ordinal === ordinal) {
+        entry.emitted = true
+        emitDiagnostic('instance-hook-armed', {
+          role,
+          state: 'fulfilled',
+          handleOrdinal: ordinal,
+          hookInvoked: true,
+          command: entry.command
+        })
+      }
+      const rejected = Promise.reject(injected.error)
+      void rejected.catch((error: unknown) => {
+        emitClassifiedFailure('file-close-done', error, {
+          role,
+          state: 'rejected',
+          handleOrdinal: ordinal,
+          ownClose: true,
+          command: operationCommand
+        })
+        if (operationCommand === 'settle' && role === 'profile-parent')
+          report({
+            type: 'profile-close-fault-observed',
+            targetRole: 'profile-parent',
+            hookInvocations: injected.hookInvocations,
+            originalCloseCalls: injected.originalCloseCalls,
+            retained: true,
+            error: 'injected-close'
+          })
+      })
+      return rejected
+    }
     let result: Promise<void>
     try {
       result = originalClose.apply(this, args)
@@ -327,14 +457,37 @@ function observeFileHandle(
       throw error
     }
     void result.then(
-      () =>
+      () => {
         emitDiagnostic('file-close-done', {
           role,
           state: 'fulfilled',
           handleOrdinal: ordinal,
           ownClose,
           command: operationCommand
-        }),
+        })
+        if (profilePreparationCloseObservation && (role === 'profile-parent' || role === 'profile')) {
+          if (preparationClosedHandles.has(role)) diagnosticInvalid = true
+          else preparationClosedHandles.set(role, ordinal)
+          if (
+            !preparationCloseReported &&
+            preparationClosedHandles.has('profile-parent') &&
+            preparationClosedHandles.has('profile') &&
+            preparationClosedHandles.get('profile-parent') !== preparationClosedHandles.get('profile')
+          ) {
+            preparationCloseReported = true
+            report({
+              type: 'profile-preparation-descriptors-settled',
+              settledDescriptorCount: 2,
+              parentCloseCount: 1,
+              profileCloseCount: 1,
+              distinctHandles: true
+            })
+            profilePreparationCloseObservation = false
+          }
+        }
+        if (role === 'profile' && retainedProfileCloseError)
+          report({ type: 'profile-other-close-observed', targetRole: 'profile', fulfilled: true })
+      },
       (error: unknown) =>
         emitClassifiedFailure('file-close-done', error, {
           role,
@@ -346,6 +499,34 @@ function observeFileHandle(
     )
     return result
   }
+  if (role === 'profile-parent' && profilePreparationStatGate) {
+    const target = handle as typeof handle & { stat?: (...args: unknown[]) => Promise<unknown> }
+    const originalStat = target.stat
+    if (typeof originalStat !== 'function') diagnosticInvalid = true
+    else
+      target.stat = async function (this: unknown, ...args: unknown[]) {
+        const result = await originalStat.apply(this, args)
+        const gate = profilePreparationStatGate
+        if (gate && !gate.entered) {
+          gate.entered = true
+          const identity = observedHandles.get(this as object)
+          heldPreparationRole = identity?.role ?? 'other'
+          heldPreparationOrdinal = identity?.ordinal ?? 0
+          emitDiagnostic('gate-held', {
+            role: heldPreparationRole,
+            handleOrdinal: heldPreparationOrdinal,
+            state: 'pending',
+            command: 'hold-profile-preparation'
+          })
+          report({ type: 'profile-preparation-stat-held' })
+          await new Promise<void>((resolve) => {
+            gate.release = resolve
+          })
+        }
+        return result
+      }
+  }
+  if (physicalStatGate && role === 'profile-parent') installPhysicalStatGate(handle, physicalStatGate)
 }
 
 function installDiagnosticObservers(userDataPath: string): void {
@@ -476,74 +657,33 @@ async function main(): Promise<void> {
   let run: QaPersistenceRunPermit
   let previousRun: QaPersistenceRunPermit | undefined
   let releaseHeldGateway: (() => void) | undefined
-  let releaseProfilePreparationStat: (() => void) | undefined
-  let releaseHeldProfilePhysicalCheck: (() => void) | undefined
   let failedProfileHandle: { close: () => Promise<void> } | undefined
   let profilePreparationHookActive = false
-  let heldPreparationRole: DiagnosticRole = 'none'
-  let heldPreparationOrdinal = 0
-  let heldPhysicalRole: DiagnosticRole = 'none'
-  let heldPhysicalOrdinal = 0
   process.on('message', (message: ChildCommand) => {
     const command = message?.command ?? 'none'
     diagnosticCommand = command
     if (message?.command === 'hold-profile-preparation') {
-      void (async () => {
-        const probe = await open(process.execPath, 'r')
-        const prototype = Object.getPrototypeOf(probe) as {
-          stat: (...args: unknown[]) => Promise<unknown>
-          close: (...args: unknown[]) => Promise<void>
-        }
-        const originalStat = prototype.stat
-        const originalClose = prototype.close
-        await probe.close()
-        let held = false
-        let settledDescriptorCount = 0
-        profilePreparationHookActive = true
-        prototype.stat = async function (this: unknown, ...args: unknown[]) {
-          const result = await originalStat.apply(this, args)
-          if (!held) {
-            held = true
-            const identity = this && typeof this === 'object' ? observedHandles.get(this) : undefined
-            heldPreparationRole = identity?.role ?? 'other'
-            heldPreparationOrdinal = identity?.ordinal ?? 0
-            emitDiagnostic('gate-held', {
-              role: heldPreparationRole,
-              handleOrdinal: heldPreparationOrdinal,
-              state: 'pending',
-              command
-            })
-            report({ type: 'profile-preparation-stat-held' })
-            await new Promise<void>((resolve) => {
-              releaseProfilePreparationStat = resolve
-            })
-          }
-          return result
-        }
-        prototype.close = async function (this: unknown, ...args: unknown[]) {
-          const identity = this && typeof this === 'object' ? observedHandles.get(this) : undefined
-          emitDiagnostic('prototype-hook-armed', {
-            role: identity?.role ?? 'other',
-            handleOrdinal: identity?.ordinal ?? 0,
-            state: 'fulfilled',
-            hookInvoked: true,
-            command: diagnosticCommand
-          })
-          await originalClose.apply(this, args)
-          settledDescriptorCount += 1
-          if (settledDescriptorCount >= 2) {
-            profilePreparationHookActive = false
-            prototype.stat = originalStat
-            prototype.close = originalClose
-            report({ type: 'profile-preparation-descriptors-settled', settledDescriptorCount })
-          }
-        }
-        emitDiagnostic('prototype-hook-armed', { role: 'profile', state: 'pending', hookInvoked: false, command })
-        report({ type: 'profile-preparation-hold-ready' })
-      })().catch((error) => {
-        emitClassifiedFailure('fixture-refusal', error, { role: 'profile', state: 'rejected', command })
-        report({ type: 'fixture-error' })
+      profilePreparationHookActive = true
+      profilePreparationCloseObservation = true
+      profilePreparationStatGate = { entered: false }
+      preparationClosedHandles.clear()
+      preparationHookInvokedHandles.clear()
+      preparationCloseReported = false
+      emitDiagnostic('instance-hook-armed', {
+        role: 'profile-parent',
+        state: 'pending',
+        handleOrdinal: 0,
+        hookInvoked: false,
+        command
       })
+      emitDiagnostic('instance-hook-armed', {
+        role: 'profile',
+        state: 'pending',
+        handleOrdinal: 0,
+        hookInvoked: false,
+        command
+      })
+      report({ type: 'profile-preparation-hold-ready' })
       return
     }
     if (message?.command === 'duplicate-prepare' && profilePreparationHookActive) {
@@ -555,15 +695,15 @@ async function main(): Promise<void> {
       return
     }
     if (message?.command === 'release-profile-preparation') {
-      if (releaseProfilePreparationStat)
+      if (profilePreparationStatGate?.release)
         emitDiagnostic('gate-released', {
           role: heldPreparationRole,
           handleOrdinal: heldPreparationOrdinal,
           state: 'fulfilled',
           command
         })
-      releaseProfilePreparationStat?.()
-      releaseProfilePreparationStat = undefined
+      profilePreparationStatGate?.release?.()
+      profilePreparationStatGate = undefined
       return
     }
     if (message?.command !== 'retire-during-preparation') return
@@ -678,6 +818,14 @@ async function main(): Promise<void> {
             report({ type: 'gateway-held' })
             await new Promise<void>((resolve) => {
               releaseHeldGateway = resolve
+              if (gatewayReleaseRequested) {
+                emitDiagnostic('gate-released', {
+                  role: 'registry-root',
+                  state: 'fulfilled',
+                  command: 'retire-window-resume'
+                })
+                resolve()
+              }
             })
             root.assertCurrent()
             gatewayPublished = true
@@ -693,32 +841,15 @@ async function main(): Promise<void> {
         return
       }
       if (message?.command === 'create-root-physical-held') {
-        const probe = await open(process.execPath, 'r')
-        const prototype = Object.getPrototypeOf(probe) as { stat: (...args: unknown[]) => Promise<unknown> }
-        const originalStat = prototype.stat
-        await probe.close()
-        let held = false
+        const userData = diagnosticUserDataPath.replaceAll('\\', '/').replace(/\/+$/, '')
+        const parentPath = userData.slice(0, userData.lastIndexOf('/'))
+        const parent = [...retainedHandles.values()]
+          .filter((value) => value.record.role === 'profile-parent' && value.record.path === parentPath)
+          .at(-1)
+        if (!parent) throw new Error('captured profile-parent handle unavailable')
+        physicalStatGate = { handle: parent.handle, entered: false }
+        installPhysicalStatGate(parent.handle, physicalStatGate)
         let gatewayCalls = 0
-        prototype.stat = async function (this: unknown, ...args: unknown[]) {
-          const result = await originalStat.apply(this, args)
-          if (!held) {
-            held = true
-            const identity = this && typeof this === 'object' ? observedHandles.get(this) : undefined
-            heldPhysicalRole = identity?.role ?? 'other'
-            heldPhysicalOrdinal = identity?.ordinal ?? 0
-            emitDiagnostic('gate-held', {
-              role: heldPhysicalRole,
-              handleOrdinal: heldPhysicalOrdinal,
-              state: 'pending',
-              command
-            })
-            report({ type: 'registry-profile-physical-held' })
-            await new Promise<void>((resolve) => {
-              releaseHeldProfilePhysicalCheck = resolve
-            })
-          }
-          return result
-        }
         const scopes = new WeakMap<object, RootScopeBinding>()
         const scope = Object.freeze({})
         scopes.set(
@@ -754,66 +885,112 @@ async function main(): Promise<void> {
           }
           report({ type: 'registry-profile-physical-result', created: false, gatewayCalls, registryPathUntouched })
         } finally {
-          prototype.stat = originalStat
+          physicalStatGate = undefined
         }
         return
       }
       if (message?.command === 'retire-window-resume') {
         window.navigateMainDocument()
         window.finishMainNavigation()
+        gatewayReleaseRequested = true
         if (releaseHeldGateway) emitDiagnostic('gate-released', { role: 'registry-root', state: 'fulfilled', command })
         releaseHeldGateway?.()
         releaseHeldGateway = undefined
         return
       }
       if (message?.command === 'release-profile-physical-check') {
-        if (releaseHeldProfilePhysicalCheck)
+        if (releaseHeldPhysicalGate)
           emitDiagnostic('gate-released', {
             role: heldPhysicalRole,
             handleOrdinal: heldPhysicalOrdinal,
             state: 'fulfilled',
             command
           })
-        releaseHeldProfilePhysicalCheck?.()
-        releaseHeldProfilePhysicalCheck = undefined
+        physicalStatGate?.release?.()
+        releaseHeldPhysicalGate = undefined
         return
       }
       if (message?.command === 'fail-profile-close') {
-        const probe = await open(process.execPath, 'r')
-        const prototype = Object.getPrototypeOf(probe) as { close: (...args: unknown[]) => Promise<void> }
-        const originalClose = prototype.close
-        await probe.close()
-        let failed = false
-        prototype.close = function (this: { close: () => Promise<void> }, ...args: unknown[]) {
-          if (!failed) {
-            failed = true
-            const identity = observedHandles.get(this)
-            emitDiagnostic('prototype-hook-armed', {
-              role: identity?.role ?? 'other',
-              handleOrdinal: identity?.ordinal ?? 0,
-              state: 'fulfilled',
-              hookInvoked: true,
-              command: diagnosticCommand
-            })
-            failedProfileHandle = this
-            prototype.close = originalClose
-            return Promise.reject(new Error('injected run profile descriptor close failure'))
-          }
-          return originalClose.apply(this, args)
+        const selected = [...retainedHandles.entries()]
+          .filter(
+            ([, value]) =>
+              value.record.role === 'profile-parent' &&
+              value.record.path ===
+                diagnosticUserDataPath
+                  .replaceAll('\\', '/')
+                  .replace(/\/+$/, '')
+                  .slice(0, diagnosticUserDataPath.replaceAll('\\', '/').replace(/\/+$/, '').lastIndexOf('/'))
+          )
+          .sort(([left], [right]) => right - left)[0]?.[1]
+        if (!selected || !Object.prototype.hasOwnProperty.call(selected.handle, 'close')) {
+          diagnosticInvalid = true
+          report({ type: 'fixture-error' })
+          return
         }
-        emitDiagnostic('prototype-hook-armed', { role: 'profile', state: 'pending', hookInvoked: false, command })
-        report({ type: 'profile-close-failure-armed' })
+        retainedProfileCloseError = new Error('injected run profile descriptor close failure')
+        failedProfileHandle = selected.handle as { close: () => Promise<void> }
+        injectedCloseHandles.set(selected.handle, {
+          error: retainedProfileCloseError,
+          role: 'profile-parent',
+          command,
+          hookInvocations: 0,
+          originalCloseCalls: 0
+        })
+        injectedCloseEntry = { role: 'profile-parent', ordinal: selected.record.ordinal, command, emitted: false }
+        emitDiagnostic('instance-hook-armed', {
+          role: 'profile-parent',
+          state: 'pending',
+          handleOrdinal: selected.record.ordinal,
+          hookInvoked: false,
+          command
+        })
+        report({ type: 'profile-close-failure-armed', targetRole: 'profile-parent', ownClose: true })
         return
       }
       if (message?.command === 'release-failed-close') {
-        await failedProfileHandle?.close().catch(() => undefined)
-        failedProfileHandle = undefined
+        if (failedProfileHandle) {
+          const identity = observedHandles.get(failedProfileHandle as object)
+          const retained = identity && retainedHandles.get(identity.ordinal)
+          if (!retained || !retainedProfileCloseError) throw new Error('retained profile close custody unavailable')
+          const injection = injectedCloseHandles.get(failedProfileHandle as object)
+          if (!injection) throw new Error('retained profile fault custody unavailable')
+          emitDiagnostic('file-close-start', {
+            role: 'profile-parent',
+            state: 'pending',
+            handleOrdinal: identity!.ordinal,
+            ownClose: true,
+            command
+          })
+          injection.originalCloseCalls += 1
+          try {
+            await retained.record.nativeClose.call(failedProfileHandle)
+            emitDiagnostic('file-close-done', {
+              role: 'profile-parent',
+              state: 'fulfilled',
+              handleOrdinal: identity!.ordinal,
+              ownClose: true,
+              command
+            })
+            report({ type: 'profile-failed-handle-release', state: 'fulfilled', retained: true })
+          } catch (error) {
+            emitClassifiedFailure('file-close-done', error, {
+              role: 'profile-parent',
+              state: 'rejected',
+              handleOrdinal: identity!.ordinal,
+              ownClose: true,
+              command
+            })
+            report({ type: 'profile-failed-handle-release', state: 'rejected', retained: true })
+            throw error
+          }
+        }
         return
       }
       if (message?.command === 'change-userdata-resume') {
         setQaFixtureUserDataPath(`${userDataPath}-changed`)
+        if (physicalStatGate && !releaseHeldPhysicalGate) physicalStatGate.releasedEarly = true
         if (releaseHeldGateway) emitDiagnostic('gate-released', { role: 'registry-root', state: 'fulfilled', command })
-        if (releaseHeldProfilePhysicalCheck)
+        if (releaseHeldPhysicalGate)
           emitDiagnostic('gate-released', {
             role: heldPhysicalRole,
             handleOrdinal: heldPhysicalOrdinal,
@@ -822,8 +999,8 @@ async function main(): Promise<void> {
           })
         releaseHeldGateway?.()
         releaseHeldGateway = undefined
-        releaseHeldProfilePhysicalCheck?.()
-        releaseHeldProfilePhysicalCheck = undefined
+        physicalStatGate?.release?.()
+        releaseHeldPhysicalGate = undefined
         return
       }
       if (message?.command === 'create-root') {
@@ -951,70 +1128,142 @@ async function main(): Promise<void> {
           resolveScope: (candidate) => scopes.get(candidate as object),
           bindGatewayRoot: async () => undefined
         })
-        let foreignReplacementPreserved = false
-        let foreignPath = ''
-        let backupPath = ''
-        let closeCapacityRetained = false
-        let leakedDirectory: { close: () => Promise<void> } | undefined
-        let originalClose: ((...args: unknown[]) => Promise<void>) | undefined
-        try {
-          const root = await roots.create(scope, 'fixture-cleanup-meeting')
-          const writer = await roots.acquireWriter(scope, root)
-          foreignPath = writer.lockPath
-          backupPath = `${foreignPath}.held-original`
-          await rename(foreignPath, backupPath)
-          await writeFile(foreignPath, 'foreign replacement', { flag: 'wx', mode: 0o600 })
-          await writer.release()
-          foreignReplacementPreserved = (await readFile(foreignPath, 'utf8')) === 'foreign replacement'
-          await rm(foreignPath, { force: true })
-          await rename(backupPath, foreignPath)
-          await rm(foreignPath, { force: true })
-          await roots.closeRoot(scope, root)
+        const root = await roots.create(scope, 'fixture-cleanup-meeting')
+        const writer = await roots.acquireWriter(scope, root)
+        const foreignPath = writer.lockPath
+        const backupPath = `${foreignPath}.held-original`
+        await rename(foreignPath, backupPath)
+        await writeFile(foreignPath, 'foreign replacement', { flag: 'wx', mode: 0o600 })
+        const foreignIdentity = await lstat(foreignPath, { bigint: true })
+        await writer.release()
+        const foreignReplacementPreserved =
+          (await readFile(foreignPath, 'utf8')) === 'foreign replacement' &&
+          (await lstat(foreignPath, { bigint: true })).dev === foreignIdentity.dev &&
+          (await lstat(foreignPath, { bigint: true })).ino === foreignIdentity.ino
+        if (!foreignReplacementPreserved) throw new Error('foreign replacement changed after writer release')
+        await rm(foreignPath)
+        await rename(backupPath, foreignPath)
+        await rm(foreignPath)
+        await roots.closeRoot(scope, root)
 
-          const retained = await roots.create(scope, 'fixture-close-retained')
-          const probe = await open(join(retained.meetingPath, '.close-probe'), 'w+')
-          const closePrototype = Object.getPrototypeOf(probe) as { close: (...args: unknown[]) => Promise<void> }
-          await probe.close()
-          originalClose = closePrototype.close
-          closePrototype.close = function (this: { close: () => Promise<void> }, ...args: unknown[]) {
-            closePrototype!.close = originalClose!
-            const identity = observedHandles.get(this)
-            emitDiagnostic('prototype-hook-armed', {
-              role: identity?.role ?? 'other',
-              handleOrdinal: identity?.ordinal ?? 0,
-              state: 'fulfilled',
-              hookInvoked: true,
-              command
-            })
-            leakedDirectory = this
-            return Promise.reject(new Error('injected root descriptor close failure'))
-          }
-          emitDiagnostic('prototype-hook-armed', {
+        const retained = await roots.create(scope, 'fixture-close-retained')
+        const probe = await open(join(retained.meetingPath, '.close-probe'), 'w+')
+        await probe.close()
+        const selected = [...retainedHandles.values()].find(
+          (value) => value.record.path === retained.meetingPath.replaceAll('\\', '/')
+        )
+        if (
+          !selected ||
+          selected.record.role !== 'registry-root' ||
+          !Object.prototype.hasOwnProperty.call(selected.handle, 'close')
+        )
+          throw new Error('selected registry root handle unavailable')
+        const injectedError = new Error('injected root descriptor close failure')
+        const injection = {
+          error: injectedError,
+          role: 'registry-root' as const,
+          command,
+          hookInvocations: 0,
+          originalCloseCalls: 0
+        }
+        injectedCloseHandles.set(selected.handle, injection)
+        injectedCloseEntry = { role: 'registry-root', ordinal: selected.record.ordinal, command, emitted: false }
+        emitDiagnostic('instance-hook-armed', {
+          role: 'registry-root',
+          state: 'pending',
+          handleOrdinal: selected.record.ordinal,
+          hookInvoked: false,
+          command
+        })
+        let hookInvocations = 0
+        let firstError: unknown
+        let repeatedError: unknown
+        try {
+          await roots.closeRoot(scope, retained)
+        } catch (error) {
+          firstError = error
+        }
+        try {
+          await roots.closeRoot(scope, retained)
+        } catch (error) {
+          repeatedError = error
+        }
+        hookInvocations = injection.hookInvocations
+        const sameError = firstError === injectedError && repeatedError === injectedError
+        let capacityRefusal = ''
+        let capacityError: unknown
+        try {
+          await roots.create(scope, 'fixture-capacity-must-remain-held')
+        } catch (error) {
+          capacityError = error
+          capacityRefusal = (error as Error).message
+        }
+        const closeCapacityRetained =
+          capacityError instanceof Error && capacityRefusal === 'Persistence root descriptor limit reached'
+        if (closeCapacityRetained)
+          emitDiagnostic('fixture-refusal', {
             role: 'registry-root',
-            state: 'pending',
-            hookInvoked: false,
+            state: 'rejected',
+            error: capacityError,
             command
           })
-          try {
-            await roots.closeRoot(scope, retained)
-          } catch (error) {
-            emitClassifiedFailure('fixture-refusal', error, { role: 'registry-root', state: 'rejected', command })
-            try {
-              await roots.create(scope, 'fixture-capacity-must-remain-held')
-            } catch (error) {
-              emitClassifiedFailure('fixture-refusal', error, { role: 'registry-root', state: 'rejected', command })
-              closeCapacityRetained = true
-            }
-          } finally {
-            closePrototype.close = originalClose!
-            await leakedDirectory?.close()
-          }
+        if (
+          !sameError ||
+          hookInvocations !== 1 ||
+          injection.originalCloseCalls !== 0 ||
+          !closeCapacityRetained ||
+          !injectedCloseEntry.emitted
+        )
+          throw new Error('registry root instance close fault evidence incomplete')
+        emitDiagnostic('file-close-start', {
+          role: 'registry-root',
+          handleOrdinal: selected.record.ordinal,
+          state: 'pending',
+          ownClose: true,
+          command: 'registry-cleanup'
+        })
+        injection.originalCloseCalls += 1
+        try {
+          await selected.record.nativeClose.call(selected.handle)
+          emitDiagnostic('file-close-done', {
+            role: 'registry-root',
+            handleOrdinal: selected.record.ordinal,
+            state: 'fulfilled',
+            ownClose: true,
+            command: 'registry-cleanup'
+          })
         } catch (error) {
-          emitClassifiedFailure('fixture-refusal', error, { role: 'registry-root', state: 'rejected', command })
-          if (foreignPath) await rm(foreignPath, { force: true }).catch(() => undefined)
-          if (backupPath) await rm(backupPath, { force: true }).catch(() => undefined)
+          emitClassifiedFailure('file-close-done', error, {
+            role: 'registry-root',
+            handleOrdinal: selected.record.ordinal,
+            state: 'rejected',
+            ownClose: true,
+            command: 'registry-cleanup'
+          })
+          throw error
         }
-        report({ type: 'registry-cleanup', foreignReplacementPreserved, closeCapacityRetained })
+        let postCleanupError: unknown
+        try {
+          await roots.closeRoot(scope, retained)
+        } catch (error) {
+          postCleanupError = error
+        }
+        const postCleanupSameError = postCleanupError === injectedError
+        if (!postCleanupSameError || injection.hookInvocations !== 1)
+          throw new Error('registry cleanup rewrote cached owner failure or capacity')
+        report({
+          type: 'registry-cleanup',
+          foreignReplacementPreserved,
+          closeCapacityRetained,
+          hookRole: 'registry-root',
+          hookInvocations,
+          repeatedRejected: true,
+          sameError,
+          capacityRefusal: 'root-descriptor-limit',
+          probeClosed: true,
+          fixtureCloseFulfilled: true,
+          postCleanupSameError
+        })
         return
       }
       if (message?.command === 'settle') {
@@ -1041,7 +1290,8 @@ async function main(): Promise<void> {
           report({
             type: 'settlement-failed',
             available: captureCurrentQaPersistenceRun() === null,
-            samePromise: settlement === repeated
+            samePromise: settlement === repeated,
+            sameInjectedError: retainedProfileCloseError ? error === retainedProfileCloseError : null
           })
         }
       }

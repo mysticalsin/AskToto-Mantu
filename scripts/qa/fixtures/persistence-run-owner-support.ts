@@ -35,6 +35,7 @@ type DiagnosticError =
   | 'ERR_STREAM_DESTROYED'
   | 'ERR_STREAM_PREMATURE_CLOSE'
   | 'known-qa-refusal'
+  | 'root-descriptor-limit'
   | 'known-profile-refusal'
   | 'injected-close'
   | 'aggregate'
@@ -69,7 +70,7 @@ type DiagnosticStage =
   | 'settle-rejected'
   | 'gate-held'
   | 'gate-released'
-  | 'prototype-hook-armed'
+  | 'instance-hook-armed'
   | 'parent-input-end'
   | 'parent-output-destroy'
   | 'child-exit'
@@ -116,6 +117,8 @@ type ChildDiagnostic = {
   target: string
   node: string
   observations: DiagnosticObservation[]
+  f0Reports: { report: Record<string, unknown>; observedEvents: number; receiverTeardown: boolean }[]
+  preTeardownObservedEvents: number | null
   overflow: boolean
   stderrBytes: number
   stderrOverflow: boolean
@@ -146,7 +149,7 @@ const diagnosticStages = new Set<DiagnosticStage>([
   'settle-rejected',
   'gate-held',
   'gate-released',
-  'prototype-hook-armed',
+  'instance-hook-armed',
   'parent-input-end',
   'parent-output-destroy',
   'child-exit',
@@ -199,6 +202,7 @@ const diagnosticErrors = new Set<DiagnosticError>([
   'ERR_STREAM_DESTROYED',
   'ERR_STREAM_PREMATURE_CLOSE',
   'known-qa-refusal',
+  'root-descriptor-limit',
   'known-profile-refusal',
   'injected-close',
   'aggregate',
@@ -224,6 +228,9 @@ const reportTypes = new Set([
   'registry-profile-physical-held',
   'registry-profile-physical-result',
   'profile-close-failure-armed',
+  'profile-close-fault-observed',
+  'profile-other-close-observed',
+  'profile-failed-handle-release',
   'root',
   'registry-negative',
   'registry-cleanup',
@@ -231,6 +238,82 @@ const reportTypes = new Set([
   'settlement-failed',
   'fixture-error'
 ])
+
+const f0ReportKeys: Record<string, string[]> = {
+  'profile-preparation-descriptors-settled': [
+    'type',
+    'settledDescriptorCount',
+    'parentCloseCount',
+    'profileCloseCount',
+    'distinctHandles'
+  ],
+  'profile-close-failure-armed': ['type', 'targetRole', 'ownClose'],
+  'profile-close-fault-observed': ['type', 'targetRole', 'hookInvocations', 'originalCloseCalls', 'retained', 'error'],
+  'profile-other-close-observed': ['type', 'targetRole', 'fulfilled'],
+  'profile-failed-handle-release': ['type', 'state', 'retained'],
+  'duplicate-prepare': ['type', 'refusal'],
+  'settlement-failed': ['type', 'available', 'samePromise', 'sameInjectedError'],
+  'registry-cleanup': [
+    'type',
+    'foreignReplacementPreserved',
+    'closeCapacityRetained',
+    'hookRole',
+    'hookInvocations',
+    'repeatedRejected',
+    'sameError',
+    'capacityRefusal',
+    'probeClosed',
+    'fixtureCloseFulfilled',
+    'postCleanupSameError'
+  ]
+}
+function validF0Report(report: Record<string, unknown>, caseId: string): boolean {
+  const type = report.type as string
+  const keys = f0ReportKeys[type]
+  if (!keys || Object.keys(report).length !== keys.length || keys.some((key) => !Object.hasOwn(report, key)))
+    return false
+  if (type === 'profile-preparation-descriptors-settled')
+    return (
+      ['R08', 'R09', 'R10', 'R11', 'R19', 'R20'].includes(caseId) &&
+      report.settledDescriptorCount === 2 &&
+      report.parentCloseCount === 1 &&
+      report.profileCloseCount === 1 &&
+      report.distinctHandles === true
+    )
+  if (type === 'profile-close-failure-armed')
+    return caseId === 'R22' && report.targetRole === 'profile-parent' && report.ownClose === true
+  if (type === 'profile-close-fault-observed')
+    return (
+      caseId === 'R22' &&
+      report.targetRole === 'profile-parent' &&
+      report.hookInvocations === 1 &&
+      report.originalCloseCalls === 0 &&
+      report.retained === true &&
+      report.error === 'injected-close'
+    )
+  if (type === 'profile-other-close-observed')
+    return caseId === 'R22' && report.targetRole === 'profile' && report.fulfilled === true
+  if (type === 'profile-failed-handle-release')
+    return caseId === 'R22' && ['fulfilled', 'rejected'].includes(report.state as string) && report.retained === true
+  if (type === 'duplicate-prepare') return caseId === 'R22' && report.refusal === 'run-already-owned'
+  if (type === 'settlement-failed')
+    return (
+      caseId === 'R22' && report.available === true && report.samePromise === true && report.sameInjectedError === true
+    )
+  return (
+    caseId === 'G02' &&
+    report.foreignReplacementPreserved === true &&
+    report.closeCapacityRetained === true &&
+    report.hookRole === 'registry-root' &&
+    report.hookInvocations === 1 &&
+    report.repeatedRejected === true &&
+    report.sameError === true &&
+    report.capacityRefusal === 'root-descriptor-limit' &&
+    report.probeClosed === true &&
+    report.fixtureCloseFulfilled === true &&
+    report.postCleanupSameError === true
+  )
+}
 
 const ownerRoster: readonly [string, string][] = [
   ['uses the actual first-show proof, inherited pipe, signed launch, profile and guarded registry', 'R01'],
@@ -266,6 +349,7 @@ const ownerRoster: readonly [string, string][] = [
 
 type SharedHarnessState = {
   children: ChildDiagnostic[]
+  f0ReportCount: number
   nextChildOrdinal: number
   overflow: boolean
   invalid: Set<string>
@@ -322,6 +406,7 @@ const harnessStateKey = Symbol.for('metis.qa.owner.diagnostic.harness.v1')
 const processState = process as unknown as Record<PropertyKey, unknown>
 const harnessState = (processState[harnessStateKey] ??= {
   children: [],
+  f0ReportCount: 0,
   nextChildOrdinal: 0,
   overflow: false,
   invalid: new Set<string>(),
@@ -597,7 +682,7 @@ function recordSummary(summary: DiagnosticSummary, observation: DiagnosticObserv
   if (stage === 'stream-close' && (role === 'reader3' || role === 'writer4')) summary.streamCloseObserved = true
   if (stage === 'parent-input-end') summary.parentInputEnd = true
   if (stage === 'parent-output-destroy') summary.parentOutputDestroy = true
-  if (stage === 'prototype-hook-armed' && observation.hookInvoked === true) summary.hookInvocationCount += 1
+  if (stage === 'instance-hook-armed' && observation.hookInvoked === true) summary.hookInvocationCount += 1
   if (handleOrdinal > 0) {
     const key = String(handleOrdinal)
     const current = summary.perHandleClose[key] ?? { role, state: 'not-started' as DiagnosticState, count: 0 }
@@ -647,6 +732,9 @@ function validDiagnosticObservation(value: unknown): value is DiagnosticObservat
     'hookInvoked',
     'teardown'
   ]
+  const stage = record.stage as DiagnosticStage
+  const fileStage = stage === 'file-open' || stage === 'file-close-start' || stage === 'file-close-done'
+  const hookStage = stage === 'instance-hook-armed'
   return (
     Object.keys(record).length === keys.length &&
     keys.every((key) => Object.hasOwn(record, key)) &&
@@ -665,7 +753,12 @@ function validDiagnosticObservation(value: unknown): value is DiagnosticObservat
     diagnosticErrors.has(record.error as DiagnosticError) &&
     (record.ownClose === null || typeof record.ownClose === 'boolean') &&
     (record.hookInvoked === null || typeof record.hookInvoked === 'boolean') &&
-    typeof record.teardown === 'boolean'
+    typeof record.teardown === 'boolean' &&
+    (fileStage ? record.handleOrdinal !== 0 && typeof record.ownClose === 'boolean' : record.ownClose === null) &&
+    (hookStage
+      ? (record.hookInvoked === false && record.state === 'pending') ||
+        (record.hookInvoked === true && record.state === 'fulfilled')
+      : record.hookInvoked === null)
   )
 }
 
@@ -1072,6 +1165,7 @@ export type QaRunOwnerChild = {
   ): void
   retireWindowDuringPreparation(event: 'navigate' | 'replace' | 'close' | 'render-process-loss'): void
   waitForReport(type: string, timeoutMs?: number): Promise<Record<string, unknown>>
+  releaseFixtureGates(): Promise<void>
   terminate(): Promise<void>
 }
 
@@ -1118,6 +1212,8 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
     target: process.env.QA_OWNER_TARGET ?? '',
     node: process.version,
     observations: [],
+    f0Reports: [],
+    preTeardownObservedEvents: null,
     overflow: caseId === 'unmapped' || childOrdinal > roleLimit,
     stderrBytes: 0,
     stderrOverflow: false,
@@ -1138,6 +1234,15 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
   let hasClosed = false
   let terminal: Error | null = null
   let preTeardownCaptured = false
+  let activeFixtureGate: 'preparation' | 'physical' | 'gateway' | null = null
+  let gateReleasePromise: Promise<void> | null = null
+  let gateReportPromise: Promise<Record<string, unknown>> | null = null
+  const gateReportType = (gate: 'preparation' | 'physical' | 'gateway'): string =>
+    gate === 'preparation'
+      ? 'profile-preparation-descriptors-settled'
+      : gate === 'physical'
+        ? 'registry-profile-physical-result'
+        : 'root-held'
   let childExitCaptured = false
   let childSequenceExpected = 0
   let pendingReportTimers = 0
@@ -1262,6 +1367,42 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
         flushDiagnosticShard(false)
         return
       }
+      const f0Type = report.type as string
+      if (
+        Object.hasOwn(f0ReportKeys, f0Type) &&
+        (!['settlement-failed', 'duplicate-prepare'].includes(f0Type) || caseId === 'R22')
+      ) {
+        const caseLimit = ['R08', 'R09', 'R10', 'R11', 'R19', 'R20'].includes(caseId)
+          ? 1
+          : caseId === 'R22'
+            ? 6
+            : caseId === 'G02'
+              ? 1
+              : 0
+        const roleLimit = caseId.startsWith('R') ? 12 : 1
+        if (
+          !validF0Report(report, caseId) ||
+          caseLimit === 0 ||
+          diagnostic.f0Reports.some((item) => item.report.type === f0Type) ||
+          diagnostic.f0Reports.length >= caseLimit ||
+          harnessState.f0ReportCount >= roleLimit ||
+          diagnostic.f0Reports.length >= 6 ||
+          harnessState.f0ReportCount >= 16 ||
+          Buffer.byteLength(JSON.stringify(report)) > 512
+        ) {
+          diagnostic.overflow = true
+          harnessState.overflow = true
+          markDiagnosticInvalid('invalid-envelope')
+          return
+        }
+        harnessState.f0ReportCount += 1
+        diagnostic.f0Reports.push({
+          report,
+          observedEvents: diagnostic.observations.length,
+          receiverTeardown: preTeardownCaptured || terminating || terminal !== null
+        })
+        flushDiagnosticShard(false)
+      }
       reportCounts.set(report.type as string, (reportCounts.get(report.type as string) ?? 0) + 1)
       const isTerminalReport =
         report.type === 'refused' ||
@@ -1317,6 +1458,7 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
       diagnostic.childExit = { state: 'rejected', code: null, signal: null, error: 'other' }
       if (!preTeardownCaptured) {
         diagnostic.preTeardown = snapshotSummary(summary)
+        diagnostic.preTeardownObservedEvents = diagnostic.observations.length
         preTeardownCaptured = true
       }
       appendObservation({
@@ -1340,6 +1482,7 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
       if (harnessState.published) markLateDiagnosticMutation()
       if (!preTeardownCaptured) {
         diagnostic.preTeardown = snapshotSummary(summary)
+        diagnostic.preTeardownObservedEvents = diagnostic.observations.length
         preTeardownCaptured = true
       }
       terminal = new Error('QA_DIAGNOSTIC_CHILD_EXIT')
@@ -1436,7 +1579,7 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
     })
   else markDiagnosticInvalid('child-bound')
 
-  return {
+  const api: QaRunOwnerChild = {
     process: child,
     get receivedFrameCount() {
       return receivedFrameCount
@@ -1551,8 +1694,37 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
     },
     sendCommand(command) {
       if (harnessState.published) markLateDiagnosticMutation()
+      if (command === 'hold-profile-preparation') {
+        activeFixtureGate = 'preparation'
+        gateReportPromise = null
+        gateReleasePromise = null
+      } else if (command === 'create-root-physical-held') {
+        activeFixtureGate = 'physical'
+        gateReportPromise = null
+        gateReleasePromise = null
+      } else if (command === 'create-root-held') {
+        activeFixtureGate = 'gateway'
+        gateReportPromise = null
+        gateReleasePromise = null
+      }
       currentCommand = command
       child.send({ command })
+      if (
+        activeFixtureGate &&
+        !gateReportPromise &&
+        (command === 'release-profile-preparation' ||
+          command === 'change-userdata-resume' ||
+          command === 'retire-window-resume')
+      ) {
+        const gate = activeFixtureGate
+        gateReportPromise = this.waitForReport(gateReportType(gate))
+        void gateReportPromise.then(
+          () => {
+            activeFixtureGate = null
+          },
+          () => {}
+        )
+      }
     },
     retireWindowDuringPreparation(event) {
       if (harnessState.published) markLateDiagnosticMutation()
@@ -1561,6 +1733,7 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
     },
     waitForReport(type, timeoutMs = 15_000) {
       if (harnessState.published) markLateDiagnosticMutation()
+      if (activeFixtureGate && type === gateReportType(activeFixtureGate) && gateReportPromise) return gateReportPromise
       const queuedIndex = reportQueue.findIndex((report) => report.type === type)
       if (queuedIndex >= 0) {
         const queued = reportQueue.splice(queuedIndex, 1)[0]
@@ -1600,12 +1773,36 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
         reportWaiters.push(waiter)
       })
     },
+    releaseFixtureGates() {
+      if (gateReleasePromise) return gateReleasePromise
+      if (!activeFixtureGate) return Promise.resolve()
+      gateReleasePromise = (async () => {
+        if (!preTeardownCaptured) {
+          diagnostic.preTeardown = snapshotSummary(summary)
+          diagnostic.preTeardownObservedEvents = diagnostic.observations.length
+          preTeardownCaptured = true
+          flushDiagnosticShard(false)
+        }
+        terminating = true
+        const gate = activeFixtureGate
+        const command =
+          gate === 'preparation'
+            ? 'release-profile-preparation'
+            : gate === 'physical'
+              ? 'change-userdata-resume'
+              : 'retire-window-resume'
+        if (!gateReportPromise) this.sendCommand(command)
+        await gateReportPromise
+      })()
+      return gateReleasePromise
+    },
     terminate() {
       if (harnessState.published) markLateDiagnosticMutation()
       if (!terminating) {
         terminating = true
         if (!preTeardownCaptured) {
           diagnostic.preTeardown = snapshotSummary(summary)
+          diagnostic.preTeardownObservedEvents = diagnostic.observations.length
           preTeardownCaptured = true
         }
         flushDiagnosticShard(false)
@@ -1617,6 +1814,17 @@ export function startQaRunOwnerChild(entry: string, userDataPath: string, mode =
       })
     }
   }
+  const caseSignal = harnessState.cases.find((record) => record.caseId === caseId)?.signal
+  if (!caseSignal) markDiagnosticInvalid('missing-case')
+  else {
+    const onAbort = () => {
+      void api.releaseFixtureGates().catch(() => markDiagnosticInvalid('terminal-invalid'))
+    }
+    caseSignal.addEventListener('abort', onAbort, { once: true })
+    child.once('close', () => caseSignal.removeEventListener('abort', onAbort))
+    if (caseSignal.aborted) onAbort()
+  }
+  return api
 }
 
 export function parentPathForProfile(profile: PhysicalDirectoryIdentity): string {

@@ -18,7 +18,11 @@ describe('compiled hosted persistence run owner', () => {
   let fixtureOutput: string | undefined
 
   afterEach(async () => {
-    await child?.terminate()
+    try {
+      await child?.releaseFixtureGates()
+    } finally {
+      await child?.terminate()
+    }
     child = undefined
     await profile?.cleanup()
     profile = undefined
@@ -145,8 +149,12 @@ describe('compiled hosted persistence run owner', () => {
     await expect(child.waitForReport('preparation-window-retired')).resolves.toMatchObject({ event })
     await expect(child.waitForReport('refused')).resolves.toMatchObject({ code: 'window-proof-unavailable' })
     child.sendCommand('release-profile-preparation')
-    await expect(child.waitForReport('profile-preparation-descriptors-settled')).resolves.toMatchObject({
-      settledDescriptorCount: 2
+    await expect(child.waitForReport('profile-preparation-descriptors-settled')).resolves.toEqual({
+      type: 'profile-preparation-descriptors-settled',
+      settledDescriptorCount: 2,
+      parentCloseCount: 1,
+      profileCloseCount: 1,
+      distinctHandles: true
     })
     expect(child.reportCount('active')).toBe(0)
   })
@@ -260,8 +268,12 @@ describe('compiled hosted persistence run owner', () => {
       refusal: 'run-already-owned'
     })
     child.sendCommand('release-profile-preparation')
-    await expect(child.waitForReport('profile-preparation-descriptors-settled')).resolves.toMatchObject({
-      settledDescriptorCount: 2
+    await expect(child.waitForReport('profile-preparation-descriptors-settled')).resolves.toEqual({
+      type: 'profile-preparation-descriptors-settled',
+      settledDescriptorCount: 2,
+      parentCloseCount: 1,
+      profileCloseCount: 1,
+      distinctHandles: true
     })
     expect(child.reportCount('active')).toBe(0)
   })
@@ -287,8 +299,12 @@ describe('compiled hosted persistence run owner', () => {
       refusal: 'run-already-owned'
     })
     child.sendCommand('release-profile-preparation')
-    await expect(child.waitForReport('profile-preparation-descriptors-settled')).resolves.toMatchObject({
-      settledDescriptorCount: 2
+    await expect(child.waitForReport('profile-preparation-descriptors-settled')).resolves.toEqual({
+      type: 'profile-preparation-descriptors-settled',
+      settledDescriptorCount: 2,
+      parentCloseCount: 1,
+      profileCloseCount: 1,
+      distinctHandles: true
     })
     expect(child.reportCount('active')).toBe(0)
   })
@@ -315,18 +331,39 @@ describe('compiled hosted persistence run owner', () => {
     await expect(child.waitForReport('active')).resolves.toMatchObject({ current: true })
 
     child.sendCommand('fail-profile-close')
-    await expect(child.waitForReport('profile-close-failure-armed')).resolves.toMatchObject({
-      type: 'profile-close-failure-armed'
+    await expect(child.waitForReport('profile-close-failure-armed')).resolves.toEqual({
+      type: 'profile-close-failure-armed',
+      targetRole: 'profile-parent',
+      ownClose: true
     })
     child.sendCommand('settle')
+    await expect(child.waitForReport('profile-close-fault-observed')).resolves.toEqual({
+      type: 'profile-close-fault-observed',
+      targetRole: 'profile-parent',
+      hookInvocations: 1,
+      originalCloseCalls: 0,
+      retained: true,
+      error: 'injected-close'
+    })
+    await expect(child.waitForReport('profile-other-close-observed')).resolves.toEqual({
+      type: 'profile-other-close-observed',
+      targetRole: 'profile',
+      fulfilled: true
+    })
     await expect(child.waitForReport('settlement-failed')).resolves.toMatchObject({
       available: true,
-      samePromise: true
+      samePromise: true,
+      sameInjectedError: true
     })
     child.sendCommand('duplicate-prepare')
     await expect(child.waitForReport('duplicate-prepare')).resolves.toMatchObject({
       refusal: 'run-already-owned'
     })
     child.sendCommand('release-failed-close')
+    await expect(child.waitForReport('profile-failed-handle-release')).resolves.toEqual({
+      type: 'profile-failed-handle-release',
+      state: 'fulfilled',
+      retained: true
+    })
   })
 })
