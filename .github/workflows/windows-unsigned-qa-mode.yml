@@ -235,8 +235,12 @@ jobs:
           const artifactFiles = new Set()
           const graphById = new Map()
           const usedArtifactIds = new Set()
+          let readbackArtifacts = 0
           if (!Array.isArray(fixture.artifacts) || fixture.artifacts.length !== 32) fail('fixture-artifact-count')
           for (const artifact of fixture.artifacts) {
+            const artifactKeys = ['id','file','metaFile','privateInput','emitted','emittedBytes','readback','metafileSha256','metafileBytes','protocolInput'].sort()
+            const readbackKeys = ['bytes','sha256','namedIdentityMatched','originalFdClosed'].sort()
+            if (!artifact || JSON.stringify(Object.keys(artifact).sort()) !== JSON.stringify(artifactKeys) || !artifact.readback || JSON.stringify(Object.keys(artifact.readback).sort()) !== JSON.stringify(readbackKeys)) fail('artifact-fields')
             if (typeof artifact.id !== 'string' || artifact.id.length > 160 || artifactIds.has(artifact.id)) fail('duplicate-or-unsafe-artifact-id')
             artifactIds.add(artifact.id)
             const file = `u0-${sha(Buffer.from(artifact.id))}.cjs`
@@ -248,6 +252,8 @@ jobs:
             const meta = JSON.parse(metaBytes.toString('utf8'))
             const expectedProtocol = artifact.privateInput ? expectedAugmentedProtocol : protocolCheckout
             if (typeof artifact.privateInput !== 'boolean' || artifact.protocolInput !== sha(expectedProtocol) || artifact.emitted !== sha(output) || artifact.emittedBytes !== output.length || artifact.metafileSha256 !== sha(metaBytes) || artifact.metafileBytes !== metaBytes.length) fail(`artifact-byte-binding:${artifact.id}`)
+            if (!Number.isSafeInteger(artifact.readback.bytes) || artifact.readback.bytes !== artifact.emittedBytes || artifact.readback.sha256 !== artifact.emitted || artifact.readback.namedIdentityMatched !== true || artifact.readback.originalFdClosed !== true) fail(`artifact-readback-binding:${artifact.id}`)
+            readbackArtifacts += 1
             if (!meta.inputs || !meta.outputs || Object.keys(meta.inputs).length !== 3 || Object.keys(meta.outputs).length !== 1) fail(`artifact-graph-count:${artifact.id}`)
             const normalizeInput = (path) => (isAbsolute(path) ? relative(process.cwd(),path) : path).replaceAll('\\','/').replace(/^\.\//,'')
             const normalizedInputs = Object.keys(meta.inputs).map(normalizeInput).sort()
@@ -340,7 +346,6 @@ jobs:
           }
           expectedTitles.set('J01','J01 canonical source control and malformed envelope cases')
           expectedTitles.set('J02','J02 unknown stamp and payload modes refuse without borrowing a valid stamp')
-          const failIds = new Set(['U02','U03','U04','U05','U09', ...Array.from({length:13},(_,i)=>`B${String(i+1).padStart(2,'0')}-unsigned-source-fixture`), ...['H01','H02','H03'].map((id)=>`${id}-unsigned-source-fixture`)])
           const subcaseIds = {
             B01:['wrong-key'], B02:['wrong-challenge'], B03:['source-commit'], B04:['alternate-self-consistent-context','first-build-context-refusal'], B05:['run-id'], B06:['run-attempt'],
             B07:['repository','workflowRef','job','target','runtime-platform','arch','node','electron','v8','modules'], B08:['candidate-hash'], B09:['implementation-hash'], B10:['profile-measurement-hash'], B11:['case-roster-hash'],
@@ -366,57 +371,44 @@ jobs:
             if (!Array.isArray(raw.failureMessages) || !Array.isArray(test.errorKinds) || (test.state === 'failed' ? raw.failureMessages.length !== 1 || test.errorKinds.length !== 1 || test.errorKinds[0] !== 'AssertionError' : raw.failureMessages.length !== 0 || test.errorKinds.length !== 0)) fail(`case-error-classification:${test.case.id}`)
             const shortId = test.case.id.slice(0,3)
             const expectedSubs = subcaseIds[shortId] ?? []
-            const prerequisite = test.case.id.endsWith('-unsigned-source-fixture') && failIds.has(test.case.id) && test.case.reached === 'prerequisite-refused'
-            if (JSON.stringify(test.case.subcases.map((row)=>row.id)) !== JSON.stringify(prerequisite ? [] : expectedSubs)) fail(`subcase-inventory:${test.case.id}`)
+            if (JSON.stringify(test.case.subcases.map((row)=>row.id)) !== JSON.stringify(expectedSubs)) fail(`subcase-inventory:${test.case.id}`)
             if (test.case.subcases.some((row)=>row.reached !== true)) fail(`subcase-not-reached:${test.case.id}`)
           }
           const rawFile = report.testResults[0]
           if (rawFile.name.replaceAll('\\','/').split('/').slice(-3).join('/') !== 'scripts/qa/windows-unsigned-qa-mode.test.ts' || rawFile.message !== '' || rawFile.status !== (cases.tests.some((test)=>test.state === 'failed') ? 'failed' : 'passed') || report.numTotalTestSuites !== 2 || report.numPendingTestSuites !== 0 || report.numFailedTestSuites !== (rawFile.status === 'failed' ? 2 : 0) || report.numPassedTestSuites !== (rawFile.status === 'passed' ? 2 : 0) || report.success !== (rawFile.status === 'passed')) fail('raw-file-suite-hook-status')
-          const actualFailures = cases.tests.filter((test) => test.state === 'failed').map((test) => test.case.id)
-          const expectedFailures = expectedIds.filter((id) => failIds.has(id))
           const protocolBlob = sourceHashes['src/main/persistence/qa-run-protocol.ts'].gitBlob
           const baselineBlob = '76fb0454a967349107afaa7a5d486c957b351729'
-          const phase = protocolBlob === baselineBlob ? 'expected-red' : 'repaired-green'
-          if (phase === 'expected-red') {
-            if (process.env.VITEST_EXIT !== '1' || JSON.stringify(actualFailures) !== JSON.stringify(expectedFailures) || actualFailures.length !== 21 || cases.tests.filter((test) => test.state === 'passed').length !== 29) fail('expected-red-mismatch')
-            for (const test of cases.tests.filter((row) => failIds.has(row.case.id))) {
-              if (test.case.reached !== 'prerequisite-refused' && !['U02','U03','U04','U05','U09'].includes(test.case.id)) fail(`red-prerequisite-phase:${test.case.id}`)
-              if (test.case.failurePhase !== (test.case.id.startsWith('U') ? 'stamp' : 'positive-launch')) fail(`red-failure-phase:${test.case.id}`)
-              if (test.case.id.startsWith('U') && test.case.reached !== 'reached') fail(`primary-case-unreached:${test.case.id}`)
-              if (!test.case.id.startsWith('U') && JSON.stringify(test.case.observations.positive) !== JSON.stringify({direct:false,launch:false,membership:false,forgedMembershipRefused:false})) fail(`unsigned-prerequisite-observation:${test.case.id}`)
-            }
-          } else {
-            if (process.env.VITEST_EXIT !== '0' || actualFailures.length !== 0 || cases.tests.some((test) => test.case.reached !== 'reached')) fail('repaired-green-mismatch')
-          }
+          if (protocolBlob === baselineBlob) fail('protocol-repair-baseline-present')
+          const phase = 'protocol-repair-green'
+          if (process.env.VITEST_EXIT !== '0' || cases.tests.some((test) => test.state !== 'passed' || test.case.reached !== 'reached' || test.case.failurePhase !== null)) fail('protocol-repair-green-mismatch')
           const same = (actual, expected, label) => { if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(label) }
           const positiveTrue = {direct:true,launch:true,membership:true,forgedMembershipRefused:true}
-          const positiveFalse = {direct:false,launch:false,membership:false,forgedMembershipRefused:false}
-          const redStampOnly = new Set(['U03','U04','U05','U09'])
+          let nestedRows = 0
+          let unsignedNestedRows = 0
           for (const test of cases.tests) {
             const item = test.case
             const id = item.id
             const observations = item.observations
-            const redFailure = phase === 'expected-red' && failIds.has(id)
-            if (test.state !== (redFailure ? 'failed' : 'passed') || item.reached !== (redFailure && (id.startsWith('B') || id.startsWith('H')) ? 'prerequisite-refused' : 'reached') || item.failurePhase !== (redFailure ? (id.startsWith('U') ? 'stamp' : 'positive-launch') : null)) fail(`causal-state:${id}`)
+            if (test.state !== 'passed' || item.reached !== 'reached' || item.failurePhase !== null) fail(`causal-state:${id}`)
+            nestedRows += item.subcases.length
+            if (id.endsWith('-unsigned-source-fixture')) unsignedNestedRows += item.subcases.length
             if (id.startsWith('U')) {
               const matrixItem = matrix[Number(id.slice(1)) - 1]
               const healthy = ['U01','U02','U06','U07','U10','U11'].includes(id)
               if (!matrixItem || item.subcases.length !== 0 || observations.expectedHealthy !== healthy) fail(`matrix-inventory:${id}`)
-              const stamp = redFailure && redStampOnly.has(id) ? true : redFailure ? false : healthy
-              const direct = redFailure ? false : healthy
-              same(observations, {stamp,context:stamp,direct,launch:direct,membership:direct,forgedMembershipRefused:direct,expectedHealthy:healthy}, `matrix-observation:${id}`)
+              same(observations, {stamp:healthy,context:healthy,direct:healthy,launch:healthy,membership:healthy,forgedMembershipRefused:healthy,expectedHealthy:healthy}, `matrix-observation:${id}`)
             } else if (id.startsWith('B') || id.startsWith('H')) {
-              const positive = redFailure ? positiveFalse : positiveTrue
-              same(observations, {positive}, `positive-observation:${id}`)
-              if (redFailure) { if (item.subcases.length !== 0) fail(`unreached-negative:${id}`); continue }
+              same(observations, {positive:positiveTrue}, `positive-observation:${id}`)
               const group = id.slice(0,3)
               for (const sub of item.subcases) {
                 if (group.startsWith('B')) {
                   if (group === 'B04') {
                     same(sub, sub.id === 'alternate-self-consistent-context' ? {id:sub.id,direct:null,launch:true,reached:true} : {id:sub.id,launch:false,reached:true}, `B04-alternate-context:${id}:${sub.id}`)
                   } else {
-                    const directFalse = group === 'B03' || group === 'B07' && sub.id === 'runtime-platform' || group === 'B12' && (sub.id === 'identity-2' || sub.id === 'identity-3' || sub.id === 'identity-4' && (phase === 'expected-red' || id.endsWith('-unsigned-source-fixture')))
-                    same(sub, {id:sub.id,direct:!directFalse,launch:false,reached:true}, `B-control-observation:${id}:${sub.id}`)
+                    const direct = group === 'B12'
+                      ? (id.endsWith('-authenticode-source-fixture') ? ['identity-1','identity-4'].includes(sub.id) : sub.id === 'identity-1')
+                      : !(group === 'B03' || group === 'B07' && sub.id === 'runtime-platform')
+                    same(sub, {id:sub.id,direct,launch:false,reached:true}, `B-control-observation:${id}:${sub.id}`)
                   }
                 } else {
                   const accepted = group === 'H01' && sub.id === 'fresh-signed-heartbeat' || group === 'H03' && sub.id === 'fractional-monotonic'
@@ -437,7 +429,8 @@ jobs:
               if (item.subcases.length !== 0) fail('J02-subcases')
             } else fail(`unknown-case:${id}`)
           }
-          if (cases.runReason !== (phase === 'expected-red' ? 'failed' : 'passed') || framework.schema !== 'metis-qa-owner-framework-evidence/v1' || framework.sourceHead !== head || framework.runId !== process.env.RUN_ID || framework.runAttempt !== Number(process.env.RUN_ATTEMPT) || framework.target !== process.env.TARGET || framework.node !== process.version || framework.reporterSha256 !== sourceHashes['scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs'].checkoutSha256 || framework.runEndReason !== cases.runReason || framework.runEndObserved !== true || framework.runEndUnhandledCount !== 0 || framework.finalUnhandledCount !== 0 || framework.frameworkClosed !== true || framework.timedOut !== false || framework.complete !== true) fail('framework-report-incomplete')
+          if (nestedRows !== 90 || unsignedNestedRows !== 41 || readbackArtifacts !== 32) fail('green-summary-counts')
+          if (cases.runReason !== 'passed' || framework.schema !== 'metis-qa-owner-framework-evidence/v1' || framework.sourceHead !== head || framework.runId !== process.env.RUN_ID || framework.runAttempt !== Number(process.env.RUN_ATTEMPT) || framework.target !== process.env.TARGET || framework.node !== process.version || framework.reporterSha256 !== sourceHashes['scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs'].checkoutSha256 || framework.runEndReason !== 'passed' || framework.runEndObserved !== true || framework.runEndUnhandledCount !== 0 || framework.finalUnhandledCount !== 0 || framework.frameworkClosed !== true || framework.timedOut !== false || framework.complete !== true) fail('framework-report-incomplete')
           const esbuildPackage = JSON.parse(bounded('node_modules/esbuild/package.json', 128 * 1024).toString('utf8'))
           const esbuildMain = bounded('node_modules/esbuild/lib/main.js', 512 * 1024)
           const esbuildBinaryPath = process.platform === 'win32' ? `node_modules/@esbuild/win32-${process.arch}/esbuild.exe` : `node_modules/@esbuild/${process.platform}-${process.arch}/bin/esbuild`
@@ -450,10 +443,10 @@ jobs:
           const nativeLock = lock.packages?.[`node_modules/@esbuild/${process.platform}-${process.arch}`]
           if (esbuildPackage.version !== '0.25.12' || esbuildNativePackage.version !== esbuildPackage.version || lock.packages?.['node_modules/esbuild']?.version !== esbuildPackage.version || nativeLock?.version !== esbuildPackage.version || esbuildPackage.optionalDependencies?.[`@esbuild/${process.platform}-${process.arch}`] !== esbuildPackage.version || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(nativeLock.integrity ?? '') || fixture.totalOutputBytes < 1) fail('esbuild-binding')
           const receipt = {
-            schema: 'metis-windows-unsigned-qa-u0-replay/v1', phase, sourceHead: head, runId: process.env.RUN_ID, runAttempt: Number(process.env.RUN_ATTEMPT), target: process.env.TARGET, node: process.version,
+            schema: 'metis-windows-unsigned-qa-u0-replay/v1', phase, functionalStatus: 'passed', nestedRows, unsignedNestedRows, readbackArtifacts, sourceHead: head, runId: process.env.RUN_ID, runAttempt: Number(process.env.RUN_ATTEMPT), target: process.env.TARGET, node: process.version,
             sourceHashes, esbuild: {version: esbuildPackage.version, packageSha256: sha(bounded('node_modules/esbuild/package.json',128*1024)), apiSha256: sha(esbuildMain), nativePackageSha256: sha(bounded(esbuildNativePackagePath,128*1024)), binaryPath: esbuildBinaryPath, binarySha256: sha(esbuildBinary), lockIntegrity:nativeLock.integrity},
             rawVitestSha256: sha(rawBytes), caseEvidenceSha256: sha(caseBytes), frameworkEvidenceSha256: sha(frameworkBytes), fixtureEvidenceSha256: sha(fixtureBytes), defaultLogSha256: sha(logBytes), vitestExitCode: Number(process.env.VITEST_EXIT), testCount: cases.tests.length,
-            passed: cases.tests.filter((test) => test.state === 'passed').length, failed: actualFailures.length, skipped: cases.tests.filter((test) => test.state === 'skipped').length, retries: cases.tests.reduce((sum,test)=>sum+test.retryCount,0), repeats: cases.tests.reduce((sum,test)=>sum+test.repeatCount,0), independentStatic: staticOutcomes
+            passed: cases.tests.filter((test) => test.state === 'passed').length, failed: cases.tests.filter((test) => test.state === 'failed').length, skipped: cases.tests.filter((test) => test.state === 'skipped').length, retries: cases.tests.reduce((sum,test)=>sum+test.retryCount,0), repeats: cases.tests.reduce((sum,test)=>sum+test.repeatCount,0), independentStatic: staticOutcomes
           }
           const receiptBytes = Buffer.from(`${JSON.stringify(receipt)}\n`)
           if (receiptBytes.byteLength > 256 * 1024) fail('replay-receipt-bound')

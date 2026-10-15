@@ -2,7 +2,7 @@ import { build } from 'esbuild'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createRequire } from 'node:module'
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeSync } from 'node:fs'
+import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, writeSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 
@@ -255,21 +255,119 @@ async function compileModule(
   const outputs = result.outputFiles
   if (
     outputs.length !== 1 ||
+    outputs[0].contents.byteLength < 1 ||
     outputs[0].contents.byteLength > LIMITS.output ||
     totalOutputBytes + outputs[0].contents.byteLength > LIMITS.allOutputs
   )
     throw new Error('fixture-output-bound')
   totalOutputBytes += outputs[0].contents.byteLength
   const outPath = resolve(fixtureRoot, safeName)
-  const fd = openSync(outPath, 'wx', 0o600)
-  try {
-    if (writeSync(fd, outputs[0].contents, 0, outputs[0].contents.byteLength, 0) !== outputs[0].contents.byteLength)
-      throw new Error('fixture-short-write')
-  } finally {
-    closeSync(fd)
+  const expectedOutput = outputs[0].contents
+  const expectedOutputSha256 = sha(expectedOutput)
+  const fd = openSync(outPath, 'wx+', 0o600)
+  let module: FixtureModule | undefined
+  let finalBytes: Buffer | undefined
+  let opened: ReturnType<typeof fstatSync> | undefined
+  let primaryError: unknown
+  let closeError: unknown
+  let operationFailed = false
+  let closeFailed = false
+  let originalFdClosed = false
+  let namedIdentityMatched = false
+  const readOutput = (): Buffer => {
+    const heldBefore = fstatSync(fd)
+    const namedBefore = lstatSync(outPath)
+    if (
+      !opened ||
+      !heldBefore.isFile() ||
+      !namedBefore.isFile() ||
+      namedBefore.isSymbolicLink() ||
+      heldBefore.dev !== opened.dev ||
+      heldBefore.ino !== opened.ino ||
+      namedBefore.dev !== opened.dev ||
+      namedBefore.ino !== opened.ino ||
+      heldBefore.size !== expectedOutput.byteLength ||
+      namedBefore.size !== expectedOutput.byteLength
+    )
+      throw new Error('fixture-output-identity-or-size')
+    const bytes = Buffer.alloc(expectedOutput.byteLength)
+    let offset = 0
+    while (offset < bytes.byteLength) {
+      const count = readSync(fd, bytes, offset, bytes.byteLength - offset, offset)
+      if (count <= 0) throw new Error('fixture-output-short-read')
+      offset += count
+    }
+    if (readSync(fd, Buffer.alloc(1), 0, 1, bytes.byteLength) !== 0) throw new Error('fixture-output-trailing-bytes')
+    const heldAfter = fstatSync(fd)
+    const namedAfter = lstatSync(outPath)
+    if (
+      !heldAfter.isFile() ||
+      !namedAfter.isFile() ||
+      namedAfter.isSymbolicLink() ||
+      heldAfter.dev !== opened.dev ||
+      heldAfter.ino !== opened.ino ||
+      namedAfter.dev !== opened.dev ||
+      namedAfter.ino !== opened.ino ||
+      heldAfter.size !== expectedOutput.byteLength ||
+      namedAfter.size !== expectedOutput.byteLength
+    )
+      throw new Error('fixture-output-changed-during-readback')
+    if (bytes.compare(expectedOutput) !== 0 || sha(bytes) !== expectedOutputSha256)
+      throw new Error('fixture-output-readback-mismatch')
+    namedIdentityMatched = true
+    return bytes
   }
-  const bytesOut = readFileSync(outPath)
-  if (bytesOut.compare(outputs[0].contents) !== 0) throw new Error('fixture-output-readback-mismatch')
+  try {
+    opened = fstatSync(fd)
+    const named = lstatSync(outPath)
+    if (
+      !opened.isFile() ||
+      !named.isFile() ||
+      named.isSymbolicLink() ||
+      opened.dev !== named.dev ||
+      opened.ino !== named.ino ||
+      opened.size !== 0 ||
+      named.size !== 0
+    )
+      throw new Error('fixture-output-open-identity')
+    if (writeSync(fd, expectedOutput, 0, expectedOutput.byteLength, 0) !== expectedOutput.byteLength)
+      throw new Error('fixture-short-write')
+    readOutput()
+    module = createRequire(import.meta.url)(outPath) as FixtureModule
+    if (
+      typeof module.hasCompiledQaPersistenceRunStamp !== 'function' ||
+      typeof module.compiledQaPersistenceRunContext !== 'function' ||
+      typeof module.newQaPersistenceBootChallenge !== 'function' ||
+      typeof module.verifyQaPersistenceLaunchEnvelope !== 'function' ||
+      typeof module.readVerifiedQaPersistenceLaunch !== 'function' ||
+      typeof module.verifyQaPersistenceHeartbeat !== 'function' ||
+      exposePayload !== (typeof module.unsignedQaFixtureValidPayload === 'function')
+    )
+      throw new Error('fixture-export-mismatch')
+    finalBytes = readOutput()
+  } catch (error) {
+    primaryError = error
+    operationFailed = true
+  }
+  try {
+    closeSync(fd)
+    originalFdClosed = true
+  } catch (error) {
+    closeError = error
+    closeFailed = true
+  }
+  if (operationFailed && closeFailed)
+    throw new AggregateError([primaryError, closeError], 'fixture-output-failure-and-close-failure')
+  if (operationFailed) throw primaryError
+  if (closeFailed) throw closeError
+  if (!module || !finalBytes || !originalFdClosed) throw new Error('fixture-output-custody-incomplete')
+  const bytesOut = finalBytes
+  const readback = {
+    bytes: bytesOut.byteLength,
+    sha256: sha(bytesOut),
+    namedIdentityMatched,
+    originalFdClosed
+  }
   const metaBytes = Buffer.from(`${JSON.stringify(result.metafile)}\n`)
   if (metaBytes.byteLength < 2 || metaBytes.byteLength > 64 * 1024) throw new Error('fixture-metafile-bound')
   const metaPath = resolve(fixtureRoot, `${safeName}.meta.json`)
@@ -280,18 +378,6 @@ async function compileModule(
   } finally {
     closeSync(metaFd)
   }
-  const module = createRequire(import.meta.url)(outPath) as FixtureModule
-  if (
-    typeof module.hasCompiledQaPersistenceRunStamp !== 'function' ||
-    typeof module.compiledQaPersistenceRunContext !== 'function' ||
-    typeof module.newQaPersistenceBootChallenge !== 'function' ||
-    typeof module.verifyQaPersistenceLaunchEnvelope !== 'function' ||
-    typeof module.readVerifiedQaPersistenceLaunch !== 'function' ||
-    typeof module.verifyQaPersistenceHeartbeat !== 'function'
-  )
-    throw new Error('fixture-export-missing')
-  if (exposePayload !== (typeof module.unsignedQaFixtureValidPayload === 'function'))
-    throw new Error('fixture-private-export-mismatch')
   const inputHashes = Object.fromEntries(inputs.map((path) => [path, sha(source(path))]))
   if (overrideProtocol && compiledProtocol.subarray(protocol.byteLength).compare(Buffer.from(SUFFIX)) !== 0)
     throw new Error('fixture-augmentation-mismatch')
@@ -302,6 +388,7 @@ async function compileModule(
     privateInput: exposePayload,
     emitted: sha(bytesOut),
     emittedBytes: bytesOut.byteLength,
+    readback,
     metafileSha256: sha(metaBytes),
     metafileBytes: metaBytes.byteLength,
     protocolInput: sha(compiledProtocol)
@@ -854,6 +941,10 @@ describe('windows unsigned QA mode finite source fixture', () => {
             subcases.push({ id: label, direct: got.direct, launch: got.launch, reached: true })
           }
         record(caseId, { positive }, subcases, 'reached')
+        if (id === 'B12')
+          expect(subcases.map((row) => row.direct)).toEqual(
+            mode === 'windows-authenticode' ? [true, false, false, true] : [true, false, false, false]
+          )
         if (id !== 'B13')
           assertAllFalse(
             subcases.map((row) => row.launch),
@@ -884,6 +975,7 @@ describe('windows unsigned QA mode finite source fixture', () => {
       expect(launch).toBe(false)
       expect(context).toBe(false)
       if (id !== 'S04') expect(challengeError).toBe(true)
+      else expect(challengeError).toBe(false)
     })
 
   for (const id of H_IDS)

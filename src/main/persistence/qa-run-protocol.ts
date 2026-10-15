@@ -57,7 +57,7 @@ export type QaPersistenceIdentity = Readonly<{
   runtimeName: 'asktoto-qa'
   bundleId: string
   executableSha256: string
-  signingMode: 'windows-authenticode' | 'mac-adhoc' | 'mac-developer-id'
+  signingMode: 'windows-authenticode' | 'windows-unsigned-candidate' | 'mac-adhoc' | 'mac-developer-id'
 }>
 
 export type QaPhysicalDirectoryIdentity = Readonly<{
@@ -308,8 +308,18 @@ function validIdentity(value: unknown): value is QaPersistenceIdentity {
     boundedText(value.bundleId, 200) &&
     HASH.test(String(value.executableSha256)) &&
     (value.signingMode === 'windows-authenticode' ||
+      value.signingMode === 'windows-unsigned-candidate' ||
       value.signingMode === 'mac-adhoc' ||
       value.signingMode === 'mac-developer-id')
+  )
+}
+
+function signingModeMatchesPlatform(runtime: QaPersistenceRuntime, identity: QaPersistenceIdentity): boolean {
+  return (
+    (runtime.platform === 'win32' &&
+      (identity.signingMode === 'windows-authenticode' || identity.signingMode === 'windows-unsigned-candidate')) ||
+    (runtime.platform === 'darwin' &&
+      (identity.signingMode === 'mac-adhoc' || identity.signingMode === 'mac-developer-id'))
   )
 }
 
@@ -437,9 +447,8 @@ function validPayload(value: unknown): value is QaPersistenceLaunchPayload {
     validRuntime(value.runtime) &&
     validIdentity(value.qaIdentity) &&
     targetMatchesRuntime(value.buildContext as QaPersistenceBuildContext, value.runtime as QaPersistenceRuntime) &&
+    signingModeMatchesPlatform(value.runtime as QaPersistenceRuntime, value.qaIdentity as QaPersistenceIdentity) &&
     value.qaIdentity.bundleId === 'com.mantu.asktoto.qa' &&
-    ((value.runtime.platform === 'win32' && value.qaIdentity.signingMode === 'windows-authenticode') ||
-      (value.runtime.platform === 'darwin' && value.qaIdentity.signingMode !== 'windows-authenticode')) &&
     validCases(value.allowedCases) &&
     positive(value.notBefore) &&
     positive(value.expiresAt) &&
@@ -486,6 +495,7 @@ function parseBuildStamp(): { stamp: QaPersistenceBuildStamp; key: KeyObject } |
       !validRuntime(parsed.runtime) ||
       !validIdentity(parsed.qaIdentity) ||
       !targetMatchesRuntime(parsed.context as QaPersistenceBuildContext, parsed.runtime as QaPersistenceRuntime) ||
+      !signingModeMatchesPlatform(parsed.runtime as QaPersistenceRuntime, parsed.qaIdentity as QaPersistenceIdentity) ||
       parsed.qaIdentity.bundleId !== 'com.mantu.asktoto.qa' ||
       canonical(parsed) !== __METIS_QA_PERSISTENCE_BUILD_STAMP__
     )
