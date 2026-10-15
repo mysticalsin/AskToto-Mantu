@@ -1,0 +1,796 @@
+name: Native DMG plist schema observation
+
+on:
+  push:
+    branches:
+      - fix/lean-dmg-native-schema
+    paths:
+      - .github/workflows/lean-dmg-native-schema.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-dmg-native-schema-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Observe synthetic native HFS+ image metadata
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      RUN_ID: ${{ github.run_id }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Check out the workflow source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Create isolated evidence and scratch roots
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          run_id = os.environ["RUN_ID"]
+          attempt = os.environ["RUN_ATTEMPT"]
+          source_sha = os.environ["SOURCE_SHA"]
+          if not re.fullmatch(r"[0-9]+", run_id):
+              raise SystemExit("invalid workflow run id")
+          if not re.fullmatch(r"[0-9]+", attempt):
+              raise SystemExit("invalid workflow attempt")
+          if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+              raise SystemExit("invalid workflow source SHA")
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "lean-dmg-native-schema" / f"{run_id}-{attempt}-{source_sha}"
+          root.mkdir(mode=0o700, parents=True, exist_ok=False)
+          artifact = root / "artifact"
+          work = root / "scratch"
+          artifact.mkdir(mode=0o700)
+          work.mkdir(mode=0o700)
+          (artifact / "commands").mkdir(mode=0o700)
+          (artifact / "bootstrap.txt").write_text(
+              "collector=synthetic-native-image-plist-observation-v1\n"
+              f"run={run_id}\nattempt={attempt}\nsource={source_sha}\n"
+              "state=initialized; no conversion qualification\n",
+              encoding="utf-8",
+          )
+          print(f"Evidence identity: run={run_id} attempt={attempt} source={source_sha}")
+          print(f"Private evidence root created under RUNNER_TEMP; scratch is not an artifact")
+          PY
+
+      - name: Observe UDRW, UDBZ, and ULMO native plist schemas
+        id: observe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import plistlib
+          import re
+          import shutil
+          import stat
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          run_id = os.environ["RUN_ID"]
+          attempt = os.environ["RUN_ATTEMPT"]
+          source_sha = os.environ["SOURCE_SHA"]
+          root = Path(os.environ["RUNNER_TEMP"]) / "lean-dmg-native-schema" / f"{run_id}-{attempt}-{source_sha}"
+          artifact = root / "artifact"
+          work = root / "scratch"
+          spool_dir = work / "native-output-spools"
+          command_rows = []
+          command_number = 0
+          max_retained_output_bytes = 2 * 1024 * 1024
+          metadata = {
+              "schema": "synthetic-native-image-plist-observation-v1",
+              "qualification": "SCHEMA_OBSERVATION_ONLY_NOT_M0_NOT_SIZE_OR_INSTALLER_QUALIFICATION",
+              "status": "RUNNING",
+              "runId": run_id,
+              "runAttempt": attempt,
+              "sourceSha": source_sha,
+              "workflowSha256": None,
+              "declaredPayloadBaseSha": "a9707334e2bb5aa898c2666db48eeb70ae5c6fa1",
+              "specimen": "synthetic HFS+ volume only; no complete application and no installer qualification",
+              "nativeOutputSpools": "UNBOUNDED_PRIVATE_SCRATCH_FILES; bounded immutable artifact snapshots only",
+              "host": {"hostname": "REDACTED", "architecture": None, "swVers": None},
+              "pythonVersion": sys.version,
+              "tools": {},
+              "fixture": [],
+              "images": {},
+              "scratchDisposition": "RETAINED_UNTIL_EPHEMERAL_RUNNER_TEARDOWN",
+              "failure": None,
+          }
+          class ObservationFailure(Exception):
+              pass
+
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+
+          def digest_file(path):
+              result = hashlib.sha256()
+              with path.open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      result.update(chunk)
+              return result.hexdigest()
+
+          def relative_arg(value):
+              text = str(value)
+              try:
+                  return "$EVIDENCE_ROOT/" + Path(text).relative_to(root).as_posix()
+              except ValueError:
+                  return text
+
+          def retain_output(row, label, spool_path, close_state):
+              destination = artifact / row[label + "File"]
+              try:
+                  before = spool_path.stat().st_size
+                  with spool_path.open("rb") as stream:
+                      prefix = stream.read(max_retained_output_bytes)
+                  after = spool_path.stat().st_size
+                  truncated = (
+                      before > max_retained_output_bytes
+                      or after > max_retained_output_bytes
+                      or len(prefix) == max_retained_output_bytes
+                  )
+                  stable = before == after and len(prefix) == after
+                  complete = close_state == "CLOSED" and stable and not truncated
+                  with destination.open("xb") as retained:
+                      retained.write(prefix)
+                      retained.flush()
+                      os.fsync(retained.fileno())
+                  destination.chmod(0o400)
+              except OSError as error:
+                  row[label + "Output"] = {
+                      "snapshotStatus": "UNAVAILABLE",
+                      "closeState": close_state,
+                      "snapshotError": f"{type(error).__name__}: {error}",
+                      "artifactFile": row[label + "File"],
+                  }
+                  return None, "UNAVAILABLE"
+              row[label + "Output"] = {
+                  "spoolBytesBeforeSnapshot": before,
+                  "spoolBytesAfterSnapshot": after,
+                  "rawByteCountExact": after if complete else None,
+                  "retainedBytes": len(prefix),
+                  "truncatedAtLimit": truncated,
+                  "snapshotPartial": not complete,
+                  "snapshotStable": stable,
+                  "snapshotStatus": "COMPLETE" if complete else "PARTIAL",
+                  "closeState": close_state,
+                  "retainedPrefixSha256": digest(prefix),
+                  "closedRawSha256": digest(prefix) if complete else None,
+                  "artifactFile": row[label + "File"],
+              }
+              return prefix if complete else None, "COMPLETE" if complete else "PARTIAL"
+
+          def run(name, argv, timeout=90):
+              global command_number
+              command_number += 1
+              prefix = f"{command_number:02d}-{name}"
+              stdout_spool = spool_dir / f"{prefix}.stdout.spool"
+              stderr_spool = spool_dir / f"{prefix}.stderr.spool"
+              stdout_artifact = f"commands/{prefix}.stdout"
+              stderr_artifact = f"commands/{prefix}.stderr"
+              actual_argv = [str(part) for part in argv]
+              row = {
+                  "name": name,
+                  "argv": actual_argv,
+                  "argvPortable": [relative_arg(part) for part in actual_argv],
+                  "cwd": str(Path.cwd()),
+                  "timeoutSeconds": timeout,
+                  "privateScratchSpools": "UNBOUNDED_PRIVATE_FILES; only immutable 2 MiB prefix snapshots are retained in artifacts",
+                  "artifactSnapshotLimitBytesPerStream": max_retained_output_bytes,
+                  "settlement": "NOT_STARTED",
+                  "exitCode": None,
+                  "signal": None,
+                  "stdoutFile": stdout_artifact,
+                  "stderrFile": stderr_artifact,
+              }
+              command_rows.append(row)
+              child = None
+              timed_out = False
+              try:
+                  for spool in (stdout_spool, stderr_spool):
+                      with spool.open("xb"):
+                          pass
+                  with stdout_spool.open("ab") as stdout_file, stderr_spool.open("ab") as stderr_file:
+                      child = subprocess.Popen(actual_argv, stdin=subprocess.DEVNULL, stdout=stdout_file, stderr=stderr_file)
+                      try:
+                          return_code = child.wait(timeout=timeout)
+                      except subprocess.TimeoutExpired as error:
+                          timed_out = True
+                          row["pid"] = child.pid
+                          row["timeoutState"] = "CHILD_CLOSE_UNKNOWN; NO_KILL_OR_ACK"
+                          row["timeoutError"] = str(error)
+                  if timed_out:
+                      row["settlement"] = "UNKNOWN_TIMEOUT_CHILD_RETAINED"
+                      retain_output(row, "stdout", stdout_spool, "CLOSE_UNKNOWN")
+                      retain_output(row, "stderr", stderr_spool, "CLOSE_UNKNOWN")
+                      raise ObservationFailure(f"{name}: timeout; child close is unknown and scratch is retained")
+              except ObservationFailure:
+                  raise
+              except Exception as error:
+                  row["settlement"] = "NOT_STARTED" if child is None else "UNKNOWN"
+                  row["outcome"] = "START_OR_CAPTURE_FAILED"
+                  row["startOrCaptureFailure"] = f"{type(error).__name__}: {error}"
+                  for label, spool in (("stdout", stdout_spool), ("stderr", stderr_spool)):
+                      close_state = "CLOSE_UNKNOWN" if child is not None else "NOT_STARTED"
+                      if spool.exists():
+                          retain_output(row, label, spool, close_state)
+                      else:
+                          row[label + "Output"] = {
+                              "snapshotStatus": "UNAVAILABLE",
+                              "closeState": close_state,
+                              "snapshotError": "spool was not created",
+                              "artifactFile": row[label + "File"],
+                          }
+                  raise ObservationFailure(f"{name}: command could not be collected: {type(error).__name__}") from error
+              row["exitCode"] = return_code if return_code >= 0 else None
+              row["signal"] = -return_code if return_code < 0 else None
+              row["settlement"] = "CLOSED"
+              stdout_bytes, stdout_status = retain_output(row, "stdout", stdout_spool, "CLOSED")
+              stderr_bytes, stderr_status = retain_output(row, "stderr", stderr_spool, "CLOSED")
+              if stdout_status != "COMPLETE" or stderr_status != "COMPLETE":
+                  row["outcome"] = "CLOSED_OUTPUT_SNAPSHOT_INCOMPLETE_NOT_PARSEABLE"
+                  raise ObservationFailure(
+                      f"{name}: stdout/stderr snapshot incomplete "
+                      f"(stdout={stdout_status}, stderr={stderr_status})"
+                  )
+              if return_code != 0:
+                  row["outcome"] = "CLOSED_NONZERO"
+                  raise ObservationFailure(f"{name}: closed with exit={return_code} signal={row['signal']}")
+              row["outcome"] = "CLOSED_ZERO"
+              return stdout_bytes
+
+          def write_plist(name, data):
+              if len(data) > 2 * 1024 * 1024:
+                  raise ObservationFailure(f"{name}: plist exceeds the 2 MiB specimen bound")
+              specimen = artifact / name
+              with specimen.open("xb") as output:
+                  output.write(data)
+                  output.flush()
+                  os.fsync(output.fileno())
+              specimen.chmod(0o400)
+              value = plistlib.loads(data)
+              if not isinstance(value, dict):
+                  raise ObservationFailure(f"{name}: native plist root is not a dictionary")
+              return value
+
+          def tool_identity(name):
+              path = shutil.which(name)
+              if path is None:
+                  raise ObservationFailure(f"required native tool is absent: {name}")
+              data = Path(path).read_bytes()
+              return {"path": path, "sha256": digest(data), "bytes": len(data)}
+
+          def validate_owned_attachment(attach_value, expected_mount):
+              entities = attach_value.get("system-entities")
+              if not isinstance(entities, list) or not entities:
+                  raise ObservationFailure("attach plist lacks a nonempty system-entities array")
+              matches = [
+                  entity for entity in entities
+                  if isinstance(entity, dict) and entity.get("mount-point") == str(expected_mount)
+              ]
+              if len(matches) != 1:
+                  raise ObservationFailure("attach plist does not identify exactly one requested mount")
+              device = matches[0].get("dev-entry")
+              if not isinstance(device, str) or not re.fullmatch(r"/dev/disk[0-9]+s?[0-9]*", device):
+                  raise ObservationFailure("owned attach entity has no valid device node")
+              return device
+
+          def observe_image(label, image):
+              info = run(f"imageinfo-{label}", ["/usr/bin/hdiutil", "imageinfo", "-plist", image])
+              write_plist(f"imageinfo-{label}.plist", info)
+              image_size = image.stat().st_size
+              if image_size > 128 * 1024 * 1024:
+                  raise ObservationFailure(f"{label}: synthetic image exceeded the 128 MiB specimen bound")
+              image_identity = {"bytes": image_size, "sha256": digest_file(image)}
+              metadata["images"][label.upper()] = image_identity
+              mount = work / f"mount-{label}"
+              if mount.exists():
+                  raise ObservationFailure(f"{label}: mountpoint collision")
+              mount.mkdir(mode=0o700)
+              attach_bytes = run(
+                  f"attach-{label}",
+                  ["/usr/bin/hdiutil", "attach", "-plist", "-readonly", "-nobrowse", "-mountpoint", mount, image],
+              )
+              attach_value = write_plist(f"attach-{label}.plist", attach_bytes)
+              device = validate_owned_attachment(attach_value, mount)
+              attach_row = command_rows[-1]
+              attach_row["ownedDevice"] = device
+              attach_row["ownedMount"] = relative_arg(mount)
+              image_identity.update({"device": device, "mount": relative_arg(mount), "detachConfirmed": False})
+              info_bytes = run(f"diskutil-info-{label}", ["/usr/sbin/diskutil", "info", "-plist", mount])
+              disk_info = write_plist(f"diskutil-info-{label}.plist", info_bytes)
+              disk_device = disk_info.get("DeviceIdentifier")
+              disk_mount = disk_info.get("MountPoint")
+              if disk_device != Path(device).name or disk_mount != str(mount):
+                  raise ObservationFailure(f"{label}: diskutil info does not confirm the owned device and mountpoint")
+              if not isinstance(disk_info.get("VolumeName"), str) or not disk_info["VolumeName"]:
+                  raise ObservationFailure(f"{label}: diskutil info did not report the actual volume name")
+              attach_row["diskutilVolumeName"] = disk_info.get("VolumeName")
+              attach_row["diskutilFilesystemType"] = disk_info.get("FilesystemType")
+              detach_output = run(f"detach-{label}", ["/usr/bin/hdiutil", "detach", "-quiet", device])
+              detach_row = command_rows[-1]
+              detach_row["ownedDevice"] = device
+              detach_row["detachOutputBytes"] = len(detach_output)
+              after = run(f"hdiutil-info-after-detach-{label}", ["/usr/bin/hdiutil", "info", "-plist"])
+              after_value = write_plist(f"hdiutil-info-after-detach-{label}.plist", after)
+              attached_images = after_value.get("images")
+              if not isinstance(attached_images, list):
+                  raise ObservationFailure(f"{label}: hdiutil info plist has no images array for detach confirmation")
+              remaining = []
+              for image_row in attached_images:
+                  if not isinstance(image_row, dict):
+                      raise ObservationFailure(f"{label}: hdiutil info plist contains a malformed image row")
+                  image_path = image_row.get("image-path")
+                  if isinstance(image_path, str) and Path(image_path).resolve() == image.resolve():
+                      remaining.append({"image-path": relative_arg(image_path)})
+                  entities = image_row.get("system-entities")
+                  if not isinstance(entities, list):
+                      raise ObservationFailure(f"{label}: hdiutil info image row lacks system-entities array")
+                  for entity in entities:
+                      if not isinstance(entity, dict):
+                          raise ObservationFailure(f"{label}: hdiutil info contains malformed system-entity")
+                      if isinstance(entity, dict) and entity.get("dev-entry") == device:
+                          remaining.append(entity)
+              if remaining:
+                  raise ObservationFailure(f"{label}: owned device remains attached after detach")
+              detach_row["ownedDeviceConfirmedAbsent"] = True
+              image_identity["detachConfirmed"] = True
+              image_identity.update({
+                  "device": device,
+                  "mount": relative_arg(mount),
+                  "volumeName": disk_info.get("VolumeName"),
+                  "filesystemType": disk_info.get("FilesystemType"),
+              })
+              return image_identity
+
+          def save_state(status, failure=None):
+              def read_bounded_regular(path, limit, expected_identity=None):
+                  flags = os.O_RDONLY | os.O_NOFOLLOW
+                  descriptor = os.open(path, flags)
+                  try:
+                      opened = os.fstat(descriptor)
+                      if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or opened.st_size > limit:
+                          raise ObservationFailure("opened evidence is not a bounded singly-linked regular file")
+                      identity = (
+                          opened.st_dev,
+                          opened.st_ino,
+                          opened.st_size,
+                          opened.st_mtime_ns,
+                          opened.st_ctime_ns,
+                      )
+                      if expected_identity is not None and identity != expected_identity:
+                          raise ObservationFailure("opened evidence identity changed")
+                      before_path = path.lstat()
+                      if (
+                          path.is_symlink()
+                          or not stat.S_ISREG(before_path.st_mode)
+                          or (before_path.st_dev, before_path.st_ino) != (opened.st_dev, opened.st_ino)
+                      ):
+                          raise ObservationFailure("evidence path does not name the opened regular file")
+                      with os.fdopen(descriptor, "rb", closefd=True) as source:
+                          descriptor = -1
+                          data = source.read(limit + 1)
+                          after_fd = os.fstat(source.fileno())
+                      after_path = path.lstat()
+                      after_identity = (
+                          after_fd.st_dev,
+                          after_fd.st_ino,
+                          after_fd.st_size,
+                          after_fd.st_mtime_ns,
+                          after_fd.st_ctime_ns,
+                      )
+                      if (
+                          after_identity != identity
+                          or path.is_symlink()
+                          or not stat.S_ISREG(after_path.st_mode)
+                          or (after_path.st_dev, after_path.st_ino) != (opened.st_dev, opened.st_ino)
+                          or len(data) != opened.st_size
+                          or len(data) > limit
+                      ):
+                          raise ObservationFailure("evidence changed during its bounded snapshot read")
+                      return data, identity
+                  finally:
+                      if descriptor >= 0:
+                          os.close(descriptor)
+
+              command_order = [
+                  "git-head", "sw-vers", "uname-machine", "hdiutil-help", "create-udrw",
+                  "imageinfo-udrw", "attach-udrw", "diskutil-info-udrw", "detach-udrw",
+                  "hdiutil-info-after-detach-udrw", "convert-udbz", "verify-udbz",
+                  "imageinfo-udbz", "attach-udbz", "diskutil-info-udbz", "detach-udbz",
+                  "hdiutil-info-after-detach-udbz", "convert-ulmo", "verify-ulmo",
+                  "imageinfo-ulmo", "attach-ulmo", "diskutil-info-ulmo", "detach-ulmo",
+                  "hdiutil-info-after-detach-ulmo",
+              ]
+              plist_names = {
+                  "imageinfo-udrw.plist", "imageinfo-udbz.plist", "imageinfo-ulmo.plist",
+                  "attach-udrw.plist", "attach-udbz.plist", "attach-ulmo.plist",
+                  "diskutil-info-udrw.plist", "diskutil-info-udbz.plist", "diskutil-info-ulmo.plist",
+                  "hdiutil-info-after-detach-udrw.plist", "hdiutil-info-after-detach-udbz.plist",
+                  "hdiutil-info-after-detach-ulmo.plist",
+              }
+              control_names = {"metadata.json", "commands.json", "index.json", "index.sha256"}
+              allowed_files = {"bootstrap.txt"} | plist_names
+              allowed_command_logs = set()
+              issues = []
+              actual_names = [row.get("name") for row in command_rows]
+              if actual_names != command_order[:len(actual_names)]:
+                  issues.append("command roster is not an exact prefix of the authored operation list")
+              if status == "COMPLETE_SCHEMA_OBSERVATION_ONLY" and actual_names != command_order:
+                  issues.append("complete observation does not contain the exact authored command roster")
+              for index, command in enumerate(command_rows, start=1):
+                  if index > len(command_order) or command.get("name") != command_order[index - 1]:
+                      continue
+                  if command.get("outcome") != "CLOSED_ZERO":
+                      issues.append(f"command did not close with zero status: {command.get('name')}")
+                  for stream in ("stdout", "stderr"):
+                      expected = f"commands/{index:02d}-{command.get('name')}.{stream}"
+                      if command.get(stream + "File") != expected:
+                          issues.append(f"command output path differs from the exact authored path: {expected}")
+                      else:
+                          allowed_command_logs.add(expected)
+                      output = command.get(stream + "Output")
+                      if (
+                          not isinstance(output, dict)
+                          or output.get("snapshotStatus") != "COMPLETE"
+                          or output.get("snapshotPartial") is not False
+                          or output.get("snapshotStable") is not True
+                          or output.get("truncatedAtLimit") is not False
+                          or output.get("rawByteCountExact") != output.get("retainedBytes")
+                          or not isinstance(output.get("closedRawSha256"), str)
+                      ):
+                          issues.append(f"command stream has no complete stable bounded snapshot: {expected}")
+
+              # The four control names are owned only if absent. Never follow or
+              # overwrite a pre-existing entry, including a symlink or directory.
+              for name in control_names:
+                  path = artifact / name
+                  try:
+                      path.lstat()
+                  except FileNotFoundError:
+                      continue
+                  else:
+                      issues.append(f"reserved control path is already occupied: {name}")
+
+              selected_files = []
+              for path in sorted(artifact.rglob("*")):
+                  relative = path.relative_to(artifact).as_posix()
+                  if relative in control_names:
+                      continue
+                  if path.is_symlink():
+                      issues.append("symlink excluded from artifact allowlist")
+                      continue
+                  info = path.lstat()
+                  if stat.S_ISDIR(info.st_mode):
+                      if relative != "commands":
+                          issues.append("unexpected directory excluded from artifact allowlist")
+                      continue
+                  if not stat.S_ISREG(info.st_mode):
+                      issues.append("non-regular artifact entry excluded")
+                      continue
+                  if relative not in allowed_files and relative not in allowed_command_logs:
+                      issues.append("unknown artifact file excluded")
+                      continue
+                  limit = max_retained_output_bytes if relative.startswith("commands/") or relative.endswith(".plist") else 1024 * 1024
+                  if info.st_size > limit:
+                      issues.append(f"oversized allowed artifact file excluded: {relative}")
+                      continue
+                  selected_files.append((relative, path))
+              selected = {relative for relative, _ in selected_files}
+              if "bootstrap.txt" not in selected:
+                  issues.append("required evidence file is absent or invalid: bootstrap.txt")
+              for command in command_rows:
+                  for label in ("stdout", "stderr"):
+                      relative = command.get(label + "File")
+                      output = command.get(label + "Output")
+                      if relative not in selected:
+                          issues.append(f"required command evidence is absent or invalid: {relative}")
+                          continue
+                      matching = [path for name, path in selected_files if name == relative]
+                      if len(matching) != 1:
+                          issues.append(f"command evidence path is not unique: {relative}")
+                          continue
+                      try:
+                          evidence, _ = read_bounded_regular(matching[0], max_retained_output_bytes)
+                      except Exception as error:
+                          issues.append(f"command evidence cannot be safely reread: {relative}: {type(error).__name__}")
+                          continue
+                      if (
+                          not isinstance(output, dict)
+                          or len(evidence) != output.get("retainedBytes")
+                          or digest(evidence) != output.get("retainedPrefixSha256")
+                          or output.get("snapshotStatus") != "COMPLETE"
+                      ):
+                          issues.append(f"command evidence final bytes differ from its complete snapshot: {relative}")
+              plist_for_command = {
+                  "imageinfo-udrw": "imageinfo-udrw.plist",
+                  "attach-udrw": "attach-udrw.plist",
+                  "diskutil-info-udrw": "diskutil-info-udrw.plist",
+                  "hdiutil-info-after-detach-udrw": "hdiutil-info-after-detach-udrw.plist",
+                  "imageinfo-udbz": "imageinfo-udbz.plist",
+                  "attach-udbz": "attach-udbz.plist",
+                  "diskutil-info-udbz": "diskutil-info-udbz.plist",
+                  "hdiutil-info-after-detach-udbz": "hdiutil-info-after-detach-udbz.plist",
+                  "imageinfo-ulmo": "imageinfo-ulmo.plist",
+                  "attach-ulmo": "attach-ulmo.plist",
+                  "diskutil-info-ulmo": "diskutil-info-ulmo.plist",
+                  "hdiutil-info-after-detach-ulmo": "hdiutil-info-after-detach-ulmo.plist",
+              }
+              for command in command_rows:
+                  plist_name = plist_for_command.get(command.get("name"))
+                  if command.get("outcome") == "CLOSED_ZERO" and plist_name and plist_name not in selected:
+                      issues.append(f"successful native plist command has no retained raw specimen: {plist_name}")
+
+              final_status = status if not issues else "INCOMPLETE_ARTIFACT_ALLOWLIST_OR_FILE_VALIDATION"
+              final_failure = failure
+              if issues:
+                  final_failure = {"prior": failure, "issues": issues}
+              metadata["status"] = final_status
+              metadata["failure"] = final_failure
+              command_bytes = (json.dumps(command_rows, indent=2, sort_keys=True) + "\n").encode("utf-8")
+              metadata_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+              entries = []
+              upload_paths = []
+              selected_identities = {}
+              for relative, path in sorted(selected_files):
+                  limit = max_retained_output_bytes if relative.startswith("commands/") or relative.endswith(".plist") else 1024 * 1024
+                  try:
+                      data, identity = read_bounded_regular(path, limit)
+                  except Exception as error:
+                      issues.append(f"final evidence path cannot be safely snapshotted: {relative}: {type(error).__name__}")
+                      continue
+                  selected_identities[relative] = identity
+                  entries.append({"path": relative, "bytes": len(data), "sha256": digest(data)})
+                  upload_paths.append(str(path))
+
+              if issues and final_status == status:
+                  metadata["status"] = "INCOMPLETE_ARTIFACT_ALLOWLIST_OR_FILE_VALIDATION"
+                  metadata["failure"] = {"prior": failure, "issues": issues}
+                  final_status = metadata["status"]
+                  command_bytes = (json.dumps(command_rows, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                  metadata_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                  entries = []
+                  upload_paths = []
+                  selected_identities = {}
+                  for relative, path in sorted(selected_files):
+                      limit = max_retained_output_bytes if relative.startswith("commands/") or relative.endswith(".plist") else 1024 * 1024
+                      try:
+                          data, identity = read_bounded_regular(path, limit)
+                      except Exception:
+                          continue
+                      selected_identities[relative] = identity
+                      entries.append({"path": relative, "bytes": len(data), "sha256": digest(data)})
+                      upload_paths.append(str(path))
+
+              index_value = {
+                  "qualification": metadata["qualification"],
+                  "status": final_status,
+                  "controlFiles": {
+                      "commands.json": {"bytes": len(command_bytes), "sha256": digest(command_bytes)},
+                      "metadata.json": {"bytes": len(metadata_bytes), "sha256": digest(metadata_bytes)},
+                  },
+                  "files": entries,
+                  "indexSelfHash": "separate index.sha256 sidecar",
+              }
+              index_bytes = (json.dumps(index_value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+              sidecar_bytes = f"{digest(index_bytes)}  index.json\n".encode("ascii")
+              control_payloads = {
+                  "commands.json": command_bytes,
+                  "metadata.json": metadata_bytes,
+                  "index.json": index_bytes,
+                  "index.sha256": sidecar_bytes,
+              }
+              control_paths = {}
+              control_identities = {}
+              publication_issues = []
+              for name, payload in control_payloads.items():
+                  path = artifact / name
+                  try:
+                      descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                      with os.fdopen(descriptor, "wb", closefd=True) as target:
+                          target.write(payload)
+                          target.flush()
+                          os.fsync(target.fileno())
+                          os.fchmod(target.fileno(), 0o400)
+                          created = os.fstat(target.fileno())
+                          control_identities[name] = (
+                              created.st_dev,
+                              created.st_ino,
+                              created.st_size,
+                              created.st_mtime_ns,
+                              created.st_ctime_ns,
+                          )
+                  except OSError as error:
+                      publication_issues.append(f"exclusive control-file publication failed for {name}: {type(error).__name__}")
+                      continue
+                  control_paths[name] = path
+
+              # Reconcile every published byte, including the index and its
+              # sidecar, before exposing an upload roster to the workflow.
+              final_inventory = {}
+              final_control_bytes = {}
+              for name, expected in control_payloads.items():
+                  path = control_paths.get(name)
+                  if path is None:
+                      publication_issues.append(f"required control file was not published: {name}")
+                      continue
+                  try:
+                      actual, identity = read_bounded_regular(
+                          path,
+                          1024 * 1024,
+                          control_identities.get(name),
+                      )
+                  except Exception as error:
+                      publication_issues.append(f"published control file cannot be validated: {name}: {type(error).__name__}")
+                      continue
+                  if actual != expected:
+                      publication_issues.append(f"published control bytes differ from the indexed final bytes: {name}")
+                  final_inventory[name] = {"bytes": len(actual), "sha256": digest(actual)}
+                  final_control_bytes[name] = actual
+
+              if "index.json" in final_inventory and "index.sha256" in final_inventory:
+                  if final_inventory["index.sha256"]["sha256"] != digest(sidecar_bytes):
+                      publication_issues.append("index sidecar bytes changed during final validation")
+                  if final_control_bytes["index.sha256"] != f"{final_inventory['index.json']['sha256']}  index.json\n".encode("ascii"):
+                      publication_issues.append("index sidecar does not match the final indexed bytes")
+                  try:
+                      parsed_index = json.loads(final_control_bytes["index.json"])
+                  except Exception as error:
+                      publication_issues.append(f"final index is not readable JSON: {type(error).__name__}")
+                  else:
+                      if parsed_index != index_value or parsed_index.get("files") != entries:
+                          publication_issues.append("final index content differs from the exact authored inventory")
+              expected_entries = {entry["path"]: entry for entry in entries}
+              final_validated_source_paths = []
+              for relative, path in selected_files:
+                  limit = max_retained_output_bytes if relative.startswith("commands/") or relative.endswith(".plist") else 1024 * 1024
+                  try:
+                      expected_identity = selected_identities.get(relative)
+                      if expected_identity is None:
+                          raise ObservationFailure("no trusted first-pass identity")
+                      actual, identity = read_bounded_regular(path, limit, expected_identity)
+                  except Exception as error:
+                      publication_issues.append(f"final indexed evidence cannot be revalidated: {relative}: {type(error).__name__}")
+                      continue
+                  expected = expected_entries.get(relative)
+                  if (
+                      expected is None
+                      or identity != selected_identities.get(relative)
+                      or len(actual) != expected["bytes"]
+                      or digest(actual) != expected["sha256"]
+                  ):
+                      publication_issues.append(f"final evidence bytes differ from the indexed upload bytes: {relative}")
+                      continue
+                  final_validated_source_paths.append(str(path))
+              final_required = {name for name, _ in selected_files} | control_names
+              uploaded_names = {Path(path).relative_to(artifact).as_posix() for path in final_validated_source_paths}
+              if not publication_issues:
+                  uploaded_names.update(control_paths)
+              if uploaded_names != final_required:
+                  publication_issues.append("final upload roster differs from the validated required artifact inventory")
+
+              if publication_issues:
+                  # Do not upload controls whose final bytes failed audit. The
+                  # bounded source evidence remains available without an index
+                  # that might falsely describe a complete artifact.
+                  metadata["status"] = "INCOMPLETE_FINAL_PUBLICATION_AUDIT"
+                  metadata["failure"] = {"prior": final_failure, "issues": publication_issues}
+                  print(f"Final evidence publication audit incomplete: {publication_issues}", file=sys.stderr)
+                  upload_paths = final_validated_source_paths
+              else:
+                  upload_paths = final_validated_source_paths + [
+                      str(control_paths[name]) for name in sorted(control_names)
+                  ]
+              output = Path(os.environ["GITHUB_OUTPUT"])
+              with output.open("a", encoding="utf-8") as stream:
+                  stream.write("artifact_paths<<NATIVE_SCHEMA_ARTIFACT_PATHS\n")
+                  stream.write("\n".join(upload_paths) + "\n")
+                  stream.write("NATIVE_SCHEMA_ARTIFACT_PATHS\n")
+
+          failure = None
+          try:
+              spool_dir.mkdir(mode=0o700)
+              metadata["workflowSha256"] = digest(Path(".github/workflows/lean-dmg-native-schema.yml").read_bytes())
+              metadata["tools"] = {name: tool_identity(name) for name in ("hdiutil", "diskutil", "python3")}
+              for name, expected_path in (("hdiutil", "/usr/bin/hdiutil"), ("diskutil", "/usr/sbin/diskutil")):
+                  if Path(metadata["tools"][name]["path"]).resolve() != Path(expected_path).resolve():
+                      raise ObservationFailure(f"{name}: resolved tool path differs from the exact command path")
+              head = run("git-head", ["git", "rev-parse", "HEAD"])
+              metadata["observedHead"] = head.decode("ascii", errors="strict").strip()
+              if metadata["observedHead"] != source_sha:
+                  raise ObservationFailure("checked-out source head does not match the workflow event SHA")
+              sw_vers = run("sw-vers", ["/usr/bin/sw_vers"])
+              uname = run("uname-machine", ["/usr/bin/uname", "-m"])
+              metadata["host"]["architecture"] = uname.decode("utf-8", errors="strict").strip()
+              metadata["host"]["swVers"] = sw_vers.decode("utf-8", errors="strict").strip()
+              run("hdiutil-help", ["/usr/bin/hdiutil", "help"], timeout=15)
+              fixture = work / "specimen"
+              (fixture / ".background").mkdir(parents=True, mode=0o700)
+              (fixture / "Applications").mkdir(mode=0o700)
+              (fixture / "License.txt").write_bytes(b"Synthetic license specimen; no product license or payload.\n")
+              binary = fixture / "binary.dat"
+              binary.write_bytes(bytes(range(256)) * 16)
+              empty = fixture / "empty.dat"
+              empty.write_bytes(b"")
+              executable = fixture / "executable.sh"
+              executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+              executable.chmod(0o755)
+              (fixture / "relative-link").symlink_to("binary.dat")
+              (fixture / ".background" / "decoration.bin").write_bytes(b"synthetic volume decoration\x00\x01")
+              (fixture / ".VolumeIcon.icns").write_bytes(b"icns\x00\x00\x00\x08synthetic")
+              os.setxattr(binary, "com.metis.synthetic", b"attribute-bytes-01")
+              (Path(str(binary) + "/..namedfork/rsrc")).write_bytes(b"synthetic-resource-fork-01")
+              metadata["fixture"] = [
+                  {"path": "binary.dat", "kind": "file", "bytes": binary.stat().st_size, "mode": oct(binary.stat().st_mode & 0o777), "sha256": digest(binary.read_bytes()), "xattr": "com.metis.synthetic", "resourceForkBytes": (Path(str(binary) + "/..namedfork/rsrc")).stat().st_size},
+                  {"path": "empty.dat", "kind": "file", "bytes": empty.stat().st_size, "sha256": digest(empty.read_bytes())},
+                  {"path": "executable.sh", "kind": "file", "bytes": executable.stat().st_size, "mode": oct(executable.stat().st_mode & 0o777), "sha256": digest(executable.read_bytes())},
+                  {"path": "relative-link", "kind": "symlink", "target": os.readlink(fixture / "relative-link")},
+                  {"path": "License.txt", "kind": "file", "bytes": (fixture / "License.txt").stat().st_size},
+                  {"path": ".background/decoration.bin", "kind": "file", "bytes": (fixture / ".background" / "decoration.bin").stat().st_size},
+                  {"path": ".VolumeIcon.icns", "kind": "file", "bytes": (fixture / ".VolumeIcon.icns").stat().st_size},
+                  {"path": "Applications", "kind": "directory"},
+              ]
+              udrw = work / "schema-udrw.dmg"
+              udbz = work / "schema-udbz.dmg"
+              ulmo = work / "schema-ulmo.dmg"
+              run("create-udrw", ["/usr/bin/hdiutil", "create", "-srcfolder", fixture, "-fs", "HFS+", "-volname", "SchemaProbe", "-format", "UDRW", udrw], timeout=120)
+              if not udrw.is_file() or udrw.is_symlink():
+                  raise ObservationFailure("native UDRW create did not produce a regular image")
+              metadata["images"]["UDRW_CHECKSUM_VERIFICATION"] = {
+                  "status": "NOT_APPLICABLE_READ_WRITE_IMAGE_WITHOUT_CHECKSUM",
+                  "basis": "Apple hdiutil verify documentation says read/write images do not contain checksums",
+              }
+              metadata["images"]["UDRW"] = observe_image("udrw", udrw)
+              run("convert-udbz", ["/usr/bin/hdiutil", "convert", udrw, "-format", "UDBZ", "-o", udbz], timeout=180)
+              if not udbz.is_file() or udbz.is_symlink():
+                  raise ObservationFailure("native UDBZ conversion did not produce a regular image")
+              run("verify-udbz", ["/usr/bin/hdiutil", "verify", udbz])
+              metadata["images"]["UDBZ_CHECKSUM_VERIFICATION"] = {
+                  "status": "VERIFIED_BY_CLOSED_ZERO_NATIVE_COMMAND",
+                  "command": "verify-udbz",
+              }
+              metadata["images"]["UDBZ"] = observe_image("udbz", udbz)
+              run("convert-ulmo", ["/usr/bin/hdiutil", "convert", udbz, "-format", "ULMO", "-o", ulmo], timeout=180)
+              if not ulmo.is_file() or ulmo.is_symlink():
+                  raise ObservationFailure("native ULMO conversion did not produce a regular image")
+              run("verify-ulmo", ["/usr/bin/hdiutil", "verify", ulmo])
+              metadata["images"]["ULMO_CHECKSUM_VERIFICATION"] = {
+                  "status": "VERIFIED_BY_CLOSED_ZERO_NATIVE_COMMAND",
+                  "command": "verify-ulmo",
+              }
+              metadata["images"]["ULMO"] = observe_image("ulmo", ulmo)
+          except Exception as error:
+              failure = {"type": type(error).__name__, "message": str(error)}
+              print(f"Schema observation incomplete; evidence retained: {failure}", file=sys.stderr)
+          if metadata["workflowSha256"] is None:
+              metadata["workflowSha256"] = digest(Path(".github/workflows/lean-dmg-native-schema.yml").read_bytes())
+          final_status = "INCOMPLETE" if failure is not None else "COMPLETE_SCHEMA_OBSERVATION_ONLY"
+          save_state(final_status, failure)
+          if failure is not None or metadata["status"] != "COMPLETE_SCHEMA_OBSERVATION_ONLY":
+              raise SystemExit("native schema observation did not complete; retained evidence status is incomplete")
+          PY
+
+      - name: Upload exact schema specimens and closed command evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lean-dmg-native-schema-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.observe.outputs.artifact_paths }}
+          if-no-files-found: error
+          retention-days: 14
