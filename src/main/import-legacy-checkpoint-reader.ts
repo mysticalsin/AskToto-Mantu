@@ -111,15 +111,20 @@ export function createImportLegacyCheckpointReader(options: ImportLegacyCheckpoi
     let activeCandidate: Awaited<ReturnType<ImportLegacyCheckpointReaderOptions['candidate']['begin']>> | undefined
     let activeWorkerStop: (() => Promise<void>) | undefined
     let activeCandidateAbort: Promise<void> | undefined
+    // The deadline may start physical retirement only while the operation owns
+    // the open terminal phase. Accounting is the synchronous cut after every
+    // physical cleanup this operation can start has been joined.
+    let terminalPhase: 'OPEN' | 'RETIRED' | 'ACCOUNTING' = 'OPEN'
     let retired = false
     let cleanupFailed = false
     const abortCandidate = (candidate: NonNullable<typeof activeCandidate>): Promise<void> => {
+      if (activeCandidateAbort) return activeCandidateAbort
       try {
         candidate.requestAbortOwnedCandidate()
       } catch {
         cleanupFailed = true
       }
-      activeCandidateAbort ??= Promise.resolve()
+      activeCandidateAbort = Promise.resolve()
         .then(() => candidate.abortOwnedCandidate())
         .catch(() => {
           cleanupFailed = true
@@ -127,6 +132,8 @@ export function createImportLegacyCheckpointReader(options: ImportLegacyCheckpoi
       return activeCandidateAbort
     }
     const retire = (): void => {
+      if (terminalPhase !== 'OPEN') return
+      terminalPhase = 'RETIRED'
       retired = true
       try {
         activeLease?.quarantine('DEADLINE', policy.shutdownDeadlineMs)
@@ -520,7 +527,13 @@ export function createImportLegacyCheckpointReader(options: ImportLegacyCheckpoi
           await cleanupWait(() => source!.settled())
           await cleanupWait(() => source!.close())
         }
+        // A deadline can retire a published candidate while source settlement
+        // or close is pending. Join the exact single-flight abort it started
+        // before crossing the accounting cut. No deadline callback can start
+        // another physical cleanup after that cut.
+        if (activeCandidateAbort) await cleanupWait(() => activeCandidateAbort!)
         if (resourceLease) {
+          terminalPhase = 'ACCOUNTING'
           if (cleanupFailed) {
             try {
               resourceLease.quarantine('CLEANUP_FAILED', policy.shutdownDeadlineMs)

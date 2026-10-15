@@ -620,7 +620,7 @@ describe('bounded legacy reader scope settlement', () => {
       expect(harness.metrics.settled).toBe(0)
       abort.resolve()
       await settledStarted.promise
-      expect(harness.metrics.settled).toBe(1)
+      expect(harness.metrics).toMatchObject({ settled: 1, abortRequests: 1, aborts: 1 })
     } finally {
       close.resolve()
       abort.resolve()
