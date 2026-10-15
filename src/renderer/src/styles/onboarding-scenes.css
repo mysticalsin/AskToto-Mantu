@@ -96,18 +96,6 @@
   color: #f4f4f5;
   cursor: pointer;
 }
-/* Hero Skip: quieter than Next. Never a raw text link. */
-.onboard-skip-chip {
-  min-height: 32px;
-  padding: 0 12px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: rgba(244, 244, 245, 0.58);
-}
-.onboard-skip-chip:hover {
-  color: rgba(244, 244, 245, 0.82);
-}
 .onboard-skip-screen {
   width: min(100%, 560px);
   gap: 28px;
@@ -292,11 +280,6 @@
   margin-top: 2px;
 }
 
-.onboard-stage .onboard-pop-in {
-  animation: none;
-  opacity: 1;
-  transform: none;
-}
 .onboard-tour-slot,
 .onboard-tour-chrome {
   position: relative;
