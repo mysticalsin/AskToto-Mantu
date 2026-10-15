@@ -1,0 +1,110 @@
+name: Promote known candidate
+
+# workflow_run does not start after a candidate that GITHUB_TOKEN dispatched.
+# A push that changes this file promotes that exact successful qa-candidate run.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/promote-known-candidate
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: promote-known-candidate
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Dispatch promotion for the named candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Read the candidate run id
+        id: run
+        run: |
+          run_id=$(tr -cd '0-9' < .github/promote-known-candidate)
+          if ! [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::.github/promote-known-candidate must contain one run id."
+            exit 1
+          fi
+          echo "id=$run_id" >> "$GITHUB_OUTPUT"
+      - name: Require a successful main qa-candidate dispatch
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.run.outputs.id }}
+        run: |
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+          jq -e '
+            .path == ".github/workflows/qa-candidate.yml" and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .status == "completed" and .conclusion == "success"
+          ' <<<"$run" > /dev/null \
+            || { echo "::error::Run $RUN_ID is not a completed successful qa-candidate dispatch on main."; exit 1; }
+          echo "sha=$(jq -r .head_sha <<<"$run")" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          persist-credentials: false
+      - name: Require the ship arm and residuals on that commit
+        run: |
+          if [ ! -f .github/ship-1.9.7 ] || [ ! -f .github/ship-1.9.7-residuals.md ]; then
+            echo "::error::The candidate commit has no ship arm."
+            exit 1
+          fi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-launch-mac
+          path: launch-mac
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-launch-win
+          path: launch-win
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+      - name: Bind PASS evidence to the launch reports
+        env:
+          RUN_ID: ${{ steps.run.outputs.id }}
+        run: |
+          version=$(jq -r .version provenance/provenance.json)
+          recorded=$(jq -r .run.id provenance/provenance.json)
+          if [ "$version" != "1.9.7" ] || [ "$recorded" != "$RUN_ID" ]; then
+            echo "::error::Provenance is version $version run $recorded; expected 1.9.7 run $RUN_ID."
+            exit 1
+          fi
+          node scripts/qa/launch-evidence.mjs \
+            provenance/provenance.json \
+            "$RUNNER_TEMP/evidence.jsonl" \
+            launch-mac \
+            launch-win
+      - name: Dispatch promote-candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ steps.run.outputs.id }}
+        run: |
+          jq -n \
+            --arg run "$CANDIDATE_RUN" \
+            --arg residuals "$(cat .github/ship-1.9.7-residuals.md)" \
+            --arg evidence "$(cat "$RUNNER_TEMP/evidence.jsonl")" \
+            '{ref:"main", inputs:{candidate_run_id:$run, publish:true, confirm_version:"1.9.7", residuals:$residuals, evidence:$evidence}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/promote-candidate.yml/dispatches" --input -
+          echo "Dispatched promote-candidate for run $CANDIDATE_RUN"
