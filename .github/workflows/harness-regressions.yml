@@ -6,13 +6,19 @@ on:
       - fix/windows-harness-regressions
     paths:
       - .github/workflows/harness-regressions.yml
+      - src/main/index.ts
       - src/main/speaker-id-off-switch.test.ts
+      - src/renderer/src/App.tsx
       - src/renderer/src/app-listen-identity.test.ts
+      - src/renderer/src/lib/listen-startup-policy.ts
   pull_request:
     paths:
       - .github/workflows/harness-regressions.yml
+      - src/main/index.ts
       - src/main/speaker-id-off-switch.test.ts
+      - src/renderer/src/App.tsx
       - src/renderer/src/app-listen-identity.test.ts
+      - src/renderer/src/lib/listen-startup-policy.ts
   workflow_dispatch:
 
 permissions:
@@ -68,7 +74,9 @@ jobs:
           const files = results.map((item) => String(item.name).replaceAll('\\', '/'))
           const passed = report.numPassedTests
           const failed = report.numFailedTests
-          const skipped = (report.numPendingTests ?? 0) + (report.numTodoTests ?? 0)
+          const pending = report.numPendingTests
+          const todo = report.numTodoTests
+          const skipped = pending + todo
           const total = report.numTotalTests
           console.log(`head=${process.env.GITHUB_SHA} os=${process.env.RUNNER_OS} files=${files.length} passed=${passed} failed=${failed} skipped=${skipped} total=${total}`)
           const completeFiles = results.length === expected.size && [...expected].every(([file, count]) => {
@@ -78,7 +86,7 @@ jobs:
               matches[0].assertionResults.every((assertion) => assertion.status === 'passed')
           })
           if (report.success !== true || !completeFiles ||
-              ![passed, failed, skipped, total].every(Number.isSafeInteger) ||
+              ![passed, failed, pending, todo, total].every(Number.isSafeInteger) ||
               total !== 13 || passed !== total || failed !== 0 || skipped !== 0) {
             throw new Error('Focused harness report is incomplete or not fully green')
           }
