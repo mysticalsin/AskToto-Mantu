@@ -240,18 +240,101 @@ describe('downloadVerified', () => {
 
   it('rejects a 206 response with a changed validator before appending its body', async () => {
     const progressByRequest: Array<{ requestCount: number; bytes: number }> = []
-    server = await serve(rangeHandler(body, { cutFirstAt: 60_000, changeValidatorOnResume: true }))
-    await downloadVerified(
-      {
-        ...request(`${server.base}/pin/model.bin`),
-        onProgress: (bytes) => progressByRequest.push({ requestCount: server!.requests.length, bytes })
-      },
-      deps()
-    )
+    const prefixLength = 60_000
+    const partial = join(dir, 'model.bin.partial')
+    const metadata = `${partial}.json`
+    const controller = new AbortController()
+    let firstResponse: import('node:http').ServerResponse | undefined
+    let changedValidatorResponse: { statusCode: number; etag?: string } | undefined
+    let prefixLatchCount = 0
+    let prefixPersistedReached = false
+    let resolvePrefixPersisted!: () => void
+    let rejectPrefixPersisted!: (error: Error) => void
+    const prefixPersisted = new Promise<void>((resolve, reject) => {
+      resolvePrefixPersisted = resolve
+      rejectPrefixPersisted = reject
+    })
+    let watchdog: ReturnType<typeof setTimeout> | undefined
+    let downloadRun: Promise<void> | undefined
+
+    const resumedHandler = rangeHandler(body, { changeValidatorOnResume: true })
+    server = await serve((req, res, index) => {
+      if (index === 0) {
+        firstResponse = res
+        res.statusCode = 200
+        res.setHeader('content-type', 'application/octet-stream')
+        res.setHeader('etag', '"v1"')
+        res.setHeader('content-length', String(body.length))
+        res.write(body.subarray(0, prefixLength))
+        return
+      }
+      resumedHandler(req, res, index)
+      if (index === 1) {
+        const etag = res.getHeader('etag')
+        changedValidatorResponse = {
+          statusCode: res.statusCode,
+          ...(typeof etag === 'string' ? { etag } : {})
+        }
+      }
+    })
+
+    try {
+      downloadRun = downloadVerified(
+        {
+          ...request(`${server.base}/pin/model.bin`, controller.signal),
+          onProgress: (bytes) => {
+            const requestCount = server!.requests.length
+            progressByRequest.push({ requestCount, bytes })
+            if (requestCount === 1 && bytes === prefixLength && !prefixPersistedReached) {
+              prefixPersistedReached = true
+              prefixLatchCount++
+              resolvePrefixPersisted()
+            } else if (requestCount === 1 && bytes > prefixLength && !prefixPersistedReached) {
+              rejectPrefixPersisted(new Error('download progress passed the required prefix before its latch'))
+            }
+          }
+        },
+        deps()
+      )
+      void downloadRun.then(
+        () => {
+          if (!prefixPersistedReached) rejectPrefixPersisted(new Error('download settled before the prefix latch'))
+        },
+        (error: unknown) => {
+          if (!prefixPersistedReached) {
+            rejectPrefixPersisted(new Error(`download failed before the prefix latch: ${String(error)}`))
+          }
+        }
+      )
+      const latchWatchdog = new Promise<never>((_resolve, reject) => {
+        watchdog = setTimeout(() => reject(new Error('timed out waiting for the persisted prefix latch')), 25_000)
+      })
+      await Promise.race([prefixPersisted, latchWatchdog])
+
+      expect(prefixLatchCount).toBe(1)
+      expect(server.requests).toHaveLength(1)
+      expect(firstResponse).toBeDefined()
+      expect(firstResponse?.destroyed).toBe(false)
+      expect(firstResponse?.writableEnded).toBe(false)
+      expect(readFileSync(partial)).toEqual(body.subarray(0, prefixLength))
+      expect(JSON.parse(readFileSync(metadata, 'utf8'))).toMatchObject({ validator: '"v1"' })
+
+      firstResponse?.destroy()
+      await downloadRun
+    } finally {
+      if (watchdog) clearTimeout(watchdog)
+      controller.abort()
+      firstResponse?.destroy()
+      await downloadRun?.catch(() => undefined)
+    }
+
     expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
     expect(server.requests).toHaveLength(3)
     expect(server.requests[1].headers.range).toBe('bytes=60000-')
+    expect(server.requests[1].headers['if-range']).toBe('"v1"')
     expect(server.requests[2].headers.range).toBeUndefined()
+    expect(changedValidatorResponse).toEqual({ statusCode: 206, etag: '"v2"' })
+    expect(prefixLatchCount).toBe(1)
     expect(progressByRequest.some(({ requestCount, bytes }) => requestCount === 2 && bytes > 60_000)).toBe(false)
   })
 
