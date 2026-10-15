@@ -555,6 +555,89 @@ describe('lean native diagnostic contracts', () => {
     })
   })
 
+  it('accepts native D inventory through archive test and extracted identity before a controlled probe stop', async () => {
+    const root = await temporaryRoot()
+    const appRoot = join(root, 'app')
+    const payloadRoot = join(root, 'payload')
+    const scratchRoot = join(root, 'scratch')
+    const reportRoot = join(root, 'reports')
+    const sevenZipPath = join(root, '7za.exe')
+    const memberBytes = Buffer.from('native directory classification fixture')
+    await mkdir(join(appRoot, 'resources'), { recursive: true })
+    await mkdir(payloadRoot)
+    await mkdir(scratchRoot)
+    await mkdir(reportRoot)
+    await writeFile(join(appRoot, 'resources', 'fixture.bin'), memberBytes)
+    await writeFile(join(payloadRoot, 'package.json'), '{}')
+    await writeFile(sevenZipPath, 'controlled 7za fixture')
+    const appManifest = await walkTree(appRoot, { windowsPathRules: true })
+    const archivePath = join(scratchRoot, 'builder-nsis.7z')
+    const archiveBytes = Buffer.from('captured archive bytes')
+    await writeFile(archivePath, archiveBytes)
+    await writeFile(
+      join(reportRoot, 'windows-archive-capture.json'),
+      JSON.stringify({
+        archiveBytes: archiveBytes.length,
+        archiveSha256: createHash('sha256').update(archiveBytes).digest('hex'),
+        archiveName: 'builder-nsis.7z',
+        preCompressedFileExtensions: []
+      })
+    )
+    const listingText =
+      'Path = builder-nsis.7z\nType = 7z\n\n----------\n' +
+      'Path = resources\nSize = 0\nPacked Size = 0\nModified = \nAttributes = D\nCRC = \nEncrypted = -\nMethod = \nBlock = \n\n' +
+      `Path = resources\\fixture.bin\nSize = ${memberBytes.length}\nPacked Size = ${memberBytes.length}\nModified = \nAttributes = A\nCRC = \nEncrypted = -\nMethod = \nBlock = \n`
+    const commands: string[][] = []
+    const run = async (command: string, args: string[]) => {
+      commands.push(args)
+      if (args[0] === 'i') return result(command, args, 'controlled 7za version')
+      if (args[0] === 'l') return result(command, args, listingText)
+      if (args[0] === 't') return result(command, args)
+      if (args[0] === 'x') {
+        const extractionRoot = args[2].slice(2)
+        await mkdir(join(extractionRoot, 'resources'), { recursive: true })
+        await writeFile(join(extractionRoot, 'resources', 'fixture.bin'), memberBytes)
+        return result(command, args)
+      }
+      if (args[0] === 'a') throw new Error('controlled stop after native-D extraction identity')
+      throw new Error(`Unexpected native-D controlled 7za command: ${args.join(' ')}`)
+    }
+
+    // The first probe's add command occurs only after the unchanged archive t and extraction identity
+    // stages. The current parser should stop earlier on the native D directory-type mismatch.
+    await expect(
+      runWindowsDiagnostics(
+        {
+          appRoot,
+          appManifest,
+          reportRoot,
+          scratchRoot,
+          installer: '',
+          payloadRoot,
+          report: {}
+        },
+        { run, redact: String, sevenZipPath }
+      )
+    ).rejects.toThrow('controlled stop after native-D extraction identity')
+    expect(commands.map((args) => args[0])).toEqual(['i', 'l', 't', 'x', 'a'])
+    const diagnostic = JSON.parse(
+      await readFile(join(reportRoot, 'windows-archive-membership-diagnostic.json'), 'utf8')
+    )
+    expect(diagnostic).toMatchObject({
+      status: 'identity-match',
+      mismatchClasses: {
+        missingPaths: 0,
+        unexpectedPaths: 0,
+        changedPaths: 0,
+        typeDifferences: 0,
+        byteCountDifferences: 0
+      }
+    })
+    expect(await readFile(join(reportRoot, 'windows-archive-listing.slt'), 'utf8')).toBe(listingText)
+    expect(commands[2]).toEqual(['t', archivePath])
+    expect(commands[3]).toEqual(['x', '-y', `-o${join(scratchRoot, 'archive-identity-check')}`, archivePath])
+  })
+
   it('marks a changed raw image failed and never writes a complete probe', async () => {
     const root = await temporaryRoot()
     const payloadRoot = join(root, 'payload')

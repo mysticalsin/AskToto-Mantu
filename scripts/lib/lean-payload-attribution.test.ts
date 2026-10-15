@@ -211,6 +211,76 @@ describe('lean payload attribution contracts', () => {
     expect(asarGroup('out/main/entry.js')).toBe('out/main')
   })
 
+  it('classifies native Windows D rows and keeps directory, empty-file, and invalid-row identities distinct', () => {
+    // These CRLF member records preserve the observed 7za -slt bytes; the archive heading and private
+    // runner path are omitted. Native directories have Attributes = D and no Folder field.
+    const nativeListing = parse7zListing(
+      '7-Zip (a) 24.09\r\n\r\n----------\r\n' +
+        'Path = resources\\vcredist\r\n' +
+        'Size = 0\r\n' +
+        'Packed Size = 0\r\n' +
+        'Modified = \r\n' +
+        'Attributes = D\r\n' +
+        'CRC = \r\n' +
+        'Encrypted = -\r\n' +
+        'Method = \r\n' +
+        'Block = \r\n\r\n' +
+        'Path = resources\\managed-node\\win-x64\\node_modules\\npm\\.npmrc\r\n' +
+        'Size = 0\r\n' +
+        'Packed Size = 0\r\n' +
+        'Modified = \r\n' +
+        'Attributes = A\r\n' +
+        'CRC = \r\n' +
+        'Encrypted = -\r\n' +
+        'Method = \r\n' +
+        'Block = \r\n'
+    )
+    const nativeMembers = archiveMembers(nativeListing)
+    const expected = [
+      { path: 'resources/managed-node/win-x64/node_modules/npm/.npmrc', type: 'file', bytes: 0 },
+      { path: 'resources/vcredist', type: 'directory', bytes: 0 }
+    ]
+    expect(nativeMembers).toEqual(expected)
+    expect(() => assertArchiveMembersMatch(expected, nativeMembers, 'native Windows SLT fixture')).not.toThrow()
+
+    const parseMembers = (record: string) => archiveMembers(parse7zListing(`header\r\n\r\n----------\r\n${record}`))
+    expect(parseMembers('Path = legacy-dir\r\nFolder = +\r\n')).toEqual([
+      { path: 'legacy-dir', bytes: 0, type: 'directory' }
+    ])
+    expect(parseMembers('Path = empty-file\r\nFolder = -\r\nSize = 0\r\nAttributes = A\r\n')).toEqual([
+      { path: 'empty-file', bytes: 0, type: 'file' }
+    ])
+    expect(parseMembers('Path = legacy-file\r\nFolder = -\r\nSize = 3\r\n')).toEqual([
+      { path: 'legacy-file', bytes: 3, type: 'file' }
+    ])
+
+    for (const invalid of [
+      'Path = dir\r\nAttributes = D\r\nSize = 1\r\n',
+      'Path = dir\r\nAttributes = D\r\nSize = invalid\r\n',
+      'Path = dir\r\nAttributes = D\r\nFolder = -\r\nSize = 0\r\n',
+      'Path = dir\r\nAttributes = A\r\nFolder = +\r\nSize = 0\r\n',
+      'Path = dir\r\nFolder = ?\r\nSize = 0\r\n',
+      'Path = dir\r\nAttributes = D\r\nSymbolic Link = target\r\nSize = 0\r\n'
+    ]) {
+      expect(() => parseMembers(invalid)).toThrow()
+    }
+    expect(() => parseMembers('Path = ..\\escape\r\nFolder = -\r\nSize = 1\r\n')).toThrow(/Unsafe archive member path/)
+    expect(() =>
+      archiveMembers(
+        parse7zListing(
+          'header\r\n\r\n----------\r\nPath = resources\\child\r\nFolder = -\r\nSize = 1\r\n\r\nPath = resources/child\r\nFolder = -\r\nSize = 1\r\n'
+        )
+      )
+    ).toThrow(/Duplicate or case-colliding archive member/)
+    expect(() =>
+      archiveMembers(
+        parse7zListing(
+          'header\r\n\r\n----------\r\nPath = resources/child\r\nFolder = -\r\nSize = 1\r\n\r\nPath = Resources/child\r\nFolder = -\r\nSize = 1\r\n'
+        )
+      )
+    ).toThrow(/Duplicate or case-colliding archive member/)
+  })
+
   it('rejects an escaping symlink and inventories a safe link without traversing it', async () => {
     const root = await temporaryRoot()
     await mkdir(join(root, 'tree'))

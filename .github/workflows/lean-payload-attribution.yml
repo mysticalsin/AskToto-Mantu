@@ -2,7 +2,7 @@ name: Nonpromotable lean payload attribution
 
 on:
   push:
-    branches: [fix/lean-payload-attribution]
+    branches: [fix/lean-payload-attribution, fix/lean-windows-slt-classification]
   workflow_dispatch:
 
 permissions:
@@ -105,22 +105,22 @@ jobs:
             const title = [ ...(Array.isArray(test.ancestorTitles) ? test.ancestorTitles : []), test.title ]
               .filter((part) => typeof part === 'string' && part.length > 0).join(' > ')
             return title.slice(0, 240) || 'UNNAMED_FAILED_ASSERTION'
-          }).slice(0, 29)
+          }).slice(0, 31)
           if (process.env.TEST_STEP_OUTCOME !== 'success') failures.push('TEST_STEP_NOT_SUCCESSFUL')
           if (process.env.TEST_EXIT_CODE !== '0') failures.push('VITEST_EXIT_NOT_ZERO')
           if (report?.success !== true) failures.push('VITEST_REPORT_NOT_SUCCESSFUL')
           if (!counts || counts.files !== 2 || counts.suites !== 4 || counts.passedSuites !== 4 ||
               counts.failedSuites !== 0 || counts.pendingSuites !== 0 ||
-              counts.tests !== 29 || counts.passed !== 29 ||
+              counts.tests !== 31 || counts.passed !== 31 ||
               counts.failed !== 0 || counts.pending !== 0 || counts.todo !== 0) {
-            failures.push('VITEST_COUNTERS_DO_NOT_MATCH_4_SUITES_29_PASS_0_SKIP_TODO_FAIL')
+            failures.push('VITEST_COUNTERS_DO_NOT_MATCH_4_SUITES_31_PASS_0_SKIP_TODO_FAIL')
           }
           const resultNames = testResults.map((file) => String(file.name ?? '').replaceAll('\\', '/').split('/').slice(-3).join('/')).sort()
           if (resultNames.length !== 2 || resultNames[0] !== 'scripts/lib/lean-native-diagnostic.test.ts' ||
               resultNames[1] !== 'scripts/lib/lean-payload-attribution.test.ts') {
             failures.push('TEST_FILE_INVENTORY_MISMATCH')
           }
-          if (tests.length !== 29 || tests.some((test) => test.status !== 'passed') ||
+          if (tests.length !== 31 || tests.some((test) => test.status !== 'passed') ||
               testResults.some((file) => file.status !== 'passed') ||
               ancestors.length !== 2 || ancestors.some((groups) => groups.length !== 1 || !groups[0])) {
             failures.push('ANCESTOR_GROUP_OR_ASSERTION_INVENTORY_MISMATCH')
@@ -268,14 +268,14 @@ jobs:
           } : null
           const tests = report?.testResults?.[0]?.assertionResults
           const ancestors = Array.isArray(tests) ? [...new Set(tests.map((test) => Array.isArray(test.ancestorTitles) ? test.ancestorTitles.join('\0') : ''))] : []
-          const namedFailures = Array.isArray(tests) ? tests.filter((test) => test.status !== 'passed').map((test) => [ ...(test.ancestorTitles ?? []), test.title ].filter(Boolean).join(' > ').slice(0, 240) || 'UNNAMED_FAILED_ASSERTION').slice(0, 11) : []
+          const namedFailures = Array.isArray(tests) ? tests.filter((test) => test.status !== 'passed').map((test) => [ ...(test.ancestorTitles ?? []), test.title ].filter(Boolean).join(' > ').slice(0, 240) || 'UNNAMED_FAILED_ASSERTION').slice(0, 12) : []
           if (process.env.TEST_STEP_OUTCOME !== 'success') failures.push('TEST_STEP_NOT_SUCCESSFUL')
           if (process.env.TEST_EXIT_CODE !== '0') failures.push('VITEST_EXIT_NOT_ZERO')
           if (report?.success !== true) failures.push('VITEST_REPORT_NOT_SUCCESSFUL')
-          if (!counts || counts.files !== 1 || counts.suites !== 2 || counts.passedSuites !== 2 || counts.failedSuites !== 0 || counts.pendingSuites !== 0 || counts.tests !== 11 || counts.passed !== 11 || counts.failed !== 0 || counts.pending !== 0 || counts.todo !== 0) failures.push('VITEST_COUNTERS_DO_NOT_MATCH_2_SUITES_11_PASS_0_SKIP_TODO_FAIL')
+          if (!counts || counts.files !== 1 || counts.suites !== 2 || counts.passedSuites !== 2 || counts.failedSuites !== 0 || counts.pendingSuites !== 0 || counts.tests !== 12 || counts.passed !== 12 || counts.failed !== 0 || counts.pending !== 0 || counts.todo !== 0) failures.push('VITEST_COUNTERS_DO_NOT_MATCH_2_SUITES_12_PASS_0_SKIP_TODO_FAIL')
           const files = Array.isArray(report?.testResults) ? report.testResults : []
           if (files.length !== 1 || !String(files[0]?.name ?? '').replaceAll('\\', '/').endsWith('/scripts/lib/lean-native-diagnostic.test.ts')) failures.push('TEST_FILE_INVENTORY_MISMATCH')
-          if (!Array.isArray(tests) || tests.length !== 11 || tests.some((test) => test.status !== 'passed') || files[0]?.status !== 'passed' || ancestors.length !== 1 || !ancestors[0]) failures.push('ANCESTOR_GROUP_OR_ASSERTION_INVENTORY_MISMATCH')
+          if (!Array.isArray(tests) || tests.length !== 12 || tests.some((test) => test.status !== 'passed') || files[0]?.status !== 'passed' || ancestors.length !== 1 || !ancestors[0]) failures.push('ANCESTOR_GROUP_OR_ASSERTION_INVENTORY_MISMATCH')
           const status = !rawWasPresent ? 'NOT_RUN' : failures.length === 0 ? 'PASS' : 'FAIL'
           const result = { schema: 'lean-attribution-native-contract-v1', status, rawBytes, counts, failedAssertions: namedFailures, failures }
           writeFileSync(outputPath, JSON.stringify(result), { mode: 0o600 })
