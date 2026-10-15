@@ -17,6 +17,10 @@ function safeAsarPath(value) {
   return normalized
 }
 
+function normalizeAsarListPath(value) {
+  return value.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
 export async function asarMemberInventory(payloadRoot, asarPath, unpackedRoot) {
   const require = createRequire(join(payloadRoot, 'package.json'))
   const asar = require('@electron/asar')
@@ -37,7 +41,7 @@ export async function asarMemberInventory(payloadRoot, asarPath, unpackedRoot) {
   visit(headerInfo.header)
   const rows = asar
     .listPackage(asarPath)
-    .map((value) => safeAsarPath(value.replace(/^\/+/, '')))
+    .map((value) => safeAsarPath(normalizeAsarListPath(value)))
     .sort()
   if (new Set(rows).size !== rows.length) throw new Error('ASAR list contains duplicate normalized paths')
   if (rows.length !== membersByPath.size || rows.some((path) => !membersByPath.has(path)))

@@ -52,6 +52,23 @@ function redact(text) {
     .replace(/(https?:\/\/)[^\s"']+/gi, '$1[REDACTED_URL]')
     .replace(/([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|KEY)[A-Z0-9_]*=)[^\s]+/gi, '$1[REDACTED]')
 }
+function boundedNativeSmokeFailure(error, redact) {
+  const result = error?.result
+  const boundedText = (value, maxLength) => redact(String(value ?? '')).slice(0, maxLength)
+  const failure = { message: boundedText(error?.message ?? error, 4000), result: null }
+  if (result && typeof result === 'object') {
+    failure.result = {
+      command: boundedText(result.command, 4096),
+      args: Array.isArray(result.args) ? result.args.slice(0, 128).map((arg) => boundedText(arg, 4096)) : [],
+      exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
+      signal: result.signal === null || typeof result.signal === 'string' ? result.signal : null,
+      stdout: boundedText(result.stdout, 2_000_000),
+      stderr: boundedText(result.stderr, 2_000_000),
+      timedOut: result.timedOut === true
+    }
+  }
+  return failure
+}
 async function run(command, args, { cwd, timeoutMs = 30 * 60_000, maxOutputBytes = 2_000_000 } = {}) {
   const started = performance.now()
   return new Promise((resolvePromise, reject) => {
@@ -728,14 +745,39 @@ async function main() {
   } else if (action === 'native-smoke') {
     const target = required(v.target, 'target')
     if (!['mac', 'win'].includes(target)) throw new Error('Native smoke target is invalid')
-    await nativeSmoke(
-      target,
-      resolve(required(v['payload-root'], 'payload root')),
-      resolve(required(v['scratch-root'], 'scratch root')),
-      resolve(required(v['report-root'], 'report root')),
-      run,
-      redact
-    )
+    const reportRoot = resolve(required(v['report-root'], 'report root'))
+    try {
+      await nativeSmoke(
+        target,
+        resolve(required(v['payload-root'], 'payload root')),
+        resolve(required(v['scratch-root'], 'scratch root')),
+        reportRoot,
+        run,
+        redact
+      )
+    } catch (error) {
+      const reportPath = join(reportRoot, 'native-smoke.json')
+      let report = { schema: 1, platform: target }
+      try {
+        report = JSON.parse(await readFile(reportPath, 'utf8'))
+      } catch {}
+      const failure = boundedNativeSmokeFailure(error, redact)
+      report.status = 'failed'
+      report.failure = failure
+      await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`)
+      const loggedFailure = {
+        ...failure,
+        result: failure.result
+          ? {
+              ...failure.result,
+              stdout: failure.result.stdout.slice(0, 4000),
+              stderr: failure.result.stderr.slice(0, 4000)
+            }
+          : null
+      }
+      process.stderr.write(`[${NONPROMOTABLE}] native-smoke failed: ${JSON.stringify(loggedFailure)}\n`)
+      throw error
+    }
   } else if (action === 'mark-incomplete') {
     const reportPath = join(resolve(required(v['report-root'], 'report root')), 'report.json')
     const report = JSON.parse(await readFile(reportPath, 'utf8'))

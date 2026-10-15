@@ -144,7 +144,29 @@ describe('lean payload attribution contracts', () => {
     await symlink('../native.node', join(source, 'nested', 'native-link.node'))
     const asar = createRequire(import.meta.url)('@electron/asar')
     await asar.createPackageWithOptions(source, archive, { unpack: '**/*.node' })
-    const result = await asarMemberInventory(process.cwd(), archive, `${archive}.unpacked`)
+    const originalListPackage = asar.listPackage
+    const withNodeModulesPath = (path: string) => {
+      asar.listPackage = (...args: Parameters<typeof originalListPackage>) =>
+        originalListPackage(...args).map((value: string) => {
+          const member = value.replace(/\\/g, '/').replace(/^\/+/, '')
+          return member === 'node_modules/pkg/index.js' ? path : value
+        })
+    }
+    let result: Awaited<ReturnType<typeof asarMemberInventory>>
+    try {
+      withNodeModulesPath('\\node_modules/pkg/index.js')
+      result = await asarMemberInventory(process.cwd(), archive, `${archive}.unpacked`)
+      withNodeModulesPath('C:\\node_modules/pkg/index.js')
+      await expect(asarMemberInventory(process.cwd(), archive, `${archive}.unpacked`)).rejects.toThrow(
+        /Unsafe ASAR member path/
+      )
+      withNodeModulesPath('\\..\\node_modules/pkg/index.js')
+      await expect(asarMemberInventory(process.cwd(), archive, `${archive}.unpacked`)).rejects.toThrow(
+        /Unsafe ASAR member path/
+      )
+    } finally {
+      asar.listPackage = originalListPackage
+    }
     expect(result.members.find((member) => member.path === 'nested')?.type).toBe('directory')
     expect(result.members.find((member) => member.path === 'nested/alias')?.type).toBe('symlink')
     expect(result.members.find((member) => member.path === 'nested/native-link.node')).toMatchObject({
