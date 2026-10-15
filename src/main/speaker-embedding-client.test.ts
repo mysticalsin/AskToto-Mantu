@@ -328,10 +328,15 @@ describe('speaker embedding utility client', () => {
       })
     const firstLease = lease('first', async () => undefined)
     let finishUnusedRelease: () => void = () => {}
+    let markUnusedReleaseEntered: () => void = () => {}
+    const unusedReleaseEntered = new Promise<void>((resolveEntered) => {
+      markUnusedReleaseEntered = resolveEntered
+    })
     const unusedLease = lease(
       'unused',
       () =>
         new Promise<void>((resolve) => {
+          markUnusedReleaseEntered()
           finishUnusedRelease = resolve
         })
     )
@@ -344,19 +349,63 @@ describe('speaker embedding utility client', () => {
     expect(deferred).toHaveLength(2)
     deferred[0](firstLease)
     const firstRequest = await request()
-    deferred[1](unusedLease)
-    for (let i = 0; i < 20 && unusedLease.release.mock.calls.length === 0; i++) await Promise.resolve()
-    expect(unusedLease.release).toHaveBeenCalledOnce()
+    let markKillEntered: () => void = () => {}
+    const killEntered = new Promise<void>((resolveEntered) => {
+      markKillEntered = resolveEntered
+    })
+    child.kill.mockImplementation(() => {
+      markKillEntered()
+      return true
+    })
+    let endingSettled = false
+    let ending: ReturnType<typeof api.releaseSpeakerEmbedding> | undefined
+    let exitEmitted = false
+    try {
+      deferred[1](unusedLease)
+      await unusedReleaseEntered
+      expect(unusedLease.release).toHaveBeenCalledOnce()
 
-    const ending = api.releaseSpeakerEmbedding('live')
-    child.emit('exit', 0)
-    await ending
-    finishUnusedRelease()
-    await firstFailure
-    await secondFailure
+      ending = api.releaseSpeakerEmbedding('live').then((result) => {
+        endingSettled = true
+        return result
+      })
+      await killEntered
+      expect(child.kill).toHaveBeenCalledOnce()
+      expect(electron.utilityProcess.fork).toHaveBeenCalledOnce()
+      expect(endingSettled).toBe(false)
+      expect(firstLease.release).not.toHaveBeenCalled()
+      expect(unusedLease.release).toHaveBeenCalledOnce()
+      expect(child.postMessage.mock.calls.map(([message]) => (message as { id: string }).id)).toEqual([firstRequest.id])
 
-    expect(firstLease.release).toHaveBeenCalledOnce()
-    expect(unusedLease.release).toHaveBeenCalledOnce()
-    expect(child.postMessage.mock.calls.map(([message]) => (message as { id: string }).id)).toEqual([firstRequest.id])
+      child.emit('exit', 0)
+      exitEmitted = true
+      await expect(ending).resolves.toBe('released')
+      expect(firstLease.release).toHaveBeenCalledOnce()
+      finishUnusedRelease()
+      await Promise.all([firstFailure, secondFailure])
+
+      expect(firstLease.release).toHaveBeenCalledOnce()
+      expect(unusedLease.release).toHaveBeenCalledOnce()
+      expect(child.postMessage.mock.calls.map(([message]) => (message as { id: string }).id)).toEqual([firstRequest.id])
+      expect(child.kill).toHaveBeenCalledOnce()
+      expect(electron.utilityProcess.fork).toHaveBeenCalledOnce()
+    } finally {
+      if (!ending) {
+        ending = api.releaseSpeakerEmbedding('live').then((result) => {
+          endingSettled = true
+          return result
+        })
+      }
+      if (!endingSettled) {
+        await killEntered
+        if (!exitEmitted) {
+          child.emit('exit', 0)
+          exitEmitted = true
+        }
+      }
+      finishUnusedRelease()
+      await ending.catch(() => undefined)
+      await Promise.all([firstFailure.catch(() => undefined), secondFailure.catch(() => undefined)])
+    }
   })
 })

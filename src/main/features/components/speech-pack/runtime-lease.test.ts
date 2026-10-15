@@ -216,7 +216,8 @@ describe('Windows optional-host system loader roots', () => {
       rendererFiles[path] = path
       rendererPins[path] = { bytes: 10, sha256: 'e'.repeat(64) }
     }
-    let verificationCount = 0
+    const physicalEvents: string[] = []
+    let providerReleaseCount = 0
     const generation: VerifiedRuntimeGeneration = {
       generationIdentity: 'f'.repeat(64),
       catalogIdentity: '9'.repeat(64),
@@ -237,33 +238,55 @@ describe('Windows optional-host system loader roots', () => {
       nativeLibraryDirs: ['native'],
       rendererFiles,
       rendererPins,
-      preparePhysicalAdmission: async () => ({ assertCurrentSync: () => undefined, dispose: async () => undefined }),
-      verifyCurrentBytes: async () => {
-        verificationCount += 1
+      preparePhysicalAdmission: async () => {
+        physicalEvents.push('prepare')
+        return {
+          assertCurrentSync: () => physicalEvents.push('guard'),
+          dispose: async () => {
+            physicalEvents.push('dispose')
+          }
+        }
       },
-      release: async () => undefined
+      verifyCurrentBytes: async () => undefined,
+      release: async () => {
+        providerReleaseCount += 1
+      }
     }
     configuredGeneration = generation
     configureRuntimeLeaseProvider(stableProvider)
     configureRuntimeExecutionAuthority(async () => true)
     const admittedLease = await acquireFeatureRuntime('offline-asr', target)
+    expect(physicalEvents).toEqual([])
     await admittedLease.verifyCurrentBytes()
-    expect(verificationCount).toBe(1)
+    expect(physicalEvents).toEqual(['prepare', 'guard', 'dispose'])
     await admittedLease.release()
+    expect(providerReleaseCount).toBe(1)
 
-    let releaseAuthority!: () => void
-    configureRuntimeExecutionAuthority(
-      () => new Promise<boolean>((resolveAuthority) => (releaseAuthority = () => resolveAuthority(true)))
-    )
-    const authorityLease = await acquireFeatureRuntime('offline-asr', target)
-    const heldAdmission = authorityLease.verifyCurrentBytes()
-    for (let attempt = 0; attempt < 10 && !releaseAuthority; attempt++) await Promise.resolve()
-    expect(releaseAuthority).toBeTypeOf('function')
-    invalidateRuntimeExecutionAuthority()
-    releaseAuthority()
-    await expect(heldAdmission).rejects.toThrow(/authority was revoked/i)
-    expect(verificationCount).toBe(1)
-    await authorityLease.release()
-    configureRuntimeExecutionAuthority(async () => true)
+    let releaseAuthority: (() => void) | undefined
+    let authorityEntered!: () => void
+    const authorityEnteredPromise = new Promise<void>((resolveEntered) => {
+      authorityEntered = resolveEntered
+    })
+    configureRuntimeExecutionAuthority(() => {
+      authorityEntered()
+      return new Promise<boolean>((resolveAuthority) => (releaseAuthority = () => resolveAuthority(true)))
+    })
+    const heldAdmission = acquireFeatureRuntime('offline-asr', target)
+    try {
+      await authorityEnteredPromise
+      expect(releaseAuthority).toBeTypeOf('function')
+      expect(physicalEvents).toEqual(['prepare', 'guard', 'dispose'])
+      expect(providerReleaseCount).toBe(1)
+      invalidateRuntimeExecutionAuthority()
+      releaseAuthority?.()
+      await expect(heldAdmission).rejects.toThrow(/authority was revoked/i)
+      expect(physicalEvents).toEqual(['prepare', 'guard', 'dispose'])
+      expect(providerReleaseCount).toBe(2)
+    } finally {
+      invalidateRuntimeExecutionAuthority()
+      releaseAuthority?.()
+      await heldAdmission.catch(() => undefined)
+      configureRuntimeExecutionAuthority(async () => true)
+    }
   })
 })

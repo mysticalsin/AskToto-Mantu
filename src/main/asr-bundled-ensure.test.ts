@@ -214,7 +214,10 @@ describe('asr-bundled-ensure', () => {
     })
     await expect(asrModelProtocolSpeechPackOptions()).resolves.toEqual({ useOnlySpeechPackModels: true })
     await expect(ensureImportAsrAssets()).rejects.toThrow(/runtime is not configured/i)
-    await expect(ensureWhisperFloorAssets()).rejects.toThrow(/runtime is not configured/i)
+    await expect(ensureWhisperFloorAssets()).rejects.toMatchObject({
+      code: 'ASR_SPEECH_PACK_NOT_READY',
+      reason: 'lean-pack-not-installed'
+    })
     expect(fetchParakeet).not.toHaveBeenCalled()
     expect(fetchWhisperFloor).not.toHaveBeenCalled()
     expect(net.fetch).not.toHaveBeenCalled()

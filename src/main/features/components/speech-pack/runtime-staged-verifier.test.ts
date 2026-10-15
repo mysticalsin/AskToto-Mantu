@@ -91,15 +91,19 @@ describe('staged runtime physical version closure', () => {
     const fixture = await stagedFixture()
     let checks = 0
     const extra = join(fixture.artifactRoot, 'unsigned-extra.bin')
+    const directoryChecks = 2 // Retained stage directory, then retained artifact-directory membership.
+    const firstRetainedFileCheck = fixture.inventory.files.length + directoryChecks + 1
+    const completedRetainedPassChecks = firstRetainedFileCheck + fixture.inventory.files.length - 1
     await expect(
       verifyStagedPayloads(fixture.stage, [fixture.inventory], async () => {
         checks++
-        if (checks === 5) {
+        // The directory membership check has completed; add the new member during the first retained-file check.
+        if (checks === firstRetainedFileCheck) {
           await writeFile(extra, 'extra', { mode: 0o600 })
         }
       })
     ).rejects.toThrow('RUNTIME_PHYSICAL_NODE_CHANGED')
-    expect(checks).toBe(5)
+    expect(checks).toBe(completedRetainedPassChecks)
     expect(await readFile(fixture.firstPath)).toEqual(Buffer.from('signed-first-entry'))
     expect(await readFile(fixture.secondPath)).toEqual(Buffer.from('signed-later-entry'))
     expect(await readFile(extra)).toEqual(Buffer.from('extra'))
