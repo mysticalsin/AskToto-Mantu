@@ -46,6 +46,7 @@ on:
       - scripts/qa/fixtures/persistence-run-owner-support.ts
       - scripts/qa/fixtures/persistence-run-owner.child.ts
       - scripts/qa/fixtures/persistence-run-owner.electron-host.ts
+      - scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs
   workflow_dispatch:
 
 permissions:
@@ -87,14 +88,22 @@ jobs:
         id: run
         env:
           REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          DIAGNOSTIC: ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          DIAGNOSTIC_DIR: ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          QA_OWNER_FRAMEWORK_REPORT_PATH: ${{ runner.temp }}/qa-persistence-owner-framework-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
           OWNER_TARGET: ${{ matrix.owner }}
+          QA_OWNER_DIAGNOSTIC_DIR: ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          QA_OWNER_SOURCE_SHA: ${{ github.sha }}
+          QA_OWNER_TARGET: ${{ matrix.target }}
         run: |
-          rm -f "$REPORT"
+          rm -f "$REPORT" "$DIAGNOSTIC" "$QA_OWNER_FRAMEWORK_REPORT_PATH" "$QA_OWNER_FRAMEWORK_REPORT_PATH.pending"
+          rm -rf "$DIAGNOSTIC_DIR"
+          mkdir -m 700 -p "$DIAGNOSTIC_DIR"
           set +e
           if [[ "$OWNER_TARGET" == true ]]; then
-            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT"
+            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --reporter=./scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs --outputFile="$REPORT"
           else
-            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT"
+            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --reporter=./scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs --outputFile="$REPORT"
           fi
           result=$?
           echo "exit_code=$result" >> "$GITHUB_OUTPUT"
@@ -104,12 +113,19 @@ jobs:
         env:
           REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
           EVIDENCE: ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          DIAGNOSTIC: ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          DIAGNOSTIC_DIR: ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          FRAMEWORK_REPORT: ${{ runner.temp }}/qa-persistence-owner-framework-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
           OWNER_TARGET: ${{ matrix.owner }}
           VITEST_EXIT: ${{ steps.run.outputs.exit_code }}
           TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_NODE: 22.22.3
         run: |
           node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs'
+          import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readSync, writeFileSync } from 'node:fs'
           import { createHash } from 'node:crypto'
           import { execFileSync } from 'node:child_process'
           const sourceFiles = [
@@ -155,7 +171,12 @@ jobs:
             'src/main/auth-authority-source-pins.ts',
             'scripts/qa/fixtures/persistence-run-owner-support.ts',
             'scripts/qa/fixtures/persistence-run-owner.child.ts',
-            'scripts/qa/fixtures/persistence-run-owner.electron-host.ts'
+            'scripts/qa/fixtures/persistence-run-owner.electron-host.ts',
+            'scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs',
+            'tsconfig.tests.json',
+            'tsconfig.node.json',
+            'src/main/settings-observation.ts',
+            'src/main/qa-identity.ts'
           ]
           const expected = process.env.OWNER_TARGET === 'true'
             ? new Map([
@@ -182,33 +203,359 @@ jobs:
             'src/main/settings-observation.test.ts'
           ] : []
           const expectedFiles = [...expected.keys(), ...coherenceFiles]
-          let error = ''
-          let report = null
-          try { report = JSON.parse(readFileSync(process.env.REPORT, 'utf8')) }
-          catch { error = 'Vitest report is missing or invalid.' }
-          const countFields = ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites','numPendingTestSuites']
-          if (report) {
-            if (countFields.some((key) => !Number.isSafeInteger(report[key]) || report[key] < 0)) error ||= 'Vitest counters are missing or invalid.'
-            if (process.env.VITEST_EXIT !== '0' || report.success !== true || report.numTotalTests <= 0 || report.numPassedTests !== report.numTotalTests || report.numFailedTests !== 0 || report.numPendingTests !== 0 || report.numTodoTests !== 0 || report.numFailedTestSuites !== 0 || report.numPendingTestSuites !== 0 || report.numPassedTestSuites <= 0 || report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites) error ||= 'Vitest failed, skipped a case or returned inconsistent totals.'
-            if (!Array.isArray(report.testResults) || report.testResults.length !== expectedFiles.length) error ||= 'Selected file inventory differs from the frozen roster.'
-            for (const file of expectedFiles) {
-              const count = expected.get(file)
-              const matches = Array.isArray(report.testResults) ? report.testResults.filter((item) => typeof item.name === 'string' && item.name.replaceAll('\\','/').endsWith('/' + file)) : []
-              if (matches.length !== 1 || matches[0].status !== 'passed' || !Array.isArray(matches[0].assertionResults) || matches[0].assertionResults.length === 0 || (count !== undefined && matches[0].assertionResults.length !== count) || matches[0].assertionResults.some((test) => test.status !== 'passed')) error ||= `Missing, failed or non-finite required case file: ${file}`
-            }
-            const assertionCount = Array.isArray(report.testResults) ? report.testResults.reduce((total, file) => total + (Array.isArray(file.assertionResults) ? file.assertionResults.length : 0), 0) : 0
-            if (report.numTotalTests !== assertionCount) error ||= 'Per-file test result counts differ from global Vitest totals.'
+          const boundedRead = (path, limit) => {
+            const before = lstatSync(path)
+            if (!before.isFile() || before.isSymbolicLink() || before.size < 1 || before.size > limit) throw new Error('bounded-read-refused')
+            const fd = openSync(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW))
+            try {
+              const opened = fstatSync(fd)
+              if (!opened.isFile() || opened.size !== before.size || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error('bounded-read-identity')
+              const bytes = Buffer.alloc(opened.size)
+              let offset = 0
+              while (offset < bytes.length) {
+                const count = readSync(fd, bytes, offset, bytes.length - offset, offset)
+                if (count <= 0) throw new Error('bounded-read-short')
+                offset += count
+              }
+              const after = fstatSync(fd)
+              if (after.size !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino) throw new Error('bounded-read-changed')
+              return bytes
+            } finally { closeSync(fd) }
           }
-          const sourceHead = execFileSync('git', ['rev-parse','HEAD'], { encoding: 'utf8' }).trim()
+          try {
+          const allowedFailures = new Set(['missing-shard','unexpected-shard','shard-identity','incomplete-shard','size-limit','write-failure','invalid-envelope','invalid-observation','binding-mismatch','source-hash-mismatch','child-bound','event-bound','sequence-mismatch','missing-case','terminal-invalid','overflow','framework-invalid'])
+          const diagnosticFailures = new Set()
+          const functionalFailures = []
+          const failDiagnostic = (reason) => diagnosticFailures.add(reason)
+          const exact = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+          const sha = (bytes) => createHash('sha256').update(bytes).digest('hex')
+          let sourceHead = null
+          try { sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }
+          catch { functionalFailures.push('Checkout HEAD is unavailable.'); failDiagnostic('binding-mismatch') }
+          if (sourceHead !== process.env.SOURCE_SHA || process.env.SOURCE_SHA !== process.env.GITHUB_SHA || !/^[a-f0-9]{40}$/.test(process.env.SOURCE_SHA ?? '') || !/^[1-9][0-9]*$/.test(process.env.RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(process.env.RUN_ATTEMPT ?? '') || !Number.isSafeInteger(Number(process.env.RUN_ATTEMPT)) || !['linux-shipping','windows-x64','macos-x64','macos-arm64'].includes(process.env.TARGET) || process.version !== `v${process.env.EXPECTED_NODE}`) {
+            functionalFailures.push('Hosted checkout, source SHA or Node pin differs.'); failDiagnostic('binding-mismatch')
+          }
           const hashes = Object.fromEntries(sourceFiles.map((file) => {
-            try { return [file, createHash('sha256').update(readFileSync(file)).digest('hex')] }
-            catch { error ||= `Required source file is missing: ${file}`; return [file, null] }
+            try { return [file, sha(readFileSync(file))] }
+            catch { functionalFailures.push('A required source file is missing.'); failDiagnostic('source-hash-mismatch'); return [file, null] }
           }))
+          let frameworkRaw = null
+          let framework = null
+          try { frameworkRaw = boundedRead(process.env.FRAMEWORK_REPORT, 16 * 1024); framework = JSON.parse(frameworkRaw.toString('utf8')) }
+          catch { failDiagnostic('framework-invalid') }
+          const frameworkKeys = ['schema','sourceHead','runId','runAttempt','target','node','reporterSha256','runEndObserved','runEndReason','runEndUnhandledCount','finalUnhandledCount','frameworkClosed','timedOut','complete']
+          if (!exact(framework,frameworkKeys) || framework.schema !== 'metis-qa-owner-framework-evidence/v1' || framework.sourceHead !== sourceHead || framework.sourceHead !== process.env.SOURCE_SHA || framework.runId !== process.env.RUN_ID || framework.runAttempt !== Number(process.env.RUN_ATTEMPT) || framework.target !== process.env.TARGET || framework.node !== process.version || framework.node !== `v${process.env.EXPECTED_NODE}` || framework.reporterSha256 !== hashes['scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs'] || framework.runEndObserved !== true || !['passed','failed'].includes(framework.runEndReason) || !Number.isSafeInteger(framework.runEndUnhandledCount) || framework.runEndUnhandledCount !== 0 || !Number.isSafeInteger(framework.finalUnhandledCount) || framework.finalUnhandledCount !== 0 || framework.frameworkClosed !== true || framework.timedOut !== false || framework.complete !== true) failDiagnostic('framework-invalid')
+          let rawReport = null
+          let report = null
+          try { rawReport = boundedRead(process.env.REPORT, 8 * 1024 * 1024); report = JSON.parse(rawReport.toString('utf8')) }
+          catch { functionalFailures.push('Vitest report is missing, malformed or outside the read bound.'); failDiagnostic('missing-case') }
+          const countFields = ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites','numPendingTestSuites']
+          const expectedTotal = process.env.OWNER_TARGET === 'true' ? 292 : 15
+          const reportFiles = report && typeof report === 'object' && !Array.isArray(report) && Array.isArray(report.testResults) ? report.testResults : []
+          if (!report || countFields.some((key) => !Number.isSafeInteger(report[key]) || report[key] < 0) || report.numTotalTests !== expectedTotal) functionalFailures.push('Vitest counters or frozen total are invalid.')
+          if (!report || process.env.VITEST_EXIT !== '0' || report.success !== true || report.numPassedTests !== report.numTotalTests || report.numFailedTests !== 0 || report.numPendingTests !== 0 || report.numTodoTests !== 0 || report.numFailedTestSuites !== 0 || report.numPendingTestSuites !== 0 || report.numPassedTestSuites <= 0 || report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites) functionalFailures.push('Vitest failed, skipped a case or returned inconsistent totals.')
+          if (reportFiles.length !== expectedFiles.length || reportFiles.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) functionalFailures.push('Selected file inventory is malformed.')
+          for (const file of expectedFiles) {
+            const matches = reportFiles.filter((item) => item && typeof item === 'object' && typeof item.name === 'string' && item.name.replaceAll('\\','/').endsWith('/' + file))
+            const selected = matches[0]
+            if (matches.length !== 1 || !selected || selected.status !== 'passed' || !Array.isArray(selected.assertionResults) || selected.assertionResults.length === 0 || (expected.has(file) && selected.assertionResults.length !== expected.get(file)) || (Array.isArray(selected.assertionResults) && selected.assertionResults.some((test) => !test || test.status !== 'passed'))) functionalFailures.push('A required case file failed or differs from its frozen selection.')
+          }
+          const assertionCount = reportFiles.reduce((total, file) => total + (Array.isArray(file?.assertionResults) ? file.assertionResults.length : 0), 0)
+          if (report?.numTotalTests !== assertionCount) functionalFailures.push('Per-file counts differ from Vitest totals.')
+          const ownerCaseTitles = [
+              ['R01','uses the actual first-show proof, inherited pipe, signed launch, profile and guarded registry'],
+              ['R02','refuses no bound window before hello, pipe use or profile preparation'],
+              ['R03','refuses unshown bound window before hello, pipe use or profile preparation'],
+              ['R04','refuses hidden bound window before hello, pipe use or profile preparation'],
+              ['R05','refuses uncommitted main frame before hello, pipe use or profile preparation'],
+              ['R06','keeps the first-show proof across hide and permanently retires it across A-to-B-to-A navigation'],
+              ['R07','uses the shared terminal path for EOF before launch, mid-frame and after activation'],
+              ['R08','retires the in-flight handshake on first-show document navigate events before active publication'],
+              ['R09','retires the in-flight handshake on first-show document replace events before active publication'],
+              ['R10','retires the in-flight handshake on first-show document close events before active publication'],
+              ['R11','retires the in-flight handshake on first-show document render-process-loss events before active publication'],
+              ['R12','retires an active run immediately for invalid heartbeat signature'],
+              ['R13','retires an active run immediately for replayed/decreasing sequence'],
+              ['R14','retires an active run immediately for oversized active frame'],
+              ['R15','accepts only a higher-generation successor after full settlement and rejects the old run at RootRegistry'],
+              ['R16','retires from its scheduled signed-expiry deadline without an intervening status call'],
+              ['R17','refuses a malformed compiled stamp before issuing a challenge or opening the fixed transport'],
+              ['R18','rechecks the actual run after a held gateway bind and publishes no root after userData changes'],
+              ['R19','keeps a timed-out handshake reserved until held profile descriptors actually close'],
+              ['R20','keeps a partial-frame transport failure reserved until held profile preparation actually settles'],
+              ['R21','retires on the real scheduled heartbeat-age timer without an intervening owner assertion'],
+              ['R22','retains run capacity and the same failed settlement after an actual profile descriptor close failure'],
+              ['G01','binds a real guarded root and refuses missing, forged and overridden QA owners before callbacks'],
+              ['G02','preserves a replaced writer path and retains root capacity after descriptor close failure'],
+              ['G03','checks the run after a held profile physical await before creating registry paths'],
+              ['G04','rechecks the run after a held gateway bind before publishing a root for a retired document']
+          ]
+          const ownerIds = new Set(ownerCaseTitles.map(([id]) => id))
+          const caseResults = new Map()
+          if (process.env.OWNER_TARGET === 'true') {
+            for (const file of reportFiles) {
+              const name = typeof file?.name === 'string' ? file.name.replaceAll('\\','/') : ''
+              if (!name.endsWith('/src/main/persistence/qa-run-owner.qa-case.ts') && !name.endsWith('/src/main/persistence/root-registry.qa-case.ts')) continue
+              for (const test of Array.isArray(file.assertionResults) ? file.assertionResults : []) {
+                if (!test || typeof test !== 'object') { failDiagnostic('missing-case'); continue }
+                const fullName = typeof test.fullName === 'string' ? test.fullName : [...(Array.isArray(test.ancestorTitles) ? test.ancestorTitles : []), test.title].filter((part) => typeof part === 'string').join(' ')
+                const pair = ownerCaseTitles.find(([, title]) => fullName.endsWith(title))
+                if (!pair || caseResults.has(pair[0]) || !['passed','failed','pending'].includes(test.status)) failDiagnostic('missing-case')
+                else caseResults.set(pair[0], test.status)
+              }
+            }
+            if (caseResults.size !== 26) failDiagnostic('missing-case')
+          }
+          const stages = new Set(['transport-open','read-start','read-done','write-start','write-done','destroy-request','stream-end','stream-close','stream-error','native-close-start','native-close-done','file-open','file-close-start','file-close-done','settle-start','settle-fulfilled','settle-rejected','gate-held','gate-released','prototype-hook-armed','parent-input-end','parent-output-destroy','child-exit','fixture-refusal','aggregate-member','aggregate-overflow'])
+          const roles = new Set(['reader3','writer4','profile-parent','profile','registry-root','writer-lock','probe','other','none'])
+          const states = new Set(['not-started','pending','fulfilled','rejected'])
+          const errors = new Set(['none','EPIPE','EBADF','ECANCELED','EIO','ERR_STREAM_DESTROYED','ERR_STREAM_PREMATURE_CLOSE','known-qa-refusal','known-profile-refusal','injected-close','aggregate','other'])
+          const commands = new Set(['check','create-root','registry-negative','settle','hide-check','navigate-aba','duplicate-prepare','successor','stale-owner','create-root-held','change-userdata-resume','retire-during-preparation','registry-cleanup','hold-profile-preparation','release-profile-preparation','fail-profile-close','release-failed-close','create-root-physical-held','retire-window-resume','release-profile-physical-check','prepare','none'])
+          const reportTypes = new Set(['preparing','refused','active','current','hidden','navigation-aba','duplicate-prepare','successor-active','successor-refused','stale-owner','root-held','gateway-held','preparation-window-retired','profile-preparation-stat-held','profile-preparation-hold-ready','profile-preparation-descriptors-settled','registry-profile-physical-held','registry-profile-physical-result','profile-close-failure-armed','root','registry-negative','registry-cleanup','settled','settlement-failed','fixture-error'])
+          const observationKeys = ['schema','sequence','command','stage','role','handleOrdinal','state','error','ownClose','hookInvoked','teardown']
+          const summaryKeys = ['settlement','settlementSamePromise','readerIo','writerIo','readerClose','writerClose','profileClose','destroyRequested','nativeClose','streamCloseObserved','parentInputEnd','parentOutputDestroy','perHandleClose','hookInvocationCount']
+          const childKeys = ['caseId','childOrdinal','sourceHead','runId','runAttempt','target','node','observations','overflow','stderrBytes','stderrOverflow','unexpectedTerminalReports','settlementPromiseObservation','preTeardown','final','childExit']
+          const emptySummary = () => ({settlement:'not-started',settlementSamePromise:null,readerIo:'not-started',writerIo:'not-started',readerClose:'not-started',writerClose:'not-started',profileClose:'not-started',destroyRequested:false,nativeClose:'not-started',streamCloseObserved:false,parentInputEnd:false,parentOutputDestroy:false,perHandleClose:Object.create(null),hookInvocationCount:0})
+          const reduceSummary = (events, samePromise) => {
+            const summary = emptySummary()
+            const seenHandles = new Map()
+            const heldGates = new Map()
+            const pendingOperations = new Map()
+            const rejectedFileCloses = new Set()
+            const armedHooks = new Set()
+            const handleOwnClose = new Map()
+            let settleStarted = false
+            for (const event of events) {
+              const {stage,role,state,handleOrdinal} = event
+              const operation = stage === 'read-start' || stage === 'read-done' ? 'read' : stage === 'write-start' || stage === 'write-done' ? 'write' : stage === 'native-close-start' || stage === 'native-close-done' ? 'native-close' : stage === 'file-close-start' || stage === 'file-close-done' ? 'file-close' : null
+              if (operation) {
+                const key = `${operation}:${role}:${handleOrdinal}:${event.command}`
+                if (stage.endsWith('-start')) pendingOperations.set(key,(pendingOperations.get(key) ?? 0)+1)
+                else if (!pendingOperations.get(key)) failDiagnostic('invalid-observation')
+                else pendingOperations.set(key,pendingOperations.get(key)-1)
+              }
+              if (stage === 'settle-start') {
+                if (settleStarted || state !== 'pending' || event.command !== 'settle') failDiagnostic('invalid-observation')
+                settleStarted = true
+                summary.settlement = state
+                summary.settlementSamePromise = samePromise
+              } else if (stage === 'settle-fulfilled' || stage === 'settle-rejected') {
+                if (!settleStarted || summary.settlement !== 'pending' || (stage === 'settle-fulfilled' && state !== 'fulfilled') || (stage === 'settle-rejected' && state !== 'rejected')) failDiagnostic('invalid-observation')
+                summary.settlement = state
+              }
+              if (role === 'reader3' && (stage === 'read-start' || stage === 'read-done')) summary.readerIo = state
+              if (role === 'writer4' && (stage === 'write-start' || stage === 'write-done')) summary.writerIo = state
+              if (stage === 'destroy-request' && (role === 'reader3' || role === 'writer4')) summary.destroyRequested = true
+              if (stage === 'native-close-start' || stage === 'native-close-done') {
+                if (role === 'reader3') summary.readerClose = state
+                else if (role === 'writer4') summary.writerClose = state
+                else failDiagnostic('invalid-observation')
+                if (summary.readerClose === 'fulfilled' && summary.writerClose === 'fulfilled') summary.nativeClose = 'fulfilled'
+                else if ((summary.readerClose === 'rejected' || summary.writerClose === 'rejected') && summary.readerClose !== 'pending' && summary.writerClose !== 'pending' && summary.readerClose !== 'not-started' && summary.writerClose !== 'not-started') summary.nativeClose = 'rejected'
+                else summary.nativeClose = 'pending'
+              }
+              if (stage === 'stream-close' && (role === 'reader3' || role === 'writer4')) summary.streamCloseObserved = true
+              if (stage === 'parent-input-end') summary.parentInputEnd = true
+              if (stage === 'parent-output-destroy') summary.parentOutputDestroy = true
+              if (stage === 'prototype-hook-armed') {
+                if (event.hookInvoked === true && state === 'fulfilled') {
+                  if (!armedHooks.has('profile') && !armedHooks.has('registry-root')) failDiagnostic('invalid-observation')
+                  if (handleOrdinal === 0 || seenHandles.get(String(handleOrdinal)) !== role) failDiagnostic('invalid-observation')
+                  summary.hookInvocationCount += 1
+                } else if (event.hookInvoked === false && state === 'pending') armedHooks.add(role)
+                else failDiagnostic('invalid-observation')
+              } else if (event.hookInvoked !== null) failDiagnostic('invalid-observation')
+              if (stage === 'gate-held') heldGates.set(`${role}:${handleOrdinal}`, (heldGates.get(`${role}:${handleOrdinal}`) ?? 0) + 1)
+              if (stage === 'gate-released') {
+                const key = `${role}:${handleOrdinal}`
+                if (!heldGates.get(key)) failDiagnostic('invalid-observation')
+                else heldGates.set(key, heldGates.get(key) - 1)
+              }
+              if (handleOrdinal > 0) {
+                const key = String(handleOrdinal)
+                const current = summary.perHandleClose[key]
+                if (stage === 'file-open') {
+                  if (current || role === 'none') failDiagnostic('invalid-observation')
+                  summary.perHandleClose[key] = {role,state:'pending',count:0}
+                  seenHandles.set(key, role)
+                  handleOwnClose.set(key, event.ownClose)
+                } else if (stage === 'file-close-start' || stage === 'file-close-done') {
+                  if (!current || current.role !== role) failDiagnostic('invalid-observation')
+                  else {
+                    if (handleOwnClose.get(key) !== event.ownClose) failDiagnostic('invalid-observation')
+                    if (stage === 'file-close-start') { current.state = 'pending'; current.count += 1 }
+                    else {
+                      if (current.count === 0) failDiagnostic('invalid-observation')
+                      if (state === 'rejected') rejectedFileCloses.add(key)
+                      current.state = [...pendingOperations].some(([operationKey,count]) => operationKey.startsWith(`file-close:${role}:${handleOrdinal}:`) && count > 0) ? 'pending' : rejectedFileCloses.has(key) ? 'rejected' : state
+                    }
+                  }
+                } else if ((stage === 'gate-held' || stage === 'gate-released') && seenHandles.get(key) !== role) failDiagnostic('invalid-observation')
+              } else if (stage === 'file-open' || stage === 'file-close-start' || stage === 'file-close-done') failDiagnostic('invalid-observation')
+              const profile = Object.values(summary.perHandleClose).filter((handle) => handle.role === 'profile' || handle.role === 'profile-parent')
+              if (profile.some((handle) => handle.state === 'pending')) summary.profileClose = 'pending'
+              else if (profile.some((handle) => handle.state === 'rejected')) summary.profileClose = 'rejected'
+              else if (profile.length > 0 && profile.every((handle) => handle.state === 'fulfilled')) summary.profileClose = 'fulfilled'
+            }
+            if (settleStarted !== (typeof samePromise === 'boolean')) failDiagnostic('invalid-observation')
+            return summary
+          }
+          const validateSnapshot = (actual, expected) => {
+            if (!exact(actual, summaryKeys) || summaryKeys.some((key) => key !== 'perHandleClose' && JSON.stringify(actual[key]) !== JSON.stringify(expected[key]))) { failDiagnostic('invalid-envelope'); return }
+            if (!exact(actual.perHandleClose, Object.keys(expected.perHandleClose)) || Object.keys(actual.perHandleClose).some((key) => !/^[1-8]$/.test(key) || !exact(actual.perHandleClose[key], ['role','state','count']) || JSON.stringify(actual.perHandleClose[key]) !== JSON.stringify(expected.perHandleClose[key]))) failDiagnostic('invalid-envelope')
+          }
+          const validateChild = (child, localOrdinal, role) => {
+            if (!exact(child, childKeys) || !ownerIds.has(child.caseId) || child.childOrdinal !== localOrdinal || child.sourceHead !== sourceHead || child.sourceHead !== process.env.SOURCE_SHA || child.runId !== process.env.RUN_ID || child.runAttempt !== Number(process.env.RUN_ATTEMPT) || child.target !== process.env.TARGET || child.node !== process.version || child.node !== `v${process.env.EXPECTED_NODE}` || child.overflow !== false || child.stderrOverflow !== false || !Number.isSafeInteger(child.stderrBytes) || child.stderrBytes < 0 || child.stderrBytes > 65536 || !Array.isArray(child.observations) || child.observations.length > 64 || !Array.isArray(child.unexpectedTerminalReports) || child.unexpectedTerminalReports.length > 8 || child.unexpectedTerminalReports.some((value) => !reportTypes.has(value)) || (role === 'run-owner' ? !child.caseId.startsWith('R') : !child.caseId.startsWith('G'))) { failDiagnostic('invalid-envelope'); return }
+            let aggregateRun = null
+            for (const [index, event] of child.observations.entries()) {
+              if (!exact(event, observationKeys) || event.schema !== 'metis-qa-owner-diagnostic/v1' || event.sequence !== index || !commands.has(event.command) || !stages.has(event.stage) || !roles.has(event.role) || !Number.isSafeInteger(event.handleOrdinal) || event.handleOrdinal < 0 || event.handleOrdinal > 8 || !states.has(event.state) || !errors.has(event.error) || !(event.ownClose === null || typeof event.ownClose === 'boolean') || !(event.hookInvoked === null || typeof event.hookInvoked === 'boolean') || typeof event.teardown !== 'boolean') { failDiagnostic('invalid-observation'); return }
+              const transport = ['transport-open','destroy-request','stream-end','stream-close','stream-error','native-close-start','native-close-done'].includes(event.stage)
+              const files = ['file-open','file-close-start','file-close-done'].includes(event.stage)
+              if ((transport && !['reader3','writer4'].includes(event.role)) || (['read-start','read-done','parent-input-end'].includes(event.stage) && event.role !== 'reader3') || (['write-start','write-done','parent-output-destroy'].includes(event.stage) && event.role !== 'writer4') || (files && (event.role === 'none' || event.handleOrdinal === 0 || typeof event.ownClose !== 'boolean')) || (!files && event.ownClose !== null) || (event.stage.startsWith('settle-') && (event.role !== 'profile' || event.command !== 'settle')) || (event.stage === 'prototype-hook-armed' && event.hookInvoked === false && !['profile','registry-root'].includes(event.role)) || (event.stage === 'prototype-hook-armed' && event.hookInvoked === true && (event.role === 'none' || event.handleOrdinal === 0)) || (event.stage === 'gate-held' && !['profile-parent','profile','registry-root'].includes(event.role)) || (event.stage === 'gate-released' && !['profile-parent','profile','registry-root'].includes(event.role)) || (event.stage === 'child-exit' && event.role !== 'none')) failDiagnostic('invalid-observation')
+              if ((['read-start','write-start','native-close-start','file-close-start','destroy-request','gate-held'].includes(event.stage) && event.state !== 'pending') || (['transport-open','stream-end','stream-close','file-open','parent-input-end','parent-output-destroy','gate-released'].includes(event.stage) && event.state !== 'fulfilled') || (['read-done','write-done','native-close-done','file-close-done'].includes(event.stage) && !['fulfilled','rejected'].includes(event.state)) || (event.stage === 'stream-error' && event.state !== 'rejected')) failDiagnostic('invalid-observation')
+              if (['read-done','write-done','native-close-done','file-close-done'].includes(event.stage) && (event.state === 'fulfilled' ? event.error !== 'none' : event.error === 'none')) failDiagnostic('invalid-observation')
+              if (event.stage === 'aggregate-member' || event.stage === 'aggregate-overflow') {
+                if (!aggregateRun || aggregateRun.overflow || event.command !== aggregateRun.command || event.role !== aggregateRun.role || event.handleOrdinal !== aggregateRun.handleOrdinal || event.state !== 'rejected' || event.ownClose !== null || event.hookInvoked !== null || (event.stage === 'aggregate-member' && ++aggregateRun.members > 4) || (event.stage === 'aggregate-overflow' && event.error !== 'other')) failDiagnostic('invalid-observation')
+                if (event.stage === 'aggregate-overflow') { aggregateRun.overflow = true; failDiagnostic('overflow') }
+              } else aggregateRun = event.error === 'aggregate' && event.state === 'rejected' ? {command:event.command,role:event.role,handleOrdinal:event.handleOrdinal,members:0,overflow:false} : null
+            }
+            let boundary = child.observations.findIndex((event) => event?.teardown === true || event?.stage === 'child-exit')
+            if (boundary < 0) { failDiagnostic('incomplete-shard'); boundary = child.observations.length }
+            if (child.observations.slice(0,boundary).some((event) => event.teardown) || child.observations.slice(boundary).some((event) => !event.teardown)) failDiagnostic('invalid-observation')
+            const preHasSettle = child.observations.slice(0,boundary).some((event) => event.stage === 'settle-start')
+            const finalHasSettle = child.observations.some((event) => event.stage === 'settle-start')
+            if (!(child.settlementPromiseObservation === null || typeof child.settlementPromiseObservation === 'boolean') || (!finalHasSettle && child.settlementPromiseObservation !== null) || preHasSettle !== (typeof child.preTeardown?.settlementSamePromise === 'boolean') || finalHasSettle !== (typeof child.final?.settlementSamePromise === 'boolean') || finalHasSettle !== (typeof child.settlementPromiseObservation === 'boolean')) failDiagnostic('invalid-envelope')
+            validateSnapshot(child.preTeardown, reduceSummary(child.observations.slice(0,boundary), preHasSettle ? child.settlementPromiseObservation : null))
+            validateSnapshot(child.final, reduceSummary(child.observations, child.settlementPromiseObservation))
+            const exits = child.observations.filter((event) => event.stage === 'child-exit')
+            const lastExit = exits.at(-1)
+            const exit = child.childExit
+            if (!exact(exit, ['state','code','signal','error']) || !lastExit || exits.length > 2 || exit.state !== lastExit.state || exit.error !== lastExit.error || !['fulfilled','rejected'].includes(exit.state) || !(exit.code === null || Number.isSafeInteger(exit.code) && exit.code >= 0) || !(exit.signal === null || ['SIGTERM','SIGKILL','SIGINT','SIGHUP','SIGABRT','other'].includes(exit.signal)) || !errors.has(exit.error) || (exit.code !== null && exit.signal !== null) || (exit.code === null && exit.signal === null && exits.length !== 1) || (exits.length === 2 && (exits[0].state !== 'rejected' || exits[0].error !== 'other' || exit.state !== 'rejected')) || (exit.code === 0 && exit.signal === null && exits.length === 1 && (exit.state !== 'fulfilled' || exit.error !== 'none')) || ((exit.code !== null && exit.code > 0 || exit.signal !== null) && (exit.state !== 'rejected' || exit.error !== 'other')) || (exit.state === 'fulfilled' && (exit.code !== 0 || exit.signal !== null || exit.error !== 'none')) || (exit.state === 'rejected' && exit.error !== 'other')) failDiagnostic('terminal-invalid')
+          }
+          let diagnostic = null
+          if (process.env.OWNER_TARGET === 'true') {
+            const shards = []
+            const provenance = []
+            const children = []
+            try {
+              const names = []
+              const directory = opendirSync(process.env.DIAGNOSTIC_DIR)
+              try {
+                while (names.length < 3) {
+                  const entry = directory.readSync()
+                  if (!entry) break
+                  names.push(entry.name)
+                }
+              } finally { directory.closeSync() }
+              if (names.length > 2) failDiagnostic('unexpected-shard')
+              const candidates = []
+              for (const name of names) {
+                const match = /^owner-(run-owner|root-registry)-worker-(0|[1-9][0-9]{0,4})\.json$/.exec(name)
+                if (!match) { failDiagnostic(name.endsWith('.pending') ? 'incomplete-shard' : 'unexpected-shard'); continue }
+                const workerId = Number(match[2])
+                if (workerId > 65535) { failDiagnostic('shard-identity'); continue }
+                candidates.push({name,role:match[1],workerId})
+              }
+              if (names.length === 2 && candidates.length === 2 && new Set(candidates.map((item) => item.role)).size === 2 && new Set(candidates.map((item) => item.workerId)).size === 2) {
+                let totalBytes = 0
+                for (const item of candidates) {
+                  const meta = lstatSync(`${process.env.DIAGNOSTIC_DIR}/${item.name}`)
+                  if (!meta.isFile() || meta.isSymbolicLink() || meta.size < 1 || meta.size > 256 * 1024 - totalBytes) { failDiagnostic('size-limit'); break }
+                  item.size = meta.size
+                  totalBytes += meta.size
+                }
+                if (totalBytes <= 256 * 1024 && candidates.every((item) => item.size > 0)) {
+                  for (const item of candidates) {
+                    let raw
+                    try { raw = boundedRead(`${process.env.DIAGNOSTIC_DIR}/${item.name}`, item.size) }
+                    catch { failDiagnostic('size-limit'); break }
+                    let shard
+                    try { shard = JSON.parse(raw.toString('utf8')) }
+                    catch { failDiagnostic('invalid-envelope'); continue }
+                    shards.push({shard,role:item.role,workerId:item.workerId,bytes:raw.byteLength,sha256:sha(raw)})
+                  }
+                }
+              }
+            } catch { failDiagnostic('missing-shard') }
+            if (shards.length !== 2 || new Set(shards.map((item) => item.role)).size !== 2 || new Set(shards.map((item) => item.workerId)).size !== 2) failDiagnostic('missing-shard')
+            if (shards.reduce((total,item) => total + item.bytes,0) > 256 * 1024) failDiagnostic('size-limit')
+            shards.sort((a,b) => a.role === b.role ? a.workerId - b.workerId : a.role === 'run-owner' ? -1 : 1)
+            for (const item of shards) {
+              const shard = item.shard
+              const shardKeys = ['schema','sourceHead','runId','runAttempt','target','node','sourceHashes','workerId','role','complete','observationEpoch','invalid','overflow','children']
+              if (!exact(shard,shardKeys) || shard.schema !== 'metis-qa-owner-diagnostic-shard/v1' || typeof shard.complete !== 'boolean' || typeof shard.overflow !== 'boolean' || !Array.isArray(shard.invalid) || shard.invalid.length > 16 || new Set(shard.invalid).size !== shard.invalid.length || shard.invalid.some((reason) => !allowedFailures.has(reason)) || !Array.isArray(shard.children)) { failDiagnostic('invalid-envelope'); continue }
+              if (shard.sourceHead !== sourceHead || shard.sourceHead !== process.env.SOURCE_SHA || shard.runId !== process.env.RUN_ID || shard.runAttempt !== Number(process.env.RUN_ATTEMPT) || shard.target !== process.env.TARGET || shard.node !== process.version || shard.node !== `v${process.env.EXPECTED_NODE}` || shard.role !== item.role || shard.workerId !== item.workerId) failDiagnostic('binding-mismatch')
+              const epoch = shard.observationEpoch
+              const epochKeys = ['schema','closed','sourceHead','runId','runAttempt','target','node','workerId','role','cases','childStarted','childClosed','pendingChildCloses','pendingReportWaiters','pendingReportTimers','pendingFrameWaiters','pendingWriteCallbacks','activeCallbacks','drained']
+              const epochCounters = ['childStarted','childClosed','pendingChildCloses','pendingReportWaiters','pendingReportTimers','pendingFrameWaiters','pendingWriteCallbacks','activeCallbacks']
+              const roleIds = item.role === 'run-owner' ? ownerCaseTitles.filter(([id]) => id.startsWith('R')).map(([id]) => id) : ['G01','G02','G03','G04']
+              if (!exact(epoch,epochKeys) || epoch.schema !== 'metis-qa-owner-observation-epoch/v1' || epoch.closed !== true || epoch.drained !== true || epoch.sourceHead !== shard.sourceHead || epoch.runId !== shard.runId || epoch.runAttempt !== shard.runAttempt || epoch.target !== shard.target || epoch.node !== shard.node || epoch.workerId !== shard.workerId || epoch.role !== shard.role || !Array.isArray(epoch.cases) || epoch.cases.length !== roleIds.length || epoch.cases.some((entry,index) => !exact(entry,['caseId','finished','aborted']) || entry.caseId !== roleIds[index] || entry.finished !== true || entry.aborted !== false) || epochCounters.some((key) => !Number.isSafeInteger(epoch[key]) || epoch[key] < 0 || epoch[key] > 32) || epoch.childStarted !== shard.children.length || epoch.childClosed !== epoch.childStarted || epoch.pendingChildCloses !== 0 || epoch.pendingReportWaiters !== 0 || epoch.pendingReportTimers !== 0 || epoch.pendingFrameWaiters !== 0 || epoch.pendingWriteCallbacks !== 0 || epoch.activeCallbacks !== 0) failDiagnostic('incomplete-shard')
+              if (shard.complete !== true) failDiagnostic('incomplete-shard')
+              if (shard.overflow) failDiagnostic('overflow')
+              for (const reason of shard.invalid) failDiagnostic(reason)
+              if (!exact(shard.sourceHashes,sourceFiles) || sourceFiles.some((file) => shard.sourceHashes[file] !== hashes[file] || !/^[a-f0-9]{64}$/.test(shard.sourceHashes[file] ?? ''))) failDiagnostic('source-hash-mismatch')
+              const local = shard.children
+              if (local.length < 1 || local.length > (item.role === 'run-owner' ? 25 : 4) || children.length + local.length > 32) failDiagnostic('child-bound')
+              let cursor = 0
+              const counts = new Map()
+              for (const [index,child] of local.entries()) {
+                validateChild(child,index+1,item.role)
+                if (!child || typeof child !== 'object') { failDiagnostic('invalid-envelope'); continue }
+                counts.set(child.caseId,(counts.get(child.caseId) ?? 0)+1)
+                while (cursor < roleIds.length && roleIds[cursor] !== child.caseId) {
+                  if (roleIds[cursor] !== 'R07') failDiagnostic('missing-case')
+                  cursor++
+                }
+                if (cursor >= roleIds.length) failDiagnostic('missing-case')
+                if (child.caseId !== 'R07') cursor++
+                children.push({...child,childOrdinal:children.length+1})
+              }
+              for (const id of roleIds) {
+                const count = counts.get(id) ?? 0
+                if (id === 'R07') {
+                  if (count < 1 || count > 4 || (count < 4 && caseResults.get(id) !== 'failed')) failDiagnostic('missing-case')
+                } else if (count !== 1) failDiagnostic('missing-case')
+              }
+              provenance.push({role:item.role,workerId:item.workerId,sha256:item.sha256,bytes:item.bytes,localChildCount:local.length,firstGlobalOrdinal:children.length-local.length+1})
+            }
+            if (children.length > 32 || children.length < 26) failDiagnostic('child-bound')
+            if (diagnosticFailures.size > 16) { diagnosticFailures.clear(); failDiagnostic('overflow') }
+            diagnostic = {schema:'metis-qa-owner-diagnostic-artifact/v2',sourceHead,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),target:process.env.TARGET,node:process.version,sourceHashes:hashes,frameworkEvidenceSha256:frameworkRaw ? sha(frameworkRaw) : null,diagnosticStatus:diagnosticFailures.size === 0 ? 'valid' : 'invalid',diagnosticFailures:[...diagnosticFailures].sort(),overflow:diagnosticFailures.has('overflow'),shards:provenance,children}
+            let aggregateRaw = Buffer.from(JSON.stringify(diagnostic)+'\n')
+            if (aggregateRaw.byteLength > 256 * 1024) {
+              failDiagnostic('size-limit')
+              diagnostic = {...diagnostic,diagnosticStatus:'invalid',diagnosticFailures:[...diagnosticFailures].sort(),overflow:true,shards:[],children:[]}
+              aggregateRaw = Buffer.from(JSON.stringify(diagnostic)+'\n')
+            }
+            writeFileSync(process.env.DIAGNOSTIC,aggregateRaw,{mode:0o600})
+          }
           const exitCode = /^\d+$/.test(process.env.VITEST_EXIT ?? '') ? Number(process.env.VITEST_EXIT) : null
-          const fileCounts = report && Array.isArray(report.testResults) ? Object.fromEntries(report.testResults.map((file) => [String(file.name).replaceAll('\\','/').split('/').at(-1), Array.isArray(file.assertionResults) ? file.assertionResults.length : 0])) : null
-          const evidence = { schema: 'metis-qa-persistence-source-evidence/v1', target: process.env.TARGET, sourceHead, sourceHashes: hashes, selectedFiles: expectedFiles, perFileTestCounts: fileCounts, vitestExitCode: exitCode, success: !error, error: error || null, counts: report ? Object.fromEntries(countFields.map((key) => [key, report[key]])) : null }
-          writeFileSync(process.env.EVIDENCE, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
-          if (error) { console.error(error); process.exitCode = 1 }
+          const fileCounts = reportFiles.length ? Object.fromEntries(reportFiles.filter((file) => file && typeof file.name === 'string').map((file) => [file.name.replaceAll('\\','/').split('/').at(-1), Array.isArray(file.assertionResults) ? file.assertionResults.length : 0])) : null
+          const diagnosticBytes = diagnostic ? boundedRead(process.env.DIAGNOSTIC, 256 * 1024) : null
+          if (diagnosticBytes && !diagnosticBytes.equals(Buffer.from(JSON.stringify(diagnostic)+'\n'))) throw new Error('diagnostic-write-mismatch')
+          const diagnosticSha256 = diagnosticBytes ? sha(diagnosticBytes) : null
+          const diagnosticStatus = process.env.OWNER_TARGET === 'true' ? diagnostic?.diagnosticStatus ?? 'invalid' : diagnosticFailures.size === 0 ? 'not-applicable' : 'invalid'
+          const functionalError = functionalFailures[0] ?? null
+          const diagnosticError = diagnosticStatus === 'invalid' ? 'Owner diagnostic validation failed independently of the functional test status.' : null
+          const evidence = { schema:'metis-qa-persistence-source-evidence/v1', target:process.env.TARGET, sourceHead, runId:process.env.RUN_ID, runAttempt:Number(process.env.RUN_ATTEMPT), node:process.version, sourceHashes:hashes, selectedFiles:expectedFiles, perFileTestCounts:fileCounts, vitestExitCode:exitCode, rawVitestSha256:rawReport ? sha(rawReport) : null, frameworkEvidenceSha256:frameworkRaw ? sha(frameworkRaw) : null, diagnosticSha256, diagnosticStatus, diagnosticFailures:diagnostic?.diagnosticFailures ?? [...diagnosticFailures].sort(), diagnosticChildren:diagnostic?.children?.length ?? null, functionalStatus:functionalError ? 'failed' : 'passed', success:!functionalError && !diagnosticError, error:functionalError ?? diagnosticError, counts:report ? Object.fromEntries(countFields.map((key) => [key,report[key]])) : null }
+          writeFileSync(process.env.EVIDENCE, JSON.stringify(evidence,null,2)+'\n',{mode:0o600})
+          if (functionalError || diagnosticError) { console.error(functionalError ?? diagnosticError); process.exitCode = 1 }
+          } catch {
+            const fallback = {schema:'metis-qa-owner-diagnostic-artifact/v2',sourceHead:null,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),target:process.env.TARGET,node:process.version,sourceHashes:{},diagnosticStatus:'invalid',diagnosticFailures:['invalid-envelope'],overflow:true,shards:[],children:[]}
+            let fallbackHash = null
+            try {
+              if (process.env.OWNER_TARGET === 'true') {
+                const bytes = Buffer.from(JSON.stringify(fallback)+'\n')
+                writeFileSync(process.env.DIAGNOSTIC,bytes,{mode:0o600})
+                const actual = boundedRead(process.env.DIAGNOSTIC, 256 * 1024)
+                if (actual.equals(bytes)) fallbackHash = createHash('sha256').update(actual).digest('hex')
+              }
+            } catch {}
+            const evidence = {schema:'metis-qa-persistence-source-evidence/v1',target:process.env.TARGET,sourceHead:null,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),node:process.version,sourceHashes:{},selectedFiles:expectedFiles,perFileTestCounts:null,vitestExitCode:/^\d+$/.test(process.env.VITEST_EXIT ?? '') ? Number(process.env.VITEST_EXIT) : null,rawVitestSha256:null,frameworkEvidenceSha256:null,diagnosticSha256:fallbackHash,diagnosticStatus:'invalid',diagnosticFailures:['invalid-envelope'],diagnosticChildren:null,functionalStatus:'failed',success:false,error:'Owner evidence validation could not complete.',counts:null}
+            try { writeFileSync(process.env.EVIDENCE,JSON.stringify(evidence,null,2)+'\n',{mode:0o600}) } catch {}
+            console.error('Owner evidence validation could not complete.')
+            process.exitCode = 1
+          }
           NODE
       - name: Retain bounded source evidence
         if: always()
@@ -218,5 +565,8 @@ jobs:
           path: |
             ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
             ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
-          if-no-files-found: warn
+            ${{ runner.temp }}/qa-persistence-owner-framework-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+            ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+            ${{ runner.temp }}/qa-persistence-owner-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          if-no-files-found: ${{ matrix.owner && 'error' || 'warn' }}
           retention-days: 7
