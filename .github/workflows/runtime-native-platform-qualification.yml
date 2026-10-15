@@ -1,28 +1,7 @@
 name: Runtime native and platform qualification
 
 on:
-  push:
-    paths:
-      - .github/workflows/runtime-native-platform-qualification.yml
-      - package.json
-      - package-lock.json
-      - vitest.config.ts
-      - scripts/fetch-llama-server.mjs
-      - scripts/check-llama-sidecar.mjs
-      - scripts/local-model-assets.mjs
-      - scripts/fetch-local-model.mjs
-      - scripts/check-local-model.mjs
-      - scripts/verify-native-runtime-qualification-inputs.mjs
-      - scripts/validate-native-platform-qualification.mjs
-      - src/main/llm/local-runtime.ts
-      - src/main/llm/local-runtime.test.ts
-      - src/main/llm/local-runtime.native-qualification.test.ts
-      - src/main/llm/local-models.ts
-      - src/main/infra/process/supervisor.ts
-      - src/main/features/components/speech-pack/runtime-archive.ts
-      - src/main/features/components/speech-pack/runtime-archive.test.ts
-      - src/main/features/components/speech-pack/runtime-archive.windows-pipe.test.ts
-      - src/main/features/components/speech-pack/runtime-archive.windows-pipe-child.ts
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -63,11 +42,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Assert exact source checkout
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
+      - name: Initialize isolated native report directory
+        run: |
+          node -e "const fs=require('node:fs');const os=require('node:os');const p=require('node:path');const d=p.resolve(process.env.RUNNER_TEMP,'runtime-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-${{ matrix.arch }}');const root=p.parse(d).root;if(d===root)throw new Error('refusing runner root');fs.mkdirSync(d,{recursive:false});fs.appendFileSync(process.env.GITHUB_ENV,'NATIVE_REPORT_DIR='+d+os.EOL)"
       - name: Install repository test dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Provision pinned native llama runtime
@@ -84,7 +69,7 @@ jobs:
           node scripts/fetch-local-model.mjs
           node scripts/check-local-model.mjs
       - name: Verify host, archive, executable architecture and exact input digests
-        run: NATIVE_INPUT_REPORT="$RUNNER_TEMP/native-inputs.json" node scripts/verify-native-runtime-qualification-inputs.mjs
+        run: NATIVE_INPUT_REPORT="$NATIVE_REPORT_DIR/native-inputs.json" node scripts/verify-native-runtime-qualification-inputs.mjs
       - name: Keep macOS supervision fallback classification explicit
         if: matrix.platform == 'darwin'
         run: |
@@ -95,35 +80,38 @@ jobs:
           echo 'NATIVE_SUPERVISION=direct-fallback-wrapper-missing'
       - name: Run required native integration and Windows pipe fixture
         id: native-tests
-        env:
-          NATIVE_CASE_REPORT: ${{ runner.temp }}/native-cases.json
         run: |
+          export NATIVE_CASE_REPORT="$NATIVE_REPORT_DIR/native-cases.json"
           files=(src/main/llm/local-runtime.native-qualification.test.ts)
           if [[ "$EXPECTED_PLATFORM" == win32 ]]; then
             files+=(src/main/features/components/speech-pack/runtime-archive.windows-pipe.test.ts)
           fi
-          set -o pipefail
-          ./node_modules/.bin/vitest run "${files[@]}" --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/native-vitest.json" --testTimeout=60000 --dangerouslyIgnoreUnhandledErrors=false 2>&1 | tee "$RUNNER_TEMP/native-vitest.log"
+          set +e
+          ./node_modules/.bin/vitest run "${files[@]}" --reporter=default --reporter=json --outputFile="$NATIVE_REPORT_DIR/native-vitest.json" --testTimeout=60000 --dangerouslyIgnoreUnhandledErrors=false 2>&1 | tee "$NATIVE_REPORT_DIR/native-vitest.log"
+          statuses=("${PIPESTATUS[@]}")
+          process_exit=${statuses[0]}
+          tee_exit=${statuses[1]}
+          result=$process_exit
+          if [[ "$result" == 0 && "$tee_exit" != 0 ]]; then result=$tee_exit; fi
+          node -e "require('node:fs').writeFileSync(process.env.NATIVE_REPORT_DIR+'/native-exit.json',JSON.stringify({processExit:Number(process.argv[1]),teeExit:Number(process.argv[2]),outcome:Number(process.argv[1])===0&&Number(process.argv[2])===0?'success':'failure'})+'\\n',{flag:'wx'})" "$process_exit" "$tee_exit"
+          exit "$result"
       - name: Require exact, nonempty, all-pass reports
         if: always()
         env:
           NATIVE_TEST_STEP_OUTCOME: ${{ steps.native-tests.outcome }}
         run: |
-          if [[ ! -s "$RUNNER_TEMP/native-vitest.json" || ! -s "$RUNNER_TEMP/native-inputs.json" || ! -s "$RUNNER_TEMP/native-vitest.log" || ! -s "$RUNNER_TEMP/native-cases.json" ]]; then
+          if [[ ! -s "$NATIVE_REPORT_DIR/native-vitest.json" || ! -s "$NATIVE_REPORT_DIR/native-inputs.json" || ! -s "$NATIVE_REPORT_DIR/native-vitest.log" || ! -s "$NATIVE_REPORT_DIR/native-cases.json" || ! -s "$NATIVE_REPORT_DIR/native-exit.json" ]]; then
             echo 'NATIVE_QUALIFICATION_REPORT_MISSING' >&2
             exit 1
           fi
-          node scripts/validate-native-platform-qualification.mjs "$RUNNER_TEMP/native-vitest.json" "$RUNNER_TEMP/native-inputs.json" "$RUNNER_TEMP/native-qualification.json" "$RUNNER_TEMP/native-cases.json"
+          node -e "const x=JSON.parse(require('node:fs').readFileSync(process.argv[1]));if(x.outcome!=='success'||x.processExit!==0||x.teeExit!==0)throw new Error('native test process exit evidence failed')" "$NATIVE_REPORT_DIR/native-exit.json"
+          node scripts/validate-native-platform-qualification.mjs "$NATIVE_REPORT_DIR/native-vitest.json" "$NATIVE_REPORT_DIR/native-inputs.json" "$NATIVE_REPORT_DIR/native-qualification.json" "$NATIVE_REPORT_DIR/native-cases.json"
       - name: Retain actual test, input and qualification reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: runtime-native-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_attempt }}
+          name: runtime-native-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/native-vitest.json
-            ${{ runner.temp }}/native-vitest.log
-            ${{ runner.temp }}/native-cases.json
-            ${{ runner.temp }}/native-inputs.json
-            ${{ runner.temp }}/native-qualification.json
+            ${{ runner.temp }}/runtime-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: warn
           retention-days: 14

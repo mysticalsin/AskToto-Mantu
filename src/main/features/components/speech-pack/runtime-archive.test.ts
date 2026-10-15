@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { link, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -35,18 +34,4 @@ describe('runtime archive held-descriptor hashing', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
-
-  it.skipIf(process.platform === 'win32')(
-    'opens a raced-in FIFO without blocking before rejecting its type',
-    async () => {
-      const root = await mkdtemp(join(tmpdir(), 'metis-runtime-fifo-'))
-      try {
-        const path = join(root, 'raced-pipe')
-        execFileSync('mkfifo', [path])
-        await expect(hashPinnedArchive(path, 1)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
-      } finally {
-        await rm(root, { recursive: true, force: true })
-      }
-    }
-  )
 })

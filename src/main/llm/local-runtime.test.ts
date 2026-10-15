@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -14,16 +14,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-import {
-  buildSpawnArgs,
-  parseBoundPort,
-  resolveBinaryPath,
-  start,
-  stop,
-  isRunning,
-  sessionKey,
-  baseURL
-} from './local-runtime'
+import { buildSpawnArgs, parseBoundPort, resolveBinaryPath } from './local-runtime'
 import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 import { formatCommand, releasePlans } from '../../../scripts/release/orchestrate.mjs'
 
@@ -276,72 +267,12 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
   })
 })
 
-describe('start() integration — real binary + real Qwen3.5-0.8B model', () => {
-  // This test SPAWNS the binary, so it needs the slice this process can actually execute — the
-  // universal package's other arch is present on disk but would fail with an exec-format error.
-  const macBinary = join(REPO_ROOT, 'resources', 'llama', 'mac', process.arch, 'llama-server')
-  const gguf = '/Users/example-owner/local-models/llama-spike/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
-  const mmproj = '/Users/example-owner/local-models/llama-spike/mmproj-F16.gguf'
-
-  const missing: string[] = []
-  if (!existsSync(macBinary)) missing.push(`mac binary (${macBinary})`)
-  if (!existsSync(gguf)) missing.push(`gguf model (${gguf})`)
-  if (!existsSync(mmproj)) missing.push(`mmproj (${mmproj})`)
-  const ready = missing.length === 0
-  const title = ready
-    ? 'spawns the real sidecar, parses the ephemeral port, reaches health 200, then stops cleanly'
-    : `skipped — missing: ${missing.join('; ')}`
-  const run = ready ? it : it.skip
-
-  run(
-    title,
-    async () => {
-      // MQA: ModelPaths gained ctxSize/parallel/gpuLayers when the sidecar became machine-sized
-      // (local-models.ts spawnProfileFor). This call site was not updated, so buildSpawnArgs emitted
-      // the literal `-c undefined` and llama-server died with `stoi: no conversion` before ever
-      // becoming healthy. Typecheck could not catch it — tsconfig.node.json excludes **/*.test.ts.
-      // Derive the profile the way production does (local.ts) rather than hardcoding numbers, so a
-      // future sizing change cannot silently desynchronise this test from the shipped path again.
-      const entry = LOCAL_MODELS.find((m) => m.id === 'qwen3.5-0.8b')
-      if (!entry) throw new Error('qwen3.5-0.8b is no longer a known local model; update this test')
-      await start({ gguf, mmproj, vision: false, ...spawnProfileFor(entry, 16, 8) }, 'mac')
-      try {
-        expect(isRunning()).toBe(true)
-        expect(sessionKey()).toMatch(/^[0-9a-f]{64}$/)
-        const base = new URL(baseURL())
-        const health = await fetch(`${base.protocol}//${base.host}/health`)
-        expect(health.status).toBe(200)
-        // Proves the api key actually reached the child via the LLAMA_API_KEY env var (FIX 2): a
-        // request without the key is rejected by /v1/chat/completions (llama-server leaves /v1/models
-        // and /health unauthenticated regardless of --api-key, so those two can't prove this), and the
-        // SAME key sessionKey() hands to real requests is accepted — round-tripping through the real
-        // spawned process, not a mock. max_tokens: 1 mirrors prewarm()'s minimal-cost request shape.
-        const body = JSON.stringify({ model: 'local', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
-        const headers = { 'content-type': 'application/json' }
-        const unauthed = await fetch(`${base.protocol}//${base.host}/v1/chat/completions`, {
-          method: 'POST',
-          headers,
-          body
-        })
-        expect(unauthed.status).toBe(401)
-        const authed = await fetch(`${base.protocol}//${base.host}/v1/chat/completions`, {
-          method: 'POST',
-          headers: { ...headers, authorization: `Bearer ${sessionKey()}` },
-          body
-        })
-        expect(authed.status).toBe(200)
-      } finally {
-        await stop()
-      }
-      expect(isRunning()).toBe(false)
-    },
-    60_000
-  )
-})
+// Required real-runtime witnesses live in local-runtime.native-qualification.test.ts and are invoked
+// by runtime-activation-qualification.yml through the reusable native qualification workflow.
 
 // ─── Startup hardening (faked child process) ──────────────────────────────────────────────────────────
 // The two blocks below need a faked `node:child_process` + `fetch` so the "spawn -> listening line ->
-// health" timing is controllable. The real-binary integration block above must keep the REAL spawn, and
+// health" timing is controllable. Real-binary integration lives in the required native qualification file, and
 // vi.mock() is file-scoped + hoisted — so load a private, freshly-registered copy of local-runtime via
 // vi.resetModules() + vi.doMock() instead (the same fake-proc shape local-runtime.concurrency.test.ts
 // uses). Each load also yields pristine module-level state — the sticky CPU pin and the restart budget
@@ -398,8 +329,8 @@ async function loadIsolatedRuntime(
     return { spawn }
   })
   // Every candidate binary must "exist" so the loop never short-circuits on the missing-binary path —
-  // only spawn/health timing matters here. The integration block above resolved node:fs at file load,
-  // so its real existsSync is unaffected.
+  // only spawn/health timing matters here. The initial local-runtime import above loaded node:fs before
+  // this isolated mock was registered.
   vi.doMock('node:fs', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs')>()
     return { ...actual, existsSync: () => true }
