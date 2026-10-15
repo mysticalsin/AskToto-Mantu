@@ -1,0 +1,127 @@
+name: Speech ownership prerequisite qualification
+
+on:
+  push:
+    paths:
+      - .github/workflows/speech-ownership-prerequisite-qualification.yml
+      - .github/workflows/speech-ownership-prerequisite-red.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - scripts/check-speech-ownership-prerequisite-report.mjs
+      - src/main/features/components/speech-pack/install-admission.ts
+      - src/main/features/components/speech-pack/install-admission.test.ts
+      - src/main/features/components/speech-pack/manifest.ts
+      - src/main/infra/storage/runtime-owned-tree.ts
+      - src/main/infra/storage/runtime-owned-tree.test.ts
+      - src/main/infra/storage/runtime-pack-namespace.ts
+      - src/main/infra/storage/runtime-payload-plan.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-ownership-prerequisite-qualification-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  qualify:
+    name: Speech ownership prerequisite qualification (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Initialize guarded report paths
+        id: initialize
+        env:
+          MATRIX_OS: ${{ matrix.os }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, existsSync, realpathSync, statSync } from 'node:fs'
+          import { dirname, isAbsolute, join, parse, posix, resolve, win32 } from 'node:path'
+
+          const configured = process.env.RUNNER_TEMP ?? ''
+          const posixAbsolute = posix.isAbsolute(configured)
+          const driveAbsolute = /^[A-Za-z]:[\\/]/.test(configured) && win32.isAbsolute(configured)
+          if (!configured || (!posixAbsolute && !driveAbsolute)) {
+            throw new Error('RUNNER_TEMP must be POSIX-absolute or drive-absolute')
+          }
+          const temporaryRoot = realpathSync(configured)
+          const filesystemRoot = parse(temporaryRoot).root
+          if (temporaryRoot.toLowerCase() === filesystemRoot.toLowerCase() || !statSync(temporaryRoot).isDirectory()) {
+            throw new Error('RUNNER_TEMP must resolve to an existing non-root directory')
+          }
+          const runId = process.env.GITHUB_RUN_ID ?? ''
+          const attempt = process.env.GITHUB_RUN_ATTEMPT ?? ''
+          const matrixOs = process.env.MATRIX_OS ?? ''
+          if (!/^\d+$/.test(runId) || !/^\d+$/.test(attempt) || !/^[A-Za-z0-9_-]+$/.test(matrixOs)) {
+            throw new Error('Speech prerequisite report identity is invalid')
+          }
+          const stem = `speech-ownership-qualification-${runId}-${attempt}-${matrixOs}`
+          const report = resolve(temporaryRoot, `${stem}.json`)
+          const qualification = resolve(temporaryRoot, `${stem}-evidence.json`)
+          const output = process.env.GITHUB_OUTPUT ?? ''
+          if (dirname(report) !== temporaryRoot || dirname(qualification) !== temporaryRoot ||
+              existsSync(report) || existsSync(qualification) || !output || !isAbsolute(output)) {
+            throw new Error('Speech prerequisite report paths are not fresh children of RUNNER_TEMP')
+          }
+          appendFileSync(output, `report=${report}\nqualification=${qualification}\n`, { flag: 'a' })
+          NODE
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the exact prerequisite fixture inventory
+        id: tests
+        env:
+          REPORT: ${{ steps.initialize.outputs.report }}
+        run: >-
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2
+          --dangerouslyIgnoreUnhandledErrors=false --reporter=default --reporter=json --outputFile="$REPORT"
+          src/main/features/components/speech-pack/install-admission.test.ts
+          src/main/infra/storage/runtime-owned-tree.test.ts
+      - name: Require the complete, nonempty all-pass inventory
+        id: validate
+        if: always()
+        env:
+          REPORT: ${{ steps.initialize.outputs.report }}
+          QUALIFICATION: ${{ steps.initialize.outputs.qualification }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUNNER_OS: ${{ runner.os }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: node scripts/check-speech-ownership-prerequisite-report.mjs "$REPORT" "$QUALIFICATION"
+      - name: Require nonempty report artifacts before upload
+        id: artifacts
+        if: always() && steps.initialize.outcome == 'success'
+        env:
+          REPORT: ${{ steps.initialize.outputs.report }}
+          QUALIFICATION: ${{ steps.initialize.outputs.qualification }}
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          set -euo pipefail
+          test -s "$REPORT"
+          if [[ -e "$QUALIFICATION" ]]; then test -s "$QUALIFICATION"; fi
+          if [[ "$VALIDATION_OUTCOME" == success ]]; then test -s "$QUALIFICATION"; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.initialize.outcome == 'success' && steps.artifacts.outcome == 'success'
+        with:
+          name: speech-ownership-qualification-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.initialize.outputs.report }}
+            ${{ steps.initialize.outputs.qualification }}
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,7 +1,7 @@
 import type { SpeechPackComponentId } from './manifest'
 
 declare const speechPackInstallAdmissionBrand: unique symbol
-declare const currentSpeechPackInstallAdmissionBrand: unique symbol
+const currentSpeechPackInstallAdmissionBrand: unique symbol = Symbol('currentSpeechPackInstallAdmission')
 
 export type SpeechPackInstallAdmission = { readonly [speechPackInstallAdmissionBrand]: true }
 

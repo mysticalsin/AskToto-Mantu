@@ -721,6 +721,7 @@ export function runtimeTreeParentDetails(
   plan: RuntimePayloadWritePlan,
   assertCallerCurrentSync: () => void
 ): Readonly<{
+  namespaceRootPath: string
   rootPath: string
   parentPath: string
   parentSnapshot: RuntimePhysicalSnapshotInput
@@ -731,6 +732,7 @@ export function runtimeTreeParentDetails(
   const state = treeParentPins.get(pin as object)
   if (!state || state.disposed || state.plan !== plan) throw new Error('RUNTIME_TREE_PARENT_PIN_INVALID')
   return Object.freeze({
+    namespaceRootPath: state.namespace.path,
     rootPath: state.treeRootPath,
     parentPath: state.treeParentPath,
     parentSnapshot: state.snapshot,

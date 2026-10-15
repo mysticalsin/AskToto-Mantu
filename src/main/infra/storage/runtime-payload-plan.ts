@@ -154,14 +154,13 @@ export function createRuntimePayloadPlanIssuer(): RuntimePayloadPlanIssuer {
         totalBytes += item.byteLength
         pathBytes += Buffer.byteLength(path)
         const ancestors = directoryAncestors(path)
-        for (const ancestor of ancestors) {
-          directories.add(ancestor)
-          pathBytes += Buffer.byteLength(ancestor)
-        }
+        for (const ancestor of ancestors) directories.add(ancestor)
         files.set(path, { path, byteLength: item.byteLength, sha256: item.sha256, ancestors, used: false })
       }
+      for (const directory of directories) pathBytes += Buffer.byteLength(directory)
       if (
         !Number.isSafeInteger(totalBytes) ||
+        !Number.isSafeInteger(pathBytes) ||
         totalBytes > input.admittedMaximumBytes ||
         files.size > input.admittedMaximumFiles ||
         pathBytes > input.admittedMaximumPathBytes ||

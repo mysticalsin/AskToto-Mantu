@@ -1,7 +1,7 @@
 import { createHash, type Hash } from 'node:crypto'
 import { type BigIntStats } from 'node:fs'
 import { lstat, opendir } from 'node:fs/promises'
-import { dirname, resolve, sep } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import { MAX_RUNTIME_EXCLUSIVE_FILE_BYTES, MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES } from './runtime-exclusive-file-sink'
 import {
   createRuntimeDirectoryAfterAdmission,
@@ -220,7 +220,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
   if (rootPath !== treeParent.rootPath || parentPath !== treeParent.parentPath || dirname(rootPath) !== parentPath) {
     throw new Error('RUNTIME_TREE_ROOT_PATH_INVALID')
   }
-  if (runtimePayloadPlanRoot(input.plan) !== rootPath.slice(parentPath.length + 1)) {
+  if (runtimePayloadPlanRoot(input.plan) !== relative(treeParent.namespaceRootPath, rootPath).split(sep).join('/')) {
     throw new Error('RUNTIME_TREE_PLAN_ROOT_MISMATCH')
   }
   const budget = runtimePayloadPlanBudget(input.plan)
