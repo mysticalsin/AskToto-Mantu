@@ -7,6 +7,8 @@ const root = join(__dirname, '..', '..')
 const ship = readFileSync(join(root, '.github', 'workflows', 'ship-1.9.7.yml'), 'utf8')
 const promote = readFileSync(join(root, '.github', 'workflows', 'promote-1.9.7.yml'), 'utf8')
 const residuals = readFileSync(join(root, '.github', 'ship-1.9.7-residuals.md'), 'utf8')
+const known = readFileSync(join(root, '.github', 'workflows', 'promote-known-candidate.yml'), 'utf8')
+const knownRun = readFileSync(join(root, '.github', 'promote-known-candidate'), 'utf8').trim()
 
 describe('unsigned 1.9.7 ship arm', () => {
   it('dispatches qa-candidate only when the arm file changes on main', () => {
@@ -29,6 +31,22 @@ describe('unsigned 1.9.7 ship arm', () => {
     expect(promote).toContain('confirm_version:"1.9.7"')
     expect(promote).toContain('[ "$version" != "1.9.7" ]')
     expect(promote).not.toMatch(/npm run|electron-builder/)
+  })
+
+  it('promotes one named successful main candidate when workflow_run does not start', () => {
+    expect(knownRun).toMatch(/^[1-9][0-9]*$/)
+    expect(known).toContain('branches:\n      - main')
+    expect(known).toContain('- .github/promote-known-candidate')
+    expect(known).toContain('.path == ".github/workflows/qa-candidate.yml"')
+    expect(known).toContain('.event == "workflow_dispatch"')
+    expect(known).toContain('.head_branch == "main"')
+    expect(known).toContain('.conclusion == "success"')
+    expect(known).toContain('node scripts/qa/launch-evidence.mjs')
+    expect(known).toContain('actions/workflows/promote-candidate.yml/dispatches')
+    expect(known).toContain('publish:true')
+    expect(known).toContain('confirm_version:"1.9.7"')
+    expect(known).toContain('[ "$version" != "1.9.7" ]')
+    expect(known).not.toMatch(/npm run|electron-builder/)
   })
 
   it('names each held owner-Mac diagnostic on its own not-run line', () => {
