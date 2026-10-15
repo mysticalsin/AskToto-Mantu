@@ -379,6 +379,8 @@ describe('lean payload attribution contracts', () => {
       'run-paths.json',
       'capture-hook-identity.json',
       'windows-archive-capture.json',
+      'windows-archive-listing.slt',
+      'windows-archive-membership-diagnostic.json',
       'app-manifest.json',
       'asar-members.json',
       'package-notices.json',

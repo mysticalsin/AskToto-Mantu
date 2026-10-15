@@ -473,7 +473,7 @@ export function validateProbeRecord(record) {
 
 export function validateReportArtifactRoster(paths) {
   const allowed =
-    /^(report\.json|run-paths\.json|capture-hook-identity\.json|windows-archive-capture\.json|app-manifest\.json|asar-members\.json|package-notices\.json|native-smoke\.json|strict-size-measurement\.json|probe-(?:[a-z0-9-]+|\*)\.json|source-inputs\.sha256)$/
+    /^(report\.json|run-paths\.json|capture-hook-identity\.json|windows-archive-capture\.json|windows-archive-listing\.slt|windows-archive-membership-diagnostic\.json|app-manifest\.json|asar-members\.json|package-notices\.json|native-smoke\.json|strict-size-measurement\.json|probe-(?:[a-z0-9-]+|\*)\.json|source-inputs\.sha256)$/
   const normalized = paths.map(assertRelativePath)
   if (new Set(normalized).size !== normalized.length) throw new Error('Report artifact roster contains duplicate paths')
   for (const path of normalized) {

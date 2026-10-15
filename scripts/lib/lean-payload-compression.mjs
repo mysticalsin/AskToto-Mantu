@@ -156,6 +156,190 @@ export function assertArchiveMembersMatch(expectedEntries, actualMembers, contex
   return { count: actual.length, rawBytes: actual.reduce((sum, entry) => sum + entry.bytes, 0) }
 }
 
+function summarizeArchiveMemberMismatch(expectedEntries, actualMembers, slt) {
+  const expected = expectedEntries.map((entry) => ({
+    path: entry.path,
+    type: entry.type,
+    bytes: entry.type === 'directory' ? 0 : (entry.bytes ?? entry.linkTextBytes ?? 0),
+    linkText: entry.type === 'symlink' ? entry.linkText : null
+  }))
+  const expectedByPath = new Map(expected.map((entry) => [entry.path, entry]))
+  const actualByPath = new Map(actualMembers.map((entry) => [entry.path, entry]))
+  const nativeRows = new Map(slt.records.map((row) => [row.Path, row]))
+  const mismatchClasses = {
+    missingPaths: 0,
+    unexpectedPaths: 0,
+    changedPaths: 0,
+    typeDifferences: 0,
+    byteCountDifferences: 0,
+    linkTargetDifferences: 0
+  }
+  const crossTab = new Map()
+  const mismatches = []
+  for (const item of expected) {
+    const actual = actualByPath.get(item.path)
+    if (!actual) {
+      mismatchClasses.missingPaths += 1
+      mismatches.push({ path: item.path, classification: 'missing', expected: item, actual: null, nativeRow: null })
+      continue
+    }
+    const typeDiffers = item.type !== actual.type
+    const bytesDiffer = item.bytes !== actual.bytes
+    const linkDiffers = item.linkText !== (actual.linkText ?? null)
+    const crossKey = JSON.stringify([item.type, actual.type, bytesDiffer ? 'different' : 'equal'])
+    const group = crossTab.get(crossKey) ?? {
+      expectedType: item.type,
+      actualType: actual.type,
+      byteCounts: bytesDiffer ? 'different' : 'equal',
+      expectedBytesMin: item.bytes,
+      expectedBytesMax: item.bytes,
+      actualBytesMin: actual.bytes,
+      actualBytesMax: actual.bytes,
+      count: 0
+    }
+    group.expectedBytesMin = Math.min(group.expectedBytesMin, item.bytes)
+    group.expectedBytesMax = Math.max(group.expectedBytesMax, item.bytes)
+    group.actualBytesMin = Math.min(group.actualBytesMin, actual.bytes)
+    group.actualBytesMax = Math.max(group.actualBytesMax, actual.bytes)
+    group.count += 1
+    crossTab.set(crossKey, group)
+    if (typeDiffers || bytesDiffer || linkDiffers) {
+      mismatchClasses.changedPaths += 1
+      if (typeDiffers) mismatchClasses.typeDifferences += 1
+      if (bytesDiffer) mismatchClasses.byteCountDifferences += 1
+      if (linkDiffers) mismatchClasses.linkTargetDifferences += 1
+      mismatches.push({
+        path: item.path,
+        classification: 'changed',
+        expected: item,
+        actual: { path: actual.path, type: actual.type, bytes: actual.bytes, linkText: actual.linkText ?? null },
+        nativeRow: nativeRows.get(item.path) ?? null
+      })
+    }
+  }
+  for (const actual of actualMembers) {
+    if (expectedByPath.has(actual.path)) continue
+    mismatchClasses.unexpectedPaths += 1
+    mismatches.push({
+      path: actual.path,
+      classification: 'unexpected',
+      expected: null,
+      actual: { path: actual.path, type: actual.type, bytes: actual.bytes, linkText: actual.linkText ?? null },
+      nativeRow: nativeRows.get(actual.path) ?? null
+    })
+  }
+  const sample = mismatches.slice(0, 8).map((item) => {
+    let nativeRow = item.nativeRow
+    let nativeRowOmitted = false
+    if (nativeRow && Buffer.byteLength(JSON.stringify(nativeRow), 'utf8') > 8192) {
+      nativeRow = null
+      nativeRowOmitted = true
+    }
+    const sampleItem = {
+      path: Buffer.byteLength(item.path, 'utf8') <= 4096 ? item.path : '<path omitted: exceeds 4096 bytes>',
+      classification: item.classification,
+      expected: item.expected
+        ? { type: item.expected.type, bytes: item.expected.bytes, linkText: item.expected.linkText }
+        : null,
+      actual: item.actual ? { type: item.actual.type, bytes: item.actual.bytes, linkText: item.actual.linkText } : null,
+      nativeRow,
+      ...(nativeRowOmitted ? { nativeRowOmitted: 'row exceeded 8192-byte diagnostic sample limit' } : {})
+    }
+    if (Buffer.byteLength(JSON.stringify(sampleItem), 'utf8') <= 16_384) return sampleItem
+    return {
+      path: '<path omitted: sample exceeded 16384 bytes>',
+      classification: item.classification,
+      expected: item.expected ? { type: item.expected.type, bytes: item.expected.bytes } : null,
+      actual: item.actual ? { type: item.actual.type, bytes: item.actual.bytes } : null,
+      nativeRow: null,
+      nativeRowOmitted: 'sample exceeded 16384-byte diagnostic limit'
+    }
+  })
+  return {
+    expectedCount: expected.length,
+    actualCount: actualMembers.length,
+    mismatchClasses,
+    crossTab: [...crossTab.values()].sort((a, b) =>
+      `${a.expectedType}/${a.actualType}/${a.byteCounts}`.localeCompare(
+        `${b.expectedType}/${b.actualType}/${b.byteCounts}`
+      )
+    ),
+    sample
+  }
+}
+
+const WINDOWS_LISTING_MAX_BYTES = 2_000_000
+const WINDOWS_DIAGNOSTIC_MAX_BYTES = 256_000
+const WINDOWS_ARCHIVE_LISTING_NAME = 'windows-archive-listing.slt'
+const WINDOWS_ARCHIVE_DIAGNOSTIC_NAME = 'windows-archive-membership-diagnostic.json'
+
+async function writeWindowsArchiveListingEvidence(reportRoot, listingResult, listingFailure, evidence) {
+  const stdout = typeof listingResult?.stdout === 'string' ? listingResult.stdout : ''
+  const stderr = typeof listingResult?.stderr === 'string' ? listingResult.stderr : ''
+  const stdoutBytes = Buffer.from(stdout, 'utf8')
+  const combinedBytes = Buffer.byteLength(stdout, 'utf8') + Buffer.byteLength(stderr, 'utf8')
+  const outputBounded = combinedBytes <= WINDOWS_LISTING_MAX_BYTES && listingResult?.outputLimitExceeded !== true
+  const retainedBytes = outputBounded ? stdoutBytes : Buffer.alloc(0)
+  await writeFile(join(reportRoot, WINDOWS_ARCHIVE_LISTING_NAME), retainedBytes, { flag: 'wx', mode: 0o600 })
+  const diagnostic = {
+    schema: 'lean-windows-archive-membership-diagnostic/v1',
+    status: 'listing-failed',
+    failureCode:
+      listingResult?.outputLimitExceeded === true || !outputBounded
+        ? 'listing-output-limit-exceeded'
+        : listingResult?.timedOut === true
+          ? 'listing-timed-out'
+          : listingFailure
+            ? 'listing-command-failed'
+            : 'listing-result-invalid',
+    listing: {
+      file: WINDOWS_ARCHIVE_LISTING_NAME,
+      retained: outputBounded,
+      complete: false,
+      bytes: retainedBytes.length,
+      sha256: createHash('sha256').update(retainedBytes).digest('hex'),
+      capturedStdoutBytes: stdoutBytes.length,
+      capturedCombinedOutputBytes: combinedBytes,
+      command: typeof listingResult?.command === 'string' ? listingResult.command.slice(0, 4096) : null,
+      args: Array.isArray(listingResult?.args)
+        ? listingResult.args.slice(0, 16).map((arg) => String(arg).slice(0, 4096))
+        : [],
+      exitCode: Number.isSafeInteger(listingResult?.exitCode) ? listingResult.exitCode : null,
+      signal: listingResult?.signal === null || typeof listingResult?.signal === 'string' ? listingResult.signal : null,
+      timedOut: listingResult?.timedOut === true,
+      outputLimitExceeded: listingResult?.outputLimitExceeded === true
+    },
+    archive: { bytes: evidence.archiveBytes, sha256: evidence.archiveSha256 },
+    tool: { bytes: evidence.toolBytes, sha256: evidence.toolSha256 },
+    diagnosticSourceSha256: evidence.diagnosticSourceSha256
+  }
+  await writeBoundedWindowsArchiveDiagnostic(reportRoot, diagnostic)
+  return diagnostic
+}
+
+function windowsListingMetadata(listingResult, listingBytes, complete) {
+  return {
+    file: WINDOWS_ARCHIVE_LISTING_NAME,
+    retained: true,
+    complete,
+    bytes: listingBytes.length,
+    sha256: createHash('sha256').update(listingBytes).digest('hex'),
+    command: listingResult.command,
+    args: listingResult.args,
+    exitCode: listingResult.exitCode,
+    signal: listingResult.signal,
+    timedOut: listingResult.timedOut,
+    outputLimitExceeded: listingResult.outputLimitExceeded
+  }
+}
+
+async function writeBoundedWindowsArchiveDiagnostic(reportRoot, diagnostic) {
+  const bytes = Buffer.from(`${JSON.stringify(diagnostic, null, 2)}\n`, 'utf8')
+  if (bytes.length > WINDOWS_DIAGNOSTIC_MAX_BYTES)
+    throw new Error('Windows archive membership diagnostic exceeds its 256000-byte evidence limit')
+  await writeFile(join(reportRoot, WINDOWS_ARCHIVE_DIAGNOSTIC_NAME), bytes, { flag: 'wx', mode: 0o600 })
+}
+
 export function deriveNsisCustomFiles(entries, extensions) {
   if (
     !Array.isArray(extensions) ||
@@ -356,9 +540,67 @@ export async function runWindowsDiagnostics(context, { run, redact, sevenZipPath
   const captured = await sha256File(archivePathname)
   if (captured.bytes !== capture.archiveBytes || captured.sha256 !== capture.archiveSha256)
     throw new Error('Captured NSIS archive identity differs from observer record')
-  const listing = await run(sevenZip, ['l', '-slt', archivePathname], { cwd: scratchRoot, timeoutMs: 10 * 60_000 })
-  const slt = parse7zListing(listing.stdout)
-  const members = archiveMembers(slt)
+  let listing
+  let listingFailure = null
+  try {
+    listing = await run(sevenZip, ['l', '-slt', archivePathname], { cwd: scratchRoot, timeoutMs: 10 * 60_000 })
+  } catch (error) {
+    listingFailure = error
+    listing = error?.result ?? null
+  }
+  const diagnosticSource = await sha256File(new URL(import.meta.url))
+  const listingStdout = typeof listing?.stdout === 'string' ? listing.stdout : ''
+  const listingStderr = typeof listing?.stderr === 'string' ? listing.stderr : ''
+  const listingCombinedBytes = Buffer.byteLength(listingStdout, 'utf8') + Buffer.byteLength(listingStderr, 'utf8')
+  const listingResultValid =
+    !listingFailure &&
+    listing &&
+    listing.command === sevenZip &&
+    listing.exitCode === 0 &&
+    listing.signal === null &&
+    listing.timedOut === false &&
+    listing.outputLimitExceeded === false &&
+    Array.isArray(listing.args) &&
+    listing.args.length === 3 &&
+    listing.args[0] === 'l' &&
+    listing.args[1] === '-slt' &&
+    listing.args[2] === archivePathname &&
+    listingCombinedBytes <= WINDOWS_LISTING_MAX_BYTES
+  if (!listingResultValid) {
+    await writeWindowsArchiveListingEvidence(reportRoot, listing, listingFailure, {
+      archiveBytes: capture.archiveBytes,
+      archiveSha256: capture.archiveSha256,
+      toolBytes: sevenZipIdentity.bytes,
+      toolSha256: sevenZipIdentity.sha256,
+      diagnosticSourceSha256: diagnosticSource.sha256
+    })
+    throw listingFailure ?? new Error('Windows 7za -slt listing did not complete within its bounded identity')
+  }
+  const listingBytes = Buffer.from(listingStdout, 'utf8')
+  await writeFile(join(reportRoot, WINDOWS_ARCHIVE_LISTING_NAME), listingBytes, { flag: 'wx', mode: 0o600 })
+  const listingEvidence = windowsListingMetadata(listing, listingBytes, true)
+  let slt
+  let members
+  try {
+    slt = parse7zListing(listingStdout)
+    if (!Array.isArray(slt.records) || slt.records.length === 0)
+      throw new Error('Windows 7za -slt listing contains no member records')
+    members = archiveMembers(slt)
+    if (members.length !== slt.records.length)
+      throw new Error('Windows 7za -slt listing contains an unclassified member record')
+  } catch (error) {
+    await writeBoundedWindowsArchiveDiagnostic(reportRoot, {
+      schema: 'lean-windows-archive-membership-diagnostic/v1',
+      status: 'invalid-records',
+      failureCode: 'invalid-slt-member-records',
+      failureMessage: String(error?.message ?? error).slice(0, 512),
+      listing: listingEvidence,
+      archive: { bytes: capture.archiveBytes, sha256: capture.archiveSha256 },
+      tool: { bytes: sevenZipIdentity.bytes, sha256: sevenZipIdentity.sha256 },
+      diagnosticSourceSha256: diagnosticSource.sha256
+    })
+    throw error
+  }
   const appFiles = appManifest.entries.filter((entry) => entry.type === 'file')
   const direct = deriveNsisCustomFiles(appManifest.entries, capture.preCompressedFileExtensions)
   if (direct.missingResourcesRoot) throw new Error('Builder resources root is absent from app manifest')
@@ -379,6 +621,21 @@ export async function runWindowsDiagnostics(context, { run, redact, sevenZipPath
   const memberPaths = new Set(members.map((member) => member.path))
   const directPaths = new Set(directFiles.map((entry) => entry.path))
   const expectedArchiveEntries = appManifest.entries.filter((entry) => !directPaths.has(entry.path))
+  const membershipDiagnostic = summarizeArchiveMemberMismatch(expectedArchiveEntries, members, slt)
+  await writeBoundedWindowsArchiveDiagnostic(reportRoot, {
+    schema: 'lean-windows-archive-membership-diagnostic/v1',
+    status:
+      membershipDiagnostic.mismatchClasses.missingPaths ||
+      membershipDiagnostic.mismatchClasses.unexpectedPaths ||
+      membershipDiagnostic.mismatchClasses.changedPaths
+        ? 'identity-mismatch'
+        : 'identity-match',
+    listing: listingEvidence,
+    archive: { bytes: capture.archiveBytes, sha256: capture.archiveSha256 },
+    tool: { bytes: sevenZipIdentity.bytes, sha256: sevenZipIdentity.sha256 },
+    diagnosticSourceSha256: diagnosticSource.sha256,
+    ...membershipDiagnostic
+  })
   const archiveMembership = assertArchiveMembersMatch(expectedArchiveEntries, members, 'builder NSIS 7z')
   const unexpectedExcluded = appFiles
     .filter((entry) => !memberPaths.has(entry.path) && !directPaths.has(entry.path))

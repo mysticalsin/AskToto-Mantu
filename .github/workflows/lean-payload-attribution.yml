@@ -507,6 +507,8 @@ jobs:
             ${{ env.ATTRIBUTION_REPORT_ROOT }}/run-paths.json
             ${{ env.ATTRIBUTION_REPORT_ROOT }}/capture-hook-identity.json
             ${{ env.ATTRIBUTION_REPORT_ROOT }}/windows-archive-capture.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/windows-archive-listing.slt
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/windows-archive-membership-diagnostic.json
             ${{ env.ATTRIBUTION_REPORT_ROOT }}/app-manifest.json
             ${{ env.ATTRIBUTION_REPORT_ROOT }}/asar-members.json
             ${{ env.ATTRIBUTION_REPORT_ROOT }}/package-notices.json

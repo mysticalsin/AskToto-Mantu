@@ -15,7 +15,7 @@ import {
   runMacProbe,
   runWindowsDiagnostics
 } from './lean-payload-compression.mjs'
-import { sha256File, walkTree } from './lean-payload-attribution.mjs'
+import { sha256File, validateReportArtifactRoster, walkTree } from './lean-payload-attribution.mjs'
 
 const roots: string[] = []
 const require = createRequire(import.meta.url)
@@ -359,7 +359,7 @@ describe('lean native diagnostic contracts', () => {
     })
   })
 
-  it('retains native smoke tool evidence and reaches Windows archive inventory with a controlled runner', async () => {
+  it('retains bounded Windows SLT evidence and mismatch details before strict archive identity rejection', async () => {
     const root = await temporaryRoot()
     const payloadRoot = join(root, 'payload')
     const scratch = join(root, 'scratch')
@@ -409,14 +409,27 @@ describe('lean native diagnostic contracts', () => {
       })
     )
     const windowsCommands: string[][] = []
-    const windowsRun = async (_command: string, args: string[]) => {
+    const windowsRun = async (command: string, args: string[]) => {
       windowsCommands.push(args)
-      if (args[0] === 'i') return { stdout: 'controlled 7za version', args, exitCode: 0 }
+      if (args[0] === 'i')
+        return {
+          command,
+          stdout: 'controlled 7za version',
+          args,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimitExceeded: false
+        }
       if (args[0] === 'l')
         return {
-          stdout: 'Path = builder-nsis.7z\nType = 7z\n\n----------\nPath = resources\nFolder = +\nSize = 0\n',
+          command,
+          stdout: 'Path = builder-nsis.7z\nType = 7z\n\n----------\nPath = resources\nFolder = -\nSize = 0\n',
           args,
-          exitCode: 0
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimitExceeded: false
         }
       if (args[0] === 't') throw new Error('controlled stop after archive inventory')
       throw new Error(`Unexpected controlled 7za command: ${args.join(' ')}`)
@@ -434,8 +447,112 @@ describe('lean native diagnostic contracts', () => {
         },
         { run: windowsRun, redact: String, sevenZipPath }
       )
-    ).rejects.toThrow('controlled stop after archive inventory')
-    expect(windowsCommands.map((args) => args[0])).toEqual(['i', 'l', 't'])
+    ).rejects.toThrow('builder NSIS 7z archive member identity mismatch missing=0 unexpected=0 changed=1')
+    expect(windowsCommands.map((args) => args[0])).toEqual(['i', 'l'])
+    const listingText = 'Path = builder-nsis.7z\nType = 7z\n\n----------\nPath = resources\nFolder = -\nSize = 0\n'
+    const listingPath = join(windowsReportRoot, 'windows-archive-listing.slt')
+    const diagnosticPath = join(windowsReportRoot, 'windows-archive-membership-diagnostic.json')
+    expect(await readFile(listingPath, 'utf8')).toBe(listingText)
+    const diagnostic = JSON.parse(await readFile(diagnosticPath, 'utf8'))
+    expect(diagnostic).toMatchObject({
+      schema: 'lean-windows-archive-membership-diagnostic/v1',
+      status: 'identity-mismatch',
+      archive: { bytes: archiveBytes.length, sha256: createHash('sha256').update(archiveBytes).digest('hex') },
+      tool: await sha256File(sevenZipPath),
+      mismatchClasses: {
+        missingPaths: 0,
+        unexpectedPaths: 0,
+        changedPaths: 1,
+        typeDifferences: 1,
+        byteCountDifferences: 0,
+        linkTargetDifferences: 0
+      },
+      crossTab: [{ expectedType: 'directory', actualType: 'file', byteCounts: 'equal', count: 1 }],
+      sample: [
+        { path: 'resources', classification: 'changed', nativeRow: { Path: 'resources', Folder: '-', Size: '0' } }
+      ]
+    })
+    expect(diagnostic.listing).toMatchObject({
+      file: 'windows-archive-listing.slt',
+      retained: true,
+      complete: true,
+      bytes: Buffer.byteLength(listingText),
+      sha256: createHash('sha256').update(listingText).digest('hex'),
+      command: sevenZipPath,
+      args: ['l', '-slt', archivePath],
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      outputLimitExceeded: false
+    })
+    expect(diagnostic.diagnosticSourceSha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(
+      validateReportArtifactRoster(['windows-archive-listing.slt', 'windows-archive-membership-diagnostic.json'])
+    ).toEqual(['windows-archive-listing.slt', 'windows-archive-membership-diagnostic.json'])
+    expect(() => validateReportArtifactRoster(['windows-archive-listing-private.slt'])).toThrow(/Non-report artifact/)
+
+    const failedReportRoot = join(root, 'windows-limited-reports')
+    const failedScratchRoot = join(root, 'windows-limited-scratch')
+    await mkdir(failedReportRoot)
+    await mkdir(failedScratchRoot)
+    const failedArchivePath = join(failedScratchRoot, 'builder-nsis.7z')
+    await writeFile(failedArchivePath, archiveBytes)
+    await writeFile(
+      join(failedReportRoot, 'windows-archive-capture.json'),
+      JSON.stringify({
+        archiveBytes: archiveBytes.length,
+        archiveSha256: createHash('sha256').update(archiveBytes).digest('hex'),
+        archiveName: 'builder-nsis.7z',
+        preCompressedFileExtensions: []
+      })
+    )
+    const limitedRun = async (command: string, args: string[]) => {
+      if (args[0] === 'i')
+        return {
+          command,
+          stdout: 'controlled 7za version',
+          args,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimitExceeded: false
+        }
+      if (args[0] === 'l')
+        return {
+          command,
+          stdout: 'partial listing prefix',
+          stderr: '',
+          args,
+          exitCode: null,
+          signal: 'SIGTERM',
+          timedOut: true,
+          outputLimitExceeded: true
+        }
+      throw new Error(`Unexpected limited runner command: ${args.join(' ')}`)
+    }
+    await expect(
+      runWindowsDiagnostics(
+        {
+          appRoot,
+          appManifest,
+          reportRoot: failedReportRoot,
+          scratchRoot: failedScratchRoot,
+          installer: '',
+          payloadRoot,
+          report: {}
+        },
+        { run: limitedRun, redact: String, sevenZipPath }
+      )
+    ).rejects.toThrow('Windows 7za -slt listing did not complete within its bounded identity')
+    expect(await readFile(join(failedReportRoot, 'windows-archive-listing.slt'))).toHaveLength(0)
+    const failedDiagnostic = JSON.parse(
+      await readFile(join(failedReportRoot, 'windows-archive-membership-diagnostic.json'), 'utf8')
+    )
+    expect(failedDiagnostic).toMatchObject({
+      status: 'listing-failed',
+      failureCode: 'listing-output-limit-exceeded',
+      listing: { retained: false, complete: false, outputLimitExceeded: true, timedOut: true }
+    })
   })
 
   it('marks a changed raw image failed and never writes a complete probe', async () => {
