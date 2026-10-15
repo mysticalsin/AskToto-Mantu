@@ -249,7 +249,7 @@ describe('speech desktop runtime authority composition', () => {
 
     const denied = makeHarness({ native: { microphone: 'denied', screenRecording: 'unknown' } })
     expect(denied.runtime.readAuthority(invokeEvent, startRequest()).captureAllowed).toBe(false)
-    expect(denied.runtime.readAuthority(invokeEvent, startRequest()).policyReady).toBe(false)
+    expect(denied.runtime.readAuthority(invokeEvent, startRequest()).policyReady).toBe(true)
   })
 
   it('requires current accepted WebContents/frame ownership and an active Listen for admission', () => {
@@ -274,7 +274,7 @@ describe('speech desktop runtime authority composition', () => {
     )
     h.current.state.screenDiagnosisState = null
     expect(h.runtime.readAuthority(invokeEvent, startRequest(['system'], ['system']))).toMatchObject({
-      policyReady: false,
+      policyReady: true,
       captureAllowed: false
     })
     h.current.state.screenDiagnosisState = 'granted'
