@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "evidenceStatus": "OBSERVED_BYTE_VERIFIED_NOT_COMPATIBILITY_QUALIFIED",
+  "derivative": {
+    "package": "global-agent",
+    "version": "4.1.3",
+    "path": "vendor/global-agent/4.1.3-metis-ip-host.tgz",
+    "bytes": 17984,
+    "sha256": "d8980b684aa265bb4398b472fb70d41e0475c5d430189eb917f3ce646edf8492",
+    "integrity": "sha512-p+KdYIWfdrsO/BPB3nN/b5Rr3/8c+3dP2bdF0O/bVk/+ReJIZXLxLFAxt75fAinv1LAdsWxZKDXDW8nzeJM+rQ==",
+    "locallyGenerated": false,
+    "localPackageExecution": false
+  },
+  "producerReadback": {
+    "sourceMethod": "authenticated GitHub job log indexed base64 readback",
+    "runId": 38656992748,
+    "jobId": 116169131600,
+    "sourceCommit": "73cefb68eef48cacca59ce63b9e974b825413e2a",
+    "runURL": "https://github.com/mysticalsin/AskToto-Mantu/actions/runs/38656992748",
+    "jobURL": "https://github.com/mysticalsin/AskToto-Mantu/actions/runs/38656992748/job/116169131600"
+  },
+  "comparison": {
+    "sourcePackage": "global-agent@4.1.3",
+    "sourceTarball": "https://registry.npmjs.org/global-agent/-/global-agent-4.1.3.tgz",
+    "sourceTarballSha256": "478ca4fff13292091adabb7f8ef985bf952f809cbf53ee5f9828ebd49b47a0a8",
+    "sourceIntegrity": "sha512-KUJEViiuFT3I97t+GYMikLPJS2Lfo/S2F+DQuBWzuzaMPnvt5yyZePzArx36fBzpGTxZjIpDbXLeySLgh+k76g==",
+    "members": 47,
+    "changedMembers": ["package/dist/classes/HttpsProxyAgent.js"],
+    "approvedDeltaBytes": 42,
+    "license": "BSD-3-Clause",
+    "licenseUnchanged": true,
+    "licensePath": "package/LICENSE"
+  },
+  "scope": {
+    "overrides": [
+      "onnxruntime-node@1.21.0 > global-agent",
+      "app-builder-lib > @electron/get@3.1.0 > global-agent"
+    ],
+    "status": "proposed; pending root review and GitHub Actions 10 TLS / 3 OS matrix"
+  }
+}
