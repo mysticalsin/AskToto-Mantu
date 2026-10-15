@@ -409,7 +409,8 @@ jobs:
                           os.close(descriptor)
 
               command_order = [
-                  "git-head", "sw-vers", "uname-machine", "hdiutil-help", "create-udrw",
+                  "git-head", "sw-vers", "uname-machine", "hdiutil-help",
+                  "xattr-write", "xattr-readback", "create-udrw",
                   "imageinfo-udrw", "attach-udrw", "diskutil-info-udrw", "detach-udrw",
                   "hdiutil-info-after-detach-udrw", "convert-udbz", "verify-udbz",
                   "imageinfo-udbz", "attach-udbz", "diskutil-info-udbz", "detach-udbz",
@@ -707,8 +708,8 @@ jobs:
           try:
               spool_dir.mkdir(mode=0o700)
               metadata["workflowSha256"] = digest(Path(".github/workflows/lean-dmg-native-schema.yml").read_bytes())
-              metadata["tools"] = {name: tool_identity(name) for name in ("hdiutil", "diskutil", "python3")}
-              for name, expected_path in (("hdiutil", "/usr/bin/hdiutil"), ("diskutil", "/usr/sbin/diskutil")):
+              metadata["tools"] = {name: tool_identity(name) for name in ("hdiutil", "diskutil", "python3", "xattr")}
+              for name, expected_path in (("hdiutil", "/usr/bin/hdiutil"), ("diskutil", "/usr/sbin/diskutil"), ("xattr", "/usr/bin/xattr")):
                   if Path(metadata["tools"][name]["path"]).resolve() != Path(expected_path).resolve():
                       raise ObservationFailure(f"{name}: resolved tool path differs from the exact command path")
               head = run("git-head", ["git", "rev-parse", "HEAD"])
@@ -734,10 +735,18 @@ jobs:
               (fixture / "relative-link").symlink_to("binary.dat")
               (fixture / ".background" / "decoration.bin").write_bytes(b"synthetic volume decoration\x00\x01")
               (fixture / ".VolumeIcon.icns").write_bytes(b"icns\x00\x00\x00\x08synthetic")
-              os.setxattr(binary, "com.metis.synthetic", b"attribute-bytes-01")
+              expected_attribute = b"attribute-bytes-01"
+              run("xattr-write", ["/usr/bin/xattr", "-wx", "com.metis.synthetic", expected_attribute.hex(), binary])
+              readback_hex = run("xattr-readback", ["/usr/bin/xattr", "-px", "com.metis.synthetic", binary])
+              try:
+                  observed_attribute = bytes.fromhex(readback_hex.decode("ascii", errors="strict"))
+              except (UnicodeDecodeError, ValueError) as error:
+                  raise ObservationFailure("xattr readback was not ASCII hexadecimal bytes") from error
+              if observed_attribute != expected_attribute:
+                  raise ObservationFailure("xattr readback differs from the authored fixture value")
               (Path(str(binary) + "/..namedfork/rsrc")).write_bytes(b"synthetic-resource-fork-01")
               metadata["fixture"] = [
-                  {"path": "binary.dat", "kind": "file", "bytes": binary.stat().st_size, "mode": oct(binary.stat().st_mode & 0o777), "sha256": digest(binary.read_bytes()), "xattr": "com.metis.synthetic", "resourceForkBytes": (Path(str(binary) + "/..namedfork/rsrc")).stat().st_size},
+                  {"path": "binary.dat", "kind": "file", "bytes": binary.stat().st_size, "mode": oct(binary.stat().st_mode & 0o777), "sha256": digest(binary.read_bytes()), "xattr": "com.metis.synthetic", "xattrBytes": len(observed_attribute), "xattrSha256": digest(observed_attribute), "resourceForkBytes": (Path(str(binary) + "/..namedfork/rsrc")).stat().st_size},
                   {"path": "empty.dat", "kind": "file", "bytes": empty.stat().st_size, "sha256": digest(empty.read_bytes())},
                   {"path": "executable.sh", "kind": "file", "bytes": executable.stat().st_size, "mode": oct(executable.stat().st_mode & 0o777), "sha256": digest(executable.read_bytes())},
                   {"path": "relative-link", "kind": "symlink", "target": os.readlink(fixture / "relative-link")},
