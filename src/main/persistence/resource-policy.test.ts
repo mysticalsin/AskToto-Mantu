@@ -25,6 +25,16 @@ import {
   type TrustedEd25519Keys
 } from './resource-policy'
 
+vi.mock('electron')
+
+// The repository Electron mock intentionally exposes only the APIs used by most
+// tests. This physical resource fixture also needs app.getAppPath(), which the
+// mock does not currently provide.
+const mockedApp = Object.assign(app, {
+  isPackaged: false,
+  getAppPath: vi.fn(() => process.cwd())
+})
+
 const catalogBytes = new Uint8Array(readFileSync(resolve(process.cwd(), 'resources/persistence-profiles.v1.json')))
 const runtime: RuntimeIdentity = {
   platform: 'linux',
@@ -401,7 +411,7 @@ describe('persistence resource policy contracts', () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'metis-qualified-policy-'))
     const resources = resolve(directory, 'resources')
     mkdirSync(resources)
-    const getAppPath = vi.spyOn(app, 'getAppPath').mockReturnValue(directory)
+    const getAppPath = vi.spyOn(mockedApp, 'getAppPath').mockReturnValue(directory)
     try {
       const parsed = parseProfileCatalog(catalogBytes)
       expect(parsed).not.toBeNull()
