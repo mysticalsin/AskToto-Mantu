@@ -49,7 +49,7 @@ jobs:
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
       PERSISTENCE_SETTLEMENT_PHASE: persistence-k1-red
-      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 7254798aafdcbced95a933d62fbef8522672e375
+      PERSISTENCE_SETTLEMENT_PARENT_COMMIT: 798c21c5d97819fea1e1c8d6dc3bc9da8668e469
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -74,19 +74,26 @@ jobs:
           echo "UNHANDLED_REPORT_PATH=$SETTLEMENT_REPORT_DIR/unhandled.json" >> "$GITHUB_ENV"
           echo "SETTLEMENT_RECEIPT_PATH=$SETTLEMENT_REPORT_DIR/receipt.json" >> "$GITHUB_ENV"
           echo "REPORT_STARTED_AT_MS=$(date -u +%s%3N)" >> "$GITHUB_ENV"
-      - name: Verify the exact five-path test-first change envelope
+      - name: Verify the exact successor and cumulative test-first change envelopes
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD^)" = "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT"
+          test "$(git rev-parse "${PERSISTENCE_SETTLEMENT_PARENT_COMMIT}^")" = "7254798aafdcbced95a933d62fbef8522672e375"
           actual_paths="$(git diff --name-only "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA" | LC_ALL=C sort)"
           expected_paths="$(printf '%s\n' \
+            .github/workflows/persistence-settlement.yml \
+            scripts/qa/check-persistence-settlement-report.mjs \
+            src/main/persistence/bootstrap-main-factory.integration.test.ts | LC_ALL=C sort)"
+          test "$actual_paths" = "$expected_paths"
+          cumulative_paths="$(git diff --name-only 7254798aafdcbced95a933d62fbef8522672e375 "$GITHUB_SHA" | LC_ALL=C sort)"
+          cumulative_expected="$(printf '%s\n' \
             .github/workflows/persistence-settlement.yml \
             scripts/qa/check-persistence-settlement-report.mjs \
             src/main/persistence/bootstrap-main-factory.integration.test.ts \
             src/main/persistence/legacy-file-key.test.ts \
             src/main/persistence/protected-meeting-keys.test.ts | LC_ALL=C sort)"
-          test "$actual_paths" = "$expected_paths"
+          test "$cumulative_paths" = "$cumulative_expected"
           git diff --check "$PERSISTENCE_SETTLEMENT_PARENT_COMMIT" "$GITHUB_SHA"
       - name: Install the frozen Node 22 test dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund

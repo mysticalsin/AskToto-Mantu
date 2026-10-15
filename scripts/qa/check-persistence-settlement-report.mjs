@@ -1247,7 +1247,7 @@ function validate() {
   requireValue(process.env.VITEST_EXIT_CODE === '1', 'Vitest did not return the required actual K1 RED exit')
   requireValue(process.env.GITHUB_JOB === 'test-first', 'reporter job binding is not test-first')
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === '7254798aafdcbced95a933d62fbef8522672e375',
+    process.env.PERSISTENCE_SETTLEMENT_PARENT_COMMIT === '798c21c5d97819fea1e1c8d6dc3bc9da8668e469',
     'reviewed parent commit binding is invalid'
   )
   requireValue(process.version === 'v22.22.3', 'Node runtime is not the pinned 22.22.3')

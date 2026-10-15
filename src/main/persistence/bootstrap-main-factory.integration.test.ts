@@ -87,9 +87,20 @@ type K1StoreRecord = {
   selected: boolean
 }
 type K1OperationOutcome = { status: 'fulfilled'; value: unknown } | { status: 'rejected'; error: unknown }
+type K1StatPhase = {
+  status: 'not-started' | 'pending' | 'fulfilled' | 'rejected'
+  promise: Promise<unknown> | null
+  outcome: K1OperationOutcome | null
+}
+type K1StatObservation = {
+  observeRaw: (promise: Promise<unknown>) => void
+  observeDelivery: (promise: Promise<unknown>) => void
+  rejectInvocation: (error: unknown) => void
+}
 type K1FactoryOwnerRef = {
   rawHandles: K1RawRecord[]
   reserveOperation(role?: 'work' | 'cleanup' | 'opaque'): void
+  reserveStat(): K1StatObservation
   observeReserved<T>(
     label: string,
     operation: Promise<T>,
@@ -286,12 +297,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
             }
           if (property === 'stat')
             return (...statArgs: Parameters<typeof target.stat>) => {
-              if (k1Record) {
-                owner?.reserveOperation()
-                owner?.reserveOperation()
+              const observation = k1Record && owner ? owner.reserveStat() : null
+              let statPromise: ReturnType<typeof target.stat>
+              try {
+                statPromise = target.stat(...statArgs)
+              } catch (error) {
+                observation?.rejectInvocation(error)
+                throw error
               }
-              const statPromise = target.stat(...statArgs)
-              if (k1Record) observeK1Operation('raw-stat', statPromise)
+              observation?.observeRaw(statPromise)
               const delivered = statPromise.then(async (result) => {
                 if (k1Record)
                   k1Record.stats.push({
@@ -324,7 +338,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
                 }
                 return result
               })
-              if (k1Record) observeK1Operation('raw-stat-delivery', delivered)
+              observation?.observeDelivery(delivered)
               return delivered
             }
           if (property === 'writeFile')
@@ -2345,6 +2359,7 @@ describe('main persistence factory source fixture', () => {
     duringFinalizer: boolean
     settled: Promise<K1OperationOutcome>
     outcome: K1OperationOutcome | null
+    statPhases: { raw: K1StatPhase; delivery: K1StatPhase } | null
   }
   type K1JournalRecord = {
     journal: Awaited<ReturnType<ReturnType<typeof createMainPersistenceBootstrapWithSourceFixture>['openNew']>>
@@ -2448,7 +2463,8 @@ describe('main persistence factory source fixture', () => {
         role,
         duringFinalizer: this.finalizing,
         settled: null as unknown as Promise<K1OperationOutcome>,
-        outcome: null
+        outcome: null,
+        statPhases: null
       }
       record.settled = operation.then(
         (value): K1OperationOutcome => {
@@ -2467,6 +2483,74 @@ describe('main persistence factory source fixture', () => {
       k1Gate.operations.push(record)
       this.byPromise.set(operation, record)
       return record
+    }
+    reserveStat(): K1StatObservation {
+      this.reserveOperation()
+      const phases = {
+        raw: { status: 'not-started', promise: null, outcome: null } as K1StatPhase,
+        delivery: { status: 'not-started', promise: null, outcome: null } as K1StatPhase
+      }
+      let settle!: (outcome: K1OperationOutcome) => void
+      const record: K1FactoryOperation = {
+        label: 'raw-stat',
+        role: 'work',
+        duringFinalizer: this.finalizing,
+        settled: new Promise<K1OperationOutcome>((resolve) => {
+          settle = resolve
+        }),
+        outcome: null,
+        statPhases: phases
+      }
+      this.operations.push(record)
+      k1Gate.operations.push(record)
+      const complete = (outcome: K1OperationOutcome) => {
+        if (record.outcome) return
+        record.outcome = outcome
+        settle(outcome)
+      }
+      const completeAfterBoth = () => {
+        if (phases.raw.outcome && phases.delivery.outcome) complete(phases.delivery.outcome)
+      }
+      return {
+        observeRaw: (promise) => {
+          phases.raw.promise = promise
+          phases.raw.status = 'pending'
+          void promise.then(
+            (value) => {
+              phases.raw.outcome = { status: 'fulfilled', value }
+              phases.raw.status = 'fulfilled'
+              completeAfterBoth()
+            },
+            (error: unknown) => {
+              phases.raw.outcome = { status: 'rejected', error }
+              phases.raw.status = 'rejected'
+              completeAfterBoth()
+            }
+          )
+        },
+        observeDelivery: (promise) => {
+          phases.delivery.promise = promise
+          phases.delivery.status = 'pending'
+          this.byPromise.set(promise, record)
+          void promise.then(
+            (value) => {
+              phases.delivery.outcome = { status: 'fulfilled', value }
+              phases.delivery.status = 'fulfilled'
+              completeAfterBoth()
+            },
+            (error: unknown) => {
+              phases.delivery.outcome = { status: 'rejected', error }
+              phases.delivery.status = 'rejected'
+              completeAfterBoth()
+            }
+          )
+        },
+        rejectInvocation: (error) => {
+          phases.raw.outcome = { status: 'rejected', error }
+          phases.raw.status = 'rejected'
+          complete(phases.raw.outcome)
+        }
+      }
     }
     start<T>(label: string, start: () => Promise<T> | T, role: 'work' | 'cleanup' | 'opaque' = 'work'): Promise<T> {
       if (role !== 'cleanup') this.checkAdmission()
@@ -2630,6 +2714,13 @@ describe('main persistence factory source fixture', () => {
         await Promise.all([...this.operations, ...this.cleanupOperations].map((item) => item.settled))
       }
     }
+    private collectOperationFailures(operation: K1FactoryOperation, failures: unknown[]): void {
+      if (operation.statPhases) {
+        const { raw, delivery } = operation.statPhases
+        if (raw.outcome?.status === 'rejected') failures.push(raw.outcome.error)
+        if (delivery.outcome?.status === 'rejected') failures.push(delivery.outcome.error)
+      } else if (operation.outcome?.status === 'rejected') failures.push(operation.outcome.error)
+    }
     private async physicalCleanup(): Promise<void> {
       this.finalizing = true
       this.sealed = true
@@ -2647,8 +2738,7 @@ describe('main persistence factory source fixture', () => {
       if (!body) failures.push(new Error('K1 fixture custody failure: actual factory body missing'))
       await this.drain()
       for (const operation of this.operations)
-        if ((operation.role === 'opaque' || operation.duringFinalizer) && operation.outcome?.status === 'rejected')
-          failures.push(operation.outcome.error)
+        if (operation.role === 'opaque' || operation.duringFinalizer) this.collectOperationFailures(operation, failures)
       if (this.unexpectedOpeningFailure) failures.push(this.unexpectedOpeningFailure.error)
       for (const journal of this.journals) {
         if (journal.attempts.length === 0) {
@@ -2732,8 +2822,7 @@ describe('main persistence factory source fixture', () => {
         failures.push(new Error('K1 fixture custody failure: pending acquisition reservations remain'))
       if (this.workers.some((worker) => !worker.didExit))
         failures.push(new Error('K1 fixture custody failure: worker exit unconfirmed'))
-      for (const operation of this.cleanupOperations)
-        if (operation.outcome?.status === 'rejected') failures.push(operation.outcome.error)
+      for (const operation of this.cleanupOperations) this.collectOperationFailures(operation, failures)
       if (this.failure) failures.push(this.failure)
       if (this.expired || Date.now() >= this.finalization!.deadline)
         failures.push(new Error('K1 fixture custody failure: shared cleanup budget expired'))
@@ -2800,8 +2889,8 @@ describe('main persistence factory source fixture', () => {
           this.requestStop(error)
           const observedFailures: unknown[] = []
           for (const operation of this.operations)
-            if ((operation.role === 'opaque' || operation.duringFinalizer) && operation.outcome?.status === 'rejected')
-              observedFailures.push(operation.outcome.error)
+            if (operation.role === 'opaque' || operation.duringFinalizer)
+              this.collectOperationFailures(operation, observedFailures)
           if (this.unexpectedOpeningFailure) observedFailures.push(this.unexpectedOpeningFailure.error)
           for (const journal of this.journals)
             for (const attempt of journal.attempts)
@@ -2813,8 +2902,7 @@ describe('main persistence factory source fixture', () => {
               observedFailures.push(store.productionDisposeOutcome.error)
             if (store.rescueOutcome?.status === 'rejected') observedFailures.push(store.rescueOutcome.error)
           }
-          for (const operation of this.cleanupOperations)
-            if (operation.outcome?.status === 'rejected') observedFailures.push(operation.outcome.error)
+          for (const operation of this.cleanupOperations) this.collectOperationFailures(operation, observedFailures)
           const reasons: unknown[] = []
           for (const candidate of [
             ...(record.bodyOutcome?.status === 'rejected' ? [record.bodyOutcome.error] : []),
