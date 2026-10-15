@@ -7,6 +7,11 @@ const workflow = readFileSync(join(root, '.github', 'workflows', 'promote-candid
   /\r\n/g,
   '\n'
 )
+const candidateWorkflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n'
+)
+const candidateJobsGate = readFileSync(join(root, 'scripts', 'qa', 'candidate-jobs.mjs'), 'utf8')
 
 const steps = workflow
   .slice(workflow.indexOf('\n    steps:\n'))
@@ -34,8 +39,8 @@ describe('M2-0503 promote-candidate residuals input', () => {
   })
 
   it('passes residuals to prepare-release through env and a file, never interpolated into a shell line', () => {
-    expect(workflow.match(/RESIDUALS: \$\{\{ inputs\.residuals \}\}/g)).toHaveLength(2)
-    expect(workflow.match(/inputs\.residuals/g)).toHaveLength(2)
+    expect(workflow.match(/RESIDUALS: \$\{\{ inputs\.residuals \}\}/g)).toHaveLength(3)
+    expect(workflow.match(/inputs\.residuals/g)).toHaveLength(3)
     expect(workflow).toContain('printf \'%s\' "$RESIDUALS" > "$RUNNER_TEMP/residuals.md"')
     expect(workflow).toContain('--residuals-file "$RUNNER_TEMP/residuals.md"')
     for (const line of workflow.split('\n')) {
@@ -45,6 +50,14 @@ describe('M2-0503 promote-candidate residuals input', () => {
 })
 
 describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500)', () => {
+  it('keeps the held owner-Mac diagnostic names aligned with qa-candidate', () => {
+    for (const name of ['ST-1 control (no fixtures)', 'ST-1 fifo stall row (macOS)']) {
+      expect(candidateWorkflow).toContain(`name: ${name}`)
+      expect(candidateWorkflow).toContain('if: ${{ false }}')
+      expect(candidateJobsGate).toContain(`'${name}'`)
+    }
+  })
+
   it('still promotes only from a dispatch on refs/heads/main, in this repository', () => {
     expect(workflow).toMatch(
       /^    if: github\.repository == 'mysticalsin\/AskToto-Mantu' && github\.ref == 'refs\/heads\/main'$/m
@@ -61,8 +74,14 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
     expect(jq).toContain('.run_attempt > 0')
     expect(step('Require a fully successful')).toContain('attempt=$(jq -r .run_attempt')
     expect(jq.match(/head_branch/g)).toHaveLength(2)
-    expect(step('Require a fully successful')).toContain('all(.jobs[]; .conclusion == "success")')
-    expect(step('Require a fully successful')).toContain('.total_count == (.jobs | length)')
+    const check = step('Require a fully successful')
+    expect(check).toContain('.total_count == (.jobs | length)')
+    expect(check).toContain('node scripts/qa/candidate-jobs.mjs \\')
+    expect(check).toContain('"$RUNNER_TEMP/candidate-jobs.json" "$RUNNER_TEMP/residuals.md" \\')
+    expect(check).toContain('"${disclosure_flag[@]}"')
+    expect(check).toContain('RESIDUALS: ${{ inputs.residuals }}')
+    expect(check).toContain('if [ "$PUBLISH" = true ]; then disclosure_flag+=(--require-disclosure); fi')
+    expect(check).not.toContain('all(.jobs[]; .conclusion == "success")')
   })
 
   it('checks the branch and version with release-line.mjs before it downloads any artifact', () => {
