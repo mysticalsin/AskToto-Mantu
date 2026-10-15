@@ -1,5 +1,6 @@
 // Closed contract for the exact retained publisher run; no filesystem or process effects.
 import { createHash } from 'node:crypto'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 
 const MAX_SOURCE_LOCK_BYTES = 20_000_000
 
@@ -196,6 +197,104 @@ export function sourceLockDigests(bytes) {
   }
 }
 
+export const HISTORICAL_PRODUCER_LOCK_BLOB = '4d2f28a9c0e1fd8b6661a7f465177acb3e0b328c'
+export const HISTORICAL_PRODUCER_LOCK_SHA256 = 'f506327da376982205e807a275bb8ff3c5b10dd20949a1a22d8a00a41897e568'
+export const HISTORICAL_PRODUCER_CATALOG_SHA256 = '320d0808b1f2d266f00467e00ae20610ffbb0aee4de7f9426065c3aea16964c1'
+export const RETAINED_TRUST_ROOT_SHA256 = '6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66'
+export const RETAINED_TRUST_RECEIPT_SHA256 = '1ad8c2f7d308b9c2a76cbbc48c8880c338a8f89f44f9ce7427ecf99acc6ec456'
+
+function bytesSha256(bytes) {
+  return bytes instanceof Uint8Array ? createHash('sha256').update(bytes).digest('hex') : null
+}
+
+/**
+ * Validate only the immutable producer inputs retained for this readback.
+ * The verifier's own package lock is intentionally absent from this contract.
+ */
+export function validateHistoricalProducerInputs(input) {
+  if (
+    !exactKeys(input, [
+      'producerCommit',
+      'producerRef',
+      'producerLockBlob',
+      'producerLockBytes',
+      'catalogBytes',
+      'trustRootBytes',
+      'receiptBytes',
+      'readerTrustRootBytes',
+      'readerReceiptBytes'
+    ]) ||
+    input.producerCommit !== SOURCE_SHA ||
+    input.producerRef !== SOURCE_REF ||
+    input.producerLockBlob !== HISTORICAL_PRODUCER_LOCK_BLOB ||
+    bytesSha256(input.producerLockBytes) !== HISTORICAL_PRODUCER_LOCK_SHA256 ||
+    bytesSha256(input.catalogBytes) !== HISTORICAL_PRODUCER_CATALOG_SHA256 ||
+    bytesSha256(input.trustRootBytes) !== RETAINED_TRUST_ROOT_SHA256 ||
+    bytesSha256(input.receiptBytes) !== RETAINED_TRUST_RECEIPT_SHA256 ||
+    bytesSha256(input.readerTrustRootBytes) !== RETAINED_TRUST_ROOT_SHA256 ||
+    bytesSha256(input.readerReceiptBytes) !== RETAINED_TRUST_RECEIPT_SHA256
+  )
+    return null
+
+  const lockDigests = sourceLockDigests(input.producerLockBytes)
+  if (!lockDigests || lockDigests.canonicalLfSha256 !== HISTORICAL_PRODUCER_LOCK_SHA256) return null
+  let catalog
+  let receipt
+  try {
+    catalog = record(parseStrictJsonBytes(input.catalogBytes))
+    receipt = record(parseStrictJsonBytes(input.receiptBytes))
+  } catch {
+    return null
+  }
+  const trustRoot = catalog && record(catalog.trustRoot)
+  const receiptPin = trustRoot && record(trustRoot.receipt)
+  const verifiedBy = receipt && record(receipt.verifiedBy)
+  if (
+    !catalog ||
+    !trustRoot ||
+    !receiptPin ||
+    !receipt ||
+    !verifiedBy ||
+    !exactKeys(catalog, ['schemaVersion', 'protocolVersion', 'catalogId', 'trustRoot', 'targets']) ||
+    catalog.schemaVersion !== 1 ||
+    catalog.protocolVersion !== 1 ||
+    catalog.catalogId !== 'metis-runtime-catalog-v1' ||
+    !Array.isArray(catalog.targets) ||
+    catalog.targets.length !== 0 ||
+    !exactKeys(trustRoot, ['path', 'bytes', 'sha256', 'source', 'receipt']) ||
+    trustRoot.path !== 'runtime-trust/sigstore-trusted-root.json' ||
+    trustRoot.bytes !== input.trustRootBytes.byteLength ||
+    trustRoot.sha256 !== RETAINED_TRUST_ROOT_SHA256 ||
+    trustRoot.source !== 'https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json' ||
+    !exactKeys(receiptPin, ['path', 'bytes', 'sha256']) ||
+    receiptPin.path !== 'runtime-trust/acquisition-receipt.json' ||
+    receiptPin.bytes !== input.receiptBytes.byteLength ||
+    receiptPin.sha256 !== RETAINED_TRUST_RECEIPT_SHA256 ||
+    !exactKeys(receipt, [
+      'schemaVersion',
+      'source',
+      'verifiedBy',
+      'sourceCommit',
+      'workflowRef',
+      'workflowCommit',
+      'runId',
+      'attempt',
+      'lockSha256',
+      'rootBytes',
+      'rootSha256'
+    ]) ||
+    receipt.schemaVersion !== 1 ||
+    receipt.source !== trustRoot.source ||
+    !exactKeys(verifiedBy, ['package', 'version']) ||
+    verifiedBy.package !== '@sigstore/tuf' ||
+    verifiedBy.version !== '5.0.0' ||
+    receipt.rootBytes !== trustRoot.bytes ||
+    receipt.rootSha256 !== trustRoot.sha256
+  )
+    return null
+  return lockDigests
+}
+
 export const SOURCE_SHA = '613d7886504f608766022fa740b1ed7297e17b16'
 export const SOURCE_REF = 'refs/heads/m2/M2-0475-runtime-artifact-publisher'
 export const WORKFLOW_PATH = '.github/workflows/runtime-llama-candidate.yml'
@@ -203,6 +302,25 @@ export const RUN_ID = '38626866933'
 export const RUN_ATTEMPT = 1
 export const REPOSITORY_URI = 'https://github.com/mysticalsin/AskToto-Mantu'
 export const REPOSITORY_ID = '1282463398'
+
+export function validHistoricalProducerPaths(input) {
+  if (!exactKeys(input, ['verifierRoot', 'producerRoot', 'artifactRoot'])) return false
+  const paths = [input.verifierRoot, input.producerRoot, input.artifactRoot]
+  if (paths.some((path) => typeof path !== 'string' || !isAbsolute(path))) return false
+  const [verifierRoot, producerRoot, artifactRoot] = paths.map((path) => resolve(path))
+  const overlaps = (left, right) => {
+    const remainder = relative(left, right)
+    return remainder === '' || (remainder !== '..' && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder))
+  }
+  return (
+    verifierRoot !== producerRoot &&
+    dirname(verifierRoot) === dirname(producerRoot) &&
+    !overlaps(verifierRoot, artifactRoot) &&
+    !overlaps(artifactRoot, verifierRoot) &&
+    !overlaps(producerRoot, artifactRoot) &&
+    !overlaps(artifactRoot, producerRoot)
+  )
+}
 export const NATIVE_TARGETS = Object.freeze([
   { platform: 'darwin', arch: 'arm64', suffix: 'darwin-arm64' },
   { platform: 'darwin', arch: 'x64', suffix: 'darwin-x64' },

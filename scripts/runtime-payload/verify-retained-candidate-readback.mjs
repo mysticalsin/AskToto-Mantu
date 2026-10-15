@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { constants } from 'node:fs'
-import { lstat, open, readdir } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { lstat, open, readdir, realpath } from 'node:fs/promises'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { bundleFromJSON, bundleToJSON } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
@@ -20,7 +22,8 @@ import {
   WORKFLOW_PATH,
   expectedSourceLockSha256,
   parseStrictJsonBytes,
-  sourceLockDigests,
+  validHistoricalProducerPaths,
+  validateHistoricalProducerInputs,
   validBuilder,
   validFileRows,
   validModelInventory,
@@ -29,6 +32,8 @@ import {
   validSource
 } from './retained-candidate-contract.mjs'
 import { assertRequiredFulcioClaims, FULCIO_OID } from './sigstore-identity-claims.mjs'
+
+const execFileAsync = promisify(execFile)
 
 function fail(code) {
   throw new Error(code)
@@ -164,6 +169,83 @@ async function hashStableFile(path, maxBytes, code) {
   } finally {
     await handle.close()
   }
+}
+
+async function historicalProducerInputs(producerPath, artifactPath) {
+  const verifierPath = resolve(process.cwd())
+  const producerAbsolute = resolve(producerPath)
+  const artifactAbsolute = resolve(artifactPath)
+  const [verifierReal, producerReal, artifactReal] = await Promise.all([
+    realpath(verifierPath),
+    realpath(producerAbsolute),
+    realpath(artifactAbsolute)
+  ])
+  if (
+    producerPath !== producerAbsolute ||
+    artifactPath !== artifactAbsolute ||
+    verifierPath !== verifierReal ||
+    producerAbsolute !== producerReal ||
+    artifactAbsolute !== artifactReal ||
+    !validHistoricalProducerPaths({
+      verifierRoot: verifierReal,
+      producerRoot: producerReal,
+      artifactRoot: artifactReal
+    }) ||
+    dirname(verifierReal) !== dirname(producerReal)
+  )
+    fail('RUNTIME_READBACK_PRODUCER_PATH_INVALID')
+  await assertDirectory(producerReal, 'RUNTIME_READBACK_PRODUCER_INVALID')
+  const [headResult, lockBlobResult, statusResult] = await Promise.all([
+    execFileAsync('git', ['-C', producerReal, 'rev-parse', 'HEAD'], { encoding: 'utf8' }),
+    execFileAsync('git', ['-C', producerReal, 'rev-parse', 'HEAD:package-lock.json'], { encoding: 'utf8' }),
+    execFileAsync('git', ['-C', producerReal, 'status', '--porcelain', '--untracked-files=all'], {
+      encoding: 'utf8'
+    })
+  ]).catch(() => fail('RUNTIME_READBACK_PRODUCER_INVALID'))
+  if (statusResult.stdout !== '') fail('RUNTIME_READBACK_PRODUCER_DIRTY')
+  const lockBytes = await readStable(
+    resolve(producerReal, 'package-lock.json'),
+    20_000_000,
+    'RUNTIME_READBACK_LOCK_INVALID'
+  )
+  const catalogBytes = await readStable(
+    resolve(producerReal, 'resources/runtime-catalog.json'),
+    2_000_000,
+    'RUNTIME_READBACK_CATALOG_INVALID'
+  )
+  const trustRootBytes = await readStable(
+    resolve(producerReal, 'resources/runtime-trust/sigstore-trusted-root.json'),
+    2_000_000,
+    'RUNTIME_READBACK_TRUST_ROOT_INVALID'
+  )
+  const receiptBytes = await readStable(
+    resolve(producerReal, 'resources/runtime-trust/acquisition-receipt.json'),
+    64_000,
+    'RUNTIME_READBACK_TRUST_RECEIPT_INVALID'
+  )
+  const readerTrustRootBytes = await readStable(
+    resolve(verifierReal, 'resources/runtime-trust/sigstore-trusted-root.json'),
+    2_000_000,
+    'RUNTIME_READBACK_TRUST_ROOT_INVALID'
+  )
+  const readerReceiptBytes = await readStable(
+    resolve(verifierReal, 'resources/runtime-trust/acquisition-receipt.json'),
+    64_000,
+    'RUNTIME_READBACK_TRUST_RECEIPT_INVALID'
+  )
+  const lockDigests = validateHistoricalProducerInputs({
+    producerCommit: headResult.stdout.trim(),
+    producerRef: SOURCE_REF,
+    producerLockBlob: lockBlobResult.stdout.trim(),
+    producerLockBytes: lockBytes,
+    catalogBytes,
+    trustRootBytes,
+    receiptBytes,
+    readerTrustRootBytes,
+    readerReceiptBytes
+  })
+  if (!lockDigests) fail('RUNTIME_READBACK_PRODUCER_INVALID')
+  return { catalogBytes, trustRootBytes, receiptBytes, lockDigests }
 }
 
 function verifyRootPin(catalog, rootBytes, receiptBytes) {
@@ -645,8 +727,16 @@ async function verifyModel(root, rootProto, lockSha256) {
 
 async function main() {
   const readbackPath = process.env.RUNTIME_CANDIDATE_READBACK
+  const producerPath = process.env.RUNTIME_HISTORICAL_PRODUCER
   const runnerTemp = process.env.RUNNER_TEMP
-  if (!readbackPath || !runnerTemp || !isAbsolute(readbackPath) || !isAbsolute(runnerTemp))
+  if (
+    !readbackPath ||
+    !producerPath ||
+    !runnerTemp ||
+    !isAbsolute(readbackPath) ||
+    !isAbsolute(producerPath) ||
+    !isAbsolute(runnerTemp)
+  )
     fail('RUNTIME_READBACK_INPUT_PATH_INVALID')
   const root = resolve(readbackPath)
   const relativeRoot = relative(resolve(runnerTemp), root)
@@ -662,39 +752,14 @@ async function main() {
     true,
     'RUNTIME_READBACK_ARTIFACT_LAYOUT_INVALID'
   )
-  const catalogBytes = await readStable(
-    resolve('resources/runtime-catalog.json'),
-    2_000_000,
-    'RUNTIME_READBACK_CATALOG_INVALID'
-  )
-  const catalog = record(parseJson(catalogBytes, 'RUNTIME_READBACK_CATALOG_INVALID'))
-  if (
-    !catalog ||
-    !exactKeys(catalog, ['schemaVersion', 'protocolVersion', 'catalogId', 'trustRoot', 'targets']) ||
-    catalog.schemaVersion !== 1 ||
-    catalog.protocolVersion !== 1 ||
-    catalog.catalogId !== 'metis-runtime-catalog-v1' ||
-    !Array.isArray(catalog.targets) ||
-    catalog.targets.length !== 0
-  )
-    fail('RUNTIME_READBACK_CATALOG_NOT_EMPTY')
-  const trustRootBytes = await readStable(
-    resolve('resources/runtime-trust/sigstore-trusted-root.json'),
-    2_000_000,
-    'RUNTIME_READBACK_TRUST_ROOT_INVALID'
-  )
-  const receiptBytes = await readStable(
-    resolve('resources/runtime-trust/acquisition-receipt.json'),
-    64_000,
-    'RUNTIME_READBACK_TRUST_RECEIPT_INVALID'
-  )
-  const rootProto = verifyRootPin(catalog, trustRootBytes, receiptBytes)
-  const packageLockBytes = await readStable(resolve('package-lock.json'), 20_000_000, 'RUNTIME_READBACK_LOCK_INVALID')
-  const packageLock = sourceLockDigests(packageLockBytes)
-  if (!packageLock) fail('RUNTIME_READBACK_LOCK_INVALID')
+  const producerInputs = await historicalProducerInputs(producerPath, root)
+  const catalog = record(parseJson(producerInputs.catalogBytes, 'RUNTIME_READBACK_CATALOG_INVALID'))
+  if (!catalog) fail('RUNTIME_READBACK_CATALOG_INVALID')
+  const rootProto = verifyRootPin(catalog, producerInputs.trustRootBytes, producerInputs.receiptBytes)
   const results = []
-  for (const target of NATIVE_TARGETS) results.push(await verifyTarget(root, target, rootProto, packageLock))
-  results.push(await verifyModel(root, rootProto, packageLock.canonicalLfSha256))
+  for (const target of NATIVE_TARGETS)
+    results.push(await verifyTarget(root, target, rootProto, producerInputs.lockDigests))
+  results.push(await verifyModel(root, rootProto, producerInputs.lockDigests.canonicalLfSha256))
   const archiveBytes = results.reduce((total, result) => total + result.archiveBytes, 0)
   const inventoryBytes = results.reduce((total, result) => total + result.inventoryBytes, 0)
   const bundleBytes = results.reduce((total, result) => total + result.bundleBytes, 0)
@@ -702,7 +767,7 @@ async function main() {
     Buffer.from(results.flatMap((result) => [result.archiveSha256, result.inventorySha256]).join(''))
   )
   process.stdout.write(
-    `RUNTIME_ATTESTATION_READBACK_OK verified=true roots=${results.length} subjects=${results.length * 2} archiveBytes=${archiveBytes} inventoryBytes=${inventoryBytes} bundleBytes=${bundleBytes} trustRootSha256=${sha256(trustRootBytes)} subjectSetSha256=${subjectSha256}\n`
+    `RUNTIME_ATTESTATION_READBACK_OK verified=true roots=${results.length} subjects=${results.length * 2} archiveBytes=${archiveBytes} inventoryBytes=${inventoryBytes} bundleBytes=${bundleBytes} trustRootSha256=${sha256(producerInputs.trustRootBytes)} subjectSetSha256=${subjectSha256}\n`
   )
 }
 

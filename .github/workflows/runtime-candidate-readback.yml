@@ -5,6 +5,7 @@ on:
     branches:
       - m2/M2-0475-runtime-artifact-publisher
       - m2/runtime-candidate-readback-four-root
+      - fix/runtime-historical-lock-isolation
     paths:
       - .github/workflows/runtime-candidate-readback.yml
       - package.json
@@ -30,16 +31,42 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          path: verifier
+      - name: Check out the immutable historical producer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: mysticalsin/AskToto-Mantu
+          ref: 613d7886504f608766022fa740b1ed7297e17b16
+          path: historical-producer
+          persist-credentials: false
+      - name: Confirm exact clean producer checkout and Git lock identity
+        env:
+          HISTORICAL_PRODUCER: ${{ github.workspace }}/historical-producer
+        run: |
+          set -euo pipefail
+          test "$(git -C "$HISTORICAL_PRODUCER" rev-parse HEAD)" = '613d7886504f608766022fa740b1ed7297e17b16'
+          test "$(git -C "$HISTORICAL_PRODUCER" rev-parse HEAD:package-lock.json)" = '4d2f28a9c0e1fd8b6661a7f465177acb3e0b328c'
+          test -z "$(git -C "$HISTORICAL_PRODUCER" status --porcelain --untracked-files=all)"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
+          cache-dependency-path: verifier/package-lock.json
       - name: Install frozen verifier dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: verifier
       - name: Check bounded duplicate-aware JSON and closed inventory fixtures
         run: node --test scripts/runtime-payload/verify-retained-candidate-readback.test.mjs
+        working-directory: verifier
+      - name: Check immutable historical producer lock and trust separation
+        env:
+          RUNTIME_HISTORICAL_PRODUCER: ${{ github.workspace }}/historical-producer
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: node --test scripts/runtime-payload/verify-historical-producer-contract.test.mjs
+        working-directory: verifier
       - name: Check maintained Sigstore DER claim parsing boundaries
         run: node scripts/runtime-payload/check-sigstore-claim-der.mjs
+        working-directory: verifier
       - name: Confirm exact retained workflow run and artifact metadata
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,4 +125,6 @@ jobs:
         env:
           RUNNER_TEMP: ${{ runner.temp }}
           RUNTIME_CANDIDATE_READBACK: ${{ runner.temp }}/runtime-candidate-readback
+          RUNTIME_HISTORICAL_PRODUCER: ${{ github.workspace }}/historical-producer
         run: node scripts/runtime-payload/verify-retained-candidate-readback.mjs
+        working-directory: verifier
