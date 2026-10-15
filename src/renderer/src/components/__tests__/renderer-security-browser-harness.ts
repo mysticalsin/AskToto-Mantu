@@ -92,7 +92,7 @@ import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
-import '${RENDERER.replace(/\\/gu, '/')}/styles.css'
+import '${RENDERER.replace(/\\/gu, '/')}/src/styles.css'
 import { Markdown } from '${RENDERER.replace(/\\/gu, '/')}/src/components/Markdown.tsx'
 import * as katexModule from 'katex'
 

@@ -32,6 +32,11 @@ jobs:
     env:
       BASELINE: 15fcfa376feda44531596218a3751c6ea37f98ef
     steps:
+      - name: Preserve committed bytes on Windows checkouts
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+
       - name: Checkout the source commit with history for baseline validation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -44,6 +49,8 @@ jobs:
           REPORT_DIR: ${{ runner.temp }}/renderer-katex-red-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
         run: |
           set -euo pipefail
+          mkdir -p "$REPORT_DIR"
+          trap 'status=$?; printf "exit=%s\n" "$status" > "$REPORT_DIR/preflight-status.txt"' EXIT
           if [ "$GITHUB_REPOSITORY" != 'mysticalsin/AskToto-Mantu' ] || [ "$GITHUB_REF" != 'refs/heads/fix/renderer-katex-security' ]; then
             echo 'renderer-katex-red:WRONG_REPOSITORY_OR_REF'
             exit 1
@@ -63,10 +70,10 @@ jobs:
           src/renderer/src/components/Markdown.security.browser.test.ts
           src/renderer/src/components/__tests__/renderer-security-browser-harness.ts
           PATHS
-          git diff --name-only "$BASELINE" "$GITHUB_SHA" | sort > "$actual"
+          LC_ALL=C sort -o "$expected" "$expected"
+          git diff --name-only "$BASELINE" "$GITHUB_SHA" | LC_ALL=C sort > "$actual"
           diff -u "$expected" "$actual"
           printf '%s  %s\n' '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122' 'package.json' '88425a099d638387d1bf14fd06348002e3ced36f29ca25296d00f7e5b92b0393' 'package-lock.json' | sha256sum --check
-          mkdir -p "$REPORT_DIR"
           echo 'renderer-katex-red:BASELINE_INPUTS_VALID'
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -120,7 +127,7 @@ jobs:
             src/renderer/src/components/Markdown.mermaid.browser.test.ts \
             src/renderer/src/components/Markdown.warmup.test.ts \
             src/renderer/src/components/CodeBlock.test.ts \
-            --maxWorkers=2 --retry=0 --reporter=json --reporter=./scripts/ci/renderer-katex-unhandled-reporter.mjs --outputFile="$RUN_REPORT" \
+            --maxWorkers=2 --retry=0 --reporter=default --reporter=json --reporter=./scripts/ci/renderer-katex-unhandled-reporter.mjs --outputFile="$RUN_REPORT" \
             > "$RUN_LOG" 2>&1
           test_exit=$?
           set -e
