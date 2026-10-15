@@ -3,11 +3,21 @@ import { lstat, mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+type SettlementFixtureHandle = { close: () => Promise<void> }
+type SettlementGate = {
+  entered: Promise<void>
+  notifyEntered: () => void
+  wait: Promise<void>
+  release: () => void
+  error: string | undefined
+  attempts: number
+  raw: SettlementFixtureHandle | undefined
+}
+
 vi.mock('electron')
 
 const rootSettlementFaults = vi.hoisted(() => ({
-  closeGates: new Map<string, any>(),
-  openedHandles: new Map<string, any>()
+  closeGates: new Map<string, SettlementGate>()
 }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -17,7 +27,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args)
       const path = String(args[0])
-      rootSettlementFaults.openedHandles.set(path, handle)
       return new Proxy(handle, {
         get(target, property) {
           if (property === 'close')
@@ -26,7 +35,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
               if (gate && (!gate.raw || gate.raw === target)) {
                 gate.attempts += 1
                 gate.raw = target
-                gate.entered()
+                gate.notifyEntered()
                 await gate.wait
                 if (gate.error) throw new Error(gate.error)
               }
@@ -40,25 +49,25 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }
 })
 
-function settlementGate(error?: string) {
-  let enter!: () => void
+function settlementGate(error?: string): SettlementGate {
+  let notifyEntered!: () => void
   let release!: () => void
   return {
     entered: new Promise<void>((resolveEntered) => {
-      enter = resolveEntered
+      notifyEntered = resolveEntered
     }),
     wait: new Promise<void>((resolveWait) => {
       release = resolveWait
     }),
-    enter() {
-      enter()
+    notifyEntered() {
+      notifyEntered()
     },
     release() {
       release()
     },
     error,
     attempts: 0,
-    raw: undefined as { close: () => Promise<void> } | undefined
+    raw: undefined
   }
 }
 

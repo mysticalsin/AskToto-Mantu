@@ -15,6 +15,7 @@ import {
 import type { MeetingSpeechRequest } from '../infra/process/meeting-speech-protocol'
 import { commitManagedAuthorityDocument } from '../settings-authority-history'
 import { publishSettingsSnapshot } from '../settings-observation'
+
 import {
   createMainPersistenceBootstrapWithSourceFixture,
   type MainPersistenceBootstrapSourceFixture
@@ -28,6 +29,17 @@ import {
   type ResourcePolicyResult
 } from './resource-policy'
 
+type SettlementFixtureHandle = { close: () => Promise<void> }
+type SettlementGate = {
+  entered: Promise<void>
+  notifyEntered: () => void
+  wait: Promise<void>
+  release: () => void
+  error: string | undefined
+  attempts: number
+  raw: SettlementFixtureHandle | undefined
+}
+
 vi.mock('electron')
 vi.mock('../auth', () => ({
   captureMainPersistenceSessionBoundary: () => ({
@@ -39,9 +51,9 @@ vi.mock('../auth', () => ({
 }))
 
 const settlementFaults = vi.hoisted(() => ({
-  closeGates: new Map<string, any>(),
-  openedHandles: new Map<string, any>(),
-  keyGate: null as any
+  closeGates: new Map<string, SettlementGate>(),
+  openedHandles: new Map<string, SettlementFixtureHandle>(),
+  keyGate: null as SettlementGate | null
 }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -60,7 +72,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
               if (gate) {
                 gate.attempts += 1
                 gate.raw = target
-                gate.entered()
+                gate.notifyEntered()
                 await gate.wait
                 if (gate.error) throw new Error(gate.error)
               }
@@ -86,7 +98,7 @@ vi.mock('./protected-meeting-keys', async (importOriginal) => {
           const gate = settlementFaults.keyGate
           if (gate) {
             gate.attempts += 1
-            gate.entered()
+            gate.notifyEntered()
             await gate.wait
             await service.settleAndDispose(handle)
             if (gate.error) throw new Error(gate.error)
@@ -99,27 +111,26 @@ vi.mock('./protected-meeting-keys', async (importOriginal) => {
   }
 })
 
-function settlementGate(error?: string) {
-  let enter!: () => void
+function settlementGate(error?: string): SettlementGate {
+  let notifyEntered!: () => void
   let release!: () => void
-  const gate = {
+  return {
     entered: new Promise<void>((resolveEntered) => {
-      enter = resolveEntered
+      notifyEntered = resolveEntered
     }),
     wait: new Promise<void>((resolveWait) => {
       release = resolveWait
     }),
-    enter() {
-      enter()
+    notifyEntered() {
+      notifyEntered()
     },
     release() {
       release()
     },
     error,
     attempts: 0,
-    raw: undefined as { close: () => Promise<void> } | undefined
+    raw: undefined
   }
-  return gate
 }
 
 function fixtureMeetingRoot(userData: string, meetingId: string): string {
@@ -247,6 +258,11 @@ function configureMainProcess(userData: string): void {
     hasSingleInstanceLock: () => boolean
   }
   vi.spyOn(electronApp, 'getPath').mockReturnValue(userData)
+  Object.defineProperty(electronApp, 'hasSingleInstanceLock', {
+    configurable: true,
+    writable: true,
+    value: vi.fn()
+  })
   vi.spyOn(electronApp, 'hasSingleInstanceLock').mockReturnValue(true)
 }
 
