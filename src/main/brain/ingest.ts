@@ -13,7 +13,6 @@ import {
   type ProvenantField,
   type EntityKind
 } from '@shared/brain'
-import { fnv1a } from '@shared/hash'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
 import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
@@ -51,8 +50,23 @@ import {
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
 import { refreshDustCliSession } from '../dustcli'
 import { auditLog, mainLog } from '../logger'
+import type { PrepareSavedReplacement } from '../infra/storage/atomic-saved-write'
 import { appendTimeSavedEvent } from '../time-saved-log'
 import { estimateSecondBrainMinutes } from '@shared/time-saved-events'
+import {
+  BackfillScanFailure,
+  recordCompletionError,
+  extractionSlug,
+  PublicationFailure,
+  claimSourceRefreshWork,
+  effectiveBackfillTrigger,
+  isUnattendedModelWork,
+  jobKey,
+  observeSourceRefreshWorkFromIndex,
+  preserveSourceRefreshWork,
+  trackedPublication
+} from './ingest-work-policy'
+export { extractionSlug }
 import {
   admitSource,
   retryStateAfterFailure,
@@ -1077,11 +1091,6 @@ type Job = {
 }
 const queue: Job[] = []
 
-/** Background extraction nobody is waiting on: the only queue work the maintenance gate governs. */
-function isUnattendedModelWork(job: Job): boolean {
-  return job.origin === 'backfill' && job.trigger === 'automatic' && job.strategy !== 'reconcile'
-}
-
 /** An explicit request makes already-queued historical work the user's: it stops waiting for the gate. */
 function promoteQueuedBackfill(): void {
   for (const job of queue) if (job.origin === 'backfill') job.trigger = 'user'
@@ -1089,22 +1098,10 @@ function promoteQueuedBackfill(): void {
   pump()
 }
 
-function effectiveBackfillTrigger(options: BackfillStartOptions): WorkTrigger {
-  return options.trigger === 'user' || pendingBackfillTrigger === 'user' ? 'user' : 'automatic'
-}
-
 /** Ingest-index identity for a job: the user's own meetings key by basename (unchanged); team jobs carry
  *  an explicit folder-namespaced key so they never collide with a same-named own meeting or member file. */
-const jobKey = (j: Job): string => j.key ?? basename(j.file)
-
-/** Storage slug for a meeting's extraction file (.brain/meetings/<slug>.json) — the on-disk identity that
- *  writeMeetingExtraction/readMeetingExtraction and the reconcile-strategy detection all key on. Own
- *  meetings keep slugify(basename), UNCHANGED. A namespaced team key ("team/<owner>/<file>") appends a
- *  short content hash of the full key, because slugify() collapses every "/" to "-" — without the hash a
- *  team key would slugify to the same string as an own file literally named "team-<owner>-<file>.md" and
- *  the two extractions would overwrite each other on disk (silent cross-meeting misattribution). */
-export const extractionSlug = (key: string): string =>
-  key.includes('/') ? `${slugify(key)}-${fnv1a(key).toString(16)}` : slugify(key)
+const effectiveBackfillTriggerForRequest = (options: BackfillStartOptions): WorkTrigger =>
+  effectiveBackfillTrigger(options.trigger, pendingBackfillTrigger)
 
 // The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
 // was burning wall-clock time on serially, so up to EXTRACT_CONCURRENCY of those calls now run at once.
@@ -1154,51 +1151,11 @@ let sourceRefreshWorkKeys = new Set<string>()
 let sourceRefreshScanRetryKeys = new Set<string>()
 
 function completionError(error: CompletionError): void {
-  const observer = backfillObserver
-  if (!observer) return
-  const priority: Record<CompletionError, number> = {
-    incomplete: 0,
-    'no-provider': 1,
-    'scan-failed': 2,
-    'publication-failed': 3,
-    'write-failed': 4
-  }
-  if (!observer.error || priority[error] > priority[observer.error]) observer.error = error
+  recordCompletionError(backfillObserver, error)
 }
 
 function observeSource(key: string): void {
   if (backfillObserver && !backfillObserver.sources.has(key)) backfillObserver.sources.set(key, false)
-}
-
-function claimSourceRefreshWork(idx: BrainIndex): Set<string> {
-  return new Set(
-    Object.entries(idx.ingested)
-      .filter(([, record]) => record.ok)
-      .map(([key]) => key)
-  )
-}
-
-function observeClaimedSourceRefreshWork(): void {
-  for (const key of sourceRefreshWorkKeys) observeSource(key)
-}
-
-function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
-  observeClaimedSourceRefreshWork()
-  for (const key of sourceRefreshScanRetryKeys) observeSource(key)
-  if (
-    sourceRefreshWorkKeys.size > 0 ||
-    sourceRefreshScanRetryKeys.size > 0 ||
-    !idx.sourceRefreshRequested ||
-    idx.replayPending
-  )
-    return
-  for (const key of claimSourceRefreshWork(idx)) observeSource(key)
-}
-
-function preserveSourceRefreshWork(idx: BrainIndex): void {
-  const keys = claimSourceRefreshWork(idx)
-  if (keys.size > 0) sourceRefreshWorkKeys = keys
-  observeClaimedSourceRefreshWork()
 }
 
 function preserveSourceRefreshRetryWork(keys: ReadonlySet<string>): void {
@@ -1206,25 +1163,6 @@ function preserveSourceRefreshRetryWork(keys: ReadonlySet<string>): void {
   sourceRefreshScanRetryKeys = new Set([...sourceRefreshScanRetryKeys, ...keys])
 }
 
-class PublicationFailure extends Error {
-  constructor(error: unknown) {
-    super(error instanceof Error ? error.message : String(error))
-  }
-}
-class BackfillScanFailure extends Error {
-  constructor(error: unknown) {
-    super(error instanceof Error ? error.message : String(error))
-  }
-}
-
-async function trackedPublication(work: () => Promise<unknown>): Promise<void> {
-  try {
-    await work()
-  } catch (error) {
-    completionError('publication-failed')
-    throw new PublicationFailure(error)
-  }
-}
 // Jobs currently running extractMeeting — bounded to EXTRACT_CONCURRENCY. A job leaves this set the
 // moment its extraction settles (success or failure), immediately freeing a slot for the next one,
 // independent of how long that job's own serial ingest takes to reach the front of the withEntityLock lane.
@@ -1252,7 +1190,12 @@ const inFlightJobs = new Set<Job>()
 // idx.ingested ended up empty because a stale rewrite kept clobbering it. Every mutation of
 // index.json now goes through this single serialized lane.
 export let indexLock: Promise<void> = Promise.resolve()
-export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
+export function updateIndex(
+  s: Settings,
+  mutate: (idx: BrainIndex) => void,
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
+): Promise<void> {
   const run = indexLock.then(async () => {
     // M2-0003: an existing index.json this process cannot use is read-only for the session. Drop the
     // mutation rather than persist a ledger derived from readIndex's empty stand-in. Quiet on purpose:
@@ -1262,7 +1205,7 @@ export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Pro
     // a failed mutator or disk write must not leak unsaved records into later reads/writes.
     const idx = cloneEntity(await readIndexAsync(s))
     mutate(idx)
-    await writeIndex(s, idx)
+    await writeIndex(s, idx, beforeReplace, prepareReplace)
   })
   indexLock = run.catch(() => {
     completionError('write-failed')
@@ -1610,7 +1553,10 @@ export async function ingestExtraction(
   // live AND backfill alike (index regeneration is throttled separately; see finishJob/maybeFinishDrain
   // below, which mirrors exactly how lintBrain itself batches). No-ops entirely when publishBrainPages
   // is off, so this costs nothing when the mirror isn't in use.
-  await trackedPublication(() => publishForExtraction(s, x, ref, aliasMap))
+  await trackedPublication(
+    () => publishForExtraction(s, x, ref, aliasMap),
+    () => completionError('publication-failed')
+  )
   const version = sourceVersion ?? (await meetingSourceVersion(file))
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true, ...(version ? { sourceVersion: version } : {}), attempts: 0 }
@@ -1724,7 +1670,10 @@ async function finishJob(result: JobResult): Promise<void> {
         idx.warnings = lintBrain(s)
       })
       // Task MI-5: one index regen per live ingest, one per whole backfill drain, not per meeting.
-      await trackedPublication(() => publishIndexes(s))
+      await trackedPublication(
+        () => publishIndexes(s),
+        () => completionError('publication-failed')
+      )
     }
   } catch (error) {
     failed = true
@@ -1787,7 +1736,10 @@ function maybeFinishBackfill(): void {
       await updateIndex(sx, (i) => {
         i.warnings = lintBrain(sx)
       })
-      await trackedPublication(() => publishIndexes(sx))
+      await trackedPublication(
+        () => publishIndexes(sx),
+        () => completionError('publication-failed')
+      )
       if (backfillObserver) backfillObserver.published = true
       const incomplete = await hasIncompleteMeetingSource(sx, await readIndexAsync(sx))
       await updateIndex(sx, (i) => {
@@ -2008,7 +1960,8 @@ onMaintenanceMayBegin(pump)
 export async function enqueueIngest(
   file: string,
   { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {},
-  assertAdmission?: () => void
+  assertAdmission?: () => void,
+  prepareAdmission?: PrepareSavedReplacement
 ): Promise<void> {
   let admissionRefused = false
   const checkAdmission = () => {
@@ -2019,6 +1972,25 @@ export async function enqueueIngest(
       throw error
     }
   }
+  const prepareCurrent = prepareAdmission
+    ? async () => {
+        try {
+          const guard = await prepareAdmission()
+          if (!guard) return undefined
+          return () => {
+            try {
+              guard()
+            } catch (error) {
+              admissionRefused = true
+              throw error
+            }
+          }
+        } catch (error) {
+          admissionRefused = true
+          throw error
+        }
+      }
+    : undefined
   // Import jobs pass their exact attempt owner here. It is checked both before any asynchronous work and
   // again after source observation, so a held attempt cannot resume this continuation after policy is
   // later restored.
@@ -2051,14 +2023,14 @@ export async function enqueueIngest(
     // A write that lands while the prior extraction is active cannot be safely folded into that job.
     // Keep the old job's result from clobbering the newer source by rebuilding from durable sources.
     if (force || (sourceVersion && tracked.sourceVersion && sourceVersion !== tracked.sourceVersion)) {
-      await requestSourceRefresh(s, checkAdmission)
+      await requestSourceRefresh(s, checkAdmission, prepareCurrent)
       checkAdmission()
     }
     return
   }
   if (previous?.ok) {
     if (!force && sourceVersion && previous.sourceVersion === sourceVersion) return
-    await requestSourceRefresh(s, checkAdmission)
+    await requestSourceRefresh(s, checkAdmission, prepareCurrent)
     checkAdmission()
     return
   }
@@ -2066,12 +2038,17 @@ export async function enqueueIngest(
   if (backfillObserver) backfillObserver.published = false
   try {
     checkAdmission()
-    await updateIndex(s, (idx) => {
-      idx.backfillRequested = true
-      // A retry must clear the previous error while leaving an honest durable pending record. The write
-      // itself is tiny and local; extraction remains fully backgrounded after this point.
-      idx.ingested[key] = { at: Date.now(), ok: false, ...(sourceVersion ? { sourceVersion } : {}), attempts: 0 }
-    })
+    await updateIndex(
+      s,
+      (idx) => {
+        idx.backfillRequested = true
+        // A retry must clear the previous error while leaving an honest durable pending record. The write
+        // itself is tiny and local; extraction remains fully backgrounded after this point.
+        idx.ingested[key] = { at: Date.now(), ok: false, ...(sourceVersion ? { sourceVersion } : {}), attempts: 0 }
+      },
+      checkAdmission,
+      prepareCurrent
+    )
     checkAdmission()
   } catch (error) {
     if (admissionRefused) throw error
@@ -2165,7 +2142,10 @@ async function performRebuildReplay(s: Settings): Promise<void> {
   }
   // Page regeneration is part of replay completion. Keep the durable replay marker until it succeeds,
   // so a retry regenerates ALL entity pages rather than mistakenly publishing only index pages.
-  await trackedPublication(() => publishAll(s))
+  await trackedPublication(
+    () => publishAll(s),
+    () => completionError('publication-failed')
+  )
   const sourceRefreshStillNeeded = await hasMeetingSourceDrift(s, await readIndexAsync(s))
   let sourceRefreshPending = true
   await updateIndex(s, (i) => {
@@ -2305,7 +2285,9 @@ async function performStartRebuild(
   if (localOnlyError) return { queued: 0, error: localOnlyError }
   const before = await readIndexAsync(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
-  if (preserveSourceRefresh) preserveSourceRefreshWork(before)
+  if (preserveSourceRefresh) {
+    sourceRefreshWorkKeys = preserveSourceRefreshWork(before, sourceRefreshWorkKeys, observeSource)
+  }
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
   if (!gate.ok) return { queued: 0, error: gate.error }
@@ -2374,7 +2356,11 @@ export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{
 }
 
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */
-export async function requestSourceRefresh(s: Settings = getSettings(), assertAdmission?: () => void): Promise<void> {
+export async function requestSourceRefresh(
+  s: Settings = getSettings(),
+  assertAdmission?: () => void,
+  prepareAdmission?: PrepareSavedReplacement
+): Promise<void> {
   assertAdmission?.()
   try {
     const idx = await readIndexAsync(s)
@@ -2397,10 +2383,15 @@ export async function requestSourceRefresh(s: Settings = getSettings(), assertAd
     if (sourceRefreshWorkKeys.size === 0) sourceRefreshWorkKeys = claimSourceRefreshWork(readIndex(s))
     preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   }
-  await updateIndex(s, (idx) => {
-    idx.sourceRefreshRequested = true
-    idx.backfillRequested = true
-  })
+  await updateIndex(
+    s,
+    (idx) => {
+      idx.sourceRefreshRequested = true
+      idx.backfillRequested = true
+    },
+    assertAdmission,
+    prepareAdmission
+  )
   assertAdmission?.()
   await maybeStartSourceRefreshAsync(assertAdmission)
   assertAdmission?.()
@@ -2418,7 +2409,7 @@ async function maybeStartSourceRefreshAsync(assertAdmission?: () => void): Promi
   const idx = await readIndexAsync(s)
   assertAdmission?.()
   if (!idx.sourceRefreshRequested || idx.replayPending || !hasUsableProvider(s)) return
-  preserveSourceRefreshWork(idx)
+  sourceRefreshWorkKeys = preserveSourceRefreshWork(idx, sourceRefreshWorkKeys, observeSource)
   preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   assertAdmission?.()
   sourceRefreshRunning = true
@@ -2592,7 +2583,7 @@ async function requestBackfillRunAsync(
   }
   backfillObserver = observer
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
-  observeClaimedSourceRefreshWork()
+  for (const key of sourceRefreshWorkKeys) observeSource(key)
   for (const key of sourceRefreshScanRetryKeys) observeSource(key)
   addCompletionGate(observer, beforeComplete)
   try {
@@ -2600,7 +2591,9 @@ async function requestBackfillRunAsync(
     for (const [key, record] of Object.entries(before.ingested)) {
       if (record.ok) observer.initialOkSourceVersions.set(key, record.sourceVersion)
     }
-    observeSourceRefreshWorkFromIndex(before)
+    observeSourceRefreshWorkFromIndex(before, sourceRefreshWorkKeys, sourceRefreshScanRetryKeys, (key) =>
+      observeSource(key)
+    )
     const startingSourceRefresh = before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning
     if (startingSourceRefresh) await maybeStartSourceRefreshAsync()
     // A source-refresh rebuild owns the follow-up scan. Do not race it with a plain forced backfill:
@@ -2608,7 +2601,9 @@ async function requestBackfillRunAsync(
     run.result =
       startingSourceRefresh && sourceRefreshRunning ? { queued: 0, preparing: true } : await requestBackfill(options)
     const idx = await readIndexAsync(observer.s)
-    observeSourceRefreshWorkFromIndex(idx)
+    observeSourceRefreshWorkFromIndex(idx, sourceRefreshWorkKeys, sourceRefreshScanRetryKeys, (key) =>
+      observeSource(key)
+    )
     if (idx.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
@@ -2715,7 +2710,10 @@ function maybeCompleteBackfillRun(): void {
         await updateIndex(observer.s, (idx) => {
           idx.warnings = lintBrain(observer.s)
         })
-        await trackedPublication(() => publishIndexes(observer.s))
+        await trackedPublication(
+          () => publishIndexes(observer.s),
+          () => completionError('publication-failed')
+        )
       })
       observer.published = true
     }
@@ -2819,7 +2817,7 @@ async function startBackfillAsync(
     // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
     // disk below without another LLM call.
     const extractedSlugs = new Set((await loadMeetingExtractionSlugs(s)) ?? [])
-    const trigger = effectiveBackfillTrigger(options)
+    const trigger = effectiveBackfillTriggerForRequest(options)
     if (trigger === 'user') promoteQueuedBackfill()
     // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
     // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file

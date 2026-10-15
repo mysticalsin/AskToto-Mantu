@@ -37,6 +37,7 @@ import {
   type IndexUnavailableCause
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
+import type { PrepareSavedReplacement } from '../infra/storage/atomic-saved-write'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
@@ -47,160 +48,27 @@ export function brainDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain')
 }
 
-// Windows reserved device basenames fail to open even for tmp files, regardless of extension.
-const WIN_RESERVED_NAMES = new Set([
-  'con',
-  'prn',
-  'aux',
-  'nul',
-  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
-  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
-])
-
-export function slugify(s: string): string {
-  const full = s
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '') // strip diacritics so "L'Oréal" and "L'Oreal" share a slug
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  // Disambiguate long shared prefixes with a short content hash.
-  const base =
-    full.length > 60
-      ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}`
-      : full
-  // Bare Windows reserved names cannot be opened; suffix deterministically.
-  if (base && WIN_RESERVED_NAMES.has(base)) return `${base}-x`
-  if (base) return base
-  // A non-Latin or blank name collapses the ASCII pass to '' — falling back to a fixed
-  // 'unknown' would silently merge every such distinct entity into one shared file (a real
-  // cross-account confidentiality bug for a tool whose job is per-account isolation). Instead, hash
-  // the NFKC-normalized original name: deterministic (same name → same slug every time) and
-  // collision-resistant (different names → different slugs) without ever touching the ASCII path above.
-  const hash = createHash('sha256').update(s.normalize('NFKC')).digest('hex').slice(0, 8)
-  return `x-${hash}`
-}
-
-/** Ledger identity for a commitment is its normalized TEXT — a promise re-spoken in a later meeting
- *  ("I'll send the deck", again) is the same obligation, not a second open row. The earliest-dated
- *  row wins (pushUnique keeps the first), so aging starts from when the promise was first made.
- *  Normalizes Unicode form (NFKC, so visually-identical composed/decomposed text matches), strips
- *  trailing sentence punctuation (a re-spoken "Send the deck." vs "send the deck" is one obligation),
- *  then case-folds and collapses whitespace. Lives here (beside slugify) rather than in ingest.ts so
- *  the correction engine (corrections.ts) can match commitments by the same key without a
- *  corrections.ts <-> ingest.ts import cycle (ingest.ts re-exports it for backward compatibility). */
-export const commitmentKey = (text: string): string =>
-  text
-    .normalize('NFKC')
-    .trim()
-    .replace(/[.!?…]+$/u, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-
-/** Push `item` onto `arr` only if no existing element shares its `key` — the de-dup primitive every
- *  compounding entity array (meetings, commitments, signals, aliases, graph edges...) is built with.
- *  Exported for the same reason as commitmentKey above: corrections.ts's entity-merge logic reuses the
- *  exact same de-dup semantics ingest.ts's mergeExtraction uses, instead of a second implementation. */
-export const pushUnique = <T>(arr: T[], item: T, key: (t: T) => string): void => {
-  if (!arr.some((x) => key(x) === key(item))) arr.push(item)
-}
-
-/** One entry in a ProvenantField's `superseded` history — see the ProvenantField doc comment in
- *  shared/brain.ts. Lives here (not ingest.ts) for the same import-cycle reason as commitmentKey/
- *  pushUnique above: corrections.ts's human-pin logic needs the identical history bookkeeping
- *  ingest.ts's mergeProvenant uses, and ingest.ts itself needs applyCorrections/readAliasMap FROM
- *  corrections.ts — so this shared piece has to sit below both, not inside either. */
-// MI-4 review (mixed-tier superseded permutation): `confidence` is OPTIONAL so every entry ever written
-// to disk before this field existed still parses — see the INFERRED fallback in `confOf` below, not a
-// migration. Threading it through means `laterEntry`'s ordering key can finally match `outranks`'s
-// (confidence tier first, then date, then source_file) instead of silently ignoring confidence — see
-// `laterEntry`'s own doc comment for why the mismatch was a real bug, not just an inconsistency.
-export type SupersededEntry<T> = { value: T; date: string; source_file: string; confidence?: Confidence }
-
-// Legacy entries written before this field existed (and any caller that still omits it) carry no
-// confidence slot at all — treated as the WEAKEST tier (INFERRED) for ordering purposes, never assumed
-// EXTRACTED. This is a read-time interpretation only (no on-disk migration): an old entry simply loses
-// every ordering tie-break to a same-value entry that DOES carry an explicit EXTRACTED confidence, which
-// is the conservative, fail-safe default.
-const confOf = <T>(e: SupersededEntry<T>): Confidence => e.confidence ?? 'INFERRED'
-
-// MI-4 review fix: previously ordered by (date, source_file) ALONE, ignoring confidence entirely — a
-// total order that could disagree with `outranks` (the SAME-named winner-selection order every merge
-// path uses), so a mixed-confidence, same-value superseded set could keep the WRONG (weaker-confidence)
-// sighting depending on which one happened to have a later date. Delegating to `outranks` here makes
-// this the same single ordering key everywhere: confidence tier first, then date, then source_file.
-const laterEntry = <T>(a: SupersededEntry<T>, b: SupersededEntry<T>): boolean =>
-  outranks(
-    { date: a.date, source_file: a.source_file, confidence: confOf(a) },
-    { date: b.date, source_file: b.source_file, confidence: confOf(b) }
-  )
-
-// Date-comparison caveat (applies to `outranks` and `laterEntry`): comparison is lexical — correct for
-// same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same day
-// ("2026-01-15" < "2026-01-15T10:00:00Z"). ingestExtraction stamps whatever precision the transcript
-// frontmatter carries, so mixed-precision same-day meetings resolve deterministically, though not
-// strictly chronologically within the day.
-//
-// `outranks` is a TOTAL order for every case merge ever hits EXCEPT one: two candidates tied on
-// (confidence tier, date, source_file) but carrying DIFFERENT values. That can only happen via
-// sequential, index-guarded re-ingestion of a changed extraction for the exact same source_file+date
-// (never via shuffled/parallel backfill, which always sees distinct source_file values) — a case this
-// codebase never actually produces, so the tie is unreachable in practice, not merely unhandled.
-//
-// Lives here (with laterEntry/pushSuperseded) rather than in ingest.ts for the same import-cycle reason
-// as everything else in this block: ingest.ts's mergeProvenant AND corrections.ts's merge-time provenance
-// fold both rank machine-extracted candidates by this one order, and corrections.ts cannot import from
-// ingest.ts.
-export function outranks(
-  a: { date: string; source_file: string; confidence: Confidence },
-  b: { date: string; source_file: string; confidence: Confidence }
-): boolean {
-  const at = a.confidence === 'EXTRACTED' ? 1 : 0
-  const bt = b.confidence === 'EXTRACTED' ? 1 : 0
-  if (at !== bt) return at > bt
-  if (a.date !== b.date) return a.date > b.date
-  return a.source_file > b.source_file
-}
-
-/** Append `entry` to a field's superseded history, deduped per value (keeping the max-(confidence tier,
- *  date, source_file) sighting — MI-4: the same `outranks` order winner selection uses, via `laterEntry`
- *  above), never containing the current value, sorted by that same key descending and capped at 10. Used
- *  by BOTH ingest.ts's mergeProvenant (rank-gated: the incoming candidate only wins if it `outranks` what's
- *  held) and corrections.ts's field-pin (unconditional: a human pin always wins) — the two are genuinely
- *  different operations that happen to share this one history primitive. */
-export function pushSuperseded<T>(
-  list: SupersededEntry<T>[],
-  entry: SupersededEntry<T>,
-  currentValue: T,
-  valuesEqual: (a: T, b: T) => boolean
-): SupersededEntry<T>[] {
-  const out: SupersededEntry<T>[] = []
-  for (const e of [...list, entry]) {
-    if (valuesEqual(e.value, currentValue)) continue // superseded holds only values DIFFERENT from current
-    const i = out.findIndex((x) => valuesEqual(x.value, e.value))
-    if (i === -1) out.push(e)
-    else if (laterEntry(e, out[i])) out[i] = e // one entry per value — its most recent sighting
-  }
-  return out.sort((a, b) => (laterEntry(a, b) ? -1 : laterEntry(b, a) ? 1 : 0)).slice(0, 10)
-}
-
-/** Default value-equality for provenant fields whose value is a plain string/enum/nullable-enum
- *  (role, org, sector, stage, win_likelihood_band, close_date). */
-export const eqStrict = <T>(a: T, b: T): boolean => a === b
-/** Value-equality for the `velocity` provenant field's {signal, evidence} object shape. */
-export const eqVelocity = (a: { signal: string; evidence: string }, b: { signal: string; evidence: string }): boolean =>
-  a.signal === b.signal && a.evidence === b.evidence
-/** Value-equality for the deal `amount` provenant field's {value, currency} object shape (MI-4). Lives
- *  here (not duplicated in ingest.ts/corrections.ts) for the same reason eqStrict/eqVelocity do — both
- *  modules' amount merges (mergeProvenant's extraction-time merge, pinProvenant's human-pin) need the
- *  identical equality rule so a value-identical re-confirmation is never miscounted as a change. */
-export const eqAmount = (a: { value: number; currency: string }, b: { value: number; currency: string }): boolean =>
-  a.value === b.value && a.currency === b.currency
+export {
+  commitmentKey,
+  eqAmount,
+  eqStrict,
+  eqVelocity,
+  outranks,
+  pushSuperseded,
+  pushUnique,
+  slugify
+} from './provenance-order'
+export type { SupersededEntry } from './provenance-order'
 
 function ensureDirs(settings: Settings): string {
   const root = brainDir(settings)
-  for (const d of [root, join(root, 'meetings'), join(root, 'entities', 'person'), join(root, 'entities', 'account'), join(root, 'entities', 'deal')]) {
+  for (const d of [
+    root,
+    join(root, 'meetings'),
+    join(root, 'entities', 'person'),
+    join(root, 'entities', 'account'),
+    join(root, 'entities', 'deal')
+  ]) {
     if (!existsSync(d)) mkdirSync(d, { recursive: true })
   }
   return root
@@ -255,7 +123,11 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
 
 type BrainFileLoad<T> = { status: 'ok'; value: T | null } | { status: 'unavailable' }
 
-export async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<BrainFileLoad<T>> {
+export async function loadJson<T>(
+  settings: Settings,
+  rel: string,
+  parse: (v: unknown) => T
+): Promise<BrainFileLoad<T>> {
   const p = join(brainDir(settings), rel)
   const gateway = storageAt(resolveMeetingsFolder(settings))
   const path = join('.brain', rel)
@@ -267,7 +139,8 @@ export async function loadJson<T>(settings: Settings, rel: string, parse: (v: un
   if (!('version' in fileClass)) return { status: 'unavailable' }
   const { mtimeMs, ctimeMs, size } = fileClass.version
   const hit = jsonCache.get(p)
-  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size) return { status: 'ok', value: hit.value as T | null }
+  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size)
+    return { status: 'ok', value: hit.value as T | null }
   if (fileClass.status !== 'ok') return { status: 'unavailable' }
   const read = await gateway.read(path)
   if (read.status === 'missing') {
@@ -293,10 +166,16 @@ async function listBrainNames(settings: Settings, relDir: string): Promise<strin
   return listing.status === 'missing' ? [] : null
 }
 
-export async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
+export async function writeJson(
+  settings: Settings,
+  rel: string,
+  value: unknown,
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
+): Promise<void> {
   ensureDirs(settings)
   const p = join(brainDir(settings), rel)
-  await writeSaved(p, JSON.stringify(value, null, 2), !!settings.encryptTranscripts)
+  await writeSaved(p, JSON.stringify(value, null, 2), !!settings.encryptTranscripts, beforeReplace, prepareReplace)
   // Invalidate rather than pre-populate: `value` here is the pre-serialize object, not necessarily
   // byte-identical to what a fresh parse() of the written JSON would yield (zod defaults/transforms) —
   // and relying on mtime alone risks a same-mtime rapid write-then-read on low-resolution filesystems.
@@ -356,7 +235,10 @@ export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
 // there is nothing to attach honest provenance to.
 
 function earliestDate(meetings: Array<{ date: string }>): string {
-  const dates = meetings.map((m) => m.date).filter(Boolean).sort()
+  const dates = meetings
+    .map((m) => m.date)
+    .filter(Boolean)
+    .sort()
   return dates[0] ?? ''
 }
 
@@ -389,7 +271,12 @@ function migrateDeal(d: DealEntity, slug: string): DealEntity {
   d.aliases ??= []
   if (!d.stage_provenance && d.stage) d.stage_provenance = migrateField(d.stage, d.meetings)
   if (!d.win_likelihood_band_provenance && d.win_likelihood_band) {
-    d.win_likelihood_band_provenance = migrateField(d.win_likelihood_band, d.meetings, 'INFERRED', d.band_evidence || undefined)
+    d.win_likelihood_band_provenance = migrateField(
+      d.win_likelihood_band,
+      d.meetings,
+      'INFERRED',
+      d.band_evidence || undefined
+    )
   }
   if (!d.velocity_provenance && d.velocity.signal !== 'no-hard-date-found') {
     d.velocity_provenance = migrateField(d.velocity, d.meetings)
@@ -460,7 +347,10 @@ export function ensureV1Backup(settings: Settings): void {
     } catch {
       /* best-effort cleanup of the failed partial copy */
     }
-    console.warn('[brain] could not create .brain.backup-v1 safety copy before v2 migration — will retry on the next write:', e)
+    console.warn(
+      '[brain] could not create .brain.backup-v1 safety copy before v2 migration — will retry on the next write:',
+      e
+    )
     // Deliberately NOT memoized and NOT re-thrown: a v1 safety net failing must not permanently block
     // every future correction/entity write until a human intervenes (a hard-refuse would do exactly
     // that, since OneDrive/AV holds are often transient) — the next write's own ensureV1Backup call
@@ -562,7 +452,11 @@ const indexCache = new Map<string, IndexCacheEntry>()
 const deferBrainLogWrite = setImmediate
 function enqueueBrainLogWrite(write: () => void): void {
   deferBrainLogWrite(() => {
-    try { write() } catch { /* best-effort */ }
+    try {
+      write()
+    } catch {
+      /* best-effort */
+    }
   })
 }
 
@@ -587,9 +481,11 @@ function recordUnavailable(
 ): ResolvedIndex {
   const alreadyLogged = hit?.load.kind === 'unavailable' && hit.load.cause === load.cause
   if (!alreadyLogged) {
-    enqueueBrainLogWrite(() => mainLog.warn(
-      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) - left untouched; indexing is paused until it can be read`
-    ))
+    enqueueBrainLogWrite(() =>
+      mainLog.warn(
+        `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) - left untouched; indexing is paused until it can be read`
+      )
+    )
     auditLog('brain.index.unavailable', { cause: load.cause })
   }
   indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
@@ -610,8 +506,12 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   } catch (e) {
     return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
   }
-  if (kept >= INDEX_AUTO_SNAPSHOT_CAP) return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
-  const to = join(dir, `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  if (kept >= INDEX_AUTO_SNAPSHOT_CAP)
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
+  const to = join(
+    dir,
+    `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`
+  )
   try {
     renameSync(p, to)
   } catch (e) {
@@ -738,18 +638,26 @@ export async function indexUnavailableAsync(s: Settings): Promise<IndexUnavailab
 export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
   switch (cause) {
     case 'undecryptable':
-      return "Mantu Intelligence can't read its index on this device: it was encrypted with a key this " +
-        'device doesn\'t have (another device, or a keychain that is unavailable). Nothing was changed ' +
+      return (
+        "Mantu Intelligence can't read its index on this device: it was encrypted with a key this " +
+        "device doesn't have (another device, or a keychain that is unavailable). Nothing was changed " +
         'or deleted. Indexing is paused on this device.'
+      )
     case 'io':
-      return "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
+      return (
+        "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
         'OneDrive). Nothing was changed. Indexing resumes automatically once the file can be read.'
+      )
     case 'unsupported':
-      return "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
+      return (
+        "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
         'Update Métis on this device to resume indexing.'
+      )
     case 'corrupt-kept':
-      return "Mantu Intelligence's index is damaged and the automatic repair limit for this folder has " +
+      return (
+        "Mantu Intelligence's index is damaged and the automatic repair limit for this folder has " +
         'been reached. Nothing was deleted. Indexing is paused on this device.'
+      )
   }
 }
 
@@ -771,10 +679,15 @@ export async function rebuildUnavailableError(s: Settings): Promise<string | nul
 }
 
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
-export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
+export async function writeIndex(
+  s: Settings,
+  v: BrainIndex,
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
+): Promise<void> {
   const blocked = indexUnavailable(s)
   if (blocked) throw new BrainIndexUnavailableError(blocked)
-  await writeJson(s, INDEX_REL, v)
+  await writeJson(s, INDEX_REL, v, beforeReplace, prepareReplace)
   indexCache.delete(join(brainDir(s), INDEX_REL))
 }
 
@@ -799,7 +712,9 @@ export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: Meeting
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
 export const loadPerson = async (s: Settings, slug: string): Promise<PersonEntity | null> => {
-  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) =>
+    migratePerson(PersonEntitySchema.parse(v), slug)
+  )
   return loaded.status === 'ok' ? loaded.value : null
 }
 export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
@@ -812,7 +727,9 @@ export const writePerson = async (s: Settings, slug: string, v: PersonEntity): P
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
 export const loadAccount = async (s: Settings, slug: string): Promise<AccountEntity | null> => {
-  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) =>
+    migrateAccount(AccountEntitySchema.parse(v), slug)
+  )
   return loaded.status === 'ok' ? loaded.value : null
 }
 export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
@@ -824,7 +741,9 @@ export const writeAccount = async (s: Settings, slug: string, v: AccountEntity):
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
 export const loadDeal = async (s: Settings, slug: string): Promise<DealEntity | null> => {
-  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) =>
+    migrateDeal(DealEntitySchema.parse(v), slug)
+  )
   return loaded.status === 'ok' ? loaded.value : null
 }
 export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
@@ -889,7 +808,12 @@ export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): 
 }
 
 export async function loadEntitySlugs(s: Settings, kind: 'person' | 'account' | 'deal'): Promise<string[]> {
-  return (await listBrainNames(s, join('entities', kind)))?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')).sort() ?? []
+  return (
+    (await listBrainNames(s, join('entities', kind)))
+      ?.filter((f) => f.endsWith('.json'))
+      .map((f) => basename(f, '.json'))
+      .sort() ?? []
+  )
 }
 
 export function listMeetingExtractions(s: Settings): string[] {
@@ -999,7 +923,10 @@ function preserveCurrentIndexBeforeRestore(settings: Settings): void {
   const current = join(brainDir(settings), INDEX_REL)
   if (!existsSync(current)) return
   const preserveDir = preservedIndexDir(settings)
-  const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  const preservePath = join(
+    preserveDir,
+    `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`
+  )
   mkdirSync(preserveDir, { recursive: true })
   copyFileSync(current, preservePath, constants.COPYFILE_EXCL)
   fsyncFilePath(preservePath)
@@ -1024,7 +951,8 @@ export function restorePreservedBrainIndex(
     return { ok: false, error: 'not-found' }
   }
   if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
-  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
+  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings))
+    return { ok: false, error: 'current-readable' }
 
   const root = brainDir(settings)
   const target = join(root, INDEX_REL)
@@ -1049,7 +977,10 @@ export function restorePreservedBrainIndex(
   }
 }
 
-export function deletePreservedBrainIndex(settings: Settings, id: string): { ok: boolean; error?: 'not-found' | 'failed' } {
+export function deletePreservedBrainIndex(
+  settings: Settings,
+  id: string
+): { ok: boolean; error?: 'not-found' | 'failed' } {
   let path: string
   try {
     path = preservedIndexPath(settings, id)
@@ -1116,9 +1047,11 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
   } catch {
     throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   }
-  if (hashBytes(currentBytes) !== classifiedHash) throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
+  if (hashBytes(currentBytes) !== classifiedHash)
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
   const rechecked = classifyIndexBytes(currentBytes)
-  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
+  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
   if (rechecked.kind === 'unavailable' && rechecked.cause === 'unsupported') {
     throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
   }
@@ -1143,7 +1076,10 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
  * graph" gone, corrections included. Copies the journal's raw on-disk bytes (respects encryption,
  * mirroring ensureV1Backup's cpSync convention above) rather than decrypting/re-encrypting it.
  */
-export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }): { ok: boolean } {
+export function purgeBrain(
+  settings: Settings,
+  opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }
+): { ok: boolean } {
   const root = brainDir(settings)
   if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
   const journalPath = join(root, 'corrections.json')

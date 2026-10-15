@@ -1,6 +1,7 @@
 import type { ImportJob, ImportJobStore, ImportHoldInventory } from './import-job-types'
 export type { ImportHoldInventory } from './import-job-types'
-import { ImportRetentionBlockedError } from './import-retention-policy'
+import { ImportRetentionAuthorityUnavailableError, ImportRetentionBlockedError } from './import-retention-policy'
+import type { ImportRetentionState } from './import-retention-policy'
 
 export class StaleImportJobWriteError extends Error {}
 
@@ -26,7 +27,7 @@ export interface ImportResumeHost {
   decodeSlotIds: Set<string>
   activeJobIds: Set<string>
   copy(job: ImportJob): ImportJob
-  assertAllowed(): void
+  assertAllowed(): void | Promise<void>
   validateSource(job: ImportJob): void | Promise<void>
   persist(job: ImportJob): Promise<void>
   releaseHold(job: ImportJob): Promise<void>
@@ -47,23 +48,30 @@ export class ImportJobRetentionCoordinator {
   private holdingAll = false
   private readonly holdMarkerTails = new Map<string, Promise<void>>()
 
-  async initialize(store: ImportJobStore, allowed: boolean): Promise<void> {
-    const inventory = await store.markExistingJobsHeld?.(allowed ? 'restart' : 'policy')
+  async initialize(store: ImportJobStore, status: ImportRetentionState): Promise<void> {
+    const inventory = await store.markExistingJobsHeld?.(status === 'summary-only' ? 'policy' : 'restart')
     this.heldJobIds = inventory?.jobIds ?? []
     this.policyHeldJobIds = inventory?.policyHeldJobIds ?? []
     this.inventoryOverflow = inventory?.inventoryOverflow ?? false
     this.policyHoldOverflow = inventory?.policyHoldOverflow ?? false
   }
 
-  async snapshot(store: ImportJobStore, allowed: () => boolean, jobs: () => ImportJob[], holdAll: () => Promise<void>) {
-    if (!allowed()) await holdAll()
+  async snapshot(
+    store: ImportJobStore,
+    status: () => ImportRetentionState,
+    jobs: () => ImportJob[],
+    holdAll: () => Promise<void>
+  ) {
+    if (status() !== 'allowed') await holdAll()
     const inventory = await store.listHeldJobIds?.()
     if (inventory) this.merge(inventory)
-    const policyBlocked = !allowed()
+    const policyState = status()
+    const policyBlocked = policyState !== 'allowed'
     if (policyBlocked) await holdAll()
     return {
       jobs: policyBlocked ? [] : jobs(),
       policyBlocked,
+      policyState,
       heldJobIds: this.heldJobIds.slice(0, 1_024),
       policyHeldJobIds: this.policyHeldJobIds.slice(0, 1_024),
       inventoryOverflow: this.inventoryOverflow,
@@ -80,7 +88,7 @@ export class ImportJobRetentionCoordinator {
 
   async persist(
     job: ImportJob,
-    allowed: () => boolean,
+    status: () => ImportRetentionState,
     hold: () => Promise<void>,
     copy: (job: ImportJob) => ImportJob,
     isCurrent: () => boolean,
@@ -89,9 +97,18 @@ export class ImportJobRetentionCoordinator {
     now: () => number,
     onChange?: (job: ImportJob) => void
   ): Promise<void> {
+    let refusalStatus: ImportRetentionState = 'allowed'
+    const allowed = (): boolean => {
+      refusalStatus = status()
+      return refusalStatus === 'allowed'
+    }
+    const refusal = (): Error =>
+      refusalStatus === 'unavailable'
+        ? new ImportRetentionAuthorityUnavailableError()
+        : new ImportRetentionBlockedError()
     if (!allowed()) {
       await hold()
-      throw new ImportRetentionBlockedError()
+      throw refusal()
     }
     job.updatedAt = now()
     try {
@@ -100,20 +117,25 @@ export class ImportJobRetentionCoordinator {
     } catch (error) {
       if (!allowed()) {
         await hold()
-        throw new ImportRetentionBlockedError()
+        throw refusal()
       }
       throw error
     }
     if (!allowed()) {
       await hold()
-      throw new ImportRetentionBlockedError()
+      throw refusal()
     }
     if (!isCurrent()) throw new StaleImportJobWriteError()
     this.durableJobs.set(job.jobId, copy(job))
     onChange?.(copy(job))
   }
 
-  async hold(job: ImportJob, host: ImportRetentionHost, store: ImportJobStore): Promise<void> {
+  async hold(
+    job: ImportJob,
+    host: ImportRetentionHost,
+    store: ImportJobStore,
+    reason: 'policy' | 'restart' = 'policy'
+  ): Promise<void> {
     if (job.state === 'policy-held' && this.heldJobIds.includes(job.jobId)) return
     const durable = this.durableJobs.get(job.jobId)
     if (durable) Object.assign(job, host.copy(durable))
@@ -153,7 +175,7 @@ export class ImportJobRetentionCoordinator {
     try {
       await this.serializeHoldMarker(job.jobId, async () => {
         if (host.jobs.get(job.jobId) !== job || job.state !== 'policy-held') return
-        persisted = (await store.markHeld?.(job.jobId)) ?? this.durableJobs.has(job.jobId)
+        persisted = (await store.markHeld?.(job.jobId, reason)) ?? this.durableJobs.has(job.jobId)
       })
     } catch {
       this.inventoryOverflow = true
@@ -167,7 +189,12 @@ export class ImportJobRetentionCoordinator {
     host.maybeIdle()
   }
 
-  async holdAll(jobs: Iterable<ImportJob>, host: ImportRetentionHost, store: ImportJobStore): Promise<void> {
+  async holdAll(
+    jobs: Iterable<ImportJob>,
+    host: ImportRetentionHost,
+    store: ImportJobStore,
+    reason: () => 'policy' | 'restart' = () => 'policy'
+  ): Promise<void> {
     if (this.holdingAll) return
     this.holdingAll = true
     try {
@@ -177,7 +204,7 @@ export class ImportJobRetentionCoordinator {
           job.state === 'failed' ||
           (job.state === 'policy-held' && !this.heldJobIds.includes(job.jobId))
         ) {
-          await this.hold(job, host, store)
+          await this.hold(job, host, store, reason())
         }
       }
     } finally {
@@ -197,17 +224,21 @@ export class ImportJobRetentionCoordinator {
   }
 
   async resume(jobId: string, store: ImportJobStore, host: ImportResumeHost): Promise<ImportJob> {
-    host.assertAllowed()
+    await host.assertAllowed()
     let job = host.jobs.get(jobId)
     const held = this.heldJobIds.includes(jobId)
     if (held && job) job = host.copy(this.durableJobs.get(jobId) ?? job)
     if (!job && held && store.loadHeld) {
       const loaded = await store.loadHeld(jobId, true)
+      await host.assertAllowed()
       if (loaded) job = host.copy(loaded)
     }
     if (!job) throw new Error('The saved import is unavailable.')
-    if (held) {
+    if (!job.file) {
       await host.validateSource(host.copy(job))
+      await host.assertAllowed()
+    }
+    if (held) {
       host.jobs.set(jobId, job)
       this.durableJobs.set(jobId, host.copy(job))
     }
@@ -220,7 +251,9 @@ export class ImportJobRetentionCoordinator {
       job.error = undefined
       job.recapError = job.recapError ?? 'Automatic summary was interrupted. Open the meeting to retry it.'
       await host.persist(job)
+      await host.assertAllowed()
       if (held) await host.releaseHold(job)
+      await host.assertAllowed()
       await host.removeCheckpoint(job.jobId)
       return host.copy(host.requireJob(jobId))
     }
@@ -229,12 +262,15 @@ export class ImportJobRetentionCoordinator {
     job.error = undefined
     job.recapError = undefined
     await host.persist(job)
+    await host.assertAllowed()
     if (held) await host.releaseHold(job)
+    await host.assertAllowed()
     // Keep a timed-out retained consumer ahead of its retry so both never own the decoder at once.
     if (host.decodeSlotIds.has(jobId) || host.activeJobIds.has(jobId)) {
       if (!host.queue.includes(jobId)) host.queue.push(jobId)
     } else host.enqueue(jobId)
     await host.pump()
+    await host.assertAllowed()
     return host.copy(host.requireJob(jobId))
   }
 

@@ -14,7 +14,8 @@ import { createRoot } from 'react-dom/client'
 import { ImportQueueSection } from ${modulePath('components/ImportQueueSection.tsx')}
 import { useImportQueue } from ${modulePath('components/useImportQueue.ts')}
 
-let policyBlocked = true
+let policyState = 'summary-only'
+let capabilityState = 'available'
 const settingsListeners = new Set()
 const heldJob = {
   jobId: 'held-job', title: 'Saved import', state: 'policy-held', cursor: 0,
@@ -22,7 +23,8 @@ const heldJob = {
 }
 window.toto = {
   importJobsList: async () => ({
-    jobs: [], policyBlocked, heldJobIds: ['held-job'], policyHeldJobIds: ['held-job'],
+    jobs: [], policyBlocked: policyState !== 'allowed', policyState, capabilityState, persistenceState: 'configured',
+    heldJobIds: ['held-job'], policyHeldJobIds: ['held-job'],
     inventoryOverflow: false, policyHoldOverflow: false
   }),
   onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => settingsListeners.delete(listener) },
@@ -33,7 +35,9 @@ function Probe() {
   const refreshList = useCallback(() => {}, [])
   const queue = useImportQueue(refreshList)
   return createElement(ImportQueueSection, {
-    jobs: [heldJob], policyBlocked: queue.policyBlocked, policyHeldJobIds: queue.policyHeldJobIds,
+    jobs: [heldJob], policyState: queue.policyState, capabilityState: queue.capabilityState,
+    persistenceState: queue.persistenceState,
+    policyHeldJobIds: queue.policyHeldJobIds,
     inventoryOverflow: queue.inventoryOverflow, policyHoldOverflow: queue.policyHoldOverflow,
     error: queue.error, assets: queue.assets, dragOver: queue.dragOver,
     onCancel: queue.cancel, onResume: queue.resume, onDismiss: queue.dismiss, onOpenMeeting: () => {}
@@ -43,7 +47,7 @@ const root = createRoot(document.getElementById('root'))
 flushSync(() => root.render(createElement(Probe)))
 window.__summaryOnly = {
   restorePolicy() {
-    policyBlocked = false
+    policyState = 'allowed'
     for (const listener of settingsListeners) listener()
   },
   unmount() { root.unmount() }

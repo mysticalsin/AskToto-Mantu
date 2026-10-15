@@ -10,18 +10,38 @@
  */
 import { dialog, type BrowserWindow } from 'electron'
 import { statSync } from 'node:fs'
+import { constants as fsConstants } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { ImportAudioPickResult, ImportAudioPickedFile, ImportAudioSkippedFile } from '@shared/ipc'
-import type { ImportJobSource } from './import-jobs'
-import { IMPORT_NOT_MEDIA, sniffMediaFile } from './import-magic'
+import type { ImportJob, ImportJobSource } from './import-jobs'
+import { IMPORT_NOT_MEDIA, isAudioOrVideoMagic, sniffMediaFile } from './import-magic'
 
 // Chromium's AudioContext does the actual capability check. Keep the picker broad enough for common
 // interview exports (including AIFF, WebM/Opus, WMA, MP4, and 3GP) instead of silently excluding them.
 // mov/m4v/mkv: QuickTime is macOS's built-in recorder and OBS defaults to mkv — both were invisible in
 // the picker (ffmpeg decodes all three fine; the "All files" escape hatch proved it, but nobody finds
 // that). Reported while importing real Downloads recordings, 2026-08-04.
-export const AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac', 'aiff', 'aif', 'webm', 'opus', 'wma', 'amr', '3gp', 'mp4', 'mov', 'm4v', 'mkv']
+export const AUDIO_EXTENSIONS = [
+  'wav',
+  'mp3',
+  'm4a',
+  'aac',
+  'ogg',
+  'flac',
+  'aiff',
+  'aif',
+  'webm',
+  'opus',
+  'wma',
+  'amr',
+  '3gp',
+  'mp4',
+  'mov',
+  'm4v',
+  'mkv'
+]
 export const MAX_SOURCE_BYTES = 500 * 1024 * 1024 // spec: cap source files at 500 MB, with a clear error
 export const MAX_IMPORT_SELECTION = 50
 
@@ -68,10 +88,7 @@ function stagePath(path: string): { file?: ImportAudioPickedFile; skipped?: Impo
   return { file: { token, name: source.name, sizeBytes: source.sizeBytes, mtimeMs: source.mtimeMs } }
 }
 
-function assemblePickResult(
-  files: ImportAudioPickedFile[],
-  skipped: ImportAudioSkippedFile[]
-): ImportAudioPickResult {
+function assemblePickResult(files: ImportAudioPickedFile[], skipped: ImportAudioSkippedFile[]): ImportAudioPickResult {
   if (!files.length) {
     return {
       error: skipped[0]?.error || 'Could not prepare the selected recordings.',
@@ -91,10 +108,7 @@ function assemblePickResult(
 /** Stage one or more already-chosen absolute paths (native picker or preload drop). Never returns paths. */
 export function offerAudioPaths(paths: string[]): ImportAudioPickResult {
   clearExpiredPicks()
-  const unique = [...new Set(paths.filter((p) => typeof p === 'string' && p.length > 0))].slice(
-    0,
-    MAX_IMPORT_SELECTION
-  )
+  const unique = [...new Set(paths.filter((p) => typeof p === 'string' && p.length > 0))].slice(0, MAX_IMPORT_SELECTION)
   if (!unique.length) return { cancelled: true }
   const files: ImportAudioPickedFile[] = []
   const skipped: ImportAudioSkippedFile[] = []
@@ -136,6 +150,80 @@ export function consumePickedAudio(token: string): ImportJobSource {
     throw new Error(IMPORT_NOT_MEDIA)
   }
   return { path: pick.path, name: pick.name, sizeBytes: pick.sizeBytes, mtimeMs: pick.mtimeMs }
+}
+
+/** Revalidate a saved checkpoint's original source before explicit Resume without consuming a picker
+ *  capability. The bounded header read preserves the same media check as initial admission while the
+ *  open descriptor and path snapshots prevent a replacement race during validation. */
+export async function validateImportJobSource(
+  job: Pick<ImportJob, 'sourcePath' | 'sourceSizeBytes' | 'sourceMtimeMs'>
+): Promise<void> {
+  if (
+    !job ||
+    typeof job.sourcePath !== 'string' ||
+    !job.sourcePath ||
+    !Number.isSafeInteger(job.sourceSizeBytes) ||
+    job.sourceSizeBytes < 0 ||
+    job.sourceSizeBytes > MAX_SOURCE_BYTES ||
+    !Number.isFinite(job.sourceMtimeMs)
+  ) {
+    throw new Error('The selected recording is no longer available.')
+  }
+
+  let before: Awaited<ReturnType<typeof lstat>>
+  try {
+    before = await lstat(job.sourcePath)
+  } catch {
+    throw new Error('The selected recording is no longer available.')
+  }
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    before.size !== job.sourceSizeBytes ||
+    before.mtimeMs !== job.sourceMtimeMs
+  ) {
+    throw new Error('The selected recording changed after it was chosen. Choose it again.')
+  }
+
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(
+      job.sourcePath,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
+    )
+    const opened = await handle.stat()
+    if (!sameImportSourceSnapshot(before, opened)) {
+      throw new Error('The selected recording changed after it was chosen. Choose it again.')
+    }
+    const header = Buffer.alloc(16)
+    const result = await handle.read(header, 0, header.byteLength, 0)
+    if (!isAudioOrVideoMagic(header.subarray(0, result.bytesRead))) throw new Error(IMPORT_NOT_MEDIA)
+    const [afterPath, afterHandle] = await Promise.all([lstat(job.sourcePath), handle.stat()])
+    if (!sameImportSourceSnapshot(before, afterPath) || !sameImportSourceSnapshot(before, afterHandle)) {
+      throw new Error('The selected recording changed after it was chosen. Choose it again.')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === IMPORT_NOT_MEDIA) throw error
+    if (error instanceof Error && error.message.includes('recording changed')) throw error
+    throw new Error('The selected recording is no longer available.')
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
+function sameImportSourceSnapshot(
+  left: Awaited<ReturnType<typeof lstat>>,
+  right: Awaited<ReturnType<typeof lstat>>
+): boolean {
+  return (
+    left.isFile() &&
+    right.isFile() &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  )
 }
 
 // ── Pure helpers (testable without Electron) ─────────────────────────────────

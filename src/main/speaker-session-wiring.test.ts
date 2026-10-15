@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +15,7 @@ import { LiveMeetingStartedAtSchema } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
+import { createImportAsrAdmission } from './import-asr-admission'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
@@ -637,17 +637,48 @@ describe('exact import attempt integration', () => {
     const api = sessionApi({ id })
     let captured: Record<string, any> | undefined
     const noop = () => undefined
+    const settings = { asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }
+    const asrAdmission = createImportAsrAdmission({
+      captureAdmission: () => ({ settings, assertCurrent: noop }),
+      capabilityState: () => 'available',
+      isAdmissionRefusal: () => false,
+      hasHighMemoryHeadroom: () => false,
+      isHighTierModelReady: async () => false,
+      setWhisperTierAdmission: async () => {},
+      ensureParakeetModel: async () => {},
+      parakeetTranscribe: async () => '',
+      whisperImportTranscribe: async () => '',
+      detectImportLanguage: () => null
+    })
     actualFunction('initializeImportJobs', {
       importJobs: null,
       wireIntelligenceIndexWork: noop,
+      createImportAsrAdmission: () => asrAdmission,
+      captureImportAsrAdmission: async () => ({ settings, assertCurrent: noop }),
       ImportJobManager: class {
         constructor(deps: Record<string, any>) {
           captured = deps
         }
       },
       EncryptedImportJobStore: class {},
-      getSettings: () => ({ asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
-      randomUUID,
+      getSettings: () => settings,
+      currentImportSettings: () => settings,
+      refreshImportSettings: async () => settings,
+      currentImportRetentionState: () => 'allowed',
+      currentImportPersistenceState: () => 'configured',
+      refreshImportRetentionState: async () => 'allowed',
+      refreshImportCapabilityState: async () => 'available',
+      assertImportAdmissionAllowed: async () => settings,
+      assertImportAdmissionCurrent: noop,
+      prepareImportReplacement: async () => noop,
+      requireAuth: () => true,
+      ImportRetentionBlockedError: Error,
+      ImportRetentionAuthorityUnavailableError: Error,
+      hasHighMemoryWhisperImportHeadroom: () => false,
+      isHighTierAsrModelReady: async () => false,
+      setWhisperImportTierAdmission: async () => {},
+      validateImportJobSource: noop,
+      randomUUID: () => '00000000-0000-4000-8000-000000000000',
       resetImportLanguageFollow: noop,
       startImportDecoder: noop,
       parakeetTranscribe: noop,

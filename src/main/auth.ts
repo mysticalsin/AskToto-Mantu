@@ -2,7 +2,6 @@ import { app, shell, safeStorage } from 'electron'
 import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { setSettings } from './store'
@@ -31,6 +30,7 @@ import {
   type SignInBackoffState
 } from './auth-session-policy'
 import { readSpeechAuthBoundary as readVerifiedSpeechAuthBoundary } from './auth-speech-boundary'
+import { createAuthStoragePaths } from './auth-storage-paths'
 import {
   SpeechAuthLeaseController,
   type SpeechAuthLease,
@@ -60,6 +60,7 @@ const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'openid', 'profile', 'ema
  */
 
 type Session = AuthSession
+const authPaths = createAuthStoragePaths(() => app.getPath('userData'))
 
 function readManagedAzure(): Partial<AzureConfig> {
   const admin = readTrustedAdminManaged()
@@ -68,7 +69,7 @@ function readManagedAzure(): Partial<AzureConfig> {
     if (azure.clientId) return azure
   }
   try {
-    return azureFromManagedContent(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))
+    return azureFromManagedContent(readFileSync(authPaths.managedConfig(), 'utf8'))
   } catch {
     return {}
   }
@@ -89,19 +90,11 @@ function readConfig(): AzureConfig | null {
   return isStickyConfigured() ? usableAzureConfig(readLkgConfig()) : null
 }
 
-function sessionPath(): string {
-  return join(app.getPath('userData'), 'auth-session.bin')
-}
-
 // ─── Sticky-configured flag ───────────────────────────────────────────────────
 // Set only after a successful interactive sign-in. It records genuinely usable SSO rather than mere
 // config resolution, keeps auth enforced through Settings edits, and clears only on authenticated sign-out.
-function stickyConfiguredPath(): string {
-  return join(app.getPath('userData'), 'auth-configured.flag')
-}
-
 function writeStickyConfigured(): void {
-  const path = stickyConfiguredPath()
+  const path = authPaths.stickyConfigured()
   if (!existsSync(path)) {
     try {
       writeFileSync(path, '1', { mode: 0o600 })
@@ -113,7 +106,7 @@ function writeStickyConfigured(): void {
 
 function clearStickyConfigured(): void {
   try {
-    const path = stickyConfiguredPath()
+    const path = authPaths.stickyConfigured()
     if (existsSync(path)) rmSync(path)
   } catch {
     /* best-effort */
@@ -122,7 +115,7 @@ function clearStickyConfigured(): void {
 
 function isStickyConfigured(): boolean {
   try {
-    return existsSync(stickyConfiguredPath())
+    return existsSync(authPaths.stickyConfigured())
   } catch {
     return false
   }
@@ -132,14 +125,10 @@ function isStickyConfigured(): boolean {
 // The LKG stores the exact public Azure identifiers from a successful sign-in for recovery after self-serve
 // Settings are cleared. Env, admin-managed, per-user managed, and Settings config all win first; LKG is used
 // only when sticky is set and clears with it on authenticated sign-out, so it cannot loosen managed policy.
-function lkgConfigPath(): string {
-  return join(app.getPath('userData'), 'auth-lkg-config.json')
-}
-
 function writeLkgConfig(config: AzureConfig): void {
   try {
     writeFileSync(
-      lkgConfigPath(),
+      authPaths.lkgConfig(),
       JSON.stringify({
         clientId: config.clientId,
         tenantId: config.tenantId,
@@ -154,7 +143,7 @@ function writeLkgConfig(config: AzureConfig): void {
 
 function readLkgConfig(): Partial<AzureConfig> {
   try {
-    const value = JSON.parse(readFileSync(lkgConfigPath(), 'utf8'))
+    const value = JSON.parse(readFileSync(authPaths.lkgConfig(), 'utf8'))
     const clientId = String(value?.clientId || '').trim()
     const tenantId = String(value?.tenantId || '').trim()
     const allowedDomain = String(value?.allowedDomain || '')
@@ -169,7 +158,7 @@ function readLkgConfig(): Partial<AzureConfig> {
 
 function clearLkgConfig(): void {
   try {
-    const path = lkgConfigPath()
+    const path = authPaths.lkgConfig()
     if (existsSync(path)) rmSync(path)
   } catch {
     /* best-effort */
@@ -177,7 +166,7 @@ function clearLkgConfig(): void {
 }
 
 function msalCachePath(): string {
-  return join(app.getPath('userData'), 'msal-cache.bin')
+  return authPaths.msalCache()
 }
 
 /**
@@ -304,6 +293,11 @@ let speechAuthSessionEpoch = 0
 let speechAuthLeaseController: SpeechAuthLeaseController
 let suspendedSpeechAuthProfilePath: string | null = null
 
+/** Main-only monotonic identity for sign-out, expiry and profile transitions. */
+export function getSpeechAuthSessionEpoch(): number {
+  return speechAuthSessionEpoch
+}
+
 export function invalidateSpeechAuthLease(): void {
   speechAuthLeaseController.invalidate()
 }
@@ -405,7 +399,7 @@ function clearSession(): void {
   speechAuthSessionEpoch += 1
   session = null
   try {
-    if (existsSync(sessionPath())) rmSync(sessionPath())
+    if (existsSync(authPaths.session())) rmSync(authPaths.session())
   } catch {
     /* best-effort */
   }
@@ -526,7 +520,7 @@ function loadSession(): void {
   loaded = true
   loadedForUserData = currentUserData
   try {
-    const buf = readFileSync(sessionPath())
+    const buf = readFileSync(authPaths.session())
     let json: string | null = null
 
     // Try the file backend (covers dev + new prod installs).
@@ -549,7 +543,7 @@ function loadSession(): void {
       // Migrate to file backend if we're now in file-backend mode (best-effort).
       if (json !== null && useFileBackend()) {
         try {
-          writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 })
+          writeFileSync(authPaths.session(), encryptSecret(json), { mode: 0o600 })
         } catch {
           /* best-effort */
         }
@@ -567,7 +561,7 @@ function loadSession(): void {
       }
       if (json !== null && safeStorage.isEncryptionAvailable()) {
         try {
-          writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 })
+          writeFileSync(authPaths.session(), safeStorage.encryptString(json), { mode: 0o600 })
         } catch {
           /* best-effort */
         }
@@ -603,7 +597,7 @@ function saveSession(s: Session): void {
       : safeStorage.isEncryptionAvailable()
         ? safeStorage.encryptString(json)
         : null
-    if (blob) writeFileSync(sessionPath(), blob, { mode: 0o600 })
+    if (blob) writeFileSync(authPaths.session(), blob, { mode: 0o600 })
   } catch (e) {
     // Session persisted to memory only — sign-in still works for this run, but will silently sign
     // the user out on next launch with no trace unless we log it. Never log session contents
@@ -657,7 +651,7 @@ function authEnforced(): boolean {
     /* malformed admin content */
   }
   try {
-    if (JSON.parse(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))?.requireAuth === true) {
+    if (JSON.parse(readFileSync(authPaths.managedConfig(), 'utf8'))?.requireAuth === true) {
       return true
     }
   } catch {

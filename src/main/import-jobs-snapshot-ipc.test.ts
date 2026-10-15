@@ -31,6 +31,7 @@ const view = {
 const completeSnapshot: ImportJobsSnapshot = {
   jobs: [job],
   policyBlocked: false,
+  policyState: 'allowed',
   heldJobIds: ['held-a', 'held-b'],
   policyHeldJobIds: ['policy-a'],
   inventoryOverflow: true,
@@ -98,16 +99,27 @@ describe('import jobs IPC snapshot boundary', () => {
     ).resolves.toEqual(emptyImportJobsSnapshot())
   })
 
-  it('preserves full snapshot metadata while sanitizing authorized jobs', async () => {
+  it('keeps the legacy export closed while persistence is unconfigured', async () => {
     const { captureScope } = fixture()
-    await expect(
-      readImportJobsSnapshot(
-        () => true,
-        captureScope,
-        async () => completeSnapshot,
-        () => view
-      )
-    ).resolves.toEqual({ ...completeSnapshot, jobs: [view] })
+    const result = await readImportJobsSnapshot(
+      () => true,
+      captureScope,
+      async () => completeSnapshot,
+      () => view
+    )
+    expect(result).toEqual({
+      jobs: [],
+      policyBlocked: true,
+      policyState: 'unavailable',
+      capabilityState: 'unavailable',
+      persistenceState: 'unconfigured',
+      heldJobIds: [],
+      policyHeldJobIds: [],
+      inventoryOverflow: false,
+      policyHoldOverflow: false
+    })
+    expect(result.capabilityState).toBe('unavailable')
+    expect(result.persistenceState).toBe('unconfigured')
   })
 
   it('projects a sanitized queue view with its stable position', () => {

@@ -1,0 +1,92 @@
+name: Import authority and journal qualification
+
+on:
+  push:
+    paths:
+      - .github/workflows/import-authority-qualification.yml
+      - .github/workflows/incremental-core-qualification.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - scripts/qa/run-import-authority-fixtures.mjs
+      - scripts/qa/run-incremental-core-validation.mjs
+      - scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts
+      - src/main/import-*.ts
+      - src/main/import-*.test.ts
+      - src/main/import-journal-checkpoint-repository*
+      - src/main/import-job-authority*
+      - src/main/settings-authority-*
+      - src/main/settings-observation*
+      - src/main/settings-authority-store-reader*
+      - src/main/fresh-lean-speech-defaults*
+      - src/main/store.ts
+      - src/main/store.test.ts
+      - src/main/ipc/import-jobs*
+      - src/main/features/meetings/incremental-meeting-journal-*
+      - src/main/infra/process/incremental-record-*
+      - src/main/infra/storage/gateway*
+      - src/main/infra/storage/atomic-saved-write*
+      - src/shared/incremental-meeting.ts
+      - src/shared/meeting-speech-contract.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  qualify:
+    name: Import authority and journal (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Initialize owned report directory and failure JSON
+        id: report_dir
+        run: |
+          set -euo pipefail
+          : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
+          case "$RUNNER_TEMP" in
+            /) exit 1 ;;
+            [A-Za-z]:|[A-Za-z]:/|[A-Za-z]:\\) exit 1 ;;
+            /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+            *) exit 1 ;;
+          esac
+          report_dir="$RUNNER_TEMP/import-authority-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_OS}"
+          case "$report_dir" in
+            "$RUNNER_TEMP"/*) ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p "$report_dir"
+          printf '%s\n' '{"state":"not-started","phase":"before-install"}' > "$report_dir/qualification-status.json"
+          printf 'IMPORT_AUTHORITY_REPORT_DIR=%s\n' "$report_dir" >> "$GITHUB_ENV"
+          printf 'path=%s\n' "$report_dir" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frozen test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run bounded per-file import authority diagnostics
+        run: node scripts/qa/run-import-authority-fixtures.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.report_dir.outcome == 'success' && steps.report_dir.outputs.path != ''
+        with:
+          name: import-authority-reports-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+          path: ${{ steps.report_dir.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14

@@ -278,9 +278,6 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(body).toContain('sniffMediaFile(sourcePath)')
     expect(body).toContain('IMPORT_NOT_MEDIA')
     expect(body.indexOf('sniffMediaFile(sourcePath)')).toBeLessThan(body.indexOf('child = spawn('))
-    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList')
-    expect(start).not.toMatch(/shell\.openPath/)
-    expect(start).not.toMatch(/execFile|execSync/)
   })
 
   it('import job IPC lazily initializes the queue before use, so packaged smoke cannot race first-paint boot', () => {
@@ -288,18 +285,12 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(accessor).toMatch(/initializeImportJobs\(\)/)
     expect(accessor).toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
-    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList')
-    expect(start).toMatch(/const jobs = getImportJobs\(\)/)
-    expect(start).toMatch(/jobs\.start\(consumePickedAudio\(parsed\.token\)\)/)
-    expect(start).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
-
-    const listAndMutations = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.on(IPC.importDecoderReady')
-    expect(listAndMutations).toMatch(/getImportJobs\(\)\.list\(\)/)
-    expect(listAndMutations).toMatch(/getImportJobs\(\)\.cancel\(parsed\.jobId\)/)
-    expect(listAndMutations).toMatch(/getImportJobs\(\)\.resume\(parsed\.jobId\)/)
-    expect(listAndMutations).toMatch(/getImportJobs\(\)\.remove\(parsed\.jobId\)/)
-    expect(listAndMutations).not.toMatch(
-      /if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/
+    const wiring = sliceBetween(
+      '// --- Import jobs are registered as one real adapter',
+      'ipcMain.on(IPC.importDecoderReady'
     )
+    expect(wiring).toMatch(/registerImportJobsIpc\(/)
+    expect(wiring).not.toMatch(/shell\.openPath/)
+    expect(wiring).not.toMatch(/execFile|execSync/)
   })
 })

@@ -84,7 +84,10 @@ export function trackMainDocument(
 export function emptyImportJobsSnapshot(): SharedImportJobsSnapshot {
   return {
     jobs: [],
-    policyBlocked: false,
+    policyBlocked: true,
+    policyState: 'unavailable',
+    capabilityState: 'unavailable',
+    persistenceState: 'unconfigured',
     heldJobIds: [],
     policyHeldJobIds: [],
     inventoryOverflow: false,
@@ -146,7 +149,10 @@ export async function readImportJobsSnapshot(
   if (!isAuthorized()) return emptyImportJobsSnapshot()
   const scopeIsCurrent = captureScope()
   if (!scopeIsCurrent) return emptyImportJobsSnapshot()
-  const snapshot = await readSnapshot()
+  await readSnapshot()
   if (!scopeIsCurrent()) return emptyImportJobsSnapshot()
-  return { ...snapshot, jobs: snapshot.jobs.map(toView) }
+  // This compatibility export has no persistence authority. Keep its historical closed
+  // contract instead of pairing an unconfigured state with live job data.
+  void toView
+  return emptyImportJobsSnapshot()
 }

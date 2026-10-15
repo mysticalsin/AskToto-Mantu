@@ -13,7 +13,7 @@ import {
   rewriteSpeechTranscript
 } from './features/meetings/speech-provenance'
 import { formatTranscript } from './features/meetings/transcript-format'
-import { canonicalizeIncrementalMeetingRecord } from './features/meetings/incremental-record-canonical'
+import { canonicalizeIncrementalMeetingRecord } from './infra/process/incremental-record-canonical'
 
 function requestInputByteLength(
   operation: MeetingSpeechRequest['operation'],

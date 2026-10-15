@@ -12,7 +12,7 @@ import {
   discardIncrementalRecordReceipt,
   issueIncrementalRecordReceipt,
   type IncrementalRecordReceipt
-} from './incremental-record-receipt'
+} from '../../infra/process/incremental-record-receipt'
 
 const meetingId = '64d5a603-0b18-4da5-8a3f-4a42c9d22031'
 const localRecordId = '6370e1cc-43f4-4976-a912-04d0c3ca8f9f'

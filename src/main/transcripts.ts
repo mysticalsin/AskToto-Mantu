@@ -23,9 +23,10 @@ import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
-import { meetingDurationMinutes } from '@shared/meeting-duration'
+import { meetingDurationMin } from './transcript-duration'
+export { meetingDurationMin }
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
-import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
+import { atomicSavedWrite, type PrepareSavedReplacement } from './infra/storage/atomic-saved-write'
 import type { FileClass } from './infra/storage/gateway'
 import { speakerLabel } from './features/meetings/transcript-format'
 import {
@@ -480,7 +481,8 @@ export async function writeSaved(
   file: string,
   content: string,
   encrypt: boolean,
-  beforeReplace?: () => void
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
 ): Promise<void> {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) {
@@ -491,7 +493,7 @@ export async function writeSaved(
       ? await encryptSpeechEnvelopeV2(content)
       : encryptEnvelopeV2(content)
   }
-  await atomicSavedWrite(file, data, beforeReplace)
+  await atomicSavedWrite(file, data, beforeReplace, prepareReplace)
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
@@ -721,15 +723,13 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   return file
 }
 
-/** Whole minutes of recording when measured, or a legacy transcript-span estimate. The value saveMeeting stamps into
- *  the frontmatter AND the value recordMeetingSummarized credits, so the tile and the on-disk meetings
- *  can never disagree about how long a call was. */
-export function meetingDurationMin(m: { startedAt: number; durationMs?: number; lines: { t: number }[] }): number {
-  return meetingDurationMinutes(m)
-}
-
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
-export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeReplace?: () => void): Promise<string> {
+export async function saveMeeting(
+  settings: Settings,
+  m: SaveMeeting,
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
+): Promise<string> {
   const statusError = recapStatusValidationError(m.recap, m.recapStatus)
   if (statusError) throw new Error(statusError)
   // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
@@ -776,7 +776,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeRepl
     summaryOnly,
     transcript
   })
-  await writeSaved(file, document, settings.encryptTranscripts, beforeReplace)
+  await writeSaved(file, document, settings.encryptTranscripts, beforeReplace, prepareReplace)
 
   if (!settings.encryptTranscripts) {
     const di = new Date(started)

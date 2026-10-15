@@ -116,13 +116,14 @@ describe('summary-only import checkpoint holds', () => {
       saveMeeting: vi.fn(async () => 'saved-import.md'),
       enqueueIngest: vi.fn(),
       generateRecap: vi.fn(async () => undefined),
-      updateRecap: vi.fn(async () => undefined)
+      updateRecap: vi.fn(async () => undefined),
+      newId: randomUUID
     })
 
     const job = await manager.start({
       path: '/private/interview.wav',
       name: 'interview.wav',
-      sizeBytes: 1_234,
+      sizeBytes: 1234,
       mtimeMs: 1_700_000_000_000
     })
 
@@ -176,6 +177,7 @@ describe('summary-only import checkpoint holds', () => {
     const store = new EncryptedImportJobStore(() => current, root)
     const job = savedJob()
     await store.save(job)
+    current = settings(true)
     await store.markExistingJobsHeld()
     current = settings(false)
 
@@ -234,19 +236,62 @@ describe('summary-only import checkpoint holds', () => {
     expect(asyncFsProbe.readFilePaths).not.toContain(checkpointPath)
   })
 
+  it('uses the refreshed authority again after FD metadata and before transcript bytes are read', async () => {
+    let current = settings(false)
+    const root = join(makeRoot(), 'import-jobs')
+    const job = savedJob()
+    const checkpointPath = join(root, `job-${job.jobId}.json`)
+    const refresh = async () => {
+      if (asyncFsProbe.openPaths.includes(checkpointPath)) current = settings(true)
+      return current.enterpriseLive.summaryOnly ? 'summary-only' : 'allowed'
+    }
+    const store = new EncryptedImportJobStore(
+      () => current,
+      root,
+      () => 'allowed',
+      refresh
+    )
+    await store.save(job)
+    await store.markExistingJobsHeld('restart')
+    asyncFsProbe.openPaths = []
+    asyncFsProbe.readFilePaths = []
+
+    await expect(store.loadHeld(job.jobId, true)).rejects.toThrow(/summary-only/i)
+
+    expect(asyncFsProbe.openPaths).toContain(checkpointPath)
+    expect(asyncFsProbe.readFilePaths).not.toContain(checkpointPath)
+  })
+
   it('fails closed on a mismatched or oversized hold marker and never lists its checkpoint for recovery', async () => {
     const root = join(makeRoot(), 'import-jobs')
     const store = new EncryptedImportJobStore(() => settings(false), root)
     const job = savedJob()
     await store.save(job)
-    writeFileSync(join(root, `job-${job.jobId}.hold.json`), JSON.stringify({ version: 1, jobId: randomUUID() }), 'utf8')
+    const checkpointPath = join(root, `job-${job.jobId}.json`)
+    const checkpointBefore = readFileSync(checkpointPath)
+    const markerPath = join(root, `job-${job.jobId}.hold.json`)
+    writeFileSync(markerPath, JSON.stringify({ version: 1, jobId: randomUUID() }), 'utf8')
+    const mismatchedMarkerBefore = readFileSync(markerPath)
 
     await expect(store.list()).resolves.toEqual([])
-    await expect(store.loadHeld(job.jobId)).rejects.toThrow()
+    asyncFsProbe.openPaths = []
+    asyncFsProbe.readFilePaths = []
+    await expect(store.loadHeld(job.jobId)).resolves.toBeUndefined()
+    expect(asyncFsProbe.openPaths).not.toContain(checkpointPath)
+    expect(asyncFsProbe.readFilePaths).not.toContain(checkpointPath)
+    expect(readFileSync(checkpointPath)).toEqual(checkpointBefore)
+    expect(readFileSync(markerPath)).toEqual(mismatchedMarkerBefore)
 
-    writeFileSync(join(root, `job-${job.jobId}.hold.json`), 'x'.repeat(257), 'utf8')
+    writeFileSync(markerPath, 'x'.repeat(257), 'utf8')
+    const oversizedMarkerBefore = readFileSync(markerPath)
     await expect(store.list()).resolves.toEqual([])
-    await expect(store.loadHeld(job.jobId)).rejects.toThrow()
+    asyncFsProbe.openPaths = []
+    asyncFsProbe.readFilePaths = []
+    await expect(store.loadHeld(job.jobId)).resolves.toBeUndefined()
+    expect(asyncFsProbe.openPaths).not.toContain(checkpointPath)
+    expect(asyncFsProbe.readFilePaths).not.toContain(checkpointPath)
+    expect(readFileSync(checkpointPath)).toEqual(checkpointBefore)
+    expect(readFileSync(markerPath)).toEqual(oversizedMarkerBefore)
   })
 
   it('does not open nonregular hold or global markers while building the bounded inventory', async () => {
@@ -336,13 +381,23 @@ describe('summary-only import checkpoint holds', () => {
     current = settings(false)
     write.mockRestore()
     const restartedStore = new EncryptedImportJobStore(() => current, root)
+    asyncFsProbe.openPaths = []
+    asyncFsProbe.readFilePaths = []
+    await expect(restartedStore.loadHeld(job.jobId)).resolves.toBeUndefined()
+    expect(asyncFsProbe.openPaths).not.toContain(checkpointPath)
+    expect(asyncFsProbe.readFilePaths).not.toContain(checkpointPath)
+
     await expect(restartedStore.markExistingJobsHeld('restart')).resolves.toMatchObject({
       jobIds: [job.jobId],
       policyHeldJobIds: [job.jobId],
       inventoryOverflow: false
     })
     await expect(restartedStore.list()).resolves.toEqual([])
-    await expect(restartedStore.loadHeld(job.jobId)).resolves.toBeUndefined()
+    await expect(restartedStore.loadHeld(job.jobId)).resolves.toMatchObject({
+      jobId: job.jobId,
+      cursor: 3,
+      lines: [{ text: 'private checkpoint sentinel' }]
+    })
     await expect(restartedStore.loadHeld(job.jobId, true)).resolves.toMatchObject({ jobId: job.jobId, cursor: 3 })
     expect(readFileSync(checkpointPath)).toEqual(checkpointBefore)
   })

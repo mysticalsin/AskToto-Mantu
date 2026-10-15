@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ImportJob, ImportJobSource, ImportJobStore } from './import-jobs'
 import { ImportJobManager } from './import-jobs'
-import { SUMMARY_ONLY_IMPORT_REFUSAL } from './import-retention-policy'
+import { ImportRetentionAuthorityUnavailableError, SUMMARY_ONLY_IMPORT_REFUSAL } from './import-retention-policy'
+import { StaleImportJobWriteError } from './import-job-retention-coordinator'
 
 class RetentionStore implements ImportJobStore {
   readonly jobs = new Map<string, ImportJob>()
@@ -87,10 +88,11 @@ function createManager(
   const onCancel = vi.fn()
   const disposeSpeakers = vi.fn()
   const validateSource = vi.fn()
+  const installedValidateSource = overrides.validateSource ?? validateSource
   const manager = new ImportJobManager({
     store,
     canRetainTranscript: canRetain,
-    validateSource,
+    validateSource: installedValidateSource,
     decode,
     transcribe,
     saveMeeting: vi.fn(async () => 'saved-import.md'),
@@ -105,7 +107,7 @@ function createManager(
     newId: () => 'job-1',
     ...overrides
   })
-  return { manager, decode, transcribe, onCancel, disposeSpeakers, validateSource }
+  return { manager, decode, transcribe, onCancel, disposeSpeakers, validateSource: installedValidateSource }
 }
 
 describe('ImportJobManager summary-only retention boundary', () => {
@@ -120,6 +122,79 @@ describe('ImportJobManager summary-only retention boundary', () => {
     expect(manager.list()).toEqual([])
     expect(store.jobs.size).toBe(0)
     expect(decode).not.toHaveBeenCalled()
+  })
+
+  it('uses the refreshed policy state before creating a requested batch', async () => {
+    const store = new RetentionStore()
+    const refreshRetentionStatus = vi.fn(async () => 'summary-only' as const)
+    const { manager, decode } = createManager(store, () => true, { refreshRetentionStatus })
+
+    await expect(manager.startMany([source])).rejects.toThrow(SUMMARY_ONLY_IMPORT_REFUSAL)
+
+    expect(refreshRetentionStatus).toHaveBeenCalledTimes(1)
+    expect(store.jobs.size).toBe(0)
+    expect(decode).not.toHaveBeenCalled()
+  })
+
+  it('reports unreadable authority separately and refuses before checkpoint payload admission', async () => {
+    const store = new RetentionStore()
+    const { manager, decode } = createManager(store, () => true, {
+      retentionStatus: () => 'unavailable'
+    })
+
+    await expect(manager.snapshot()).resolves.toMatchObject({
+      jobs: [],
+      policyBlocked: true,
+      policyState: 'unavailable'
+    })
+    await expect(manager.start(source)).rejects.toThrow(/policy could not be verified/)
+    expect(store.saveCalls).toBe(0)
+    expect(store.listCalls).toBe(0)
+    expect(decode).not.toHaveBeenCalled()
+  })
+
+  it('keeps an exact decode attempt held when admission reported unavailable authority before it restored', async () => {
+    const store = new RetentionStore()
+    const { manager, decode } = createManager(store, () => true, {
+      retentionStatus: () => 'allowed',
+      onDecodeAdmission: async () => {
+        throw new ImportRetentionAuthorityUnavailableError()
+      }
+    })
+
+    const job = await manager.start(source)
+
+    expect(manager.get(job.jobId)).toMatchObject({ state: 'policy-held' })
+    expect(store.held.has(job.jobId)).toBe(true)
+    expect(decode).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a typed transcription refusal after policy restores and holds the exact job', async () => {
+    let canRetain = true
+    const store = new RetentionStore()
+    const refused = new ImportRetentionAuthorityUnavailableError()
+    const transcribe = vi.fn(async () => {
+      canRetain = true
+      throw refused
+    })
+    const { manager } = createManager(store, () => canRetain, {
+      freeMemoryBytes: () => 1,
+      transcribe
+    })
+    const job = await manager.start(source)
+
+    await expect(manager.acceptDecodedChunk(job.jobId, 0, 1, new Float32Array(1_600).fill(0.1))).rejects.toBe(refused)
+
+    expect(transcribe).toHaveBeenCalledOnce()
+    expect(manager.get(job.jobId)).toMatchObject({ jobId: job.jobId, state: 'policy-held' })
+    expect(manager.list()).toEqual([])
+    await expect(manager.snapshot()).resolves.toMatchObject({
+      jobs: [],
+      heldJobIds: [job.jobId],
+      policyHeldJobIds: [job.jobId]
+    })
+    expect(store.held.has(job.jobId)).toBe(true)
+    expect(store.jobs.get(job.jobId)?.state).not.toBe('failed')
   })
 
   it('holds existing checkpoints at boot without listing or recovering their transcript payloads', async () => {
@@ -346,6 +421,37 @@ describe('ImportJobManager summary-only retention boundary', () => {
     expect(manager.get(job.jobId)).toMatchObject({ state: 'policy-held' })
   })
 
+  it('keeps an authority-refused recap held even if readability returns before its catch runs', async () => {
+    let retentionStatus: 'allowed' | 'unavailable' = 'allowed'
+    const store = new RetentionStore()
+    const enqueueIngest = vi.fn()
+    const updateRecap = vi.fn(async (_file: string, _recap: string, _status: string, beforeReplace?: () => void) => {
+      retentionStatus = 'unavailable'
+      try {
+        beforeReplace?.()
+      } catch (error) {
+        retentionStatus = 'allowed'
+        throw error
+      }
+    })
+    const { manager } = createManager(store, () => true, {
+      retentionStatus: () => retentionStatus,
+      freeMemoryBytes: () => 0,
+      generateRecap: vi.fn(async () => 'Private recap'),
+      updateRecap,
+      enqueueIngest
+    })
+    const job = await manager.start(source)
+    await manager.acceptDecodedChunk(job.jobId, 0, 1, new Float32Array(1_600).fill(0.1))
+    await manager.finishDecoding(job.jobId, 1)
+
+    expect(updateRecap).toHaveBeenCalledOnce()
+    expect(store.held.has(job.jobId)).toBe(true)
+    expect(manager.get(job.jobId)).toMatchObject({ state: 'policy-held' })
+    expect(enqueueIngest).not.toHaveBeenCalled()
+    expect(store.jobs.get(job.jobId)?.state).not.toBe('failed')
+  })
+
   it('serializes a held marker write before explicit Resume clears it and admits the successor', async () => {
     let canRetain = true
     let releaseMarker!: () => void
@@ -406,19 +512,26 @@ describe('ImportJobManager summary-only retention boundary', () => {
       }
       await originalSave(job, beforeReplace)
     }
-    const { manager } = createManager(store, () => canRetain)
+    const { manager } = createManager(store, () => canRetain, { freeMemoryBytes: () => 0 })
     const job = await manager.start(source)
+    expect(job.pipeline).toBeUndefined()
     const pendingProgress = manager.reportProgress(job.jobId, 50)
-    await blockedSaveStarted
+    let explicitResume: Promise<ImportJob> | undefined
+    try {
+      await blockedSaveStarted
 
-    canRetain = false
-    await manager.snapshot()
-    canRetain = true
-    const explicitResume = manager.resume(job.jobId)
-    releaseBlockedSave()
+      canRetain = false
+      await manager.snapshot()
+      canRetain = true
+      explicitResume = manager.resume(job.jobId)
+      releaseBlockedSave()
 
-    await expect(pendingProgress).rejects.toThrow(/summary-only/i)
-    await explicitResume
+      await expect(pendingProgress).rejects.toBeInstanceOf(StaleImportJobWriteError)
+      await explicitResume
+    } finally {
+      releaseBlockedSave()
+      await Promise.allSettled([pendingProgress, ...(explicitResume ? [explicitResume] : [])])
+    }
     expect(store.jobs.get(job.jobId)).toMatchObject({ state: 'decoding' })
     expect(store.jobs.get(job.jobId)?.progressPct).toBeUndefined()
     expect(store.held.has(job.jobId)).toBe(false)
@@ -448,17 +561,26 @@ describe('ImportJobManager summary-only retention boundary', () => {
     const job = await manager.start(source)
     await manager.acceptDecodedChunk(job.jobId, 0, 1, new Float32Array(1_600).fill(0.1))
     const finalizing = manager.finishDecoding(job.jobId, 1)
-    await saveStarted
+    try {
+      await saveStarted
 
-    canRetain = false
-    await manager.snapshot()
-    releaseSave()
-    await finalizing
+      canRetain = false
+      await manager.snapshot()
+      const heldCheckpoint = structuredClone(store.jobs.get(job.jobId))
+      releaseSave()
+      await finalizing
 
-    expect(saveMeeting).toHaveBeenCalledTimes(1)
-    expect(saveMeeting.mock.calls[0]?.[1]).toBeTypeOf('function')
-    expect(manager.get(job.jobId)).toMatchObject({ state: 'policy-held' })
-    expect(manager.get(job.jobId)?.file).toBeUndefined()
+      expect(saveMeeting).toHaveBeenCalledTimes(1)
+      expect(saveMeeting.mock.calls[0]?.[1]).toBeTypeOf('function')
+      expect(manager.get(job.jobId)).toBeUndefined()
+      expect(manager.list()).toEqual([])
+      expect(store.held.has(job.jobId)).toBe(true)
+      expect(store.jobs.get(job.jobId)).toEqual(heldCheckpoint)
+      expect(store.jobs.get(job.jobId)?.file).toBeUndefined()
+    } finally {
+      releaseSave()
+      await Promise.allSettled([finalizing])
+    }
   })
 
   it('stops the decoder and detaches PCM before awaiting a slow hold-marker write', async () => {
@@ -556,14 +678,49 @@ describe('ImportJobManager summary-only retention boundary', () => {
     })
     store.held.add('job-1')
     const { manager, decode, validateSource } = createManager(store, () => true, {
-      validateSource: () => {
+      validateSource: vi.fn(() => {
         throw new Error('source changed')
-      }
+      })
     })
+    await manager.recover()
 
     await expect(manager.resume('job-1')).rejects.toThrow('source changed')
 
     expect(validateSource).toHaveBeenCalledTimes(1)
+    expect(store.held.has('job-1')).toBe(true)
+    expect(decode).not.toHaveBeenCalled()
+  })
+
+  it('does not persist or decode a held resume after authentication is revoked during source validation', async () => {
+    let authorized = true
+    const store = new RetentionStore()
+    store.jobs.set('job-1', {
+      jobId: 'job-1',
+      sourcePath: source.path,
+      sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs,
+      title: 'Interview',
+      state: 'failed',
+      cursor: 3,
+      totalChunks: 9,
+      lines: [{ speaker: 'you', text: 'saved words', t: 1_700_000_000_000 }],
+      createdAt: 1,
+      updatedAt: 2
+    })
+    store.held.add('job-1')
+    const { manager, decode, validateSource } = createManager(store, () => true, {
+      isImportAuthorized: () => authorized,
+      validateSource: vi.fn(async () => {
+        authorized = false
+      })
+    })
+    await manager.recover()
+    const savesBeforeResume = store.saveCalls
+    await expect(manager.resume('job-1')).rejects.toThrow('Not signed in.')
+
+    expect(validateSource).toHaveBeenCalledTimes(1)
+    expect(store.saveCalls).toBe(savesBeforeResume)
     expect(store.held.has('job-1')).toBe(true)
     expect(decode).not.toHaveBeenCalled()
   })

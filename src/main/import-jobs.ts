@@ -1,7 +1,33 @@
 import { freemem, totalmem } from 'node:os'
 import { hasVadV2MemoryHeadroom } from '@shared/asr-hardware-preference'
-import { IMPORT_CHUNK_SECONDS, type TranscriptLine } from '@shared/ipc'
-import { ImportRetentionBlockedError } from './import-retention-policy'
+import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
+import * as ImportRetention from './import-retention-policy'
+import { ImportCheckpointUnavailableError } from './import-job-checkpoint-contract'
+import { titleFromSource } from './import-job-title'
+import {
+  MAX_CONCURRENT_DECODES,
+  copyImportJobValue as copy,
+  canFinishImportAttempt,
+  decodeSkipThrough,
+  decoderSlotIsStale,
+  isTerminalImportJobState as terminal,
+  retireImportAttemptAuthority,
+  stopImportAttempt
+} from './import-job-utilities'
+export {
+  MAX_CONCURRENT_DECODES,
+  MAX_CONCURRENT_IMPORTS,
+  decodeSkipThrough,
+  decoderSlotIsStale
+} from './import-job-utilities'
+import {
+  acceptImportDecodedChunk,
+  importPcmOf,
+  takeImportPcm,
+  type ImportDecodedAudioHost,
+  type ImportPcmBuffer
+} from './import-job-decoded-audio'
+import type { ImportAsrDecodeAdmission, ImportAsrLanguageProbe, ImportAsrTranscriber } from './import-asr-admission'
 import {
   consumeVadPcm,
   finalizeImportJob,
@@ -23,17 +49,20 @@ import type {
   ImportJob,
   ImportJobStore,
   ImportSpeakerAttempt,
+  ImportJobAttemptAuthority,
   ImportDecodeMemoryAdmission,
   ImportJobsSnapshot,
   ImportJobManagerDeps,
   ImportHoldInventory
 } from './import-job-types'
+import type { ImportRetentionState } from './import-retention-policy'
 export type {
   ImportJobState,
   ImportJobSource,
   ImportJob,
   ImportJobStore,
   ImportSpeakerAttempt,
+  ImportJobAttemptAuthority,
   ImportDecodeMemoryAdmission,
   ImportJobsSnapshot,
   ImportJobManagerDeps,
@@ -45,17 +74,6 @@ export type {
  * never left on disk. On boot, saved imports are inventoried without reading payloads and require an
  * explicit Resume action before source validation or decoder admission.
  */
-/** One decoded recording at a time, from decoder admission through retained-PCM consumption. */
-export const MAX_CONCURRENT_DECODES = 1
-/** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
-export const MAX_CONCURRENT_IMPORTS = MAX_CONCURRENT_DECODES
-
-const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
-const SAMPLE_RATE = 16_000
-/** Whole-recording PCM is buffered in memory for VAD segmentation. 90 minutes at 16kHz f32 is ~345MB —
- *  acceptable for a desktop import; past it the job degrades to the legacy fixed-slab pipeline rather
- *  than risking an OOM (`vad-v2` is dropped and the buffered slabs are transcribed as-is). */
-const VAD_MAX_SAMPLES = SAMPLE_RATE * 60 * 90
 /** Majority-vote sample points across the recording's windows. Five spread probes beat the old single
  *  window-0 probe because window 0 is disproportionately a greeting in the OTHER language ("Hello" on a
  *  French call) — the documented 2026-08-05 failure that translated a whole meeting. */
@@ -63,39 +81,13 @@ const ATTEMPT_STOPPED = Symbol('import-attempt-stopped')
 
 interface SpeakerAttemptState {
   identity: ImportSpeakerAttempt
+  authority?: ImportJobAttemptAuthority
   accepting: boolean
   tailAllowed: boolean
   speakerOwned: boolean
   finalized: boolean
   disposed: boolean
-}
-
-const terminal = (state: ImportJobState): boolean =>
-  state === 'done' || state === 'failed' || state === 'policy-held' || state === 'cancelled'
-
-/** The singleton decoder may be reaped once the job is no longer in the decode phase.
- *  Transcribing / saving / recapping must not keep the next file waiting. */
-export function decoderSlotIsStale(state: ImportJobState | undefined): boolean {
-  return state !== 'decoding'
-}
-
-/** VAD cursors count utterance windows, not decoder slabs. Both decoders must replay all PCM. */
-export function decodeSkipThrough(job: Pick<ImportJob, 'pipeline' | 'cursor'>): number {
-  return job.pipeline === 'vad-v1' || job.pipeline === 'vad-v2' ? 0 : job.cursor
-}
-
-function titleFromSource(name: string): string {
-  const base = name.replace(/\.[^./\\]+$/, '')
-  const words = base.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
-  if (!words) return 'Imported audio'
-  return words
-    .split(' ')
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ')
-}
-
-function copy<T>(value: T): T {
-  return structuredClone(value)
+  authorityRetired: boolean
 }
 
 /**
@@ -106,9 +98,11 @@ function copy<T>(value: T): T {
 export class ImportJobManager {
   private readonly jobs = new Map<string, ImportJob>()
   private readonly retention = new ImportJobRetentionCoordinator()
+  private readonly retentionPolicy: ImportRetention.ImportJobRetentionPolicy
+  private currentRetentionState: ImportRetentionState = 'unavailable'
   private readonly queue: string[] = []
   /** In-memory only: decoded PCM slabs per in-flight vad-v2 job (never persisted; resume re-decodes). */
-  private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
+  private readonly pcmByJob = new Map<string, ImportPcmBuffer>()
   /** Jobs that occupy the decoded-audio admission slot. Recap never belongs here. */
   private readonly decodeSlotIds = new Set<string>()
   /** Jobs whose whole-recording PCM has moved from pcmByJob into the VAD/ASR consumer's local scope. */
@@ -117,6 +111,7 @@ export class ImportJobManager {
   private readonly activeJobIds = new Set<string>()
   /** Exact transient ownership for the currently admitted attempt of each durable job. */
   private readonly speakerAttempts = new Map<string, SpeakerAttemptState>()
+  private readonly explicitResumeJobs = new Set<string>()
   private nextAttemptId = 0
   private transcribeLock: Promise<void> = Promise.resolve()
   private loaded = false
@@ -161,6 +156,10 @@ export class ImportJobManager {
   constructor(private readonly deps: ImportJobManagerDeps) {
     const n = deps.concurrency ?? MAX_CONCURRENT_DECODES
     this.maxConcurrent = Number.isFinite(n) && n > 0 ? Math.min(1, Math.floor(n)) : 1
+    this.currentRetentionState = deps.retentionStatus?.() ?? 'unavailable'
+    this.retentionPolicy = deps.refreshRetentionStatus
+      ? new ImportRetention.ImportJobRetentionPolicy(() => this.currentRetentionState)
+      : new ImportRetention.ImportJobRetentionPolicy(deps.retentionStatus, deps.canRetainTranscript)
   }
 
   async start(source: ImportJobSource): Promise<ImportJob> {
@@ -170,7 +169,10 @@ export class ImportJobManager {
 
   /** Create N durable jobs, then pump so as many as `maxConcurrent` begin decoding. */
   async startMany(sources: ImportJobSource[]): Promise<ImportJob[]> {
-    this.assertRetentionAllowed()
+    this.assertPersistenceConfigured()
+    await this.refreshRetentionStatus()
+    this.assertPersistenceConfigured()
+    this.retentionPolicy.assertAllowed()
     const started: string[] = []
     for (const source of sources) {
       const now = this.now()
@@ -203,14 +205,15 @@ export class ImportJobManager {
 
   /** Boot records bounded held identities only; it never reads checkpoint payloads or starts decoding. */
   async recover(): Promise<ImportJob[]> {
+    await this.refreshRetentionStatus()
     if (this.loaded) return this.list()
-    await this.retention.initialize(this.deps.store, this.retentionAllowed())
+    await this.retention.initialize(this.deps.store, this.retentionPolicy.status())
     this.loaded = true
     return []
   }
 
   list(): ImportJob[] {
-    if (!this.retentionAllowed()) return []
+    if (!this.retentionPolicy.allowed()) return []
     return [...this.jobs.values()]
       .filter((job) => job.state !== 'policy-held')
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -218,16 +221,25 @@ export class ImportJobManager {
   }
 
   async snapshot(): Promise<ImportJobsSnapshot> {
-    return this.retention.snapshot(
+    await this.refreshRetentionStatus()
+    const snapshot = await this.retention.snapshot(
       this.deps.store,
-      () => this.retentionAllowed(),
+      () => this.retentionPolicy.status(),
       () => this.list(),
       () => this.holdAllForPolicy()
     )
+    await this.refreshRetentionStatus()
+    snapshot.policyState = this.retentionPolicy.status()
+    snapshot.policyBlocked = snapshot.policyState !== 'allowed'
+    if (snapshot.policyBlocked) {
+      await this.holdAllForPolicy()
+      snapshot.jobs = []
+    }
+    return snapshot
   }
 
   get(jobId: string): ImportJob | undefined {
-    if (!this.retentionAllowed()) return undefined
+    if (!this.retentionPolicy.allowed()) return undefined
     const job = this.jobs.get(jobId)
     return job ? copy(job) : undefined
   }
@@ -246,7 +258,7 @@ export class ImportJobManager {
     const job = this.requireJob(jobId)
     await reportImportProgress(
       {
-        retentionAllowed: () => this.retentionAllowed(),
+        retentionAllowed: () => this.retentionPolicy.allowed(),
         attemptAccepts: () => this.attemptAccepts(this.speakerAttempts.get(jobId)),
         holdForPolicy: (heldJob) => this.holdForPolicy(heldJob),
         persist: (updatedJob) => this.persist(updatedJob),
@@ -258,7 +270,19 @@ export class ImportJobManager {
   }
 
   async resume(jobId: string): Promise<ImportJob> {
-    return this.retention.resume(jobId, this.deps.store, this.resumeHost())
+    this.assertImportAuthorized()
+    await this.refreshRetentionStatus()
+    this.assertImportAuthorized()
+    this.explicitResumeJobs.add(jobId)
+    let job: ImportJob
+    try {
+      job = await this.retention.resume(jobId, this.deps.store, this.resumeHost())
+    } catch (error) {
+      this.explicitResumeJobs.delete(jobId)
+      throw error
+    }
+    this.assertImportAuthorized()
+    return job
   }
 
   async cancel(jobId: string, opts: { pump?: boolean } = {}): Promise<void> {
@@ -318,151 +342,36 @@ export class ImportJobManager {
 
   /** Called only by the authenticated hidden decoder, one chunk at a time. */
   async acceptDecodedChunk(jobId: string, seq: number, totalChunks: number, samples: Float32Array): Promise<void> {
-    const job = this.requireJob(jobId)
-    if (!this.retentionAllowed()) {
-      await this.holdForPolicy(job)
-      return
-    }
-    const attempt = this.speakerAttempts.get(jobId)
-    if (job.state === 'cancelled') throw new Error('Import was cancelled.')
-    if (terminal(job.state)) throw new Error('Import is no longer accepting audio.')
-    if (!this.attemptAccepts(attempt)) throw new Error('Import is not accepting audio for this attempt.')
-    if (!Number.isInteger(seq) || seq < 0 || !Number.isInteger(totalChunks) || totalChunks < 0) {
-      throw new Error('Invalid decoded audio chunk.')
-    }
-    // A window should never exceed one decode chunk plus a few seconds of slack for FFmpeg/decoder jitter.
-    if (samples.length > 16_000 * (IMPORT_CHUNK_SECONDS + 5)) throw new Error('Decoded audio chunk is too large.')
-    // vad-v2: cursor counts WINDOWS (phase 2), not slabs — order is enforced against the count of
-    // slabs already buffered instead. Legacy keeps the original cursor-based replay/order contract.
-    const expectedSeq = job.pipeline === 'vad-v2' ? this.pcmOf(job.jobId).slabs.length : job.cursor
-    if (seq < expectedSeq) return // replay during resume: this checkpoint already exists
-    if (seq !== expectedSeq) {
-      await this.fail(job, `Decoded audio arrived out of order (expected chunk ${expectedSeq + 1}).`)
-      throw new Error(job.error)
-    }
-    if (job.totalChunks && job.totalChunks !== totalChunks) {
-      await this.fail(job, 'The decoder changed the recording chunk count while importing.')
-      throw new Error(job.error)
-    }
-
-    if (totalChunks > 0) job.totalChunks = totalChunks
-
-    // MQA-235 (vad-v2): phase 1 only BUFFERS — segmentation and ASR happen in finishDecoding, where the
-    // whole recording is known. Past the memory cap the job degrades to the legacy slab pipeline: the
-    // backlog is transcribed slab-by-slab right here, then this and every later slab take the legacy
-    // branch below.
-    let drainBufferedPcm = false
-    let ownsRetainedPcm = false
-    try {
-      if (job.pipeline === 'vad-v2') {
-        const buf = this.pcmOf(job.jobId)
-        if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
-          // Own copy: the decoder reuses its buffer across chunks.
-          buf.slabs.push(samples.slice())
-          buf.samples += samples.length
-          return
-        }
-        // Claim the retention marker before changing the durable pipeline or awaiting persistence. The
-        // backlog is still reachable through pcmByJob during that await, and optional local work must
-        // remain deferred until drainLegacyBacklog() releases it.
-        this.retainedPcmConsumerIds.add(job.jobId)
-        ownsRetainedPcm = true
-        job.pipeline = undefined
-        job.chunkSec = IMPORT_CHUNK_SECONDS
-        await this.persist(job)
-        if (!this.attemptAccepts(attempt)) return
-        drainBufferedPcm = true
-      }
-
-      // The legacy overflow path temporarily owns the entire buffered recording while draining it. Keep
-      // admission closed until that helper's stack has unwound; recovered legacy jobs share the same guard
-      // so cancellation cannot overlap even their bounded current slab with the next decoder.
-      if (!ownsRetainedPcm) {
-        this.retainedPcmConsumerIds.add(job.jobId)
-        ownsRetainedPcm = true
-      }
-      if (drainBufferedPcm && !(await this.drainLegacyBacklog(job, attempt))) return
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return
-      job.state = 'transcribing'
-      await this.persist(job)
-      if (!this.attemptAccepts(attempt)) return
-      if (!(await this.legacyTranscribeSlab(job, seq, samples, attempt))) return
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return
-      job.state = 'decoding'
-      await this.persist(job)
-    } catch (error) {
-      if (terminal(job.state)) return
-      await this.fail(job, message(error))
-      throw error
-    } finally {
-      if (ownsRetainedPcm) this.retainedPcmConsumerIds.delete(job.jobId)
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) await this.releaseAdmissionSlot(job.jobId, attempt)
-    }
+    await acceptImportDecodedChunk(this.decodedAudioHost(), jobId, seq, totalChunks, samples)
   }
 
-  /** Drain the whole-recording backlog in its own stack so it is unreachable before admission releases. */
-  private async drainLegacyBacklog(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
-    const backlog = this.takePcm(job.jobId)
-    let backlogSeq = 0
-    for (const slab of backlog) {
-      if (!(await this.legacyTranscribeSlab(job, backlogSeq++, slab, attempt))) return false
-      if (terminal(job.state) || !this.attemptAccepts(attempt)) return false
-    }
-    return true
-  }
-
-  /** One legacy fixed-slab transcription step: ASR the slab, append the line, advance the slab cursor. */
-  private async legacyTranscribeSlab(
-    job: ImportJob,
-    seq: number,
-    samples: Float32Array,
-    attempt: SpeakerAttemptState | undefined
-  ): Promise<boolean> {
-    if (seq < job.cursor) return true
-    let text: string
-    try {
-      text = await this.transcribeWithRetry(
-        samples,
-        undefined,
-        () => this.retentionAllowed() && this.attemptAccepts(attempt)
-      )
-    } catch (error) {
-      if (error === ATTEMPT_STOPPED) return false
-      throw error
-    }
-    if (terminal(job.state) || !this.retentionAllowed() || !this.attemptAccepts(attempt)) return false
-    if (text.trim()) {
-      job.lines.push({ speaker: 'unknown', text: text.trim(), t: job.sourceMtimeMs + seq * CHUNK_MS })
-    }
-    job.cursor = seq + 1
-    // Slabs before seq are fixed-length; the last slab may be partial. Assignment (not accumulation)
-    // makes retries idempotent and also covers the bounded-memory legacy overflow path.
-    job.durationMs = seq * CHUNK_MS + Math.round((samples.length * 1000) / SAMPLE_RATE)
-    await this.persist(job)
-    if (await this.stopIfPolicyHeld(job)) return false
-    return this.attemptAccepts(attempt)
-  }
-
-  private pcmOf(jobId: string): { slabs: Float32Array[]; samples: number } {
-    let buf = this.pcmByJob.get(jobId)
-    if (!buf) {
-      buf = { slabs: [], samples: 0 }
-      this.pcmByJob.set(jobId, buf)
-    }
-    return buf
+  private pcmOf(jobId: string): ImportPcmBuffer {
+    return importPcmOf(this.pcmByJob, jobId)
   }
 
   /** Hand back and clear the buffered PCM for one vad-v2 job. */
   private takePcm(jobId: string): Float32Array[] {
-    const buf = this.pcmByJob.get(jobId)
-    this.pcmByJob.delete(jobId)
-    if (!buf) return []
-    const slabs = buf.slabs
-    // A caller may still hold the small buffer metadata object. Detach the large slab array from it so
-    // only the dedicated consumer stack owns the recording from this point onward.
-    buf.slabs = []
-    buf.samples = 0
-    return slabs
+    return takeImportPcm(this.pcmByJob, jobId)
+  }
+
+  private decodedAudioHost(): ImportDecodedAudioHost {
+    return {
+      jobs: this.jobs,
+      pcmByJob: this.pcmByJob,
+      retainedPcmConsumerIds: this.retainedPcmConsumerIds,
+      getAttempt: (jobId) => this.speakerAttempts.get(jobId),
+      attemptAccepts: (attempt) => this.attemptAccepts(attempt as SpeakerAttemptState | undefined),
+      isTerminal: terminal,
+      retentionAllowed: () => this.retentionPolicy.allowed(),
+      transcribeWithRetry: (samples, opts, stillCurrent) => this.transcribeWithRetry(samples, opts, stillCurrent),
+      isAttemptStopped: (error) => error === ATTEMPT_STOPPED,
+      fail: (job, error) => this.fail(job, error),
+      persist: (job, attempt) => this.persist(job, attempt as SpeakerAttemptState | undefined),
+      holdForPolicy: (job, reason) => this.holdForPolicy(job, reason),
+      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt as SpeakerAttemptState | undefined),
+      releaseAdmissionSlot: (jobId, attempt) =>
+        this.releaseAdmissionSlot(jobId, attempt as SpeakerAttemptState | undefined)
+    }
   }
 
   /** The decoder process/window is gone. Admission stays held while this job still owns decoded PCM. */
@@ -492,7 +401,7 @@ export class ImportJobManager {
   /** Called by the hidden decoder only after it has submitted every non-skipped chunk. */
   async finishDecoding(jobId: string, discoveredTotalChunks?: number): Promise<void> {
     const job = this.requireJob(jobId)
-    if (!this.retentionAllowed()) {
+    if (!this.retentionPolicy.allowed()) {
       await this.holdForPolicy(job)
       return
     }
@@ -572,7 +481,11 @@ export class ImportJobManager {
 
   async failDecoder(jobId: string, error: unknown): Promise<void> {
     const job = this.requireJob(jobId)
-    if (!this.retentionAllowed()) {
+    if (ImportRetention.isImportRetentionRefusal(error)) {
+      await this.holdForPolicy(job, 'policy')
+      return
+    }
+    if (!this.retentionPolicy.allowed()) {
       await this.holdForPolicy(job)
       return
     }
@@ -600,11 +513,12 @@ export class ImportJobManager {
       let last: unknown
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const text = await this.deps.transcribe(samples, opts)
+          const text = await this.deps.transcribe(samples, opts, stillCurrent)
           if (!stillCurrent()) throw ATTEMPT_STOPPED
           return text
         } catch (error) {
           if (error === ATTEMPT_STOPPED || !stillCurrent()) throw ATTEMPT_STOPPED
+          if (ImportRetention.isImportRetentionRefusal(error)) throw error
           last = error
         }
       }
@@ -621,11 +535,14 @@ export class ImportJobManager {
   }
 
   private async pump(): Promise<void> {
-    if (!this.retentionAllowed()) {
+    await this.refreshRetentionStatus()
+    this.assertImportAuthorized()
+    if (!this.retentionPolicy.allowed()) {
       await this.holdAllForPolicy()
       return
     }
     while (this.decodeSlotIds.size < this.maxConcurrent && this.queue.length) {
+      this.assertImportAuthorized()
       const jobId = this.queue.shift()!
       const job = this.jobs.get(jobId)
       if (!job || terminal(job.state)) continue
@@ -649,7 +566,21 @@ export class ImportJobManager {
       if (job.pipeline === 'vad-v2') job.totalChunks = 0
       this.decodeSlotIds.add(jobId)
       this.activeJobIds.add(jobId)
-      const attempt = this.createAttempt(job)
+      let attempt: SpeakerAttemptState
+      try {
+        attempt = this.createAttempt(job)
+      } catch {
+        this.decodeSlotIds.delete(jobId)
+        this.activeJobIds.delete(jobId)
+        await this.holdForPolicy(job, 'policy')
+        continue
+      }
+      if (!this.attemptAccepts(attempt)) {
+        this.decodeSlotIds.delete(jobId)
+        this.activeJobIds.delete(jobId)
+        await this.holdForPolicy(job, 'policy')
+        continue
+      }
       job.state = 'decoding'
       await this.persist(job)
       if (await this.stopIfPolicyHeld(job)) continue
@@ -658,9 +589,13 @@ export class ImportJobManager {
         // A high-tier policy can release optional model memory before the decoder begins. Treat a
         // rejected policy step like any other pre-decode failure so the durable job gets an error and
         // its decoder slot is reclaimed instead of remaining indefinitely in "decoding".
-        await this.deps.onDecodeAdmission?.(copy(job), memory)
+        await this.deps.onDecodeAdmission?.(copy(job), memory, () => this.attemptAccepts(attempt))
       } catch (error) {
-        if (this.isCurrentDecodeAttempt(job, attempt)) await this.fail(job, message(error))
+        if (this.isCurrentDecodeAttempt(job, attempt)) {
+          if (ImportRetention.isImportRetentionRefusal(error)) {
+            await this.holdForPolicy(job, 'policy')
+          } else await this.fail(job, message(error))
+        }
         continue
       }
       if (await this.stopIfPolicyHeld(job)) continue
@@ -669,7 +604,10 @@ export class ImportJobManager {
       try {
         await this.deps.decode(copy(job))
       } catch (error) {
-        if (this.isCurrentDecodeAttempt(job, attempt)) await this.fail(job, message(error))
+        if (this.isCurrentDecodeAttempt(job, attempt)) {
+          if (ImportRetention.isImportRetentionRefusal(error)) await this.holdForPolicy(job, 'policy')
+          else await this.fail(job, message(error))
+        }
       }
       if (await this.stopIfPolicyHeld(job)) continue
       // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Admission stays
@@ -678,7 +616,7 @@ export class ImportJobManager {
   }
 
   private async fail(job: ImportJob, error: string): Promise<void> {
-    if (!this.retentionAllowed()) {
+    if (!this.retentionPolicy.allowed()) {
       await this.holdForPolicy(job)
       return
     }
@@ -712,7 +650,15 @@ export class ImportJobManager {
       tailAllowed: true,
       speakerOwned: false,
       finalized: false,
-      disposed: false
+      disposed: false,
+      authorityRetired: false
+    }
+    const explicitResume = this.explicitResumeJobs.delete(job.jobId)
+    if (this.deps.captureAttemptAuthority) {
+      attempt.authority = this.deps.captureAttemptAuthority(copy(job), identity, explicitResume)
+    } else if (this.deps.persistenceState?.() === 'configured') {
+      attempt.accepting = false
+      attempt.tailAllowed = false
     }
     this.speakerAttempts.set(job.jobId, attempt)
     return attempt
@@ -729,7 +675,17 @@ export class ImportJobManager {
   }
 
   private attemptAccepts(attempt: SpeakerAttemptState | undefined): boolean {
-    return !!attempt && attempt.accepting && this.speakerAttempts.get(attempt.identity.jobId) === attempt
+    if (!attempt || !attempt.accepting || this.speakerAttempts.get(attempt.identity.jobId) !== attempt) return false
+    try {
+      if (attempt.authority) attempt.authority.assertCurrent()
+      else if (this.deps.persistenceState?.() === 'configured') return false
+      return true
+    } catch {
+      attempt.accepting = false
+      attempt.tailAllowed = false
+      retireImportAttemptAuthority(attempt)
+      return false
+    }
   }
 
   private isCurrentDecodeAttempt(job: ImportJob, attempt: SpeakerAttemptState): boolean {
@@ -737,15 +693,18 @@ export class ImportJobManager {
   }
 
   private attemptCanFinish(attempt: SpeakerAttemptState | undefined): boolean {
-    return !!attempt && attempt.tailAllowed && this.speakerAttempts.get(attempt.identity.jobId) === attempt
+    return (
+      !!attempt &&
+      canFinishImportAttempt(
+        attempt,
+        this.speakerAttempts.get(attempt.identity.jobId) === attempt,
+        () => this.deps.persistenceState?.() === 'configured'
+      )
+    )
   }
 
   private stopSpeakerAttempt(jobId: string): void {
-    const attempt = this.speakerAttempts.get(jobId)
-    if (attempt) {
-      attempt.accepting = false
-      attempt.tailAllowed = false
-    }
+    stopImportAttempt(this.speakerAttempts.get(jobId))
   }
 
   private disposeSpeakerAttempt(jobId: string, attempt: SpeakerAttemptState | undefined, retainForTail = false): void {
@@ -765,13 +724,16 @@ export class ImportJobManager {
   }
 
   private retireAttempt(jobId: string, attempt: SpeakerAttemptState | undefined): void {
-    if (attempt && this.speakerAttempts.get(jobId) === attempt) this.speakerAttempts.delete(jobId)
+    if (!attempt) return
+    retireImportAttemptAuthority(attempt)
+    if (this.speakerAttempts.get(jobId) === attempt) this.speakerAttempts.delete(jobId)
   }
 
   private async persist(job: ImportJob, attempt?: SpeakerAttemptState): Promise<void> {
+    await this.refreshRetentionStatus()
     await this.retention.persist(
       job,
-      () => this.retentionAllowed(),
+      () => this.retentionPolicy.status(),
       () => this.holdForPolicy(job),
       copy,
       () =>
@@ -781,38 +743,55 @@ export class ImportJobManager {
       () => this.now(),
       this.deps.onChange
     )
-  }
-
-  private retentionAllowed(): boolean {
-    return this.deps.canRetainTranscript?.() !== false
-  }
-
-  private assertRetentionAllowed(): void {
-    if (!this.retentionAllowed()) throw new ImportRetentionBlockedError()
+    await this.refreshRetentionStatus()
+    if (!this.retentionPolicy.allowed()) await this.holdForPolicy(job)
   }
 
   private assertJobWriteAllowed(job: ImportJob, attempt?: SpeakerAttemptState): void {
-    this.assertRetentionAllowed()
+    this.retentionPolicy.assertAllowed()
     if (job.state === 'policy-held' || this.jobs.get(job.jobId) !== job) throw new StaleImportJobWriteError()
     if (attempt && !this.attemptCanFinish(attempt)) {
       throw new StaleImportJobWriteError()
     }
   }
 
-  private async holdForPolicy(job: ImportJob): Promise<void> {
-    await this.retention.hold(job, this.retentionHost(), this.deps.store)
+  private async holdForPolicy(job: ImportJob, reason = this.retentionPolicy.holdReason()): Promise<void> {
+    await this.retention.hold(job, this.retentionHost(), this.deps.store, reason)
   }
 
   /** An async continuation must not revive work after a policy hold, even if policy is later restored. */
   private async stopIfPolicyHeld(job: ImportJob, attempt?: SpeakerAttemptState): Promise<boolean> {
+    await this.refreshRetentionStatus()
     if (job.state === 'policy-held' || (attempt && !this.attemptCanFinish(attempt))) return true
-    if (this.retentionAllowed()) return false
+    if (this.retentionPolicy.allowed()) return false
     await this.holdForPolicy(job)
     return true
   }
 
   private async holdAllForPolicy(): Promise<void> {
-    await this.retention.holdAll(this.jobs.values(), this.retentionHost(), this.deps.store)
+    await this.retention.holdAll(this.jobs.values(), this.retentionHost(), this.deps.store, () =>
+      this.retentionPolicy.holdReason()
+    )
+  }
+
+  private async refreshRetentionStatus(): Promise<ImportRetentionState> {
+    if (!this.deps.refreshRetentionStatus) return this.retentionPolicy.status()
+    try {
+      this.currentRetentionState = await this.deps.refreshRetentionStatus()
+    } catch {
+      this.currentRetentionState = 'unavailable'
+    }
+    return this.currentRetentionState
+  }
+
+  private assertImportAuthorized(): void {
+    if (this.deps.isImportAuthorized && !this.deps.isImportAuthorized()) throw new Error('Not signed in.')
+  }
+
+  private assertPersistenceConfigured(): void {
+    if (this.deps.persistenceState && this.deps.persistenceState() !== 'configured') {
+      throw new ImportCheckpointUnavailableError('UNCONFIGURED')
+    }
   }
 
   private async releaseHold(job: ImportJob): Promise<void> {
@@ -849,8 +828,23 @@ export class ImportJobManager {
       decodeSlotIds: this.decodeSlotIds,
       activeJobIds: this.activeJobIds,
       copy,
-      assertAllowed: () => this.assertRetentionAllowed(),
-      validateSource: (job) => this.deps.validateSource?.(job),
+      assertAllowed: async () => {
+        this.assertImportAuthorized()
+        this.assertPersistenceConfigured()
+        await this.refreshRetentionStatus()
+        this.assertImportAuthorized()
+        this.assertPersistenceConfigured()
+        this.retentionPolicy.assertAllowed()
+      },
+      validateSource: async (job) => {
+        if (!this.deps.validateSource) {
+          if (this.deps.persistenceState?.() === 'configured') {
+            throw new ImportCheckpointUnavailableError('UNCONFIGURED')
+          }
+          return
+        }
+        await this.deps.validateSource(job)
+      },
       persist: (job) => this.persist(job),
       releaseHold: (job) => this.releaseHold(job),
       prepareCheckpoint: prepareImportCheckpoint,
@@ -867,16 +861,22 @@ export class ImportJobManager {
       copy,
       takePcm: (jobId) => this.takePcm(jobId),
       fail: (job, error) => this.fail(job, error),
-      persist: (job, attempt) => this.persist(job, attempt),
-      attemptAccepts: (attempt) => this.attemptAccepts(attempt),
+      persist: (job, attempt) => this.persist(job, attempt as SpeakerAttemptState | undefined),
+      attemptAccepts: (attempt) => this.attemptAccepts(attempt as SpeakerAttemptState | undefined),
       isAttemptStopped: (error) => error === ATTEMPT_STOPPED,
       transcribeWithRetry: (samples, opts, stillCurrent) => this.transcribeWithRetry(samples, opts, stillCurrent),
-      retentionAllowed: () => this.retentionAllowed(),
-      assertRetentionAllowed: () => this.assertRetentionAllowed(),
-      assertJobWriteAllowed: (job, attempt) => this.assertJobWriteAllowed(job, attempt),
-      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt),
-      holdForPolicy: (job) => this.holdForPolicy(job),
-      isCurrentJob: (job, attempt) => this.jobs.get(job.jobId) === job && (!attempt || this.attemptCanFinish(attempt)),
+      retentionAllowed: () => this.retentionPolicy.allowed(),
+      assertRetentionAllowed: () => this.retentionPolicy.assertAllowed(),
+      refreshRetention: async () => {
+        await this.refreshRetentionStatus()
+        this.retentionPolicy.assertAllowed()
+      },
+      assertJobWriteAllowed: (job, attempt) =>
+        this.assertJobWriteAllowed(job, attempt as SpeakerAttemptState | undefined),
+      stopIfPolicyHeld: (job, attempt) => this.stopIfPolicyHeld(job, attempt as SpeakerAttemptState | undefined),
+      holdForPolicy: (job, reason) => this.holdForPolicy(job, reason),
+      isCurrentJob: (job, attempt) =>
+        this.jobs.get(job.jobId) === job && (!attempt || this.speakerAttempts.get(job.jobId) === attempt),
       abandonIfCancelled: (job, file) => this.abandonIfCancelled(job, file),
       removeCheckpoint: (jobId) => this.removeCheckpoint(jobId),
       releaseDecodeSlot: (jobId) => this.releaseDecodeSlot(jobId),

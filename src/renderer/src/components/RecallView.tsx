@@ -10,7 +10,6 @@ import {
   Trash2,
   Pencil,
   Brain,
-  Upload,
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
@@ -23,7 +22,7 @@ import { beginHistoryRequest, type HistoryRequest } from '../lib/history-trace'
 import { brainStatusError, brainStatusIsWorking } from './brain-status-refresh'
 import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
-import { ImportQueueSection } from './ImportQueueSection'
+import { ImportActionButton, ImportQueueSection } from './ImportQueueSection'
 import { UpcomingSection } from './UpcomingSection'
 import { useImportQueue } from './useImportQueue'
 import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from './history/RowStatusChip'
@@ -860,7 +859,10 @@ export function RecallView({
 
   const {
     jobs: importJobs,
-    policyBlocked: importPolicyBlocked,
+    policyState: importPolicyState,
+    capabilityState: importCapabilityState,
+    persistenceState: importPersistenceState,
+    actionsBlocked: importActionsBlocked,
     policyHeldJobIds: policyHeldImportIds,
     inventoryOverflow: importInventoryOverflow,
     policyHoldOverflow,
@@ -1031,22 +1033,18 @@ export function RecallView({
           />
           <Search size={14} className="shrink-0 text-[color:var(--color-ink-3)]" />
         </div>
-        <TextButton
-          icon={Upload}
+        <ImportActionButton
           onClick={() => void importAudio()}
-          disabled={importPolicyBlocked}
-          title={
-            importPolicyBlocked
-              ? 'Your organization’s summary-only policy prevents recording import.'
-              : 'Import one or more recordings. They keep processing in the background while you navigate.'
-          }
-        >
-          Import meetings
-        </TextButton>
+          policyState={importPolicyState}
+          capabilityState={importCapabilityState}
+          persistenceState={importPersistenceState}
+        />
       </div>
       <ImportQueueSection
         jobs={importJobs}
-        policyBlocked={importPolicyBlocked}
+        policyState={importPolicyState}
+        capabilityState={importCapabilityState}
+        persistenceState={importPersistenceState}
         policyHeldJobIds={policyHeldImportIds}
         inventoryOverflow={importInventoryOverflow}
         policyHoldOverflow={policyHoldOverflow}

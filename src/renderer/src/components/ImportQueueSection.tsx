@@ -1,9 +1,42 @@
-import type { ImportAssetsProgress, ImportJobView } from '@shared/ipc'
+import type {
+  ImportAssetsProgress,
+  ImportCapabilityState,
+  ImportJobView,
+  ImportPersistenceState,
+  ImportPolicyState
+} from '@shared/ipc'
+import { Upload } from 'lucide-react'
 import { ImportQueue } from './ImportQueue'
+import { TextButton } from './ui'
+import { importBlockNotice } from './useImportQueue'
+
+export function ImportActionButton({
+  policyState,
+  capabilityState,
+  persistenceState,
+  onClick
+}: {
+  policyState: ImportPolicyState
+  capabilityState: ImportCapabilityState
+  persistenceState: ImportPersistenceState
+  onClick: () => void
+}): JSX.Element {
+  const disabled = policyState !== 'allowed' || capabilityState !== 'available' || persistenceState !== 'configured'
+  const title = disabled
+    ? importBlockNotice(policyState, capabilityState, persistenceState)
+    : 'Import one or more recordings. They keep processing in the background while you navigate.'
+  return (
+    <TextButton icon={Upload} onClick={onClick} disabled={disabled} title={title}>
+      Import meetings
+    </TextButton>
+  )
+}
 
 export function ImportQueueSection({
   jobs,
-  policyBlocked,
+  policyState,
+  capabilityState,
+  persistenceState,
   policyHeldJobIds,
   inventoryOverflow,
   policyHoldOverflow,
@@ -16,7 +49,9 @@ export function ImportQueueSection({
   onOpenMeeting
 }: {
   jobs: ImportJobView[]
-  policyBlocked: boolean
+  policyState: ImportPolicyState
+  capabilityState: ImportCapabilityState
+  persistenceState: ImportPersistenceState
   policyHeldJobIds: string[]
   inventoryOverflow: boolean
   policyHoldOverflow: boolean
@@ -28,21 +63,55 @@ export function ImportQueueSection({
   onDismiss: (jobId: string) => void
   onOpenMeeting: (file: string) => void
 }): JSX.Element {
+  const actionsBlocked =
+    policyState !== 'allowed' || capabilityState !== 'available' || persistenceState !== 'configured'
   return (
     <>
-      {policyBlocked && (
+      {policyState === 'unavailable' && (
+        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+          Import is paused because current organization settings could not be verified. Existing recordings are
+          unchanged.
+        </p>
+      )}
+      {policyState === 'summary-only' && (
         <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
           Recording import currently requires retaining a full transcript. Your organization’s summary-only policy
           prevents import. Your original recording is unchanged.
         </p>
       )}
-      {!policyBlocked && (policyHeldJobIds.length > 0 || policyHoldOverflow) && (
+      {policyState === 'allowed' &&
+        persistenceState === 'configured' &&
+        capabilityState === 'cloud-only-unsupported' && (
+          <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+            Recording import is unavailable because this installation does not support its configured cloud-only speech
+            route. Existing recordings are unchanged.
+          </p>
+        )}
+      {policyState === 'allowed' && persistenceState === 'configured' && capabilityState === 'unavailable' && (
+        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+          Import is paused because the available speech capability could not be verified. Existing recordings are
+          unchanged.
+        </p>
+      )}
+      {policyState === 'allowed' && persistenceState === 'unconfigured' && (
+        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+          Saved imports are paused because bounded checkpoint recovery is not configured. Existing checkpoint and
+          recording files are unchanged.
+        </p>
+      )}
+      {policyState === 'allowed' && persistenceState === 'invalid' && (
+        <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
+          Saved imports are paused because checkpoint recovery configuration could not be validated. Existing checkpoint
+          and recording files are unchanged.
+        </p>
+      )}
+      {!actionsBlocked && (policyHeldJobIds.length > 0 || policyHoldOverflow) && (
         <p role="status" className="mt-2 text-[11px] text-[color:var(--color-ink-2)]">
           Saved imports paused while your organization’s summary-only policy was active. Resume a listed import after
           your organization restores permission. Your original recordings are unchanged.
         </p>
       )}
-      {!policyBlocked &&
+      {!actionsBlocked &&
         policyHeldJobIds.length === 0 &&
         !policyHoldOverflow &&
         (inventoryOverflow || jobs.some((job) => job.state === 'policy-held')) && (
@@ -58,7 +127,7 @@ export function ImportQueueSection({
         error={error}
         onCancel={onCancel}
         onResume={onResume}
-        resumeDisabled={policyBlocked}
+        resumeDisabled={actionsBlocked}
         onDismiss={onDismiss}
         onOpenMeeting={onOpenMeeting}
       />

@@ -126,7 +126,9 @@ describe('import queue rendered behavior', () => {
     const html = renderToStaticMarkup(
       createElement(ImportQueueSection, {
         jobs: [job({ jobId: 'held-1', state: 'policy-held', title: 'Saved import' })],
-        policyBlocked: true,
+        policyState: 'summary-only',
+        capabilityState: 'available',
+        persistenceState: 'configured',
         policyHeldJobIds: ['held-1'],
         inventoryOverflow: false,
         policyHoldOverflow: false,

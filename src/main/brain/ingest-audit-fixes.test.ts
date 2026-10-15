@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -23,6 +23,7 @@ import {
 } from './ingest'
 import { readDeal, readIndex, setDealOutcome, withEntityLock, writeDeal } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { ImportRetentionAuthorityUnavailableError } from '../import-retention-policy'
 
 vi.mock('electron')
 
@@ -235,6 +236,48 @@ describe('brain ingest — audited fixes', () => {
     await expect(enqueueIngest(file, {}, assertAdmission)).rejects.toBe(refusal)
     expect(assertAdmission).toHaveBeenCalledTimes(2)
     expect(readIndex(getSettings()).ingested['held-before-brain-queue.md']).toBeUndefined()
+    expect(brainBackfillProgress().running).toBe(false)
+  })
+
+  it('keeps an import held when fresh index-write preparation refuses after temporary I/O', async () => {
+    const file = writeMeeting('held-before-index-replace.md')
+    const settings = getSettings()
+    await updateIndex(settings, (index) => {
+      index.backfillRequested = false
+      delete index.ingested['held-before-index-replace.md']
+    })
+    await settleBrainWritesForTests()
+    const indexPath = join(settings.meetingsFolder, '.brain', 'index.json')
+    const original = readFileSync(indexPath)
+    const refusal = new ImportRetentionAuthorityUnavailableError()
+    let release!: () => void
+    let markPrepared!: () => void
+    const prepared = new Promise<void>((resolve) => {
+      markPrepared = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let restored = false
+
+    const pending = enqueueIngest(
+      file,
+      {},
+      () => {},
+      async () => {
+        markPrepared()
+        await gate
+        restored = true
+        throw refusal
+      }
+    )
+    await prepared
+    release()
+
+    await expect(pending).rejects.toBe(refusal)
+    expect(restored).toBe(true)
+    expect(readFileSync(indexPath)).toEqual(original)
+    expect(readIndex(settings).ingested['held-before-index-replace.md']).toBeUndefined()
     expect(brainBackfillProgress().running).toBe(false)
   })
 

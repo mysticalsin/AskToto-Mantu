@@ -5,6 +5,7 @@ import { BrokerSpeechSettingsSchema, DEFAULT_BROKER_SPEECH_SETTINGS } from '@sha
 import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
 import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
 import type { SettingsPolicyAuthoritySnapshot } from './settings-observation'
+import { getSettingsAuthorityHistory } from './settings-authority-history'
 import type { ManagedPolicyAuthorityRead } from './win-security'
 import { isProfileRecoveryFileName } from './profile-recovery-files'
 
@@ -280,18 +281,27 @@ export class FreshLeanSpeechAuthority {
     }
     readable: () => boolean
     epoch: () => number
+    withReadFrame: <T>(read: () => T) => T
   }): Promise<SettingsPolicyAuthoritySnapshot> {
     const result = this.authorityQueue.then(async () => {
       const reads = await options.readFiles()
       options.setReads(reads.user, reads.admin)
       options.resetCaches()
-      try {
-        const settings = options.readSettings()
-        const policy = options.readPolicy()
-        return { settings, readable: options.readable(), epoch: options.epoch(), ...policy }
-      } finally {
-        options.setReads(null, null)
-      }
+      return options.withReadFrame(() => {
+        try {
+          const settings = options.readSettings()
+          const policy = options.readPolicy()
+          return {
+            settings,
+            readable: options.readable(),
+            epoch: options.epoch(),
+            ...policy,
+            history: getSettingsAuthorityHistory()
+          }
+        } finally {
+          options.setReads(null, null)
+        }
+      })
     })
     this.authorityQueue = result.then(
       () => undefined,

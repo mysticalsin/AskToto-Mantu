@@ -8,6 +8,7 @@ import {
   audioPickerDialogOptions,
   offerAudioPaths,
   consumePickedAudio,
+  validateImportJobSource,
   MAX_SOURCE_BYTES
 } from './import-audio'
 
@@ -41,6 +42,29 @@ describe('offerAudioPaths', () => {
     expect(JSON.stringify(picked)).not.toContain(dir)
     expect(consumePickedAudio(picked.files![0].token).name).toBe('standup.m4a')
     expect(consumePickedAudio(picked.files![1].token).name).toBe('review.wav')
+  })
+
+  it('explicit resume revalidates the saved source fingerprint and media header without a picker token', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'metis-import-resume-source-'))
+    const sourcePath = join(dir, 'resume.wav')
+    writeId3(sourcePath)
+    const source = consumePickedAudio(offerAudioPaths([sourcePath]).files![0].token)
+    await expect(
+      validateImportJobSource({
+        sourcePath: source.path,
+        sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs
+      })
+    ).resolves.toBeUndefined()
+
+    writeFileSync(sourcePath, 'not media and different size')
+    await expect(
+      validateImportJobSource({
+        sourcePath: source.path,
+        sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs
+      })
+    ).rejects.toThrow(/changed after it was chosen/)
   })
 
   it('skips a folder and still stages the rest, and names the 500 MB per-file cap', () => {

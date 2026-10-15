@@ -84,10 +84,6 @@ import {
   SetConfidentialPayloadSchema,
   SetCrmPushedPayloadSchema,
   RecallBackfillSpeakersPayloadSchema,
-  ImportAudioStartSchema,
-  ImportAudioStartBatchSchema,
-  ImportAudioOfferSchema,
-  ImportJobIdSchema,
   ImportDecoderChunkSchema,
   ImportDecoderCompleteSchema,
   ImportDecoderFailedSchema,
@@ -132,11 +128,13 @@ import {
   recordMeetingSummarized,
   getAdminLocalSpeechPackPolicy,
   getLocalModelProvisioningIdentity,
-  readSettingsAtAuthorityBoundary,
   getSonioxApiKey,
   setSonioxApiKey,
-  clearSonioxApiKey
+  clearSonioxApiKey,
+  readSettingsAtAuthorityBoundary
 } from './store'
+import { getPublishedSettingsObservation } from './settings-observation'
+import { captureSettingsAuthority, isSettingsAuthorityCurrent } from './settings-authority-history'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
@@ -719,7 +717,6 @@ import {
   withBootFirstShowDeferred
 } from './lifecycle/first-show'
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
-import { getPublishedSettingsObservation } from './settings-observation'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -736,6 +733,7 @@ import {
   signIn as authSignIn,
   signOut as authSignOut,
   requireAuth,
+  getSpeechAuthSessionEpoch,
   setSessionClearedHandler,
   resetSpeechAuthProfile,
   completeSpeechAuthProfileReset,
@@ -762,7 +760,7 @@ import {
 } from './cloud-stt/live-session'
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
-import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
+import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from '../shared/cloud-stt-start'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
@@ -780,7 +778,10 @@ import { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture
 import { registerListenDisplayMedia } from './capture-permissions/listen-display-media'
 import { startSpeechDesktopBootstrap } from './speech-desktop-bootstrap'
 import { speechDesktopBoundaryOptions } from './speech-desktop-boundary'
-import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
+import { validateImportJobSource } from './import-audio'
+import { createImportJobAuthority } from './import-job-authority'
+import { registerImportJobsIpc } from './ipc/import-jobs'
+import { createImportAsrAdmission } from './import-asr-admission'
 import {
   ImportJobManager,
   MAX_CONCURRENT_DECODES,
@@ -821,6 +822,8 @@ import {
   asrModelProtocolSpeechPackOptions
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
+import { resolveImportPersistencePolicy } from './import-persistence-policy'
+import { ImportRetentionAuthorityUnavailableError, ImportRetentionBlockedError } from './import-retention-policy'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
@@ -1389,6 +1392,30 @@ function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
 
 const importJobView = importJobsSnapshotIpc.createImportJobView(() => importJobs?.list() ?? [])
 
+const importJobAuthority = createImportJobAuthority({
+  requireAuth,
+  authGeneration: getSpeechAuthSessionEpoch,
+  readAuthority: readSettingsAtAuthorityBoundary,
+  currentObservation: getPublishedSettingsObservation,
+  captureAuthorityReceipt: () => captureSettingsAuthority('import'),
+  isAuthorityReceiptCurrent: isSettingsAuthorityCurrent
+})
+const currentImportSettings = importJobAuthority.currentSettings
+const refreshImportSettings = importJobAuthority.refreshSettings
+const refreshImportRetentionState = importJobAuthority.refreshRetentionState
+const currentImportRetentionState = importJobAuthority.currentRetentionState
+const assertImportWriteAllowed = importJobAuthority.assertRetentionAllowed
+const assertImportAdmissionCurrent = importJobAuthority.assertAdmissionCurrent
+const currentImportCapabilityState = importJobAuthority.currentCapabilityState
+const refreshImportCapabilityState = importJobAuthority.refreshCapabilityState
+// This build has no reviewed production checkpoint budgets, legacy-owner association, or protected
+// checkpoint repository bootstrap. Keep old checkpoint payloads held and content-free until injected.
+const importPersistenceConfiguration = resolveImportPersistencePolicy(undefined)
+const currentImportPersistenceState = () => importPersistenceConfiguration.status
+const assertImportAdmissionAllowed = importJobAuthority.assertAdmissionAllowed
+const captureImportAsrAdmission = importJobAuthority.captureAsrAdmission
+const prepareImportReplacement = (settings?: Settings) => importJobAuthority.prepareReplacement(settings)
+
 function publishAsrAssetsProgress(progress = asrAssetsProgress()): void {
   if (win && !win.isDestroyed()) {
     const payload: ImportAssetsProgress = {
@@ -1857,24 +1884,34 @@ function wireIntelligenceIndexWork(): void {
 function initializeImportJobs(): void {
   if (importJobs) return
   wireIntelligenceIndexWork()
+  const asrAdmission = createImportAsrAdmission({
+    captureAdmission: captureImportAsrAdmission,
+    capabilityState: refreshImportCapabilityState,
+    isAdmissionRefusal: (error) =>
+      error instanceof ImportRetentionBlockedError || error instanceof ImportRetentionAuthorityUnavailableError,
+    hasHighMemoryHeadroom: hasHighMemoryWhisperImportHeadroom,
+    isHighTierModelReady: isHighTierAsrModelReady,
+    setWhisperTierAdmission: setWhisperImportTierAdmission,
+    ensureParakeetModel,
+    parakeetTranscribe,
+    whisperImportTranscribe,
+    detectImportLanguage
+  })
   importJobs = new ImportJobManager({
-    store: new EncryptedImportJobStore(getSettings),
-    onDecodeAdmission: async (_job, memory) => {
-      // This is the actual decoder-admission point, not setup or queue time. Reserve the optional tier
-      // only when its full digest verification and current hardware gate both pass; otherwise select base.
-      let highTierVerified = false
-      if (
-        getSettings().asrEngine !== 'parakeet' &&
-        hasHighMemoryWhisperImportHeadroom(memory.totalMemoryBytes, memory.freeMemoryBytes)
-      ) {
-        try {
-          highTierVerified = await isHighTierAsrModelReady()
-        } catch {
-          // Unreadable optional files are indistinguishable from unavailable ones for admission purposes.
-        }
-      }
-      highMemoryWhisperImportReserved = highTierVerified
-      await setWhisperImportTierAdmission(memory.totalMemoryBytes, memory.freeMemoryBytes, highTierVerified)
+    store: new EncryptedImportJobStore(
+      currentImportSettings,
+      undefined,
+      currentImportRetentionState,
+      refreshImportRetentionState,
+      prepareImportReplacement
+    ),
+    retentionStatus: currentImportRetentionState,
+    refreshRetentionStatus: refreshImportRetentionState,
+    persistenceState: currentImportPersistenceState,
+    isImportAuthorized: requireAuth,
+    validateSource: validateImportJobSource,
+    onDecodeAdmission: async (job, memory, stillCurrent) => {
+      highMemoryWhisperImportReserved = await asrAdmission.onDecodeAdmission(job, memory, stillCurrent)
     },
     decode: (job) => {
       // One reset per job, at decode start — a new import must never inherit the previous one's
@@ -1882,58 +1919,8 @@ function initializeImportJobs(): void {
       resetImportLanguageFollow(getSettings().asrLanguage)
       return startImportDecoder(job)
     },
-    transcribe: async (samples, opts) => {
-      const engine = getSettings().asrEngine
-      if (engine === 'parakeet') {
-        await ensureParakeetModel()
-        return parakeetTranscribe(samples)
-      }
-      // 'whisper' and 'apple' both route to the bundled Whisper transcriber for imports. Apple's
-      // SFSpeechRecognizer sidecar (apple-speech.ts) is a per-call, lazily-spawned, macOS-only process
-      // built for live Listen's streaming windows, not a batch decoder — using Whisper for imports on
-      // every platform (including when the live engine is 'apple') is the honest cross-platform choice
-      // rather than making imports mac-only or silently changing accuracy profile by OS.
-      try {
-        // Probe hook: whisperImportTranscribe calls this at most once per job (auto language, window 1
-        // only — see probeLanguage in whisper-import.ts) to pin the recording's language off a Parakeet
-        // decode of that same first window, before whisper-base's own unreliable per-window auto-detect
-        // gets a chance to hallucinate a wrong one. Wired here rather than inside whisper-import.ts so
-        // that module stays decoupled from parakeet.ts — a plain callback, easy to fake in tests.
-        // MQA-235: the manager's whole-recording majority vote outranks both the per-window guess and
-        // the single window-0 probe (a greeting in the other language mis-pinned a whole meeting on
-        // 2026-08-05). The user's explicit Settings pin still outranks the vote.
-        const userPin = getSettings().asrLanguage
-        const language = userPin !== 'auto' ? userPin : (opts?.language ?? 'auto')
-        return await whisperImportTranscribe(samples, language, async (probeSamples) => {
-          await ensureParakeetModel()
-          return parakeetTranscribe(probeSamples)
-        })
-      } catch (err) {
-        // An engine choice must never fail an import (T14 guardrail). Whisper's Node runtime can be
-        // unavailable for packaging reasons on a given platform (its transformers backend needs native
-        // addons — e.g. sharp ships per-OS binaries); Parakeet's sherpa addon is provisioned per target
-        // by the build gates, so it is the reliable floor. One warn, then degrade — worse language
-        // routing beats a dead import.
-        mainLog.warn(
-          `[import] whisper transcriber unavailable, falling back to Parakeet: ${err instanceof Error ? err.message : String(err)}`
-        )
-        await ensureParakeetModel()
-        return parakeetTranscribe(samples)
-      }
-    },
-    // MQA-235: one language-ID vote sample — Parakeet decodes the window (language-agnostic), text-side
-    // lang-id classifies it. Same signal probeLanguage uses, but the manager votes across windows spread
-    // over the whole recording instead of trusting window 0.
-    probeLanguageName: async (samples) => {
-      try {
-        await ensureParakeetModel()
-        const text = await parakeetTranscribe(samples)
-        if (text.trim().split(/\s+/).filter(Boolean).length < 4) return null
-        return detectImportLanguage(text)
-      } catch {
-        return null
-      }
-    },
+    transcribe: asrAdmission.transcribe,
+    probeLanguageName: asrAdmission.probeLanguageName,
     // Each manager-admitted fresh attempt owns one exact keyed session. A stale callback cannot label,
     // finalize, or dispose a replacement attempt that happens to reuse the same durable job ID.
     beginSpeakers: beginImportSpeakers,
@@ -1967,17 +1954,55 @@ function initializeImportJobs(): void {
         mainLog.error('[intelligence-index] import-idle pass failed:', e)
       )
     },
-    saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
+    saveMeeting: async (meeting, beforeReplace) => {
+      const settings = await refreshImportSettings()
+      assertImportAdmissionCurrent()
+      const prepareReplacement = prepareImportReplacement(settings)
+      return saveMeeting(
+        settings,
+        meeting,
+        () => {
+          assertImportWriteAllowed()
+          beforeReplace?.()
+        },
+        prepareReplacement
+      )
+    },
     deleteMeeting,
-    enqueueIngest,
+    enqueueIngest: async (file, options, beforeReplace) => {
+      const settings = await refreshImportSettings()
+      assertImportAdmissionCurrent()
+      return enqueueIngest(
+        file,
+        options,
+        () => {
+          assertImportWriteAllowed()
+          beforeReplace?.()
+        },
+        prepareImportReplacement(settings)
+      )
+    },
     recordMeetingSummarized,
     recordTimeSavedNote: (words, file) => {
       const mins = estimateNoteTakingMinutes(words)
       if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: file } })
     },
     generateRecap: runImportedRecap,
-    updateRecap: async (file, recap, status) => {
-      const result = await updateMeetingRecap(getSettings(), file, recap, status)
+    updateRecap: async (file, recap, status, beforeReplace) => {
+      const settings = await refreshImportSettings()
+      assertImportAdmissionCurrent()
+      const prepareReplacement = prepareImportReplacement(settings)
+      const result = await updateMeetingRecap(
+        settings,
+        file,
+        recap,
+        status,
+        () => {
+          assertImportWriteAllowed()
+          beforeReplace?.()
+        },
+        prepareReplacement
+      )
       if (!result.ok) throw new Error(result.error || 'Could not save the imported summary.')
     },
     onChange: publishImportJob,
@@ -1986,15 +2011,6 @@ function initializeImportJobs(): void {
     newId: randomUUID,
     concurrency: MAX_CONCURRENT_DECODES
   })
-  const speechPackBlocked = resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
-  if (!speechPackBlocked) {
-    void ensureImportAsrAssets((pct) => {
-      publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-    }).catch((err) => {
-      mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
-      publishAsrAssetsProgress()
-    })
-  }
 }
 
 function getImportJobs(): ImportJobManager {
@@ -9119,69 +9135,22 @@ function registerIpc(): void {
     void recordOperatorRating(getSettings(), rating)
   })
 
-  // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
-  ipcMain.handle(IPC.importAudioPick, async (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { error: 'Not signed in.' }
-    return pickAudioFile(win)
-  })
-  ipcMain.handle(IPC.importAudioOffer, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { error: 'Not signed in.' }
-    const parsed = ImportAudioOfferSchema.safeParse(raw)
-    if (!parsed.success) return { error: 'Could not prepare the selected recordings.' }
-    return offerAudioPaths(parsed.data.paths)
-  })
-  ipcMain.handle(IPC.importAudioStart, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) throw new Error('Not signed in.')
-    const parsed = ImportAudioStartSchema.parse(raw)
-    const jobs = getImportJobs()
-    return importJobView(await jobs.start(consumePickedAudio(parsed.token)))
-  })
-  ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) throw new Error('Not signed in.')
-    const parsed = ImportAudioStartBatchSchema.parse(raw)
-    const jobs = getImportJobs()
-    const sources = []
-    const errors: string[] = []
-    for (const token of parsed.tokens) {
-      try {
-        sources.push(consumePickedAudio(token))
-      } catch (err) {
-        errors.push(err instanceof Error ? err.message : String(err))
-      }
-    }
-    if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
-    return (await jobs.startMany(sources)).map(importJobView)
-  })
-  ipcMain.handle(IPC.importJobsList, (e) => {
-    assertMainWindow(e)
-    return importJobsSnapshotIpc.listImportJobsSnapshot(
-      e,
-      () => win,
-      () => getImportJobs().snapshot(),
-      importJobView
-    )
-  })
-  ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) throw new Error('Not signed in.')
-    const parsed = ImportJobIdSchema.parse(raw)
-    await getImportJobs().cancel(parsed.jobId)
-  })
-  ipcMain.handle(IPC.importJobResume, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) throw new Error('Not signed in.')
-    const parsed = ImportJobIdSchema.parse(raw)
-    return importJobView(await getImportJobs().resume(parsed.jobId))
-  })
-  ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) throw new Error('Not signed in.')
-    const parsed = ImportJobIdSchema.parse(raw)
-    await getImportJobs().remove(parsed.jobId)
+  // --- Import jobs are registered as one real adapter so admission/token gates stay cohesive. ---
+  registerImportJobsIpc({
+    ipcMain,
+    currentWindow: () => win,
+    captureDocumentScope: (event) => importJobsSnapshotIpc.captureImportJobsSnapshotScope(event, () => win),
+    assertMainWindow,
+    requireAuth,
+    getImportJobs,
+    refreshImportAuthority: refreshImportSettings,
+    captureImportOperation: importJobAuthority.captureOperation,
+    assertImportAdmissionAllowed,
+    assertImportAdmissionCurrent,
+    currentImportRetentionState,
+    currentImportCapabilityState,
+    currentImportPersistenceState,
+    importJobView
   })
 
   ipcMain.on(IPC.importDecoderReady, (e) => {

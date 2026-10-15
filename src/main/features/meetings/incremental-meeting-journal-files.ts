@@ -7,8 +7,12 @@ import { atomicSavedWriteStream } from '../../infra/storage/atomic-saved-write'
 import { withIncrementalMeetingMutation } from './incremental-meeting-mutation-lock'
 import { createBoundedJournalFileReader } from './incremental-meeting-journal-file-read'
 import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journal-root'
-import { consumeIncrementalRecordReceipt } from './incremental-record-receipt'
+import { consumeIncrementalRecordReceipt } from '../../infra/process/incremental-record-receipt'
+import { createApplicationMetadataStore } from './incremental-meeting-journal-application-metadata'
+import { createIncrementalJournalStateOperations } from './incremental-meeting-journal-state-operations'
+import { readIncrementalJournalPage } from './incremental-meeting-journal-page-reader'
 import {
+  MAX_MANIFEST_BYTES,
   SHA256,
   UUID,
   decodeRecord,
@@ -34,6 +38,7 @@ import {
   type IncrementalIdentityLookup,
   type IncrementalJournalSnapshot,
   type IncrementalJournalStorageResult,
+  type IncrementalJournalApplicationMetadataResult,
   type IncrementalMeetingJournalStorage
 } from './incremental-meeting-journal'
 
@@ -55,6 +60,7 @@ export interface IncrementalMeetingJournalFileStorageOptions {
 
 export interface IncrementalMeetingJournalFileStorage extends IncrementalMeetingJournalStorage {
   initialize(): Promise<IncrementalJournalStorageResult<IncrementalJournalSnapshot>>
+  readPendingAppend(isCurrent: () => boolean): Promise<'pending' | 'clear' | 'unavailable'>
   transitionState(
     state: Exclude<JournalState, 'active'>,
     isCurrent: () => boolean
@@ -64,8 +70,16 @@ export interface IncrementalMeetingJournalFileStorage extends IncrementalMeeting
     expectedRevision: number,
     maxRecords: number,
     sink: (record: IncrementalJournalFileRecord) => void | Promise<void>,
-    isCurrent: () => boolean
+    isCurrent: () => boolean,
+    maxBytes?: number
   ): Promise<IncrementalJournalPageResult>
+  readApplicationMetadata(isCurrent: () => boolean): Promise<IncrementalJournalApplicationMetadataResult>
+  commitApplicationMetadata(
+    expectedRevision: number,
+    bytes: Uint8Array | null,
+    maxBytes: number,
+    isCurrent: () => boolean
+  ): Promise<IncrementalJournalApplicationMetadataResult>
   dispose(): void
 }
 
@@ -174,7 +188,13 @@ export function createIncrementalMeetingJournalFileStorage(
     requestCurrent: () => boolean,
     maxBytes: number
   ): Promise<boolean> {
-    if (!(await rootAligned()) || !baseCurrent() || !requestCurrent() || bytes.byteLength > maxBytes) {
+    if (
+      !(await rootAligned()) ||
+      !baseCurrent() ||
+      !requestCurrent() ||
+      bytes.byteLength > maxBytes ||
+      (name === manifestName && bytes.byteLength > MAX_MANIFEST_BYTES)
+    ) {
       bytes.fill(0)
       return false
     }
@@ -212,7 +232,33 @@ export function createIncrementalMeetingJournalFileStorage(
     }
   }
 
+  const applicationMetadata = createApplicationMetadataStore({
+    baseCurrent,
+    maxJournalBytes,
+    key: key!,
+    readManifest,
+    async writeManifest(core, recordBytes, requestCurrent) {
+      const bytes = setManifestStoredBytes(core, recordBytes, key!)
+      if (!requestCurrent() || core.storedBytes > maxJournalBytes) {
+        bytes.fill(0)
+        return false
+      }
+      return writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
+    }
+  })
+  const stateOperations = createIncrementalJournalStateOperations({
+    baseCurrent,
+    activeCheck,
+    readManifest,
+    writeAtomic,
+    manifestName,
+    maxJournalBytes,
+    key: key!
+  })
+
   const storage: IncrementalMeetingJournalFileStorage = {
+    readPendingAppend: stateOperations.readPendingAppend,
+
     async initialize() {
       const requestCurrent = baseCurrent
       if (!requestCurrent()) return { status: 'unavailable' }
@@ -239,7 +285,9 @@ export function createIncrementalMeetingJournalFileStorage(
           linePayloadBytes: 0,
           storedBytes: 0,
           manifestBytes: 0,
-          pending: null
+          pending: null,
+          applicationRevision: 0,
+          applicationMetadata: null
         }
         const encoded = setManifestStoredBytes(core, 0, key!)
         if (encoded.byteLength > maxJournalBytes) {
@@ -460,7 +508,11 @@ export function createIncrementalMeetingJournalFileStorage(
           encrypted.byteLength +
           indexBuffer.byteLength +
           identityIndexBuffer.byteLength
-        if (!Number.isSafeInteger(reservedPhysicalBytes) || reservedPhysicalBytes > request.maxJournalBytes) {
+        if (
+          pendingManifest.byteLength > MAX_MANIFEST_BYTES ||
+          !Number.isSafeInteger(reservedPhysicalBytes) ||
+          reservedPhysicalBytes > request.maxJournalBytes
+        ) {
           pendingManifest.fill(0)
           encrypted.fill(0)
           indexBuffer.fill(0)
@@ -636,7 +688,7 @@ export function createIncrementalMeetingJournalFileStorage(
         committedRecordBytes + activePending.recordBytes + activePending.indexBytes + activePending.identityIndexBytes,
         key!
       )
-      if (finalCore.storedBytes > request.maxJournalBytes) {
+      if (finalBytes.byteLength > MAX_MANIFEST_BYTES || finalCore.storedBytes > request.maxJournalBytes) {
         finalBytes.fill(0)
         currentManifest.bytes.fill(0)
         return { status: 'limit' }
@@ -647,95 +699,32 @@ export function createIncrementalMeetingJournalFileStorage(
       return { status: 'committed', snapshot: snapshotFrom(finalCore) }
     },
 
-    async readPage(afterRevision, expectedRevision, maxRecords, sink, isCurrent) {
-      if (
-        !Number.isSafeInteger(afterRevision) ||
-        afterRevision < 0 ||
-        afterRevision > Number.MAX_SAFE_INTEGER - maxPageRecords ||
-        !Number.isSafeInteger(expectedRevision) ||
-        expectedRevision < afterRevision ||
-        !Number.isSafeInteger(maxRecords) ||
-        maxRecords <= 0 ||
-        maxRecords > maxPageRecords ||
-        typeof sink !== 'function'
-      )
-        return { status: 'unavailable' }
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent()) return { status: 'unavailable' }
-      const durableRevision = loaded.core.durableRevision
-      loaded.bytes.fill(0)
-      if (durableRevision !== expectedRevision || afterRevision > durableRevision) return { status: 'unavailable' }
-      const stopAt = Math.min(durableRevision, afterRevision + maxRecords)
-      let nextRevision = afterRevision
-      let pageBytes = 0
-      for (let revision = afterRevision + 1; revision <= stopAt; revision++) {
-        if (!requestCurrent()) return { status: 'stale-owner' }
-        const encodedIndex = await readBytes(indexName(revision), 512, requestCurrent)
-        const indexByteLength = encodedIndex.status === 'ok' ? encodedIndex.bytes.byteLength : 0
-        const index = encodedIndex.status === 'ok' && verifyIndex(encodedIndex.bytes, key!, meetingId, revision)
-        if (encodedIndex.status === 'ok') encodedIndex.bytes.fill(0)
-        if (!index || !requestCurrent()) return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-        if (
-          index.recordBytes > maxPhysicalRecordBytes ||
-          pageBytes > maxPageBytes - indexByteLength - index.recordBytes
-        )
-          return { status: 'unavailable' }
-        const recordRead = await readBytes(recordName(index.identityHash), index.recordBytes, requestCurrent)
-        if (recordRead.status !== 'ok' || recordRead.bytes.byteLength !== index.recordBytes || !requestCurrent()) {
-          if (recordRead.status === 'ok') recordRead.bytes.fill(0)
-          return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
-        }
-        pageBytes += indexByteLength + index.recordBytes
-        const decoded = decodeRecord(recordRead.bytes, key!, meetingId, index.identityHash, revision)
-        recordRead.bytes.fill(0)
-        if (!decoded || decoded.metadata.sha256 !== index.sha256) {
-          decoded?.canonicalBytes.fill(0)
-          return { status: 'unavailable' }
-        }
-        const value: IncrementalJournalFileRecord = {
-          revision,
-          ...decoded.metadata,
-          canonicalBytes: decoded.canonicalBytes
-        }
-        try {
-          await sink(value)
-        } catch {
-          value.canonicalBytes.fill(0)
-          return { status: 'unavailable' }
-        }
-        value.canonicalBytes.fill(0)
-        if (!requestCurrent()) return { status: 'stale-owner' }
-        nextRevision = revision
-      }
-      if (!requestCurrent()) return { status: 'stale-owner' }
-      return { status: 'ok', nextRevision, durableRevision, complete: nextRevision === durableRevision }
+    async readPage(afterRevision, expectedRevision, maxRecords, sink, isCurrent, requestedMaxBytes = maxPageBytes) {
+      return readIncrementalJournalPage({
+        afterRevision,
+        expectedRevision,
+        maxRecords,
+        maxPageRecords,
+        maxPageBytes,
+        maxPhysicalRecordBytes,
+        requestedMaxBytes,
+        meetingId,
+        key: key!,
+        baseCurrent,
+        isCurrent,
+        readManifest,
+        readBytes,
+        indexName,
+        recordName,
+        verifyIndex,
+        decodeRecord,
+        sink
+      })
     },
 
-    async transitionState(state, isCurrent) {
-      const requestCurrent = activeCheck(baseCurrent, isCurrent)
-      if (!requestCurrent()) return 'stale-owner'
-      const loaded = await readManifest(requestCurrent)
-      if (loaded.status !== 'ok' || !requestCurrent()) return 'unavailable'
-      if (loaded.core.state !== 'active' || loaded.core.pending) {
-        loaded.bytes.fill(0)
-        return 'unavailable'
-      }
-      const core: ManifestCore = { ...loaded.core, state, manifestBytes: 0 }
-      const recordBytes = core.storedBytes - loaded.core.manifestBytes
-      const bytes = setManifestStoredBytes(core, recordBytes, key!)
-      loaded.bytes.fill(0)
-      if (!requestCurrent()) {
-        bytes.fill(0)
-        return 'stale-owner'
-      }
-      if (core.storedBytes > maxJournalBytes) {
-        bytes.fill(0)
-        return 'unavailable'
-      }
-      const wrote = await writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
-      return wrote ? 'committed' : requestCurrent() ? 'unavailable' : 'stale-owner'
-    },
+    transitionState: stateOperations.transitionState,
+
+    ...applicationMetadata,
 
     dispose() {
       if (disposed) return
@@ -772,6 +761,30 @@ export function createIncrementalMeetingJournalFileStorage(
         () => storage.transitionState(state, isCurrent)
       )
       return locked.status === 'ok' ? locked.value : locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable'
+    },
+    async readApplicationMetadata(isCurrent) {
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return { status: 'unavailable' }
+      const locked = await withIncrementalMeetingMutation(
+        canonicalKey,
+        () => baseCurrent() && safeCurrent(isCurrent),
+        () => storage.readApplicationMetadata(isCurrent)
+      )
+      return locked.status === 'ok'
+        ? locked.value
+        : { status: locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable' }
+    },
+    async commitApplicationMetadata(expectedRevision, bytes, maxBytes, isCurrent) {
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return { status: 'unavailable' }
+      const locked = await withIncrementalMeetingMutation(
+        canonicalKey,
+        () => baseCurrent() && safeCurrent(isCurrent),
+        () => storage.commitApplicationMetadata(expectedRevision, bytes, maxBytes, isCurrent)
+      )
+      return locked.status === 'ok'
+        ? locked.value
+        : { status: locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable' }
     }
   }
 }

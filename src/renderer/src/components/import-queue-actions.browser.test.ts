@@ -17,7 +17,8 @@ const settingsListeners = new Set()
 const state = { picked: 0, dropped: [], started: [] }
 window.toto = {
   importJobsList: async () => ({
-    jobs: [], policyBlocked, heldJobIds: [], policyHeldJobIds: [],
+    jobs: [], policyBlocked, policyState: policyBlocked ? 'summary-only' : 'allowed',
+    capabilityState: 'available', persistenceState: 'configured', heldJobIds: [], policyHeldJobIds: [],
     inventoryOverflow: false, policyHoldOverflow: false
   }),
   importAudioPick: async () => {

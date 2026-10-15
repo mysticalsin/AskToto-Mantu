@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
-import { canonicalizeIncrementalMeetingRecord } from './incremental-record-canonical'
+import { canonicalizeIncrementalMeetingRecord } from '../../infra/process/incremental-record-canonical'
 import { createStorageGateway } from '../../infra/storage/gateway'
 import type { ContentPresence, DatalessDetector } from '../../infra/storage/dataless'
 import {
@@ -12,7 +12,7 @@ import {
   type IncrementalMeetingJournalStorage
 } from './incremental-meeting-journal'
 import { createIncrementalMeetingJournalFileStorage } from './incremental-meeting-journal-files'
-import { issueIncrementalRecordReceipt } from './incremental-record-receipt'
+import { issueIncrementalRecordReceipt } from '../../infra/process/incremental-record-receipt'
 import { encodeIndex, identityHash } from './incremental-meeting-journal-format'
 import type { StorageGateway } from '../../infra/storage/gateway'
 import { atomicSavedWriteStream } from '../../infra/storage/atomic-saved-write'
@@ -92,6 +92,133 @@ function appender(storage: IncrementalMeetingJournalStorage | undefined, isCurre
 }
 
 describe('encrypted incremental meeting journal files', () => {
+  it('refuses an append when the pending manifest would cross its fixed cap without damaging readable state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-manifest-cap-'))
+    roots.push(root)
+    const journal = await store(root)
+    await journal.initialize()
+    const metadata = Uint8Array.from({ length: 11_830 }, (_, index) => index % 251)
+    await expect(journal.commitApplicationMetadata(0, metadata, 16_384, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1
+    })
+    const activeManifest = await readFile(join(root, 'manifest.v1'))
+    expect(activeManifest.byteLength + 259).toBe(16_388)
+    await expect(appender(journal).append(recordJson, 0)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+    await expect(journal.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(journal.readSnapshot(meetingId, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      snapshot: { durableRevision: 0, recordCount: 0 }
+    })
+    journal.dispose()
+
+    const reopened = await store(root)
+    await expect(reopened.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(reopened.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    reopened.dispose()
+  })
+
+  it('measures below-cap and exact-cap pending manifest admission from the encoded active manifest', async () => {
+    // Base64 grows by four characters per three input bytes, so raw byte steps can share a size.
+    for (const metadataLength of [11_826, 11_827]) {
+      const root = await mkdtemp(join(tmpdir(), 'metis-incremental-manifest-boundary-'))
+      roots.push(root)
+      const journal = await store(root)
+      await journal.initialize()
+      const metadata = Uint8Array.from({ length: metadataLength }, (_, index) => index % 251)
+      await expect(journal.commitApplicationMetadata(0, metadata, 16_384, () => true)).resolves.toMatchObject({
+        status: 'ok',
+        revision: 1
+      })
+      const activeManifest = await readFile(join(root, 'manifest.v1'))
+      const candidatePendingBytes = activeManifest.byteLength + 259
+      expect(candidatePendingBytes).toBe(metadataLength === 11_827 ? 16_384 : 16_380)
+      await expect(appender(journal).append(recordJson, 0)).resolves.toMatchObject({ status: 'durable' })
+      expect((await readFile(join(root, 'manifest.v1'))).byteLength).toBeLessThanOrEqual(16_384)
+      journal.dispose()
+    }
+  })
+
+  it('stores application cursor metadata in the authenticated manifest with revision CAS', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-app-metadata-'))
+    roots.push(root)
+    const journal = await store(root)
+    await expect(journal.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(journal.readApplicationMetadata(() => true)).resolves.toEqual({
+      status: 'ok',
+      revision: 0,
+      bytes: null
+    })
+
+    const metadata = new TextEncoder().encode('{"cursor":4,"pending":"6370e1cc-43f4-4976-a912-04d0c3ca8f9f"}')
+    await expect(journal.commitApplicationMetadata(0, metadata, 1024, () => true)).resolves.toEqual({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(journal.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(journal.commitApplicationMetadata(0, metadata, 1024, () => true)).resolves.toEqual({
+      status: 'stale-revision'
+    })
+    await expect(journal.commitApplicationMetadata(1, metadata, 4, () => true)).resolves.toEqual({
+      status: 'limit'
+    })
+    await expect(journal.commitApplicationMetadata(1, metadata.subarray(1), 1024, () => true)).resolves.toEqual({
+      status: 'limit'
+    })
+    await expect(appender(journal).append(recordJson, 0)).resolves.toEqual({
+      status: 'durable',
+      revision: 1,
+      duplicate: false
+    })
+    journal.dispose()
+
+    const reopened = await store(root)
+    await expect(reopened.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(reopened.readSnapshot(meetingId, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      snapshot: { acceptedRevision: 1, durableRevision: 1, recordCount: 1 }
+    })
+    await expect(reopened.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(appender(reopened).append(recordJson, 0)).resolves.toEqual({
+      status: 'durable',
+      revision: 1,
+      duplicate: true
+    })
+    const advanced = new TextEncoder().encode('{"cursor":5,"pending":null}')
+    await expect(reopened.commitApplicationMetadata(1, advanced, 1024, () => true)).resolves.toEqual({
+      status: 'ok',
+      revision: 2,
+      bytes: advanced
+    })
+    reopened.dispose()
+
+    const final = await store(root)
+    await expect(final.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(final.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 2,
+      bytes: advanced
+    })
+    final.dispose()
+  })
+
   it('persists an authenticated frontier and encrypted immutable record for exact retry', async () => {
     const root = await mkdtemp(join(tmpdir(), 'metis-incremental-files-'))
     roots.push(root)
@@ -189,58 +316,6 @@ describe('encrypted incremental meeting journal files', () => {
     expect(await readdir(join(physicalParent, 'journal'))).toEqual(['manifest.v1'])
     aliased.dispose()
     canonical.dispose()
-  })
-
-  it('admits the retained canonical root for each fresh read-only adapter through a parent alias', async () => {
-    const parent = await mkdtemp(join(tmpdir(), 'metis-incremental-read-alias-'))
-    roots.push(parent)
-    const root = join(parent, 'journal')
-    const writer = await store(root)
-    await expect(writer.initialize()).resolves.toMatchObject({ status: 'ok' })
-    await expect(appender(writer).append(recordJson, 0)).resolves.toEqual({
-      status: 'durable',
-      revision: 1,
-      duplicate: false
-    })
-    writer.dispose()
-    const names = (await readdir(root)).sort()
-    const alias = join(parent, 'alias')
-    await symlink(parent, alias, process.platform === 'win32' ? 'junction' : 'dir')
-    const aliasedRoot = join(alias, 'journal')
-    const snapshotReader = await store(aliasedRoot)
-    const identityReader = await store(aliasedRoot)
-    const pageReader = await store(aliasedRoot)
-    const record = JSON.parse(new TextDecoder().decode(recordJson))
-    try {
-      await expect(snapshotReader.readSnapshot(meetingId, () => true)).resolves.toMatchObject({
-        status: 'ok',
-        snapshot: { acceptedRevision: 1, durableRevision: 1, recordCount: 1 }
-      })
-      await expect(
-        identityReader.lookupIdentity(meetingId, JSON.stringify(record.identity), () => true)
-      ).resolves.toMatchObject({
-        status: 'found',
-        revision: 1
-      })
-      const records: unknown[] = []
-      await expect(
-        pageReader.readPage(
-          0,
-          1,
-          1,
-          (value) => {
-            records.push(JSON.parse(new TextDecoder().decode(value.canonicalBytes)))
-          },
-          () => true
-        )
-      ).resolves.toEqual({ status: 'ok', nextRevision: 1, durableRevision: 1, complete: true })
-      expect(records).toEqual([record])
-      expect((await readdir(root)).sort()).toEqual(names)
-    } finally {
-      snapshotReader.dispose()
-      identityReader.dispose()
-      pageReader.dispose()
-    }
   })
 
   it('rejects a symlink as the final storage-root component', async () => {
@@ -622,6 +697,73 @@ describe('encrypted incremental meeting journal files', () => {
     })
     expect(recordReads).toBe(0)
     bounded.dispose()
+  })
+
+  it('returns a continuation after a fitting page prefix instead of failing after delivering it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-page-continuation-'))
+    roots.push(root)
+    const first = await store(root)
+    await first.initialize()
+    await appender(first).append(recordJson, 0)
+    const secondRecord = new TextEncoder().encode(
+      JSON.stringify({
+        identity: { kind: 'local', recordId: 'd6e1a2aa-0478-4a6e-b1e0-4c2e5cbb91e5' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'another private line', t: 1_700_000_000_100 }
+      })
+    )
+    await appender(first).append(secondRecord, 1)
+    first.dispose()
+    const names = await readdir(root)
+    const recordSizes = await Promise.all(
+      names
+        .filter((name) => name.startsWith('record-'))
+        .map(async (name) => (await readFile(join(root, name))).byteLength)
+    )
+    const indexSizes = await Promise.all(
+      names
+        .filter((name) => name.startsWith('index-'))
+        .map(async (name) => (await readFile(join(root, name))).byteLength)
+    )
+    const maxPageBytes =
+      recordSizes.reduce((sum, size) => sum + size, 0) + indexSizes.reduce((sum, size) => sum + size, 0) - 1
+    const paged = await store(root, () => true, key, undefined, maxPageBytes)
+    const seen: number[] = []
+    await expect(
+      paged.readPage(
+        0,
+        2,
+        2,
+        (record) => {
+          seen.push(record.revision)
+        },
+        () => true
+      )
+    ).resolves.toEqual({
+      status: 'ok',
+      nextRevision: 1,
+      durableRevision: 2,
+      complete: false
+    })
+    expect(seen).toEqual([1])
+    await expect(
+      paged.readPage(
+        1,
+        2,
+        2,
+        (record) => {
+          seen.push(record.revision)
+        },
+        () => true
+      )
+    ).resolves.toEqual({
+      status: 'ok',
+      nextRevision: 2,
+      durableRevision: 2,
+      complete: true
+    })
+    expect(seen).toEqual([1, 2])
+    paged.dispose()
   })
 
   it('snapshots page limits and gateway methods before the caller can mutate its options', async () => {

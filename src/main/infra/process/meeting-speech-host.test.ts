@@ -4,10 +4,7 @@ import type { TranscriptLine } from '@shared/transcript-line'
 import type { MeetingSpeechRequest } from './meeting-speech-protocol'
 import { createMeetingSpeechPersistenceService, type MeetingSpeechWorkerPort } from './meeting-speech-host'
 import { processMeetingSpeechRequest } from '../../meeting-speech-worker'
-import {
-  consumeIncrementalRecordReceipt,
-  type IncrementalRecordReceiptBinding
-} from '../../features/meetings/incremental-record-receipt'
+import { consumeIncrementalRecordReceipt, type IncrementalRecordReceiptBinding } from './incremental-record-receipt'
 
 const policy = {
   limits: { maxRecords: 4, maxWords: 4, maxFieldBytes: 1024, maxRecordBytes: 4096, maxPayloadBytes: 8192 },

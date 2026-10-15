@@ -3,6 +3,8 @@ import { lstat, open, rename, unlink, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { recordLocalWrite } from './local-writes'
 
+export type PrepareSavedReplacement = () => void | (() => void) | Promise<void | (() => void)>
+
 export interface AtomicSavedWriteStreamBounds {
   /** Explicit finite caller-admitted limits are required; this writer supplies no defaults. */
   maxBytes: number
@@ -12,7 +14,7 @@ export interface AtomicSavedWriteStreamBounds {
   beforeChunk?: () => void
   beforeReplace?: () => void
   /** Async physical-root admission after temp sync and immediately before each rename attempt. */
-  prepareBeforeReplace?: () => Promise<void>
+  prepareBeforeReplace?: () => Promise<void | (() => void)>
 }
 
 export interface AtomicSavedWriteStreamResult {
@@ -215,7 +217,7 @@ export async function atomicSavedWriteStream(
         error.name = 'TEMP_OWNERSHIP'
         throw error
       }
-      await limits.prepareBeforeReplace?.()
+      const preparedGuard = await limits.prepareBeforeReplace?.()
       if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
         const error = new Error('Streamed saved write lost ownership of its temporary file.')
         error.name = 'TEMP_OWNERSHIP'
@@ -223,6 +225,7 @@ export async function atomicSavedWriteStream(
       }
       // This synchronous policy check follows the final metadata await and stays outside the retry catch.
       checkAdmission(limits.beforeReplace)
+      if (typeof preparedGuard === 'function') preparedGuard()
       checkAdmission(limits.beforeChunk)
       try {
         await rename(tmp, file)
@@ -280,13 +283,21 @@ export async function atomicSavedWriteStream(
 }
 
 /** Replaces one saved file only after its current owner admits the exact rename attempt. */
-export async function atomicSavedWrite(file: string, data: Buffer, beforeReplace?: () => void): Promise<void> {
+export async function atomicSavedWrite(
+  file: string,
+  data: Buffer,
+  beforeReplace?: () => void,
+  prepareReplace?: PrepareSavedReplacement
+): Promise<void> {
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   try {
     await writeFile(tmp, data, { mode: 0o600 })
     for (let attempt = 0; ; attempt++) {
-      // Admission is synchronous and outside the rename retry handler so refusals propagate unchanged.
+      // Refresh the original operation after temp I/O and on every retry. Both original-owner guards run
+      // synchronously after the await and immediately before rename.
+      const preparedGuard = await prepareReplace?.()
       beforeReplace?.()
+      if (typeof preparedGuard === 'function') preparedGuard()
       try {
         await rename(tmp, file)
         break

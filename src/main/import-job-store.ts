@@ -3,9 +3,15 @@ import { constants as fsConstants, lstatSync } from 'node:fs'
 import { lstat, mkdir, open, opendir, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
-import { canRetainImportedTranscript, ImportRetentionBlockedError } from './import-retention-policy'
+import {
+  canRetainImportedTranscript,
+  ImportRetentionAuthorityUnavailableError,
+  ImportRetentionBlockedError,
+  type ImportRetentionState
+} from './import-retention-policy'
 import { decodeSaved, writeSaved } from './transcripts'
-import type { ImportHoldInventory, ImportJob, ImportJobStore } from './import-jobs'
+import type { PrepareSavedReplacement } from './infra/storage/atomic-saved-write'
+import type { ImportHoldInventory, ImportJob, ImportJobStore } from './import-job-types'
 
 const MAX_HELD_JOB_IDS = 1_024
 const MAX_HOLD_SCAN_ENTRIES = 4_096
@@ -42,25 +48,44 @@ interface GlobalHoldMarker {
 export class EncryptedImportJobStore implements ImportJobStore {
   constructor(
     private readonly getSettings: () => Settings,
-    private readonly root = join(app.getPath('userData'), 'import-jobs')
+    private readonly root = join(app.getPath('userData'), 'import-jobs'),
+    private readonly retentionStatus?: () => ImportRetentionState,
+    private readonly refreshRetentionStatus?: () => Promise<ImportRetentionState>,
+    private readonly prepareReplacement?: (settings: Settings) => PrepareSavedReplacement
   ) {}
 
   async save(job: ImportJob, beforeReplace?: () => void): Promise<void> {
+    await this.refreshAndAssertRetentionAllowed()
     this.assertRetentionAllowed()
+    const operationSettings = this.getSettings()
+    const prepareReplacement = this.prepareReplacement?.(operationSettings)
     const rootIdentity = await this.ensureRoot()
-    await writeSaved(this.path(job.jobId), JSON.stringify(job), this.getSettings().encryptTranscripts, () => {
-      this.assertRootIdentityBeforeReplace(rootIdentity)
-      this.assertRetentionAllowed()
-      beforeReplace?.()
-    })
+    await this.refreshAndAssertRetentionAllowed()
+    await writeSaved(
+      this.path(job.jobId),
+      JSON.stringify(job),
+      operationSettings.encryptTranscripts,
+      () => {
+        this.assertRootIdentityBeforeReplace(rootIdentity)
+        this.assertRetentionAllowed()
+        beforeReplace?.()
+      },
+      async () => {
+        await this.refreshAndAssertRetentionAllowed()
+        this.assertRetentionAllowed()
+        return prepareReplacement?.()
+      }
+    )
   }
 
   async list(): Promise<ImportJob[]> {
+    await this.refreshAndAssertRetentionAllowed()
     if (!this.retentionAllowed()) return []
     const rootIdentity = await this.existingRoot()
     if (!rootIdentity) return []
     const names = await readdir(this.root)
     await this.assertRootIdentity(rootIdentity)
+    await this.refreshAndAssertRetentionAllowed()
     const jobs: ImportJob[] = []
     const globalFence = await this.globalHoldPresent(rootIdentity)
     for (const name of names) {
@@ -226,13 +251,17 @@ export class EncryptedImportJobStore implements ImportJobStore {
 
   /** Reads only the explicitly selected, already-held checkpoint after current retention is allowed. */
   async loadHeld(jobId: string, explicitResume = false): Promise<ImportJob | undefined> {
+    await this.refreshAndAssertRetentionAllowed()
     this.assertRetentionAllowed()
     if (!isJobId(jobId)) throw new Error('Invalid import identity.')
     const rootIdentity = await this.existingRoot()
+    await this.refreshAndAssertRetentionAllowed()
     if (!rootIdentity || (!explicitResume && !(await this.markerIsValid(this.holdPath(jobId), jobId, rootIdentity))))
       return undefined
     if (!(await this.isRegularFile(this.path(jobId)))) return undefined
+    await this.refreshAndAssertRetentionAllowed()
     const raw = await this.readOwnedFile(this.path(jobId), rootIdentity)
+    await this.refreshAndAssertRetentionAllowed()
     this.assertRetentionAllowed()
     const parsed = JSON.parse(decodeSaved(raw)) as Partial<ImportJob>
     if (
@@ -249,11 +278,11 @@ export class EncryptedImportJobStore implements ImportJobStore {
   }
 
   /** Persist a content-free policy hold only for an already-existing checkpoint. */
-  async markHeld(jobId: string): Promise<boolean> {
+  async markHeld(jobId: string, reason: 'policy' | 'restart' = 'policy'): Promise<boolean> {
     if (!isJobId(jobId)) throw new Error('Invalid import identity.')
     const rootIdentity = await this.existingRoot()
     if (!rootIdentity || !(await this.isRegularFile(this.path(jobId)))) return false
-    await this.writeHold(jobId, rootIdentity, 'policy')
+    await this.writeHold(jobId, rootIdentity, reason)
     return true
   }
 
@@ -275,11 +304,23 @@ export class EncryptedImportJobStore implements ImportJobStore {
   }
 
   private retentionAllowed(): boolean {
+    if (this.retentionStatus) return this.retentionStatus() === 'allowed'
     return canRetainImportedTranscript(this.getSettings())
   }
 
   private assertRetentionAllowed(): void {
-    if (!this.retentionAllowed()) throw new ImportRetentionBlockedError()
+    if (this.retentionStatus) {
+      const status = this.retentionStatus()
+      if (status === 'unavailable') throw new ImportRetentionAuthorityUnavailableError()
+      if (status !== 'allowed') throw new ImportRetentionBlockedError()
+    } else if (!this.retentionAllowed()) throw new ImportRetentionBlockedError()
+  }
+
+  private async refreshAndAssertRetentionAllowed(): Promise<void> {
+    if (!this.refreshRetentionStatus) return
+    const status = await this.refreshRetentionStatus()
+    if (status === 'unavailable') throw new ImportRetentionAuthorityUnavailableError()
+    if (status !== 'allowed') throw new ImportRetentionBlockedError()
   }
 
   private async ensureRoot(): Promise<RootIdentity> {
@@ -320,6 +361,7 @@ export class EncryptedImportJobStore implements ImportJobStore {
   private async readOwnedFile(path: string, root: RootIdentity): Promise<Buffer> {
     await this.assertRootIdentity(root)
     const before = await lstat(path)
+    await this.refreshAndAssertRetentionAllowed()
     if (before.isSymbolicLink() || !before.isFile()) throw new Error('The import checkpoint is not a regular file.')
     this.assertRetentionAllowed()
     const nofollow = fsConstants.O_NOFOLLOW ?? 0
@@ -332,6 +374,7 @@ export class EncryptedImportJobStore implements ImportJobStore {
       if (pathStat.isSymbolicLink() || pathStat.dev !== opened.dev || pathStat.ino !== opened.ino) {
         throw new Error('The import checkpoint changed during the read.')
       }
+      await this.refreshAndAssertRetentionAllowed()
       this.assertRetentionAllowed()
       const bytes = await handle.readFile()
       const after = await lstat(path)
@@ -345,6 +388,7 @@ export class EncryptedImportJobStore implements ImportJobStore {
         throw new Error('The import checkpoint changed during the read.')
       }
       await this.assertRootIdentity(root)
+      await this.refreshAndAssertRetentionAllowed()
       this.assertRetentionAllowed()
       return bytes
     } finally {
