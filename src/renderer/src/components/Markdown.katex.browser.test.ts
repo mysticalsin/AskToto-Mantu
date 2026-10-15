@@ -192,9 +192,7 @@ describe('actual installed KaTeX advisory and API regressions', () => {
     expect(result).toEqual({
       rendered: false,
       errorName: 'ParseError',
-      errorMessage: expect.stringMatching(
-        /(?:undefined control sequence|Undefined control sequence).*rendererInheritedSentinel/u
-      )
+      errorMessage: expect.stringMatching(/^KaTeX parse error: No function handler for \\rendererInheritedSentinel$/u)
     })
     await expectNoUnexpectedEffects(test)
   })
@@ -230,9 +228,7 @@ describe('actual installed KaTeX advisory and API regressions', () => {
     })
     expect(result).toEqual({
       own: false,
-      after: expect.stringMatching(
-        /^ParseError:.*(?:undefined control sequence|Undefined control sequence).*rendererScopedSentinel/u
-      )
+      after: expect.stringMatching(/^ParseError:KaTeX parse error: No function handler for \\rendererScopedSentinel$/u)
     })
     await expectNoUnexpectedEffects(test)
   })

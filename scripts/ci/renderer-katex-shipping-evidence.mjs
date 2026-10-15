@@ -110,6 +110,10 @@ function normalizeAsarPath(value) {
   if (!path || path.split('/').some((part) => !part || part === '.' || part === '..')) fail('ASAR_UNSAFE_PATH')
   return path
 }
+function nativeAsarMember(logicalPath) {
+  if (typeof logicalPath !== 'string' || normalizeAsarPath(logicalPath) !== logicalPath) fail('ASAR_UNSAFE_PATH')
+  return logicalPath.split('/').join(sep)
+}
 function isCodeContainerPrefix(bytes) {
   return (
     bytes.subarray(0, 4).equals(Buffer.from('PK\x03\x04')) ||
@@ -226,9 +230,10 @@ async function inventoryLoose(root, prefix, containmentRoot = root, budget = adm
     if (error && typeof error === 'object' && error.code === 'ENOENT') return []
     throw error
   }
+  const realContainmentRoot = resolveLink(containmentRoot, prefix)
   if (rootStat.isSymbolicLink()) {
     const physicalPath = resolveLink(root, prefix)
-    const contained = relative(resolve(containmentRoot), physicalPath).replaceAll('\\', '/')
+    const contained = relative(realContainmentRoot, physicalPath).replaceAll('\\', '/')
     const targetStat = lstatSync(physicalPath)
     if (!contained || contained === '..' || contained.startsWith('../') || isAbsolute(contained))
       fail(`LOOSE_ROOT_LINK:${prefix}`)
@@ -260,13 +265,15 @@ async function inventoryLoose(root, prefix, containmentRoot = root, budget = adm
     const realDirectory = resolveLink(directory, relativeRoot)
     if (activeDirectories.has(realDirectory)) fail(`LOOSE_SYMLINK_CYCLE:${relativeRoot}`)
     activeDirectories.add(realDirectory)
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      const path = join(directory, entry.name)
+    for (const entry of readdirSync(realDirectory, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    )) {
+      const path = join(realDirectory, entry.name)
       const relativePath = `${relativeRoot}/${entry.name}`.replaceAll('\\', '/')
       const stat = lstatSync(path)
       if (stat.isSymbolicLink()) {
         const physicalPath = resolveLink(path, relativePath)
-        const contained = relative(resolve(containmentRoot), physicalPath).replaceAll('\\', '/')
+        const contained = relative(realContainmentRoot, physicalPath).replaceAll('\\', '/')
         if (!contained || contained === '..' || contained.startsWith('../') || isAbsolute(contained))
           fail(`LOOSE_EXTERNAL_SYMLINK:${relativePath}`)
         const targetStat = lstatSync(physicalPath)
@@ -331,6 +338,7 @@ async function asarInventory(archive, unpackedRoot, budget = admissionBudget(), 
   const unique = new Set()
   const entries = []
   const packedRanges = []
+  let realUnpackedRoot
   let totalBytes = 0
   async function collect(files, parent = '') {
     if (parent.split('/').filter(Boolean).length > MAX_ASAR_DEPTH) fail('ASAR_DEPTH_LIMIT')
@@ -389,16 +397,22 @@ async function asarInventory(archive, unpackedRoot, budget = admissionBudget(), 
       if (info.unpacked) {
         const physical = resolve(unpackedRoot, ...path.split('/'))
         const rel = relative(resolve(unpackedRoot), physical)
-        if (rel.startsWith('..') || rel === '') fail(`UNPACKED_PATH_ESCAPE:${path}`)
+        if (rel === '..' || rel.startsWith(`..${sep}`) || rel === '' || isAbsolute(rel))
+          fail(`UNPACKED_PATH_ESCAPE:${path}`)
         const physicalStat = lstatSync(physical)
         if (!physicalStat.isFile() || physicalStat.isSymbolicLink() || physicalStat.size !== info.size)
           fail(`UNPACKED_ENTRY_MISMATCH:${path}`)
-        budget.admit(info.size, physical)
+        realUnpackedRoot ??= realpathSync(unpackedRoot)
+        const realPhysical = realpathSync(physical)
+        const realRel = relative(realUnpackedRoot, realPhysical)
+        if (realRel === '..' || realRel.startsWith(`..${sep}`) || realRel === '' || isAbsolute(realRel))
+          fail(`LOOSE_EXTERNAL_SYMLINK:${path}`)
+        budget.admit(info.size, realPhysical)
         entries.push({
           path,
           type: 'unpacked-file',
-          physicalPath: physical,
-          ...(deferHash ? { bytes: info.size } : await shaFile(physical))
+          physicalPath: realPhysical,
+          ...(deferHash ? { bytes: info.size } : await shaFile(realPhysical))
         })
         continue
       }
@@ -665,7 +679,7 @@ async function requiredResourceSources(loose, profile, arch, sourceRoot, resourc
     }
     const resolveContainedSource = (path) => {
       const real = realpathSync(path)
-      const rel = relative(resolve(sourceRoot), real)
+      const rel = relative(sourceRoot, real)
       if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
         fail(`REQUIRED_RESOURCE_SOURCE_LINK:${path}`)
       return real
@@ -1148,7 +1162,7 @@ async function scanDeliveredSources({ archive, unpackedRoot, asar, delivered, so
     if (entry.origin === 'asar') {
       const archived = asarByPath.get(entry.path)
       if (archived?.type === 'unpacked-file') bytes = readFileSync(join(unpackedRoot, ...archived.path.split('/')))
-      else if (archived?.type === 'file') bytes = extractFile(archive, archived.path)
+      else if (archived?.type === 'file') bytes = extractFile(archive, nativeAsarMember(archived.path))
       else fail(`DELIVERED_ASAR_ORIGIN_MISSING:${entry.path}`)
     } else bytes = readFileSync(entry.physicalPath)
     if (isCodeContainerPrefix(bytes)) fail(`NESTED_CODE_CONTAINER_UNCLASSIFIED:${entry.path}`)
@@ -1192,7 +1206,8 @@ export async function inspectCandidate({
     }).trim()
     if (head !== process.env.GITHUB_SHA || changes) fail('SOURCE_CHECKOUT_COMMIT_OR_CLEANLINESS')
   }
-  const root = resolve(resources)
+  sourceRoot = realpathSync(sourceRoot)
+  const root = realpathSync(resources)
   const budget = admissionBudget(structuralByteLimit ?? MAX_DELIVERED_BYTES)
   const archive = join(root, 'app.asar')
   const archiveStat = lstatSync(archive)
@@ -1433,7 +1448,7 @@ export async function inspectCandidate({
     noticeBytes =
       noticeEntry?.type === 'unpacked-file'
         ? readFileSync(join(unpackedRoot, ...noticeEntry.path.split('/')))
-        : extractFile(archive, notice.path)
+        : extractFile(archive, nativeAsarMember(notice.path))
   } else noticeBytes = readFileSync(notice.physicalPath)
   const noticeText = Buffer.from(noticeBytes).toString('utf8')
   const packageLicenses = ['katex', 'mermaid', 'streamdown'].map((name) => {
@@ -1477,7 +1492,8 @@ export async function inspectCandidate({
   )
   let fullApacheLocation = null
   for (const entry of legalLocations) {
-    const bytes = entry.origin === 'asar' ? extractFile(archive, entry.path) : readFileSync(entry.physicalPath)
+    const bytes =
+      entry.origin === 'asar' ? extractFile(archive, nativeAsarMember(entry.path)) : readFileSync(entry.physicalPath)
     if (normalizeLegal(bytes.toString('utf8')).includes(apacheTerms)) {
       fullApacheLocation = `${entry.origin}:${entry.path}`
       break
@@ -1488,7 +1504,7 @@ export async function inspectCandidate({
   const archiveIdentity = await shaFile(archive)
   const packageIdentity = asar.find((entry) => entry.path === 'package.json' && entry.type === 'file')
   if (!packageIdentity) fail('PACKAGED_PROFILE_MARKER_MISSING')
-  const packagedManifest = JSON.parse(extractFile(archive, 'package.json').toString('utf8'))
+  const packagedManifest = JSON.parse(extractFile(archive, nativeAsarMember('package.json')).toString('utf8'))
   if (profile === 'lean') {
     if (packagedManifest.metisPackageProfile !== 'lean') fail('PACKAGED_PROFILE_MARKER_MISMATCH')
   } else {

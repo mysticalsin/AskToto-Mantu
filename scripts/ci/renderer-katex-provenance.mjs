@@ -21,6 +21,7 @@ const REMEDIATION_FILES = Object.freeze([
   'scripts/ci/renderer-katex-build-evidence.mjs',
   'scripts/ci/renderer-katex-shipping-evidence.mjs',
   'scripts/ci/renderer-katex-evidence.test.ts',
+  'src/renderer/src/components/Markdown.katex.browser.test.ts',
   'src/renderer/src/components/Markdown.mermaid.browser.test.ts'
 ])
 const EVIDENCE_TEST_PATH = 'scripts/ci/renderer-katex-evidence.test.ts'
@@ -1361,7 +1362,7 @@ function checkRemediationLineage(root) {
     'src/renderer/src/components/Markdown.security.browser.test.ts':
       '6db0c57e6c756573af0eb3e58629f1e66220d46e5d3815073cac8d89e7507453',
     'src/renderer/src/components/Markdown.katex.browser.test.ts':
-      '29a45a57d2223da01ed632e2ada5d7a1ab84997add53b74371b5e2324fbb17f0',
+      'b5e25eb09fd3b9f163a689619567a7fe731bfd5f6a7bbc0e0fdd3ba543b54e4f',
     'src/renderer/src/components/Markdown.mermaid.browser.test.ts':
       'debbc0ce9f905eae876170d6946ebe597061cecf893914a44cc106fc68a8aaec',
     'src/renderer/src/components/Markdown.warmup.test.ts':

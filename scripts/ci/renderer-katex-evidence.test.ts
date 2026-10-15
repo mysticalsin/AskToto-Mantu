@@ -1603,6 +1603,7 @@ describe('renderer remediation evidence validators', () => {
       'scripts/ci/renderer-katex-evidence.test.ts',
       'scripts/ci/renderer-katex-provenance.mjs',
       'scripts/ci/renderer-katex-shipping-evidence.mjs',
+      'src/renderer/src/components/Markdown.katex.browser.test.ts',
       'src/renderer/src/components/Markdown.mermaid.browser.test.ts'
     ].sort()
     const packageFiles = ['package-lock.json', 'package.json']
@@ -1687,6 +1688,21 @@ describe('renderer remediation evidence validators', () => {
           paths: { ...facts.paths, dToG: [...remediationFiles, 'unrelated.txt'] }
         }),
       'GREEN_D_TO_G_PATHS'
+    )
+    const withoutKatexTest = remediationFiles.filter(
+      (path) => path !== 'src/renderer/src/components/Markdown.katex.browser.test.ts'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, dToG: withoutKatexTest } }),
+      'GREEN_D_TO_G_PATHS'
+    )
+    reject(
+      () =>
+        validateRemediationLineageFacts({
+          ...facts,
+          paths: { ...facts.paths, rToG: [...packageFiles, ...withoutKatexTest].sort() }
+        }),
+      'GREEN_R_TO_G_PATHS'
     )
   })
 
@@ -1899,8 +1915,45 @@ describe('renderer remediation evidence validators', () => {
       )
     )
     expect(packedBytes).toBeGreaterThan(0)
-    expect(unpackedBytes).toBeGreaterThan(0)
+    expect(unpackedBytes).toBe(Buffer.byteLength('unpacked fixture') + Buffer.byteLength('nested fixture'))
     expect(looseBytes).toBeGreaterThan(0)
+    const unpackedPhysical = (path: string) =>
+      unpackedFiles.find((entry: { path: string }) => entry.path === path)?.physicalPath
+    expect(unpackedPhysical('assets/unpacked.dat')).toEqual(expect.any(String))
+    expect(unpackedPhysical('assets/nested/contained.dat')).toEqual(expect.any(String))
+    expect(unpackedPhysical('assets/file-link.dat')).toBe(unpackedPhysical('assets/unpacked.dat'))
+    expect(unpackedPhysical('assets/directory-link/contained.dat')).toBe(
+      unpackedPhysical('assets/nested/contained.dat')
+    )
+    const resourcesAlias = join(root, 'resources-alias')
+    symlinkSync(resources, resourcesAlias, process.platform === 'win32' ? 'junction' : 'dir')
+    const inspectAlias = (structuralByteLimit: number) =>
+      inspectCandidate({
+        structuralFixture: true,
+        structuralByteLimit,
+        resources: resourcesAlias,
+        buildEvidence: buildPath,
+        candidateReceipt: receiptPath,
+        sourceRoot,
+        profile: 'full',
+        arch: 'win-x64'
+      })
+    const admittedBytes = packedBytes + unpackedBytes + looseBytes
+    const aliasedEvidence = await inspectAlias(admittedBytes)
+    expect(aliasedEvidence.resourcesRoot).toBe(evidence.resourcesRoot)
+    expect(aliasedEvidence.delivered).toEqual(evidence.delivered)
+    expect(aliasedEvidence.unpackedFileCount).toBe(4)
+    const unpackedFileLink = join(resources, 'app.asar.unpacked/assets/file-link.dat')
+    const ownedOutside = join(root, 'outside-unpacked-link.dat')
+    put(ownedOutside, 'outside unpacked roots')
+    rmSync(unpackedFileLink)
+    symlinkSync(ownedOutside, unpackedFileLink)
+    try {
+      await expect(inspectAlias(admittedBytes)).rejects.toThrow('LOOSE_EXTERNAL_SYMLINK')
+    } finally {
+      rmSync(unpackedFileLink)
+      symlinkSync('unpacked.dat', unpackedFileLink)
+    }
     const inspectWithLimit = (structuralByteLimit: number) =>
       inspectCandidate({
         structuralFixture: true,
@@ -1913,7 +1966,7 @@ describe('renderer remediation evidence validators', () => {
         arch: 'win-x64'
       })
     const rejectBeforePayloadRead = async (limit: number) => {
-      const archivePath = join(resources, 'app.asar')
+      const archivePath = fs.realpathSync(join(resources, 'app.asar'))
       const headerEnd = 8 + readFileSync(archivePath).readUInt32LE(4)
       const originalOpen = fs.openSync
       const originalRead = fs.readSync
@@ -2221,6 +2274,7 @@ describe('renderer remediation evidence validators', () => {
     const interLicense = readFileSync(resolve(process.cwd(), 'node_modules/@fontsource-variable/inter/LICENSE'), 'utf8')
     const fullFontNotice = `${noticeText}\nCopyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)\n${interLicense}`
     rmSync(join(resources, 'app.asar'))
+    rmSync(join(resources, 'app.asar.unpacked'), { recursive: true })
     const fontArchive = await createPackageWithOptions(stage, join(resources, 'app.asar'), { unpackDir: 'assets' })
     await finished(fontArchive as unknown as Writable)
     const fontBinding = await candidateBinding(
@@ -2251,6 +2305,23 @@ describe('renderer remediation evidence validators', () => {
       profile: 'full',
       arch: 'win-x64'
     })
+    expect(fontEvidence.unpackedFileCount).toBe(4)
+    expect(fontEvidence.delivered).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          origin: 'asar',
+          path: 'assets/file-link.dat',
+          type: 'internal-link',
+          target: 'assets/unpacked.dat'
+        }),
+        expect.objectContaining({
+          origin: 'asar',
+          path: 'assets/directory-link',
+          type: 'internal-link',
+          target: 'assets/nested'
+        })
+      ])
+    )
     expect(fontEvidence.fontAssets.some((entry: { licensePackage: string }) => entry.licensePackage === 'geist')).toBe(
       true
     )
