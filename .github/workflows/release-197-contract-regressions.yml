@@ -1,4 +1,4 @@
-name: Release 1.9.7 contract regression baseline
+name: Release 1.9.7 contract regressions
 
 on:
   push:
@@ -21,8 +21,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  focused-baseline:
-    name: Contract regression baseline (${{ matrix.os }})
+  focused-regressions:
+    name: Contract regressions (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -73,7 +73,7 @@ jobs:
             if (fs.existsSync(path.join(producer, file))) throw new Error('stale producer destination')
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `evidence_dir=${evidence}\ntrace_out=${path.relative(process.cwd(), producer).split(path.sep).join('/')}\n`)
           NODE
-      - name: Run the exact four-file Vitest baseline
+      - name: Run the exact four-file contract suite
         id: focused
         if: steps.namespace.outcome == 'success'
         env:
@@ -104,7 +104,7 @@ jobs:
           echo "out_dir=$TRACE_OUT" >> "$GITHUB_OUTPUT"
           if [[ "${statuses[0]}" -ne 0 ]]; then exit "${statuses[0]}"; fi
           exit "${statuses[1]}"
-      - name: Validate the complete causal RED and write its bounded manifest
+      - name: Validate the source-bound case set and write bounded evidence
         id: evidence
         if: always()
         env:
@@ -196,6 +196,23 @@ jobs:
             'the managed-config docs name the accented Métis path and never a supported AskToto path',
             'no doc under docs/ lists the license gate as an enforced control while it is compiled off'
           ])
+
+          const repairedFiles = new Map([...baselineFiles.entries()].map(([key, item]) => [
+            key,
+            { ...item, expectedStatus: 'passed' }
+          ]))
+          const addRepairCase = (file, ancestor, title) => repairedFiles.set(
+            `${file}\0${JSON.stringify(ancestor)}\0${title}`,
+            { file, ancestorTitles: ancestor, title, expectedStatus: 'passed' }
+          )
+          addRepairCase(traceFile, ['traceability builder M2-0016 coverage rows'], 'rejects a same-line source edit against the fixed content reference')
+          addRepairCase(traceFile, ['traceability builder M2-0016 coverage rows'], 'rejects a missing extracted publish-provenance source')
+          addRepairCase(traceFile, ['traceability builder M2-0016 coverage rows'], 'matches LF and CRLF source references while retaining distinct raw byte hashes')
+          addRepairCase(traceFile, ['traceability builder M2-0016 coverage rows'], 'rejects missing malformed or duplicate required reference metadata')
+          addRepairCase(traceFile, ['traceability builder M2-0016 coverage rows'], 'writes the validated source-bound report and derived Section 25 artifacts')
+          const parserSuite = 'managed-config policy authority parser compatibility'
+          addRepairCase(docsFile, [parserSuite], 'honors locked precedence and legacy lockedKeys while retaining malformed-policy unreadability')
+          addRepairCase(docsFile, [parserSuite], 'distinguishes absent allowedProviders from explicit deny-all and malformed policy')
 
           function assert(condition, message) {
             if (!condition) throw new Error(message)
@@ -292,9 +309,9 @@ jobs:
           let validationFailure = null
           try {
           assert(admissionErrors.length === 0, 'one or more original payloads were absent, unsafe, oversized or changed')
-          assert(process.env.INSTALL_OUTCOME === 'success', 'npm ci did not complete; this is an incomplete run, not causal RED')
-          assert(process.env.VITEST_EXIT === '1', `expected actual Vitest exit 1, got ${process.env.VITEST_EXIT || 'missing'}`)
-          assert(process.env.PRODUCER_EXIT === '1', `expected actual producer exit 1, got ${process.env.PRODUCER_EXIT || 'missing'}`)
+          assert(process.env.INSTALL_OUTCOME === 'success', 'npm ci did not complete; this is an incomplete run')
+          assert(process.env.VITEST_EXIT === '0', `expected actual Vitest exit 0, got ${process.env.VITEST_EXIT || 'missing'}`)
+          assert(process.env.PRODUCER_EXIT === '0', `expected actual producer exit 0, got ${process.env.PRODUCER_EXIT || 'missing'}`)
           assert(process.env.VITEST_CAPTURE_EXIT === '0' && process.env.PRODUCER_CAPTURE_EXIT === '0', 'tee capture failed')
           assert(process.version === 'v22.22.3', `unexpected Node runtime: ${process.version}`)
           const expectedPlatform = process.env.EXPECTED_OS === 'windows-latest' ? ['win32','x64'] : ['linux','x64']
@@ -312,7 +329,9 @@ jobs:
             ...Object.keys(expectedRefs),
             'package.json', 'package-lock.json', 'vitest.config.ts', 'electron.vite.config.ts',
             'scripts/hermetic/sandbox-env.mjs', 'tsconfig.tests.json', 'scripts/trace/m2-0016-lock.mjs',
-            'scripts/before-pack.mjs', 'src/main/transcripts-recap.ts', 'src/shared/ipc.ts',
+            'scripts/before-pack.mjs', 'src/main/transcripts-recap.ts', 'src/main/transcripts.ts',
+            'src/main/index.ts', 'src/main/fresh-lean-speech-defaults.ts', 'src/main/store.ts',
+            'src/shared/transcript-line.ts', 'src/shared/ipc.ts',
             '.github/workflows/release-197-contract-regressions.yml',
             'scripts/lean-builder-exclusions.test.ts',
             'scripts/qa/rebuild-waves.contract.test.ts',
@@ -325,12 +344,19 @@ jobs:
             .reduce((sum, item) => sum + item.bytes, 0)
           assert(totalBoundBytes <= 8 * 1024 * 1024, `bounded read set exceeds 8 MiB: ${totalBoundBytes}`)
 
-          const fixedBaselineHashes = {
+          const baselineSourceHashes = {
             'scripts/lean-builder-exclusions.test.ts': '8c333aa492cc098f6736eefcae7d59881f7cb123ee56209e2f6d646b86458b5a',
             'scripts/qa/rebuild-waves.contract.test.ts': '1b13036827668ebf2ae46248db8917ba16b262d0c6bd559129a5c0b01a9e5e2d',
             'scripts/trace/build-traceability.test.ts': '98d335998274e3d2950dddecd50fcf49a8605b6435d7950e83e22c02c7bb790f',
             'scripts/docs/managed-config-docs.test.ts': '0300ede12d921bf4384dff228654b4da6c232fe0c2b664b86f53addd33b011ca',
             'scripts/trace/build-traceability.mjs': '8e0827da4d904a4d5b0fc561c8b57d425e1c044826e4eecb6b41077b307863e9'
+          }
+          const repairedSourceHashes = {
+            'scripts/lean-builder-exclusions.test.ts': 'd8db29d5293cf59add45be9c3be61e9b8491e7120e6a79e900c040886f1cbd1e',
+            'scripts/qa/rebuild-waves.contract.test.ts': '4c3c90a0f7180f94711cf9614416a15f32480c2aaa07b28021cfea2f5ecd53bd',
+            'scripts/trace/build-traceability.test.ts': 'd375c4f21e3c2bc26c53e5e3a6e1a1547db7c35dcb54f62b9921a523645d7cc7',
+            'scripts/docs/managed-config-docs.test.ts': '93a14fc533f16c1e968d8a2e77f6641ebae086e79618bb7cae453229d2769b86',
+            'scripts/trace/build-traceability.mjs': 'c5379b67fdf319f18d1f57cd30879a0e837a64a7dd77cb0108898c344e66bcf6'
           }
           const sourceBindings = {}
           for (const file of sourceFiles) {
@@ -340,12 +366,23 @@ jobs:
             assert(Buffer.from(canonical, 'utf8').equals(blob), `Git source blob is not canonical UTF-8 LF: ${file}`)
             const crlf = Buffer.from(canonical.replace(/\n/g, '\r\n'), 'utf8')
             assert(checkout.equals(blob) || checkout.equals(crlf), `checkout differs from HEAD blob: ${file}`)
-            if (fixedBaselineHashes[file]) assert(sha256(blob) === fixedBaselineHashes[file], `baseline test or producer changed: ${file}`)
             sourceBindings[file] = {
               git_blob_sha256: sha256(blob), checkout_sha256: sha256(checkout),
               representation: checkout.equals(blob) ? 'git-lf' : 'derived-crlf'
             }
           }
+
+          const statePaths = Object.keys(baselineSourceHashes).sort()
+          assert(JSON.stringify(Object.keys(repairedSourceHashes).sort()) === JSON.stringify(statePaths), 'baseline and repair source bindings must cover the same complete file set')
+          const observedStateHashes = Object.fromEntries(statePaths.map((file) => [file, sourceBindings[file].git_blob_sha256]))
+          const matchesSourceState = (expected) => statePaths.every((file) => /^[a-f0-9]{64}$/.test(expected[file]) && observedStateHashes[file] === expected[file])
+          const baselineSourceMatch = matchesSourceState(baselineSourceHashes)
+          const repairedSourceMatch = matchesSourceState(repairedSourceHashes)
+          assert(baselineSourceMatch !== repairedSourceMatch, 'all five focused source files must match exactly one fixed baseline or repaired source binding')
+          const phase = baselineSourceMatch ? 'BASELINE_RED' : 'REPAIRED_GREEN'
+          assert(phase === 'REPAIRED_GREEN', 'source binding identifies the unrepaired baseline; repaired hosted qualification requires the fixed six-path repair source')
+          const sourceStateHashes = repairedSourceHashes
+          for (const file of statePaths) assert(observedStateHashes[file] === sourceStateHashes[file], `selected ${phase} source binding mismatch: ${file}`)
 
           const report = JSON.parse(reportFile.content.toString('utf8'))
           const results = report.testResults
@@ -354,7 +391,7 @@ jobs:
           const actual = []
           const seenFiles = new Set()
           for (const fileResult of results) {
-            assert(fileResult && typeof fileResult.name === 'string' && fileResult.status === 'failed' &&
+            assert(fileResult && typeof fileResult.name === 'string' && fileResult.status === 'passed' &&
               fileResult.message === '', 'unexpected file or hook failure in Vitest result')
             const absoluteName = normPath(fileResult.name)
             const relativeName = absoluteName.startsWith(`${repoRoot}/`) ? absoluteName.slice(repoRoot.length + 1) : absoluteName
@@ -376,13 +413,13 @@ jobs:
               actual.push({ file: relativeName, ancestorTitles: assertion.ancestorTitles, title: assertion.title, status: assertion.status, failureMessages: assertion.failureMessages })
             }
           }
-          const expected = [...baselineFiles.values()].map(({ file, ancestorTitles, title, expectedStatus }) => ({ file, ancestorTitles, title, status: expectedStatus }))
+          const expected = [...repairedFiles.values()].map(({ file, ancestorTitles, title, expectedStatus }) => ({ file, ancestorTitles, title, status: expectedStatus }))
           const keyOf = ({ file, ancestorTitles, title }) => `${file}\0${JSON.stringify(ancestorTitles)}\0${title}`
           const expectedKeys = expected.map(keyOf).sort()
           const actualKeys = actual.map(keyOf).sort()
-          assert(expectedKeys.length === 30 && actual.length === 30, `expected exact 30-case population, got ${actual.length}`)
-          assert(JSON.stringify(actualKeys) === JSON.stringify(expectedKeys), 'Vitest case multiset differs from the frozen four-file roster')
-          const expectedSuites = new Map([[builderFile, 0], [rebuildFile, 5], [traceFile, 1], [docsFile, 2]])
+          assert(expectedKeys.length === 37 && actual.length === 37, `expected exact 37-case population, got ${actual.length}`)
+          assert(JSON.stringify(actualKeys) === JSON.stringify(expectedKeys), 'Vitest case multiset differs from the frozen four-file repair roster')
+          const expectedSuites = new Map([[builderFile, 0], [rebuildFile, 5], [traceFile, 1], [docsFile, 3]])
           const nestedSuites = new Set()
           const failedNestedSuites = new Set()
           for (const file of expectedSuites.keys()) {
@@ -396,55 +433,63 @@ jobs:
               }
             assert(fileSuites.size === expectedSuites.get(file), `nested suite inventory changed: ${file}`)
           }
-          assert(nestedSuites.size === 8 && report.numTotalTestSuites === results.length + nestedSuites.size &&
-            report.numTotalTestSuites === 12 && report.numFailedTestSuites === 8 &&
-            report.numPassedTestSuites === 4 && report.numPendingTestSuites === 0 &&
+          assert(nestedSuites.size === 9 && report.numTotalTestSuites === results.length + nestedSuites.size &&
+            report.numTotalTestSuites === 13 && report.numFailedTestSuites === 0 &&
+            report.numPassedTestSuites === 13 && report.numPendingTestSuites === 0 &&
             report.numTotalTestSuites === report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites &&
             report.numFailedTestSuites >= results.filter((item) => item.status === 'failed').length + failedNestedSuites.size,
-            'pinned Vitest suite counters or nested suite inventory differ from the baseline')
+            'pinned Vitest suite counters or nested suite inventory differ from the repair')
           for (const item of expected) {
             const observed = actual.find((candidate) => keyOf(candidate) === keyOf(item))
             assert(observed.status === item.status, `wrong status for ${item.file} > ${item.title}: ${observed.status}`)
-            assert(Array.isArray(observed.failureMessages) && observed.failureMessages.length === (item.status === 'failed' ? 1 : 0),
+            assert(Array.isArray(observed.failureMessages) && observed.failureMessages.length === 0,
               `unexpected appended or missing failure for ${item.file} > ${item.title}`)
           }
-          assert(Number.isSafeInteger(report.numPassedTests) && report.numPassedTests === 24, `expected 24 passing cases, got ${report.numPassedTests}`)
-          assert(Number.isSafeInteger(report.numFailedTests) && report.numFailedTests === 6, `expected 6 failing cases, got ${report.numFailedTests}`)
+          assert(Number.isSafeInteger(report.numPassedTests) && report.numPassedTests === 37, `expected 37 passing cases, got ${report.numPassedTests}`)
+          assert(Number.isSafeInteger(report.numFailedTests) && report.numFailedTests === 0, `expected 0 failing cases, got ${report.numFailedTests}`)
           assert(Number.isSafeInteger(report.numPendingTests) && report.numPendingTests === 0, `expected 0 pending cases, got ${report.numPendingTests}`)
           assert(Number.isSafeInteger(report.numTodoTests) && report.numTodoTests === 0, `expected 0 todo cases, got ${report.numTodoTests}`)
-          assert(Number.isSafeInteger(report.numTotalTests) && report.numTotalTests === 30, `expected 30 total cases, got ${report.numTotalTests}`)
-          assert(report.success === false, 'Vitest JSON must preserve the expected failing result')
-
-          const expectedFailureCauses = [
-            [builderFile, 'excludes inference workers from normalized darwin file sets while retaining application entries', /isEnabled/],
-            [builderFile, 'excludes inference workers from normalized win32 file sets while retaining application entries', /isEnabled/],
-            [rebuildFile, 'parseRecapMarkdown aliases Next steps into actionItems', /sections.*next steps/],
-            [rebuildFile, 'stripProvisionalLines exists and save paths use it', /provisional/],
-            [docsFile, 'the governance list documents where every key is read', /locked: src\/main\/store\.ts must contain obj\.locked \?\? obj\.lockedKeys/],
-            [traceFile, 'builds the workflow artifact from Section 25 COV rows in traceability.json', /expected \[ Array\(1\) \] to deeply equal \[\]/]
-          ]
-          for (const [file, title, cause] of expectedFailureCauses) {
-            const assertion = actual.find((item) => item.file === file && item.title === title)
-            assert(cause.test(assertion.failureMessages[0]), `failure cause did not match for ${title}`)
-          }
+          assert(Number.isSafeInteger(report.numTotalTests) && report.numTotalTests === 37, `expected 37 total cases, got ${report.numTotalTests}`)
+          assert(report.success === true, 'Vitest JSON must preserve the actual successful result')
 
           const producerReportPath = path.join(process.env.TRACE_OUT, 'traceability.json')
           const producerReport = JSON.parse(payloadInfos.get('traceability.json').content.toString('utf8'))
-          const expectedProblem = 'src/main/brain/publish.ts: expected 974 lines, found 954'
-          assert(Array.isArray(producerReport.check?.problems), 'producer report omitted its check problems')
-          assert(JSON.stringify(producerReport.check.problems) === JSON.stringify([expectedProblem]), `producer report mismatch was not exactly the reviewed publish source delta: ${JSON.stringify(producerReport.check.problems)}`)
-          assert(Array.isArray(producerReport.reviewed_scopes) && producerReport.reviewed_scopes.length === 28, 'baseline producer scope set must retain all 28 original paths')
-          assert(Array.isArray(producerReport.rows) && producerReport.rows.filter((row) => row.family === 'COV' && row.section === 25).length === 44, 'baseline producer report must retain all 44 Section 25 rows')
+          assert(Array.isArray(producerReport.check?.problems) && producerReport.check.problems.length === 0, `producer report contains validation problems: ${JSON.stringify(producerReport.check?.problems)}`)
+          assert(Array.isArray(producerReport.reviewed_scopes) && producerReport.reviewed_scopes.length === 29, 'producer report must contain exactly the fixed 29 source scopes')
+          assert(Array.isArray(producerReport.rows) && producerReport.rows.filter((row) => row.family === 'COV' && row.section === 25).length === 44, 'producer report must retain all 44 Section 25 rows')
+          const producerEvidence = JSON.parse(payloadInfos.get('m2-0016-evidence.json').content.toString('utf8'))
+          assert(producerEvidence.ticket === 'M2-0016' && producerEvidence.generated_from === 'traceability.json' &&
+            producerEvidence.coverage?.section === 25 && producerEvidence.coverage?.rows === 44 &&
+            producerEvidence.coverage?.all_rows_have_ticket === true && producerEvidence.gates_other_tickets === false,
+            'actual derived producer evidence must retain the 44-row Section 25 mapping without gating other tickets')
+          assert(Array.isArray(producerReport.source_reference_observations) && producerReport.source_reference_observations.length === 4 &&
+            producerReport.source_reference_observations.every((item) => item.classification === 'SOURCE_REFERENCE_ONLY' && item.matches_expected === true &&
+              /^[a-f0-9]{64}$/.test(item.observed_raw_sha256) && /^[a-f0-9]{64}$/.test(item.observed_canonical_sha256)),
+            'producer report must preserve all four source-only raw and canonical content bindings')
+          for (const [file, expectedCanonicalSha256] of Object.entries(expectedRefs)) {
+            const sourceBytes = sourceInfos.get(file).content
+            const observed = producerReport.source_reference_observations.find((item) => item.reference_path === file)
+            assert(observed && observed.reference_commit === 'bf38b0bc74c91a7cf35b22829a0aac85746034e8' &&
+              observed.expected_sha256 === expectedCanonicalSha256 && observed.hash_policy === 'sha256-utf8-crlf-to-lf' &&
+              observed.observed_raw_sha256 === sha256(sourceBytes) && observed.observed_canonical_sha256 === expectedCanonicalSha256,
+              `producer source-reference observation does not bind to the admitted source bytes: ${file}`)
+          }
+          assert(producerReport.source_reference_limit === 'SOURCE_REFERENCE_ONLY: exact source identity and structural traceability; runtime and installed-app qualification remain separate.',
+            'producer report widened source-only qualification')
+          assert(producerReport.historical_findings_origin?.commit === 'eae96341c3771748b0bcfaf12de48cdb6e114d40' &&
+            producerReport.historical_findings_origin?.path === 'scripts/trace/build-traceability.mjs' &&
+            producerReport.historical_findings_origin?.sha256 === '8e0827da4d904a4d5b0fc561c8b57d425e1c044826e4eecb6b41077b307863e9',
+            'producer report changed the historical findings origin')
           const producerLog = producerLogFile.content.toString('utf8')
-          assert(producerLog.includes(`[traceability] ${expectedProblem}`), 'actual producer log omitted the source mismatch')
-          assert((producerLog.match(/\[traceability\] /g) || []).length === 1, 'producer emitted an unexpected additional validation failure')
+          assert(producerLog.includes(`[traceability] PASS ${process.env.TRACE_OUT}/traceability.json`), 'actual producer log omitted the successful real CLI result')
+          assert((producerLog.match(/\[traceability\] /g) || []).length === 1, 'producer emitted an unexpected additional diagnostic')
           const vitestLog = vitestLogFile.content.toString('utf8')
           assert(!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(vitestLog), 'Vitest default log contains terminal controls')
           assert(!/(?:Vitest caught [1-9][0-9]* unhandled errors? during the test run|Unhandled Errors|There were unhandled errors during test collection|Failed Suites [1-9][0-9]*|Source Errors|Test timed out|Hook timed out|Failed to load url|Error when evaluating module)/i.test(vitestLog),
             'Vitest emitted an unhandled, fatal, timeout or collection diagnostic')
-          assert(/Test Files\s+4 failed\s*\(4\)/.test(vitestLog) &&
-            /Tests\s+6 failed\s*\|\s*24 passed\s*\(30\)/.test(vitestLog),
-            'actual default reporter summary is missing the four-file 24/6 baseline')
+          assert(/Test Files\s+4 passed\s*\(4\)/.test(vitestLog) &&
+            /Tests\s+37 passed\s*\(37\)/.test(vitestLog),
+            'actual default reporter summary is missing the four-file 37/37 repair')
 
           const referenceObservations = []
           for (const [file, expectedCanonicalSha256] of Object.entries(expectedRefs)) {
@@ -470,7 +515,7 @@ jobs:
           manifestDetails = {
             schema: 1,
             classification: 'SOURCE_ONLY_NONPROMOTABLE_DIAGNOSTIC',
-            phase: 'BASELINE_RED',
+            phase,
             head,
             run_id: process.env.RUN_ID,
             run_attempt: process.env.RUN_ATTEMPT,
@@ -485,20 +530,19 @@ jobs:
               producer_exit: Number(process.env.PRODUCER_EXIT),
               producer_capture_exit: Number(process.env.PRODUCER_CAPTURE_EXIT)
             },
-            expected_baseline: { cases: 30, passed: 24, failed: 6, pending: 0, todo: 0, named_failures: expectedFailureCauses.map(([, title]) => title) },
+            expected_repair: { cases: 37, passed: 37, failed: 0, pending: 0, todo: 0 },
             source_hashes: sourceHashes,
             source_bindings: sourceBindings,
             source_reference_observations: referenceObservations,
-            producer_failure: expectedProblem,
             unhandled_error_count: { value: null, availability: 'not-in-pinned-vitest-json', log_checked_for_framework_markers: true },
             uploaded_payload_files: payloadFiles,
             manifest_self_hash: 'omitted: a manifest cannot contain its own stable hash'
           }
           validated = true
-          console.log(`validated baseline RED head=${head} os=${process.env.EXPECTED_OS} cases=30 pass=24 fail=6 producer_exit=1`)
+          console.log(`validated repaired GREEN head=${head} os=${process.env.EXPECTED_OS} cases=37 pass=37 fail=0 producer_exit=0`)
           } catch (error) {
             validationFailure = String(error?.message || error).slice(0, 240)
-            console.error(`incomplete baseline evidence: ${validationFailure}`)
+            console.error(`incomplete or different repair evidence: ${validationFailure}`)
           } finally {
             const manifest = validated ? manifestDetails : {
               schema: 1,
@@ -533,12 +577,12 @@ jobs:
           }
           if (!validated) process.exitCode = 1
           NODE
-      - name: Upload finite baseline diagnostic evidence
+      - name: Upload finite contract diagnostic evidence
         id: upload
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-197-contract-baseline-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-197-contract-regressions-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 14
           path: ${{ steps.evidence.outputs.upload_paths }}
