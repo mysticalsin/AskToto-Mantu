@@ -1,6 +1,11 @@
 name: Windows ACL authority qualification
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-acl-probe.yml
+      - src/main/win-security.ts
+      - src/main/win-security.test.ts
   push:
     branches: [fix/windows-acl-probe]
     paths:
