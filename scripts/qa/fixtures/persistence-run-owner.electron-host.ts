@@ -28,6 +28,22 @@ export const app = Object.freeze({
   hasSingleInstanceLock: () => true
 })
 
+function refuseSourceFixtureNativeEffect(): never {
+  throw new Error('QA_SOURCE_FIXTURE_NATIVE_EFFECT_UNAVAILABLE')
+}
+
+// Imported production modules may inspect availability. These source fixtures cannot
+// encrypt, decrypt, or open a browser; native acceptance uses the installed application.
+export const safeStorage = Object.freeze({
+  isEncryptionAvailable: () => false,
+  encryptString: refuseSourceFixtureNativeEffect,
+  decryptString: refuseSourceFixtureNativeEffect
+})
+
+export const shell = Object.freeze({
+  openExternal: refuseSourceFixtureNativeEffect
+})
+
 class QaFixtureMainFrame {
   readonly processId = 1
   readonly routingId = 1
