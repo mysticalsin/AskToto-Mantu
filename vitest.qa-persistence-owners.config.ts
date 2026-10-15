@@ -77,6 +77,18 @@ const shippingProject = {
   }
 }
 
+const c1CoherenceFiles = [
+  'src/main/auth.test.ts',
+  'src/main/auth-speech-lease.test.ts',
+  'src/main/auth-speech-boundary-readers.test.ts',
+  'src/main/auth-persistence-observation.test.ts',
+  'src/main/persistence/qa-main-action-owner.test.ts',
+  'src/main/win-security.test.ts',
+  'src/main/store.test.ts',
+  'src/main/fresh-lean-speech-defaults.test.ts',
+  'src/main/settings-observation.test.ts'
+]
+
 const qaOwnerProject = fixtureStamp
   ? [
       {
@@ -92,16 +104,7 @@ const qaOwnerProject = fixtureStamp
             'src/main/persistence/qa-run-protocol.qa-case.ts',
             'src/main/persistence/qa-run-owner.qa-case.ts',
             'src/main/persistence/qa-profile-root-owner.qa-case.ts',
-            'src/main/persistence/root-registry.qa-case.ts',
-            'src/main/auth.test.ts',
-            'src/main/auth-speech-lease.test.ts',
-            'src/main/auth-speech-boundary-readers.test.ts',
-            'src/main/auth-persistence-observation.test.ts',
-            'src/main/persistence/qa-main-action-owner.test.ts',
-            'src/main/win-security.test.ts',
-            'src/main/store.test.ts',
-            'src/main/fresh-lean-speech-defaults.test.ts',
-            'src/main/settings-observation.test.ts'
+            'src/main/persistence/root-registry.qa-case.ts'
           ],
           setupFiles: [electronHost],
           environment: 'node',
@@ -117,6 +120,23 @@ const qaOwnerProject = fixtureStamp
     ]
   : []
 
+const c1CoherenceProject = fixtureStamp
+  ? [
+      {
+        extends: true as const,
+        define: { __METIS_QA_IDENTITY__: 'false' },
+        test: {
+          name: 'qa-persistence-c1-coherence',
+          include: c1CoherenceFiles,
+          environment: 'node',
+          testTimeout: 30_000,
+          hookTimeout: 30_000,
+          maxWorkers: 1
+        }
+      }
+    ]
+  : []
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -124,6 +144,6 @@ export default defineConfig({
     }
   },
   test: {
-    projects: [shippingProject, ...qaOwnerProject]
+    projects: [shippingProject, ...qaOwnerProject, ...c1CoherenceProject]
   }
 })

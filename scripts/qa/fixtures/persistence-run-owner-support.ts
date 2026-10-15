@@ -1,7 +1,7 @@
 import { createPrivateKey, createHash, sign } from 'node:crypto'
 import { mkdir, mkdtemp, lstat, realpath, rm, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { build } from 'esbuild'
 import { inject } from 'vitest'
@@ -179,7 +179,10 @@ export async function buildQaRunOwnerChild(
       __METIS_QA_IDENTITY__: 'true',
       __METIS_QA_PERSISTENCE_BUILD_STAMP__: JSON.stringify(compiledStamp)
     },
-    alias: { electron: sourceElectronHost },
+    alias: {
+      '@shared': resolve(__dirname, '../../../src/shared'),
+      electron: sourceElectronHost
+    },
     external: ['electron-log']
   })
   return outfile

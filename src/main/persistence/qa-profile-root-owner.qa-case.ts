@@ -1,5 +1,41 @@
 import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const closeFault = vi.hoisted(() => ({
+  enabled: false,
+  attempts: 0,
+  retainedPaths: new Set<string>(),
+  failedHandle: null as { close: () => Promise<void> } | null
+}))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args)
+      const path = String(args[0])
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'close')
+            return async () => {
+              if (closeFault.enabled && closeFault.retainedPaths.has(path)) {
+                closeFault.attempts += 1
+                if (closeFault.attempts === 1) {
+                  closeFault.failedHandle = handle
+                  throw new Error('injected first descriptor close failure')
+                }
+              }
+              await handle.close()
+            }
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
+    }
+  }
+})
+
 import { setQaFixtureUserDataPath } from '../../../scripts/qa/fixtures/persistence-run-owner.electron-host'
 import { applyLegacyPersistenceNativeKeyDefault } from './native-key-intent'
 import {
@@ -25,6 +61,10 @@ describe('compiled hosted persistence profile owner', () => {
   let cleanup: (() => Promise<void>) | undefined
 
   afterEach(async () => {
+    closeFault.enabled = false
+    closeFault.attempts = 0
+    closeFault.retainedPaths.clear()
+    closeFault.failedHandle = null
     await cleanup?.()
     cleanup = undefined
   })
@@ -110,30 +150,19 @@ describe('compiled hosted persistence profile owner', () => {
     const challenge = newQaFixtureChallenge()
     const launch = verifyQaPersistenceLaunchEnvelope(signQaFixtureLaunch(challenge, physical), challenge)
     expect(launch).not.toBeNull()
+    closeFault.retainedPaths.add(physical.parent.path)
+    closeFault.retainedPaths.add(physical.profile.path)
     await prepareQaProfileRoot(launch!)
 
-    const probe = await open(`${physical.profile.path}/close-probe`, 'w+')
-    const prototype = Object.getPrototypeOf(probe) as { close: (...args: unknown[]) => Promise<void> }
-    await probe.close()
-    const originalClose = prototype.close
-    let closeAttempts = 0
-    let failedHandle: { close: () => Promise<void> } | undefined
-    const closeSpy = vi.spyOn(prototype, 'close').mockImplementation(function (this: { close: () => Promise<void> }) {
-      closeAttempts += 1
-      if (closeAttempts === 1) {
-        failedHandle = this
-        return Promise.reject(new Error('injected first descriptor close failure'))
-      }
-      return originalClose.call(this)
-    })
+    closeFault.enabled = true
     const settlement = settleQaProfileRootPreparation(launch!)
     try {
       await expect(settlement).rejects.toThrow('injected first descriptor close failure')
       expect(settleQaProfileRootPreparation(launch!)).toBe(settlement)
-      expect(closeAttempts).toBe(2)
+      expect(closeFault.attempts).toBe(2)
     } finally {
-      closeSpy.mockRestore()
-      await failedHandle?.close()
+      closeFault.enabled = false
+      await closeFault.failedHandle?.close()
     }
   })
 
