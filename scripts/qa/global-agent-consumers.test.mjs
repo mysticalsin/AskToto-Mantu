@@ -316,7 +316,7 @@ test.before(async () => {
       clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n')
       return
     }
-    const upstream = connectNet(tlsPort, '127.0.0.1')
+    const upstream = connectNet(Number(target.port), '127.0.0.1')
     tunnelSockets.add(clientSocket)
     tunnelSockets.add(upstream)
     clientSocket.on('close', () => tunnelSockets.delete(clientSocket))
