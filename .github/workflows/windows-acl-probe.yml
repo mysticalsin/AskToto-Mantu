@@ -1,0 +1,25 @@
+name: Windows ACL authority qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-acl-probe.yml
+      - src/main/win-security.ts
+      - src/main/win-security.test.ts
+permissions:
+  contents: read
+
+jobs:
+  acl-owner:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run src/main/win-security.test.ts
