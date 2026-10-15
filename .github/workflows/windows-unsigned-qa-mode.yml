@@ -1,0 +1,497 @@
+name: Windows unsigned QA mode protocol source fixture
+
+on:
+  push:
+    branches: [fix/windows-unsigned-qa-mode]
+    paths:
+      - .github/workflows/windows-unsigned-qa-mode.yml
+      - vitest.windows-unsigned-qa-mode.config.ts
+      - scripts/qa/windows-unsigned-qa-mode.test.ts
+      - src/main/persistence/qa-run-protocol.ts
+      - src/main/qa-identity.ts
+      - src/main/persistence/resource-policy-contract.ts
+      - scripts/hermetic/sandbox-env.mjs
+      - scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs
+      - package.json
+      - package-lock.json
+      - tsconfig.node.json
+      - tsconfig.web.json
+      - tsconfig.tests.json
+      - scripts/check-architecture.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-unsigned-qa-mode-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  source-fixture:
+    if: github.ref == 'refs/heads/fix/windows-unsigned-qa-mode'
+    name: Windows unsigned QA source fixture (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-shipping, os: ubuntu-latest }
+          - { target: windows-x64, os: windows-latest }
+          - { target: macos-arm64, os: macos-14 }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install lockfile dependencies without lifecycle scripts
+        id: install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the bounded focused source fixture
+        id: fixture
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        env:
+          U0_DIR: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          QA_U0_RUN_DIR: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/fixture
+          QA_U0_CASE_REPORT: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/cases.json
+          QA_U0_VITEST_JSON: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/vitest.json
+          QA_OWNER_FRAMEWORK_REPORT_PATH: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/framework.json
+          QA_OWNER_TARGET: ${{ matrix.target }}
+          QA_OWNER_SOURCE_SHA: ${{ github.sha }}
+          QA_U0_TARGET: ${{ matrix.target }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_ACTIONS: 'true'
+        run: |
+          set -euo pipefail
+          node -e "require('node:fs').mkdirSync(process.env.U0_DIR, { recursive: true, mode: 0o700 })"
+          node --input-type=module <<'NODE'
+          import { closeSync, lstatSync, openSync, writeSync } from 'node:fs'
+          import { spawn } from 'node:child_process'
+          import { createRequire } from 'node:module'
+          import { resolve } from 'node:path'
+
+          const cap = 4 * 1024 * 1024
+          const log = resolve(process.env.U0_DIR, 'default.log')
+          const fd = openSync(log, 'wx', 0o600)
+          const nativePackage = `@esbuild/${process.platform}-${process.arch}`
+          const nativeSubpath = process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'
+          const ordinaryBinary = resolve('node_modules', nativePackage, nativeSubpath)
+          const selectedBinary = createRequire(resolve('node_modules/esbuild/lib/main.js')).resolve(`${nativePackage}/${nativeSubpath}`)
+          if (selectedBinary !== ordinaryBinary) throw new Error('pinned-esbuild-native-resolution-mismatch')
+          const binaryStat = lstatSync(selectedBinary)
+          if (!binaryStat.isFile() || binaryStat.isSymbolicLink() || binaryStat.size < 1 || binaryStat.size > 32 * 1024 * 1024) throw new Error('pinned-esbuild-binary-missing')
+          let bytes = 0
+          let overflow = false
+          let streamError = false
+          const childEnv = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
+          delete childEnv.ESBUILD_BINARY_PATH
+          const child = spawn(process.execPath, [
+            'node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.windows-unsigned-qa-mode.config.ts', '--retry=0'
+          ], { cwd: process.cwd(), env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+          const consume = (stream, label) => {
+            stream.on('data', (chunk) => {
+              if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk)
+              if (bytes + chunk.length > cap) { overflow = true; return }
+              const prefix = Buffer.from(`${label}:`)
+              if (bytes + prefix.length + chunk.length > cap) { overflow = true; return }
+              if (writeSync(fd, prefix) !== prefix.length || writeSync(fd, chunk) !== chunk.length) { streamError = true; return }
+              bytes += prefix.length + chunk.length
+            })
+            stream.on('error', () => { streamError = true })
+          }
+          consume(child.stdout, 'stdout')
+          consume(child.stderr, 'stderr')
+          child.on('error', () => { streamError = true })
+          const exitCode = await new Promise((resolveExit) => child.once('close', (code) => resolveExit(code)))
+          closeSync(fd)
+          const output = `exit_code=${Number.isInteger(exitCode) ? exitCode : 'null'}\nlog_overflow=${overflow}\nstream_error=${streamError}\n`
+          writeSync(openSync(process.env.GITHUB_OUTPUT, 'a'), output)
+          process.exitCode = 0
+          NODE
+      - name: Check architecture independently
+        id: architecture
+        if: always() && steps.install.outcome == 'success'
+        run: node scripts/check-architecture.mjs
+      - name: TypeScript node configuration
+        id: tsc_node
+        if: always() && steps.install.outcome == 'success'
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.node.json
+      - name: TypeScript web configuration
+        id: tsc_web
+        if: always() && steps.install.outcome == 'success'
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.web.json
+      - name: TypeScript tests configuration
+        id: tsc_tests
+        if: always() && steps.install.outcome == 'success'
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.tests.json
+      - name: Replay exact source, framework and test evidence
+        id: replay
+        if: always()
+        env:
+          U0_DIR: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_NODE: 22.22.3
+          VITEST_EXIT: ${{ steps.fixture.outputs.exit_code }}
+          LOG_OVERFLOW: ${{ steps.fixture.outputs.log_overflow }}
+          STREAM_ERROR: ${{ steps.fixture.outputs.stream_error }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          ARCH_OUTCOME: ${{ steps.architecture.outcome }}
+          TSC_NODE_OUTCOME: ${{ steps.tsc_node.outcome }}
+          TSC_WEB_OUTCOME: ${{ steps.tsc_web.outcome }}
+          TSC_TESTS_OUTCOME: ${{ steps.tsc_tests.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { closeSync, fstatSync, lstatSync, openSync, readSync, readdirSync, writeSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
+          import { createRequire } from 'node:module'
+          import { basename, isAbsolute, relative, resolve } from 'node:path'
+
+          const fail = (message) => { throw new Error(message) }
+          const sha = (bytes) => createHash('sha256').update(bytes).digest('hex')
+          const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map((key)=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value) ?? 'null'
+          const bounded = (path, max) => {
+            const stat = lstatSync(path)
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > max) fail(`invalid-bounded-file:${path}`)
+            const fd = openSync(path, 'r')
+            try {
+              const held = fstatSync(fd)
+              if (!held.isFile() || held.dev !== stat.dev || held.ino !== stat.ino || held.size !== stat.size) fail(`file-identity-mismatch:${path}`)
+              const bytes = Buffer.alloc(stat.size)
+              if (readSync(fd, bytes, 0, stat.size, 0) !== stat.size) fail(`short-file-read:${path}`)
+              const after = fstatSync(fd)
+              const namedAfter = lstatSync(path)
+              if (after.dev !== held.dev || after.ino !== held.ino || after.size !== held.size || namedAfter.dev !== held.dev || namedAfter.ino !== held.ino || namedAfter.size !== held.size || !namedAfter.isFile() || namedAfter.isSymbolicLink()) fail(`file-changed-during-read:${path}`)
+              return bytes
+            } finally { closeSync(fd) }
+          }
+          const fileBindings = [
+            '.github/workflows/windows-unsigned-qa-mode.yml', 'vitest.windows-unsigned-qa-mode.config.ts',
+            'scripts/qa/windows-unsigned-qa-mode.test.ts', 'src/main/persistence/qa-run-protocol.ts',
+            'src/main/qa-identity.ts', 'src/main/persistence/resource-policy-contract.ts',
+            'scripts/hermetic/sandbox-env.mjs', 'scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs',
+            'package.json', 'package-lock.json', 'tsconfig.node.json', 'tsconfig.web.json', 'tsconfig.tests.json',
+            'scripts/check-architecture.mjs'
+          ]
+          const sourceHashes = {}
+          for (const path of fileBindings) {
+            const checkout = bounded(path, 2 * 1024 * 1024)
+            const blob = execFileSync('git', ['show', `HEAD:${path}`], { maxBuffer: 2 * 1024 * 1024 })
+            const gitBlob = execFileSync('git', ['rev-parse', `HEAD:${path}`], { encoding: 'utf8' }).trim()
+            let transform = 'identical'
+            if (!checkout.equals(blob)) {
+              const crlf = Buffer.from(blob.toString('utf8').replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))
+              if (!checkout.equals(crlf)) fail(`source-checkout-mismatch:${path}`)
+              transform = 'git-lf-to-checkout-crlf'
+            }
+            sourceHashes[path] = { gitBlob, gitSha256: sha(blob), checkoutSha256: sha(checkout), transform }
+          }
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+          if (head !== process.env.SOURCE_SHA || head !== process.env.GITHUB_SHA || !/^[a-f0-9]{40}$/.test(head)) fail('checkout-head-binding')
+          if (process.version !== `v${process.env.EXPECTED_NODE}`) fail('node-version-binding')
+          if (process.env.INSTALL_OUTCOME !== 'success') fail('install-failed')
+          const staticOutcomes = {architecture:process.env.ARCH_OUTCOME,node:process.env.TSC_NODE_OUTCOME,web:process.env.TSC_WEB_OUTCOME,tests:process.env.TSC_TESTS_OUTCOME}
+          if (Object.values(staticOutcomes).some((value) => !['success','failure','cancelled','skipped'].includes(value))) fail('independent-static-outcome-missing-or-invalid')
+          if (process.env.LOG_OVERFLOW !== 'false' || process.env.STREAM_ERROR !== 'false') fail('default-log-capture-incomplete')
+          const dir = process.env.U0_DIR
+          const rawBytes = bounded(resolve(dir, 'vitest.json'), 8 * 1024 * 1024)
+          const caseBytes = bounded(resolve(dir, 'cases.json'), 256 * 1024)
+          const frameworkBytes = bounded(resolve(dir, 'framework.json'), 16 * 1024)
+          const logBytes = bounded(resolve(dir, 'default.log'), 4 * 1024 * 1024)
+          const fixtureBytes = bounded(resolve(dir, 'fixture/source-fixture.json'), 256 * 1024)
+          const report = JSON.parse(rawBytes.toString('utf8'))
+          const cases = JSON.parse(caseBytes.toString('utf8'))
+          const framework = JSON.parse(frameworkBytes.toString('utf8'))
+          const fixture = JSON.parse(fixtureBytes.toString('utf8'))
+          if (cases.schema !== 'metis-windows-unsigned-qa-vitest-cases/v1' || cases.sourceHead !== head || cases.runId !== process.env.RUN_ID || cases.runAttempt !== process.env.RUN_ATTEMPT || cases.target !== process.env.TARGET || cases.node !== process.version || cases.suiteCount !== 2 || cases.moduleId.replaceAll('\\','/').split('/').at(-1) !== 'windows-unsigned-qa-mode.test.ts' || cases.tests.length !== 50 || cases.unhandledCount !== 0 || !['passed','failed'].includes(cases.runReason)) fail('case-reporter-binding-or-count')
+          if (fixture.schema !== 'metis-windows-unsigned-qa-source-fixture/v1' || fixture.subject !== 'synthetic-parser-fixture' || fixture.sourceHead !== head || fixture.runId !== process.env.RUN_ID || fixture.runAttempt !== process.env.RUN_ATTEMPT || fixture.job !== process.env.GITHUB_JOB || fixture.workflowRef !== process.env.GITHUB_WORKFLOW_REF || fixture.node !== process.version || fixture.platform !== process.platform || fixture.arch !== process.arch || fixture.compiledModules !== 32 || fixture.modules.length !== 20 || fixture.cases.length !== 50 || fixture.totalOutputBytes > 8 * 1024 * 1024) fail('source-fixture-binding')
+          const dependencies = ['src/main/persistence/qa-run-protocol.ts','src/main/qa-identity.ts','src/main/persistence/resource-policy-contract.ts']
+          for (const path of dependencies) {
+            const record = fixture.sourceHashes[path]
+            const current = sourceHashes[path]
+            if (!record || record.gitBlob !== current.gitBlob || record.gitSha256 !== current.gitSha256 || record.checkoutSha256 !== current.checkoutSha256 || record.lineEnding !== current.transform) fail(`fixture-source-binding:${path}`)
+          }
+          const suffix = Buffer.from('\nexport { validPayload as unsignedQaFixtureValidPayload }\n')
+          const protocolCheckout = bounded('src/main/persistence/qa-run-protocol.ts', 64 * 1024)
+          const expectedAugmentedProtocol = Buffer.concat([protocolCheckout, suffix])
+          let recordedOutputBytes = 0
+          const moduleIds = new Set()
+          const artifactIds = new Set()
+          const artifactFiles = new Set()
+          const graphById = new Map()
+          const usedArtifactIds = new Set()
+          if (!Array.isArray(fixture.artifacts) || fixture.artifacts.length !== 32) fail('fixture-artifact-count')
+          for (const artifact of fixture.artifacts) {
+            if (typeof artifact.id !== 'string' || artifact.id.length > 160 || artifactIds.has(artifact.id)) fail('duplicate-or-unsafe-artifact-id')
+            artifactIds.add(artifact.id)
+            const file = `u0-${sha(Buffer.from(artifact.id))}.cjs`
+            const metaFile = `${file}.meta.json`
+            if (artifact.file !== file || artifact.metaFile !== metaFile || artifactFiles.has(file) || artifactFiles.has(metaFile)) fail('artifact-filename-binding')
+            artifactFiles.add(file); artifactFiles.add(metaFile)
+            const output = bounded(resolve(dir,'fixture/compiled',file), 256 * 1024)
+            const metaBytes = bounded(resolve(dir,'fixture/compiled',metaFile), 64 * 1024)
+            const meta = JSON.parse(metaBytes.toString('utf8'))
+            const expectedProtocol = artifact.privateInput ? expectedAugmentedProtocol : protocolCheckout
+            if (typeof artifact.privateInput !== 'boolean' || artifact.protocolInput !== sha(expectedProtocol) || artifact.emitted !== sha(output) || artifact.emittedBytes !== output.length || artifact.metafileSha256 !== sha(metaBytes) || artifact.metafileBytes !== metaBytes.length) fail(`artifact-byte-binding:${artifact.id}`)
+            if (!meta.inputs || !meta.outputs || Object.keys(meta.inputs).length !== 3 || Object.keys(meta.outputs).length !== 1) fail(`artifact-graph-count:${artifact.id}`)
+            const normalizeInput = (path) => (isAbsolute(path) ? relative(process.cwd(),path) : path).replaceAll('\\','/').replace(/^\.\//,'')
+            const normalizedInputs = Object.keys(meta.inputs).map(normalizeInput).sort()
+            if (JSON.stringify(normalizedInputs) !== JSON.stringify([...dependencies].sort())) fail(`artifact-input-graph:${artifact.id}`)
+            for (const [path, info] of Object.entries(meta.inputs)) {
+              const normalized = normalizeInput(path)
+              const expectedBytes = normalized === dependencies[0] ? expectedProtocol : bounded(normalized, 64 * 1024)
+              if (info.bytes !== expectedBytes.length) fail(`artifact-input-bytes:${artifact.id}:${normalized}`)
+            }
+            const [[outputName, outputInfo]] = Object.entries(meta.outputs)
+            const contributingInputs = Object.keys(outputInfo.inputs ?? {})
+            if (basename(outputName.replaceAll('\\','/')) !== file || outputInfo.bytes !== output.length || contributingInputs.length < 1 || contributingInputs.some((path)=>!Object.hasOwn(meta.inputs,path))) fail(`artifact-output-graph:${artifact.id}`)
+            graphById.set(artifact.id, { emitted:sha(output), emittedBytes:output.length, outputGraph:sha(Buffer.from(canonical(meta.outputs))), protocolInput:sha(expectedProtocol), privateInput:artifact.privateInput })
+          }
+          const actualCompiled = readdirSync(resolve(dir,'fixture/compiled')).sort()
+          if (JSON.stringify(actualCompiled) !== JSON.stringify([...artifactFiles].sort())) fail('compiled-artifact-roster')
+          const matrix = [
+            ['win32-x64','windows-authenticode'],['win32-x64','windows-unsigned-candidate'],['win32-x64','mac-adhoc'],['win32-x64','mac-developer-id'],
+            ['darwin-x64','windows-authenticode'],['darwin-x64','mac-adhoc'],['darwin-x64','mac-developer-id'],['darwin-x64','windows-unsigned-candidate'],
+            ['darwin-arm64','windows-authenticode'],['darwin-arm64','mac-adhoc'],['darwin-arm64','mac-developer-id'],['darwin-arm64','windows-unsigned-candidate']
+          ]
+          const digestRecord = (label) => sha(Buffer.from(`windows-unsigned-qa-source-fixture:${label}`))
+          const expectedModules = new Map()
+          const addExpected = (id,target,mode,stamp,publicArtifact,privateArtifact,commit=head) => {
+            const platform = target === 'win32-x64' ? 'win32' : 'darwin'
+            const arch = target === 'darwin-arm64' ? 'arm64' : 'x64'
+            const context = stamp ? {repository:process.env.GITHUB_REPOSITORY,workflowRef:process.env.GITHUB_WORKFLOW_REF,commit,runId:process.env.RUN_ID,runAttempt:Number(process.env.RUN_ATTEMPT),job:process.env.GITHUB_JOB,target} : {}
+            const runtime = stamp ? {platform,arch,node:process.versions.node,electron:'0.0.0-source-fixture',v8:process.versions.v8,modules:process.versions.modules} : {}
+            const identity = stamp ? {runtimeName:'asktoto-qa',bundleId:'com.mantu.asktoto.qa',executableSha256:digestRecord('fixture-executable'),signingMode:mode} : {}
+            expectedModules.set(id,{id,target,mode,stampLiteralIncluded:stamp,context,runtime,identity,publicArtifact,privateArtifact})
+          }
+          for (const [target,mode] of matrix) {
+            const id = `matrix:${target}:${mode}`
+            addExpected(id,target,mode,true,`${id}-public`,`${id}-payload`)
+          }
+          for (const [id,target,mode,stamp] of [
+            ['S01','win32-x64','windows-authenticode',true],['S02','win32-x64','windows-unsigned-candidate',true],
+            ['S03','win32-x64','windows-authenticode',false],['S04','win32-x64','windows-authenticode',false]
+          ]) addExpected(id,target,mode,stamp,`${id}:${target}:${mode}-public`,null)
+          addExpected('J02-windows-unknown','win32-x64','future-unknown-mode',true,'J02-windows-unknown:win32-x64:future-unknown-mode-public',null)
+          addExpected('J02-darwin-unknown','darwin-x64','future-unknown-mode',true,'J02-darwin-unknown:darwin-x64:future-unknown-mode-public',null)
+          for (const mode of ['windows-authenticode','windows-unsigned-candidate']) addExpected(`B04-alt-${mode}`,'win32-x64',mode,true,`B04-alt-${mode}`,null,'b'.repeat(40))
+          if (expectedModules.size !== 20 || !process.env.GITHUB_REPOSITORY) fail('expected-fixture-roster-incomplete')
+          for (const module of fixture.modules) {
+            const expected = expectedModules.get(module.id)
+            if (!expected || moduleIds.has(module.id)) fail('unknown-or-duplicate-fixture-module')
+            moduleIds.add(module.id)
+            for (const field of ['id','target','mode','stampLiteralIncluded','context','runtime','identity']) if (canonical(module[field]) !== canonical(expected[field])) fail(`fixture-tuple-mismatch:${module.id}:${field}`)
+            const expectedHashKeys = [...dependencies,'artifactId','emitted','emittedBytes','protocolInput','augmentationSuffix','outputGraph',...(expected.privateArtifact ? ['payloadArtifactId','payloadProtocolInput','payloadAugmentationSuffix','payloadOutput','payloadEmittedBytes','payloadOutputGraph'] : [])].sort()
+            if (JSON.stringify(Object.keys(module.hashes).sort()) !== JSON.stringify(expectedHashKeys)) fail(`fixture-hash-fields:${module.id}`)
+            const graphSources = Object.keys(module.hashes).filter((path)=>dependencies.includes(path)).sort()
+            if (JSON.stringify(graphSources) !== JSON.stringify([...dependencies].sort()) || graphSources.some((path)=>module.hashes[path] !== sourceHashes[path].checkoutSha256)) fail(`fixture-input-graph-binding:${module.id}`)
+            if (!/^[1-9][0-9]*$/.test(module.hashes.emittedBytes ?? '')) fail(`fixture-public-decimal-bytes:${module.id}`)
+            const publicId = module.hashes.artifactId
+            const publicGraph = graphById.get(publicId)
+            if (publicId !== expected.publicArtifact || !publicGraph || publicGraph.privateInput || publicGraph.emitted !== module.hashes.emitted || publicGraph.emittedBytes !== Number(module.hashes.emittedBytes) || publicGraph.outputGraph !== module.hashes.outputGraph || publicGraph.protocolInput !== sha(protocolCheckout) || module.hashes.protocolInput !== publicGraph.protocolInput || module.hashes.augmentationSuffix !== '') fail(`public-artifact-binding:${module.id}`)
+            recordedOutputBytes += publicGraph.emittedBytes
+            if (usedArtifactIds.has(publicId)) fail('reused-public-artifact')
+            usedArtifactIds.add(publicId)
+            if (expected.privateArtifact) {
+              if (module.hashes.payloadArtifactId !== expected.privateArtifact || module.hashes.payloadProtocolInput !== sha(expectedAugmentedProtocol) || module.hashes.payloadAugmentationSuffix !== sha(suffix) || !/^[1-9][0-9]*$/.test(module.hashes.payloadEmittedBytes ?? '')) fail(`fixture-augmented-input-binding:${module.id}`)
+              const privateGraph = graphById.get(module.hashes.payloadArtifactId)
+              if (!privateGraph || !privateGraph.privateInput || privateGraph.emitted !== module.hashes.payloadOutput || privateGraph.emittedBytes !== Number(module.hashes.payloadEmittedBytes) || privateGraph.outputGraph !== module.hashes.payloadOutputGraph || privateGraph.protocolInput !== sha(expectedAugmentedProtocol)) fail(`private-artifact-binding:${module.id}`)
+              recordedOutputBytes += privateGraph.emittedBytes
+              if (usedArtifactIds.has(module.hashes.payloadArtifactId)) fail('reused-private-artifact')
+              usedArtifactIds.add(module.hashes.payloadArtifactId)
+            }
+          }
+          if (recordedOutputBytes !== fixture.totalOutputBytes || moduleIds.size !== 20 || artifactIds.size !== 32 || usedArtifactIds.size !== 32 || [...artifactIds].some((id)=>!usedArtifactIds.has(id))) fail('fixture-output-total-mismatch')
+          const sourceReadSetSha256 = sha(Buffer.from(canonical(fixture.sourceHashes)))
+          const fixtureGraphSha256 = sha(Buffer.from(canonical(fixture.modules.map((module)=>({id:module.id,hashes:module.hashes})))))
+          if (report.testResults?.length !== 1 || report.testResults[0].assertionResults?.length !== 50 || report.numTotalTests !== 50) fail('raw-vitest-roster-count')
+          const rawTests = report.testResults[0].assertionResults
+          if (report.numTotalTests !== 50 || report.numPendingTests !== 0 || report.numTodoTests !== 0 || report.numFailedTests !== cases.tests.filter((test)=>test.state === 'failed').length || report.numPassedTests !== cases.tests.filter((test)=>test.state === 'passed').length) fail('raw-vitest-count-mismatch')
+          const expectedTitles = new Map(matrix.map(([target,mode],i)=>[`U${String(i+1).padStart(2,'0')}`,`U${String(i+1).padStart(2,'0')} ${target} ${mode}`]))
+          const expectedIds = [
+            ...Array.from({length:12},(_,i)=>`U${String(i+1).padStart(2,'0')}`),
+            ...Array.from({length:13},(_,i)=>[`B${String(i+1).padStart(2,'0')}-authenticode-source-fixture`,`B${String(i+1).padStart(2,'0')}-unsigned-source-fixture`]).flat(),
+            'S01','S02','S03','S04', ...['H01','H02','H03'].flatMap((id)=>[`${id}-authenticode-source-fixture`,`${id}-unsigned-source-fixture`]),'J01','J02'
+          ]
+          for (let index = 1; index <= 13; index++) {
+            const id = `B${String(index).padStart(2,'0')}`
+            expectedTitles.set(`${id}-authenticode-source-fixture`,`${id}-authenticode-source-fixture`)
+            expectedTitles.set(`${id}-unsigned-source-fixture`,`${id}-unsigned-source-fixture`)
+          }
+          for (const id of ['S01','S02','S03','S04']) expectedTitles.set(id,`${id} shipping and missing-stamp boundary`)
+          for (const id of ['H01','H02','H03']) {
+            expectedTitles.set(`${id}-authenticode-source-fixture`,`${id}-authenticode-source-fixture`)
+            expectedTitles.set(`${id}-unsigned-source-fixture`,`${id}-unsigned-source-fixture`)
+          }
+          expectedTitles.set('J01','J01 canonical source control and malformed envelope cases')
+          expectedTitles.set('J02','J02 unknown stamp and payload modes refuse without borrowing a valid stamp')
+          const failIds = new Set(['U02','U03','U04','U05','U09', ...Array.from({length:13},(_,i)=>`B${String(i+1).padStart(2,'0')}-unsigned-source-fixture`), ...['H01','H02','H03'].map((id)=>`${id}-unsigned-source-fixture`)])
+          const subcaseIds = {
+            B01:['wrong-key'], B02:['wrong-challenge'], B03:['source-commit'], B04:['alternate-self-consistent-context','first-build-context-refusal'], B05:['run-id'], B06:['run-attempt'],
+            B07:['repository','workflowRef','job','target','runtime-platform','arch','node','electron','v8','modules'], B08:['candidate-hash'], B09:['implementation-hash'], B10:['profile-measurement-hash'], B11:['case-roster-hash'],
+            B12:['identity-1','identity-2','identity-3','identity-4'], B13:['profile','parent','osPrincipalAssociation','nativeKeyIntent'],
+            H01:['fresh-signed-heartbeat','duplicate-sequence','lower-sequence'], H02:['wrong-key','wrong-domain','wrong-run','wrong-generation'], H03:['fractional-monotonic','backwards-monotonic','nonfinite-monotonic','heartbeat-age-boundary','exact-launch-expiry'],
+            J01:['duplicate-outer-key','invalid-utf8','noncanonical-base64url','noncanonical-payload','duplicate-payload-key','over-bound','over-depth','truncated']
+          }
+          const actualIds = cases.tests.map((test) => test.case?.id)
+          if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) fail('case-id-inventory')
+          if (fixture.cases.some((test,index)=>test.id !== expectedIds[index] || JSON.stringify(test) !== JSON.stringify(cases.tests[index].case))) fail('fixture-case-evidence-mismatch')
+          const suiteTitle = 'windows unsigned QA mode finite source fixture'
+          const fileTitle = 'scripts/qa/windows-unsigned-qa-mode.test.ts'
+          const expectedModulePath = resolve(fileTitle).replaceAll('\\','/')
+          if (cases.moduleId !== expectedModulePath || report.testResults[0].name.replaceAll('\\','/') !== expectedModulePath) fail('module-path-binding')
+          if (cases.tests.some((test) => test.moduleId !== cases.moduleId || test.fullName !== `${suiteTitle} > ${expectedTitles.get(test.case?.id)}` || !['passed','failed'].includes(test.state) || test.retryCount !== 0 || test.repeatCount !== 0 || !test.case || !Array.isArray(test.case.subcases) || test.case.subcases.length > 32 || test.case.hashes?.sourceReadSetSha256 !== sourceReadSetSha256 || test.case.hashes?.fixtureGraphSha256 !== fixtureGraphSha256)) fail('case-status-metadata')
+          const rawByName = new Map(rawTests.map((test) => [test.fullName, test]))
+          if (rawByName.size !== 50) fail('raw-vitest-unique-names')
+          for (const test of cases.tests) {
+            const title = expectedTitles.get(test.case.id)
+            const rawFullName = `${suiteTitle} ${title}`
+            const raw = rawByName.get(rawFullName)
+            if (!raw || raw.fullName !== raw.ancestorTitles.concat(raw.title).join(' ') || JSON.stringify(raw.ancestorTitles) !== JSON.stringify([suiteTitle]) || raw.title !== title || raw.status !== test.state || raw.meta?.qaU0Record?.id !== test.case.id || JSON.stringify(raw.meta.qaU0Record) !== JSON.stringify(test.case)) fail(`raw-reporter-disagreement:${test.case.id}`)
+            if (!Array.isArray(raw.failureMessages) || !Array.isArray(test.errorKinds) || (test.state === 'failed' ? raw.failureMessages.length !== 1 || test.errorKinds.length !== 1 || test.errorKinds[0] !== 'AssertionError' : raw.failureMessages.length !== 0 || test.errorKinds.length !== 0)) fail(`case-error-classification:${test.case.id}`)
+            const shortId = test.case.id.slice(0,3)
+            const expectedSubs = subcaseIds[shortId] ?? []
+            const prerequisite = test.case.id.endsWith('-unsigned-source-fixture') && failIds.has(test.case.id) && test.case.reached === 'prerequisite-refused'
+            if (JSON.stringify(test.case.subcases.map((row)=>row.id)) !== JSON.stringify(prerequisite ? [] : expectedSubs)) fail(`subcase-inventory:${test.case.id}`)
+            if (test.case.subcases.some((row)=>row.reached !== true)) fail(`subcase-not-reached:${test.case.id}`)
+          }
+          const rawFile = report.testResults[0]
+          if (rawFile.name.replaceAll('\\','/').split('/').slice(-3).join('/') !== 'scripts/qa/windows-unsigned-qa-mode.test.ts' || rawFile.message !== '' || rawFile.status !== (cases.tests.some((test)=>test.state === 'failed') ? 'failed' : 'passed') || report.numTotalTestSuites !== 2 || report.numPendingTestSuites !== 0 || report.numFailedTestSuites !== (rawFile.status === 'failed' ? 2 : 0) || report.numPassedTestSuites !== (rawFile.status === 'passed' ? 2 : 0) || report.success !== (rawFile.status === 'passed')) fail('raw-file-suite-hook-status')
+          const actualFailures = cases.tests.filter((test) => test.state === 'failed').map((test) => test.case.id)
+          const expectedFailures = expectedIds.filter((id) => failIds.has(id))
+          const protocolBlob = sourceHashes['src/main/persistence/qa-run-protocol.ts'].gitBlob
+          const baselineBlob = '76fb0454a967349107afaa7a5d486c957b351729'
+          const phase = protocolBlob === baselineBlob ? 'expected-red' : 'repaired-green'
+          if (phase === 'expected-red') {
+            if (process.env.VITEST_EXIT !== '1' || JSON.stringify(actualFailures) !== JSON.stringify(expectedFailures) || actualFailures.length !== 21 || cases.tests.filter((test) => test.state === 'passed').length !== 29) fail('expected-red-mismatch')
+            for (const test of cases.tests.filter((row) => failIds.has(row.case.id))) {
+              if (test.case.reached !== 'prerequisite-refused' && !['U02','U03','U04','U05','U09'].includes(test.case.id)) fail(`red-prerequisite-phase:${test.case.id}`)
+              if (test.case.failurePhase !== (test.case.id.startsWith('U') ? 'stamp' : 'positive-launch')) fail(`red-failure-phase:${test.case.id}`)
+              if (test.case.id.startsWith('U') && test.case.reached !== 'reached') fail(`primary-case-unreached:${test.case.id}`)
+              if (!test.case.id.startsWith('U') && JSON.stringify(test.case.observations.positive) !== JSON.stringify({direct:false,launch:false,membership:false,forgedMembershipRefused:false})) fail(`unsigned-prerequisite-observation:${test.case.id}`)
+            }
+          } else {
+            if (process.env.VITEST_EXIT !== '0' || actualFailures.length !== 0 || cases.tests.some((test) => test.case.reached !== 'reached')) fail('repaired-green-mismatch')
+          }
+          const same = (actual, expected, label) => { if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(label) }
+          const positiveTrue = {direct:true,launch:true,membership:true,forgedMembershipRefused:true}
+          const positiveFalse = {direct:false,launch:false,membership:false,forgedMembershipRefused:false}
+          const redStampOnly = new Set(['U03','U04','U05','U09'])
+          for (const test of cases.tests) {
+            const item = test.case
+            const id = item.id
+            const observations = item.observations
+            const redFailure = phase === 'expected-red' && failIds.has(id)
+            if (test.state !== (redFailure ? 'failed' : 'passed') || item.reached !== (redFailure && (id.startsWith('B') || id.startsWith('H')) ? 'prerequisite-refused' : 'reached') || item.failurePhase !== (redFailure ? (id.startsWith('U') ? 'stamp' : 'positive-launch') : null)) fail(`causal-state:${id}`)
+            if (id.startsWith('U')) {
+              const matrixItem = matrix[Number(id.slice(1)) - 1]
+              const healthy = ['U01','U02','U06','U07','U10','U11'].includes(id)
+              if (!matrixItem || item.subcases.length !== 0 || observations.expectedHealthy !== healthy) fail(`matrix-inventory:${id}`)
+              const stamp = redFailure && redStampOnly.has(id) ? true : redFailure ? false : healthy
+              const direct = redFailure ? false : healthy
+              same(observations, {stamp,context:stamp,direct,launch:direct,membership:direct,forgedMembershipRefused:direct,expectedHealthy:healthy}, `matrix-observation:${id}`)
+            } else if (id.startsWith('B') || id.startsWith('H')) {
+              const positive = redFailure ? positiveFalse : positiveTrue
+              same(observations, {positive}, `positive-observation:${id}`)
+              if (redFailure) { if (item.subcases.length !== 0) fail(`unreached-negative:${id}`); continue }
+              const group = id.slice(0,3)
+              for (const sub of item.subcases) {
+                if (group.startsWith('B')) {
+                  if (group === 'B04') {
+                    same(sub, sub.id === 'alternate-self-consistent-context' ? {id:sub.id,direct:null,launch:true,reached:true} : {id:sub.id,launch:false,reached:true}, `B04-alternate-context:${id}:${sub.id}`)
+                  } else {
+                    const directFalse = group === 'B03' || group === 'B07' && sub.id === 'runtime-platform' || group === 'B12' && (sub.id === 'identity-2' || sub.id === 'identity-3' || sub.id === 'identity-4' && (phase === 'expected-red' || id.endsWith('-unsigned-source-fixture')))
+                    same(sub, {id:sub.id,direct:!directFalse,launch:false,reached:true}, `B-control-observation:${id}:${sub.id}`)
+                  }
+                } else {
+                  const accepted = group === 'H01' && sub.id === 'fresh-signed-heartbeat' || group === 'H03' && sub.id === 'fractional-monotonic'
+                  same(sub, {id:sub.id,accepted,reached:true}, `H-control-observation:${id}:${sub.id}`)
+                }
+              }
+            } else if (id.startsWith('S')) {
+              same(observations, {stamp:false,context:false,launch:false,challengeError:id !== 'S04'}, `shipping-observation:${id}`)
+              if (item.subcases.length !== 0) fail(`shipping-subcases:${id}`)
+            } else if (id === 'J01') {
+              same(observations, {canonicalControl:true}, 'J01-canonical-control')
+              for (const sub of item.subcases) {
+                const boundary = sub.id === 'over-depth' ? 'depth-plus-payload-schema' : sub.id === 'invalid-utf8' ? 'utf8-before-signature' : sub.id === 'truncated' ? 'json-before-signature' : 'isolated-parser-or-bound'
+                same(sub, {id:sub.id,accepted:false,boundary,reached:true}, `J01-malformed:${sub.id}`)
+              }
+            } else if (id === 'J02') {
+              same(observations, {stampUnknown:false,darwinStampUnknown:false,payloadUnknown:false,borrowed:false}, 'J02-unknown-mode')
+              if (item.subcases.length !== 0) fail('J02-subcases')
+            } else fail(`unknown-case:${id}`)
+          }
+          if (cases.runReason !== (phase === 'expected-red' ? 'failed' : 'passed') || framework.schema !== 'metis-qa-owner-framework-evidence/v1' || framework.sourceHead !== head || framework.runId !== process.env.RUN_ID || framework.runAttempt !== Number(process.env.RUN_ATTEMPT) || framework.target !== process.env.TARGET || framework.node !== process.version || framework.reporterSha256 !== sourceHashes['scripts/qa/fixtures/persistence-owner-diagnostic-reporter.mjs'].checkoutSha256 || framework.runEndReason !== cases.runReason || framework.runEndObserved !== true || framework.runEndUnhandledCount !== 0 || framework.finalUnhandledCount !== 0 || framework.frameworkClosed !== true || framework.timedOut !== false || framework.complete !== true) fail('framework-report-incomplete')
+          const esbuildPackage = JSON.parse(bounded('node_modules/esbuild/package.json', 128 * 1024).toString('utf8'))
+          const esbuildMain = bounded('node_modules/esbuild/lib/main.js', 512 * 1024)
+          const esbuildBinaryPath = process.platform === 'win32' ? `node_modules/@esbuild/win32-${process.arch}/esbuild.exe` : `node_modules/@esbuild/${process.platform}-${process.arch}/bin/esbuild`
+          const esbuildBinary = bounded(esbuildBinaryPath, 32 * 1024 * 1024)
+          const resolvedRootBinary = createRequire(resolve('node_modules/esbuild/lib/main.js')).resolve(`@esbuild/${process.platform}-${process.arch}/${process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'}`)
+          if (resolvedRootBinary !== resolve(esbuildBinaryPath) || fixture.compilerBinaryPath !== resolvedRootBinary) fail('esbuild-actual-selection-binding')
+          const esbuildNativePackagePath = `node_modules/@esbuild/${process.platform}-${process.arch}/package.json`
+          const esbuildNativePackage = JSON.parse(bounded(esbuildNativePackagePath,128*1024).toString('utf8'))
+          const lock = JSON.parse(bounded('package-lock.json', 2 * 1024 * 1024).toString('utf8'))
+          const nativeLock = lock.packages?.[`node_modules/@esbuild/${process.platform}-${process.arch}`]
+          if (esbuildPackage.version !== '0.25.12' || esbuildNativePackage.version !== esbuildPackage.version || lock.packages?.['node_modules/esbuild']?.version !== esbuildPackage.version || nativeLock?.version !== esbuildPackage.version || esbuildPackage.optionalDependencies?.[`@esbuild/${process.platform}-${process.arch}`] !== esbuildPackage.version || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(nativeLock.integrity ?? '') || fixture.totalOutputBytes < 1) fail('esbuild-binding')
+          const receipt = {
+            schema: 'metis-windows-unsigned-qa-u0-replay/v1', phase, sourceHead: head, runId: process.env.RUN_ID, runAttempt: Number(process.env.RUN_ATTEMPT), target: process.env.TARGET, node: process.version,
+            sourceHashes, esbuild: {version: esbuildPackage.version, packageSha256: sha(bounded('node_modules/esbuild/package.json',128*1024)), apiSha256: sha(esbuildMain), nativePackageSha256: sha(bounded(esbuildNativePackagePath,128*1024)), binaryPath: esbuildBinaryPath, binarySha256: sha(esbuildBinary), lockIntegrity:nativeLock.integrity},
+            rawVitestSha256: sha(rawBytes), caseEvidenceSha256: sha(caseBytes), frameworkEvidenceSha256: sha(frameworkBytes), fixtureEvidenceSha256: sha(fixtureBytes), defaultLogSha256: sha(logBytes), vitestExitCode: Number(process.env.VITEST_EXIT), testCount: cases.tests.length,
+            passed: cases.tests.filter((test) => test.state === 'passed').length, failed: actualFailures.length, skipped: cases.tests.filter((test) => test.state === 'skipped').length, retries: cases.tests.reduce((sum,test)=>sum+test.retryCount,0), repeats: cases.tests.reduce((sum,test)=>sum+test.repeatCount,0), independentStatic: staticOutcomes
+          }
+          const receiptBytes = Buffer.from(`${JSON.stringify(receipt)}\n`)
+          if (receiptBytes.byteLength > 256 * 1024) fail('replay-receipt-bound')
+          const outputPath = resolve(dir,'replay.json')
+          const outFd = openSync(outputPath,'wx',0o600)
+          try { if (writeSync(outFd,receiptBytes,0,receiptBytes.length,0) !== receiptBytes.length) fail('replay-short-write') } finally { closeSync(outFd) }
+          const exactRoot = ['cases.json','default.log','fixture','framework.json','replay.json','vitest.json']
+          if (JSON.stringify(readdirSync(dir).sort()) !== JSON.stringify(exactRoot)) fail('upload-root-roster')
+          if (JSON.stringify(readdirSync(resolve(dir,'fixture')).sort()) !== JSON.stringify(['compiled','source-fixture.json'])) fail('upload-fixture-roster')
+          for (const path of [resolve(dir,'fixture'),resolve(dir,'fixture/compiled')]) { const stat=lstatSync(path); if (!stat.isDirectory() || stat.isSymbolicLink()) fail('upload-directory-identity') }
+          let aggregateBytes = 0
+          for (const path of [...exactRoot.filter((name)=>name !== 'fixture').map((name)=>resolve(dir,name)),resolve(dir,'fixture/source-fixture.json'),...[...artifactFiles].map((name)=>resolve(dir,'fixture/compiled',name))]) {
+            const stat=lstatSync(path)
+            if (!stat.isFile() || stat.isSymbolicLink()) fail('upload-file-roster')
+            aggregateBytes += stat.size
+          }
+          if (aggregateBytes < 1 || aggregateBytes > 24 * 1024 * 1024) fail('upload-aggregate-bound')
+          NODE
+      - name: Upload the bounded source and CI evidence
+        if: always() && steps.replay.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-unsigned-qa-u0-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-unsigned-qa-u0-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce the independently replayed functional phase
+        if: always()
+        env:
+          REPLAY_OUTCOME: ${{ steps.replay.outcome }}
+          ARCH_OUTCOME: ${{ steps.architecture.outcome }}
+          TSC_NODE_OUTCOME: ${{ steps.tsc_node.outcome }}
+          TSC_WEB_OUTCOME: ${{ steps.tsc_web.outcome }}
+          TSC_TESTS_OUTCOME: ${{ steps.tsc_tests.outcome }}
+        run: |
+          set -euo pipefail
+          test "$REPLAY_OUTCOME" = success
+          test "$ARCH_OUTCOME" = success
+          test "$TSC_NODE_OUTCOME" = success
+          test "$TSC_WEB_OUTCOME" = success
+          test "$TSC_TESTS_OUTCOME" = success
