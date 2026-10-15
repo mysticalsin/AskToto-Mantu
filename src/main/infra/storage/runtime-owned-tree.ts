@@ -1,8 +1,7 @@
-import { createHash, type Hash } from 'node:crypto'
 import { type BigIntStats } from 'node:fs'
-import { lstat, opendir } from 'node:fs/promises'
+import { lstat } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
-import { MAX_RUNTIME_EXCLUSIVE_FILE_BYTES, MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES } from './runtime-exclusive-file-sink'
+import { MAX_RUNTIME_EXCLUSIVE_FILE_BYTES } from './runtime-exclusive-file-sink'
 import {
   createRuntimeDirectoryAfterAdmission,
   createRuntimeExclusiveFileAfterAdmission,
@@ -45,6 +44,25 @@ import {
   type RuntimePayloadWritePlan
 } from './runtime-payload-plan'
 import { runtimeTreeParentDetails, type RuntimeTreeParentPin } from './runtime-pack-namespace'
+import {
+  beginRuntimeOwnedTransferWithHost as beginOwnedTransfer,
+  removeTrackedNode,
+  replaceTrackedNode,
+  readRuntimeOwnedTreeDirectoryNames,
+  trackedSnapshot,
+  updateDirectory,
+  sameRuntimeOwnedTreeDirectoryVersion,
+  sameRuntimeOwnedTreeFileVersion,
+  wrapRuntimeOwnedTreeFileSink,
+  type RuntimeOwnedTransferAction,
+  type RuntimeOwnedTransferFile,
+  type RuntimeOwnedTransferTreeHost
+} from './runtime-owned-transfer'
+import {
+  finishWriterTransfer,
+  reserveWriterTransfer,
+  type RuntimeOwnedTransferInput
+} from './runtime-owned-transfer-lifecycle'
 export type {
   AuthenticatedRuntimeOwnedTreeRecord,
   RuntimeOwnedTreeAuthenticatedInput,
@@ -90,108 +108,13 @@ interface TreeWriterState {
   queued: Promise<void>
   operations: Set<Promise<unknown>>
   receipt: RuntimeOwnedTreeReceipt | null
+  transferActive: boolean
+  settleTransfer: (() => void) | null
+  transferStop: (() => Promise<void>) | null
+  disposePromise: Promise<void> | null
 }
 
-function replaceSnapshotPath(
-  snapshot: RuntimePhysicalSnapshotInput,
-  path: string,
-  version: BigIntStats
-): RuntimePhysicalSnapshotInput {
-  return {
-    ...snapshot,
-    nodes: snapshot.nodes.map((node) => (node.path === path ? { path, version } : node)),
-    directories: snapshot.directories.map((directory) =>
-      directory.path === path ? { ...directory, version } : directory
-    )
-  }
-}
-
-function updateDirectory(
-  state: TreeWriterState,
-  path: string,
-  version: BigIntStats,
-  children: readonly string[]
-): void {
-  const previous = state.directories.get(path)
-  if (previous) {
-    previous.version = version
-    previous.children = [...children]
-  }
-  state.snapshot = replaceSnapshotPath(state.snapshot, path, version)
-  state.snapshot = {
-    ...state.snapshot,
-    directories: state.snapshot.directories.map((directory) =>
-      directory.path === path ? { ...directory, version, children: [...children] } : directory
-    )
-  }
-}
-
-function sameStableDirectoryVersion(expected: BigIntStats, actual: BigIntStats): boolean {
-  return (
-    expected.isDirectory() &&
-    actual.isDirectory() &&
-    !actual.isSymbolicLink() &&
-    expected.dev === actual.dev &&
-    expected.ino === actual.ino &&
-    expected.birthtimeNs === actual.birthtimeNs
-  )
-}
-
-function sameStableFileVersion(expected: BigIntStats, actual: BigIntStats): boolean {
-  return (
-    expected.isFile() &&
-    actual.isFile() &&
-    !actual.isSymbolicLink() &&
-    expected.dev === actual.dev &&
-    expected.ino === actual.ino &&
-    expected.mode === actual.mode &&
-    expected.nlink === actual.nlink &&
-    expected.uid === actual.uid &&
-    expected.gid === actual.gid &&
-    expected.rdev === actual.rdev &&
-    expected.size === actual.size &&
-    expected.blocks === actual.blocks &&
-    expected.mtimeNs === actual.mtimeNs &&
-    expected.birthtimeNs === actual.birthtimeNs
-  )
-}
-
-function removeTrackedNode(state: TreeWriterState, path: string): void {
-  state.snapshot = {
-    ...state.snapshot,
-    roots: state.snapshot.roots.filter((root) => root.path !== path),
-    nodes: state.snapshot.nodes.filter((node) => node.path !== path),
-    directories: state.snapshot.directories.filter((directory) => directory.path !== path)
-  }
-}
-
-function replaceTrackedNode(state: TreeWriterState, source: string, destination: string, version: BigIntStats): void {
-  const nodes = state.snapshot.nodes.filter((node) => node.path !== source && node.path !== destination)
-  nodes.push({ path: destination, version })
-  state.snapshot = { ...state.snapshot, roots: state.snapshot.roots.filter((root) => root.path !== destination), nodes }
-}
-
-function trackedSnapshot(state: TreeWriterState): RuntimePhysicalSnapshotInput {
-  const nodes = [...state.snapshot.nodes]
-  const directories = [...state.snapshot.directories]
-  for (const directory of state.directories.values()) {
-    const nodeIndex = nodes.findIndex((node) => node.path === directory.path)
-    if (nodeIndex < 0) nodes.push({ path: directory.path, version: directory.version })
-    else nodes[nodeIndex] = { path: directory.path, version: directory.version }
-    const directoryIndex = directories.findIndex((value) => value.path === directory.path)
-    const value = { path: directory.path, version: directory.version, children: [...directory.children] }
-    if (directoryIndex < 0) directories.push(value)
-    else directories[directoryIndex] = value
-  }
-  for (const file of state.files.values()) {
-    if (!file.version) continue
-    const index = nodes.findIndex((node) => node.path === file.path)
-    const value = { path: file.path, version: file.version }
-    if (index < 0) nodes.push(value)
-    else nodes[index] = value
-  }
-  return { ...state.snapshot, nodes, directories }
-}
+const transferHosts = new WeakMap<object, RuntimeOwnedTransferTreeHost>()
 
 function trackOperation<T>(state: TreeWriterState, operation: Promise<T>): Promise<T> {
   state.operations.add(operation)
@@ -238,7 +161,11 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
     disposed: false,
     queued: Promise.resolve(),
     operations: new Set(),
-    receipt: null
+    receipt: null,
+    transferActive: false,
+    settleTransfer: null,
+    transferStop: null,
+    disposePromise: null
   }
   const writer: RuntimeOwnedTreeWriter = Object.freeze({
     createRoot(): Promise<RuntimeDirectoryCreationReceipt> {
@@ -315,59 +242,14 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         state.files.set(path, file)
         if (creation.parentVersion)
           updateDirectory(state, parentPath, creation.parentVersion, creation.parentChildren ?? [])
-        const hash: Hash = createHash('sha256')
-        let closePromise: Promise<
-          Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }> & { readonly byteLength: number }
-        > | null = null
-        const wrapped: RuntimeOwnedTreeFileSink = Object.freeze({
-          write(chunk: Uint8Array): Promise<void> {
-            if (!state.accepting || state.disposed) return Promise.reject(new Error('RUNTIME_TREE_WRITER_CLOSED'))
-            if (chunk.byteLength > MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES)
-              return Promise.reject(new Error('RUNTIME_EXCLUSIVE_FILE_LIMIT'))
-            const ownedChunk = Buffer.from(chunk)
-            return trackOperation(
-              state,
-              creation.sink.write(ownedChunk).then(() => {
-                hash.update(ownedChunk)
-              })
-            )
-          },
-          sync(): Promise<void> {
-            if (!state.accepting || state.disposed) return Promise.reject(new Error('RUNTIME_TREE_WRITER_CLOSED'))
-            return trackOperation(state, creation.sink.sync())
-          },
-          close(): Promise<
-            Extract<RuntimeOwnedTreeEntry, { readonly kind: 'file' }> & { readonly byteLength: number }
-          > {
-            if (closePromise) return closePromise
-            closePromise = trackOperation(
-              state,
-              (async () => {
-                const receipt = await creation.sink.close()
-                state.sinks.delete(wrapped)
-                if (receipt.status !== 'created') throw new Error('RUNTIME_TREE_FILE_UNCONFIRMED')
-                file.version = receipt.version
-                file.sink = null
-                const sha256 = hash.digest('hex')
-                file.sha256 = sha256
-                const byteLength = Number(receipt.version.size)
-                if (!Number.isSafeInteger(byteLength)) throw new Error('RUNTIME_TREE_FILE_SIZE_INVALID')
-                if (byteLength !== file.expectedByteLength) throw new Error('RUNTIME_TREE_FILE_SIZE_MISMATCH')
-                if (sha256 !== file.expectedSha256) throw new Error('RUNTIME_TREE_FILE_DIGEST_MISMATCH')
-                return Object.freeze({
-                  path: receipt.path
-                    .slice(rootPath.length + 1)
-                    .split(sep)
-                    .join('/'),
-                  kind: 'file',
-                  identity: identityRecord(receipt.version),
-                  sha256,
-                  byteLength
-                })
-              })()
-            )
-            return closePromise
-          }
+        const wrapped = wrapRuntimeOwnedTreeFileSink({
+          rootPath,
+          file,
+          creation,
+          accepting: () => state.accepting && !state.disposed,
+          assertCurrentSync: treeParent.assertCurrentSync,
+          track: (operation) => trackOperation(state, operation),
+          onClose: (sink) => state.sinks.delete(sink)
         })
         state.sinks.add(wrapped)
         return wrapped
@@ -424,9 +306,9 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
               : lstat(destinationParentPath, { bigint: true })
           ])
           if (
-            !sameStableFileVersion(file.version, movedVersion) ||
-            !sameStableDirectoryVersion(sourceParent.version, sourceParentVersion) ||
-            !sameStableDirectoryVersion(destinationParent.version, destinationParentVersion)
+            !sameRuntimeOwnedTreeFileVersion(file.version, movedVersion) ||
+            !sameRuntimeOwnedTreeDirectoryVersion(sourceParent.version, sourceParentVersion) ||
+            !sameRuntimeOwnedTreeDirectoryVersion(destinationParent.version, destinationParentVersion)
           ) {
             state.accepting = false
             return { status: 'moved-unconfirmed' }
@@ -436,7 +318,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           )
           if (sourceParentPath === destinationParentPath)
             expectedSource.push(destination.slice(destinationParentPath.length + 1))
-          const actualSource = await readExactDirectoryNames(sourceParentPath, sourceParent.children.length)
+          const actualSource = await readRuntimeOwnedTreeDirectoryNames(sourceParentPath, sourceParent.children.length)
           if ([...actualSource].sort().join('\0') !== [...expectedSource].sort().join('\0')) {
             state.accepting = false
             return { status: 'moved-unconfirmed' }
@@ -447,12 +329,16 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
               ...destinationParent.children,
               destination.slice(destinationParentPath.length + 1)
             ]
-            actualDestination = await readExactDirectoryNames(destinationParentPath, expectedDestination.length)
+            actualDestination = await readRuntimeOwnedTreeDirectoryNames(
+              destinationParentPath,
+              expectedDestination.length
+            )
             if ([...actualDestination].sort().join('\0') !== [...expectedDestination].sort().join('\0')) {
               state.accepting = false
               return { status: 'moved-unconfirmed' }
             }
           }
+          treeParent.assertCurrentSync(assertCurrentSync)
           updateDirectory(state, sourceParentPath, sourceParentVersion, actualSource)
           if (sourceParentPath !== destinationParentPath) {
             updateDirectory(state, destinationParentPath, destinationParentVersion, actualDestination)
@@ -503,11 +389,11 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         try {
           const [parentVersion, children] = await Promise.all([
             lstat(parentPath, { bigint: true }),
-            readExactDirectoryNames(parentPath, Math.max(0, parent.children.length - 1))
+            readRuntimeOwnedTreeDirectoryNames(parentPath, Math.max(0, parent.children.length - 1))
           ])
           const expected = parent.children.filter((name) => name !== path.slice(parentPath.length + 1))
           if (
-            !sameStableDirectoryVersion(parent.version, parentVersion) ||
+            !sameRuntimeOwnedTreeDirectoryVersion(parent.version, parentVersion) ||
             [...children].sort().join('\0') !== [...expected].sort().join('\0')
           ) {
             state.accepting = false
@@ -546,11 +432,11 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         try {
           const [parentVersion, children] = await Promise.all([
             lstat(parentPath, { bigint: true }),
-            readExactDirectoryNames(parentPath, Math.max(0, parent.children.length - 1))
+            readRuntimeOwnedTreeDirectoryNames(parentPath, Math.max(0, parent.children.length - 1))
           ])
           const expected = parent.children.filter((name) => name !== path.slice(parentPath.length + 1))
           if (
-            !sameStableDirectoryVersion(parent.version, parentVersion) ||
+            !sameRuntimeOwnedTreeDirectoryVersion(parent.version, parentVersion) ||
             [...children].sort().join('\0') !== [...expected].sort().join('\0')
           ) {
             state.accepting = false
@@ -585,13 +471,13 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         try {
           const [parentVersion, children] = await Promise.all([
             lstat(parentPath, { bigint: true }),
-            readExactDirectoryNames(parentPath, Math.max(0, parent.children.length - 1))
+            readRuntimeOwnedTreeDirectoryNames(parentPath, Math.max(0, parent.children.length - 1))
           ])
           const expected = parent.children.filter((name) => name !== rootPath.slice(parentPath.length + 1))
           const parentVersionBefore = state.snapshot.nodes.find((node) => node.path === parentPath)?.version
           if (
             !parentVersionBefore ||
-            !sameStableDirectoryVersion(parentVersionBefore, parentVersion) ||
+            !sameRuntimeOwnedTreeDirectoryVersion(parentVersionBefore, parentVersion) ||
             [...children].sort().join('\0') !== [...expected].sort().join('\0')
           ) {
             state.accepting = false
@@ -610,6 +496,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
     },
     async seal(): Promise<RuntimeOwnedTreeReceipt> {
       if (!state.accepting || state.disposed) throw new Error('RUNTIME_TREE_WRITER_CLOSED')
+      if (state.transferActive) throw new Error('RUNTIME_TREE_TRANSFER_ACTIVE')
       state.accepting = false
       await Promise.allSettled([...state.operations])
       await state.queued
@@ -622,7 +509,15 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
       }
       for (const [path, file] of state.files) {
         if (file.sink !== null || !file.version) throw new Error('RUNTIME_TREE_WRITER_INCOMPLETE')
-        if (file.path !== path) throw new Error('RUNTIME_TREE_WRITER_INCOMPLETE')
+        if (
+          file.path !== path ||
+          file.targetPath !==
+            path
+              .slice(rootPath.length + 1)
+              .split(sep)
+              .join('/')
+        )
+          throw new Error('RUNTIME_TREE_WRITER_INCOMPLETE')
         if (file.version.size !== BigInt(file.expectedByteLength)) throw new Error('RUNTIME_TREE_FILE_SIZE_MISMATCH')
       }
       if (!runtimePayloadPlanComplete(state.plan)) throw new Error('RUNTIME_TREE_PLAN_INCOMPLETE')
@@ -654,16 +549,135 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
       state.receipt = receipt
       return receipt
     },
-    async dispose(): Promise<void> {
-      if (state.disposed) return
+    dispose(): Promise<void> {
+      if (state.disposePromise) return state.disposePromise
       state.accepting = false
       state.disposed = true
-      await Promise.allSettled([...state.operations])
-      await Promise.allSettled([...state.sinks].map((sink) => sink.close()))
-      if (state.receipt) await disposeRuntimeOwnedTreeReceipt(state.receipt)
+      state.disposePromise = (async () => {
+        if (state.transferStop) await state.transferStop()
+        await Promise.allSettled([...state.operations])
+        const closed = await Promise.allSettled([...state.sinks].map((sink) => sink.close()))
+        if (closed.some((result) => result.status === 'rejected'))
+          throw new Error('RUNTIME_TREE_WRITER_SETTLEMENT_FAILED')
+        if (state.receipt) await disposeRuntimeOwnedTreeReceipt(state.receipt)
+      })()
+      return state.disposePromise
     }
   })
+  const transferFiles = new WeakMap<object, TreeFile>()
+  const transferHost: RuntimeOwnedTransferTreeHost = Object.freeze({
+    plan: state.plan,
+    reserve(): void {
+      reserveWriterTransfer(state)
+    },
+    assertStableCurrentSync(): void {
+      treeParent.assertCurrentSync()
+    },
+    async create(
+      claim: { readonly path: string; readonly byteLength: number; readonly sha256: string },
+      action: RuntimeOwnedTransferAction
+    ): Promise<RuntimeOwnedTransferFile> {
+      return queueMutation(state, async () => {
+        assertTreeReady(state)
+        const relativePath = `${claim.path}.partial`
+        const path = ensureContained(rootPath, relativePath)
+        const parentPath = dirname(path)
+        const parent = state.directories.get(parentPath)
+        if (!parent || state.files.has(path) || state.files.has(ensureContained(rootPath, claim.path)))
+          throw new Error('RUNTIME_TREE_PARENT_INVALID')
+        const admission = await prepareRuntimeExclusiveFileCreation({
+          path,
+          parentPath,
+          snapshot: trackedSnapshot(state)
+        })
+        const creation = await createRuntimeExclusiveFileAfterAdmission(admission, claim.byteLength, () => {
+          treeParent.assertCurrentSync(action.assertCurrentSync)
+        })
+        const file: TreeFile = {
+          path,
+          targetPath: claim.path,
+          expectedByteLength: claim.byteLength,
+          expectedSha256: claim.sha256,
+          version: creation.receipt.status === 'created' ? creation.receipt.version : null,
+          sink: creation.sink,
+          sha256: null
+        }
+        state.files.set(path, file)
+        if (creation.parentVersion)
+          updateDirectory(state, parentPath, creation.parentVersion, creation.parentChildren ?? [])
+        const transferFile = Object.freeze({
+          sink: creation.sink,
+          byteLength: creation.receipt.status === 'created' ? Number(creation.receipt.version.size) : 0,
+          confirmed: creation.receipt.status === 'created'
+        })
+        transferFiles.set(transferFile, file)
+        return transferFile
+      })
+    },
+    async close(transferFile: RuntimeOwnedTransferFile): Promise<boolean> {
+      const file = transferFiles.get(transferFile as object)
+      if (!file?.sink) return Boolean(file?.version)
+      const receipt = await file.sink.close()
+      if (receipt.status !== 'created') return false
+      file.version = receipt.version
+      file.sink = null
+      return true
+    },
+    async remove(transferFile: RuntimeOwnedTransferFile, assertCleanupCurrentSync: () => void): Promise<boolean> {
+      const file = transferFiles.get(transferFile as object)
+      if (!file || !state.files.has(file.path)) return false
+      await writer.removeFile(
+        file.path
+          .slice(rootPath.length + 1)
+          .split(sep)
+          .join('/'),
+        assertCleanupCurrentSync
+      )
+      return !state.files.has(file.path)
+    },
+    async verifyAndRename(
+      transferFile: RuntimeOwnedTransferFile,
+      sha256: string,
+      action: RuntimeOwnedTransferAction
+    ): Promise<boolean> {
+      const file = transferFiles.get(transferFile as object)
+      if (!file?.version || file.version.size !== BigInt(file.expectedByteLength) || file.expectedSha256 !== sha256)
+        return false
+      file.sha256 = sha256
+      const result = await writer.renameFile(
+        file.path
+          .slice(rootPath.length + 1)
+          .split(sep)
+          .join('/'),
+        file.targetPath,
+        action.assertCurrentSync
+      )
+      return result.status === 'moved'
+    },
+    retainUntilSettled(operation: Promise<unknown>): void {
+      trackOperation(state, operation)
+    },
+    registerTarget(stopAndSettle: () => Promise<void>): void {
+      state.transferStop = stopAndSettle
+    },
+    transferFinished(outcome: 'verified' | 'closed' | 'frozen'): void {
+      finishWriterTransfer(state, outcome)
+    }
+  })
+  transferHosts.set(writer as object, transferHost)
   return writer
+}
+
+export {
+  type RuntimeOwnedTransferAction,
+  type RuntimeOwnedTransferBounds,
+  type RuntimeOwnedTransferStart
+} from './runtime-owned-transfer'
+
+export function beginRuntimeOwnedTreeDownload(input: RuntimeOwnedTransferInput) {
+  const host = transferHosts.get(input.writer as object)
+  if (!host) throw new Error('RUNTIME_TRANSFER_WRITER_NOT_AUTHENTICATED')
+  return beginOwnedTransfer({ ...input, host })
 }
 
 function assertTreeReady(state: TreeWriterState): void {
@@ -747,7 +761,7 @@ export async function prepareRuntimeOwnedTreeReopen(input: {
   const parentPath = dirname(rootPath)
   const parentVersion = await lstat(parentPath, { bigint: true })
   if (!sameStableIdentityRecord(issued.manifest.rootParent, parentVersion)) throw new Error('RUNTIME_TREE_ROOT_CHANGED')
-  const parentNames = await readExactDirectoryNames(parentPath, MAX_TREE_NODES)
+  const parentNames = await readRuntimeOwnedTreeDirectoryNames(parentPath, MAX_TREE_NODES)
   const rootName = rootPath.slice(parentPath.length + 1)
   if (!parentNames.includes(rootName)) throw new Error('RUNTIME_TREE_ROOT_CHANGED')
   nodes.push({ path: parentPath, version: parentVersion })
@@ -774,21 +788,6 @@ export async function prepareRuntimeOwnedTreeReopen(input: {
     consumed: false
   })
   return receipt
-}
-
-async function readExactDirectoryNames(path: string, maximum: number): Promise<string[]> {
-  const handle = await opendir(path, { bufferSize: 1 })
-  const names: string[] = []
-  try {
-    for (;;) {
-      const entry = await handle.read()
-      if (!entry) return names
-      if (names.length >= maximum) throw new Error('RUNTIME_TREE_LIMIT')
-      names.push(entry.name)
-    }
-  } finally {
-    await handle.close()
-  }
 }
 
 function sameStableIdentityRecord(expected: RuntimeOwnedTreeIdentity, actual: BigIntStats): boolean {

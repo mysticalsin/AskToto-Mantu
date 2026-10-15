@@ -597,7 +597,7 @@ export async function createRuntimeExclusiveFileAfterAdmission(
     assertCallerCurrentSync()
     const fd = openSync(
       state.path,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW | NONBLOCK,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | NOFOLLOW | NONBLOCK,
       0o600
     )
     return await prepareRuntimeExclusiveFileSink({

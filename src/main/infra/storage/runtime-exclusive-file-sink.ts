@@ -1,4 +1,12 @@
-import { close as closeFd, fstat as fstatFd, fsync as fsyncFd, write as writeFd, type BigIntStats } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  close as closeFd,
+  fstat as fstatFd,
+  fsync as fsyncFd,
+  read as readFd,
+  write as writeFd,
+  type BigIntStats
+} from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { sameRuntimeFileVersion } from './runtime-file-version'
 
@@ -11,8 +19,29 @@ export type RuntimeExclusiveFileReceipt =
 
 export interface RuntimeExclusiveFileSink {
   write(chunk: Uint8Array): Promise<void>
+  writeOwned(chunk: Uint8Array, assertCurrentSync: () => void): Promise<RuntimeExclusiveFileWriteAck>
+  checkpointOwned(
+    assertCustodyCurrentSync: () => void,
+    maximumReadBytes: number
+  ): Promise<RuntimeExclusiveFileCheckpoint>
+  readback(
+    maximumBytes: number,
+    assertCurrentSync?: () => void
+  ): Promise<{ readonly byteLength: number; readonly sha256: string }>
   sync(): Promise<void>
+  syncOwned(assertCurrentSync: () => void): Promise<void>
   close(): Promise<RuntimeExclusiveFileReceipt>
+}
+
+export interface RuntimeExclusiveFileCheckpoint {
+  readonly version: BigIntStats
+  readonly byteLength: number
+  readonly sha256: string
+}
+
+export interface RuntimeExclusiveFileWriteAck {
+  readonly version: BigIntStats
+  readonly byteLength: number
 }
 
 export interface RuntimeExclusiveFileCreation {
@@ -78,6 +107,22 @@ function sameStableDirectoryIdentity(expected: BigIntStats, actual: BigIntStats)
   )
 }
 
+function sameStableFileOwner(expected: BigIntStats, actual: BigIntStats): boolean {
+  return (
+    expected.isFile() &&
+    actual.isFile() &&
+    !actual.isSymbolicLink() &&
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.mode === actual.mode &&
+    expected.nlink === actual.nlink &&
+    expected.uid === actual.uid &&
+    expected.gid === actual.gid &&
+    expected.rdev === actual.rdev &&
+    expected.birthtimeNs === actual.birthtimeNs
+  )
+}
+
 export async function prepareRuntimeExclusiveFileSink(input: {
   readonly fd: number
   readonly path: string
@@ -124,96 +169,197 @@ export async function prepareRuntimeExclusiveFileSink(input: {
   let closed = false
   let busy = false
   let invalidated = initialReceipt.status !== 'created'
-  const close = async (): Promise<RuntimeExclusiveFileReceipt> => {
-    if (closed)
-      return invalidated || !currentVersion
-        ? { status: 'created-unconfirmed', path: input.path }
-        : { status: 'created', path: input.path, version: currentVersion }
+  let closePromise: Promise<RuntimeExclusiveFileReceipt> | null = null
+  const close = (): Promise<RuntimeExclusiveFileReceipt> => {
+    if (closePromise) return closePromise
     if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
     closed = true
-    try {
-      if (!invalidated && currentVersion) {
-        const beforeClose = currentVersion
-        const afterClose = await captureCreatedFileVersion(input.fd, input.path)
-        if (sameRuntimeFileVersion(beforeClose, afterClose)) currentVersion = afterClose
-        else invalidated = true
-      } else invalidated = true
-    } catch {
-      invalidated = true
+    closePromise = (async () => {
+      try {
+        if (!invalidated && currentVersion) {
+          const beforeClose = currentVersion
+          const afterClose = await captureCreatedFileVersion(input.fd, input.path)
+          if (sameRuntimeFileVersion(beforeClose, afterClose)) currentVersion = afterClose
+          else invalidated = true
+        } else invalidated = true
+      } catch {
+        invalidated = true
+      }
+      await closeFdAsync(input.fd)
+      return !invalidated && currentVersion
+        ? { status: 'created', path: input.path, version: currentVersion }
+        : { status: 'created-unconfirmed', path: input.path }
+    })()
+    return closePromise
+  }
+  const writeOwned = async (
+    chunk: Uint8Array,
+    assertCurrentSync: () => void
+  ): Promise<RuntimeExclusiveFileWriteAck> => {
+    if (closed || invalidated || !currentVersion) throw new Error('RUNTIME_EXCLUSIVE_FILE_SINK_INVALID')
+    if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
+    if (
+      !(chunk instanceof Uint8Array) ||
+      chunk.byteLength > MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES ||
+      position + chunk.byteLength > input.maximumBytes
+    ) {
+      throw new Error('RUNTIME_EXCLUSIVE_FILE_LIMIT')
     }
-    await closeFdAsync(input.fd)
-    return !invalidated && currentVersion
-      ? { status: 'created', path: input.path, version: currentVersion }
-      : { status: 'created-unconfirmed', path: input.path }
+    const ownedChunk = Buffer.from(chunk)
+    busy = true
+    let physicallyUncertain = false
+    try {
+      assertCurrentSync()
+      const before = await captureCreatedFileVersion(input.fd, input.path)
+      if (!sameRuntimeFileVersion(currentVersion, before) || before.size !== BigInt(position)) {
+        invalidated = true
+        throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+      }
+      assertCurrentSync()
+      let written = 0
+      while (written < ownedChunk.byteLength) {
+        assertCurrentSync()
+        const remaining = ownedChunk.byteLength - written
+        physicallyUncertain = true
+        const count = await writeFdAsync(input.fd, ownedChunk, written, remaining, position)
+        if (count === 0) throw new Error('RUNTIME_EXCLUSIVE_FILE_ZERO_PROGRESS')
+        if (!Number.isSafeInteger(count) || count < 0 || count > remaining)
+          throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_COUNT_INVALID')
+        written += count
+        position += count
+        const afterWrite = await captureCreatedFileVersion(input.fd, input.path)
+        if (!sameStableFileOwner(currentVersion!, afterWrite) || afterWrite.size !== BigInt(position))
+          throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+        currentVersion = afterWrite
+        physicallyUncertain = false
+        assertCurrentSync()
+      }
+      assertCurrentSync()
+      const after = await captureCreatedFileVersion(input.fd, input.path)
+      if (!sameRuntimeFileVersion(currentVersion, after) || after.size !== BigInt(position)) {
+        invalidated = true
+        throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+      }
+      currentVersion = after
+      assertCurrentSync()
+      return { version: after, byteLength: position }
+    } catch (error) {
+      if (physicallyUncertain) invalidated = true
+      throw error
+    } finally {
+      busy = false
+    }
+  }
+  const checkpointOwned = async (
+    assertCurrentSync: () => void,
+    maximumReadBytes: number
+  ): Promise<RuntimeExclusiveFileCheckpoint> => {
+    if (closed || invalidated || !currentVersion) throw new Error('RUNTIME_EXCLUSIVE_FILE_SINK_INVALID')
+    if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
+    if (!Number.isSafeInteger(maximumReadBytes) || maximumReadBytes < 1 || maximumReadBytes > 64 * 1024) {
+      throw new Error('RUNTIME_EXCLUSIVE_FILE_LIMIT')
+    }
+    busy = true
+    let physicalPending = false
+    try {
+      assertCurrentSync()
+      physicalPending = true
+      const before = await captureCreatedFileVersion(input.fd, input.path)
+      physicalPending = false
+      if (!sameRuntimeFileVersion(currentVersion, before) || before.size !== BigInt(position)) {
+        invalidated = true
+        throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+      }
+      assertCurrentSync()
+      const hash = createHash('sha256')
+      const buffer = Buffer.alloc(maximumReadBytes)
+      let offset = 0
+      while (offset <= position) {
+        assertCurrentSync()
+        const amount = Math.min(buffer.length, Math.max(1, position - offset))
+        physicalPending = true
+        const read = await new Promise<number>((resolveRead, rejectRead) => {
+          readFd(input.fd, buffer, 0, amount, offset, (error, bytesRead) =>
+            error ? rejectRead(error) : resolveRead(bytesRead)
+          )
+        })
+        physicalPending = false
+        if (!Number.isSafeInteger(read) || read < 0 || read > amount)
+          throw new Error('RUNTIME_EXCLUSIVE_FILE_READ_COUNT_INVALID')
+        if (offset === position) {
+          if (read !== 0) throw new Error('RUNTIME_EXCLUSIVE_FILE_READBACK_TRAILING_BYTES')
+          break
+        }
+        if (read === 0) throw new Error('RUNTIME_EXCLUSIVE_FILE_READBACK_EOF')
+        hash.update(buffer.subarray(0, read))
+        offset += read
+        assertCurrentSync()
+      }
+      assertCurrentSync()
+      physicalPending = true
+      const after = await captureCreatedFileVersion(input.fd, input.path)
+      physicalPending = false
+      if (!sameRuntimeFileVersion(before, after) || after.size !== BigInt(position)) {
+        invalidated = true
+        throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+      }
+      currentVersion = after
+      assertCurrentSync()
+      return { version: after, byteLength: offset, sha256: hash.digest('hex') }
+    } catch (error) {
+      if (physicalPending) invalidated = true
+      throw error
+    } finally {
+      busy = false
+    }
+  }
+  const syncOwned = async (assertCurrentSync: () => void): Promise<void> => {
+    if (closed || invalidated || !currentVersion) throw new Error('RUNTIME_EXCLUSIVE_FILE_SINK_INVALID')
+    if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
+    busy = true
+    let syncPending = false
+    try {
+      assertCurrentSync()
+      const before = await captureCreatedFileVersion(input.fd, input.path)
+      if (!sameRuntimeFileVersion(currentVersion, before)) {
+        invalidated = true
+        throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+      }
+      assertCurrentSync()
+      syncPending = true
+      await syncFdAsync(input.fd)
+      syncPending = false
+      assertCurrentSync()
+      const after = await captureCreatedFileVersion(input.fd, input.path)
+      if (!sameRuntimeFileVersion(before, after)) {
+        invalidated = true
+        throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
+      }
+      currentVersion = after
+      assertCurrentSync()
+    } catch (error) {
+      if (syncPending) invalidated = true
+      throw error
+    } finally {
+      busy = false
+    }
   }
   const sink: RuntimeExclusiveFileSink = Object.freeze({
     async write(chunk: Uint8Array): Promise<void> {
-      if (closed || invalidated || !currentVersion) throw new Error('RUNTIME_EXCLUSIVE_FILE_SINK_INVALID')
-      if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
-      if (
-        chunk.byteLength > MAX_RUNTIME_EXCLUSIVE_FILE_CHUNK_BYTES ||
-        position + chunk.byteLength > input.maximumBytes
-      ) {
+      await writeOwned(chunk, () => undefined)
+    },
+    writeOwned,
+    checkpointOwned,
+    async readback(maximumBytes: number, assertCurrentSync: () => void = () => undefined) {
+      if (!Number.isSafeInteger(maximumBytes) || maximumBytes < position || maximumBytes > input.maximumBytes)
         throw new Error('RUNTIME_EXCLUSIVE_FILE_LIMIT')
-      }
-      busy = true
-      try {
-        const before = await captureCreatedFileVersion(input.fd, input.path)
-        if (!sameRuntimeFileVersion(currentVersion, before) || before.size !== BigInt(position)) {
-          invalidated = true
-          throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
-        }
-        const ownedChunk = Buffer.from(chunk)
-        let written = 0
-        while (written < ownedChunk.byteLength) {
-          const count = await writeFdAsync(
-            input.fd,
-            ownedChunk,
-            written,
-            ownedChunk.byteLength - written,
-            position + written
-          )
-          if (count <= 0) throw new Error('RUNTIME_EXCLUSIVE_FILE_ZERO_PROGRESS')
-          written += count
-        }
-        const after = await captureCreatedFileVersion(input.fd, input.path)
-        if (after.size !== BigInt(position + ownedChunk.byteLength)) {
-          invalidated = true
-          throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
-        }
-        currentVersion = after
-        position += ownedChunk.byteLength
-      } catch (error) {
-        invalidated = true
-        throw error
-      } finally {
-        busy = false
-      }
+      const { byteLength, sha256 } = await checkpointOwned(assertCurrentSync, 64 * 1024)
+      return { byteLength, sha256 }
     },
     async sync(): Promise<void> {
-      if (closed || invalidated || !currentVersion) throw new Error('RUNTIME_EXCLUSIVE_FILE_SINK_INVALID')
-      if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
-      busy = true
-      try {
-        const before = await captureCreatedFileVersion(input.fd, input.path)
-        if (!sameRuntimeFileVersion(currentVersion, before)) {
-          invalidated = true
-          throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
-        }
-        await syncFdAsync(input.fd)
-        const after = await captureCreatedFileVersion(input.fd, input.path)
-        if (!sameRuntimeFileVersion(before, after)) {
-          invalidated = true
-          throw new Error('RUNTIME_EXCLUSIVE_FILE_OWNER_CHANGED')
-        }
-        currentVersion = after
-      } catch (error) {
-        invalidated = true
-        throw error
-      } finally {
-        busy = false
-      }
+      await syncOwned(() => undefined)
     },
+    syncOwned,
     close
   })
   return {

@@ -1,23 +1,31 @@
-name: Speech owned transfer causal controls
+name: Speech owned transfer qualification
 
 on:
   push:
+    branches:
+      - fix/speech-owned-transfer-b9-causal-red
     paths:
       - .github/workflows/speech-owned-transfer.yml
       - package.json
       - package-lock.json
       - vitest.config.ts
-      - src/main/infra/storage/runtime-owned-files.ts
       - src/main/infra/storage/runtime-exclusive-file-sink.ts
+      - src/main/infra/storage/runtime-owned-files.ts
+      - src/main/infra/storage/runtime-owned-tree.ts
+      - src/main/infra/storage/runtime-owned-transfer.ts
+      - src/main/infra/storage/runtime-owned-transfer-lifecycle.ts
       - src/main/infra/storage/runtime-owned-transfer.test.ts
+      - src/main/features/components/speech-pack/owned-download.ts
+      - src/main/features/components/speech-pack/owned-download.test.ts
       - scripts/qa/speech-owned-transfer-unhandled-reporter.mjs
+      - scripts/check-architecture.mjs
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: speech-owned-transfer-controls-${{ github.ref }}
+  group: speech-owned-transfer-${{ github.ref }}
   cancel-in-progress: true
 
 defaults:
@@ -25,10 +33,10 @@ defaults:
     shell: bash
 
 jobs:
-  controls:
-    name: Speech owned transfer controls (${{ matrix.os }})
+  qualify:
+    name: Speech owned transfer (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -49,38 +57,31 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, existsSync, realpathSync, statSync } from 'node:fs'
-          import { dirname, isAbsolute, parse, posix, resolve, win32 } from 'node:path'
-
+          import { dirname, parse, posix, resolve, win32 } from 'node:path'
           const configured = process.env.RUNNER_TEMP ?? ''
-          const posixAbsolute = posix.isAbsolute(configured)
-          const driveAbsolute = /^[A-Za-z]:[\\/]/.test(configured) && win32.isAbsolute(configured)
-          if (!configured || (!posixAbsolute && !driveAbsolute)) throw new Error('RUNNER_TEMP must be absolute')
-          const temporaryRoot = realpathSync(configured)
-          const filesystemRoot = parse(temporaryRoot).root
-          if (temporaryRoot.toLowerCase() === filesystemRoot.toLowerCase() || !statSync(temporaryRoot).isDirectory()) {
-            throw new Error('RUNNER_TEMP must resolve to an existing non-root directory')
+          const absolute = posix.isAbsolute(configured) || (/^[A-Za-z]:[\\/]/.test(configured) && win32.isAbsolute(configured))
+          if (!absolute) throw new Error('SPEECH_TRANSFER_TEMP_NOT_ABSOLUTE')
+          const root = realpathSync(configured)
+          if (root.toLowerCase() === parse(root).root.toLowerCase() || !statSync(root).isDirectory()) throw new Error('SPEECH_TRANSFER_TEMP_UNSAFE')
+          const run = process.env.GITHUB_RUN_ID ?? '', attempt = process.env.GITHUB_RUN_ATTEMPT ?? '', os = process.env.MATRIX_OS ?? ''
+          if (!/^\d+$/.test(run) || !/^\d+$/.test(attempt) || !/^[A-Za-z0-9_-]+$/.test(os)) throw new Error('SPEECH_TRANSFER_IDENTITY_INVALID')
+          const stem = `speech-owned-transfer-${run}-${attempt}-${os}`
+          const paths = {
+            report: resolve(root, `${stem}.json`), unhandled: resolve(root, `${stem}-unhandled.json`),
+            evidence: resolve(root, `${stem}-evidence.json`),
+            a3report: resolve(root, `${stem}-a3.json`), a3evidence: resolve(root, `${stem}-a3-evidence.json`),
+            storagereport: resolve(root, `${stem}-storage.json`),
+            keyreport: resolve(root, `${stem}-key-anchor.json`),
+            downloadreport: resolve(root, `${stem}-old-download.json`)
           }
-          const runId = process.env.GITHUB_RUN_ID ?? ''
-          const attempt = process.env.GITHUB_RUN_ATTEMPT ?? ''
-          const matrixOs = process.env.MATRIX_OS ?? ''
-          if (!/^\d+$/.test(runId) || !/^\d+$/.test(attempt) || !/^[A-Za-z0-9_-]+$/.test(matrixOs)) {
-            throw new Error('SPEECH_TRANSFER_REPORT_IDENTITY_INVALID')
-          }
-          const stem = `speech-owned-transfer-${runId}-${attempt}-${matrixOs}`
-          const report = resolve(temporaryRoot, `${stem}.json`)
-          const unhandled = resolve(temporaryRoot, `${stem}-unhandled.json`)
-          const evidence = resolve(temporaryRoot, `${stem}-evidence.json`)
           const output = process.env.GITHUB_OUTPUT ?? ''
-          if (dirname(report) !== temporaryRoot || dirname(evidence) !== temporaryRoot ||
-              dirname(unhandled) !== temporaryRoot || existsSync(report) || existsSync(unhandled) ||
-              existsSync(evidence) || !output || !isAbsolute(output)) {
-            throw new Error('SPEECH_TRANSFER_REPORT_PATHS_INVALID')
-          }
-          appendFileSync(output, `report=${report}\nunhandled=${unhandled}\nevidence=${evidence}\n`, { flag: 'a' })
+          const outputAbsolute = posix.isAbsolute(output) || (/^[A-Za-z]:[\\/]/.test(output) && win32.isAbsolute(output))
+          if (Object.values(paths).some((path) => dirname(path) !== root || existsSync(path)) || !outputAbsolute || !statSync(output).isFile()) throw new Error('SPEECH_TRANSFER_REPORT_PATH_INVALID')
+          appendFileSync(output, Object.entries(paths).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', { flag: 'a' })
           NODE
-      - name: Install locked test dependencies without lifecycle scripts
+      - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Run the frozen four-case old API control inventory
+      - name: Run exact owned transfer assertion roster
         id: tests
         continue-on-error: true
         env:
@@ -91,20 +92,21 @@ jobs:
           node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
             --dangerouslyIgnoreUnhandledErrors=false --reporter=default --reporter=json \
             --reporter=./scripts/qa/speech-owned-transfer-unhandled-reporter.mjs --outputFile="$REPORT" \
-            src/main/infra/storage/runtime-owned-transfer.test.ts
+            src/main/infra/storage/runtime-owned-transfer.test.ts \
+            src/main/features/components/speech-pack/owned-download.test.ts
           test_exit_code=$?
           printf 'exit_code=%s\n' "$test_exit_code" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Validate exact causal outcomes and assertion roster
+          exit "$test_exit_code"
+      - name: Validate exact roster, raw report, and zero unhandled errors
         if: always() && steps.initialize.outcome == 'success'
         env:
           REPORT: ${{ steps.initialize.outputs.report }}
           UNHANDLED: ${{ steps.initialize.outputs.unhandled }}
           EVIDENCE: ${{ steps.initialize.outputs.evidence }}
           ACTUAL_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
           SOURCE_SHA: ${{ github.sha }}
           RUNNER_OS: ${{ runner.os }}
-          CONTROL_REF: ${{ github.ref }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           MATRIX_OS: ${{ matrix.os }}
@@ -112,105 +114,94 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { createHash } from 'node:crypto'
-          import { readFileSync, statSync, writeFileSync } from 'node:fs'
-
-          const expected = new Map([
-            ['runtime owned transfer old API causal controls runtime owned transfer fences each actual short write when the original action retires', 'R1_CAUSAL_WRITE_FENCE'],
-            ['runtime owned transfer old API causal controls runtime owned transfer accounts for delegated short writes while the action stays current', null],
-            ['runtime owned transfer old API causal controls runtime owned transfer joins raw exclusive closes until the actual close settles', 'R2_CAUSAL_CLOSE_JOIN'],
-            ['runtime owned transfer old API causal controls runtime owned transfer resolves raw close observers from the same actual close', null]
-          ])
-          const redRef = 'refs/heads/fix/speech-owned-transfer-red'
-          const controlRed = process.env.CONTROL_REF === redRef
-          const reportStat = statSync(process.env.REPORT)
-          if (!reportStat.isFile() || reportStat.size <= 0 || reportStat.size > 16 * 1024 * 1024) {
-            throw new Error('SPEECH_TRANSFER_RAW_REPORT_SIZE_INVALID')
+          import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
+          import { posix, win32 } from 'node:path'
+          const expected = [
+            'runtime owned transfer writes and seals a real nested pinned file through its owned target',
+            'runtime owned transfer accounts for real short writes without duplicated or missing bytes',
+            'runtime owned transfer rejects zero write progress and retains uncertain ownership',
+            'runtime owned transfer fences each actual short write when the original action retires',
+            'runtime owned transfer rejects oversized and concurrent appends before extra allocation or IO',
+            'runtime owned transfer restarts one consumed logical pin with a fresh exclusive owner',
+            'runtime owned transfer retains a replaced prefix instead of deleting or appending to it',
+            'runtime owned transfer suspends a verified prefix and resumes only with a settled fresh action',
+            'runtime owned transfer rejects replayed suspended tokens and cross transaction handover',
+            'runtime owned transfer rejects changed root custody and action ABA during resume',
+            'runtime owned transfer keeps cleanup pending until the actual close settles',
+            'runtime owned transfer cleans only its recorded partial after cancellation',
+            'runtime owned transfer rejects tampered actual FD bytes at finish and while paused',
+            'runtime owned transfer requires full size digest EOF and confirmed rename for verification',
+            'runtime owned transfer refuses seal with paused failed or unfinished transfers',
+            'runtime owned transfer expires paused retention without releasing a pending owner',
+            'owned speech download binds compiled Whisper source paths pins and current admission before creation',
+            'owned speech download downloads actual HTTP bytes into a real nested owned tree',
+            'owned speech download resumes a thirty percent disconnect with exact Range and If Range',
+            'owned speech download settles a ranged 200 response before an owned restart',
+            'owned speech download restarts changed validators invalid ranges and 416 under finite budgets',
+            'owned speech download retries one full digest mismatch and rejects the second',
+            'owned speech download rejects excess bytes before any part of the excess chunk is written',
+            'owned speech download rejects oversized transport chunks without buffering or writing them',
+            'owned speech download rejects captive HTML mutable redirects and HTTPS downgrade',
+            'owned speech download honors bounded Retry After and cancels its backoff timer',
+            'owned speech download settles held HTTP reads and disk writes before reporting pause',
+            'owned speech download retains the live transaction while cancel cleanup is pending',
+            'owned speech download rejects action revocation after fetch read and redirect awaits',
+            'owned speech download does not adopt cold partials metadata or a forged target',
+            'owned speech download bounds total requests restarts and retries despite intermittent progress',
+            'owned speech download keeps archive pins null and never publishes engine readiness'
+          ].sort()
+          const guardedRead = (path, maximum) => {
+            const absolute = posix.isAbsolute(path) || (/^[A-Za-z]:[\\/]/.test(path) && win32.isAbsolute(path))
+            if (!absolute) throw new Error('SPEECH_TRANSFER_REPORT_PATH_NOT_ABSOLUTE')
+            const info = lstatSync(path)
+            if (!info.isFile() || info.size < 1 || info.size > maximum) throw new Error('SPEECH_TRANSFER_REPORT_FILE_INVALID')
+            const bytes = readFileSync(path)
+            if (bytes.length !== info.size) throw new Error('SPEECH_TRANSFER_REPORT_FILE_CHANGED')
+            return bytes
           }
-          const bytes = readFileSync(process.env.REPORT)
-          if (bytes.byteLength > 16 * 1024 * 1024) throw new Error('SPEECH_TRANSFER_RAW_REPORT_OVERSIZED')
-          const report = JSON.parse(bytes.toString('utf8'))
-          const unhandledStat = statSync(process.env.UNHANDLED)
-          if (!unhandledStat.isFile() || unhandledStat.size <= 0 || unhandledStat.size > 32 * 1024) {
-            throw new Error('SPEECH_TRANSFER_UNHANDLED_REPORT_SIZE_INVALID')
-          }
-          const unhandledBytes = readFileSync(process.env.UNHANDLED)
-          if (unhandledBytes.byteLength > 32 * 1024) throw new Error('SPEECH_TRANSFER_UNHANDLED_REPORT_OVERSIZED')
-          const unhandled = JSON.parse(unhandledBytes.toString('utf8'))
-          const workflowBytes = readFileSync('.github/workflows/speech-owned-transfer.yml')
+          const reportBytes = guardedRead(process.env.REPORT, 4 * 1024 * 1024)
+          const report = JSON.parse(reportBytes.toString('utf8'))
           const results = Array.isArray(report.testResults) ? report.testResults : []
-          const normalize = (value) => String(value).replaceAll('\\', '/')
-          const paths = results.map((result) => normalize(result.name))
-          const assertions = results.flatMap((result) => Array.isArray(result.assertionResults) ? result.assertionResults : [])
-          const failures = assertions.filter((assertion) => assertion.status === 'failed')
-          const fullNames = assertions.map((assertion) => assertion.fullName)
-          const actualFailures = new Map(failures.map((failure) => [failure.fullName, JSON.stringify(failure.failureMessages ?? [])]))
-          const expectedFailures = controlRed ? new Map([...expected].filter(([, cause]) => cause !== null)) : new Map()
-          const expectedNames = [...expected.keys()].sort()
-          const counters = ['numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests',
-            'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites']
-          const countValues = counters.map((key) => report[key])
-          const numericCounts = countValues.every((count) => Number.isSafeInteger(count) && count >= 0)
-          const suitesConsistent = report.numTotalTestSuites === 2 &&
-            report.numTotalTestSuites === report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites
-          const exactFile = results.length === 1 && paths[0]?.endsWith('/src/main/infra/storage/runtime-owned-transfer.test.ts')
-          const emptyFileMessage = results.length === 1 && results[0].message === ''
-          const exactRoster = fullNames.length === expected.size && [...fullNames].sort().every((name, index) => name === expectedNames[index])
-          const exactFailures = failures.length === expectedFailures.size && [...expectedFailures].every(([name, marker]) => {
-            const failure = failures.filter((entry) => entry.fullName === name)
-            const messages = failure[0]?.failureMessages
-            return failure.length === 1 && Array.isArray(messages) && messages.length === 1 &&
-              messages[0].includes('AssertionError') && messages[0].includes(marker) && actualFailures.get(name)?.includes(marker)
-          }) && failures.every((failure) => expectedFailures.has(failure.fullName))
-          const accounted = assertions.length === report.numTotalTests &&
-            assertions.every((assertion) => assertion.status === 'passed' || assertion.status === 'failed') &&
-            assertions.filter((assertion) => assertion.status === 'passed').every((assertion) =>
-              Array.isArray(assertion.failureMessages) && assertion.failureMessages.length === 0) &&
-            results.every((result) => result.status === 'passed' || result.status === 'failed') &&
-            results.every((result) => Array.isArray(result.assertionResults) && result.assertionResults.length > 0)
-          const expectedExitCode = controlRed ? 1 : 0
-          const expectedSuccess = !controlRed
-          const errorMetadataBound = unhandled.schema === 1 &&
-            unhandled.runId === process.env.RUN_ID && unhandled.runAttempt === process.env.RUN_ATTEMPT &&
-            unhandled.job === process.env.JOB_ID && unhandled.runnerOs === process.env.RUNNER_OS &&
-            unhandled.platform === process.platform && unhandled.architecture === process.arch &&
-            unhandled.fileCount === 1 && unhandled.errorCount === 0 && Array.isArray(unhandled.errors) &&
-            unhandled.errors.length === 0 && unhandled.omittedErrors === 0
-          const complete = numericCounts && suitesConsistent && exactFile && exactRoster && exactFailures && accounted &&
-            emptyFileMessage && errorMetadataBound && process.env.ACTUAL_EXIT_CODE === String(expectedExitCode) &&
-            report.success === expectedSuccess &&
-            report.numTotalTests === 4 && report.numPassedTests + report.numFailedTests === 4 &&
-            report.numFailedTests === expectedFailures.size && report.numPendingTests === 0 && report.numTodoTests === 0 &&
-            report.numPassedTestSuites === (controlRed ? 0 : 2) &&
-            report.numFailedTestSuites === (controlRed ? 2 : 0) && report.numPendingTestSuites === 0
-          const evidence = {
-            sourceSha: process.env.SOURCE_SHA,
-            workflowSha256: createHash('sha256').update(workflowBytes).digest('hex'),
-            unhandledReporterSha256: createHash('sha256').update(readFileSync('scripts/qa/speech-owned-transfer-unhandled-reporter.mjs')).digest('hex'),
-            runId: process.env.RUN_ID,
-            runAttempt: process.env.RUN_ATTEMPT,
-            controlRef: process.env.CONTROL_REF,
-            matrixOs: process.env.MATRIX_OS,
-            runnerOs: process.env.RUNNER_OS,
-            platform: process.platform,
-            architecture: process.arch,
-            actualExitCode: process.env.ACTUAL_EXIT_CODE,
-            reportSha256: createHash('sha256').update(bytes).digest('hex'),
-            unhandledReportSha256: createHash('sha256').update(unhandledBytes).digest('hex'),
-            errorCount: unhandled.errorCount,
-            files: paths,
-            assertionRoster: fullNames,
-            expectedFailedAssertions: [...expectedFailures.keys()],
-            actualFailedAssertions: failures.map((failure) => ({ fullName: failure.fullName, failureMessages: failure.failureMessages ?? [] })),
-            counts: Object.fromEntries(counters.map((key) => [key, report[key] ?? null])),
-            evidenceKind: controlRed ? 'EXPECTED_CAUSAL_RED_ONLY' : 'CONTROL_INVENTORY_ONLY',
-            productionQualification: false,
-            validation: complete ? 'accepted' : 'rejected'
-          }
+          const paths = results.map((item) => String(item.name).replaceAll('\\', '/'))
+          const assertions = results.flatMap((item) => Array.isArray(item.assertionResults) ? item.assertionResults : [])
+          const names = assertions.map((item) => item.fullName).sort()
+          const unhandledBytes = guardedRead(process.env.UNHANDLED, 32 * 1024)
+          const unhandled = JSON.parse(unhandledBytes.toString('utf8'))
+          const counters = ['numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests', 'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites']
+          const numeric = counters.every((key) => Number.isSafeInteger(report[key]) && report[key] >= 0)
+          const exactPaths = results.length === 2 && paths.some((path) => path.endsWith('/src/main/infra/storage/runtime-owned-transfer.test.ts')) && paths.some((path) => path.endsWith('/src/main/features/components/speech-pack/owned-download.test.ts'))
+          const exactRoster = names.length === 32 && names.every((name, index) => name === expected[index])
+          const accounted = assertions.length === 32 && assertions.every((item) =>
+            item.status === 'passed' && item.failureMessages?.length === 0
+          ) && results.every((item) => item.status === 'passed' && item.assertionResults?.length > 0 && item.message === '')
+          const taskCases = Array.isArray(unhandled.cases) ? unhandled.cases : []
+          const taskNames = taskCases.map((item) => item.fullName).sort()
+          const actualTaskDiagnostics = taskCases.length === 32 && taskNames.every((name, index) => name === expected[index]) && taskCases.every((item) =>
+            item.parentType === 'suite' && item.state === 'passed' && item.retryCount === 0 && item.repeatCount === 0
+          )
+          const taskSuites = Array.isArray(unhandled.suites) ? unhandled.suites : []
+          const expectedSuiteInventory = [
+            'runtime-owned-transfer.test.ts:module:runtime-owned-transfer.test.ts',
+            'runtime-owned-transfer.test.ts:suite:runtime owned transfer',
+            'owned-download.test.ts:module:owned-download.test.ts',
+            'owned-download.test.ts:suite:owned speech download'
+          ].sort()
+          const suiteInventory = taskSuites.map((item) => {
+            const file = String(item.file).replaceAll('\\', '/').split('/').at(-1)
+            const name = item.type === 'module' ? String(item.name).replaceAll('\\', '/').split('/').at(-1) : item.name
+            return `${file}:${item.type}:${name}`
+          }).sort()
+          const exactSuites = suiteInventory.length === 4 && suiteInventory.every((name, index) => name === expectedSuiteInventory[index])
+          const suiteCount = report.numTotalTestSuites
+          const testStepPassed = process.env.TEST_OUTCOME === 'success' && process.env.ACTUAL_EXIT_CODE === '0' && report.success === true
+          const errorMetadata = unhandled.schema === 2 && unhandled.runId === process.env.RUN_ID && unhandled.runAttempt === process.env.RUN_ATTEMPT && unhandled.job === process.env.JOB_ID && unhandled.runnerOs === process.env.RUNNER_OS && unhandled.platform === process.platform && unhandled.architecture === process.arch && unhandled.fileCount === 2 && unhandled.errorCount === 0 && unhandled.errors?.length === 0 && unhandled.omittedErrors === 0
+          const valid = exactPaths && exactRoster && accounted && actualTaskDiagnostics && exactSuites && numeric && suiteCount === 4 && report.numTotalTests === 32 && report.numPassedTests === 32 && report.numFailedTests === 0 && report.numPendingTests === 0 && report.numTodoTests === 0 && report.numPassedTestSuites === suiteCount && report.numFailedTestSuites === 0 && report.numPendingTestSuites === 0 && testStepPassed && errorMetadata
+          const evidence = { sourceSha: process.env.SOURCE_SHA, workflowSha256: createHash('sha256').update(readFileSync('.github/workflows/speech-owned-transfer.yml')).digest('hex'), unhandledReporterSha256: createHash('sha256').update(readFileSync('scripts/qa/speech-owned-transfer-unhandled-reporter.mjs')).digest('hex'), runId: process.env.RUN_ID, runAttempt: process.env.RUN_ATTEMPT, jobId: process.env.JOB_ID, matrixOs: process.env.MATRIX_OS, runnerOs: process.env.RUNNER_OS, platform: process.platform, architecture: process.arch, actualExitCode: process.env.ACTUAL_EXIT_CODE, testOutcome: process.env.TEST_OUTCOME, reportSha256: createHash('sha256').update(reportBytes).digest('hex'), unhandledReportSha256: createHash('sha256').update(unhandledBytes).digest('hex'), files: paths, assertionRoster: names, counters: Object.fromEntries(counters.map((key) => [key, report[key]])), suiteCount, suiteInventory, taskDiagnosticCount: taskCases.length, unhandledErrorCount: unhandled.errorCount, validation: valid ? 'accepted' : 'rejected', evidenceKind: 'OWNED_TRANSFER_INFRASTRUCTURE_ONLY', nativeRecognition: false, engineActivation: false }
           writeFileSync(process.env.EVIDENCE, `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' })
           console.log(JSON.stringify(evidence))
-          if (!complete) throw new Error('SPEECH_OWNED_TRANSFER_CONTROL_REPORT_REJECTED')
+          if (!valid) throw new Error('SPEECH_OWNED_TRANSFER_REPORT_REJECTED')
           NODE
-      - name: Require report and preserve evidence artifacts
+      - name: Preserve the raw transfer evidence
         if: always() && steps.initialize.outcome == 'success'
         env:
           REPORT: ${{ steps.initialize.outputs.report }}
@@ -220,7 +211,89 @@ jobs:
           set -euo pipefail
           test -s "$REPORT"
           test -s "$UNHANDLED"
-          if [[ -e "$EVIDENCE" ]]; then test -s "$EVIDENCE"; fi
+          test -s "$EVIDENCE"
+      - name: Run unchanged A3 prerequisite regression
+        id: a3
+        if: always() && steps.initialize.outcome == 'success'
+        continue-on-error: true
+        env:
+          REPORT: ${{ steps.initialize.outputs.a3report }}
+        run: |
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
+            --dangerouslyIgnoreUnhandledErrors=false --reporter=default --reporter=json --outputFile="$REPORT" \
+            src/main/features/components/speech-pack/install-admission.test.ts \
+            src/main/infra/storage/runtime-owned-tree.test.ts
+      - name: Validate unchanged A3 assertion inventory
+        id: a3validate
+        if: always() && steps.initialize.outcome == 'success'
+        continue-on-error: true
+        env:
+          REPORT: ${{ steps.initialize.outputs.a3report }}
+          QUALIFICATION: ${{ steps.initialize.outputs.a3evidence }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUNNER_OS: ${{ runner.os }}
+          TEST_OUTCOME: ${{ steps.a3.outcome }}
+        run: node scripts/check-speech-ownership-prerequisite-report.mjs "$REPORT" "$QUALIFICATION"
+      - name: Run unchanged storage helper regression
+        id: storage
+        if: always() && steps.initialize.outcome == 'success'
+        continue-on-error: true
+        env:
+          REPORT: ${{ steps.initialize.outputs.storagereport }}
+        run: >-
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2
+          --dangerouslyIgnoreUnhandledErrors=false --reporter=default --reporter=json --outputFile="$REPORT"
+          src/main/infra/storage/runtime-owned-files.test.ts
+      - name: Run unchanged key anchor regression
+        id: key
+        if: always() && steps.initialize.outcome == 'success'
+        continue-on-error: true
+        env:
+          REPORT: ${{ steps.initialize.outputs.keyreport }}
+        run: >-
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2
+          --dangerouslyIgnoreUnhandledErrors=false --reporter=default --reporter=json --outputFile="$REPORT"
+          src/main/persistence/speech-pack-key-anchor-owner.test.ts
+      - name: Run unchanged old downloader regression
+        id: olddownload
+        if: always() && steps.initialize.outcome == 'success'
+        continue-on-error: true
+        env:
+          REPORT: ${{ steps.initialize.outputs.downloadreport }}
+        run: >-
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2
+          --dangerouslyIgnoreUnhandledErrors=false --reporter=default --reporter=json --outputFile="$REPORT"
+          src/main/features/components/speech-pack/download.test.ts
+      - name: Require all affected regressions and reports
+        if: always() && steps.initialize.outcome == 'success'
+        env:
+          A3: ${{ steps.a3.outcome }}
+          A3_VALIDATION: ${{ steps.a3validate.outcome }}
+          STORAGE: ${{ steps.storage.outcome }}
+          KEY: ${{ steps.key.outcome }}
+          OLD_DOWNLOAD: ${{ steps.olddownload.outcome }}
+          A3_REPORT: ${{ steps.initialize.outputs.a3report }}
+          STORAGE_REPORT: ${{ steps.initialize.outputs.storagereport }}
+          KEY_REPORT: ${{ steps.initialize.outputs.keyreport }}
+          DOWNLOAD_REPORT: ${{ steps.initialize.outputs.downloadreport }}
+        run: |
+          set -euo pipefail
+          test "$A3" = success
+          test "$A3_VALIDATION" = success
+          test "$STORAGE" = success
+          test "$KEY" = success
+          test "$OLD_DOWNLOAD" = success
+          test -s "$A3_REPORT"
+          test -s "$STORAGE_REPORT"
+          test -s "$KEY_REPORT"
+          test -s "$DOWNLOAD_REPORT"
+      - name: Run architecture and TypeScript checks
+        if: always() && steps.initialize.outcome == 'success'
+        run: |
+          node scripts/check-architecture.mjs
+          node node_modules/typescript/bin/tsc --noEmit -p tsconfig.node.json
+          node node_modules/typescript/bin/tsc --noEmit -p tsconfig.web.json
+          node node_modules/typescript/bin/tsc --noEmit -p tsconfig.tests.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && steps.initialize.outcome == 'success'
         with:
@@ -229,5 +302,10 @@ jobs:
             ${{ steps.initialize.outputs.report }}
             ${{ steps.initialize.outputs.unhandled }}
             ${{ steps.initialize.outputs.evidence }}
+            ${{ steps.initialize.outputs.a3report }}
+            ${{ steps.initialize.outputs.a3evidence }}
+            ${{ steps.initialize.outputs.storagereport }}
+            ${{ steps.initialize.outputs.keyreport }}
+            ${{ steps.initialize.outputs.downloadreport }}
           if-no-files-found: warn
           retention-days: 14
