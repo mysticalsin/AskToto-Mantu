@@ -7,6 +7,7 @@ on:
       - package.json
       - package-lock.json
       - vitest.config.ts
+      - scripts/qa/persistence-settlement-unhandled-reporter.mjs
       - scripts/qa/check-persistence-settlement-report.mjs
       - src/main/persistence/bootstrap.ts
       - src/main/persistence/bootstrap-speech-owner.ts
@@ -59,10 +60,12 @@ jobs:
           SETTLEMENT_REPORT_DIR="$RUNNER_TEMP/persistence-settlement-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -m 700 "$SETTLEMENT_REPORT_DIR"
           test ! -e "$SETTLEMENT_REPORT_DIR/vitest.json"
+          test ! -e "$SETTLEMENT_REPORT_DIR/unhandled.json"
           test ! -e "$SETTLEMENT_REPORT_DIR/receipt.json"
           echo "SETTLEMENT_REPORT_DIR=$SETTLEMENT_REPORT_DIR" >> "$GITHUB_ENV"
           echo "VITEST_REPORT_PATH=$SETTLEMENT_REPORT_DIR/vitest.json" >> "$GITHUB_ENV"
           echo "VITEST_LOG_PATH=$SETTLEMENT_REPORT_DIR/vitest.log" >> "$GITHUB_ENV"
+          echo "UNHANDLED_REPORT_PATH=$SETTLEMENT_REPORT_DIR/unhandled.json" >> "$GITHUB_ENV"
           echo "SETTLEMENT_RECEIPT_PATH=$SETTLEMENT_REPORT_DIR/receipt.json" >> "$GITHUB_ENV"
           echo "REPORT_STARTED_AT_MS=$(date -u +%s%3N)" >> "$GITHUB_ENV"
       - name: Install the frozen Node 22 test dependencies
@@ -76,6 +79,7 @@ jobs:
             --retry=0 \
             --reporter=default \
             --reporter=json \
+            --reporter=./scripts/qa/persistence-settlement-unhandled-reporter.mjs \
             --outputFile="$VITEST_REPORT_PATH" \
             > "$SETTLEMENT_REPORT_DIR/vitest.log" 2>&1
           test_exit=$?

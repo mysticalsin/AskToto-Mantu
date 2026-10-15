@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const requiredFiles = [
@@ -25,6 +25,7 @@ const hashedSources = [
   'src/main/settings-observation.ts',
   'src/main/persistence/resource-policy.ts',
   'resources/persistence-profiles.v1.json',
+  'scripts/qa/persistence-settlement-unhandled-reporter.mjs',
   'scripts/qa/check-persistence-settlement-report.mjs',
   '.github/workflows/persistence-settlement.yml'
 ]
@@ -202,6 +203,68 @@ function readReport(path) {
   } catch {
     throw new Error('persistence-settlement-report:JSON report is malformed')
   }
+}
+
+function readUnhandledReport(path) {
+  let info
+  try {
+    info = lstatSync(resolve(path))
+  } catch {
+    throw new Error('persistence-settlement-report:unhandled report is missing')
+  }
+  requireValue(info.isFile() && info.size > 0 && info.size <= 4096, 'unhandled report size or file type is invalid')
+  const startedAt = Number(process.env.REPORT_STARTED_AT_MS)
+  requireValue(Number.isSafeInteger(startedAt) && startedAt > 0, 'run start timestamp is missing')
+  requireValue(info.mtimeMs >= startedAt, 'unhandled report is stale')
+  let bytes
+  let report
+  try {
+    bytes = readFileSync(resolve(path))
+    report = JSON.parse(bytes.toString('utf8'))
+  } catch {
+    throw new Error('persistence-settlement-report:unhandled report is malformed')
+  }
+  const keys = [
+    'schema',
+    'sourceHead',
+    'runId',
+    'runAttempt',
+    'job',
+    'target',
+    'observed',
+    'inputKind',
+    'unhandledCount',
+    'recordedAtMs'
+  ].sort()
+  requireValue(
+    report &&
+      typeof report === 'object' &&
+      !Array.isArray(report) &&
+      Object.keys(report).sort().join(',') === keys.join(','),
+    'unhandled report fields differ from the closed schema'
+  )
+  requireValue(report.schema === 'metis-persistence-settlement-unhandled/v1', 'unhandled report schema is invalid')
+  requireValue(report.sourceHead === process.env.GITHUB_SHA, 'unhandled report source head differs from the run')
+  requireValue(report.runId === process.env.GITHUB_RUN_ID, 'unhandled report run differs from the current run')
+  requireValue(
+    report.runAttempt === process.env.GITHUB_RUN_ATTEMPT,
+    'unhandled report attempt differs from the current attempt'
+  )
+  requireValue(report.job === process.env.GITHUB_JOB, 'unhandled report job differs from the current job')
+  requireValue(
+    report.target === process.env.PERSISTENCE_SETTLEMENT_TARGET,
+    'unhandled report target differs from the current target'
+  )
+  requireValue(
+    report.observed === true && report.inputKind === 'array',
+    'Vitest unhandled-error input was not observed as an array'
+  )
+  requireValue(integer(report.unhandledCount) && report.unhandledCount === 0, 'Vitest reported unhandled errors')
+  requireValue(
+    integer(report.recordedAtMs) && report.recordedAtMs >= startedAt,
+    'unhandled report timestamp is invalid'
+  )
+  return { bytes, report }
 }
 
 function normalizedName(value) {
@@ -513,8 +576,12 @@ function validateStructuredEvidence(evidence, assertion) {
 function validate() {
   const reportPath = process.env.VITEST_REPORT_PATH
   const logPath = process.env.VITEST_LOG_PATH
+  const unhandledReportPath = process.env.UNHANDLED_REPORT_PATH
   const receiptPath = process.env.SETTLEMENT_RECEIPT_PATH
-  requireValue(reportPath && logPath && receiptPath, 'report/log/receipt paths are missing')
+  requireValue(
+    reportPath && logPath && unhandledReportPath && receiptPath,
+    'report/log/unhandled/receipt paths are missing'
+  )
   requireValue(
     process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-red-with-owner',
     'phase is not settlement-red-with-owner'
@@ -550,6 +617,7 @@ function validate() {
   )
 
   const { bytes, report } = readReport(reportPath)
+  const { bytes: unhandledBytes, report: unhandledReport } = readUnhandledReport(unhandledReportPath)
   requireValue(report.success === false, 'Vitest JSON does not record a failed run')
   const expectedCounters = {
     numTotalTests: 20,
@@ -568,16 +636,16 @@ function validate() {
     report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites === 4,
     'recursive suite counts are inconsistent'
   )
-  if ('numUnhandledErrors' in report) requireValue(report.numUnhandledErrors === 0, 'Vitest recorded unhandled errors')
+  if ('numUnhandledErrors' in report)
+    requireValue(
+      report.numUnhandledErrors === unhandledReport.unhandledCount,
+      'Vitest JSON unhandled count differs from actual reporter evidence'
+    )
   if ('unhandledErrors' in report)
     requireValue(
-      Array.isArray(report.unhandledErrors) && report.unhandledErrors.length === 0,
-      'Vitest recorded unhandled errors'
+      Array.isArray(report.unhandledErrors) && report.unhandledErrors.length === unhandledReport.unhandledCount,
+      'Vitest JSON unhandled errors differ from actual reporter evidence'
     )
-  requireValue(
-    report.numUnhandledErrors === 0 || (Array.isArray(report.unhandledErrors) && report.unhandledErrors.length === 0),
-    'Vitest JSON does not prove zero unhandled errors'
-  )
 
   requireValue(
     Array.isArray(report.testResults) && report.testResults.length === 2,
@@ -667,6 +735,8 @@ function validate() {
     node: process.version,
     vitestExitCode: 1,
     reportSha256: sha256(bytes),
+    unhandledReportSha256: sha256(unhandledBytes),
+    unhandledReporterCount: unhandledReport.unhandledCount,
     sourceHashes,
     counts: {
       total: report.numTotalTests,
