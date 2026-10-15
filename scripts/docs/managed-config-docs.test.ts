@@ -20,9 +20,9 @@ const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').repl
  * Every entry names the file and the identifier in it that reads the key; a self-check below verifies both.
  */
 const GOVERNANCE_KEYS: Record<string, { file: string; symbol: string }> = {
-  locked: { file: 'src/main/fresh-lean-speech-defaults.ts', symbol: 'parseLocked' },
+  locked: { file: 'src/main/store.ts', symbol: 'managedPolicyAuthority.parseLocked' },
   requireAuth: { file: 'src/main/auth.ts', symbol: 'authEnforced' },
-  allowedProviders: { file: 'src/main/fresh-lean-speech-defaults.ts', symbol: 'parseAllowed' },
+  allowedProviders: { file: 'src/main/store.ts', symbol: 'managedPolicyAuthority.parseAllowed' },
   escrowPubKey: { file: 'src/main/transcripts.ts', symbol: 'escrowPubKey' },
   disableAutoUpdate: { file: 'src/main/updater.ts', symbol: 'disableAutoUpdate' },
   updateFeedUrl: { file: 'src/main/updater.ts', symbol: 'updateFeedUrl' },
@@ -150,7 +150,8 @@ describe('managed-config check functions fire on a bad fixture', () => {
     for (const [key, { file, symbol }] of Object.entries(GOVERNANCE_KEYS)) {
       expect(read(file), `${key}: ${file} must contain ${symbol}`).toContain(symbol)
     }
-    const store = parseTypeScript('src/main/store.ts')
+    expect(GOVERNANCE_KEYS.allowedProviders.file).toBe(GOVERNANCE_KEYS.locked.file)
+    const store = parseTypeScript(GOVERNANCE_KEYS.locked.file)
     expect(hasNamedImport(store, './fresh-lean-speech-defaults', 'ManagedPolicyAuthority')).toBe(true)
     expect(
       visit(

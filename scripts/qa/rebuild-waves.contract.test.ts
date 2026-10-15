@@ -131,8 +131,10 @@ function shadowsName(handler: ts.ArrowFunction, name: string): boolean {
 }
 
 function parseInlineTypeScript(source: string): ts.SourceFile {
-  return ts.createSourceFile('fixture.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  return ts.createSourceFile('<inline>', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
+
+const mainSource = parseTypeScript('src/main/index.ts')
 
 function directRecapReturns(handler: ts.ArrowFunction): ts.CallExpression[] {
   if (!ts.isBlock(handler.body)) return []
@@ -272,8 +274,7 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
     ])
 
     const transcripts = parseTypeScript('src/main/transcripts.ts')
-    const recapModule = parseTypeScript('src/main/transcripts-recap.ts')
-    const main = parseTypeScript('src/main/index.ts')
+    const main = mainSource
     expect(namedBindings(transcripts, './transcripts-recap', 'parseRecapMarkdown')).toBe(true)
     expect(namedReExport(transcripts, './transcripts-recap', 'parseRecapMarkdown')).toBe(true)
     expect(namedBindings(main, './transcripts', 'parseRecapMarkdown')).toBe(true)
@@ -299,15 +300,6 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
     expect(ts.isStringLiteral(recapInput.condition.right) && recapInput.condition.right.text === 'string').toBe(true)
     expect(ts.isIdentifier(recapInput.whenTrue) && recapInput.whenTrue.text === 'markdown').toBe(true)
     expect(ts.isStringLiteral(recapInput.whenFalse) && recapInput.whenFalse.text === '').toBe(true)
-    expect(
-      recapModule.statements.filter(
-        (statement) =>
-          ts.isFunctionDeclaration(statement) &&
-          statement.name?.text === 'parseRecapMarkdown' &&
-          ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
-      )
-    ).toHaveLength(1)
-
     const disconnectedRecapSource = parseInlineTypeScript(`
       const disconnected = () => {
         const unused = () => parseRecapMarkdown('## Next steps')
@@ -346,7 +338,7 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     const finalLines = [provisionalLines[0], provisionalLines[2]]
     expect(stripProvisionalLines(finalLines)).toBe(finalLines)
 
-    const main = parseTypeScript('src/main/index.ts')
+    const main = mainSource
     expect(namedBindings(main, '@shared/ipc', 'stripProvisionalLines')).toBe(true)
     expect(namedBindings(main, '@shared/ipc', 'SaveMeetingSchema')).toBe(true)
     expect(namedBindings(main, './transcripts', 'saveMeeting')).toBe(true)

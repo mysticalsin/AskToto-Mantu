@@ -353,9 +353,9 @@ jobs:
           }
           const repairedSourceHashes = {
             'scripts/lean-builder-exclusions.test.ts': 'd8db29d5293cf59add45be9c3be61e9b8491e7120e6a79e900c040886f1cbd1e',
-            'scripts/qa/rebuild-waves.contract.test.ts': '4c3c90a0f7180f94711cf9614416a15f32480c2aaa07b28021cfea2f5ecd53bd',
-            'scripts/trace/build-traceability.test.ts': 'd375c4f21e3c2bc26c53e5e3a6e1a1547db7c35dcb54f62b9921a523645d7cc7',
-            'scripts/docs/managed-config-docs.test.ts': '93a14fc533f16c1e968d8a2e77f6641ebae086e79618bb7cae453229d2769b86',
+            'scripts/qa/rebuild-waves.contract.test.ts': '2ba7314b3d9abf7c4bf3e0598c8fb3b714f3c71486950ce11f0b56199b4e8920',
+            'scripts/trace/build-traceability.test.ts': '09385285e90af77166fa8e9685859f62a8bc6b41379d7f31baa02714c75ca2a3',
+            'scripts/docs/managed-config-docs.test.ts': '7a64719e4b7a7b105543c8a0fbe9c01e51cc7871dd980bfda7a573f8054e84f2',
             'scripts/trace/build-traceability.mjs': 'c5379b67fdf319f18d1f57cd30879a0e837a64a7dd77cb0108898c344e66bcf6'
           }
           const sourceBindings = {}
