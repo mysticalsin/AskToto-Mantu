@@ -32,8 +32,9 @@ describe('unsigned 1.9.7 ship arm', () => {
   })
 
   it('names each held owner-Mac diagnostic on its own not-run line', () => {
+    const lines = residuals.replace(/\r\n/g, '\n').split('\n')
     for (const name of DEFERRED_OWNER_DIAGNOSTICS) {
-      expect(residuals.split('\n')).toContain(`- **Not run:** \`${name}\``)
+      expect(lines).toContain(`- **Not run:** \`${name}\``)
     }
   })
 })

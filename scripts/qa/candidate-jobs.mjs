@@ -5,10 +5,7 @@ import { pathToFileURL } from 'node:url'
  * Owner-Mac diagnostics that qa-candidate.yml holds with `if: false` until owner-account isolation
  * is proven. They appear on every candidate as skipped. A skip of any other job is still a refusal.
  */
-export const DEFERRED_OWNER_DIAGNOSTICS = Object.freeze([
-  'ST-1 control (no fixtures)',
-  'ST-1 fifo stall row (macOS)'
-])
+export const DEFERRED_OWNER_DIAGNOSTICS = Object.freeze(['ST-1 control (no fixtures)', 'ST-1 fifo stall row (macOS)'])
 
 /**
  * Validate the complete jobs response from a qa-candidate run.
@@ -74,15 +71,8 @@ export function candidateJobProblems(result, residuals = '', { requireDisclosure
 
 async function main(args) {
   const [jobsPath, residualsPath, publishFlag] = args
-  if (
-    !jobsPath ||
-    !residualsPath ||
-    args.length > 3 ||
-    (publishFlag && publishFlag !== '--require-disclosure')
-  ) {
-    console.error(
-      'Usage: node scripts/qa/candidate-jobs.mjs <jobs.json> <residuals.md> [--require-disclosure]'
-    )
+  if (!jobsPath || !residualsPath || args.length > 3 || (publishFlag && publishFlag !== '--require-disclosure')) {
+    console.error('Usage: node scripts/qa/candidate-jobs.mjs <jobs.json> <residuals.md> [--require-disclosure]')
     process.exitCode = 2
     return
   }

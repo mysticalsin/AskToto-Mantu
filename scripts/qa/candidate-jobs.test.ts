@@ -26,7 +26,10 @@ describe('candidate job gate', () => {
   })
 
   it('rejects a skipped owner diagnostic that the residuals do not name', () => {
-    const problems = candidateJobProblems(candidateJobs(['skipped', 'success', 'success']), 'Owner tests were unavailable.')
+    const problems = candidateJobProblems(
+      candidateJobs(['skipped', 'success', 'success']),
+      'Owner tests were unavailable.'
+    )
     expect(problems.some((problem) => problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[0]}`))).toBe(true)
   })
 
@@ -44,9 +47,9 @@ describe('candidate job gate', () => {
 
   it('rejects a failed owner diagnostic', () => {
     const problems = candidateJobProblems(candidateJobs(['failure', 'success', 'success']), disclosed)
-    expect(problems.some((problem) => problem.includes(`job did not succeed: ${DEFERRED_OWNER_DIAGNOSTICS[0]} (failure)`))).toBe(
-      true
-    )
+    expect(
+      problems.some((problem) => problem.includes(`job did not succeed: ${DEFERRED_OWNER_DIAGNOSTICS[0]} (failure)`))
+    ).toBe(true)
   })
 
   it('rejects a missing owner diagnostic', () => {
