@@ -1024,7 +1024,7 @@ async function setupFixture(): Promise<void> {
   }
 }
 
-beforeAll((_ctx, suite) => {
+beforeAll(({}, suite) => {
   suite.meta.qaU0FixtureOwner = owner
   const original = setupFixture()
   setupPromise = original
@@ -1037,7 +1037,7 @@ afterEach(({ task }) => {
   currentCaseRecord = null
 })
 
-afterAll(async (_ctx, suite) => {
+afterAll(async ({}, suite) => {
   owner.closing = true
   owner.sameSetupPromise = setupPromise !== undefined && setupPromise === beforeAllPromise
   owner.join = 'pending'
