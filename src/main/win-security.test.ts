@@ -109,7 +109,9 @@ describe('ACL probe transport and parser', () => {
   })
 
   it('accepts a real SID and a single complete ACE', () => {
-    expect(parseAclOutput(JSON.stringify({ owner: SYSTEM, aces: { sid: SYSTEM, rights: FULL, type: 'Allow' } }))).toEqual({
+    expect(
+      parseAclOutput(JSON.stringify({ owner: SYSTEM, aces: { sid: SYSTEM, rights: FULL, type: 'Allow' } }))
+    ).toEqual({
       owner: SYSTEM,
       aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }]
     })
@@ -163,9 +165,7 @@ function probeTransportDiagnostic(path: string, mode: 'command' | 'encoded'): st
   } catch (error) {
     const failure = error as NodeJS.ErrnoException & { status?: number; stdout?: Buffer | string }
     const output = String(failure.stdout ?? '').trim()
-    const category = /^exception=[A-Za-z0-9.]+;id=[A-Za-z0-9,._-]+$/.test(output)
-      ? output
-      : 'no-coded-output'
+    const category = /^exception=[A-Za-z0-9.]+;id=[A-Za-z0-9,._-]+$/.test(output) ? output : 'no-coded-output'
     return `status=${failure.status ?? 'none'};code=${failure.code ?? 'none'};${category}`
   }
 }
@@ -432,7 +432,9 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     }
     const probe = readAclForTest(file)
     expect(probe).not.toBeNull()
-    expect(probe?.aces.some((ace) => ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0)).toBe(true)
+    expect(probe?.aces.some((ace) => ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0)).toBe(
+      true
+    )
     expect(probe && evaluateAclTrust(probe)).toBe(false)
   }
   afterEach(() => {
@@ -515,7 +517,9 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
       }
     } catch (error) {
       const failure = error as NodeJS.ErrnoException & { status?: number }
-      throw new Error(`synthetic ACL hardening failed: status=${failure.status ?? 'none'};code=${failure.code ?? 'none'}`)
+      throw new Error(
+        `synthetic ACL hardening failed: status=${failure.status ?? 'none'};code=${failure.code ?? 'none'}`
+      )
     }
     const probe = readAclForTest(hardened)
     expect(probe?.owner).toBe(ADMINS)
