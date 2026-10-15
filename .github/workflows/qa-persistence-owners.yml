@@ -46,6 +46,7 @@ on:
       - scripts/qa/fixtures/persistence-run-owner-support.ts
       - scripts/qa/fixtures/persistence-run-owner.child.ts
       - scripts/qa/fixtures/persistence-run-owner.electron-host.ts
+      - scripts/qa/fixtures/auth-authority-diagnostic.ts
   workflow_dispatch:
 
 permissions:
@@ -61,17 +62,20 @@ defaults:
 
 jobs:
   source-owners:
-    name: Finite QA owner source fixtures (${{ matrix.target }})
+    name: Finite QA owner source fixtures (${{ matrix.target }} / ${{ matrix.diagnostic }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { target: linux-shipping, os: ubuntu-latest, owner: false }
-          - { target: windows-x64, os: windows-latest, owner: true }
-          - { target: macos-x64, os: macos-15-intel, owner: true }
-          - { target: macos-arm64, os: macos-14, owner: true }
+          - { target: linux-shipping, os: ubuntu-latest, owner: false, diagnostic: disabled }
+          - { target: windows-x64, os: windows-latest, owner: true, diagnostic: disabled }
+          - { target: windows-x64, os: windows-latest, owner: true, diagnostic: enabled }
+          - { target: macos-x64, os: macos-15-intel, owner: true, diagnostic: disabled }
+          - { target: macos-x64, os: macos-15-intel, owner: true, diagnostic: enabled }
+          - { target: macos-arm64, os: macos-14, owner: true, diagnostic: disabled }
+          - { target: macos-arm64, os: macos-14, owner: true, diagnostic: enabled }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -83,140 +87,610 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install frozen test dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Remove stale report and run the explicitly selected finite fixtures
+      - name: Run the fixed finite fixture cohort and retain the actual default log
         id: run
         env:
-          REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
+          REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.json
+          DEFAULT_LOG: ${{ runner.temp }}/qa-persistence-default-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.log
+          DIAGNOSTIC_REPORT: ${{ runner.temp }}/qa-auth-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.json
           OWNER_TARGET: ${{ matrix.owner }}
-        run: |
-          rm -f "$REPORT"
-          set +e
-          if [[ "$OWNER_TARGET" == true ]]; then
-            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT"
-          else
-            NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT"
-          fi
-          result=$?
-          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Gate exact report inventory, counts and current source hashes
-        if: always()
-        env:
-          REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
-          EVIDENCE: ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
-          OWNER_TARGET: ${{ matrix.owner }}
-          VITEST_EXIT: ${{ steps.run.outputs.exit_code }}
+          DIAGNOSTIC_MODE: ${{ matrix.diagnostic }}
           TARGET: ${{ matrix.target }}
         run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs'
+          rm -f "$REPORT" "$DEFAULT_LOG" "$DIAGNOSTIC_REPORT"
+          if [[ "$DIAGNOSTIC_MODE" == enabled ]]; then
+            export METIS_AUTH_AUTHORITY_DIAGNOSTIC=enabled
+            export METIS_AUTH_AUTHORITY_DIAGNOSTIC_REPORT="$DIAGNOSTIC_REPORT"
+            export METIS_AUTH_AUTHORITY_SOURCE_HASHES="$(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
           import { createHash } from 'node:crypto'
-          import { execFileSync } from 'node:child_process'
-          const sourceFiles = [
+          const files = [
             '.github/workflows/qa-persistence-owners.yml',
             'vitest.qa-persistence-owners.config.ts',
             'package.json',
             'package-lock.json',
-            'src/main/persistence/qa-run-protocol.ts',
-            'src/main/persistence/qa-run-protocol.test.ts',
-            'src/main/persistence/qa-run-protocol.qa-case.ts',
-            'src/main/persistence/qa-run-owner.ts',
-            'src/main/persistence/qa-run-owner.qa-case.ts',
-            'src/main/persistence/qa-profile-root-owner.ts',
-            'src/main/persistence/qa-profile-root-owner.qa-case.ts',
-            'src/main/persistence/root-registry.ts',
-            'src/main/persistence/root-registry.qa-case.ts',
-            'src/main/persistence/native-key-intent.ts',
-            'src/main/persistence/native-key-intent.test.ts',
-            'src/main/persistence/qa-main-action-owner.ts',
-            'src/main/persistence/qa-main-action-owner.test.ts',
-            'src/main/persistence/bootstrap.ts',
-            'src/main/index.ts',
+            'scripts/qa/fixtures/auth-authority-diagnostic.ts',
+            'src/main/auth.test.ts',
+            'src/main/auth-authority-source-pins.ts',
             'src/main/auth-boundary-adapters.ts',
             'src/main/auth-config.ts',
-            'src/main/auth-persistence-observation.test.ts',
-            'src/main/auth-persistence-observation.ts',
-            'src/main/auth-speech-boundary-readers.test.ts',
             'src/main/auth-speech-boundary-readers.ts',
             'src/main/auth-speech-boundary.ts',
-            'src/main/auth-speech-lease.test.ts',
             'src/main/auth-speech-lease.ts',
-            'src/main/auth.test.ts',
             'src/main/auth.ts',
             'src/main/fresh-lean-speech-defaults.ts',
-            'src/main/fresh-lean-speech-defaults.test.ts',
             'src/main/settings-auth-authority-frame.ts',
-            'src/main/settings-observation.test.ts',
+            'src/main/settings-observation.ts',
             'src/main/speech-desktop-boundary.ts',
-            'src/main/store.test.ts',
             'src/main/store.ts',
-            'src/main/win-security.ts',
-            'src/main/win-security.test.ts',
-            'src/main/auth-authority-source-pins.ts',
-            'scripts/qa/fixtures/persistence-run-owner-support.ts',
-            'scripts/qa/fixtures/persistence-run-owner.child.ts',
-            'scripts/qa/fixtures/persistence-run-owner.electron-host.ts'
+            'src/main/win-security.ts'
           ]
-          const expected = process.env.OWNER_TARGET === 'true'
-            ? new Map([
-                ['src/main/persistence/qa-run-protocol.qa-case.ts', 27],
-                ['src/main/persistence/qa-run-owner.qa-case.ts', 22],
-                ['src/main/persistence/qa-profile-root-owner.qa-case.ts', 8],
-                ['src/main/persistence/root-registry.qa-case.ts', 4],
-                ['src/main/persistence/qa-run-protocol.test.ts', 3],
-                ['src/main/persistence/native-key-intent.test.ts', 12]
-              ])
-            : new Map([
-                ['src/main/persistence/qa-run-protocol.test.ts', 3],
-                ['src/main/persistence/native-key-intent.test.ts', 12]
-              ])
-          const coherenceFiles = process.env.OWNER_TARGET === 'true' ? [
-            'src/main/auth.test.ts',
-            'src/main/auth-speech-lease.test.ts',
-            'src/main/auth-speech-boundary-readers.test.ts',
-            'src/main/auth-persistence-observation.test.ts',
-            'src/main/persistence/qa-main-action-owner.test.ts',
-            'src/main/win-security.test.ts',
-            'src/main/store.test.ts',
-            'src/main/fresh-lean-speech-defaults.test.ts',
-            'src/main/settings-observation.test.ts'
-          ] : []
-          const expectedFiles = [...expected.keys(), ...coherenceFiles]
-          let error = ''
-          let report = null
-          try { report = JSON.parse(readFileSync(process.env.REPORT, 'utf8')) }
-          catch { error = 'Vitest report is missing or invalid.' }
-          const countFields = ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites','numPendingTestSuites']
-          if (report) {
-            if (countFields.some((key) => !Number.isSafeInteger(report[key]) || report[key] < 0)) error ||= 'Vitest counters are missing or invalid.'
-            if (process.env.VITEST_EXIT !== '0' || report.success !== true || report.numTotalTests <= 0 || report.numPassedTests !== report.numTotalTests || report.numFailedTests !== 0 || report.numPendingTests !== 0 || report.numTodoTests !== 0 || report.numFailedTestSuites !== 0 || report.numPendingTestSuites !== 0 || report.numPassedTestSuites <= 0 || report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites) error ||= 'Vitest failed, skipped a case or returned inconsistent totals.'
-            if (!Array.isArray(report.testResults) || report.testResults.length !== expectedFiles.length) error ||= 'Selected file inventory differs from the frozen roster.'
-            for (const file of expectedFiles) {
-              const count = expected.get(file)
-              const matches = Array.isArray(report.testResults) ? report.testResults.filter((item) => typeof item.name === 'string' && item.name.replaceAll('\\','/').endsWith('/' + file)) : []
-              if (matches.length !== 1 || matches[0].status !== 'passed' || !Array.isArray(matches[0].assertionResults) || matches[0].assertionResults.length === 0 || (count !== undefined && matches[0].assertionResults.length !== count) || matches[0].assertionResults.some((test) => test.status !== 'passed')) error ||= `Missing, failed or non-finite required case file: ${file}`
-            }
-            const assertionCount = Array.isArray(report.testResults) ? report.testResults.reduce((total, file) => total + (Array.isArray(file.assertionResults) ? file.assertionResults.length : 0), 0) : 0
-            if (report.numTotalTests !== assertionCount) error ||= 'Per-file test result counts differ from global Vitest totals.'
-          }
-          const sourceHead = execFileSync('git', ['rev-parse','HEAD'], { encoding: 'utf8' }).trim()
-          const hashes = Object.fromEntries(sourceFiles.map((file) => {
-            try { return [file, createHash('sha256').update(readFileSync(file)).digest('hex')] }
-            catch { error ||= `Required source file is missing: ${file}`; return [file, null] }
-          }))
-          const exitCode = /^\d+$/.test(process.env.VITEST_EXIT ?? '') ? Number(process.env.VITEST_EXIT) : null
-          const fileCounts = report && Array.isArray(report.testResults) ? Object.fromEntries(report.testResults.map((file) => [String(file.name).replaceAll('\\','/').split('/').at(-1), Array.isArray(file.assertionResults) ? file.assertionResults.length : 0])) : null
-          const evidence = { schema: 'metis-qa-persistence-source-evidence/v1', target: process.env.TARGET, sourceHead, sourceHashes: hashes, selectedFiles: expectedFiles, perFileTestCounts: fileCounts, vitestExitCode: exitCode, success: !error, error: error || null, counts: report ? Object.fromEntries(countFields.map((key) => [key, report[key]])) : null }
-          writeFileSync(process.env.EVIDENCE, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
-          if (error) { console.error(error); process.exitCode = 1 }
+          const hashes = Object.fromEntries(files.map((file) => [file, createHash('sha256').update(readFileSync(file)).digest('hex')]))
+          process.stdout.write(JSON.stringify(hashes))
           NODE
-      - name: Retain bounded source evidence
+            )"
+          else
+            unset METIS_AUTH_AUTHORITY_DIAGNOSTIC METIS_AUTH_AUTHORITY_DIAGNOSTIC_REPORT METIS_AUTH_AUTHORITY_SOURCE_HASHES || true
+          fi
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 npx vitest run --config vitest.qa-persistence-owners.config.ts --retry=0 --reporter=default --reporter=json --outputFile="$REPORT" >"$DEFAULT_LOG" 2>&1
+          result=$?
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          echo "Vitest exit code: $result. Original report and default log retained for the bounded evidence gate."
+          exit 0
+      - name: Independently gate the exact reports, provenance, inventory and D0 trace
+        id: evidence
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.json
+          DEFAULT_LOG: ${{ runner.temp }}/qa-persistence-default-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.log
+          DIAGNOSTIC_REPORT: ${{ runner.temp }}/qa-auth-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.json
+          EVIDENCE: ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}-${{ matrix.diagnostic }}.json
+          OWNER_TARGET: ${{ matrix.owner }}
+          DIAGNOSTIC_MODE: ${{ matrix.diagnostic }}
+          VITEST_EXIT: ${{ steps.run.outputs.exit_code }}
+          TARGET: ${{ matrix.target }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_JOB: ${{ github.job }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync, statSync, existsSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
+
+          const sourceFiles = [
+            '.github/workflows/qa-persistence-owners.yml', 'vitest.qa-persistence-owners.config.ts', 'package.json', 'package-lock.json',
+            'src/main/persistence/qa-run-protocol.ts', 'src/main/persistence/qa-run-protocol.test.ts', 'src/main/persistence/qa-run-protocol.qa-case.ts',
+            'src/main/persistence/qa-run-owner.ts', 'src/main/persistence/qa-run-owner.qa-case.ts', 'src/main/persistence/qa-profile-root-owner.ts',
+            'src/main/persistence/qa-profile-root-owner.qa-case.ts', 'src/main/persistence/root-registry.ts', 'src/main/persistence/root-registry.qa-case.ts',
+            'src/main/persistence/native-key-intent.ts', 'src/main/persistence/native-key-intent.test.ts', 'src/main/persistence/qa-main-action-owner.ts',
+            'src/main/persistence/qa-main-action-owner.test.ts', 'src/main/persistence/bootstrap.ts', 'src/main/index.ts', 'src/main/auth-boundary-adapters.ts',
+            'src/main/auth-config.ts', 'src/main/auth-persistence-observation.test.ts', 'src/main/auth-persistence-observation.ts',
+            'src/main/auth-speech-boundary-readers.test.ts', 'src/main/auth-speech-boundary-readers.ts', 'src/main/auth-speech-boundary.ts',
+            'src/main/auth-speech-lease.test.ts', 'src/main/auth-speech-lease.ts', 'src/main/auth.test.ts', 'src/main/auth.ts',
+            'src/main/fresh-lean-speech-defaults.ts', 'src/main/fresh-lean-speech-defaults.test.ts', 'src/main/settings-auth-authority-frame.ts',
+            'src/main/settings-observation.ts', 'src/main/settings-observation.test.ts', 'src/main/speech-desktop-boundary.ts', 'src/main/store.test.ts',
+            'src/main/store.ts', 'src/main/win-security.ts', 'src/main/win-security.test.ts', 'src/main/auth-authority-source-pins.ts',
+            'scripts/qa/fixtures/persistence-run-owner-support.ts', 'scripts/qa/fixtures/persistence-run-owner.child.ts',
+            'scripts/qa/fixtures/persistence-run-owner.electron-host.ts', 'scripts/qa/fixtures/auth-authority-diagnostic.ts'
+          ]
+          const diagnosticSourceFiles = [
+            '.github/workflows/qa-persistence-owners.yml', 'vitest.qa-persistence-owners.config.ts', 'package.json', 'package-lock.json',
+            'scripts/qa/fixtures/auth-authority-diagnostic.ts', 'src/main/auth.test.ts', 'src/main/auth-authority-source-pins.ts',
+            'src/main/auth-boundary-adapters.ts', 'src/main/auth-config.ts', 'src/main/auth-speech-boundary-readers.ts', 'src/main/auth-speech-boundary.ts',
+            'src/main/auth-speech-lease.ts', 'src/main/auth.ts', 'src/main/fresh-lean-speech-defaults.ts', 'src/main/settings-auth-authority-frame.ts',
+            'src/main/settings-observation.ts', 'src/main/speech-desktop-boundary.ts', 'src/main/store.ts', 'src/main/win-security.ts'
+          ]
+          const nativeExpected = new Map([
+            ['src/main/persistence/native-key-intent.test.ts', [12, '4a8c6d6a05f1b14208b66d1754231c90a3482feb861143bcc6297c5f8783e9af']],
+            ['src/main/persistence/qa-run-protocol.test.ts', [3, '408d70eba15ab392e118da02e05b6891ee830b82c4d8776e1c63935b88e067fd']],
+            ['src/main/persistence/qa-profile-root-owner.qa-case.ts', [8, '0840ed00b7af86421e44b7b71e9763dd8f19452eef103cb034742bbc8a92de4f']],
+            ['src/main/persistence/qa-run-owner.qa-case.ts', [22, '9b638955c31dde22ee0ed9df14ce03ca539acafc93865ea0ed5bc05463e1bd68']],
+            ['src/main/persistence/qa-run-protocol.qa-case.ts', [27, '2b96b62f1134f848384fa2c123fd81db0dea782361bf891793a671150a881fac']],
+            ['src/main/persistence/root-registry.qa-case.ts', [4, 'ba5f1631adb5b372634f956680aaf69d2eca6b5911648cdad58eb9f663374cb3']],
+            ['src/main/auth-persistence-observation.test.ts', [3, 'c9e233c08e086fbc67803166ad7ea454f2b5a580bd6db990dbb1bb98faddbe3c']],
+            ['src/main/auth-speech-boundary-readers.test.ts', [6, '810edb5a1baf49c5b48f072c42e2b82238a7f32fe9b9af4478d8616384a228ed']],
+            ['src/main/auth-speech-lease.test.ts', [7, '4ce76ae626b2c16fdb8f8303ec2e19c1d6c8867613b8686c61555ed24fc6bded']],
+            ['src/main/auth.test.ts', [62, 'b5cdfe7e39fc15d89223097f1e7204f00afd4f76d9d0a60e24a8ce47fccba2aa']],
+            ['src/main/fresh-lean-speech-defaults.test.ts', [15, '0ddd58bd921d4e6df5d745520d1835955902ce5214ab3e1763d07b83fb256ba0']],
+            ['src/main/settings-observation.test.ts', [4, '01db2db1792a5d6443ef0844eb01570788ab23e3d366986767827135ec3c9f2c']],
+            ['src/main/store.test.ts', [70, 'b8d5385088ce01893919f8d442027a09346a50dfbadbcf1d1e5cf098d6e66012']],
+            ['src/main/win-security.test.ts', [39, '3ba1894a41cf2d9a23644fb22f2c464152b201d1a31c7db3054aa43807c4dc2a']],
+            ['src/main/persistence/qa-main-action-owner.test.ts', [10, '9ed1670b14859aba44c94d944317b76089adb44f856111552df01e314c009b1e']]
+          ])
+          const linuxExpected = new Map([
+            ['src/main/persistence/qa-run-protocol.test.ts', [3, '408d70eba15ab392e118da02e05b6891ee830b82c4d8776e1c63935b88e067fd']],
+            ['src/main/persistence/native-key-intent.test.ts', [12, '4a8c6d6a05f1b14208b66d1754231c90a3482feb861143bcc6297c5f8783e9af']]
+          ])
+          // Pinned Vitest 4.1.11 getSuites includes each file and every nested suite.
+          // These nested counts come from the frozen selected source inventory (native 41, Linux 2).
+          const expectedNestedSuites = new Map([
+            ['src/main/persistence/native-key-intent.test.ts', 1],
+            ['src/main/persistence/qa-run-protocol.test.ts', 1],
+            ['src/main/persistence/qa-profile-root-owner.qa-case.ts', 1],
+            ['src/main/persistence/qa-run-owner.qa-case.ts', 1],
+            ['src/main/persistence/qa-run-protocol.qa-case.ts', 1],
+            ['src/main/persistence/root-registry.qa-case.ts', 1],
+            ['src/main/auth-persistence-observation.test.ts', 1],
+            ['src/main/auth-speech-boundary-readers.test.ts', 1],
+            ['src/main/auth-speech-lease.test.ts', 1],
+            ['src/main/auth.test.ts', 8],
+            ['src/main/fresh-lean-speech-defaults.test.ts', 1],
+            ['src/main/settings-observation.test.ts', 1],
+            ['src/main/store.test.ts', 10],
+            ['src/main/win-security.test.ts', 11],
+            ['src/main/persistence/qa-main-action-owner.test.ts', 1]
+          ])
+          const countFields = ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites','numPendingTestSuites']
+          const hash = (value) => createHash('sha256').update(value).digest('hex')
+          const functionalErrors = []
+          const diagnosticErrors = []
+          const evidenceErrors = []
+          let report = null
+          let diagnostic = null
+          let reportBytes = null
+          let logBytes = null
+          let diagnosticBytes = null
+          let reportSha256 = null
+          let defaultLogSha256 = null
+          let diagnosticSha256 = null
+          let authCase = null
+          let inventory = null
+          const boundedRead = (path, maxBytes, minBytes) => {
+            const metadata = statSync(path)
+            if (!metadata.isFile() || metadata.size < minBytes || metadata.size > maxBytes) throw new Error('bounded-file-invalid')
+            const data = readFileSync(path)
+            if (data.byteLength !== metadata.size || data.byteLength < minBytes || data.byteLength > maxBytes) throw new Error('bounded-file-raced')
+            return data
+          }
+          try {
+            reportBytes = boundedRead(process.env.REPORT, 32 * 1024 * 1024, 2)
+            reportSha256 = hash(reportBytes)
+            report = JSON.parse(reportBytes.toString('utf8'))
+          } catch { functionalErrors.push('vitest-report-missing-malformed-or-out-of-bounds') }
+          try {
+            logBytes = boundedRead(process.env.DEFAULT_LOG, 4 * 1024 * 1024, 1)
+            defaultLogSha256 = hash(logBytes)
+          } catch { functionalErrors.push('default-log-missing-malformed-or-out-of-bounds') }
+
+          const targetMap = {
+            'linux-shipping': { platform: 'linux', arch: 'x64', owner: false },
+            'windows-x64': { platform: 'win32', arch: 'x64', owner: true },
+            'macos-x64': { platform: 'darwin', arch: 'x64', owner: true },
+            'macos-arm64': { platform: 'darwin', arch: 'arm64', owner: true }
+          }
+          const expectedRuntime = targetMap[process.env.TARGET]
+          const runtime = { version: process.version, platform: process.platform, arch: process.arch }
+          if (!expectedRuntime || process.version !== 'v22.22.3' || runtime.platform !== expectedRuntime.platform || runtime.arch !== expectedRuntime.arch)
+            functionalErrors.push('actual-node-runtime-does-not-match-target')
+          const sourceHead = (() => {
+            try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }
+            catch { return null }
+          })()
+          if (!sourceHead || sourceHead !== process.env.WORKFLOW_SHA) functionalErrors.push('git-head-does-not-match-workflow-sha')
+          if (!process.env.RUN_ID || !process.env.RUN_ATTEMPT || !process.env.RUN_JOB) functionalErrors.push('run-attempt-or-job-binding-missing')
+
+          const sourceManifest = Object.create(null)
+          for (const file of sourceFiles) {
+            try {
+              const checkout = readFileSync(file)
+              const blob = execFileSync('git', ['show', `${sourceHead}:${file}`])
+              const checkoutText = checkout.toString('utf8')
+              const blobText = blob.toString('utf8')
+              const normalizedBlob = blobText.replace(/\r\n/g, '\n')
+              const expectedCrlf = normalizedBlob.replace(/\n/g, '\r\n')
+              const checkoutMatchesBlob = checkout.equals(blob) || checkoutText === expectedCrlf
+              const hasCrLf = checkoutText.includes('\r\n')
+              const hasLf = /(^|[^\r])\n/.test(checkoutText)
+              sourceManifest[file] = {
+                gitBlobSha256: hash(blob),
+                checkoutSha256: hash(checkout),
+                checkoutLineEndings: hasCrLf && hasLf ? 'mixed' : hasCrLf ? 'crlf' : hasLf ? 'lf' : 'none',
+                checkoutMatchesBlobOrCrlf: checkoutMatchesBlob
+              }
+              if (!checkoutMatchesBlob) functionalErrors.push('checkout-bytes-do-not-match-git-blob-or-crlf-form')
+            } catch {
+              sourceManifest[file] = null
+              functionalErrors.push('required-source-provenance-missing')
+            }
+          }
+          if (sourceFiles.length !== 45) functionalErrors.push('source-roster-size-invalid')
+
+          const expected = process.env.OWNER_TARGET === 'true' ? nativeExpected : linuxExpected
+          const expectedFiles = [...expected.keys()]
+          if (report) {
+            if (typeof report !== 'object' || Array.isArray(report) || typeof report.success !== 'boolean')
+              evidenceErrors.push('pinned-vitest-report-top-level-shape-invalid')
+            if (countFields.some((key) => !Number.isSafeInteger(report[key]) || report[key] < 0)) functionalErrors.push('vitest-counters-missing-or-invalid')
+            if (Object.hasOwn(report, 'numUnhandledErrors') || Object.hasOwn(report, 'unhandledErrors')) functionalErrors.push('pinned-unhandled-json-shape-changed')
+            const expectedTotal = process.env.OWNER_TARGET === 'true' ? 292 : 15
+            const expectedSuiteTotal = process.env.OWNER_TARGET === 'true' ? 56 : 4
+            if (report.numTotalTests !== expectedTotal) functionalErrors.push('vitest-total-does-not-match-frozen-cohort')
+            if (process.env.VITEST_EXIT !== '0' || report.success !== true || report.numPassedTests !== report.numTotalTests || report.numFailedTests !== 0 || report.numPendingTests !== 0 || report.numTodoTests !== 0 || report.numFailedTestSuites !== 0 || report.numPendingTestSuites !== 0 || report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites)
+              functionalErrors.push('strict-vitest-exit-or-count-gate-failed')
+            if (!Array.isArray(report.testResults) || report.testResults.length !== expectedFiles.length) functionalErrors.push('selected-file-inventory-does-not-match-closed-roster')
+            const observedCounts = Object.create(null)
+            for (const file of expectedFiles) {
+              const matches = Array.isArray(report.testResults) ? report.testResults.filter((item) => typeof item?.name === 'string' && item.name.replaceAll('\\', '/').endsWith('/' + file)) : []
+              const expectedSpec = expected.get(file)
+              if (!expectedSpec) functionalErrors.push('frozen-case-title-digest-missing')
+              const [expectedCount, expectedTitleDigest] = expectedSpec ?? [null, null]
+              const item = matches.length === 1 ? matches[0] : null
+              const assertions = item && Array.isArray(item.assertionResults) ? item.assertionResults : null
+              const titles = assertions && assertions.every((test) => typeof test.fullName === 'string') ? assertions.map((test) => test.fullName) : null
+              const titleDigest = titles ? hash(Buffer.from(JSON.stringify(titles))) : null
+              const count = assertions ? assertions.length : null
+              observedCounts[file] = { count, titleDigest }
+              if (!item || !assertions || count !== expectedCount || !expectedTitleDigest || titleDigest !== expectedTitleDigest)
+                functionalErrors.push('file-count-title-inventory-mismatch')
+              if (item && assertions && (item.status !== 'passed' || assertions.some((test) => test.status !== 'passed')))
+                functionalErrors.push('file-or-case-functional-failure')
+            }
+            const allAssertionArraysPresent = Array.isArray(report.testResults) && report.testResults.every((item) => Array.isArray(item?.assertionResults))
+            const actualTotal = allAssertionArraysPresent ? report.testResults.reduce((sum, item) => sum + item.assertionResults.length, 0) : null
+            if (actualTotal !== report.numTotalTests) functionalErrors.push('per-file-counts-do-not-match-global-total')
+            if (allAssertionArraysPresent) {
+              const allowedCaseStatuses = new Set(['passed','failed','pending','skipped','todo'])
+              const statuses = report.testResults.flatMap((item) => item.assertionResults.map((test) => test?.status))
+              const nestedSuites = new Set()
+              const failedNestedSuites = new Set()
+              for (const file of expectedFiles) {
+                const matches = report.testResults.filter((item) => typeof item?.name === 'string' && item.name.replaceAll('\\', '/').endsWith('/' + file))
+                if (matches.length !== 1) continue
+                const fileSuites = new Set()
+                for (const test of matches[0].assertionResults) {
+                  if (!Array.isArray(test?.ancestorTitles) || test.ancestorTitles.length === 0 ||
+                      test.ancestorTitles.some((name) => typeof name !== 'string' || !name) ||
+                      typeof test.title !== 'string' || test.fullName !== [...test.ancestorTitles, test.title].join(' ')) {
+                    evidenceErrors.push('pinned-vitest-suite-ancestry-invalid')
+                    continue
+                  }
+                  for (let depth = 1; depth <= test.ancestorTitles.length; depth += 1) {
+                    const suite = JSON.stringify([file, ...test.ancestorTitles.slice(0, depth)])
+                    fileSuites.add(suite)
+                    nestedSuites.add(suite)
+                    if (test.status === 'failed') failedNestedSuites.add(suite)
+                  }
+                }
+                if (fileSuites.size !== expectedNestedSuites.get(file)) evidenceErrors.push('pinned-vitest-file-suite-inventory-invalid')
+              }
+              const failedFiles = report.testResults.filter((item) => item.status === 'failed').length
+              const passedFiles = report.testResults.filter((item) => item.status === 'passed').length
+              if (report.numTotalTestSuites !== expectedSuiteTotal ||
+                  report.numTotalTestSuites !== expectedFiles.length + nestedSuites.size ||
+                  report.numFailedTestSuites < failedFiles + failedNestedSuites.size ||
+                  report.numPassedTestSuites < passedFiles)
+                evidenceErrors.push('pinned-vitest-selected-suite-counters-inconsistent')
+              if (report.testResults.some((item) => !['passed','failed'].includes(item?.status)) || statuses.some((status) => !allowedCaseStatuses.has(status)))
+                evidenceErrors.push('pinned-vitest-file-or-case-status-invalid')
+              const numberWithStatus = (status) => statuses.filter((item) => item === status).length
+              if (report.numPassedTests !== numberWithStatus('passed') || report.numFailedTests !== numberWithStatus('failed') ||
+                  report.numPendingTests !== numberWithStatus('pending') + numberWithStatus('skipped') || report.numTodoTests !== numberWithStatus('todo') ||
+                  report.numTotalTests !== statuses.length || report.numTotalTests !== report.numPassedTests + report.numFailedTests + report.numPendingTests + report.numTodoTests)
+                evidenceErrors.push('pinned-vitest-aggregate-test-counters-inconsistent')
+              if (report.testResults.some((item) => item.status === 'passed' && item.assertionResults.some((test) => test?.status === 'failed')) ||
+                  (report.testResults.some((item) => item.status === 'failed') && report.numFailedTestSuites === 0))
+                evidenceErrors.push('pinned-vitest-file-result-inconsistent')
+            }
+            if (report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites ||
+                report.success !== (report.testResults?.length > 0 && report.numFailedTestSuites === 0 && report.numFailedTests === 0))
+              evidenceErrors.push('pinned-vitest-suite-counters-or-success-inconsistent')
+            inventory = { selectedFiles: expectedFiles, perFile: observedCounts, expectedTotal, actualTotal }
+            if (process.env.OWNER_TARGET === 'true') {
+              const target = Array.isArray(report.testResults) ? report.testResults.filter((item) => typeof item?.name === 'string' && item.name.replaceAll('\\', '/').endsWith('/src/main/auth.test.ts')) : []
+              const title = 'retires the old owner when actual sign-in replaces the in-memory session'
+              const matches = target.length === 1 && Array.isArray(target[0].assertionResults)
+                ? target[0].assertionResults.filter((test) => typeof test.fullName === 'string' && test.fullName.endsWith(title))
+                : []
+              authCase = matches.length === 1 ? {
+                title,
+                status: matches[0].status,
+                failureMessageSha256: Array.isArray(matches[0].failureMessages) ? hash(Buffer.from(JSON.stringify(matches[0].failureMessages))) : null,
+                replacementNullAssertionFailure: Array.isArray(matches[0].failureMessages) && matches[0].failureMessages.some((message) => typeof message === 'string' && message.includes('expected null not to be null'))
+              } : null
+              if (!authCase) functionalErrors.push('original-auth-case-result-missing-or-duplicate')
+            }
+          }
+
+          const prerequisiteCodes = new Set([
+            'vitest-report-missing-malformed-or-out-of-bounds', 'default-log-missing-malformed-or-out-of-bounds',
+            'actual-node-runtime-does-not-match-target', 'git-head-does-not-match-workflow-sha',
+            'run-attempt-or-job-binding-missing', 'checkout-bytes-do-not-match-git-blob-or-crlf-form',
+            'required-source-provenance-missing', 'source-roster-size-invalid',
+            'vitest-counters-missing-or-invalid', 'pinned-unhandled-json-shape-changed',
+            'vitest-total-does-not-match-frozen-cohort', 'selected-file-inventory-does-not-match-closed-roster',
+            'file-count-title-inventory-mismatch', 'per-file-counts-do-not-match-global-total',
+            'original-auth-case-result-missing-or-duplicate'
+          ])
+          evidenceErrors.push(...functionalErrors.filter((code) => prerequisiteCodes.has(code)))
+
+          const exactKeys = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) && JSON.stringify(Object.keys(object).sort()) === JSON.stringify([...keys].sort())
+          const allowedRoles = new Set(['initial-speech','held-old-speech','reentrant-main','explicit-status-main','replacement-speech','returned-account-speech'])
+          const allowedPhases = new Set(['request','invalidation-status','post-sign-in-status','return-account-status','unassigned'])
+          const allowedCategories = new Set(['unknown-membership','ancestor-changed','target-changed','absence-appeared','source-disappeared','admin-trust-refused','close-failed','settings-frame-unavailable','original-fence-changed','unclassified-refusal'])
+          const allowedSources = new Set(['settings','recovered','user-managed','admin-managed','sticky','lkg'])
+          const allowedRelations = new Set(['volume-root','shared-ancestor','profile','immediate-source-parent'])
+          const eventKeys = ['sequence','tick','kind','ordinal','role','phase','status']
+          const prepKeys = ['ordinal','startedTick','kind','role','callerPhase','begun','ended','outcome','stageAtEnd','boundaryReturnedTick','expectedPublicationTick','errorCategory','verifiedBoundaryOutcome','verifiedBoundaryErrorCategory','joins','fence','principalAssociationAvailable','fixtureEpochCaptured','storeEpochCaptured','storeOutcome','storeReadable','storeFramePresent','storeFrameLookup','storeReceiptPresent','storeReceiptFrameAssociated','boundaryReadable','boundaryFramePresent','boundaryReceiptPresent','boundaryReceiptMatchesStore','sources']
+          const fenceKeys = ['captured','boundaryGenerationCaptured','authorityEpochCaptured','semanticEpochCaptured','sessionIdentityCaptured','sessionValueCaptured','sessionEpochCaptured','profileCaptured','readerIdentityCaptured','sessionOutsideOriginalObserved','principalAssociationAvailable','checksBeforeBoundary','checksAfterBoundary','expectedPublicationCheckCount','firstChangedCheck','firstChangedPhase','boundaryGenerationEqual','authorityEpochEqual','semanticEpochEqual','sessionIdentityEqual','sessionValueEqual','sessionEpochEqual','profileEqual','readerIdentityEqual','environmentCheckCount','environmentCurrent','environmentSnapshotIdentityEqual','receiptCheckCount','receiptCurrent','receiptMatchesOriginal','fixtureEpochEqual','storeEpochEqual']
+          const sourceKeys = ['ordinal','role','captureCount','validationCount','captureOutcome','boundedOutcome','managedOutcome','validationOutcome','validationCategory','failureCategory','observerMembership','unchangedPathCount','changedPathCount','absenceAppearedCount','sourceDisappearedCount','firstDivergence']
+          const divergenceKeys = ['atTick','depth','relation','target','fields']
+          const statFields = ['kind','dev','ino','size','mtime','ctime','birthtime','uid','gid','mode']
+          const topKeys = ['schema','sourceHead','runId','runAttempt','job','target','runtime','sourceHashes','caseId','caseOutcome','replacementAssertion','unreached','collectorComplete','observerFailure','cleanupFailure','overflowReason','limits','unhandledErrorCount','events','preparations']
+          const allowedEventKinds = new Set(['preparation-begin','preparation-end','caller-join','currentness','replacement-assertion','case-outcome'])
+          const allowedEventStatuses = {
+            'preparation-begin': new Set(['main','speech']),
+            'preparation-end': new Set(['fulfilled-null','fulfilled-present','rejected']),
+            'caller-join': new Set(['joined-existing']),
+            currentness: new Set(['current','retired']),
+            'replacement-assertion': new Set(['passed','failed']),
+            'case-outcome': new Set(['complete'])
+          }
+          const validSmallCount = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max
+          const validateDiagnostic = (value) => {
+            if (!exactKeys(value, topKeys)) return ['diagnostic-top-level-shape-invalid']
+            const errors = []
+            if (value.schema !== 'metis-auth-authority-diagnostic/v2' || value.caseId !== 'auth-sign-in-replacement') errors.push('diagnostic-schema-or-case-id-invalid')
+            if (value.sourceHead !== sourceHead || value.sourceHead !== process.env.WORKFLOW_SHA || value.runId !== process.env.RUN_ID || value.runAttempt !== process.env.RUN_ATTEMPT || value.job !== process.env.RUN_JOB || value.target !== process.env.TARGET) errors.push('diagnostic-run-binding-invalid')
+            if (!exactKeys(value.runtime, ['version','platform','arch']) || value.runtime.version !== runtime.version || value.runtime.platform !== runtime.platform || value.runtime.arch !== runtime.arch) errors.push('diagnostic-runtime-binding-invalid')
+            if (!value.sourceHashes || typeof value.sourceHashes !== 'object' || Array.isArray(value.sourceHashes) || Object.keys(value.sourceHashes).length !== diagnosticSourceFiles.length) errors.push('diagnostic-source-hash-set-invalid')
+            else for (const file of diagnosticSourceFiles) if (value.sourceHashes[file] !== sourceManifest[file]?.checkoutSha256) errors.push('diagnostic-source-hash-mismatch')
+            if (value.collectorComplete !== true || value.observerFailure !== false || value.cleanupFailure !== false || value.overflowReason !== null) errors.push('collector-reported-incomplete')
+            if (!exactKeys(value.limits, ['preparations','sourcesPerPreparation','events','bytes']) || value.limits.preparations !== 8 || value.limits.sourcesPerPreparation !== 6 || value.limits.events !== 128 || value.limits.bytes !== 65536) errors.push('diagnostic-bounds-invalid')
+            if (!exactKeys(value.unhandledErrorCount, ['value','availability']) || value.unhandledErrorCount.value !== null || value.unhandledErrorCount.availability !== 'not-in-pinned-vitest-json') errors.push('unhandled-count-availability-invalid')
+            if (!Array.isArray(value.preparations) || value.preparations.length < 2 || value.preparations.length > 8) errors.push('preparation-roster-invalid')
+            if (!Array.isArray(value.events) || value.events.length === 0 || value.events.length > 128) errors.push('event-roster-invalid')
+            if (!Array.isArray(value.events) || value.events.some((item, index) => !exactKeys(item,eventKeys) || item.sequence !== index || !Number.isSafeInteger(item.tick) || item.tick < 1 || item.tick > 8192 || (index > 0 && item.tick <= value.events[index - 1].tick) || !allowedEventKinds.has(item.kind) || !allowedEventStatuses[item.kind]?.has(item.status) || !allowedRoles.has(item.role) || !allowedPhases.has(item.phase) || item.phase === 'unassigned' || (item.ordinal !== null && (!Number.isSafeInteger(item.ordinal) || item.ordinal < 1 || item.ordinal > 8)))) errors.push('event-shape-or-enum-invalid')
+            const prepByOrdinal = new Map()
+            if (Array.isArray(value.preparations)) {
+              for (let index = 0; index < value.preparations.length; index += 1) {
+                const prep = value.preparations[index]
+                if (!exactKeys(prep, prepKeys) || prep.ordinal !== index + 1 || prepByOrdinal.has(prep.ordinal)) { errors.push('preparation-shape-or-ordinal-invalid'); continue }
+                prepByOrdinal.set(prep.ordinal, prep)
+                if (!Number.isSafeInteger(prep.startedTick) || prep.startedTick < 1 || prep.startedTick > 8192 || !['main','speech'].includes(prep.kind) || !allowedRoles.has(prep.role) || !allowedPhases.has(prep.callerPhase) || prep.callerPhase === 'unassigned' || prep.begun !== true || prep.ended !== true || !['fulfilled-null','fulfilled-present','rejected'].includes(prep.outcome) || !['before-original-capture','before-boundary-return','after-boundary-return'].includes(prep.stageAtEnd) || (prep.errorCategory !== null && !allowedCategories.has(prep.errorCategory))) errors.push('preparation-state-invalid')
+                if (prep.boundaryReturnedTick !== null && (!Number.isSafeInteger(prep.boundaryReturnedTick) || prep.boundaryReturnedTick < 1 || prep.boundaryReturnedTick > 8192)) errors.push('boundary-return-tick-invalid')
+                if (prep.expectedPublicationTick !== null && (!Number.isSafeInteger(prep.expectedPublicationTick) || prep.expectedPublicationTick < 1 || prep.expectedPublicationTick > 8192)) errors.push('expected-publication-tick-invalid')
+                if (prep.stageAtEnd === 'after-boundary-return' && prep.boundaryReturnedTick === null) errors.push('settled-boundary-milestone-unavailable')
+                if (prep.stageAtEnd === 'before-boundary-return' && prep.boundaryReturnedTick !== null) errors.push('early-boundary-stage-inconsistent')
+                if (prep.outcome === 'fulfilled-present' &&
+                    (prep.stageAtEnd !== 'after-boundary-return' || prep.boundaryReturnedTick === null ||
+                     prep.expectedPublicationTick === null || prep.fence?.checksAfterBoundary < 1 ||
+                     prep.fence?.expectedPublicationCheckCount < 1))
+                  errors.push('positive-original-boundary-or-publication-missing')
+                if (!['not-observed','current','refused','unknown'].includes(prep.verifiedBoundaryOutcome) || (prep.verifiedBoundaryErrorCategory !== null && !allowedCategories.has(prep.verifiedBoundaryErrorCategory)) || (prep.verifiedBoundaryOutcome === 'refused' && prep.verifiedBoundaryErrorCategory === null)) errors.push('verified-boundary-outcome-invalid')
+                if (prep.outcome === 'fulfilled-null' && prep.role !== 'held-old-speech' && prep.errorCategory !== 'unclassified-refusal') errors.push('null-outcome-not-classified-as-unclassified')
+                if (!exactKeys(prep.fence, fenceKeys) || typeof prep.fence.captured !== 'boolean' || prep.fence.principalAssociationAvailable !== false || prep.principalAssociationAvailable !== false) errors.push('original-fence-capture-invalid')
+                else {
+                  const captured = ['boundaryGenerationCaptured','authorityEpochCaptured','semanticEpochCaptured','sessionIdentityCaptured','sessionValueCaptured','sessionEpochCaptured','profileCaptured','readerIdentityCaptured']
+                  if (captured.some((key) => typeof prep.fence[key] !== 'boolean') || typeof prep.fence.sessionOutsideOriginalObserved !== 'boolean') errors.push('original-fence-field-availability-invalid')
+                  if (prep.kind === 'main' && prep.stageAtEnd !== 'before-original-capture' && (prep.fence.captured !== true || prep.fence.sessionIdentityCaptured !== true || prep.fence.sessionValueCaptured !== true || prep.fence.sessionEpochCaptured !== true || prep.fence.profileCaptured !== true)) errors.push('main-original-fence-unavailable')
+                  if (prep.kind === 'speech' && prep.stageAtEnd !== 'before-original-capture' && (prep.fence.captured !== true || prep.fence.boundaryGenerationCaptured !== true || prep.fence.authorityEpochCaptured !== true || prep.fence.semanticEpochCaptured !== true || prep.fence.readerIdentityCaptured !== true || prep.fence.sessionIdentityCaptured !== false || prep.fence.sessionValueCaptured !== false)) errors.push('speech-preawait-fence-invalid')
+                  if (prep.stageAtEnd === 'before-original-capture' && (prep.fence.captured !== false || prep.outcome === 'fulfilled-present')) errors.push('early-capture-stage-inconsistent')
+                  for (const key of fenceKeys) if (key.endsWith('Equal') || ['environmentCurrent','environmentSnapshotIdentityEqual','receiptCurrent','receiptMatchesOriginal'].includes(key)) if (prep.fence[key] !== null && typeof prep.fence[key] !== 'boolean') errors.push('fence-comparison-not-boolean-or-null')
+                  if (!validSmallCount(prep.fence.checksBeforeBoundary,128) || !validSmallCount(prep.fence.checksAfterBoundary,128) || !validSmallCount(prep.fence.expectedPublicationCheckCount,128) || !validSmallCount(prep.fence.environmentCheckCount,128) || !validSmallCount(prep.fence.receiptCheckCount,128)) errors.push('fence-check-count-out-of-bounds')
+                  if ((prep.fence.firstChangedCheck === null) !== (prep.fence.firstChangedPhase === null) || (prep.fence.firstChangedCheck !== null && (!Number.isSafeInteger(prep.fence.firstChangedCheck) || prep.fence.firstChangedCheck < 1 || prep.fence.firstChangedCheck > 8192 || !['before-boundary','after-boundary','expected-publication'].includes(prep.fence.firstChangedPhase)))) errors.push('first-fence-transition-invalid')
+                  if (prep.fence.firstChangedCheck !== null && ((prep.fence.firstChangedPhase === 'before-boundary' && prep.boundaryReturnedTick !== null && prep.fence.firstChangedCheck >= prep.boundaryReturnedTick) || (prep.fence.firstChangedPhase === 'after-boundary' && (prep.boundaryReturnedTick === null || prep.fence.firstChangedCheck <= prep.boundaryReturnedTick || (prep.expectedPublicationTick !== null && prep.fence.firstChangedCheck >= prep.expectedPublicationTick))) || (prep.fence.firstChangedPhase === 'expected-publication' && (prep.expectedPublicationTick === null || prep.fence.firstChangedCheck <= prep.expectedPublicationTick)))) errors.push('first-fence-transition-phase-invalid')
+                  if (prep.fence.receiptCheckCount > 0 && prep.fence.receiptMatchesOriginal !== true) errors.push('receipt-check-not-bound-to-original-receipt')
+                }
+                for (const key of ['storeReadable','storeFramePresent','storeReceiptPresent','storeReceiptFrameAssociated','boundaryReadable','boundaryFramePresent','boundaryReceiptPresent','boundaryReceiptMatchesStore']) if (prep[key] !== null && typeof prep[key] !== 'boolean') errors.push('store-or-frame-result-invalid')
+                if (prep.verifiedBoundaryOutcome === 'current' && prep.boundaryFramePresent !== true) errors.push('verified-boundary-current-without-frame')
+                if (prep.boundaryReceiptPresent === true && prep.boundaryFramePresent !== true) errors.push('boundary-receipt-without-verified-frame')
+                if (prep.storeReceiptPresent === true && prep.boundaryReceiptPresent === true && prep.boundaryReceiptMatchesStore === null) errors.push('boundary-receipt-association-unobserved')
+                if (typeof prep.fixtureEpochCaptured !== 'boolean' || typeof prep.storeEpochCaptured !== 'boolean') errors.push('producer-epoch-capture-state-invalid')
+                if (!['not-called','returned-null','returned-frame'].includes(prep.storeFrameLookup)) errors.push('store-frame-lookup-invalid')
+                if (!['not-observed','returned-readable','returned-unreadable','rejected'].includes(prep.storeOutcome)) errors.push('store-outcome-invalid')
+                if (prep.storeOutcome === 'rejected' && (prep.storeReadable !== null || prep.storeReceiptPresent !== false || prep.storeFrameLookup !== 'not-called' || prep.storeFramePresent !== null || prep.storeReceiptFrameAssociated !== null)) errors.push('rejected-store-claimed-returned-snapshot-or-frame')
+                if (prep.storeOutcome === 'returned-readable' && prep.storeReadable !== true) errors.push('returned-readable-store-state-invalid')
+                if (prep.storeOutcome === 'returned-unreadable' && prep.storeReadable !== false) errors.push('returned-unreadable-store-state-invalid')
+                if (prep.storeOutcome === 'not-observed' && prep.storeReadable !== null) errors.push('unobserved-store-claimed-snapshot')
+                if (prep.storeFrameLookup === 'returned-frame' && (prep.storeFramePresent !== true || prep.storeReceiptFrameAssociated !== true)) errors.push('called-store-frame-association-invalid')
+                if (prep.storeFrameLookup === 'returned-null' && prep.storeFramePresent !== false) errors.push('called-store-frame-null-invalid')
+                if (prep.storeFrameLookup === 'not-called' && prep.storeReadable === false && prep.storeFramePresent !== false) errors.push('unreadable-store-frame-invalid')
+                if (prep.kind === 'main' && prep.storeReadable === true && prep.storeReceiptPresent === true && prep.storeFrameLookup === 'not-called' && prep.stageAtEnd === 'after-boundary-return' && prep.outcome === 'fulfilled-present') errors.push('positive-main-frame-was-not-looked-up')
+                if (prep.kind === 'main' && prep.outcome === 'fulfilled-present' &&
+                    (prep.storeOutcome !== 'returned-readable' || prep.storeReadable !== true ||
+                     prep.storeFrameLookup !== 'returned-frame' || prep.storeFramePresent !== true ||
+                     prep.storeReceiptPresent !== true || prep.storeReceiptFrameAssociated !== true ||
+                     prep.boundaryReadable !== true || prep.boundaryFramePresent !== true ||
+                     prep.boundaryReceiptPresent !== true || prep.boundaryReceiptMatchesStore !== true ||
+                     prep.verifiedBoundaryOutcome !== 'current' || prep.fence?.receiptCheckCount < 1 ||
+                     prep.fence?.receiptMatchesOriginal !== true))
+                  errors.push('positive-main-original-frame-or-receipt-path-missing')
+                if (!Array.isArray(prep.joins) || prep.joins.length > 8 || prep.joins.some((join) => !exactKeys(join,['role','phase']) || !allowedRoles.has(join.role) || !allowedPhases.has(join.phase) || join.phase === 'unassigned')) errors.push('caller-join-invalid')
+                if (!Array.isArray(prep.sources) || prep.sources.length > 6) errors.push('source-summary-roster-invalid')
+                else for (const source of prep.sources) {
+                  if (!exactKeys(source,sourceKeys) || !allowedSources.has(source.role) || !validSmallCount(source.ordinal,6) || source.ordinal < 1) { errors.push('source-summary-shape-invalid'); continue }
+                  if (!validSmallCount(source.captureCount,65) || !validSmallCount(source.validationCount,65) || !validSmallCount(source.unchangedPathCount,65) || !validSmallCount(source.changedPathCount,65) || !validSmallCount(source.absenceAppearedCount,65) || !validSmallCount(source.sourceDisappearedCount,65)) errors.push('source-observation-count-invalid')
+                  if (!['not-observed','captured','invalid','unknown'].includes(source.captureOutcome) || !['not-observed','present','absent','invalid','unknown'].includes(source.boundedOutcome) || !['not-observed','present','absent','invalid','unknown'].includes(source.managedOutcome) || !['not-observed','current','refused','unknown'].includes(source.validationOutcome) || (source.validationCategory !== null && !allowedCategories.has(source.validationCategory)) || (source.failureCategory !== null && !allowedCategories.has(source.failureCategory)) || !['observed','unavailable'].includes(source.observerMembership)) errors.push('source-outcome-invalid')
+                  if ((source.captureOutcome === 'invalid' || source.boundedOutcome === 'invalid' || source.managedOutcome === 'invalid' || source.validationOutcome === 'refused') && source.failureCategory === null) errors.push('source-failure-category-missing')
+                  if (source.validationOutcome === 'refused' && source.validationCategory !== source.failureCategory) errors.push('source-validation-category-disagrees')
+                  if (source.captureOutcome === 'unknown' && source.observerMembership !== 'unavailable') errors.push('unobserved-original-pin-claimed-observed')
+                  if (source.captureOutcome === 'captured' && source.captureCount < 1) errors.push('pin-capture-without-original-metadata')
+                  if (source.unchangedPathCount + source.changedPathCount + source.absenceAppearedCount + source.sourceDisappearedCount > source.validationCount) errors.push('source-comparison-count-exceeds-checks')
+                  if (source.changedPathCount > 0 && source.firstDivergence === null) errors.push('changed-source-without-first-divergence')
+                  if (source.firstDivergence !== null) {
+                    const d = source.firstDivergence
+                    if (!exactKeys(d,divergenceKeys) || !Number.isSafeInteger(d.atTick) || d.atTick < 1 || d.atTick > 8192 || (d.depth !== null && (!Number.isInteger(d.depth) || d.depth < 0 || d.depth > 64)) || typeof d.target !== 'boolean' || (d.relation !== null && !allowedRelations.has(d.relation)) || (d.target && d.relation !== null) || (!d.target && d.relation === null) || !exactKeys(d.fields,statFields) || Object.values(d.fields).some((item) => typeof item !== 'boolean') || Object.values(d.fields).every(Boolean) || source.changedPathCount < 1) errors.push('first-divergence-shape-invalid')
+                  }
+                }
+                if (Array.isArray(prep.sources) && prep.sources.some((source, index) => source?.ordinal !== index + 1)) errors.push('source-ordinals-not-unique-and-sequential')
+                if (prep.kind === 'speech' && prep.role === 'initial-speech' && prep.outcome === 'fulfilled-present' && !['admin-managed','user-managed','sticky'].every((role) => prep.sources.some((source) => source?.role === role && (['present','absent'].includes(source.boundedOutcome) || ['present','absent'].includes(source.managedOutcome))))) errors.push('positive-initial-speech-source-observation-missing')
+              }
+            }
+            const roleKindPhase = new Map([
+              ['initial-speech:request','speech'], ['held-old-speech:request','speech'],
+              ['reentrant-main:invalidation-status','main'], ['explicit-status-main:post-sign-in-status','main'],
+              ['replacement-speech:request','speech'], ['returned-account-speech:return-account-status','main'],
+              ['returned-account-speech:request','speech']
+            ])
+            const states = new Map()
+            const owners = new Set()
+            const joins = []
+            const replacementEvents = []
+            const caseEvents = []
+            for (const item of value.events) {
+              const prep = prepByOrdinal.get(item.ordinal)
+              const owner = `${item.role}:${item.phase}`
+              if (item.kind === 'preparation-begin') {
+                if (item.role === 'returned-account-speech' && replacementEvents.length !== 1) errors.push('return-account-started-before-replacement-assertion')
+                if (!prep || states.has(item.ordinal) || prep.kind !== item.status || prep.role !== item.role || prep.callerPhase !== item.phase || roleKindPhase.get(owner) !== prep.kind || owners.has(owner)) errors.push('preparation-begin-invalid-or-duplicate')
+                else { states.set(item.ordinal,{phase:'open',begin:item,joins:[],end:null}); owners.add(owner) }
+              } else if (item.kind === 'caller-join') {
+                if (item.role === 'returned-account-speech' && replacementEvents.length !== 1) errors.push('return-account-joined-before-replacement-assertion')
+                const state = states.get(item.ordinal)
+                if (!prep || state?.phase !== 'open' || roleKindPhase.get(owner) !== prep.kind || owners.has(owner)) errors.push('caller-join-outside-original-preparation')
+                else { state.joins.push({role:item.role,phase:item.phase}); owners.add(owner) }
+                joins.push(item)
+              } else if (item.kind === 'preparation-end') {
+                const state = states.get(item.ordinal)
+                if (!prep || state?.phase !== 'open' || prep.outcome !== item.status || prep.role !== item.role || prep.callerPhase !== item.phase) errors.push('preparation-end-invalid-or-duplicate')
+                else { state.phase = 'ended'; state.end = item }
+              } else if (item.kind === 'currentness') {
+                const state = states.get(item.ordinal)
+                if (!prep || state?.phase !== 'ended' || prep.kind !== 'speech' || prep.outcome !== 'fulfilled-present' || prep.role !== item.role || prep.callerPhase !== item.phase) errors.push('currentness-without-returned-original-lease')
+              } else if (item.kind === 'replacement-assertion') {
+                replacementEvents.push(item)
+                const replacement = [...prepByOrdinal.values()].find((p) => p.role === 'replacement-speech' && p.kind === 'speech')
+                if (!replacement || item.ordinal !== replacement.ordinal || states.get(item.ordinal)?.phase !== 'ended' || item.role !== 'replacement-speech' || item.phase !== 'request' || item.status !== value.replacementAssertion) errors.push('replacement-assertion-before-settled-attempt')
+              } else if (item.kind === 'case-outcome') {
+                caseEvents.push(item)
+                const returned = [...prepByOrdinal.values()].find((p) => p.role === 'returned-account-speech' && p.kind === 'speech')
+                if (!returned || replacementEvents.length !== 1 || item.ordinal !== returned.ordinal || states.get(item.ordinal)?.phase !== 'ended' || item.role !== 'returned-account-speech' || item.phase !== 'request' || item.status !== 'complete' || value.caseOutcome !== 'complete') errors.push('case-complete-before-returned-lease')
+              }
+            }
+            for (const prep of prepByOrdinal.values()) {
+              const state = states.get(prep.ordinal)
+              if (state?.phase !== 'ended' || JSON.stringify(state.joins) !== JSON.stringify(prep.joins) || prep.startedTick >= state.begin.tick) errors.push('preparation-lifetime-or-joins-not-replayed')
+              if (state && (prep.boundaryReturnedTick !== null && (prep.boundaryReturnedTick <= prep.startedTick || prep.boundaryReturnedTick >= state.end?.tick) || prep.expectedPublicationTick !== null && (prep.expectedPublicationTick <= (prep.boundaryReturnedTick ?? prep.startedTick) || prep.expectedPublicationTick >= state.end?.tick))) errors.push('boundary-or-publication-outside-original-preparation')
+              if (prep.fence?.firstChangedCheck !== null && state && (prep.fence.firstChangedCheck <= prep.startedTick || prep.fence.firstChangedCheck >= state.end?.tick)) errors.push('first-fence-transition-outside-original-preparation')
+              for (const source of Array.isArray(prep.sources) ? prep.sources : []) if (source?.firstDivergence && state && (source.firstDivergence.atTick <= prep.startedTick || source.firstDivergence.atTick >= state.end?.tick)) errors.push('first-source-transition-outside-original-preparation')
+            }
+            if (replacementEvents.length !== 1 || caseEvents.length !== (value.caseOutcome === 'complete' ? 1 : 0)) errors.push('terminal-event-roster-invalid')
+            const callerSeen = (callerRole, phase) => owners.has(`${callerRole}:${phase}`)
+            for (const [callerRole, phase] of [['initial-speech','request'],['held-old-speech','request'],['reentrant-main','invalidation-status'],['explicit-status-main','post-sign-in-status'],['replacement-speech','request']]) if (!callerSeen(callerRole,phase)) errors.push('required-reached-role-missing')
+            const roleEvent = (role, phase) => value.events.find((item) => ['preparation-begin','caller-join'].includes(item.kind) && item.role === role && item.phase === phase)
+            const rolePrep = (role, phase) => prepByOrdinal.get(roleEvent(role, phase)?.ordinal)
+            const roleEnd = (role, phase) => states.get(roleEvent(role, phase)?.ordinal)?.end
+            const initialCall = roleEvent('initial-speech','request')
+            const heldCall = roleEvent('held-old-speech','request')
+            const reentrantCall = roleEvent('reentrant-main','invalidation-status')
+            const explicitCall = roleEvent('explicit-status-main','post-sign-in-status')
+            const replacementCall = roleEvent('replacement-speech','request')
+            const initialEnd = roleEnd('initial-speech','request')
+            const heldEnd = roleEnd('held-old-speech','request')
+            const replacementEnd = roleEnd('replacement-speech','request')
+            if (rolePrep('initial-speech','request')?.outcome !== 'fulfilled-present' || rolePrep('held-old-speech','request')?.outcome !== 'fulfilled-null') errors.push('original-initial-or-held-lease-outcome-invalid')
+            if (!initialCall || !initialEnd || !heldCall || !heldEnd || !reentrantCall || !explicitCall || !replacementCall || !replacementEnd ||
+                initialCall.kind !== 'preparation-begin' || heldCall.kind !== 'preparation-begin' || replacementCall.kind !== 'preparation-begin' ||
+                !(initialEnd.sequence < heldCall.sequence && heldCall.sequence < reentrantCall.sequence && reentrantCall.sequence < explicitCall.sequence && explicitCall.sequence < heldEnd.sequence && heldEnd.sequence < replacementCall.sequence && replacementEnd.sequence < replacementEvents[0]?.sequence))
+              errors.push('original-auth-case-caller-order-invalid')
+            const initialRetirements = value.events.filter((item) => item.kind === 'currentness' && item.role === 'initial-speech' && item.phase === 'request' && item.status === 'retired' && item.ordinal === initialCall?.ordinal)
+            if (!initialRetirements.some((item) => heldCall && reentrantCall && heldCall.sequence < item.sequence && item.sequence < reentrantCall.sequence) ||
+                !initialRetirements.some((item) => heldEnd && replacementCall && heldEnd.sequence < item.sequence && item.sequence < replacementCall.sequence))
+              errors.push('original-initial-lease-retirement-observation-missing')
+            if (value.replacementAssertion === 'failed') {
+              if (value.caseOutcome !== 'replacement-assertion-failed' || !Array.isArray(value.unreached) || JSON.stringify(value.unreached) !== JSON.stringify([{phase:'returned-account-status',reason:'replacement-assertion-failed'},{phase:'returned-account-speech',reason:'replacement-assertion-failed'}])) errors.push('replacement-failure-branch-invalid')
+              if (callerSeen('returned-account-speech','return-account-status') || callerSeen('returned-account-speech','request')) errors.push('unreached-return-account-role-was-executed')
+              if (authCase?.status !== 'failed' || authCase.replacementNullAssertionFailure !== true) errors.push('replacement-assertion-not-bound-to-actual-test-result')
+              if (rolePrep('replacement-speech','request')?.outcome !== 'fulfilled-null') errors.push('replacement-null-assertion-disagrees-with-original-result')
+            } else if (value.replacementAssertion === 'passed' && value.caseOutcome === 'complete') {
+              if (JSON.stringify(value.unreached) !== '[]' || !callerSeen('returned-account-speech','return-account-status') || !callerSeen('returned-account-speech','request') || authCase?.status !== 'passed') errors.push('complete-positive-branch-not-bound-to-report')
+              const returnedMainCall = roleEvent('returned-account-speech','return-account-status')
+              const returnedSpeechCall = roleEvent('returned-account-speech','request')
+              const returnedSpeechEnd = roleEnd('returned-account-speech','request')
+              if (rolePrep('replacement-speech','request')?.outcome !== 'fulfilled-present' || rolePrep('returned-account-speech','request')?.outcome !== 'fulfilled-present' || !returnedMainCall || !returnedSpeechCall || !returnedSpeechEnd || !replacementEvents[0] || !caseEvents[0] ||
+                  !(replacementEvents[0].sequence < returnedMainCall.sequence && returnedMainCall.sequence < returnedSpeechCall.sequence && returnedSpeechEnd.sequence < caseEvents[0].sequence)) errors.push('positive-replacement-or-returned-lease-outcome-invalid')
+              const current = (role, after, before, status) => value.events.some((item) => item.kind === 'currentness' && item.role === role && item.phase === 'request' && item.ordinal === roleEvent(role,'request')?.ordinal && item.status === status && after < item.sequence && item.sequence < before)
+              if (!current('replacement-speech',replacementEvents[0]?.sequence ?? Infinity,returnedMainCall?.sequence ?? -1,'current') ||
+                  !current('initial-speech',returnedMainCall?.sequence ?? Infinity,returnedSpeechCall?.sequence ?? -1,'retired') ||
+                  !current('replacement-speech',returnedMainCall?.sequence ?? Infinity,returnedSpeechCall?.sequence ?? -1,'retired') ||
+                  !current('returned-account-speech',returnedSpeechEnd?.sequence ?? Infinity,caseEvents[0]?.sequence ?? -1,'current'))
+                errors.push('positive-original-lease-currentness-ledger-incomplete')
+            } else errors.push('replacement-assertion-outcome-invalid')
+            if (value.events.filter((item) => item.kind === 'replacement-assertion').length !== 1) errors.push('replacement-assertion-event-missing-or-duplicate')
+            if (value.collectorComplete !== true) errors.push('collector-completeness-claim-false')
+            return [...new Set(errors)]
+          }
+
+          if (process.env.DIAGNOSTIC_MODE === 'enabled') {
+            try {
+              diagnosticBytes = boundedRead(process.env.DIAGNOSTIC_REPORT, 64 * 1024, 2)
+              diagnosticSha256 = hash(diagnosticBytes)
+              diagnostic = JSON.parse(diagnosticBytes.toString('utf8'))
+              diagnosticErrors.push(...validateDiagnostic(diagnostic))
+            } catch { diagnosticErrors.push('diagnostic-missing-malformed-or-out-of-bounds') }
+          } else if (existsSync(process.env.DIAGNOSTIC_REPORT)) diagnosticErrors.push('disabled-lane-emitted-diagnostic')
+
+          const exitCode = /^\d+$/.test(process.env.VITEST_EXIT ?? '') ? Number(process.env.VITEST_EXIT) : null
+          if (!Number.isSafeInteger(exitCode) || exitCode < 0 || exitCode > 255)
+            evidenceErrors.push('actual-vitest-cli-outcome-unavailable')
+          if (!reportBytes || !reportSha256 || !logBytes || !defaultLogSha256)
+            evidenceErrors.push('original-report-or-default-log-not-bound')
+          if (!expectedRuntime || !inventory || inventory.actualTotal !== inventory.expectedTotal || sourceFiles.length !== 45 ||
+              diagnosticSourceFiles.length !== 19 || sourceFiles.some((file) => sourceManifest[file]?.checkoutMatchesBlobOrCrlf !== true))
+            evidenceErrors.push('provenance-or-inventory-prerequisite-invalid')
+          const pinnedUnhandledFieldsAbsent = report !== null && !Object.hasOwn(report, 'numUnhandledErrors') && !Object.hasOwn(report, 'unhandledErrors')
+          const evidence = {
+            schema: 'metis-qa-persistence-source-evidence/v2',
+            target: process.env.TARGET,
+            diagnosticMode: process.env.DIAGNOSTIC_MODE,
+            runId: process.env.RUN_ID,
+            runAttempt: process.env.RUN_ATTEMPT,
+            job: process.env.RUN_JOB,
+            workflowSha: process.env.WORKFLOW_SHA,
+            actualHead: sourceHead,
+            runtime,
+            sourceFiles,
+            sourceManifest,
+            selectedFiles: inventory?.selectedFiles ?? null,
+            perFileResults: inventory?.perFile ?? null,
+            vitestExitCode: exitCode,
+            reportSha256,
+            defaultLogSha256,
+            diagnosticSha256,
+            diagnosticCollectorComplete: diagnostic?.collectorComplete ?? null,
+            diagnosticValidatedComplete: process.env.DIAGNOSTIC_MODE === 'enabled' ? diagnosticErrors.length === 0 && evidenceErrors.length === 0 : null,
+            evidencePrerequisiteErrors: [...new Set(evidenceErrors)],
+            diagnosticErrors,
+            functionalErrors,
+            authCase,
+            unhandledErrors: {
+              count: null,
+              availability: pinnedUnhandledFieldsAbsent ? 'unavailable-in-pinned-vitest-json' : 'invalid-or-missing-json',
+              strictCliExitCode: exitCode,
+              defaultLogSha256
+            },
+            counts: report ? Object.fromEntries(countFields.map((key) => [key, report[key] ?? null])) : null,
+            success: functionalErrors.length === 0 && diagnosticErrors.length === 0 && evidenceErrors.length === 0
+          }
+          let evidencePayload = JSON.stringify(evidence, null, 2) + '\n'
+          if (Buffer.byteLength(evidencePayload, 'utf8') > 256 * 1024) {
+            evidencePayload = JSON.stringify({
+              schema: 'metis-qa-persistence-source-evidence/v2', target: process.env.TARGET,
+              diagnosticMode: process.env.DIAGNOSTIC_MODE, runId: process.env.RUN_ID,
+              runAttempt: process.env.RUN_ATTEMPT, job: process.env.RUN_JOB,
+              workflowSha: process.env.WORKFLOW_SHA, actualHead: sourceHead,
+              diagnosticValidatedComplete: false, success: false,
+              evidencePrerequisiteErrors: ['evidence-overflow']
+            }) + '\n'
+            evidenceErrors.push('evidence-overflow')
+          }
+          writeFileSync(process.env.EVIDENCE, evidencePayload, { mode: 0o600 })
+          boundedRead(process.env.EVIDENCE, 256 * 1024, 2)
+          const uploadPaths = [process.env.EVIDENCE]
+          if (reportBytes) uploadPaths.push(process.env.REPORT)
+          if (logBytes) uploadPaths.push(process.env.DEFAULT_LOG)
+          if (process.env.DIAGNOSTIC_MODE === 'enabled' && diagnosticBytes) uploadPaths.push(process.env.DIAGNOSTIC_REPORT)
+          writeFileSync(process.env.GITHUB_OUTPUT, `upload_paths<<AUTH_DIAGNOSTIC_BOUNDED_FILES\n${uploadPaths.join('\n')}\nAUTH_DIAGNOSTIC_BOUNDED_FILES\n`, { flag: 'a' })
+          if (functionalErrors.length || diagnosticErrors.length || evidenceErrors.length) process.exitCode = 1
+          NODE
+      - name: Retain bounded original report, default log and source evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: qa-persistence-source-${{ matrix.target }}
-          path: |
-            ${{ runner.temp }}/qa-persistence-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
-            ${{ runner.temp }}/qa-persistence-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}.json
-          if-no-files-found: warn
+          name: qa-persistence-source-${{ matrix.target }}-${{ matrix.diagnostic }}
+          path: ${{ steps.evidence.outputs.upload_paths }}
+          if-no-files-found: error
           retention-days: 7

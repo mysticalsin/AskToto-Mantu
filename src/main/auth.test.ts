@@ -22,6 +22,12 @@ import {
   assertSettingsAuthAuthorityFrameCurrent,
   readSettingsAuthAuthorityFrame
 } from './settings-auth-authority-frame'
+import {
+  createAuthAuthorityDiagnostic,
+  type AuthAuthorityDiagnostic
+} from '../../scripts/qa/fixtures/auth-authority-diagnostic'
+
+const authAuthorityDiagnosticBridge = vi.hoisted(() => ({ observer: null as AuthAuthorityDiagnostic | null }))
 
 const authFileReadRace = vi.hoisted(() => ({
   path: null as string | null,
@@ -42,7 +48,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
-    lstat: vi.fn(actual.lstat),
+    lstat: vi.fn(function (this: unknown, ...args: Parameters<typeof actual.lstat>) {
+      const pending = Reflect.apply(actual.lstat, this, args)
+      const observer = authAuthorityDiagnosticBridge.observer
+      if (observer?.enabled) {
+        void pending
+          .then(
+            (stats) => observer.observeLstat(String(args[0]), stats),
+            (error: unknown) => observer.observeLstatFailure(String(args[0]), error)
+          )
+          .catch(() => observer.noteObserverFailure())
+      }
+      return pending
+    }),
     open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
       const [sourcePath] = args
       const handle = await actual.open(...args)
@@ -66,6 +84,168 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     })
   }
 })
+vi.mock('./auth-speech-lease', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./auth-speech-lease')>()
+  class DiagnosticSpeechAuthLeaseController extends actual.SpeechAuthLeaseController {
+    override configureReaders(readers: import('./auth-speech-lease').SpeechAuthLeaseReaders): void {
+      const observer = authAuthorityDiagnosticBridge.observer
+      if (observer?.enabled) {
+        observer.attachController(this)
+        observer.wrapReaders(readers)
+      }
+      super.configureReaders(readers)
+    }
+
+    override refresh(): Promise<import('./auth-speech-lease').SpeechAuthLease | null> {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer ? observer.runController(this, 'speech', () => super.refresh()) : super.refresh()
+    }
+
+    override refreshMainPersistenceSessionObservation(): Promise<
+      import('./auth-speech-lease').MainPersistenceSessionBoundary | null
+    > {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer
+        ? observer.runController(this, 'main', () => super.refreshMainPersistenceSessionObservation())
+        : super.refreshMainPersistenceSessionObservation()
+    }
+
+    override isCurrent(lease: import('./auth-speech-lease').SpeechAuthLease | null): boolean {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled
+        ? observer.observeCurrentness(this, lease, () => super.isCurrent(lease))
+        : super.isCurrent(lease)
+    }
+  }
+  return { ...actual, SpeechAuthLeaseController: DiagnosticSpeechAuthLeaseController }
+})
+vi.mock('./auth-speech-boundary', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./auth-speech-boundary')>()
+  return {
+    ...actual,
+    isVerifiedSpeechAuthBoundary: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.isVerifiedSpeechAuthBoundary>
+    ) {
+      const result = Reflect.apply(actual.isVerifiedSpeechAuthBoundary, this, args)
+      authAuthorityDiagnosticBridge.observer?.observeVerifiedBoundary(args[0], result)
+      return result
+    },
+    getVerifiedSpeechAuthBoundaryPersistenceReceipt: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.getVerifiedSpeechAuthBoundaryPersistenceReceipt>
+    ) {
+      const receipt = Reflect.apply(actual.getVerifiedSpeechAuthBoundaryPersistenceReceipt, this, args)
+      authAuthorityDiagnosticBridge.observer?.observeBoundaryReceipt(args[0], receipt)
+      return receipt
+    },
+    getVerifiedSpeechAuthBoundaryEnvironmentSnapshot: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.getVerifiedSpeechAuthBoundaryEnvironmentSnapshot>
+    ) {
+      const snapshot = Reflect.apply(actual.getVerifiedSpeechAuthBoundaryEnvironmentSnapshot, this, args)
+      authAuthorityDiagnosticBridge.observer?.observeBoundaryEnvironment(args[0], snapshot)
+      return snapshot
+    },
+    assertVerifiedSpeechAuthBoundaryCurrent: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.assertVerifiedSpeechAuthBoundaryCurrent>
+    ) {
+      const original = Reflect.apply(actual.assertVerifiedSpeechAuthBoundaryCurrent, this, args)
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled ? observer.observeVerifiedBoundaryCurrent(args[0], original) : original
+    }
+  }
+})
+vi.mock('./store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./store')>()
+  return {
+    ...actual,
+    readSettingsAtAuthorityBoundary: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.readSettingsAtAuthorityBoundary>
+    ) {
+      const original = Reflect.apply(actual.readSettingsAtAuthorityBoundary, this, args)
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled ? observer.observeStorePromise(original) : original
+    }
+  }
+})
+vi.mock('./settings-observation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./settings-observation')>()
+  return {
+    ...actual,
+    getSettingsObservationEpoch: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.getSettingsObservationEpoch>
+    ) {
+      const epoch = Reflect.apply(actual.getSettingsObservationEpoch, this, args)
+      return authAuthorityDiagnosticBridge.observer?.observeStoreEpoch(epoch) ?? epoch
+    }
+  }
+})
+vi.mock('./settings-auth-authority-frame', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./settings-auth-authority-frame')>()
+  return {
+    ...actual,
+    readSettingsAuthAuthorityFrame: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.readSettingsAuthAuthorityFrame>
+    ) {
+      const frame = Reflect.apply(actual.readSettingsAuthAuthorityFrame, this, args)
+      authAuthorityDiagnosticBridge.observer?.observeFrame(args[0], frame)
+      return frame
+    }
+  }
+})
+vi.mock('./auth-authority-source-pins', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./auth-authority-source-pins')>()
+  return {
+    ...actual,
+    captureAuthoritySourcePin: function (this: unknown, ...args: Parameters<typeof actual.captureAuthoritySourcePin>) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled
+        ? observer.runPinCapture(args[0], () => Reflect.apply(actual.captureAuthoritySourcePin, this, args))
+        : Reflect.apply(actual.captureAuthoritySourcePin, this, args)
+    },
+    assertAuthoritySourcePinCurrent: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.assertAuthoritySourcePinCurrent>
+    ) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled
+        ? observer.runPinValidation(args[0], () => Reflect.apply(actual.assertAuthoritySourcePinCurrent, this, args))
+        : Reflect.apply(actual.assertAuthoritySourcePinCurrent, this, args)
+    }
+  }
+})
+vi.mock('./auth-speech-boundary-readers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./auth-speech-boundary-readers')>()
+  return {
+    ...actual,
+    readBoundedTextFile: function (this: unknown, ...args: Parameters<typeof actual.readBoundedTextFile>) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      if (!observer?.enabled) return Reflect.apply(actual.readBoundedTextFile, this, args)
+      const original = observer.runReadCapture(args[0], () => Reflect.apply(actual.readBoundedTextFile, this, args))
+      return observer.observeBoundedRead(args[0], original)
+    },
+    readTrustedAdminText: function (this: unknown, ...args: Parameters<typeof actual.readTrustedAdminText>) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      if (!observer?.enabled) return Reflect.apply(actual.readTrustedAdminText, this, args)
+      const original = observer.runReadCapture(args[0], () => Reflect.apply(actual.readTrustedAdminText, this, args))
+      return observer.observeBoundedRead(args[0], original)
+    },
+    assertBoundedTextReadCurrent: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.assertBoundedTextReadCurrent>
+    ) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled
+        ? observer.runReadValidation(args[0], () => Reflect.apply(actual.assertBoundedTextReadCurrent, this, args))
+        : Reflect.apply(actual.assertBoundedTextReadCurrent, this, args)
+    }
+  }
+})
 // Stub only the admin-trusted managed-config read so tests never inherit this machine's real ProgramData
 // policy (default null = no admin policy). All other win-security exports stay real — store.ts imports
 // adminManagedConfigPath from here. The MQA-107 admin-managed gate test overrides readTrustedAdminManaged.
@@ -74,10 +254,38 @@ vi.mock('./win-security', async (importOriginal) => {
   return {
     ...actual,
     adminManagedConfigPath: vi.fn(() => join(app.getPath('userData'), 'admin-managed-config.json')),
-    readTrustedAdminManaged: vi.fn((): string | null => null)
+    readTrustedAdminManaged: vi.fn((): string | null => null),
+    readTrustedAdminManagedBytes: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.readTrustedAdminManagedBytes>
+    ) {
+      const original = Reflect.apply(actual.readTrustedAdminManagedBytes, this, args)
+      const observer = authAuthorityDiagnosticBridge.observer
+      const path = typeof args[0] === 'string' ? args[0] : null
+      return observer?.enabled ? observer.observeAdminBytes(path, original) : original
+    },
+    readManagedPolicyAuthorityFile: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.readManagedPolicyAuthorityFile>
+    ) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled
+        ? observer.observeManagedRead(args[0], () => Reflect.apply(actual.readManagedPolicyAuthorityFile, this, args))
+        : Reflect.apply(actual.readManagedPolicyAuthorityFile, this, args)
+    },
+    assertManagedPolicyAuthorityReadCurrent: function (
+      this: unknown,
+      ...args: Parameters<typeof actual.assertManagedPolicyAuthorityReadCurrent>
+    ) {
+      const observer = authAuthorityDiagnosticBridge.observer
+      return observer?.enabled
+        ? observer.observeManagedValidation(args[0], () =>
+            Reflect.apply(actual.assertManagedPolicyAuthorityReadCurrent, this, args)
+          )
+        : Reflect.apply(actual.assertManagedPolicyAuthorityReadCurrent, this, args)
+    }
   }
 })
-
 // Shape Entra actually issues in the id-token `tid` claim, and the only tenantId the sign-in gate can
 // ever match (Microsoft's own published sample tenant).
 const TENANT_GUID = '72f988bf-86f1-41af-91ab-2d7cd011db47'
@@ -1456,83 +1664,152 @@ describe('speech auth lease (auth module authority)', () => {
   })
 
   it('retires the old owner when actual sign-in replaces the in-memory session', async () => {
-    configureTenant()
-    await writeSessionFile()
-    writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
-    let callbackUrl = ''
-    let state = ''
-    let replacementEmail = 'replacement@example.com'
-    const msalRequire = createRequire(import.meta.url)
-    const msal = msalRequire('@azure/msal-node') as typeof import('@azure/msal-node')
-    vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockResolvedValue({
-      verifier: 'verifier',
-      challenge: 'challenge'
+    const diagnosticEnabled = process.env.METIS_AUTH_AUTHORITY_DIAGNOSTIC === 'enabled'
+    const diagnostic = createAuthAuthorityDiagnostic({
+      enabled: diagnosticEnabled,
+      outputPath: diagnosticEnabled ? process.env.METIS_AUTH_AUTHORITY_DIAGNOSTIC_REPORT : undefined,
+      profilePath: ud
     })
-    vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
-      callbackUrl = options.redirectUri || ''
-      state = options.state || ''
-      return 'https://login.example.test/authorize'
-    })
-    vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockImplementation(
-      async () =>
-        ({
-          account: { username: replacementEmail, name: 'Replacement' },
-          idTokenClaims: { tid: TENANT_GUID }
-        }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>
-    )
-    let adminReads = 0
-    let began!: () => void
-    let release!: () => void
-    const started = new Promise<void>((resolve) => {
-      began = resolve
-    })
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    // This test-owned policy file is the exact configured source under test. The injected reader models
-    // a trusted machine-policy read while readTrustedAdminText still performs its real source-pin checks.
-    const auth = await prepareAuth(async (path) => {
-      if (path !== join(ud, 'admin-managed-config.json')) throw new Error('Unexpected admin policy fixture path')
-      adminReads += 1
-      if (adminReads === 2) {
-        began()
-        await gate
-      }
-      return readFileSync(path)
-    })
-    const lease = await auth.refreshSpeechAuthLease()
-    expect(lease).not.toBeNull()
-    const heldRefresh = auth.refreshSpeechAuthLease()
-    await started
-    let invalidatedBeforeReplacement = false
-    const unsubscribe = auth.subscribeSpeechAuthLeaseInvalidation(() => {
-      invalidatedBeforeReplacement =
-        !auth.isSpeechAuthLeaseCurrent(lease) && auth.authStatus().email === 'user@example.com'
-    })
-    const { shell } = await import('electron')
-    vi.spyOn(shell, 'openExternal').mockImplementation(async () => {
-      const response = await fetch(`${callbackUrl}/?code=auth-code&state=${state}`)
-      expect(response.status).toBe(200)
-    })
+    authAuthorityDiagnosticBridge.observer = diagnostic
+    let heldRefresh: Promise<unknown> | undefined
+    let release: () => void = () => undefined
+    let unsubscribe = (): void => undefined
+    let testFailed = false
+    let testFailure: unknown
+    let cleanupFailed = false
+    try {
+      configureTenant()
+      await writeSessionFile()
+      writeFileSync(join(ud, 'admin-managed-config.json'), '{}', 'utf8')
+      let callbackUrl = ''
+      let state = ''
+      let replacementEmail = 'replacement@example.com'
+      const msalRequire = createRequire(import.meta.url)
+      const msal = msalRequire('@azure/msal-node') as typeof import('@azure/msal-node')
+      vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockResolvedValue({
+        verifier: 'verifier',
+        challenge: 'challenge'
+      })
+      vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
+        callbackUrl = options.redirectUri || ''
+        state = options.state || ''
+        return 'https://login.example.test/authorize'
+      })
+      vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockImplementation(
+        async () =>
+          ({
+            account: { username: replacementEmail, name: 'Replacement' },
+            idTokenClaims: { tid: TENANT_GUID }
+          }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>
+      )
+      let adminReads = 0
+      let began!: () => void
+      const started = new Promise<void>((resolve) => {
+        began = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      // This test-owned policy file is the exact configured source under test. The injected reader models
+      // a trusted machine-policy read while readTrustedAdminText still performs its real source-pin checks.
+      const auth = await prepareAuth(async (path) => {
+        if (path !== join(ud, 'admin-managed-config.json')) throw new Error('Unexpected admin policy fixture path')
+        adminReads += 1
+        if (adminReads === 2) {
+          began()
+          await gate
+        }
+        return readFileSync(path)
+      })
+      diagnostic.queueSpeechRole('initial-speech')
+      const lease = await auth.refreshSpeechAuthLease()
+      expect(lease).not.toBeNull()
+      diagnostic.queueSpeechRole('held-old-speech')
+      heldRefresh = auth.refreshSpeechAuthLease()
+      await started
+      let invalidatedBeforeReplacement = false
+      unsubscribe = auth.subscribeSpeechAuthLeaseInvalidation(() => {
+        invalidatedBeforeReplacement =
+          !auth.isSpeechAuthLeaseCurrent(lease) && auth.authStatus().email === 'user@example.com'
+      })
+      const { shell } = await import('electron')
+      vi.spyOn(shell, 'openExternal').mockImplementation(async () => {
+        const response = await fetch(`${callbackUrl}/?code=auth-code&state=${state}`)
+        expect(response.status).toBe(200)
+      })
 
-    expect((await auth.signIn()).ok).toBe(true)
-    expect(auth.authStatus().email).toBe('replacement@example.com')
-    unsubscribe()
-    expect(invalidatedBeforeReplacement).toBe(true)
-    release()
-    expect(await heldRefresh).toBeNull()
-    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
-    const replacementLease = await auth.refreshSpeechAuthLease()
-    expect(replacementLease).not.toBeNull()
-    expect(auth.isSpeechAuthLeaseCurrent(replacementLease)).toBe(true)
-    replacementEmail = 'user@example.com'
-    expect((await auth.signIn()).ok).toBe(true)
-    expect(auth.authStatus().email).toBe('user@example.com')
-    expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
-    expect(auth.isSpeechAuthLeaseCurrent(replacementLease)).toBe(false)
-    const returnedLease = await auth.refreshSpeechAuthLease()
-    expect(returnedLease).not.toBeNull()
-    expect(auth.isSpeechAuthLeaseCurrent(returnedLease)).toBe(true)
+      diagnostic.queueMainRole('reentrant-main', 'invalidation-status')
+      expect((await auth.signIn()).ok).toBe(true)
+      diagnostic.queueMainRole('explicit-status-main')
+      expect(auth.authStatus().email).toBe('replacement@example.com')
+      unsubscribe()
+      expect(invalidatedBeforeReplacement).toBe(true)
+      release()
+      expect(await heldRefresh).toBeNull()
+      expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+      diagnostic.queueSpeechRole('replacement-speech')
+      const replacementLease = await auth.refreshSpeechAuthLease()
+      try {
+        expect(replacementLease).not.toBeNull()
+      } catch (error) {
+        diagnostic.noteReplacementAssertion(false)
+        throw error
+      }
+      diagnostic.noteReplacementAssertion(true)
+      expect(auth.isSpeechAuthLeaseCurrent(replacementLease)).toBe(true)
+      replacementEmail = 'user@example.com'
+      expect((await auth.signIn()).ok).toBe(true)
+      diagnostic.queueMainRole('returned-account-speech', 'return-account-status')
+      expect(auth.authStatus().email).toBe('user@example.com')
+      expect(auth.isSpeechAuthLeaseCurrent(lease)).toBe(false)
+      expect(auth.isSpeechAuthLeaseCurrent(replacementLease)).toBe(false)
+      diagnostic.queueSpeechRole('returned-account-speech')
+      const returnedLease = await auth.refreshSpeechAuthLease()
+      expect(returnedLease).not.toBeNull()
+      expect(auth.isSpeechAuthLeaseCurrent(returnedLease)).toBe(true)
+      diagnostic.noteCaseComplete()
+    } catch (error) {
+      testFailed = true
+      testFailure = error
+    } finally {
+      let cleanupError: unknown
+      const recordCleanupError = (error: unknown) => {
+        if (!cleanupFailed) cleanupError = error
+        cleanupFailed = true
+        diagnostic.noteCleanupFailure()
+      }
+      try {
+        try {
+          release()
+        } catch (error) {
+          recordCleanupError(error)
+        }
+        try {
+          unsubscribe()
+        } catch (error) {
+          recordCleanupError(error)
+        }
+        try {
+          if (heldRefresh) await Promise.allSettled([heldRefresh])
+        } catch (error) {
+          recordCleanupError(error)
+        }
+        try {
+          await diagnostic.waitForObserved()
+        } catch (error) {
+          recordCleanupError(error)
+        }
+        try {
+          if (diagnosticEnabled) await diagnostic.flush()
+        } catch (error) {
+          recordCleanupError(error)
+        }
+      } finally {
+        authAuthorityDiagnosticBridge.observer = null
+      }
+      if (cleanupFailed && !testFailed) testFailure = cleanupError
+    }
+    if (testFailed || cleanupFailed) throw testFailure
   })
 
   it('does not publish a held boundary after wall-clock rollback', async () => {
