@@ -62,6 +62,10 @@ jobs:
     # Windows runners are consistently slower at npm ci + the Electron build than ubuntu.
     timeout-minutes: 30
     steps:
+      - name: Preserve committed bytes on Windows checkouts
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # scripts/check-color-literals.test.ts reads the pre-split styles.css from history (M2-0411).
@@ -101,6 +105,88 @@ jobs:
       # installs the browser without OS packages.
       - name: Install Playwright Chromium
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - name: Prepare pinned KaTeX evidence inputs
+        shell: bash
+        env:
+          RENDERER_KATEX_ARCHIVE_DIR: ${{ runner.temp }}/renderer-katex-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RENDERER_KATEX_ARCHIVE_DIR"
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
+          import { closeSync, openSync, readSync, writeFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          const url = 'https://registry.npmjs.org/katex/-/katex-0.18.2.tgz'
+          const integrity = 'sha512-3snve4y0SXTMequLim1FMiPvLGElySam0blN5xQZBqEY3lOJz1TnuaaiugnBZBqHzlSAGmFTYL7MCQkORuLKCA=='
+          const dir = process.env.RENDERER_KATEX_ARCHIVE_DIR
+          const response = await fetch(url, { redirect: 'error' })
+          if (!response.ok || !response.body) throw new Error(`KaTeX archive HTTP status ${response.status}`)
+          const chunks = []
+          const reader = response.body.getReader()
+          let bytes = 0
+          for (;;) {
+            const part = await reader.read()
+            if (part.done) break
+            bytes += part.value.byteLength
+            if (bytes > 32 * 1024 * 1024) throw new Error('KaTeX archive exceeds 32 MiB')
+            chunks.push(Buffer.from(part.value))
+          }
+          const archive = Buffer.concat(chunks)
+          const sri = `sha512-${createHash('sha512').update(archive).digest('base64')}`
+          if (sri !== integrity) throw new Error('KaTeX archive SRI mismatch')
+          const archivePath = join(dir, 'katex-0.18.2.tgz')
+          const archiveIdentity = { url, integrity: sri, bytes, sha256: createHash('sha256').update(archive).digest('hex') }
+          writeFileSync(archivePath, archive, { flag: 'wx' })
+          const files = [
+            'electron.vite.config.ts',
+            'package.json',
+            'package-lock.json',
+            'electron-builder.yml',
+            'electron-builder.win.yml',
+            'scripts/before-pack.mjs',
+            'scripts/design/renderer-inputs.ts'
+          ]
+          const expected = {
+            'package.json': 'dddf43f8fcd0a8b353b5b29ed9fa316486a668955ad56161e707f71f56b2ad06',
+            'package-lock.json': 'f2cedcad1b2b67c9f9fb780d24ab6c8dde6dfa65ae0a76432038450d2a41746c'
+          }
+          const inputs = files.map((path) => {
+            const fd = openSync(path, 'r')
+            try {
+              const raw = Buffer.alloc(2 * 1024 * 1024)
+              let bytes = 0
+              while (bytes < raw.length) {
+                const count = readSync(fd, raw, bytes, raw.length - bytes, null)
+                if (count === 0) break
+                bytes += count
+              }
+              if (readSync(fd, Buffer.alloc(1), 0, 1, null)) return { path, bytes: bytes + 1, sha256: null }
+              return { path, bytes, sha256: createHash('sha256').update(raw.subarray(0, bytes)).digest('hex') }
+            } finally {
+              closeSync(fd)
+            }
+          })
+          const observation = {
+            sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            job: process.env.GITHUB_JOB,
+            runnerOs: process.env.RUNNER_OS,
+            archive: { path: archivePath, ...archiveIdentity },
+            inputs
+          }
+          const output = JSON.stringify(observation)
+          if (Buffer.byteLength(output) > 8 * 1024) throw new Error('renderer caller observation exceeds 8 KiB')
+          writeFileSync(join(dir, 'identity.json'), `${JSON.stringify(observation, null, 2)}\n`, { flag: 'wx' })
+          console.log(output)
+          if (observation.sourceCommit !== process.env.GITHUB_SHA) throw new Error('RENDERER_CALLER_SOURCE_HEAD_MISMATCH')
+          if (inputs.some((input) => input.sha256 === null)) throw new Error('RENDERER_CALLER_INPUT_EXCEEDS_2_MIB')
+          for (const [path, hash] of Object.entries(expected))
+            if (inputs.find((input) => input.path === path)?.sha256 !== hash)
+              throw new Error(`RENDERER_CALLER_PACKAGE_HASH_MISMATCH:${path}`)
+          writeFileSync(process.env.GITHUB_ENV, `RENDERER_KATEX_TARBALL=${archivePath}\n`, { flag: 'a' })
+          NODE
       # The root config adds JSON only when this quality-scoped destination is set. Keep npm test as the
       # sole mode-lock/root/proxy/Operator pipeline and clear only this attempt's report before it starts.
       - name: Run complete test pipeline

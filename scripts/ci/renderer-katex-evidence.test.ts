@@ -1823,6 +1823,13 @@ describe('renderer remediation evidence validators', () => {
     ].sort()
     const packageFiles = ['package-lock.json', 'package.json']
     const retainedFailure = '1612d40c56b05d39147443b3765cabed1c99ef2a'
+    const broadBaseline = 'f880e76069c43cfa135ffed0d2baf7593068d50a'
+    const broadRepair = [
+      '.github/workflows/build.yml',
+      'scripts/ci/renderer-katex-provenance.mjs',
+      'scripts/ci/renderer-katex-evidence.test.ts',
+      'scripts/ci/root-report-workflow.contract.test.ts'
+    ]
     const historicalFive = [
       'scripts/ci/renderer-katex-build-evidence.mjs',
       'scripts/ci/renderer-katex-provenance.mjs',
@@ -1836,6 +1843,9 @@ describe('renderer remediation evidence validators', () => {
       'scripts/ci/renderer-katex-shipping-evidence.mjs'
     ].sort()
     const cumulativeSix = [...new Set([...historicalFive, ...currentFour])].sort()
+    const broadCumulativeEight = [...new Set([...cumulativeSix, ...broadRepair])].sort()
+    const amendedEleven = [...new Set([...remediationFiles, ...packageFiles, ...broadRepair])].sort()
+    const broadFour = broadRepair.slice().sort()
     const facts = {
       repository: 'mysticalsin/AskToto-Mantu',
       ref: 'refs/heads/fix/renderer-katex-remediation',
@@ -1844,6 +1854,7 @@ describe('renderer remediation evidence validators', () => {
       dependencyParent: 'cf2889b0c46b001140b7ccd346ffa6010eeec7a1',
       imagePolicyParent: 'c7901c5551c820171401ff4669b5af4b394eb5b9',
       retainedFailureParent: fallbackBase,
+      broadBaselineParent: retainedFailure,
       dirty: false,
       ancestors: Object.fromEntries(
         [
@@ -1854,6 +1865,7 @@ describe('renderer remediation evidence validators', () => {
           'af7da32a46e2edb084c70f41823e7df48a13df9a',
           fallbackBase,
           retainedFailure,
+          broadBaseline,
           'b'.repeat(40)
         ].map((commit) => [commit, true])
       ),
@@ -1889,10 +1901,15 @@ describe('renderer remediation evidence validators', () => {
         dToFallbackBase: remediationFiles,
         fallbackBaseToG: historicalFive,
         fallbackBaseToRetainedFailure: historicalFive,
-        retainedFailureToG: currentFour,
-        fallbackBaseToCurrent: cumulativeSix,
-        dToG: [...packageFiles, ...remediationFiles].sort(),
-        rToG: [...packageFiles, ...remediationFiles].sort()
+        retainedFailureToBroadBaseline: currentFour,
+        fallbackBaseToBroadBaseline: cumulativeSix,
+        dToBroadBaseline: [...packageFiles, ...remediationFiles].sort(),
+        rToBroadBaseline: [...packageFiles, ...remediationFiles].sort(),
+        broadBaselineToG: broadFour,
+        retainedFailureToG: [...new Set([...currentFour, ...broadRepair])].sort(),
+        fallbackBaseToCurrent: broadCumulativeEight,
+        dToG: amendedEleven,
+        rToG: amendedEleven
       },
       historicalPackageHashes: {
         manifest: '143e15a11a6b4285a02cb385a0701e85e2a001c0b2b0ed8560283ef12e938122',
@@ -1914,6 +1931,7 @@ describe('renderer remediation evidence validators', () => {
     }
     expect(validateRemediationLineageFacts(facts).dependencyCommit).toBe('af7da32a46e2edb084c70f41823e7df48a13df9a')
     expect(validateRemediationLineageFacts(facts).retainedFailureCommit).toBe(retainedFailure)
+    expect(validateRemediationLineageFacts(facts).broadBaselineCommit).toBe(broadBaseline)
     reject(
       () => validateRemediationLineageFacts({ ...facts, retainedFailureParent: '' }),
       'GREEN_RETAINED_FAILURE_PARENT'
@@ -1925,6 +1943,14 @@ describe('renderer remediation evidence validators', () => {
     reject(
       () => validateRemediationLineageFacts({ ...facts, ancestors: { ...facts.ancestors, [retainedFailure]: false } }),
       'GREEN_RETAINED_FAILURE_ANCESTRY'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, broadBaselineParent: '0'.repeat(40) }),
+      'GREEN_BROAD_BASELINE_PARENT'
+    )
+    reject(
+      () => validateRemediationLineageFacts({ ...facts, ancestors: { ...facts.ancestors, [broadBaseline]: false } }),
+      'GREEN_BROAD_BASELINE_ANCESTRY'
     )
     reject(
       () =>
@@ -1949,14 +1975,45 @@ describe('renderer remediation evidence validators', () => {
       [...currentFour, 'extra.txt'].sort()
     ])
       reject(
-        () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, retainedFailureToG: paths } }),
+        () =>
+          validateRemediationLineageFacts({
+            ...facts,
+            paths: { ...facts.paths, retainedFailureToBroadBaseline: paths }
+          }),
         'GREEN_CURRENT_REPAIR_PATHS'
+      )
+    for (const paths of [
+      ...[broadRepair[0], broadRepair[3]].map((omitted) => broadFour.filter((path) => path !== omitted)),
+      [...broadFour, 'package.json'].sort(),
+      [...broadFour, 'extra.txt'].sort()
+    ])
+      reject(
+        () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, broadBaselineToG: paths } }),
+        'GREEN_BROAD_REPAIR_PATHS'
       )
     reject(
       () =>
-        validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, fallbackBaseToCurrent: historicalFive } }),
-      'GREEN_CUMULATIVE_FALLBACK_PATHS'
+        validateRemediationLineageFacts({
+          ...facts,
+          paths: { ...facts.paths, fallbackBaseToBroadBaseline: historicalFive }
+        }),
+      'GREEN_BROAD_BASELINE_CUMULATIVE_PATHS'
     )
+    for (const [key, code] of [
+      ['retainedFailureToBroadBaseline', 'GREEN_CURRENT_REPAIR_PATHS'],
+      ['fallbackBaseToBroadBaseline', 'GREEN_BROAD_BASELINE_CUMULATIVE_PATHS'],
+      ['dToBroadBaseline', 'GREEN_BROAD_BASELINE_D_PATHS'],
+      ['rToBroadBaseline', 'GREEN_BROAD_BASELINE_R_PATHS'],
+      ['retainedFailureToG', 'GREEN_CURRENT_REPAIR_PATHS'],
+      ['fallbackBaseToCurrent', 'GREEN_CUMULATIVE_FALLBACK_PATHS'],
+      ['dToG', 'GREEN_D_TO_G_PATHS'],
+      ['rToG', 'GREEN_R_TO_G_PATHS']
+    ] as const)
+      reject(
+        () =>
+          validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, [key]: facts.paths[key].slice(1) } }),
+        code
+      )
     reject(
       () => validateRemediationLineageFacts({ ...facts, repository: 'fork/AskToto-Mantu' }),
       'GREEN_SOURCE_IDENTITY'
@@ -1974,9 +2031,9 @@ describe('renderer remediation evidence validators', () => {
       () =>
         validateRemediationLineageFacts({
           ...facts,
-          paths: { ...facts.paths, dToG: [...packageFiles, ...remediationFiles, 'unrelated.txt'].sort() }
+          paths: { ...facts.paths, dToBroadBaseline: [...packageFiles, ...remediationFiles, 'unrelated.txt'].sort() }
         }),
-      'GREEN_D_TO_G_PATHS'
+      'GREEN_BROAD_BASELINE_D_PATHS'
     )
     const withoutKatexTest = remediationFiles.filter(
       (path) => path !== 'src/renderer/src/components/Markdown.katex.browser.test.ts'
@@ -1985,17 +2042,17 @@ describe('renderer remediation evidence validators', () => {
       () =>
         validateRemediationLineageFacts({
           ...facts,
-          paths: { ...facts.paths, dToG: [...packageFiles, ...withoutKatexTest].sort() }
+          paths: { ...facts.paths, dToBroadBaseline: [...packageFiles, ...withoutKatexTest].sort() }
         }),
-      'GREEN_D_TO_G_PATHS'
+      'GREEN_BROAD_BASELINE_D_PATHS'
     )
     reject(
       () =>
         validateRemediationLineageFacts({
           ...facts,
-          paths: { ...facts.paths, rToG: [...packageFiles, ...withoutKatexTest].sort() }
+          paths: { ...facts.paths, rToBroadBaseline: [...packageFiles, ...withoutKatexTest].sort() }
         }),
-      'GREEN_R_TO_G_PATHS'
+      'GREEN_BROAD_BASELINE_R_PATHS'
     )
     reject(
       () => validateRemediationLineageFacts({ ...facts, paths: { ...facts.paths, dToFallbackBase: withoutKatexTest } }),
