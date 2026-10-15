@@ -82,6 +82,8 @@ interface HeldRoot {
   readonly root: OwnedMeetingRoot
   readonly directory: FileHandle
   readonly disposed: { value: boolean }
+  writerOperation?: Promise<WriterLease>
+  writerFailure?: unknown
   closing?: Promise<void>
 }
 
@@ -89,11 +91,28 @@ interface HeldWriter {
   readonly held: HeldRoot
   readonly lock: FileHandle
   readonly identity: PhysicalIdentity
+  readonly reservationKey: string
   released: boolean
+  closing?: Promise<void>
+}
+
+interface WriterReservation {
+  /** Keeps the registry ledger and its physical owner alive while the reservation is global. */
+  readonly registry: RootRegistry
+  descriptor?: FileHandle
+  state: 'acquiring' | 'held' | 'closing' | 'failed'
+  failure?: unknown
+}
+
+interface RetainedFailure {
+  readonly label: string
+  readonly failure: unknown
+  readonly descriptor?: FileHandle
 }
 
 const heldRoots = new WeakMap<OwnedMeetingRoot, HeldRoot>()
 const heldWriters = new WeakMap<WriterLease, HeldWriter>()
+const physicalWriterReservations = new Map<string, WriterReservation>()
 
 function assertComponent(value: string, label: string): void {
   if (!SAFE_COMPONENT.test(value)) throw new Error(`Invalid ${label}`)
@@ -108,6 +127,25 @@ function sameIdentity(
 
 function isCurrentProcessOwner(uid: number | bigint): boolean {
   return process.platform === 'win32' || process.getuid?.() === Number(uid)
+}
+
+function errorWithCode(message: string, code: string): NodeJS.ErrnoException {
+  const error = new Error(message) as NodeJS.ErrnoException
+  error.code = code
+  return error
+}
+
+async function removeOwnedWriterEntry(lockPath: string, identity: PhysicalIdentity): Promise<void> {
+  let current
+  try {
+    current = await lstat(lockPath, { bigint: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!current.isFile() || current.isSymbolicLink() || !sameIdentity(current, identity))
+    throw new Error('Persistence writer lock entry changed before owned cleanup')
+  await unlink(lockPath)
 }
 
 async function secureDirectory(path: string): Promise<void> {
@@ -138,6 +176,8 @@ export class RootRegistry {
   private readonly bindGatewayRoot: (root: OwnedMeetingRoot) => Promise<void>
   private readonly retiredScopes = new WeakSet<object>()
   private heldRootCount = 0
+  private readonly writerReservationKeys = new Set<string>()
+  private readonly failedResources: RetainedFailure[] = []
 
   constructor(options: RootRegistryOptions) {
     if (!options.resolveScope) throw new Error('A main-owned persistence scope resolver is required')
@@ -272,25 +312,85 @@ export class RootRegistry {
       reservedRootSlot = false
       return root
     } catch (error) {
-      if (openedRoot) heldRoots.delete(openedRoot)
-      if (openedDirectory) await openedDirectory.close().catch(() => undefined)
+      if (openedDirectory) {
+        const held = openedRoot && heldRoots.get(openedRoot)
+        if (held) {
+          held.disposed.value = true
+          // Install the shared dependency before issuing close so captured capabilities join it.
+          held.closing = Promise.resolve().then(async () => {
+            await openedDirectory!.close()
+            heldRoots.delete(openedRoot!)
+            this.heldRootCount -= 1
+          })
+        }
+        try {
+          if (held?.closing) await held.closing
+          else await openedDirectory.close()
+          if (!held && reservedRootSlot) this.heldRootCount -= 1
+          reservedRootSlot = false
+        } catch (closeError) {
+          const failure = new AggregateError(
+            [error, closeError],
+            error instanceof Error
+              ? `${error.message}; root descriptor close failed`
+              : 'Persistence root open and descriptor close failed'
+          )
+          this.failedResources.push({ label: 'failed-open-root-descriptor', failure, descriptor: openedDirectory })
+          reservedRootSlot = false
+          throw failure
+        }
+      }
       if (reservedRootSlot) this.heldRootCount -= 1
       throw error
     }
   }
 
   /** New-journal single-writer ownership; a stale lock after process death fails closed. */
-  async acquireWriter(scope: OpaqueOperationScope, root: OwnedMeetingRoot): Promise<WriterLease> {
+  acquireWriter(scope: OpaqueOperationScope, root: OwnedMeetingRoot): Promise<WriterLease> {
     const held = this.requireRoot(scope, root)
-    await this.assertPhysicalRoot(scope, root)
-    const lockPath = join(root.meetingPath, '.journal-writer.lock')
-    const lock = await open(
-      lockPath,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-      PRIVATE_FILE_MODE
+    const reservationKey = this.writerReservationKey(held)
+    if (physicalWriterReservations.has(reservationKey))
+      return Promise.reject(errorWithCode('Persistence writer is already reserved for this root', 'EEXIST'))
+    const reservation: WriterReservation = { registry: this, state: 'acquiring' }
+    physicalWriterReservations.set(reservationKey, reservation)
+    this.writerReservationKeys.add(reservationKey)
+    // Defer the first acquisition I/O until this root owns the exact operation dependency.
+    const operation = Promise.resolve().then(() =>
+      this.acquireWriterReserved(scope, root, held, reservationKey, reservation)
     )
+    held.writerOperation = operation
+    void operation.then(
+      () => {
+        if (held.writerOperation === operation) held.writerOperation = undefined
+      },
+      () => {
+        if (held.writerOperation === operation) held.writerOperation = undefined
+      }
+    )
+    return operation
+  }
+
+  private async acquireWriterReserved(
+    scope: OpaqueOperationScope,
+    root: OwnedMeetingRoot,
+    held: HeldRoot,
+    reservationKey: string,
+    reservation: WriterReservation
+  ): Promise<WriterLease> {
+    let lock: FileHandle | undefined
     let identity: PhysicalIdentity | undefined
+    let lease: WriterLease | undefined
+    let retained = false
+    let completed = false
     try {
+      await this.assertPhysicalRoot(scope, root)
+      const lockPath = join(root.meetingPath, '.journal-writer.lock')
+      lock = await open(
+        lockPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+        PRIVATE_FILE_MODE
+      )
+      reservation.descriptor = lock
       const createdLock = await lock.stat({ bigint: true })
       identity = { dev: createdLock.dev, ino: createdLock.ino, size: createdLock.size }
       if (process.platform === 'win32' && !(await preparePrivateCurrentUserAcl(lockPath)))
@@ -317,18 +417,18 @@ export class RootRegistry {
       marker.fill(0)
       const stat = await lock.stat({ bigint: true })
       identity = { dev: stat.dev, ino: stat.ino, size: stat.size }
-      const lease: WriterLease = Object.freeze({
+      const createdLease: WriterLease = Object.freeze({
         root,
         lockPath,
         assertCurrent: () => {
           this.assertRoot(root, scope)
-          const owner = heldWriters.get(lease)
+          const owner = heldWriters.get(createdLease)
           if (!owner || owner.released || !sameIdentity(owner.identity, identity!))
             throw new Error('Persistence writer lease changed')
         },
         assertPhysicalCurrent: async () => {
           this.assertRoot(root, scope)
-          const owner = heldWriters.get(lease)
+          const owner = heldWriters.get(createdLease)
           if (!owner || owner.released) throw new Error('Persistence writer lease changed')
           const [opened, named] = await Promise.all([
             owner.lock.stat({ bigint: true }),
@@ -345,20 +445,53 @@ export class RootRegistry {
             throw new Error('Persistence writer lock physical version changed')
           }
         },
-        release: () => this.releaseWriter(lease)
+        release: () => this.releaseWriter(createdLease)
       })
-      heldWriters.set(lease, { held, lock, identity, released: false })
+      lease = createdLease
+      heldWriters.set(createdLease, { held, lock, identity, reservationKey, released: false })
+      reservation.state = 'held'
       await this.assertPhysicalRoot(scope, root)
-      lease.assertCurrent()
-      return lease
+      createdLease.assertCurrent()
+      completed = true
+      return createdLease
     } catch (error) {
-      await lock.close().catch(() => undefined)
-      if (identity) {
-        const current = await lstat(lockPath, { bigint: true }).catch(() => undefined)
-        if (current && sameIdentity(current, identity) && current.isFile() && !current.isSymbolicLink())
-          await unlink(lockPath).catch(() => undefined)
+      const cleanupErrors: unknown[] = []
+      if (lock) {
+        try {
+          await lock.close()
+        } catch (closeError) {
+          cleanupErrors.push(closeError)
+        }
+        if (cleanupErrors.length === 0 && !identity)
+          cleanupErrors.push(new Error('Writer descriptor opened without a verified physical identity'))
+        if (cleanupErrors.length === 0 && identity) {
+          try {
+            await removeOwnedWriterEntry(join(root.meetingPath, '.journal-writer.lock'), identity)
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError)
+          }
+        }
       }
+      if (cleanupErrors.length > 0) {
+        const failure = new AggregateError(
+          [error, ...cleanupErrors],
+          error instanceof Error ? `${error.message}; writer cleanup failed` : 'Writer acquisition and cleanup failed'
+        )
+        reservation.state = 'failed'
+        reservation.failure = failure
+        reservation.descriptor = lock
+        held.writerFailure = cleanupErrors[cleanupErrors.length - 1]
+        this.failedResources.push({ label: 'failed-writer-acquisition', failure, descriptor: lock })
+        retained = true
+        throw failure
+      }
+      if (lease) heldWriters.delete(lease)
       throw error
+    } finally {
+      if (!retained && !completed) {
+        physicalWriterReservations.delete(reservationKey)
+        this.writerReservationKeys.delete(reservationKey)
+      }
     }
   }
 
@@ -384,11 +517,26 @@ export class RootRegistry {
     held.disposed.value = true
     // Retirement denies new operations but disposal remains available to settle the held descriptor.
     held.closing = (async () => {
-      await held.directory.close()
+      if (held.writerOperation) await held.writerOperation.catch(() => undefined)
+      if (held.writerFailure) throw held.writerFailure
+      try {
+        await held.directory.close()
+      } catch (error) {
+        this.failedResources.push({ label: 'root-close', failure: error, descriptor: held.directory })
+        throw error
+      }
       heldRoots.delete(root)
       this.heldRootCount -= 1
     })()
     return held.closing
+  }
+
+  /** No-I/O closeout assertion; it never retries descriptors or clears a retained failure. */
+  assertSettled(): void {
+    if (this.heldRootCount === 0 && this.writerReservationKeys.size === 0 && this.failedResources.length === 0) return
+    const failures = this.failedResources.map(({ failure }) => failure)
+    failures.push(new Error(`held roots=${this.heldRootCount}; writer reservations=${this.writerReservationKeys.size}`))
+    throw new AggregateError(failures, 'Persistence root registry is not physically settled')
   }
 
   /** Assert that the exact captured operation token owns this root, including on read-only paths. */
@@ -495,17 +643,52 @@ export class RootRegistry {
     }
   }
 
-  private async releaseWriter(lease: WriterLease): Promise<void> {
+  private writerReservationKey(held: HeldRoot): string {
+    const { canonicalPath, device, inode } = held.root.version
+    return `${canonicalPath}\n${String(device)}:${String(inode)}`
+  }
+
+  private releaseWriter(lease: WriterLease): Promise<void> {
     const owner = heldWriters.get(lease)
-    if (!owner || owner.released) return
+    if (!owner) return Promise.resolve()
+    if (owner.closing) return owner.closing
+    if (owner.released) return Promise.resolve()
     owner.released = true
-    try {
-      const current = await lstat(lease.lockPath, { bigint: true })
-      if (current.isFile() && !current.isSymbolicLink() && sameIdentity(current, owner.identity))
-        await unlink(lease.lockPath)
-    } finally {
-      await owner.lock.close()
+    const reservation = physicalWriterReservations.get(owner.reservationKey)
+    if (reservation) reservation.state = 'closing'
+    owner.closing = (async () => {
+      const errors: unknown[] = []
+      try {
+        await owner.lock.close()
+      } catch (error) {
+        errors.push(error)
+      }
+      if (errors.length === 0) {
+        try {
+          await removeOwnedWriterEntry(lease.lockPath, owner.identity)
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      if (errors.length > 0) {
+        const failure =
+          errors.length === 1
+            ? errors[0]
+            : new AggregateError(errors, 'Writer release did not confirm all owned cleanup')
+        const currentReservation = physicalWriterReservations.get(owner.reservationKey)
+        if (currentReservation) {
+          currentReservation.state = 'failed'
+          currentReservation.failure = failure
+          currentReservation.descriptor = owner.lock
+        }
+        this.failedResources.push({ label: 'writer-release', failure, descriptor: owner.lock })
+        owner.held.writerFailure = errors[0]
+        throw failure
+      }
+      physicalWriterReservations.delete(owner.reservationKey)
+      this.writerReservationKeys.delete(owner.reservationKey)
       heldWriters.delete(lease)
-    }
+    })()
+    return owner.closing
   }
 }

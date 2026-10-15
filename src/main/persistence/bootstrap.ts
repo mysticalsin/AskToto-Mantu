@@ -48,6 +48,12 @@ import {
 } from './root-registry'
 import { PersistencePolicyHighWaterStore } from './policy-high-water'
 import { createMainSpeechOwner, requirePublishedMainSpeechOwner, type MainSpeechOwner } from './bootstrap-speech-owner'
+import {
+  createPendingOperationTracker,
+  createBootstrapSettlementOwner,
+  combineSettlementErrors,
+  type BootstrapSettlementOwner
+} from './bootstrap-settlement'
 
 declare const __METIS_SOURCE_COMMIT__: string
 let mainInstanceAuthorityLost = false
@@ -113,19 +119,6 @@ interface ScopeEntry {
   retired: boolean
 }
 
-interface OpenJournal {
-  readonly scope: OpaqueOperationScope
-  readonly root: OwnedMeetingRoot
-  readonly writer?: WriterLease
-  readonly key: ProtectedKeyHandle
-  readonly storage: NonNullable<ReturnType<typeof createIncrementalMeetingJournalFileStorage>>
-  readonly gateway: StorageGateway
-  readonly pending: Set<Promise<unknown>>
-  readonly settle: () => Promise<void>
-  disposed: boolean
-  settling?: Promise<void>
-}
-
 function runtimeIdentity() {
   const platform = process.platform
   if (platform !== 'win32' && platform !== 'darwin' && platform !== 'linux')
@@ -182,21 +175,12 @@ function createMainPersistenceBootstrapInternal(
   let disposal: Promise<void> | undefined
   const scopes = new WeakMap<object, ScopeEntry>()
   const liveScopes = new Set<ScopeEntry>()
-  const journals = new Set<OpenJournal>()
-  const pendingOperations = new Set<Promise<unknown>>()
+  const settlementOwners = new Set<BootstrapSettlementOwner>()
+  const { pending: pendingOperations, track: trackOperation } = createPendingOperationTracker()
   const speechSettlements = new Map<MeetingSpeechPersistenceService, Promise<void>>()
   let refreshPolicy: (() => Promise<PersistenceCapability>) | undefined
   const gateways = new WeakMap<OwnedMeetingRoot, StorageGateway>()
   const currentUserData = (): string => resolve(app.getPath('userData'))
-
-  function trackOperation<T>(operation: Promise<T>): Promise<T> {
-    pendingOperations.add(operation)
-    void operation.then(
-      () => pendingOperations.delete(operation),
-      () => pendingOperations.delete(operation)
-    )
-    return operation
-  }
 
   function invalidateSpeech(service: MeetingSpeechPersistenceService | undefined): Promise<void> | undefined {
     if (!service) return undefined
@@ -258,9 +242,9 @@ function createMainPersistenceBootstrapInternal(
       entry.retired = true
       roots.retireScope(entry.scope)
     }
-    for (const journal of journals) {
-      journal.root.retire()
-      keys.retire(journal.key)
+    for (const owner of settlementOwners) {
+      owner.root.retire()
+      if (owner.key) keys.retire(owner.key)
     }
     invalidateSpeech(speech)
   }
@@ -380,25 +364,23 @@ function createMainPersistenceBootstrapInternal(
 
   function createJournal(
     profile: ResolvedPersistenceProfile,
-    scope: OpaqueOperationScope,
-    root: OwnedMeetingRoot,
+    owner: BootstrapSettlementOwner,
     writer: WriterLease,
     key: ProtectedKeyHandle
   ): Promise<WritableMainMeetingJournal>
   function createJournal(
     profile: ResolvedPersistenceProfile,
-    scope: OpaqueOperationScope,
-    root: OwnedMeetingRoot,
+    owner: BootstrapSettlementOwner,
     writer: undefined,
     key: ProtectedKeyHandle
   ): Promise<ReadOnlyMainMeetingJournal>
   async function createJournal(
     profile: ResolvedPersistenceProfile,
-    scope: OpaqueOperationScope,
-    root: OwnedMeetingRoot,
+    owner: BootstrapSettlementOwner,
     writer: WriterLease | undefined,
     key: ProtectedKeyHandle
   ): Promise<WritableMainMeetingJournal | ReadOnlyMainMeetingJournal> {
+    const { scope, root } = owner
     const gateway = gateways.get(root)
     if (!profile || !gateway) throw new Error('Persistence root services are not installed')
     const scopeEntry = scopes.get(scope as object)
@@ -468,43 +450,12 @@ function createMainPersistenceBootstrapInternal(
           storage
         })
     } catch (error) {
-      storage?.dispose()
+      if (storage) owner.storage = storage
       throw error
     }
-    let owned: OpenJournal
-    const dispose = (): Promise<void> => {
-      if (owned.settling) return owned.settling
-      if (owned.disposed) return Promise.resolve()
-      owned.disposed = true
-      owned.settling = (async () => {
-        keys.retire(key)
-        root.retire()
-        await Promise.allSettled([...owned.pending])
-        storage.dispose()
-        try {
-          await keys.settleAndDispose(key)
-        } finally {
-          await writer?.release().catch(() => undefined)
-          await roots.closeRoot(scope, root).catch(() => undefined)
-          const entry = scopes.get(scope as object)
-          if (entry) liveScopes.delete(entry)
-          journals.delete(owned)
-        }
-      })()
-      return owned.settling
-    }
-    owned = {
-      scope,
-      root,
-      ...(writer ? { writer } : {}),
-      key,
-      storage,
-      gateway,
-      pending: new Set(),
-      settle: dispose,
-      disposed: false
-    }
-    journals.add(owned)
+    owner.writer = writer
+    owner.key = key
+    owner.storage = storage
     const common = {
       meetingId: root.meetingId,
       keyReference: key.reference,
@@ -512,21 +463,16 @@ function createMainPersistenceBootstrapInternal(
         root.retire()
         keys.retire(key)
       },
-      settle: dispose
+      settle: () => owner.settle()
     }
     if (writer && appender)
       return Object.freeze({
         ...common,
         append: (record: Uint8Array, expectedRevision: number) => {
-          if (owned.disposed || !current())
+          if (owner.disposed || !current())
             return Promise.resolve({ status: 'refused', reason: 'STALE_OWNER' } as const)
           const operation = appender!.append(record, expectedRevision)
-          owned.pending.add(operation)
-          void operation.then(
-            () => owned.pending.delete(operation),
-            () => owned.pending.delete(operation)
-          )
-          return operation
+          return owner.track(operation)
         }
       }) satisfies WritableMainMeetingJournal
     if (!snapshot) throw new Error('Read-only journal snapshot is unavailable')
@@ -686,8 +632,8 @@ function createMainPersistenceBootstrapInternal(
       return trackOperation(
         (async () => {
           const profile = requireActionableProfile()
-          const owner = requirePublishedMainSpeechOwner(speechOwner, profile)
-          const scope = mintScope(profile, owner)
+          const publishedOwner = requirePublishedMainSpeechOwner(speechOwner, profile)
+          const scope = mintScope(profile, publishedOwner)
           let root: OwnedMeetingRoot
           try {
             root = await roots.create(scope, meetingId)
@@ -699,19 +645,28 @@ function createMainPersistenceBootstrapInternal(
             }
             throw error
           }
+          const owner = createBootstrapSettlementOwner(roots, keys, scope, root, (settledOwner) => {
+            const entry = scopes.get(scope as object)
+            if (entry) liveScopes.delete(entry)
+            settlementOwners.delete(settledOwner)
+          })
+          settlementOwners.add(owner)
           let writer: WriterLease | undefined
           let key: ProtectedKeyHandle | undefined
           try {
             writer = await roots.acquireWriter(scope, root)
+            owner.writer = writer
             key = await keys.create(scope, root, writer, randomUUID())
-            return await createJournal(profile, scope, root, writer, key)
+            owner.key = key
+            return await createJournal(profile, owner, writer, key)
           } catch (error) {
-            if (key) await keys.settleAndDispose(key).catch(() => undefined)
-            await writer?.release().catch(() => undefined)
-            roots.retire(root)
-            await roots.closeRoot(scope, root).catch(() => undefined)
-            const entry = scopes.get(scope as object)
-            if (entry) liveScopes.delete(entry)
+            if (key) owner.key = key
+            if (writer) owner.writer = writer
+            try {
+              await owner.settle()
+            } catch (settlementError) {
+              throw combineSettlementErrors(error, settlementError)
+            }
             throw error
           }
         })()
@@ -721,8 +676,8 @@ function createMainPersistenceBootstrapInternal(
       return trackOperation(
         (async () => {
           const profile = requireActionableProfile()
-          const owner = requirePublishedMainSpeechOwner(speechOwner, profile)
-          const scope = mintScope(profile, owner, keyReference.journalGeneration)
+          const publishedOwner = requirePublishedMainSpeechOwner(speechOwner, profile)
+          const scope = mintScope(profile, publishedOwner, keyReference.journalGeneration)
           let root: OwnedMeetingRoot
           try {
             root = await roots.openExisting(scope, meetingId)
@@ -734,16 +689,24 @@ function createMainPersistenceBootstrapInternal(
             }
             throw error
           }
+          const owner = createBootstrapSettlementOwner(roots, keys, scope, root, (settledOwner) => {
+            const entry = scopes.get(scope as object)
+            if (entry) liveScopes.delete(entry)
+            settlementOwners.delete(settledOwner)
+          })
+          settlementOwners.add(owner)
           let key: ProtectedKeyHandle | undefined
           try {
             key = await keys.open(scope, root, keyReference)
-            return await createJournal(profile, scope, root, undefined, key)
+            owner.key = key
+            return await createJournal(profile, owner, undefined, key)
           } catch (error) {
-            if (key) await keys.settleAndDispose(key).catch(() => undefined)
-            roots.retire(root)
-            await roots.closeRoot(scope, root).catch(() => undefined)
-            const entry = scopes.get(scope as object)
-            if (entry) liveScopes.delete(entry)
+            if (key) owner.key = key
+            try {
+              await owner.settle()
+            } catch (settlementError) {
+              throw combineSettlementErrors(error, settlementError)
+            }
             throw error
           }
         })()
@@ -751,11 +714,35 @@ function createMainPersistenceBootstrapInternal(
     },
     retire,
     async settle() {
-      while (pendingOperations.size > 0) await Promise.allSettled([...pendingOperations])
-      await Promise.allSettled([...journals].map((journal) => journal.settle()))
+      const failures: unknown[] = []
+      while (pendingOperations.size > 0) {
+        const results = await Promise.allSettled([...pendingOperations])
+        // Operation rejections are already returned to their callers; owner cleanup is tracked separately.
+        for (const result of results) if (result.status === 'rejected') void result.reason
+      }
+      const ownerResults = await Promise.allSettled([...settlementOwners].map((owner) => owner.settle()))
+      for (const result of ownerResults) if (result.status === 'rejected') failures.push(result.reason)
+
+      // Worker retirement is independent of journal cleanup and must still be attempted.
       const currentSettlement = invalidateSpeech(speech)
-      if (currentSettlement) await currentSettlement
-      await Promise.all([...speechSettlements.values()])
+      if (currentSettlement) {
+        const currentResult = await Promise.allSettled([currentSettlement])
+        for (const result of currentResult) if (result.status === 'rejected') failures.push(result.reason)
+      }
+      const retiredResults = await Promise.allSettled([...speechSettlements.values()])
+      for (const result of retiredResults) if (result.status === 'rejected') failures.push(result.reason)
+      try {
+        roots.assertSettled()
+      } catch (error) {
+        failures.push(error)
+      }
+      if (failures.length > 0) {
+        const primary = failures[0]
+        throw new AggregateError(
+          failures,
+          primary instanceof Error ? primary.message : 'Persistence resources did not physically settle'
+        )
+      }
     },
     dispose() {
       if (disposal) return disposal
@@ -765,8 +752,23 @@ function createMainPersistenceBootstrapInternal(
       unsubscribeSettings()
       unsubscribeAuth()
       disposal = (async () => {
-        await this.settle()
-        if (speech) await speech.dispose()
+        const failures: unknown[] = []
+        try {
+          await this.settle()
+        } catch (error) {
+          failures.push(error)
+        }
+        if (speech) {
+          try {
+            await speech.dispose()
+          } catch (error) {
+            failures.push(error)
+          }
+        }
+        if (failures.length > 0) {
+          const primary = failures[0]
+          throw new AggregateError(failures, primary instanceof Error ? primary.message : 'Persistence disposal failed')
+        }
         speech = undefined
         capability = Object.freeze({ status: 'disposed' })
       })()

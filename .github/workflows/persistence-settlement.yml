@@ -1,4 +1,4 @@
-name: Persistence owned cleanup source RED
+name: Persistence owned cleanup source GREEN
 
 on:
   push:
@@ -39,12 +39,12 @@ defaults:
 
 jobs:
   test-first:
-    name: R06/R07 owned cleanup causal RED
+    name: 23-case owned cleanup settlement GREEN
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       PERSISTENCE_SETTLEMENT_TARGET: ubuntu-latest
-      PERSISTENCE_SETTLEMENT_PHASE: settlement-red-owned-cleanup
+      PERSISTENCE_SETTLEMENT_PHASE: settlement-green-owned-cleanup
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -330,13 +330,13 @@ jobs:
             console.log(`SETTLEMENT_DIAGNOSTIC_EVIDENCE_COUNT ${evidenceCount}`)
           }
           NODE
-      - name: Validate exact owner witnesses and nine named settlement failures
+      - name: Validate all 23 settlements and 16 exact owner witnesses
         run: node scripts/qa/check-persistence-settlement-report.mjs
-      - name: Retain the raw run, JSON and EXPECTED_SETTLEMENT_RED_OWNED_CLEANUP receipt
+      - name: Retain the raw run, JSON and SETTLEMENT_GREEN_OWNED_CLEANUP receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: persistence-settlement-red-owned-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persistence-settlement-green-owned-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/persistence-settlement-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
           retention-days: 14
