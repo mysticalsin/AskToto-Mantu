@@ -128,6 +128,14 @@ const cases = [
   },
   {
     file: requiredFiles[0],
+    caseId: 'F10',
+    title: 'retains the root owner when writer acquisition fails before returning a lease',
+    expected: 'failed',
+    cause: 'injected unreturned-writer write failure',
+    secondCause: 'injected unreturned-writer close failure'
+  },
+  {
+    file: requiredFiles[0],
     caseId: 'F09',
     title: 'settles resources after an already completed append refusal',
     expected: 'passed'
@@ -551,6 +559,125 @@ function validateStructuredEvidence(evidence, assertion) {
         causeEvidence.disposalOutcome?.status === 'fulfilled',
       'F08 did not reach the close fault or did not preserve the original non-aggregate open outcome'
     )
+  } else if (assertion.caseId === 'F10') {
+    requireEvidenceKeys(causeEvidence, ['confirmedClose', 'failedClose'], 'F10')
+    const subcaseKeys = [
+      'primeReady',
+      'realOpenObserved',
+      'writeHandleMatchesOpen',
+      'closeHandleMatchesOpen',
+      'writeFaultCount',
+      'writerLeaseFulfillments',
+      'keyWrapsBeforePostSuccessor',
+      'openingStatusWhileCloseHeld',
+      'openingOutcome',
+      'openingAggregateMessages',
+      'originalErrorIdentity',
+      'cleanupErrorIdentity',
+      'originalRootClosesWhileWriterHeld',
+      'originalRootClosesBeforePostSuccessor',
+      'originalRootClosesBeforeDisposal',
+      'originalRootClosesAfterDisposal',
+      'heldSuccessorOutcome',
+      'heldSuccessorAdmitted',
+      'postSuccessorOutcome',
+      'postSuccessorAdmitted',
+      'postSuccessorSettlement',
+      'writerClosesBeforePostSuccessor',
+      'writerClosesBeforeDisposal',
+      'writerClosesAfterDisposal',
+      'disposalOutcome',
+      'disposalMemoized',
+      'disposalSameRejection'
+    ]
+    const control = causeEvidence.confirmedClose
+    const failure = causeEvidence.failedClose
+    for (const [name, item] of [
+      ['confirmedClose', control],
+      ['failedClose', failure]
+    ]) {
+      requireValue(item && typeof item === 'object' && !Array.isArray(item), `F10/${name} is not a closed subrecord`)
+      requireValue(
+        Object.keys(item).sort().join(',') === subcaseKeys.slice().sort().join(','),
+        `F10/${name} fields differ from the closed schema`
+      )
+      requireValue(
+        item.primeReady === true &&
+          item.realOpenObserved === true &&
+          item.writeHandleMatchesOpen === true &&
+          item.closeHandleMatchesOpen === true &&
+          item.writeFaultCount === 1 &&
+          item.writerLeaseFulfillments === 0 &&
+          item.keyWrapsBeforePostSuccessor === 0 &&
+          item.originalErrorIdentity === true &&
+          item.writerClosesBeforePostSuccessor === 1 &&
+          item.writerClosesBeforeDisposal === 1 &&
+          item.writerClosesAfterDisposal === 1 &&
+          item.disposalMemoized === true &&
+          Array.isArray(item.openingAggregateMessages) &&
+          item.openingAggregateMessages.length <= 4 &&
+          item.openingAggregateMessages.every((value) => typeof value === 'string' && value.length <= 120),
+        `F10/${name} did not reach one real delegated writer fault with stable ownership observations`
+      )
+      const exactOutcome = (value, keys) =>
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value).sort().join(',') === keys.slice().sort().join(',')
+      requireValue(
+        exactOutcome(item.openingOutcome, ['status', 'errorName', 'errorMessage']) &&
+          (item.heldSuccessorOutcome === null ||
+            exactOutcome(item.heldSuccessorOutcome, ['status', 'errorName', 'errorMessage'])) &&
+          exactOutcome(
+            item.postSuccessorOutcome,
+            item.postSuccessorAdmitted ? ['status'] : ['status', 'errorName', 'errorMessage']
+          ) &&
+          exactOutcome(item.disposalOutcome, ['status']) &&
+          (item.postSuccessorSettlement === null || exactOutcome(item.postSuccessorSettlement, ['status'])),
+        `F10/${name} nested outcome fields differ from the closed RED schema`
+      )
+    }
+    requireValue(
+      control.openingOutcome?.status === 'rejected' &&
+        control.openingOutcome.errorName === 'Error' &&
+        control.openingOutcome.errorMessage === 'injected unreturned-writer write failure' &&
+        control.openingAggregateMessages.length === 0 &&
+        control.cleanupErrorIdentity === false &&
+        control.originalRootClosesBeforePostSuccessor === 1 &&
+        control.originalRootClosesBeforeDisposal === 1 &&
+        control.originalRootClosesAfterDisposal === 1 &&
+        control.heldSuccessorOutcome === null &&
+        control.heldSuccessorAdmitted === null &&
+        control.postSuccessorOutcome?.status === 'fulfilled' &&
+        control.postSuccessorAdmitted === true &&
+        control.postSuccessorSettlement?.status === 'fulfilled' &&
+        control.disposalOutcome?.status === 'fulfilled' &&
+        control.disposalSameRejection === false,
+      'F10 confirmed-close control did not release the original root after its real writer close'
+    )
+    requireValue(
+      failure.openingStatusWhileCloseHeld === 'pending' &&
+        failure.originalRootClosesWhileWriterHeld === 0 &&
+        failure.heldSuccessorOutcome?.status === 'rejected' &&
+        /descriptor limit/i.test(failure.heldSuccessorOutcome.errorMessage ?? '') &&
+        failure.heldSuccessorAdmitted === false &&
+        failure.openingOutcome?.status === 'rejected' &&
+        failure.openingOutcome.errorName === 'Error' &&
+        failure.openingOutcome.errorMessage === 'injected unreturned-writer write failure' &&
+        failure.openingAggregateMessages.length === 0 &&
+        failure.cleanupErrorIdentity === false &&
+        failure.originalRootClosesBeforePostSuccessor === 1 &&
+        failure.postSuccessorOutcome?.status === 'fulfilled' &&
+        failure.postSuccessorAdmitted === true &&
+        failure.postSuccessorSettlement?.status === 'fulfilled' &&
+        failure.originalRootClosesBeforeDisposal === 1 &&
+        failure.originalRootClosesAfterDisposal === 1 &&
+        failure.disposalOutcome?.status === 'fulfilled' &&
+        failure.disposalSameRejection === false &&
+        failure.heldSuccessorOutcome.errorName === 'Error' &&
+        failure.postSuccessorSettlement?.status === 'fulfilled',
+      'F10 did not show the exact held-close then failed-close baseline root-custody loss'
+    )
   } else if (assertion.caseId === 'R04') {
     requireValue(
       causeEvidence.failedOpenCloseAttempts === 1 &&
@@ -583,8 +710,8 @@ function validate() {
     'report/log/unhandled/receipt paths are missing'
   )
   requireValue(
-    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-red-with-owner',
-    'phase is not settlement-red-with-owner'
+    process.env.PERSISTENCE_SETTLEMENT_PHASE === 'settlement-red-unreturned-writer',
+    'phase is not settlement-red-unreturned-writer'
   )
   requireValue(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA), 'commit identity is invalid')
   requireValue(/^\d+$/.test(process.env.GITHUB_RUN_ID ?? ''), 'run identity is invalid')
@@ -606,23 +733,38 @@ function validate() {
     .filter((entry) => entry.evidence || entry.expected === 'failed')
     .map((entry) => entry.caseId)
     .sort()
-  const requiredWitnessIds = ['F02', 'F05', 'F06', 'F07', 'F08', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'R04', 'R05']
+  const requiredWitnessIds = [
+    'F02',
+    'F05',
+    'F06',
+    'F07',
+    'F08',
+    'F10',
+    'O01',
+    'O02',
+    'O03',
+    'O04',
+    'O05',
+    'O06',
+    'R04',
+    'R05'
+  ]
   requireValue(
     expectedWitnessIds.join(',') === requiredWitnessIds.join(','),
-    'closed case inventory does not produce the exact thirteen-witness roster'
+    'closed case inventory does not produce the exact fourteen-witness roster'
   )
   requireValue(
     evidence.size === requiredWitnessIds.length && requiredWitnessIds.every((caseId) => evidence.has(caseId)),
-    'actual evidence does not contain exactly the thirteen unique closed witnesses'
+    'actual evidence does not contain exactly the fourteen unique closed witnesses'
   )
 
   const { bytes, report } = readReport(reportPath)
   const { bytes: unhandledBytes, report: unhandledReport } = readUnhandledReport(unhandledReportPath)
   requireValue(report.success === false, 'Vitest JSON does not record a failed run')
   const expectedCounters = {
-    numTotalTests: 20,
+    numTotalTests: 21,
     numPassedTests: 14,
-    numFailedTests: 6,
+    numFailedTests: 7,
     numPendingTests: 0,
     numTodoTests: 0,
     numTotalTestSuites: 4,
@@ -691,7 +833,7 @@ function validate() {
     report.testResults.length + suiteTitles.size === report.numTotalTestSuites,
     'recursive suite total is not four'
   )
-  requireValue(actualCases.size === cases.length, 'actual assertion count is not twenty')
+  requireValue(actualCases.size === cases.length, 'actual assertion count is not twenty-one')
 
   for (const expected of cases) {
     const found = actualCases.get(expected.title)
@@ -713,6 +855,11 @@ function validate() {
       )
       validateStructuredEvidence(evidence, expected)
       requireValue(failureText.includes(expected.cause), `assertion location omits its case label: ${expected.title}`)
+      if (expected.secondCause)
+        requireValue(
+          failureText.includes(expected.secondCause),
+          `assertion location omits its cleanup label: ${expected.title}`
+        )
     } else {
       requireValue(!found.assertion.failureMessages?.length, `positive control failed: ${expected.title}`)
       if (expected.evidence) validateStructuredEvidence(evidence, expected)
@@ -726,8 +873,8 @@ function validate() {
   const sourceHashes = Object.fromEntries(hashedSources.map((file) => [file, sha256(readFileSync(file))]))
   const receipt = {
     schema: 'metis-persistence-settlement-source-receipt/v1',
-    disposition: 'EXPECTED_SETTLEMENT_RED_OWNER_VERIFIED',
-    phase: 'settlement-red-with-owner',
+    disposition: 'EXPECTED_SETTLEMENT_RED_UNRETURNED_WRITER',
+    phase: 'settlement-red-unreturned-writer',
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
@@ -752,7 +899,7 @@ function validate() {
   }
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   console.log(
-    'persistence-settlement:EXPECTED_SETTLEMENT_RED_OWNER_VERIFIED 20 cases; 14 passed; 6 named settlement failures'
+    'persistence-settlement:EXPECTED_SETTLEMENT_RED_UNRETURNED_WRITER 21 cases; 14 passed; 7 named settlement failures'
   )
   console.log(`persistence-settlement:REPORT_SHA256 ${receipt.reportSha256}`)
 }

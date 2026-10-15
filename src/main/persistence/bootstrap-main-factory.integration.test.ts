@@ -41,6 +41,7 @@ import {
   type ResourcePolicyInput,
   type ResourcePolicyResult
 } from './resource-policy'
+import { RootRegistry } from './root-registry'
 
 type SettlementFixtureHandle = { close: () => Promise<void> }
 type SettlementGate = {
@@ -49,6 +50,12 @@ type SettlementGate = {
   wait: Promise<void>
   release: () => void
   error: string | undefined
+  attempts: number
+  raw: SettlementFixtureHandle | undefined
+  thrown: Error | undefined
+}
+type SettlementWriteFault = {
+  error: Error
   attempts: number
   raw: SettlementFixtureHandle | undefined
 }
@@ -71,6 +78,7 @@ vi.mock('../auth', () => ({
 
 const settlementFaults = vi.hoisted(() => ({
   closeGates: new Map<string, SettlementGate>(),
+  writeFaults: new Map<string, SettlementWriteFault>(),
   openedHandles: new Map<string, SettlementFixtureHandle>(),
   keyGate: null as SettlementGate | null,
   authEpoch: 0,
@@ -95,9 +103,22 @@ vi.mock('node:fs/promises', async (importOriginal) => {
                 gate.raw = target
                 gate.notifyEntered()
                 await gate.wait
-                if (gate.error) throw new Error(gate.error)
+                if (gate.error) {
+                  gate.thrown = new Error(gate.error)
+                  throw gate.thrown
+                }
               }
               await target.close()
+            }
+          if (property === 'writeFile')
+            return (...writeArgs: Parameters<typeof target.writeFile>) => {
+              const fault = settlementFaults.writeFaults.get(path)
+              if (fault && fault.attempts === 0) {
+                fault.attempts += 1
+                fault.raw = target
+                return Promise.reject(fault.error)
+              }
+              return target.writeFile(...writeArgs)
             }
           const value = Reflect.get(target, property, target)
           return typeof value === 'function' ? value.bind(target) : value
@@ -150,7 +171,8 @@ function settlementGate(error?: string): SettlementGate {
     },
     error,
     attempts: 0,
-    raw: undefined
+    raw: undefined,
+    thrown: undefined
   }
 }
 
@@ -1722,6 +1744,242 @@ describe('main persistence factory source fixture', () => {
       await closeFixtureHandle(rootPath)
       vi.restoreAllMocks()
       rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('retains the root owner when writer acquisition fails before returning a lease', async () => {
+    const writeFailure = 'injected unreturned-writer write failure'
+    const closeFailure = 'injected unreturned-writer close failure'
+    const rawHandleCleanups: Array<() => Promise<void>> = []
+    const observe = async (failClose: boolean) => {
+      const userData = mkdtempSync(resolve(tmpdir(), 'metis-main-persistence-unreturned-writer-'))
+      configureMainProcess(userData)
+      commitManagedAuthorityDocument('user', resolve(userData, 'managed-config.json'), null, 'readable')
+      commitManagedAuthorityDocument('admin', resolve(userData, 'admin-managed-config.json'), null, 'readable')
+      publishSettingsSnapshot({ ...DEFAULT_SETTINGS, encryptTranscripts: true }, true)
+      const meetingId = failClose ? '16f45c47-6583-45fb-8340-72aa6b6d1287' : '16f45c47-6583-45fb-8340-72aa6b6d1290'
+      const heldSuccessorId = '16f45c47-6583-45fb-8340-72aa6b6d1288'
+      const postSuccessorId = failClose
+        ? '16f45c47-6583-45fb-8340-72aa6b6d1289'
+        : '16f45c47-6583-45fb-8340-72aa6b6d1291'
+      const rootPath = fixtureMeetingRoot(userData, meetingId)
+      const writerPath = join(rootPath, '.journal-writer.lock')
+      rawHandleCleanups.push(async () => {
+        await closeFixtureHandle(writerPath)
+        await closeFixtureHandle(rootPath)
+        rmSync(userData, { recursive: true, force: true })
+      })
+      const fault: SettlementWriteFault = { error: new Error(writeFailure), attempts: 0, raw: undefined }
+      const writerGate = settlementGate(failClose ? closeFailure : undefined)
+      const rootGate = settlementGate()
+      rootGate.release()
+      if (!failClose) writerGate.release()
+      settlementFaults.writeFaults.set(writerPath, fault)
+      settlementFaults.closeGates.set(writerPath, writerGate)
+      settlementFaults.closeGates.set(rootPath, rootGate)
+      let writerLeaseFulfillments = 0
+      let keyWraps = 0
+      const originalAcquireWriter = RootRegistry.prototype.acquireWriter
+      const acquireObserver = vi.spyOn(RootRegistry.prototype, 'acquireWriter').mockImplementation(function (
+        this: RootRegistry,
+        ...args
+      ) {
+        const originalPromise = originalAcquireWriter.apply(this, args)
+        if (args[1].meetingPath === rootPath)
+          void originalPromise.then(
+            () => {
+              writerLeaseFulfillments += 1
+            },
+            () => undefined
+          )
+        return originalPromise
+      })
+      const baseFixture = sourceFixture(async () => null, undefined, 1)
+      const bootstrap = createMainPersistenceBootstrapWithSourceFixture(
+        { afterFirstShow: () => true, nativeKeyIntent: 'allowed' },
+        {
+          ...baseFixture,
+          nativeKeyStore: {
+            ...baseFixture.nativeKeyStore,
+            wrap: (contentKeyBase64) => {
+              keyWraps += 1
+              return baseFixture.nativeKeyStore.wrap(contentKeyBase64)
+            }
+          }
+        }
+      )
+      let openingObserved: Promise<void> | undefined
+      let heldSuccessorAttempt: Promise<unknown> | undefined
+      let postSuccessorAttempt: Promise<unknown> | undefined
+      let heldSuccessor: WritableMainMeetingJournal | undefined
+      let postSuccessor: WritableMainMeetingJournal | undefined
+      try {
+        const primeResult = await bootstrap.prime()
+        let openingStatus: 'pending' | 'fulfilled' | 'rejected' = 'pending'
+        let openingError: unknown
+        const opening = bootstrap.openNew(meetingId)
+        openingObserved = opening.then(
+          () => {
+            openingStatus = 'fulfilled'
+          },
+          (error: unknown) => {
+            openingStatus = 'rejected'
+            openingError = error
+          }
+        )
+        await writerGate.entered
+        const openingStatusWhileCloseHeld = openingStatus
+        const originalRootClosesWhileWriterHeld = rootGate.attempts
+        const openedRawHandle = settlementFaults.openedHandles.get(writerPath)
+        const realOpenObserved = openedRawHandle !== undefined
+        const writeHandleMatchesOpen = realOpenObserved && openedRawHandle === fault.raw
+        const closeHandleMatchesOpen = realOpenObserved && openedRawHandle === writerGate.raw
+
+        let heldSuccessorOutcome: Record<string, unknown> | null = null
+        let heldSuccessorAdmitted: boolean | null = null
+        if (failClose) {
+          heldSuccessorAttempt = bootstrap.openNew(heldSuccessorId).then((journal) => {
+            heldSuccessor = journal
+          })
+          heldSuccessorOutcome = await settlementOutcome(heldSuccessorAttempt)
+          heldSuccessorAdmitted = Boolean(heldSuccessor)
+          await heldSuccessor?.settle().catch(() => undefined)
+        }
+        writerGate.release()
+        await openingObserved
+        const openingOutcome = await settlementOutcome(opening)
+        const aggregateMembers =
+          openingError instanceof AggregateError && Array.isArray(openingError.errors)
+            ? openingError.errors.slice(0, 4)
+            : []
+        const keyWrapsBeforePostSuccessor = keyWraps
+        const originalRootClosesBeforePostSuccessor = rootGate.attempts
+        const writerClosesBeforePostSuccessor = writerGate.attempts
+
+        postSuccessorAttempt = bootstrap.openNew(postSuccessorId).then((journal) => {
+          postSuccessor = journal
+        })
+        const postSuccessorOutcome = await settlementOutcome(postSuccessorAttempt)
+        const postSuccessorAdmitted = Boolean(postSuccessor)
+        const postSuccessorSettlement = postSuccessor ? await settlementOutcome(postSuccessor.settle()) : null
+        const originalRootClosesBeforeDisposal = rootGate.attempts
+        const writerClosesBeforeDisposal = writerGate.attempts
+        const disposal = bootstrap.dispose()
+        const disposalMemoized = bootstrap.dispose() === disposal
+        const disposalError = await disposal.then(
+          () => undefined,
+          (error: unknown) => error
+        )
+        const disposalOutcome = await settlementOutcome(disposal)
+        const repeatedDisposalError = await bootstrap.dispose().then(
+          () => undefined,
+          (error: unknown) => error
+        )
+        return {
+          primeReady: primeResult.status === 'ready',
+          realOpenObserved,
+          writeHandleMatchesOpen,
+          closeHandleMatchesOpen,
+          writeFaultCount: fault.attempts,
+          writerLeaseFulfillments,
+          keyWrapsBeforePostSuccessor,
+          openingStatusWhileCloseHeld,
+          openingOutcome,
+          openingAggregateMessages: aggregateMembers.map((member) =>
+            member instanceof Error ? member.message.slice(0, 120) : String(member).slice(0, 120)
+          ),
+          originalErrorIdentity: openingError === fault.error || aggregateMembers.includes(fault.error),
+          cleanupErrorIdentity: writerGate.thrown !== undefined && aggregateMembers.includes(writerGate.thrown),
+          originalRootClosesWhileWriterHeld,
+          originalRootClosesBeforePostSuccessor,
+          originalRootClosesBeforeDisposal,
+          originalRootClosesAfterDisposal: rootGate.attempts,
+          heldSuccessorOutcome,
+          heldSuccessorAdmitted,
+          postSuccessorOutcome,
+          postSuccessorAdmitted,
+          postSuccessorSettlement,
+          writerClosesBeforePostSuccessor,
+          writerClosesBeforeDisposal,
+          writerClosesAfterDisposal: writerGate.attempts,
+          disposalOutcome,
+          disposalMemoized,
+          disposalSameRejection: disposalError !== undefined && disposalError === repeatedDisposalError
+        }
+      } finally {
+        writerGate.release()
+        rootGate.release()
+        settlementFaults.writeFaults.delete(writerPath)
+        settlementFaults.closeGates.delete(writerPath)
+        settlementFaults.closeGates.delete(rootPath)
+        await Promise.allSettled([openingObserved, heldSuccessorAttempt, postSuccessorAttempt].filter(Boolean))
+        await heldSuccessor?.settle().catch(() => undefined)
+        await postSuccessor?.settle().catch(() => undefined)
+        await bootstrap.dispose().catch(() => undefined)
+        acquireObserver.mockRestore()
+      }
+    }
+
+    try {
+      const confirmedClose = await observe(false)
+      const failedClose = await observe(true)
+      const evidence = { confirmedClose, failedClose }
+      recordSettlementEvidence('F10', evidence)
+      expect(confirmedClose, `${writeFailure} must release capacity after its confirmed writer close`).toMatchObject({
+        primeReady: true,
+        realOpenObserved: true,
+        writeHandleMatchesOpen: true,
+        closeHandleMatchesOpen: true,
+        writeFaultCount: 1,
+        writerLeaseFulfillments: 0,
+        keyWrapsBeforePostSuccessor: 0,
+        openingOutcome: { status: 'rejected', errorName: 'Error', errorMessage: writeFailure },
+        openingAggregateMessages: [],
+        originalErrorIdentity: true,
+        cleanupErrorIdentity: false,
+        originalRootClosesBeforePostSuccessor: 1,
+        originalRootClosesAfterDisposal: 1,
+        postSuccessorOutcome: { status: 'fulfilled' },
+        postSuccessorAdmitted: true,
+        postSuccessorSettlement: { status: 'fulfilled' },
+        writerClosesAfterDisposal: 1,
+        disposalOutcome: { status: 'fulfilled' },
+        disposalMemoized: true
+      })
+      expect(
+        failedClose,
+        `${writeFailure} and ${closeFailure} must retain the original root owner and max-one capacity`
+      ).toMatchObject({
+        primeReady: true,
+        realOpenObserved: true,
+        writeHandleMatchesOpen: true,
+        closeHandleMatchesOpen: true,
+        writeFaultCount: 1,
+        writerLeaseFulfillments: 0,
+        keyWrapsBeforePostSuccessor: 0,
+        openingStatusWhileCloseHeld: 'pending',
+        openingOutcome: { status: 'rejected', errorName: 'AggregateError' },
+        openingAggregateMessages: expect.arrayContaining([writeFailure, closeFailure]),
+        originalErrorIdentity: true,
+        cleanupErrorIdentity: true,
+        originalRootClosesWhileWriterHeld: 0,
+        originalRootClosesBeforePostSuccessor: 0,
+        originalRootClosesBeforeDisposal: 0,
+        originalRootClosesAfterDisposal: 0,
+        heldSuccessorOutcome: { status: 'rejected', errorMessage: expect.stringMatching(/descriptor limit/i) },
+        heldSuccessorAdmitted: false,
+        postSuccessorOutcome: { status: 'rejected', errorMessage: expect.stringMatching(/descriptor limit/i) },
+        postSuccessorAdmitted: false,
+        writerClosesBeforePostSuccessor: 1,
+        writerClosesBeforeDisposal: 1,
+        writerClosesAfterDisposal: 1,
+        disposalOutcome: { status: 'rejected' },
+        disposalMemoized: true,
+        disposalSameRejection: true
+      })
+    } finally {
+      for (const cleanup of rawHandleCleanups) await cleanup()
+      vi.restoreAllMocks()
     }
   })
 
