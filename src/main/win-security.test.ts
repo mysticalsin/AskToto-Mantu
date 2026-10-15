@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -91,6 +92,46 @@ const USERS = 'S-1-5-32-545'
 const AUTH_USERS = 'S-1-5-11'
 const EVERYONE = 'S-1-1-0'
 const ATTACKER = 'S-1-5-21-111-222-333-1005' // a normal domain/local user RID
+
+/** Distinguish a failed Get-Acl invocation from a failed script transport without logging a file path. */
+function probeTransportDiagnostic(path: string, mode: 'command' | 'encoded'): string {
+  const inputPath = mode === 'encoded' ? '$path' : JSON.stringify(path)
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    ...(mode === 'encoded'
+      ? [
+          '$bytes = New-Object System.IO.MemoryStream',
+          '[Console]::OpenStandardInput().CopyTo($bytes)',
+          '$path = [Text.Encoding]::UTF8.GetString($bytes.ToArray())'
+        ]
+      : []),
+    'try {',
+    `  $acl = Get-Acl -LiteralPath ${inputPath}`,
+    '  $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value',
+    "  [Console]::Out.Write('sid=' + [bool]($owner -match '^S-1-\\d+(-\\d+)+$') + ';aces=' + @($acl.Access).Count)",
+    "} catch { [Console]::Out.Write('exception=' + $_.Exception.GetType().Name + ';id=' + $_.FullyQualifiedErrorId); exit 43 }"
+  ].join('\n')
+  const args =
+    mode === 'encoded'
+      ? ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
+      : ['-NoProfile', '-NonInteractive', '-Command', script]
+  try {
+    const output = execFileSync(WINDOWS_POWERSHELL, args, {
+      encoding: 'utf8',
+      input: mode === 'encoded' ? Buffer.from(path, 'utf8') : undefined,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 8000
+    }).trim()
+    return /^sid=(True|False);aces=\d+$/.test(output) ? output : 'unexpected-output'
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { status?: number; stdout?: Buffer | string }
+    const output = String(failure.stdout ?? '').trim()
+    const category = /^exception=[A-Za-z0-9.]+;id=[A-Za-z0-9,._-]+$/.test(output)
+      ? output
+      : 'no-coded-output'
+    return `status=${failure.status ?? 'none'};code=${failure.code ?? 'none'};${category}`
+  }
+}
 
 describe('WINDOWS_POWERSHELL — the shared pinned interpreter path', () => {
   // Every main-process powershell spawn resolves through this constant, so pin its shape here once:
@@ -362,7 +403,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
   // String and got null, so EVERY file on win32 probed as `owner: ''` and evaluateAclTrust rejected it.
   // Windows machine policy (requireAuth, allowedProviders, lockedKeys, disableAutoUpdate) was therefore
   // never enforced, and every reject-direction test above still passed. This asserts the owner resolves.
-  it('resolves a real owner SID from the live ACL probe — an empty owner silently disables all machine policy (MQA-008)', async (ctx) => {
+  it('resolves a real owner SID from the live ACL probe — an empty owner silently disables all machine policy (MQA-008)', async () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ requireAuth: true }))
 
@@ -377,17 +418,15 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
       probe = readAclForTest(file)
     }
-    // MQA-262: five consecutive nulls means the powershell.exe spawn cannot run HERE at all — GitHub's
-    // windows-latest runner is one such environment. The comment above already says why that is not
-    // evidence either way about MQA-008, so asserting on it produces a red line about the product from a
-    // fact about the machine. Skip loudly instead: the message names the blocker, and the assertions
-    // below still run in every environment where the probe works, which includes a real install.
+    // A null ACL probe fails this qualification. The same runner can spawn the pinned PowerShell for
+    // dataless tests, so null alone cannot establish an unavailable host. Compare two bounded Get-Acl
+    // transports and report only status/error categories; never print the path or policy bytes.
     if (probe === null) {
-      ctx.skip(
-        'not exercised — the live ACL probe (powershell.exe) returned null on every attempt in this ' +
-          'environment, so there is no verdict to check. Run on a machine where the probe can spawn.'
+      throw new Error(
+        'live ACL probe returned null after five attempts; ' +
+          `command:${probeTransportDiagnostic(file, 'command')}; ` +
+          `encoded:${probeTransportDiagnostic(file, 'encoded')}`
       )
-      return
     }
     expect(probe).not.toBeNull()
     // A well-formed Windows SID: S-1-<authority>-<sub authorities>. Any file has an owner, so an empty
