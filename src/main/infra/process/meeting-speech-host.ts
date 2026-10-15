@@ -4,11 +4,7 @@ import { join } from 'node:path'
 import type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import type { TranscriptLine } from '@shared/transcript-line'
 import { IncrementalMeetingIdentitySchema, type CanonicalIncrementalRecord } from '@shared/incremental-meeting'
-import {
-  issueIncrementalRecordReceipt,
-  type IncrementalRecordReceipt,
-  type IncrementalRecordReceiptBinding
-} from '../../features/meetings/incremental-record-receipt'
+import type { IncrementalRecordReceipt, IncrementalRecordReceiptBinding } from '@shared/incremental-record-receipt'
 import {
   isMeetingSpeechReply,
   type MeetingSpeechFailureCode,
@@ -34,6 +30,11 @@ export interface MeetingSpeechServiceOptions {
   readLimits: () => SpeechProvenanceLimits | undefined
   /** Root-installed finite resource limits. The service refuses work if any field is absent or invalid. */
   readBounds: () => MeetingSpeechServiceBounds | undefined
+  /** Feature-owned capability that binds a validated worker result to the current meeting owner. */
+  issueIncrementalRecordReceipt: (
+    value: unknown,
+    binding: IncrementalRecordReceiptBinding
+  ) => IncrementalRecordReceipt | null
   /** Main-only ownership predicate. It is never serialized into the worker protocol. */
   isCurrent?: () => boolean
   /** Timing-only observer; values are monotonic durations and never include request content. */
@@ -645,7 +646,7 @@ export function createMeetingSpeechPersistenceService(
           )
         )
           throw failure('CANCELLED')
-        const receipt = issueIncrementalRecordReceipt(canonical, binding)
+        const receipt = options.issueIncrementalRecordReceipt(canonical, binding)
         if (!receipt) throw failure('WORKER_FAILED')
         return receipt
       })

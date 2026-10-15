@@ -26,6 +26,7 @@ import {
 } from './infra/process/meeting-speech-host'
 import type { MeetingSpeechRequest } from './infra/process/meeting-speech-protocol'
 import { processMeetingSpeechRequest } from './meeting-speech-worker'
+import { issueIncrementalRecordReceipt } from './features/meetings/incremental-record-receipt'
 import {
   recallRead,
   updateMeetingTranscript,
@@ -122,6 +123,7 @@ describe('actual saved final speech provenance', () => {
       maxPayloadBytes: 1000000
     })
     service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: getMeetingSpeechLimits,
       readBounds: () => testServiceBounds,
       ...(process.env.METIS_SPEECH_ACTUAL_WORKER === '1'

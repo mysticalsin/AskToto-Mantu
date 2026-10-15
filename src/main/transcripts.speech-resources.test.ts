@@ -23,6 +23,7 @@ import {
 } from './infra/process/meeting-speech-host'
 import type { MeetingSpeechRequest } from './infra/process/meeting-speech-protocol'
 import { processMeetingSpeechRequest } from './meeting-speech-worker'
+import { issueIncrementalRecordReceipt } from './features/meetings/incremental-record-receipt'
 import { decodeSavedMeetingAsync, saveMeeting, saveDraftTranscript } from './transcripts'
 import { recallRead } from './recall'
 import { readSavedMeeting } from './history-actions'
@@ -141,6 +142,7 @@ describe('actual declared speech persistence resource measurements', () => {
       configureMeetingSpeechLimits(testBudget)
       const timings: Record<string, number[]> = Object.create(null) as Record<string, number[]>
       service = createMeetingSpeechPersistenceService({
+        issueIncrementalRecordReceipt,
         readLimits: getMeetingSpeechLimits,
         readBounds: () => testServiceBounds,
         onTiming: ({ name, durationMs }) => {

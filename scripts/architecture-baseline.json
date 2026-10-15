@@ -1,5 +1,6 @@
 {
   "FF-01": {
+    "src/main/infra/process/meeting-speech-host.test.ts": 1,
     "src/renderer/src/lib/onboarding-kinetic-grid.test.ts": 1,
     "src/shared/hash.test.ts": 1
   },
@@ -14,6 +15,14 @@
     "src/main/application-command-session.ts": 1,
     "src/main/application-discovery.ts": 1,
     "src/main/application-intents.ts": 1,
+    "src/main/features/meetings/incremental-meeting-journal-file-read.ts": 1,
+    "src/main/features/meetings/incremental-meeting-journal-files.ts": 1,
+    "src/main/features/meetings/incremental-meeting-journal-format.ts": 1,
+    "src/main/features/meetings/incremental-meeting-journal-root.ts": 1,
+    "src/main/features/meetings/incremental-meeting-journal.ts": 1,
+    "src/main/features/meetings/incremental-meeting-mutation-lock.ts": 1,
+    "src/main/features/meetings/incremental-record-receipt.ts": 1,
+    "src/main/features/meetings/meeting-public-projection.ts": 1,
     "src/main/operator-test-keypair.ts": 1,
     "src/renderer/src/components/CommandListeningPill.tsx": 1,
     "src/renderer/src/components/CommandProposalCard.tsx": 1,
@@ -61,7 +70,7 @@
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3120,
-    "src/shared/ipc.ts": 2400
+    "src/shared/ipc.ts": 2399
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,

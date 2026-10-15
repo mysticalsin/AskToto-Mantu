@@ -45,10 +45,11 @@
  * Default target: release/win-unpacked/Metis.exe
  */
 import { _electron as electron } from 'playwright'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
 import {
   describeFixture,
@@ -64,6 +65,18 @@ const positional = argv.filter((a) => !a.startsWith('--'))
 const target = resolve(positional[0] || join(root, 'release/win-unpacked/Metis.exe'))
 const timeoutIndex = argv.indexOf('--timeout-seconds')
 const timeoutSeconds = timeoutIndex === -1 ? 180 : Number(argv[timeoutIndex + 1])
+const flag = (name) => {
+  const index = argv.indexOf(name)
+  return index === -1 ? undefined : argv[index + 1]
+}
+const reportPath = flag('--report')
+const installer = flag('--installer')
+const artifactSha256 = flag('--artifact-sha256')
+const candidateRun = flag('--candidate-run')
+const executableSource = flag('--executable-source')
+const startedAt = Date.now()
+const engineReports = {}
+let executableSha256
 const SAPI_SYNTH_TIMEOUT_MS = 180_000
 const PHRASE = 'The quarterly revenue target is seven million dollars'
 const ENGINES = ['whisper', 'parakeet']
@@ -154,6 +167,58 @@ console.log(`[check:packaged-asr] launching ${target}`)
 console.log(`[check:packaged-asr]   isolated profile: ${userData}`)
 
 let app
+function writeAcceptanceReport(verdict, failureCode = null) {
+  if (reportPath === undefined) return
+  if (!installer) throw new Error('--report requires --installer')
+  if (!/^[0-9a-f]{64}$/i.test(artifactSha256 ?? '')) {
+    throw new Error('--report requires a 64-character --artifact-sha256')
+  }
+  if (!/^\d+$/.test(candidateRun ?? '')) throw new Error('--report requires a numeric --candidate-run')
+  if (!['installed-setup', 'portable-payload'].includes(executableSource ?? '')) {
+    throw new Error('--report requires a recognized --executable-source')
+  }
+  writeFileSync(
+    reportPath,
+    `${JSON.stringify(
+      {
+        schema: 1,
+        verdict,
+        installer,
+        artifact_sha256: artifactSha256.toLowerCase(),
+        candidate_run: candidateRun,
+        executable: basename(target),
+        executable_source: executableSource,
+        executable_sha256: executableSha256,
+        engines: engineReports,
+        failure_code: failureCode,
+        elapsed_ms: Date.now() - startedAt
+      },
+      null,
+      2
+    )}\n`
+  )
+}
+function classifyFailure(reason) {
+  if (reason.includes('failed to launch under Playwright') || reason.includes('no renderer window')) {
+    return 'launch-failed'
+  }
+  if (reason.includes('asrEngine did not stick')) return 'settings-mismatch'
+  if (reason.includes('importAudioPick()')) return 'picker-failed'
+  if (reason.includes('importAudioStart()')) return 'job-start-failed'
+  if (reason.includes('job disappeared')) return 'job-missing'
+  if (reason.includes('job failed')) return 'job-failed'
+  if (reason.includes('did not finish within')) return 'job-timeout'
+  if (reason.includes('no saved meeting file')) return 'saved-file-missing'
+  if (reason.includes('could not be read back')) return 'readback-failed'
+  if (reason.includes('no transcript lines')) return 'transcript-empty'
+  if (reason.includes('acceptance report')) return 'report-write-failed'
+  return 'native-evidence-failed'
+}
+async function sha256File(path) {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  return hash.digest('hex')
+}
 function killApp() {
   try {
     execFileSync(
@@ -182,6 +247,13 @@ function safeRmSync(path) {
 async function fail(reason) {
   console.error(`[check:packaged-asr] FAIL — ${reason}`)
   try {
+    writeAcceptanceReport('FAIL', classifyFailure(reason))
+  } catch (error) {
+    console.error(
+      `[check:packaged-asr] FAIL — could not write the acceptance report: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  try {
     await app?.close()
   } catch {
     /* best-effort */
@@ -194,6 +266,7 @@ async function fail(reason) {
 }
 
 async function main() {
+  executableSha256 = await sha256File(target)
   try {
     app = await electron.launch({ executablePath: target, env })
     await app.evaluate(installAsrObserver)
@@ -259,6 +332,15 @@ async function main() {
     // run separates a product fault (job, read-back, native ASR) from a harness one (fixture) by itself. The
     // same facts follow as one JSON line, the record a content-free JSON report copies.
     const failImport = async (reason) => {
+      const transcript = meeting?.lines?.map((line) => line.text).join(' ') ?? ''
+      engineReports[engine] = {
+        job_id: job?.jobId ?? started.jobId,
+        job_state: job?.state ?? null,
+        saved_file: job?.file ? basename(job.file) : null,
+        readback_ok: meeting?.ok === true,
+        transcript_lines: meeting?.lines?.length ?? 0,
+        transcript_sha256: transcript ? createHash('sha256').update(transcript).digest('hex') : null
+      }
       const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate).catch(() => undefined)
       const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(logOffset) : ''
       const seen = { engine, job, meeting, fixture, observed, afterSequence, mainLog }
@@ -305,11 +387,25 @@ async function main() {
     } catch (error) {
       return failImport(error instanceof Error ? error.message : String(error))
     }
+    engineReports[engine] = {
+      job_id: job.jobId,
+      job_state: job.state,
+      saved_file: basename(job.file),
+      readback_ok: meeting.ok,
+      transcript_lines: meeting.lines.length,
+      transcript_sha256: createHash('sha256').update(transcript).digest('hex'),
+      evidence: verified
+    }
     console.log(`[check:packaged-asr] ${engine} decoded transcript: "${transcript}"`)
     console.log(`[check:packaged-asr] VERIFIED ${JSON.stringify(verified)}`)
   }
 
   console.log('[check:packaged-asr] OK — separate real Whisper and Parakeet imports verified; no engine fallback.')
+  try {
+    writeAcceptanceReport('PASS')
+  } catch (error) {
+    return fail(`could not write the acceptance report: ${error instanceof Error ? error.message : String(error)}`)
+  }
 
   try {
     await app.evaluate(({ app: electronApp }) => electronApp.exit(0))

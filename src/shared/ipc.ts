@@ -6,6 +6,7 @@ import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
+import type { RecallNoteReadFields } from './recall-note'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
@@ -1975,12 +1976,10 @@ export const RecallBackfillSpeakersPayloadSchema = z.object({
 })
 export type RecallBackfillSpeakersPayload = z.infer<typeof RecallBackfillSpeakersPayloadSchema>
 
-/** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
-export interface RecallReadResult {
+/** Result of reading a saved meeting or quick note back through the explicit History reader. */
+export interface RecallReadResult extends RecallNoteReadFields {
   ok: boolean
   error?: string
-  title?: string
-  mode?: string
   startedAt?: number
   durationMs?: number
   recap?: string

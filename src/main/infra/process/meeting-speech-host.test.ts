@@ -6,6 +6,7 @@ import { createMeetingSpeechPersistenceService, type MeetingSpeechWorkerPort } f
 import { processMeetingSpeechRequest } from '../../meeting-speech-worker'
 import {
   consumeIncrementalRecordReceipt,
+  issueIncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
 } from '../../features/meetings/incremental-record-receipt'
 
@@ -90,6 +91,7 @@ describe('meeting speech persistence worker host', () => {
   it('does not create a child before a bounded request is admitted', async () => {
     let starts = 0
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => undefined,
       readBounds: () => policy,
       workerFactory: () => {
@@ -105,6 +107,7 @@ describe('meeting speech persistence worker host', () => {
   it('rejects a huge sparse array before expanding it into the admission traversal stack', async () => {
     let starts = 0
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => {
@@ -121,6 +124,7 @@ describe('meeting speech persistence worker host', () => {
   it('uses the worker codec for a typed projection and preserves the closed result shape', async () => {
     const worker = new TestWorker()
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => worker
@@ -150,6 +154,7 @@ describe('meeting speech persistence worker host', () => {
     // The service transfers recordBytes; the admitted budget must survive that buffer's detachment.
     const maxInputBytes = recordBytes.byteLength
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => ({ ...policy, maxInputBytes }),
       isCurrent: () => true,
@@ -185,6 +190,7 @@ describe('meeting speech persistence worker host', () => {
     )
     const maxInputBytes = bytes.byteLength
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => ({ ...policy, maxInputBytes }),
       isCurrent: () => true,
@@ -203,6 +209,7 @@ describe('meeting speech persistence worker host', () => {
     const isCurrent = () => current
     const worker = new TestWorker()
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => ({ ...policy, maxInputBytes: 16_384 }),
       isCurrent,
@@ -247,6 +254,7 @@ describe('meeting speech persistence worker host', () => {
   it('keeps incremental record canonicalization unavailable without a configured current-owner predicate', async () => {
     let starts = 0
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => {
@@ -273,6 +281,7 @@ describe('meeting speech persistence worker host', () => {
   it('rejects borrowed byte views before worker admission', async () => {
     const worker = new TestWorker()
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       isCurrent: () => true,
@@ -289,6 +298,7 @@ describe('meeting speech persistence worker host', () => {
   it('admits one active and one queued request, refusing overflow without dispatch', async () => {
     const worker = new TestWorker(-1)
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => worker
@@ -306,6 +316,7 @@ describe('meeting speech persistence worker host', () => {
     const worker = new TestWorker(10)
     const mutableLimits = { ...policy.limits }
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => mutableLimits,
       readBounds: () => policy,
       workerFactory: () => worker
@@ -327,6 +338,7 @@ describe('meeting speech persistence worker host', () => {
   it('terminates and waits for the exact child exit before releasing an invalidated operation', async () => {
     const worker = new TestWorker(-1)
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => worker
@@ -337,6 +349,7 @@ describe('meeting speech persistence worker host', () => {
     expect(worker.listenerCount('exit')).toBeGreaterThan(0)
     const retry = new TestWorker()
     const next = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => retry
@@ -361,6 +374,7 @@ describe('meeting speech persistence worker host', () => {
   it('offloads AES-GCM envelope payload encryption and decryption with exact transferable keys', async () => {
     const worker = new TestWorker()
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       workerFactory: () => worker
@@ -409,6 +423,7 @@ describe('meeting speech persistence worker host', () => {
       }
     } as unknown as Uint8Array
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => ({ ...policy, maxInputBytes: 2 }),
       workerFactory: () => new TestWorker()
@@ -421,6 +436,7 @@ describe('meeting speech persistence worker host', () => {
   it('settles queued work at the active deadline while retaining a non-exited worker slot', async () => {
     const worker = new HeldExitWorker()
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => ({ ...policy, operationDeadlineMs: 10, shutdownDeadlineMs: 100 }),
       workerFactory: () => worker
@@ -440,6 +456,7 @@ describe('meeting speech persistence worker host', () => {
     const replacement = new TestWorker()
     let starts = 0
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => ({ ...policy, shutdownDeadlineMs: 10 }),
       workerFactory: () => (starts++ === 0 ? worker : replacement)
@@ -463,6 +480,7 @@ describe('meeting speech persistence worker host', () => {
     const worker = new TestWorker(10)
     let current = true
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => policy.limits,
       readBounds: () => policy,
       isCurrent: () => current,

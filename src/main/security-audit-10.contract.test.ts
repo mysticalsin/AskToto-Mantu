@@ -294,7 +294,8 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(start).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
     const listAndMutations = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.on(IPC.importDecoderReady')
-    expect(listAndMutations).toMatch(/getImportJobs\(\)\.list\(\)/)
+    expect(listAndMutations).toMatch(/importJobsSnapshotIpc\.listImportJobsSnapshot\(/)
+    expect(listAndMutations).not.toMatch(/getImportJobs\(\)\.list\(\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.cancel\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.resume\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.remove\(parsed\.jobId\)/)

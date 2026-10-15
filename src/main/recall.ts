@@ -27,6 +27,7 @@ import {
   rewriteMeetingSpeechRecap,
   refuseReservedSpeechProse
 } from './features/meetings/speech-provenance'
+import { readSavedNote } from './features/meetings/recall-note'
 import { storageAt } from './infra/storage/meetings-storage'
 import { writeWithAdmission } from './infra/storage/write-with-admission'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
@@ -167,8 +168,8 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
 }
 
 /**
- * Read a saved meeting file back into memory for "Resume session".
- * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
+ * Read a saved meeting or Q&A note back through the explicit History reader.
+ * Meeting reads return the recap/transcript; note reads return the saved title, question and answer.
  * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
  */
 export async function recallRead(
@@ -207,6 +208,8 @@ export async function recallRead(
   const text = speech.publicMarkdown
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
+  const note = readSavedNote(text, safeName)
+  if (note) return note
   const fm = frontmatter(text)
   if (!isMeetingDocumentType(fm.type)) {
     return { ok: false, error: 'This does not look like a meeting file.' }

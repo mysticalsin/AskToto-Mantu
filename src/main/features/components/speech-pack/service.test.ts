@@ -406,6 +406,44 @@ describe('explicit speech-pack service boundary', () => {
     expect(failClosed.createEngine).not.toHaveBeenCalled()
   })
 
+  it.each([
+    'cancel',
+    'selection',
+    'policy',
+    'capture',
+    'shutdown'
+  ] as const)('invalidates a preview when %s changes its authority during the first trust refresh', async (change) => {
+    let releaseRefresh!: (allowed: boolean) => void
+    const refresh = new Promise<boolean>((resolve) => {
+      releaseRefresh = resolve
+    })
+    let selectionIdentity = 'selection:0'
+    let policyIdentity = 'policy:0'
+    let captureIdentity = 'capture:0'
+    const { service, createEngine } = setup({
+      refreshAuthority: () => refresh,
+      selectionIdentity: () => selectionIdentity,
+      policyIdentity: () => policyIdentity,
+      captureIdentity: () => captureIdentity
+    })
+    const request = {
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'install' as const,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    }
+    const pending = service.planPreview(request)
+    if (change === 'cancel') await service.action({ ...request, action: 'cancel' })
+    else if (change === 'selection') selectionIdentity = 'selection:2'
+    else if (change === 'policy') policyIdentity = 'policy:2'
+    else if (change === 'capture') captureIdentity = 'capture:2'
+    else await service.shutdown()
+    // Identities also fence changes observed through live getters before a change callback runs.
+    releaseRefresh(true)
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: 'stale-plan' })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
   it('invalidates an action whose package admission is pending when the user cancels', async () => {
     const pendingContract = deferredPackageContract()
     const { service, createEngine } = setup({ packageRuntimeContract: () => pendingContract.promise })

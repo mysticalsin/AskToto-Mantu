@@ -454,34 +454,37 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-manifest' })
     if (sourceHost(component) === null)
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
-    if (!(await refreshAuthority()))
-      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (closing) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
+    // Bind the request before the first asynchronous boundary. A cancellation or an identity change
+    // during the trust refresh must invalidate this request, not become its new starting authority.
+    const revision = authorityRevision
+    const selectedEngine = options.selectedEngine()
+    const policyIdentity = currentPolicyIdentity()
+    const selectionIdentity = currentSelectionIdentity()
+    const captureIdentity = currentCaptureIdentity()
+    const requestIsCurrent = (): boolean =>
+      revision === authorityRevision &&
+      !closing &&
+      options.selectedEngine() === selectedEngine &&
+      currentPolicyIdentity() === policyIdentity &&
+      currentSelectionIdentity() === selectionIdentity &&
+      currentCaptureIdentity() === captureIdentity
+    const refreshed = await refreshAuthority()
+    if (!requestIsCurrent()) {
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
+    }
+    if (!refreshed) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (!featureEnabled()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'disabled' })
-    const initiallySelectedEngine = options.selectedEngine()
-    if (selectedId(initiallySelectedEngine) !== component.id) {
+    if (selectedId(selectedEngine) !== component.id) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-selected' })
     }
     if (!policyAllows()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
-    const policyIdentity = currentPolicyIdentity()
     if (policyIdentity === null) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (isCaptureActive()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
-    const selectionIdentity = currentSelectionIdentity()
-    const captureIdentity = currentCaptureIdentity()
     if (selectionIdentity === null || captureIdentity === null)
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
-    const revision = authorityRevision
-    const selectedEngine = initiallySelectedEngine
     const packageContract = await currentPackageContract()
-    if (
-      revision !== authorityRevision ||
-      closing ||
-      !featureEnabled() ||
-      selectedId(options.selectedEngine()) !== component.id ||
-      currentPolicyIdentity() !== policyIdentity ||
-      currentSelectionIdentity() !== selectionIdentity ||
-      currentCaptureIdentity() !== captureIdentity
-    ) {
+    if (!requestIsCurrent() || !featureEnabled()) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-plan' })
     }
     if (packageContract.status === 'invalid') {
@@ -498,6 +501,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     const readiness = await resolveSpeechPack(options.rootDir, component)
     if (
       revision !== authorityRevision ||
+      closing ||
+      !featureEnabled() ||
       selectedId(options.selectedEngine()) !== component.id ||
       currentSelectionIdentity() !== selectionIdentity ||
       currentCaptureIdentity() !== captureIdentity
@@ -738,7 +743,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     captureActivityChanged(active: boolean): void {
       if (captureActive !== active) {
         authorityRevision += 1
-        installPlans.clear()
+        // Keep the bounded, single-use record so capture-revoked consent reports stale-plan; an
+        // unknown, consumed or TTL-expired plan still reports plan-expired in installWithPlan.
       }
       captureActive = active
       if (!active) return
