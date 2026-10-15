@@ -1,0 +1,382 @@
+name: Nonpromotable lean payload attribution
+
+on:
+  push:
+    branches: [fix/lean-payload-attribution]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-payload-attribution-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Attribution data-integrity contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - id: contract_init
+        name: Initialize owned contract report before dependency installation
+        shell: bash
+        run: |
+          case "${RUNNER_TEMP:-}" in /*) ;; *) echo 'RUNNER_TEMP must be an absolute path'; exit 1 ;; esac
+          test -d "$RUNNER_TEMP"
+          test "$(cd "$RUNNER_TEMP" && pwd -P)" != /
+          LEAN_CONTRACT_ROOT="$RUNNER_TEMP/NONPROMOTABLE-lean-attribution-contract-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$LEAN_CONTRACT_ROOT" in /*) ;; *) echo 'contract report root must be absolute'; exit 1 ;; esac
+          test "$LEAN_CONTRACT_ROOT" != /
+          mkdir -m 700 "$LEAN_CONTRACT_ROOT"
+          printf '{"schema":"lean-attribution-contract-v1","status":"NOT_RUN","counts":null,"failures":[]}' > "$LEAN_CONTRACT_ROOT/contract-report.json"
+          echo "LEAN_CONTRACT_ROOT=$LEAN_CONTRACT_ROOT" >> "$GITHUB_ENV"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - name: Install pure JavaScript contract dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - id: contract_tests
+        name: Run the exact attribution contract file with retained Vitest JSON
+        shell: bash
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 node node_modules/vitest/vitest.mjs run \
+            scripts/lib/lean-payload-attribution.test.ts \
+            --reporter=json \
+            --outputFile="$LEAN_CONTRACT_ROOT/vitest.json" \
+            --dangerouslyIgnoreUnhandledErrors=false
+          test_exit=$?
+          echo "exit_code=$test_exit" >> "$GITHUB_OUTPUT"
+          exit "$test_exit"
+      - id: contract_validate
+        name: Validate Vitest counters and persist bounded contract report
+        if: always() && steps.contract_init.outputs.ready == 'true'
+        env:
+          TEST_STEP_OUTCOME: ${{ steps.contract_tests.outcome }}
+          TEST_EXIT_CODE: ${{ steps.contract_tests.outputs.exit_code }}
+        shell: bash
+        run: |
+          node - "$LEAN_CONTRACT_ROOT/vitest.json" "$LEAN_CONTRACT_ROOT/contract-report.json" <<'NODE'
+          const { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs')
+          const [rawPath, outputPath] = process.argv.slice(2)
+          const maximumRawBytes = 2 * 1024 * 1024
+          let report
+          const failures = []
+          let rawBytes = null
+          let rawRetained = false
+          try {
+            rawBytes = statSync(rawPath).size
+            if (rawBytes > maximumRawBytes) {
+              failures.push('VITEST_JSON_EXCEEDS_2_MIB_LIMIT')
+              rmSync(rawPath)
+            } else {
+              rawRetained = true
+              report = JSON.parse(readFileSync(rawPath, 'utf8'))
+            }
+          } catch {
+            failures.push('VITEST_JSON_MISSING_OR_INVALID')
+          }
+          const numeric = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null
+          const counts = report ? {
+            files: Array.isArray(report.testResults) ? report.testResults.length : null,
+            suites: numeric(report.numTotalTestSuites),
+            passedSuites: numeric(report.numPassedTestSuites),
+            failedSuites: numeric(report.numFailedTestSuites),
+            pendingSuites: numeric(report.numPendingTestSuites),
+            tests: numeric(report.numTotalTests),
+            passed: numeric(report.numPassedTests),
+            failed: numeric(report.numFailedTests),
+            pending: numeric(report.numPendingTests),
+            todo: numeric(report.numTodoTests)
+          } : null
+          const tests = report?.testResults?.[0]?.assertionResults
+          const ancestors = Array.isArray(tests) ? [...new Set(tests.map((test) =>
+            Array.isArray(test.ancestorTitles) ? test.ancestorTitles.join('\0') : ''
+          ))] : []
+          const namedFailures = Array.isArray(tests)
+            ? tests.filter((test) => test.status !== 'passed').map((test) => {
+                const title = [ ...(Array.isArray(test.ancestorTitles) ? test.ancestorTitles : []), test.title ]
+                  .filter((part) => typeof part === 'string' && part.length > 0).join(' > ')
+                return title.slice(0, 240) || 'UNNAMED_FAILED_ASSERTION'
+              }).slice(0, 18)
+            : []
+          if (process.env.TEST_STEP_OUTCOME !== 'success') failures.push('TEST_STEP_NOT_SUCCESSFUL')
+          if (process.env.TEST_EXIT_CODE !== '0') failures.push('VITEST_EXIT_NOT_ZERO')
+          if (report?.success !== true) failures.push('VITEST_REPORT_NOT_SUCCESSFUL')
+          if (!counts || counts.files !== 1 || counts.suites !== 2 || counts.passedSuites !== 2 ||
+              counts.failedSuites !== 0 || counts.pendingSuites !== 0 ||
+              counts.tests !== 18 || counts.passed !== 18 ||
+              counts.failed !== 0 || counts.pending !== 0 || counts.todo !== 0) {
+            failures.push('VITEST_COUNTERS_DO_NOT_MATCH_2_SUITES_18_PASS_0_SKIP_TODO_FAIL')
+          }
+          if (!Array.isArray(report?.testResults) || report.testResults.length !== 1 ||
+              !String(report.testResults[0]?.name ?? '').replaceAll('\\', '/').endsWith('/scripts/lib/lean-payload-attribution.test.ts')) {
+            failures.push('TEST_FILE_INVENTORY_MISMATCH')
+          }
+          if (!Array.isArray(tests) || tests.length !== 18 ||
+              tests.some((test) => test.status !== 'passed') ||
+              report?.testResults?.[0]?.status !== 'passed' ||
+              ancestors.length !== 1 || !ancestors[0]) {
+            failures.push('ANCESTOR_GROUP_OR_ASSERTION_INVENTORY_MISMATCH')
+          }
+          const result = {
+            schema: 'lean-attribution-contract-v1',
+            status: failures.length === 0 ? 'PASS' : 'FAIL',
+            rawBytes,
+            counts,
+            failedAssertions: namedFailures,
+            failures
+          }
+          writeFileSync(outputPath, `${JSON.stringify(result)}\n`, { mode: 0o600 })
+          if (process.env.GITHUB_OUTPUT) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `raw_retained=${rawRetained}\n`)
+          }
+          console.log(`contract counts: ${JSON.stringify(counts)}`)
+          if (failures.length) {
+            console.error(`contract validation failed: ${failures.join(', ')}`)
+            if (namedFailures.length) console.error(`failed assertions: ${namedFailures.join(' | ')}`)
+            process.exitCode = 1
+          }
+          NODE
+      - id: contract_output
+        name: Guard the exact owned JSON report set before retention
+        if: always() && steps.contract_init.outputs.ready == 'true'
+        shell: bash
+        run: |
+          test -s "$LEAN_CONTRACT_ROOT/contract-report.json"
+          {
+            echo 'paths<<EOF'
+            echo "$LEAN_CONTRACT_ROOT/contract-report.json"
+            if [ -f "$LEAN_CONTRACT_ROOT/vitest.json" ]; then
+              raw_bytes="$(wc -c < "$LEAN_CONTRACT_ROOT/vitest.json")"
+              if [ "$raw_bytes" -le 2097152 ]; then
+                echo "$LEAN_CONTRACT_ROOT/vitest.json"
+              fi
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+          node -e "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))" "$LEAN_CONTRACT_ROOT/contract-report.json"
+          if [ -f "$LEAN_CONTRACT_ROOT/vitest.json" ]; then
+            test -s "$LEAN_CONTRACT_ROOT/vitest.json"
+            test "$(wc -c < "$LEAN_CONTRACT_ROOT/vitest.json")" -le 2097152
+          fi
+          actual="$(find "$LEAN_CONTRACT_ROOT" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)"
+          if [ -f "$LEAN_CONTRACT_ROOT/vitest.json" ]; then
+            expected="$(printf '%s\n' contract-report.json vitest.json | sort)"
+          else
+            expected=contract-report.json
+          fi
+          test "$actual" = "$expected"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        name: Retain bounded contract result only
+        if: always() && steps.contract_init.outputs.ready == 'true' && steps.contract_output.outputs.paths != ''
+        with:
+          name: NONPROMOTABLE-lean-attribution-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          path: ${{ steps.contract_output.outputs.paths }}
+
+  payload:
+    name: NONPROMOTABLE ${{ matrix.variant }} attribution
+    needs: contract
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - target: win
+            arch: x64
+            runner: windows-latest
+            variant: win-x64-solid
+          - target: mac
+            arch: arm64
+            runner: macos-latest
+            variant: mac-arm64-udbz
+          - target: mac
+            arch: x64
+            runner: macos-latest
+            variant: mac-x64-udbz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      ATTRIBUTION_REPORT_ROOT: ${{ github.workspace }}/diagnostic-tools/build/lean-attribution-reports/${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
+      ATTRIBUTION_OUTPUT_ROOT: ${{ github.workspace }}/payload-source/release/lean-attribution-${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: diagnostic-tools
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: d6003b038ffd3bbf94a3aa7b44aa6645f4e4f180
+          path: payload-source
+          persist-credentials: false
+      - name: Verify immutable payload checkout
+        shell: bash
+        run: |
+          test "$(git -C payload-source rev-parse HEAD)" = d6003b038ffd3bbf94a3aa7b44aa6645f4e4f180
+          test -z "$(git -C payload-source status --porcelain)"
+      - id: init
+        name: Initialize owned report and scratch roots
+        shell: bash
+        run: |
+          ATTRIBUTION_SCRATCH_ROOT="$RUNNER_TEMP/lean-attribution-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          node diagnostic-tools/scripts/diagnostics/lean-payload-attribution.mjs init \
+            --target "${{ matrix.target }}" --arch "${{ matrix.arch }}" --variant "${{ matrix.variant }}" \
+            --diagnostic-sha "$GITHUB_SHA" \
+            --diagnostic-root "$GITHUB_WORKSPACE/diagnostic-tools" \
+            --payload-root "$GITHUB_WORKSPACE/payload-source" \
+            --report-root "$ATTRIBUTION_REPORT_ROOT" \
+            --scratch-root "$ATTRIBUTION_SCRATCH_ROOT"
+          echo "ATTRIBUTION_SCRATCH_ROOT=$ATTRIBUTION_SCRATCH_ROOT" >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: payload-source/package-lock.json
+      - name: Provision reviewed FFmpeg decoder
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: payload-source
+        run: |
+          mkdir -p "resources/ffmpeg/${{ matrix.target == 'win' && 'win32' || 'darwin' }}-${{ matrix.arch }}"
+          asset="ffmpeg-${{ matrix.target == 'win' && 'win32' || 'darwin' }}-${{ matrix.arch }}${{ matrix.target == 'win' && '.exe' || '' }}"
+          gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir resources/ffmpeg --clobber
+          if [ "${{ matrix.target }}" = win ]; then
+            mv "resources/ffmpeg/$asset" "resources/ffmpeg/win32-x64/ffmpeg.exe"
+          else
+            mv "resources/ffmpeg/$asset" "resources/ffmpeg/darwin-${{ matrix.arch }}/ffmpeg"
+            chmod +x "resources/ffmpeg/darwin-${{ matrix.arch }}/ffmpeg"
+          fi
+      - name: Install frozen payload dependencies
+        working-directory: payload-source
+        run: npm ci
+      - name: Verify reviewed FFmpeg decoder
+        working-directory: payload-source
+        run: node scripts/check-ffmpeg-sidecar.mjs ${{ matrix.target }} ${{ matrix.arch }}
+      - name: Provision architecture-specific Electron distribution
+        if: matrix.target == 'mac'
+        working-directory: payload-source
+        run: node scripts/provision-electron-dist.mjs ${{ matrix.arch }}
+      - name: Build and verify macOS capture helper
+        if: matrix.target == 'mac'
+        working-directory: payload-source
+        run: |
+          node scripts/build-mac-helper.mjs
+          node scripts/check-mac-helper.mjs mac
+      - name: Provision managed Node and Windows VC++ runtime
+        working-directory: payload-source
+        run: npm run fetch:managed-node -- ${{ matrix.target }}
+      - name: Build Mantu Intelligence resources
+        working-directory: payload-source
+        run: npm run build:intelligence
+      - name: Build profile-compiled application
+        working-directory: payload-source
+        shell: bash
+        env:
+          METIS_PACKAGE_PROFILE: lean
+        run: npm run build
+      - name: Copy and bind the read-only NSIS archive observer
+        if: matrix.target == 'win'
+        shell: bash
+        run: >-
+          node diagnostic-tools/scripts/diagnostics/lean-payload-attribution.mjs prepare-capture
+          --payload-root "$GITHUB_WORKSPACE/payload-source"
+          --diagnostic-root "$GITHUB_WORKSPACE/diagnostic-tools"
+          --report-root "$ATTRIBUTION_REPORT_ROOT"
+      - id: package
+        name: Build one complete installer with reviewed format
+        shell: bash
+        working-directory: payload-source
+        env:
+          METIS_PACKAGE_PROFILE: lean
+          METIS_PACKAGE_ARCH: ${{ matrix.arch }}
+          DEBUG: electron-builder,electron-builder:7z
+          DEBUG_DMG: ${{ matrix.target == 'mac' && 'true' || '' }}
+          METIS_ATTRIBUTION_EXPECTED_OUTPUT: ${{ env.ATTRIBUTION_OUTPUT_ROOT }}
+          METIS_ATTRIBUTION_SCRATCH: ${{ runner.temp }}/lean-attribution-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
+          METIS_ATTRIBUTION_REPORT: ${{ env.ATTRIBUTION_REPORT_ROOT }}
+        run: |
+          if [ "${{ matrix.target }}" = win ]; then
+            npx electron-builder --config electron-builder.win.yml --win nsis --x64 \
+              -c.compression=maximum -c.nsis.differentialPackage=false \
+              -c.npmRebuild=false --publish never \
+              -c.directories.output="release/lean-attribution-${{ matrix.variant }}" \
+              -c.artifactBuildCompleted=./build/lean-measurements/capture-lean-nsis-payload.mjs
+          else
+            npx electron-builder --mac dmg --${{ matrix.arch }} \
+              -c.compression=maximum -c.dmg.format=UDBZ \
+              -c.npmRebuild=false -c.electronDist=resources/electron-dist \
+              --publish never -c.mac.identity=null \
+              -c.directories.output="release/lean-attribution-${{ matrix.variant }}"
+          fi
+      - name: Run native shared-data compressor smoke fixture
+        shell: bash
+        run: >-
+          node diagnostic-tools/scripts/diagnostics/lean-payload-attribution.mjs native-smoke
+          --target "${{ matrix.target }}"
+          --payload-root "$GITHUB_WORKSPACE/payload-source"
+          --scratch-root "$ATTRIBUTION_SCRATCH_ROOT"
+          --report-root "$ATTRIBUTION_REPORT_ROOT"
+      - id: diagnostics
+        name: Inventory complete payload and run bounded compression attribution
+        if: success()
+        shell: bash
+        run: >-
+          node diagnostic-tools/scripts/diagnostics/lean-payload-attribution.mjs collect
+          --target "${{ matrix.target }}" --arch "${{ matrix.arch }}" --variant "${{ matrix.variant }}"
+          --diagnostic-sha "$GITHUB_SHA"
+          --diagnostic-root "$GITHUB_WORKSPACE/diagnostic-tools"
+          --payload-root "$GITHUB_WORKSPACE/payload-source"
+          --output-root "$ATTRIBUTION_OUTPUT_ROOT"
+          --report-root "$ATTRIBUTION_REPORT_ROOT"
+          --scratch-root "$ATTRIBUTION_SCRATCH_ROOT"
+      - id: strict_size
+        name: Run unchanged strict installer-size gate after diagnostics
+        if: always() && steps.package.outcome == 'success'
+        shell: bash
+        working-directory: payload-source
+        run: node scripts/measure-lean-candidate.mjs ${{ matrix.target }} ${{ matrix.arch }} "release/lean-attribution-${{ matrix.variant }}" ${{ matrix.variant }}
+      - name: Copy only the strict-size JSON verdict into the report set
+        if: always() && steps.init.outputs.ready == 'true' && steps.package.outcome == 'success'
+        shell: bash
+        run: |
+          source_json="payload-source/build/lean-measurements/${{ matrix.target }}-${{ matrix.arch }}.json"
+          if [ -f "$source_json" ]; then cp "$source_json" "$ATTRIBUTION_REPORT_ROOT/strict-size-measurement.json"; fi
+      - name: Mark attribution incomplete after a preparation or diagnostic failure
+        if: failure() && steps.init.outputs.ready == 'true' && steps.diagnostics.outcome != 'success'
+        shell: bash
+        run: >-
+          node diagnostic-tools/scripts/diagnostics/lean-payload-attribution.mjs mark-incomplete
+          --report-root "$ATTRIBUTION_REPORT_ROOT"
+          --reason "Required preparation, packaging, native smoke, or attribution work failed; see the private workflow log."
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        name: Upload reports only
+        if: always() && steps.init.outputs.ready == 'true'
+        with:
+          name: NONPROMOTABLE-lean-attribution-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          path: |
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/report.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/run-paths.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/capture-hook-identity.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/windows-archive-capture.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/app-manifest.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/asar-members.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/package-notices.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/native-smoke.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/strict-size-measurement.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/probe-*.json
+            ${{ env.ATTRIBUTION_REPORT_ROOT }}/source-inputs.sha256
