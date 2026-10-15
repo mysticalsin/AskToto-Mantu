@@ -69,7 +69,7 @@ jobs:
           node scripts/fetch-local-model.mjs
           node scripts/check-local-model.mjs
       - name: Verify host, archive, executable architecture and exact input digests
-        run: NATIVE_INPUT_REPORT="$NATIVE_REPORT_DIR/native-inputs.json" node scripts/verify-native-runtime-qualification-inputs.mjs
+        run: RUNNER_TEMP="$NATIVE_REPORT_DIR" NATIVE_INPUT_REPORT="$NATIVE_REPORT_DIR/native-inputs.json" node scripts/verify-native-runtime-qualification-inputs.mjs
       - name: Keep macOS supervision fallback classification explicit
         if: matrix.platform == 'darwin'
         run: |
