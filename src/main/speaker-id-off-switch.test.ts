@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -75,6 +76,7 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
   const finalizeImportSpeakers = vi.fn(() => (settings.speakerId.enabled ? new Map([['Speaker 1', 'Speaker 1']]) : null))
   actualFunction('initializeImportJobs', {
     importJobs: null,
+    randomUUID,
     wireIntelligenceIndexWork: noop,
     ImportJobManager: class { constructor(deps: Record<string, any>) { captured = deps } },
     EncryptedImportJobStore: class {},
