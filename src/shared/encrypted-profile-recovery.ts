@@ -6,9 +6,15 @@
  * widen this into keyword matching: an ordinary write or credential-store error must never suggest
  * changing a user's encrypted profile.
  */
-export const ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX =
-  'Métis could not unlock the existing encrypted profile.'
+export const ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX = 'Métis could not unlock the existing encrypted profile.'
+
+/** Distinguishes the macOS first-paint gate from account-bound recovery on Windows. */
+export const MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX = 'Métis needs your approval to unlock the original macOS Keychain.'
 
 export function isEncryptedProfileRecoveryMessage(message: string): boolean {
   return message.startsWith(ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX)
+}
+
+export function isMacKeychainUnlockMessage(message: string): boolean {
+  return message.startsWith(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
 }

@@ -8,7 +8,9 @@ import {
   renameSync,
   statSync,
   readdirSync,
-  mkdtempSync, unlinkSync } from 'node:fs'
+  mkdtempSync,
+  unlinkSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { totalmem as physicalTotalMemory } from 'node:os'
 import {
@@ -36,6 +38,7 @@ import {
   KeychainKeyRecoveryError,
   decryptSecret,
   encryptSecret,
+  requireMacKeychainUnlock,
   prepareFileKeyForWrite,
   resetSecretKeyCache,
   useFileBackend
@@ -52,6 +55,7 @@ import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
+import { createCredentialReaders } from './store-credential-readers'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -250,7 +254,6 @@ function adminManagedContent(): string | null {
     c.mtime === id.mtime &&
     c.dev === id.dev &&
     c.ino === id.ino &&
-
     now - c.at >= 0 &&
     now - c.at < ADMIN_POLICY_REPROBE_MS
   ) {
@@ -345,17 +348,23 @@ function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     try {
       return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
-    } catch {
+    } catch (e) {
+      if (e instanceof KeychainKeyRecoveryError) throw e
       return null
     }
   }
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
+    if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     // Only touch safeStorage (the Keychain) when the file backend is NOT in force — see readUserRaw's
     // comment for why a keystore-forced build must never probe it here.
-    if (useFileBackend() || !safeStorage.isEncryptionAvailable()) return null
+    if (useFileBackend() || !safeStorage.isEncryptionAvailable()) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
+      return null
+    }
     try {
       return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
-    } catch {
+    } catch (e) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       return null
     }
   }
@@ -401,7 +410,9 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
   }
   const recovered = tryParseSettingsBuffer(buf)
   if (!recovered) return null
-  mainLog.warn(`[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`)
+  mainLog.warn(
+    `[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`
+  )
   return recovered
 }
 
@@ -443,19 +454,28 @@ function readUserRaw(): Record<string, unknown> | null {
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
+    if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
     // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
     // treat it as unreadable and serve conservative defaults without caching it as fresh, never prompting.
     if (useFileBackend()) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
+      preserveUnreadableSettings(
+        buf,
+        'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed'
+      )
       return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
+      if (app.isPackaged && process.platform === 'darwin') throw new KeychainKeyRecoveryError()
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
+      preserveUnreadableSettings(
+        buf,
+        'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine'
+      )
       return null
     }
     const parsed = tryParseSettingsBuffer(buf)
@@ -467,14 +487,19 @@ function readUserRaw(): Record<string, unknown> | null {
           const tmp = `${p}.tmp`
           writeFileSync(tmp, serializeUserRaw(parsed), { mode: 0o600 })
           renameSync(tmp, p)
-        } catch { /* migration is best-effort; old format still works */ }
+        } catch {
+          /* migration is best-effort; old format still works */
+        }
       }
       return parsed
     }
     // Undecryptable (keychain/OS user changed) — fall back to defaults, but try `.recovered` first.
     const recoveredV1 = tryRecoveredSettings()
     if (recoveredV1) return recoveredV1
-    preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
+    preserveUnreadableSettings(
+      buf,
+      'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed'
+    )
     return null
   }
 
@@ -540,7 +565,11 @@ function migrateLegacyBidstackConnection(raw: Record<string, unknown>): void {
 // Cache is also explicitly invalidated in setSettings / setApiKey / clearApiKey for safety.
 
 function safeMtime(p: string): number {
-  try { return statSync(p).mtimeMs } catch { return 0 }
+  try {
+    return statSync(p).mtimeMs
+  } catch {
+    return 0
+  }
 }
 
 interface SettingsCache {
@@ -574,13 +603,10 @@ export function resetAsrHardwarePreferenceForTests(): void {
 
 function setupIsComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
   const userDone = 'onboardingDone' in user ? shape().onboardingDone.safeParse(user.onboardingDone) : null
-  const managedDone =
-    'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
+  const managedDone = 'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
   return (
     (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
-    (typeof user.onboardingDoneAt === 'number' &&
-      Number.isFinite(user.onboardingDoneAt) &&
-      user.onboardingDoneAt > 0)
+    (typeof user.onboardingDoneAt === 'number' && Number.isFinite(user.onboardingDoneAt) && user.onboardingDoneAt > 0)
   )
 }
 
@@ -592,10 +618,7 @@ export function resetSettingsCacheForTests(): void {
   _settingsCache = null
 }
 
-function currentSettingsMtimes(): Pick<
-  SettingsCache,
-  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'
-> {
+function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
   return {
     // settings.json path is part of the key so a change of profile directory always misses the cache.
     // In production `settingsPath()` is constant; test suites point app.getPath('userData') at a fresh
@@ -839,7 +862,15 @@ const AES_KEY_MARKER = Buffer.from('ATKAES1\n')
 // getApiKey() is called inside every IPC handler that needs the key (ask, test, dust agents…).
 // Each call hits the filesystem + runs AES-GCM decryption. Cache per provider; invalidated on
 // setApiKey / clearApiKey so a rotation is always reflected immediately.
-const _apiKeyCache = new Map<ProviderId, string>()
+const credentialReaders = createCredentialReaders({
+  readPath: readFileSync,
+  pathExists: existsSync,
+  apiKeyPath: keyPath,
+  dustTokenPath: () => join(dir(), 'dust-refresh.bin'),
+  sonioxKeyPath: () => join(dir(), 'key-soniox.bin'),
+  envKey: (provider) => process.env[ENV_VAR[provider]],
+  saveApiKey: setApiKey
+})
 
 export interface EncryptedProfileArchive {
   backupDir: string
@@ -895,7 +926,7 @@ export function archiveEncryptedProfile(): EncryptedProfileArchive {
 
   resetSecretKeyCache()
   _settingsCache = null
-  _apiKeyCache.clear()
+  credentialReaders.resetCaches()
   return { backupDir, files: moved }
 }
 
@@ -946,7 +977,7 @@ export function setApiKey(provider: ProviderId, key: string): void {
       }. Check that the disk isn't full and the folder is writable.`
     )
   }
-  _apiKeyCache.delete(provider)
+  credentialReaders.invalidateApiKey(provider)
   _settingsCache = null
 }
 
@@ -958,7 +989,7 @@ export function clearApiKey(provider: ProviderId): void {
   } catch (e) {
     mainLog.warn('[store] clearApiKey: could not delete key file for', provider, e)
   }
-  _apiKeyCache.delete(provider)
+  credentialReaders.invalidateApiKey(provider)
   _settingsCache = null
 }
 
@@ -1134,50 +1165,7 @@ export function dustSelectedAgentVision(sId: string | undefined): boolean {
 }
 
 export function getApiKey(provider: ProviderId): string {
-  // Env-var keys bypass the cache — they're already an O(1) lookup and must stay live.
-  const env = process.env[ENV_VAR[provider]]
-  if (env) return env
-
-  if (_apiKeyCache.has(provider)) return _apiKeyCache.get(provider)!
-
-  // Compute from disk (file read + AES decrypt). All paths below land on a single `key` assignment
-  // so we can cache the result regardless of which branch resolved it.
-  let key = ''
-  try {
-    const buf = readFileSync(keyPath(provider))
-
-    // ── Legacy plaintext (oldest format) ──────────────────────────────────────
-    if (buf.subarray(0, 6).toString('utf8') === 'plain:') {
-      const plain = buf.subarray(6).toString('utf8')
-      // Migrate to current backend on first read (defense-in-depth for disk backups).
-      // setApiKey will delete _apiKeyCache[provider]; we re-set it below.
-      try { setApiKey(provider, plain) } catch { /* keep the plaintext file; key still works */ }
-      key = plain
-    } else if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
-      try {
-        key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-      } catch (e) {
-        mainLog.warn('[store] key file undecryptable for', provider, e)
-        key = '' // Corrupt or key rotated
-      }
-    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      // ── Legacy safeStorage blob (no marker) — migrate to current backend ────
-      try {
-        const plain = safeStorage.decryptString(buf)
-        // Best-effort migration: re-save with the current backend so future reads don't need keychain.
-        try { setApiKey(provider, plain) } catch { /* keep the old blob; key still works */ }
-        key = plain
-      } catch {
-        /* not a safeStorage blob for this OS user — unreadable */
-      }
-    }
-  } catch {
-    /* file missing or unreadable */
-  }
-
-  _apiKeyCache.set(provider, key)
-  return key
+  return credentialReaders.getApiKey(provider)
 }
 
 export function hasApiKey(provider: ProviderId): boolean {
@@ -1230,22 +1218,7 @@ export function setDustRefreshToken(token: string): void {
 }
 
 export function getDustRefreshToken(): string {
-  try {
-    const buf = readFileSync(dustRefreshTokenPath())
-    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      return decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    }
-    if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try {
-        return safeStorage.decryptString(buf)
-      } catch {
-        return ''
-      }
-    }
-    return ''
-  } catch {
-    return ''
-  }
+  return credentialReaders.getDustRefreshToken()
 }
 
 /** Returns false when the token file survived the delete (locked by AV/backup, read-only). A disconnect
@@ -1273,13 +1246,11 @@ export function hasKeysMap(): Record<string, boolean> {
 
 // ─── Soniox STT key (not a ProviderId) — same encryption backend as setApiKey, dedicated file ───
 const sonioxKeyPath = () => join(dir(), 'key-soniox.bin')
-let _sonioxKeyCache: string | null | undefined
-
 export function setSonioxApiKey(key: string): void {
   ensureDir()
   const trimmed = key.trim()
   const path = sonioxKeyPath()
-  _sonioxKeyCache = undefined
+  credentialReaders.invalidateSoniox()
   if (!trimmed) {
     clearSonioxApiKey()
     return
@@ -1298,7 +1269,7 @@ export function setSonioxApiKey(key: string): void {
   const tmp = `${path}.tmp`
   writeFileSync(tmp, blob, { mode: 0o600 })
   renameSync(tmp, path)
-  _sonioxKeyCache = trimmed
+  credentialReaders.invalidateSoniox()
 }
 
 export function clearSonioxApiKey(): void {
@@ -1320,36 +1291,22 @@ export function clearSonioxApiKey(): void {
   } catch (e) {
     // Do not cache an invented empty value. A subsequent read must inspect the surviving encrypted
     // file so callers retain an honest "key still seated" state after an AV/backup/ACL failure.
-    _sonioxKeyCache = undefined
+    credentialReaders.invalidateSoniox()
     mainLog.warn('[store] clearSonioxApiKey: could not delete encrypted key file', e)
     throw new Error(
       "Couldn't remove your Soniox key. Métis could not delete its encrypted key file. Check that the data folder is writable and the file is not in use."
     )
   }
-  _sonioxKeyCache = ''
+  credentialReaders.invalidateSoniox()
 }
 
 export function getSonioxApiKeyStored(): string {
-  if (_sonioxKeyCache !== undefined && _sonioxKeyCache !== null) return _sonioxKeyCache
-  let key = ''
-  try {
-    const path = sonioxKeyPath()
-    if (!existsSync(path)) {
-      _sonioxKeyCache = ''
-      return ''
-    }
-    const buf = readFileSync(path)
-    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    } else if (safeStorage.isEncryptionAvailable()) {
-      key = safeStorage.decryptString(buf)
-    }
-  } catch (e) {
-    mainLog.warn('[store] soniox key undecryptable', e)
-    key = ''
-  }
-  _sonioxKeyCache = key
-  return key
+  return credentialReaders.getSonioxApiKeyStored()
+}
+
+/** Clear decrypted credential memoization after explicit profile unlock. */
+export function resetCredentialReadCachesAfterProfileUnlock(): void {
+  credentialReaders.resetCaches()
 }
 
 /** Seated Soniox key from Settings, or SONIOX_API_KEY env. Env wins (same honesty as getApiKey). */

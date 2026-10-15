@@ -302,6 +302,7 @@ export class ImportJobManager {
     this.loaded = true
     for (const saved of await this.deps.store.list()) {
       if (!saved?.jobId || !saved.sourcePath || !saved.sourceName) continue
+      if (this.jobs.has(saved.jobId)) continue
       const job = copy(saved)
       this.jobs.set(job.jobId, job)
       if (!terminal(job.state)) {
@@ -566,7 +567,7 @@ export class ImportJobManager {
     job.cursor = seq + 1
     // Slabs before seq are fixed-length; the last slab may be partial. Assignment (not accumulation)
     // makes retries idempotent and also covers the bounded-memory legacy overflow path.
-    job.durationMs = seq * CHUNK_MS + Math.round(samples.length * 1000 / SAMPLE_RATE)
+    job.durationMs = seq * CHUNK_MS + Math.round((samples.length * 1000) / SAMPLE_RATE)
     await this.persist(job)
     return this.attemptAccepts(attempt)
   }
@@ -687,7 +688,7 @@ export class ImportJobManager {
   private async consumeVadPcm(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
     const pcm = assembleVadPcmAndRelease(this.takePcm(job.jobId))
     const total = pcm.length
-    job.durationMs = Math.round(total * 1000 / SAMPLE_RATE)
+    job.durationMs = Math.round((total * 1000) / SAMPLE_RATE)
     const windows = vadWindowsFromPcm(pcm, SAMPLE_RATE)
     if (windows.length === 0) {
       await this.fail(job, 'No speech was recognized in this recording.')
@@ -744,11 +745,7 @@ export class ImportJobManager {
       const samples = pcm.subarray(w.start, w.end)
       let text = ''
       try {
-        text = await this.transcribeWithRetry(
-          samples,
-          { language: votedLanguage },
-          () => this.attemptAccepts(attempt)
-        )
+        text = await this.transcribeWithRetry(samples, { language: votedLanguage }, () => this.attemptAccepts(attempt))
       } catch (error) {
         if (error === ATTEMPT_STOPPED) return false
         if (terminal(job.state)) return false

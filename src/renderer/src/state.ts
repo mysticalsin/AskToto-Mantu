@@ -15,6 +15,10 @@ import type {
   SignInResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import { isEncryptedProfileRecoveryMessage, isMacKeychainUnlockMessage } from '@shared/encrypted-profile-recovery'
+import { useEncryptedProfileUnlock } from './hooks/use-encrypted-profile-unlock'
+import { BOOT_DEADLINE_MS, withBootIpcTimeout, useSettingsBoot } from './settings-boot'
+export { BOOT_DEADLINE_MS, BOOT_IPC_TIMEOUT_MS, withBootIpcTimeout } from './settings-boot'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -182,11 +186,7 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       // the next animation frame and would cancel that batch. Page Visibility is the explicit condition for
       // the frozen-safe fallback; timers are no help there because they are frozen alongside rAF.
       if (!rafRef.current) rafRef.current = requestAnimationFrame(measureAndPush)
-      if (
-        !microRef.current &&
-        typeof document !== 'undefined' &&
-        document.visibilityState === 'hidden'
-      ) {
+      if (!microRef.current && typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         microRef.current = true
         void Promise.resolve().then(() => {
           microRef.current = false
@@ -292,15 +292,18 @@ export function useAsk(): {
   // onto it. If the request ends with no real output at all (onDone/onError with zero deltas), the stale
   // text is cleared then instead — so a copy/feedback action can never act on the wrong answer.
   const pendingReplaceRef = useRef(false)
-  const updateAnswer = useCallback((update: (current: AnswerState | null) => AnswerState | null): AnswerState | null => {
-    const next = update(answerRef.current)
-    answerRef.current = next
-    // All first-mount publications, including a fast terminal event, stay in the transition lane so
-    // lazy Answer/Copilot mounting cannot suspend synchronous input (React #426).
-    if (answerMountedRef.current) setAnswer(next)
-    else startTransition(() => setAnswer(next))
-    return next
-  }, [])
+  const updateAnswer = useCallback(
+    (update: (current: AnswerState | null) => AnswerState | null): AnswerState | null => {
+      const next = update(answerRef.current)
+      answerRef.current = next
+      // All first-mount publications, including a fast terminal event, stay in the transition lane so
+      // lazy Answer/Copilot mounting cannot suspend synchronous input (React #426).
+      if (answerMountedRef.current) setAnswer(next)
+      else startTransition(() => setAnswer(next))
+      return next
+    },
+    []
+  )
 
   const flush = useCallback((): void => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -311,24 +314,32 @@ export function useAsk(): {
     const replace = pendingReplaceRef.current
     pendingRef.current = ''
     pendingReplaceRef.current = false
-    updateAnswer((a) => a && a.id === id ? { ...a, text: replace ? chunk : a.text + chunk } : a)
+    updateAnswer((a) => (a && a.id === id ? { ...a, text: replace ? chunk : a.text + chunk } : a))
   }, [updateAnswer])
 
-  const finishCurrent = useCallback((
-    completion: 'complete' | 'incomplete', error: string | null, retainPrevious = false
-  ): AnswerState | null => {
-    const id = idRef.current
-    if (!id) return answerRef.current
-    flush() // includes current tokens that have not reached their animation frame or first paint
-    idRef.current = '' // terminal ownership ends now; duplicate or late IPC events are inert
-    const noOutput = pendingReplaceRef.current
-    pendingReplaceRef.current = false
-    return updateAnswer((a) => a && a.id === id ? {
-      ...a, streaming: false, completion, error,
-      text: noOutput && !retainPrevious ? '' : a.text,
-      usedScreen: noOutput && !retainPrevious ? false : a.usedScreen
-    } : a)
-  }, [flush, updateAnswer])
+  const finishCurrent = useCallback(
+    (completion: 'complete' | 'incomplete', error: string | null, retainPrevious = false): AnswerState | null => {
+      const id = idRef.current
+      if (!id) return answerRef.current
+      flush() // includes current tokens that have not reached their animation frame or first paint
+      idRef.current = '' // terminal ownership ends now; duplicate or late IPC events are inert
+      const noOutput = pendingReplaceRef.current
+      pendingReplaceRef.current = false
+      return updateAnswer((a) =>
+        a && a.id === id
+          ? {
+              ...a,
+              streaming: false,
+              completion,
+              error,
+              text: noOutput && !retainPrevious ? '' : a.text,
+              usedScreen: noOutput && !retainPrevious ? false : a.usedScreen
+            }
+          : a
+      )
+    },
+    [flush, updateAnswer]
+  )
 
   useEffect(() => {
     const offDelta = window.toto.onDelta((d: StreamDelta) => {
@@ -359,9 +370,7 @@ export function useAsk(): {
               // the INTENT flag it sent, and on the fast path main decides at send time whether its
               // on-device description still existed (MQA-180). Absent = no verdict (plain/vision asks),
               // so the optimistic value stands.
-              ...(m.usedScreen === undefined
-                ? {}
-                : { usedScreen: m.usedScreen, screenMissed: !m.usedScreen })
+              ...(m.usedScreen === undefined ? {} : { usedScreen: m.usedScreen, screenMissed: !m.usedScreen })
             }
           : a
       )
@@ -429,24 +438,26 @@ export function useAsk(): {
         usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
         ephemeral: req.mode === 'suggest'
       }))
-      void window.toto.ask({
-        id,
-        mode: req.mode,
-        prompt: req.prompt ?? '',
-        image: req.image,
-        transcript: req.transcript,
-        depth: req.depth,
-        kind: req.kind,
-        redactPrompt: req.redactPrompt,
-        agentOverride: req.agentOverride,
-        providerOverride: req.providerOverride,
-        wantsScreenContext: req.wantsScreenContext,
-        history: req.history ?? []
-      }).catch(() => {
-        // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
-        // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
-        if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
-      })
+      void window.toto
+        .ask({
+          id,
+          mode: req.mode,
+          prompt: req.prompt ?? '',
+          image: req.image,
+          transcript: req.transcript,
+          depth: req.depth,
+          kind: req.kind,
+          redactPrompt: req.redactPrompt,
+          agentOverride: req.agentOverride,
+          providerOverride: req.providerOverride,
+          wantsScreenContext: req.wantsScreenContext,
+          history: req.history ?? []
+        })
+        .catch(() => {
+          // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
+          // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
+          if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
+        })
       return id
     },
     [resetBuffer, updateAnswer, finishCurrent]
@@ -511,29 +522,8 @@ export function useAsk(): {
   )
 }
 
-
-/** Bound a boot IPC so a hung invoke (never settles) advances retries instead of spinning forever. */
-export const BOOT_IPC_TIMEOUT_MS = 2000
-/** Wall-clock budget for first-paint getSettings/authStatus before surfacing bootError. */
-export const BOOT_DEADLINE_MS = 15_000
 /** FITO-185-X: show Reload on the Loading strip after this wait — never spin with zero escape. */
 export const BOOT_SOFT_RETRY_MS = 5_000
-
-export function withBootIpcTimeout<T>(promise: Promise<T>, label: string, ms = BOOT_IPC_TIMEOUT_MS): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-    promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (err) => {
-        clearTimeout(timer)
-        reject(err)
-      }
-    )
-  })
-}
 
 export function useSettings(): {
   settings: PublicSettings | null
@@ -542,6 +532,7 @@ export function useSettings(): {
   patch: (p: SettingsPatch) => Promise<PublicSettings>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
+  unlockEncryptedProfile: () => Promise<void>
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
 } {
@@ -561,49 +552,11 @@ export function useSettings(): {
       setBootError(null)
     } catch (e) {
       console.error('[settings] refresh failed', e)
+      const message = e instanceof Error ? e.message : String(e)
+      if (isEncryptedProfileRecoveryMessage(message) || isMacKeychainUnlockMessage(message)) setBootError(message)
     }
   }, [])
-  useEffect(() => {
-    // First-paint load with retry. getSettings() can reject before the main-process handler is
-    // registered (boot-order race) or on a transient decrypt hiccup; the app renders only the
-    // "Starting Métis…" strip until `settings` is non-null, and the overlay is usually already
-    // focused so the focus-refetch below never fires — without a retry a single boot reject strands
-    // the app on that strip indefinitely. Retry with backoff until it resolves.
-    // FITO-185-G-TIMEOUT: also bound each invoke (~2s) so a HUNG IPC (never settles) advances
-    // retries, and stop by 15s wall so bootError surfaces instead of spinning forever.
-    let cancelled = false
-    const deadline = Date.now() + BOOT_DEADLINE_MS
-    void (async () => {
-      for (let attempt = 0; !cancelled; attempt++) {
-        try {
-          const s = await withBootIpcTimeout(window.toto.getSettings(), 'getSettings')
-          if (!cancelled) {
-            setSettings(s)
-            setBootError(null)
-          }
-          return
-        } catch (e) {
-          if (attempt >= 20 || Date.now() >= deadline) {
-            console.error('[boot] getSettings failed after retries; app cannot start', e)
-            if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
-            return
-          }
-          const wait = Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
-          await new Promise((r) => setTimeout(r, wait))
-        }
-      }
-    })()
-    // Refetch on focus so settings changed by the MAIN process (e.g. the Dust CLI auto-connect / token
-    // refresh on launch) surface in the UI without the user having to do anything.
-    const onFocus = (): void => void refresh()
-    window.addEventListener('focus', onFocus)
-    const unsubscribe = window.toto.onSettingsChanged(onFocus)
-    return () => {
-      cancelled = true
-      window.removeEventListener('focus', onFocus)
-      unsubscribe()
-    }
-  }, [refresh])
+  useSettingsBoot(refresh, setSettings, setBootError)
   const patch = useCallback(async (p: Partial<PublicSettings>) => {
     const next = await window.toto.setSettings(p)
     setSettings(next)
@@ -631,7 +584,18 @@ export function useSettings(): {
   const testKey = useCallback(async (provider: ProviderId, k: string) => {
     return window.toto.testApiKey(provider, k)
   }, [])
-  return { settings, bootError, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey }
+  const unlockEncryptedProfile = useEncryptedProfileUnlock(setSettings, setBootError)
+  return {
+    settings,
+    bootError,
+    refresh,
+    patch,
+    saveKey,
+    recoverEncryptedProfile,
+    unlockEncryptedProfile,
+    clearKey,
+    testKey
+  }
 }
 
 /** How often the renderer re-polls auth status while the app is open.
@@ -710,9 +674,13 @@ export function useAuth(): {
       }
     })()
     const stop = startAuthRefreshLoop(() => void refresh())
+    // Profile unlock can make a previously inaccessible encrypted auth cache readable in this process.
+    // Main emits settingsChanged after successful Keychain access so authStatus refreshes immediately.
+    const unsubscribeSettings = window.toto.onSettingsChanged(() => void refresh())
     return () => {
       cancelled = true
       stop()
+      unsubscribeSettings()
     }
   }, [refresh])
   const signIn = useCallback(async () => {

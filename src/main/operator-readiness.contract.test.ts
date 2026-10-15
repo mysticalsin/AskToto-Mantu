@@ -16,7 +16,7 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
 
   it('refreshes readiness from main events and after licence activation without refocusing', () => {
     expect(source('preload/index.ts')).toContain('sub(IPC.settingsChanged, cb)')
-    expect(source('renderer/src/state.ts')).toContain('window.toto.onSettingsChanged(onFocus)')
+    expect(source('renderer/src/settings-boot.ts')).toContain('window.toto.onSettingsChanged(onFocus)')
     expect(source('main/index.ts')).toContain('onReadinessChanged: notifySettingsChanged')
     const settingsSources = [
       source('renderer/src/features/settings/SettingsRoot.tsx'),
@@ -26,12 +26,17 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
   })
 
   it('rejects an activation if its verified endpoint changed during the request', () => {
-    expect(source('main/index.ts')).toContain('resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())')
+    expect(source('main/index.ts')).toContain(
+      'resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())'
+    )
   })
 
   it('MQA-295 clears saved credentials before a renderer-requested endpoint change', () => {
     const main = source('main/index.ts')
-    const guard = main.slice(main.indexOf("if ('operatorUrl' in p && resolveOperatorBaseUrl"), main.indexOf('const next = setSettingsWithSpeakerPolicy(p)'))
+    const guard = main.slice(
+      main.indexOf("if ('operatorUrl' in p && resolveOperatorBaseUrl"),
+      main.indexOf('const next = setSettingsWithSpeakerPolicy(p)')
+    )
     expect(guard.includes("operatorLicenseToken: ''")).toBe(true)
     expect(guard.includes("operatorIngestSecret: ''")).toBe(true)
   })

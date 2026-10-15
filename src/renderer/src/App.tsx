@@ -27,6 +27,8 @@ import {
 import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
 import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
+import { MacKeychainUnlockScreen } from './components/MacKeychainUnlockScreen'
+import { isMacKeychainUnlockMessage } from '@shared/encrypted-profile-recovery'
 import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
@@ -327,6 +329,7 @@ export function App(): JSX.Element {
     patch,
     saveKey,
     recoverEncryptedProfile,
+    unlockEncryptedProfile,
     clearKey,
     testKey,
     refresh
@@ -4028,20 +4031,19 @@ export function App(): JSX.Element {
                   ? reviewBody
                   : answerBody
 
-  // A license-gate verdict is only ever pending when the gate itself is on (default off) — and
-  // settings.licenseGateEnabled is already known the moment `settings` resolves, so this adds no extra
-  // wait for the common case of an unlicensed build.
+  // Resolve license gating only when configured; the default path adds no wait.
   const licenseGatePending = licenseEnforced && licenseGate == null
 
-  // FITO-185-I: exclusive first-run must paint Act 1 (or at least the poster bed) WITHOUT waiting for
-  // settings/auth IPC. Missing settings ≡ onboarding not done (same fail-closed as main's
-  // onboardingExclusiveLive). Live settings replace provisional defaults when getSettings lands.
+  // Keep exclusive first-run paint independent of settings IPC; live settings replace defaults later.
   const onboardingBoot = isOnboardingBoot(settings)
   const onboardingSettings = settings ?? provisionalOnboardingSettings()
 
-  // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
-  // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
-  // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
+  // Keep profile recovery and onboarding behind explicit Keychain consent.
+  if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError)) {
+    return <MacKeychainUnlockScreen setRoot={setRoot} onUnlock={unlockEncryptedProfile} />
+  }
+
+  // License status takes precedence over SSO and onboarding when access is denied.
   if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
@@ -4052,14 +4054,10 @@ export function App(): JSX.Element {
     )
   }
 
-  // Azure AD gate — blocks all use when SSO is configured OR enforced (managed-config/env requireAuth,
-  // sticky-configured — see AuthStatus.enforced) and the user isn't signed in. It must run before
-  // onboarding once auth has resolved: main correctly refuses privileged settings writes while signed
-  // out, and placing onboarding first made its final save look successful even when nothing persisted.
+  // Enforced SSO must resolve before onboarding, which otherwise cannot save protected settings.
   const signInRequired = (auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn
   const signInGate = (status: NonNullable<typeof auth.status>): JSX.Element => {
-    // MQA-066: keep the Settings escape reachable when an organization has enforcement enabled but has
-    // not supplied its Entra IDs. Main permits only the three bootstrap fields in this state.
+    // Keep the Settings escape reachable while an enforced organization enters its Entra IDs.
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col gap-2 p-1.5">

@@ -357,6 +357,13 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 
+  const delayedBrainStartupBody = (source: string): string => {
+    const start = source.indexOf('const runDelayedBrainStartup = (): void => {')
+    const scheduled = source.indexOf('setTimeout(runDelayedBrainStartup, 15_000)', start)
+    if (start < 0 || scheduled < 0) throw new Error('15s delayed brain startup wiring not found')
+    return source.slice(start, scheduled)
+  }
+
   it('MQA-175: a run that never closes its boot watch is reported as an early death on the next launch', () => {
     expect(beginBootWatch(userData, '1.5.4')).toBeNull() // first ever launch: nothing to report
 
@@ -392,13 +399,13 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // kill zone); the 15s finally still backstops via clearBootWatchOnce('mqa-175').
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     expect(source).toMatch(/const earlyDeath = beginBootWatch\(/)
-    const resume = source.indexOf('resumeBackfillIfPending()')
-    const guard = source.lastIndexOf('if (earlyDeath)', resume)
+    const delayed = delayedBrainStartupBody(source)
+    const resume = delayed.indexOf('resumeBackfillIfPending()')
+    const guard = delayed.lastIndexOf('if (earlyDeath)', resume)
     expect(guard).toBeGreaterThan(-1)
     expect(resume).toBeGreaterThan(guard) // the resume sits inside the early-death branch
-    const timer = source.lastIndexOf('setTimeout(() => {', resume)
-    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
-    expect(slice).toMatch(/clearBootWatchOnce\('mqa-175'\)/)
+    expect(source).toMatch(/setTimeout\(runDelayedBrainStartup, 15_000\)/)
+    expect(delayed).toMatch(/clearBootWatchOnce\('mqa-175'\)/)
   })
 
   it('FITO-185-B: boot holds prevent-app-suspension from beginBootWatch until 15s brain clear', () => {
@@ -410,9 +417,7 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // Power-save must arm before createWindow so exclusive hidden first-paint is not App-Napped.
     const create = source.indexOf("runStep('createWindow', createWindow)", begin)
     expect(create).toBeGreaterThan(start)
-    const resume = source.indexOf('resumeBackfillIfPending()')
-    const timer = source.lastIndexOf('setTimeout(() => {', resume)
-    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
+    const slice = delayedBrainStartupBody(source)
     const stop = slice.indexOf('setBootPowerSaveBlock(false)')
     const clear = slice.indexOf("clearBootWatchOnce('mqa-175')")
     expect(stop).toBeGreaterThan(-1)
@@ -432,15 +437,14 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // the clear sat after the brain work with no finally. Contract: try/finally around the 15s body,
     // per-step try/catch on each brain call, and clearBootWatchOnce('mqa-175') in finally (audits inside).
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const resume = source.indexOf('resumeBackfillIfPending()')
+    const slice = delayedBrainStartupBody(source)
+    const resume = slice.indexOf('resumeBackfillIfPending()')
     expect(resume).toBeGreaterThan(-1)
-    // Walk back to the setTimeout that owns this resume (the 15s MQA-175 timer).
-    const timer = source.lastIndexOf('setTimeout(() => {', resume)
-    expect(timer).toBeGreaterThan(-1)
-    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
+    expect(source).toMatch(/setTimeout\(runDelayedBrainStartup, 15_000\)/)
     expect(slice).toMatch(/try\s*\{/)
     expect(slice).toMatch(/finally\s*\{/)
-    const finallyIdx = slice.indexOf('finally')
+    const finallyIdx = slice.indexOf('} finally {')
+    expect(finallyIdx).toBeGreaterThan(resume)
     const finallyBody = slice.slice(finallyIdx)
     expect(finallyBody).toMatch(/setBootPowerSaveBlock\(false\)/)
     expect(finallyBody).toMatch(/clearBootWatchOnce\('mqa-175'\)/)
@@ -484,9 +488,9 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(create).toMatch(/revealExclusiveWhenPainted/)
     expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reveal
     // Brain work still only on 15s timer (not moved earlier)
-    const resume = source.indexOf('resumeBackfillIfPending()')
-    const fifteen = source.indexOf('}, 15_000)', resume)
-    expect(fifteen).toBeGreaterThan(resume)
+    const delayed = delayedBrainStartupBody(source)
+    expect(delayed).toContain('resumeBackfillIfPending()')
+    expect(source).toMatch(/setTimeout\(runDelayedBrainStartup, 15_000\)/)
   })
 
   it('FITO-185-F: createTray audits success/failure and always sets a darwin title', () => {

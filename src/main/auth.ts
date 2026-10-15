@@ -7,8 +7,17 @@ import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings, setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
-import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+import {
+  useFileBackend,
+  encryptSecret,
+  decryptSecret,
+  KeychainKeyRecoveryError,
+  MacKeychainUnlockRequiredError,
+  isMacKeychainUnlockAuthorized
+} from './secrets'
 import { readTrustedAdminManaged } from './win-security'
+import { createAuthSessionLoader, reloadAuthSessionAfterUnlock } from './auth-session-cache'
+import { createAuthLocalConfigState, type AzureConfig } from './auth-local-config'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -31,11 +40,6 @@ const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'openid', 'profile', 'ema
  * The validated identity is persisted (encrypted) so sign-in survives restarts.
  */
 
-interface AzureConfig {
-  clientId: string
-  tenantId: string
-  allowedDomain: string
-}
 interface Session {
   email: string
   name?: string
@@ -200,27 +204,22 @@ function sessionPath(): string {
 // in-app Settings azure fields (which would otherwise flip configured→false, unlocking the gate).
 // Cleared only by a genuine authenticated sign-out (signOut() with a live session).
 //
-function stickyConfiguredPath(): string {
-  return join(app.getPath('userData'), 'auth-configured.flag')
-}
-
-function writeStickyConfigured(): void {
-  const p = stickyConfiguredPath()
-  if (!existsSync(p)) {
-    try { writeFileSync(p, '1', { mode: 0o600 }) } catch { /* best-effort */ }
-  }
-}
-
-function clearStickyConfigured(): void {
-  try {
-    const p = stickyConfiguredPath()
-    if (existsSync(p)) rmSync(p)
-  } catch { /* best-effort */ }
-}
-
-function isStickyConfigured(): boolean {
-  try { return existsSync(stickyConfiguredPath()) } catch { return false }
-}
+const authLocalConfig = createAuthLocalConfigState({
+  userDataPath: () => app.getPath('userData'),
+  joinPath: join,
+  exists: existsSync,
+  readText: (path) => readFileSync(path, 'utf8'),
+  writeText: (path, value) => writeFileSync(path, value, { mode: 0o600 }),
+  remove: rmSync
+})
+const {
+  writeStickyConfigured,
+  clearStickyConfigured,
+  isStickyConfigured,
+  writeLkgConfig,
+  readLkgConfig,
+  clearLkgConfig
+} = authLocalConfig
 
 // ─── Last-known-good (LKG) sign-in config ─────────────────────────────────────
 //
@@ -242,42 +241,6 @@ function isStickyConfigured(): boolean {
 // Written on every successful sign-in (latest good config wins); cleared on a genuine authenticated
 // sign-out, in lockstep with the sticky flag.
 //
-function lkgConfigPath(): string {
-  return join(app.getPath('userData'), 'auth-lkg-config.json')
-}
-
-function writeLkgConfig(cfg: AzureConfig): void {
-  try {
-    writeFileSync(
-      lkgConfigPath(),
-      JSON.stringify({ clientId: cfg.clientId, tenantId: cfg.tenantId, allowedDomain: cfg.allowedDomain }),
-      { mode: 0o600 }
-    )
-  } catch {
-    /* best-effort: without it, recovery just falls back to Settings/managed config */
-  }
-}
-
-function readLkgConfig(): Partial<AzureConfig> {
-  try {
-    const j = JSON.parse(readFileSync(lkgConfigPath(), 'utf8'))
-    const clientId = String(j?.clientId || '').trim()
-    const tenantId = String(j?.tenantId || '').trim()
-    const allowedDomain = String(j?.allowedDomain || '').trim().replace(/^@/, '')
-    if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
-  } catch {
-    /* absent / unreadable / malformed — no recovery config */
-  }
-  return {}
-}
-
-function clearLkgConfig(): void {
-  try {
-    const p = lkgConfigPath()
-    if (existsSync(p)) rmSync(p)
-  } catch { /* best-effort */ }
-}
-
 function msalCachePath(): string {
   return join(app.getPath('userData'), 'msal-cache.bin')
 }
@@ -299,23 +262,39 @@ function makeCachePlugin(): any {
         let json: string | null = null
 
         if (useFileBackend()) {
-          try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
+          try {
+            json = decryptSecret(buf)
+          } catch {
+            /* not AES-GCM format — try safeStorage below */
+          }
         }
         // Fallback / migration: try safeStorage (old installs or prod reads on prod path). Skipped when
         // the file backend is in force, so an old safeStorage-wrapped token can't re-open the Keychain
         // prompt we route around on an un-notarized build — the user just re-authenticates once instead.
         if (json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()) {
-          try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob either */ }
+          try {
+            json = safeStorage.decryptString(buf)
+          } catch {
+            /* not a safeStorage blob either */
+          }
           // If we read it via safeStorage while in file-backend mode, migrate now (best-effort)
           if (json !== null && useFileBackend()) {
-            try { writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
+            try {
+              writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 })
+            } catch {
+              /* best-effort */
+            }
           }
         }
         // Reverse migration (mirrors loadSession): the cache may have been written by a build that
         // FORCED the file keystore on a platform that no longer does. Without this the Graph token
         // cache is dropped on upgrade and the user must re-authenticate interactively.
         if (json === null && !useFileBackend()) {
-          try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
+          try {
+            json = decryptSecret(buf)
+          } catch {
+            /* not AES-GCM either, or the file key is unrecoverable */
+          }
         }
         if (json !== null) ctx.tokenCache.deserialize(json)
       } catch {
@@ -385,6 +364,26 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
 
 let session: Session | null = null
 let loaded = false
+const loadSessionCache = createAuthSessionLoader<Session>({
+  isLoaded: () => loaded,
+  setLoaded: (value) => (loaded = value),
+  getSession: () => session,
+  setSession: (value) => (session = value),
+  path: sessionPath,
+  readFile: readFileSync,
+  writeFile: writeFileSync,
+  clearExpiredSession: clearSession
+})
+
+/** A pre-consent authStatus may have treated a locked encrypted cache as absent. Re-read it only after
+ *  the profile's explicit Keychain unlock succeeds, so a stored session is not presented as signed out. */
+export function reloadSessionAfterProfileUnlock(): void {
+  reloadAuthSessionAfterUnlock<Session>({
+    setSession: (value) => (session = value),
+    setLoaded: (value) => (loaded = value),
+    load: loadSession
+  })
+}
 
 // Single-flight guard for interactive sign-in. signIn() binds a loopback HTTP server, opens an external
 // browser, and races to write the session — so concurrent/looping calls (double-clicks, or a misbehaving
@@ -574,47 +573,7 @@ function ensureRevalidationTimer(): void {
 }
 
 function loadSession(): void {
-  if (loaded) return
-  loaded = true
-  try {
-    const buf = readFileSync(sessionPath())
-    let json: string | null = null
-
-    // Try the file backend (covers dev + new prod installs).
-    if (useFileBackend()) {
-      try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
-    }
-    // Fallback / migration: try safeStorage only when this build did not explicitly opt out of
-    // Keychain. The unsigned package sets ASKTOTO_LOCAL_KEYSTORE so an old auth-session.bin can never
-    // place a hidden Keychain dialog in front of onboarding; it is treated as an expired local cache.
-    if (json === null && !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob */ }
-      // Migrate to file backend if we're now in file-backend mode (best-effort).
-      if (json !== null && useFileBackend()) {
-        try { writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
-      }
-    }
-    // Reverse migration: this file may have been written by a build that FORCED the file keystore on a
-    // platform that no longer does (Windows, once the forced local keystore became darwin-only). Without
-    // this the AES-GCM blob is never even tried and every upgrading user is silently signed out. Only
-    // runs when the file backend is off, so a keystore-forced build still never probes the Keychain here.
-    if (json === null && !useFileBackend()) {
-      try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
-      if (json !== null && safeStorage.isEncryptionAvailable()) {
-        try { writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 }) } catch { /* best-effort */ }
-      }
-    }
-    session = json !== null ? (JSON.parse(json) as Session) : null
-  } catch {
-    session = null
-  }
-  // Treat the file as a CACHE: a session past the max local age is evicted on read (memory + disk),
-  // forcing fresh interactive sign-in. (Config re-validation, domain and tenant, needs cfg and runs in
-  // authStatus and the sweep.)
-  if (session && (typeof session.at !== 'number' || Date.now() - session.at > MAX_SESSION_AGE_MS)) {
-    clearSession()
-    auditLog('auth.expired', { reason: 'max_age' })
-  }
+  loadSessionCache()
 }
 
 function saveSession(s: Session): void {
@@ -634,7 +593,10 @@ function saveSession(s: Session): void {
     // Session persisted to memory only — sign-in still works for this run, but will silently sign
     // the user out on next launch with no trace unless we log it. Never log session contents
     // (email/name/tokens) — reason/class only.
-    mainLog.warn('[auth] failed to persist session to disk (in-memory only this run):', e instanceof Error ? e.message : String(e))
+    mainLog.warn(
+      '[auth] failed to persist session to disk (in-memory only this run):',
+      e instanceof Error ? e.message : String(e)
+    )
   }
 }
 

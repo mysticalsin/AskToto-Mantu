@@ -76,13 +76,12 @@ void _providerIdParity
 /** Single source of truth for every IPC channel name. */
 export const IPC = {
   settingsGet: 'settings:get',
+  settingsUnlockProfile: 'settings:unlockProfile',
   settingsChanged: 'settings:changed',
   settingsSet: 'settings:set',
-  // One-way only: sent after settings:set has replied, so replaying onboarding cannot sever the
-  // renderer's durable-save response by replacing its transparent BrowserWindow mid-invoke.
+  // One-way after save reply so onboarding replacement cannot sever the durable-save IPC.
   onboardingEnter: 'onboarding:enter',
-  // One-way only: sent after settings:set has replied, so exiting opaque onboarding cannot sever the
-  // renderer's durable-save response by destroying its BrowserWindow mid-invoke.
+  // One-way after save reply so exiting onboarding cannot sever the durable-save IPC.
   onboardingExit: 'onboarding:exit',
   settingsRecoverProfile: 'settings:recoverProfile',
   setApiKey: 'settings:setApiKey',

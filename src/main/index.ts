@@ -136,6 +136,14 @@ import {
   setSonioxApiKey,
   clearSonioxApiKey
 } from './store'
+import { requireMacKeychainUnlock } from './secrets'
+import { registerMacProfileUnlockIpc } from './ipc/mac-profile-unlock'
+import {
+  applyOperatorBootstrapSettings,
+  createMacProfileBootCoordinator,
+  safeOverlayLayout,
+  safeOverlayPlacement
+} from './mac-profile-boot'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
@@ -966,15 +974,6 @@ function makeRefreshDustAuth(current: {
   }
 }
 
-// KEYSTORE BACKEND — the default is PLATFORM-SPECIFIC, not global.
-//
-// macOS (forced file keystore): on a self-signed / un-notarized build the Keychain ACL is not stably
-// trusted, so safeStorage prompts for the login-keychain password on launch — AND because the first
-// getSettings() decrypt runs synchronously during boot, BEFORE the overlay window paints, that modal
-// prompt blocks the entire UI behind it (the "load forever" / "I only see the keychain box" report).
-// The AES-256-GCM file backend keeps secrets encrypted at rest (secret-key.bin, mode 0600) with zero
-// OS prompt, so the app boots straight to its UI. Remove this once the app ships signed with an Apple
-// Developer ID + notarization, so it can use the Keychain-backed store again.
 //
 // Windows (NOT forced): none of the above applies. safeStorage there is DPAPI-backed, tied to the
 // signed-in Windows account rather than to the binary's code signature, and never shows a prompt.
@@ -985,12 +984,9 @@ function makeRefreshDustAuth(current: {
 // the userData folder is no longer decryptable. TRADEOFF: the profile becomes bound to this Windows
 // user account — see the DPAPI note in secrets.ts and the recoverEncryptedProfile IPC.
 //
-// `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
-// in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 // ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
 // Run before any display-name change and before the first session is initialized.
 freezeAsciiUserAgent(app)
-if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Self-test must own a throwaway userData before anything resolves userData; no-op unless
 // devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
@@ -2275,6 +2271,8 @@ let emittedAppStarted = false
 // on it, and it is meaningless before that first createWindow() has run.
 let observability: RunObservability | null = null
 let bootWorkGate: BootWork | null = null
+let startupBootWork: BootWork | null = null
+const macProfileBoot = createMacProfileBootCoordinator(() => startupBootWork)
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -3293,15 +3291,12 @@ const TOP_CENTER_MARGIN_PX = 24
 const RESIZE_EDGE_MARGIN = 8
 
 function liveOverlayLayout(): OverlayLayout {
-  return resolveOverlayPresentation({
-    placement: liveOverlayPlacement(),
-    layout: parseOverlayLayout(getSettings().overlayLayout)
-  }).layout
+  return safeOverlayLayout(getSettings)
 }
 
 /** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
 function liveOverlayPlacement(): OverlayPlacement {
-  return parseOverlayPlacement(getSettings().overlayPlacement)
+  return safeOverlayPlacement(getSettings)
 }
 
 /** The sidecar falls back to the established top-center behavior on a constrained display. */
@@ -5272,9 +5267,15 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
-  // --- Settings & permissions ---
+  registerMacProfileUnlockIpc(
+    assertMainWindow,
+    publicSettingsWithSpeakerPolicy,
+    () => win,
+    macProfileBoot.unlockSucceeded
+  )
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
+    if (app.isPackaged && process.platform === 'darwin') requireMacKeychainUnlock()
     const s = publicSettingsWithSpeakerPolicy()
     // Re-apply the live side effects of a managed-config change (content protection / shortcuts / tray)
     // if the relevant values drifted since we last applied them — but only then, so a plain settings poll
@@ -9627,6 +9628,7 @@ if (!app.requestSingleInstanceLock()) {
       commandControl.initialize(powerMonitor, initLogging, mainLog)
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
+      startupBootWork = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
       // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
       bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
@@ -9687,16 +9689,13 @@ if (!app.requestSingleInstanceLock()) {
       })
       {
         setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
-        const boot = getSettings()
-        if (
-          !boot.operatorUrl &&
-          process.env.METIS_OPERATOR_URL &&
-          /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)
-        ) {
-          setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
-        }
-        if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
-          setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+        try {
+          applyOperatorBootstrapSettings(getSettings, setSettings, process.env)
+        } catch (e) {
+          if (!macProfileBoot.isUnlockError(e)) throw e
+          macProfileBoot.defer('applyOperatorBootstrapSettings', () =>
+            applyOperatorBootstrapSettings(getSettings, setSettings, process.env)
+          )
         }
       }
       // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
@@ -9731,7 +9730,7 @@ if (!app.requestSingleInstanceLock()) {
             })
             .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
         )
-        void runAsMaintenance(warmLocalIfReady)
+        bootWork.run('warmLocalIfReady', () => runAsMaintenance(warmLocalIfReady))
       }
       // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
       // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
@@ -9880,15 +9879,13 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
 
-      // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
-      // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately
-      // below — previously registered unguarded — run inside it too: a throw during any of those must not
-      // take out createTray/registerShortcuts/createWindow further down the boot sequence.
+      // Guard boot steps so failures, including display/permission/media registrations, cannot abort window startup.
       const runStep = (name: string, fn: () => void): void => {
         const run = (): void => {
           try {
             fn()
           } catch (e) {
+            if (macProfileBoot.deferUnlockError(name, e, () => runStep(name, fn))) return
             // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
             // boot-step failure is actually diagnosable and shows up in the audit trail.
             mainLog.error(`[boot] ${name} failed:`, e)
@@ -10133,38 +10130,32 @@ if (!app.requestSingleInstanceLock()) {
       // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
       // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
       // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
-      trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
+      runStep('registerSettingsIntervals', () => {
+        trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
 
-      // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
-      // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
-      // build (the shipped default) never touches the network here. For an always-on machine that's
-      // offline for days, this is what lands a revocation within half a day instead of waiting for the
-      // renderer's own once-per-launch check (which only runs at the next relaunch).
-      trackTimer(
-        setInterval(
-          () => {
-            if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
-          },
-          12 * 60 * 60 * 1000
+        // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above:
+        // skips entirely unless the gate is on and this device is activated.
+        trackTimer(
+          setInterval(
+            () => {
+              if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
+            },
+            12 * 60 * 60 * 1000
+          )
         )
-      )
+      })
 
       // Catch the case where encryption was already on (managed-config or a previous run) with a stale
       // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
       runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-      // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
-      // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
       runStep('registerShortcuts', registerShortcuts)
-      // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
-      // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
-      // (ahead of preprocess) but loadURL still raced first paint — that strand is the post-boot
-      // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
+      // Register IPC before createWindow/loadURL: first paint can race handler setup and leave a loading strip.
       runStep('registerIpc', registerIpc)
       clearBootWatchOnce('registerIpc')
       await yieldBeforeBootWindow() // M2-0422: window construction is its own task
       withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
       scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
-      bootWork.releaseAfterFirstShow(win)
+      macProfileBoot.requestBootWorkRelease(win)
       revealController.markBootComplete()
       // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
       clearBootWatchOnce('createWindow')
@@ -10191,8 +10182,8 @@ if (!app.requestSingleInstanceLock()) {
         runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
       )
       runStep('initializeImportJobs', initializeImportJobs)
-      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
-      startOperatorOverlayPoll(() => getSettings())
+      runStep('startOperatorRuntime', () => startOperatorRuntime(() => getSettings(), operatorRuntimeHooks()))
+      runStep('startOperatorOverlayPoll', () => startOperatorOverlayPoll(() => getSettings()))
       // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
       // can safely report chunks as soon as it starts, without delaying first paint.
       const recoverImports = (): Promise<unknown> | undefined => {
@@ -10219,12 +10210,16 @@ if (!app.requestSingleInstanceLock()) {
       runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
       runStep('startMeetingNotifier', startMeetingNotifier)
       runStep('initAutoUpdate', () => initAutoUpdate(() => win))
-      // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
-      // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
-      // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
-      // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
+      // Resume background reconciliation after first paint; directory scans cover sync clients without reliable fs.watch events.
       const BRAIN_RECONCILE_MS = 60 * 1000
-      setTimeout(() => {
+      const runDelayedBrainStartup = (): void => {
+        if (
+          macProfileBoot.deferIfLocked('runDelayedBrainStartup', runDelayedBrainStartup, () => {
+            setBootPowerSaveBlock(false)
+            clearBootWatchOnce('profile-unlock-deferred')
+          })
+        )
+          return
         // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
         // launch that decrypts index.json. When the previous run died before boot completed, this launch
         // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
@@ -10298,7 +10293,8 @@ if (!app.requestSingleInstanceLock()) {
           setBootPowerSaveBlock(false)
           clearBootWatchOnce('mqa-175')
         }
-      }, 15_000)
+      }
+      setTimeout(runDelayedBrainStartup, 15_000)
 
       app.on('activate', () => {
         reveal('activate', { focus: true })
@@ -10312,6 +10308,7 @@ if (!app.requestSingleInstanceLock()) {
           /* settings store not ready */
         }
       })
+      macProfileBoot.completeInitialization()
     })
     .catch((e) => {
       // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
