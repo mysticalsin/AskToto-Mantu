@@ -1,0 +1,79 @@
+name: Harness regression qualification
+
+on:
+  push:
+    branches:
+      - fix/windows-harness-regressions
+    paths:
+      - .github/workflows/harness-regressions.yml
+      - src/main/speaker-id-off-switch.test.ts
+      - src/renderer/src/app-listen-identity.test.ts
+  pull_request:
+    paths:
+      - .github/workflows/harness-regressions.yml
+      - src/main/speaker-id-off-switch.test.ts
+      - src/renderer/src/app-listen-identity.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-regressions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-tests:
+    name: Focused harness tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run both VM harness suites without retries
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/harness-regressions-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 --retry=0 \
+            src/main/speaker-id-off-switch.test.ts \
+            src/renderer/src/app-listen-identity.test.ts
+      - name: Verify complete focused test report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/harness-regressions-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node <<'NODE'
+          const { readFileSync } = require('node:fs')
+          const report = JSON.parse(readFileSync(process.env.REPORT, 'utf8'))
+          const expected = [
+            'src/main/speaker-id-off-switch.test.ts',
+            'src/renderer/src/app-listen-identity.test.ts'
+          ]
+          const files = (report.testResults ?? []).map((item) => String(item.name).replaceAll('\\', '/'))
+          const passed = report.numPassedTests
+          const failed = report.numFailedTests
+          const skipped = (report.numPendingTests ?? 0) + (report.numTodoTests ?? 0)
+          const total = report.numTotalTests
+          console.log(`head=${process.env.GITHUB_SHA} os=${process.env.RUNNER_OS} files=${files.length} passed=${passed} failed=${failed} skipped=${skipped} total=${total}`)
+          if (report.success !== true || files.length !== expected.length ||
+              expected.some((file) => !files.some((actual) => actual.endsWith(file))) ||
+              ![passed, failed, skipped, total].every(Number.isSafeInteger) ||
+              total < 2 || passed !== total || failed !== 0 || skipped !== 0) {
+            throw new Error('Focused harness report is incomplete or not fully green')
+          }
+          NODE
