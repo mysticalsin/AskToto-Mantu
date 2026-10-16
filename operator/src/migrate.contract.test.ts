@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isPlaceholderDatabaseId, parseStatements, resolveDatabaseName, stripJsonComments } from '../scripts/migrate.mjs'
+import {
+  isPlaceholderDatabaseId,
+  parseStatements,
+  resolveDatabaseName,
+  stripJsonComments
+} from '../scripts/migrate.mjs'
 
 const OPERATOR_ROOT = join(__dirname, '..')
 const schemaSql = readFileSync(join(OPERATOR_ROOT, 'schema.sql'), 'utf8')
@@ -40,8 +45,18 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
     }
   })
 
-  it('schema-alter.sql only ever ALTERs seats, crm_sends, issued_licenses, audit, and integrations (the tables with additive columns)', () => {
-    const allowed = new Set(['seats', 'crm_sends', 'issued_licenses', 'audit', 'pulses', 'asks', 'integrations'])
+  it('schema-alter.sql ALTERs only known additive tables, including versioned speech columns', () => {
+    const allowed = new Set([
+      'seats',
+      'crm_sends',
+      'issued_licenses',
+      'audit',
+      'pulses',
+      'asks',
+      'integrations',
+      'speech_sessions',
+      'speech_grants'
+    ])
     for (const stmt of parseStatements(schemaAlterSql)) {
       const m = /^ALTER TABLE (\w+)/i.exec(stmt)
       if (m) expect(allowed.has(m[1])).toBe(true)
@@ -138,7 +153,12 @@ describe('schema-alter.sql operator_settings table (task B6, operator/src/routes
   it('creates operator_settings with exactly the four columns the settings store needs', () => {
     const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS operator_settings\b/i.test(s))
     expect(stmt).toBeTruthy()
-    for (const col of ['key TEXT PRIMARY KEY', 'value_json TEXT NOT NULL', 'updated_at INTEGER NOT NULL', 'updated_by TEXT NOT NULL']) {
+    for (const col of [
+      'key TEXT PRIMARY KEY',
+      'value_json TEXT NOT NULL',
+      'updated_at INTEGER NOT NULL',
+      'updated_by TEXT NOT NULL'
+    ]) {
       expect(stmt.replace(/\s+/g, ' ')).toContain(col)
     }
   })
@@ -158,7 +178,12 @@ describe('schema-alter.sql model_policy table (M2-0412, operator/src/model-polic
   it('creates model_policy with exactly the four columns the policy store needs', () => {
     const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS model_policy\b/i.test(s))
     expect(stmt).toBeTruthy()
-    for (const col of ['id TEXT PRIMARY KEY', 'policy_json TEXT NOT NULL', 'updated_at INTEGER NOT NULL', 'updated_by TEXT NOT NULL']) {
+    for (const col of [
+      'id TEXT PRIMARY KEY',
+      'policy_json TEXT NOT NULL',
+      'updated_at INTEGER NOT NULL',
+      'updated_by TEXT NOT NULL'
+    ]) {
       expect(stmt.replace(/\s+/g, ' ')).toContain(col)
     }
   })
@@ -171,5 +196,143 @@ describe('schema-alter.sql model_policy table (M2-0412, operator/src/model-polic
   it('is never targeted by an ALTER TABLE statement (a policy write always replaces the whole row)', () => {
     const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE model_policy\b/i.test(s))
     expect(alters).toHaveLength(0)
+  })
+})
+
+describe('speech broker additive schema (M2-0107)', () => {
+  it('creates durable session reservations and one-use grants in both fresh and upgrade schemas', () => {
+    for (const sql of [schemaSql, schemaAlterSql]) {
+      const statements = parseStatements(sql)
+      const sessions = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_sessions\b/i.test(statement))
+      const grants = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_grants\b/i.test(statement))
+      expect(sessions).toBeTruthy()
+      expect(grants).toBeTruthy()
+      for (const column of [
+        'id TEXT PRIMARY KEY',
+        'tenant_id TEXT NOT NULL',
+        'audience TEXT NOT NULL',
+        'license_jti TEXT NOT NULL',
+        'device_id TEXT NOT NULL',
+        'capture_generation INTEGER NOT NULL',
+        'route_id TEXT NOT NULL',
+        'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL',
+        'language TEXT',
+        'track_count INTEGER NOT NULL',
+        'reserved_ms INTEGER NOT NULL',
+        'settled_ms INTEGER NOT NULL',
+        'budget_window_start INTEGER NOT NULL',
+        'lease_expires_at INTEGER NOT NULL'
+      ])
+        expect(sessions?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'token_hash TEXT NOT NULL UNIQUE',
+        'session_id TEXT NOT NULL',
+        'track TEXT NOT NULL',
+        'capture_generation INTEGER NOT NULL',
+        'route_id TEXT NOT NULL',
+        'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL',
+        'language TEXT',
+        'expires_at INTEGER NOT NULL',
+        'redeemed_at INTEGER',
+        'revoked_at INTEGER'
+      ])
+        expect(grants?.replace(/\s+/g, ' ')).toContain(column)
+      expect(grants).not.toMatch(/\btoken\s+TEXT\b/i)
+      expect(grants).not.toMatch(/audio|transcript|content/i)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_sessions_active_tenant\b/i.test(statement))
+      ).toBe(true)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_grants_session\b/i.test(statement))
+      ).toBe(true)
+    }
+  })
+})
+
+describe('speech relay durable lifecycle schema (M2-0108)', () => {
+  it('adds metadata-only relay streams and owner-reviewed route evidence to fresh and upgrade schemas', () => {
+    expect(schemaSql).toContain('consented_tracks_json TEXT NOT NULL')
+    const freshStatements = parseStatements(schemaSql)
+    const upgradeStatements = parseStatements(schemaAlterSql)
+    const freshSessions = freshStatements.find((statement) =>
+      /^CREATE TABLE IF NOT EXISTS speech_sessions\b/i.test(statement)
+    )
+    expect(freshSessions?.replace(/\s+/g, ' ')).toContain('consented_tracks_json TEXT NOT NULL')
+    expect(
+      upgradeStatements.some((statement) =>
+        /ALTER TABLE speech_sessions ADD COLUMN consented_tracks_json TEXT/.test(statement)
+      )
+    ).toBe(true)
+    for (const sql of [schemaSql, schemaAlterSql]) {
+      const statements = parseStatements(sql)
+      const streams = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_streams\b/i.test(statement))
+      const evidence = statements.find((statement) =>
+        /^CREATE TABLE IF NOT EXISTS speech_route_evidence\b/i.test(statement)
+      )
+      const epochs = statements.find((statement) =>
+        /^CREATE TABLE IF NOT EXISTS speech_capture_epochs\b/i.test(statement)
+      )
+      const sessions = statements.find((statement) => /^CREATE TABLE IF NOT EXISTS speech_sessions\b/i.test(statement))
+      expect(streams).toBeTruthy()
+      expect(evidence).toBeTruthy()
+      expect(epochs).toBeTruthy()
+      for (const column of [
+        'session_id TEXT NOT NULL',
+        'grant_id TEXT NOT NULL',
+        'track TEXT NOT NULL',
+        'stream_epoch INTEGER NOT NULL',
+        'transport_attempted_at INTEGER',
+        'opened_at INTEGER',
+        'stop_requested_at INTEGER',
+        'close_confirmed_at INTEGER',
+        'settled_at INTEGER',
+        'input_bytes INTEGER NOT NULL',
+        'output_bytes INTEGER NOT NULL'
+      ])
+        expect(streams?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'finish_requested_at INTEGER',
+        'provider_complete_at INTEGER',
+        'last_sequence INTEGER NOT NULL',
+        'tail_status TEXT'
+      ])
+        expect(streams?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'capture_generation INTEGER NOT NULL',
+        'track TEXT NOT NULL',
+        'last_epoch INTEGER NOT NULL',
+        'expires_at INTEGER NOT NULL'
+      ])
+        expect(epochs?.replace(/\s+/g, ' ')).toContain(column)
+      for (const column of [
+        'evidence_key TEXT NOT NULL UNIQUE',
+        'tenant_id TEXT NOT NULL',
+        'audience TEXT NOT NULL',
+        'deployment_id TEXT NOT NULL',
+        'account_id TEXT NOT NULL',
+        'gateway_id TEXT NOT NULL',
+        'route_id TEXT NOT NULL',
+        'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL',
+        'policy_version TEXT NOT NULL',
+        'implementation_revision TEXT NOT NULL',
+        'reviewer_email TEXT NOT NULL',
+        'evidence_refs_json TEXT NOT NULL',
+        'expires_at INTEGER NOT NULL',
+        'version INTEGER NOT NULL',
+        'revoked_at INTEGER'
+      ])
+        expect(evidence?.replace(/\s+/g, ' ')).toContain(column)
+      expect(streams).not.toMatch(/audio|transcript|content/i)
+      expect(evidence).not.toMatch(/token\s+TEXT|secret\s+TEXT/i)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_streams_active\b/i.test(statement))
+      ).toBe(true)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_evidence_lookup\b/i.test(statement))
+      ).toBe(true)
+    }
   })
 })

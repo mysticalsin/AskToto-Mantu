@@ -16,6 +16,7 @@ import { registerSeatTimelineRoutes } from './seat-timeline'
 import { registerInsightsRoutes } from './insights'
 import { registerMcpGatewayRoutes } from './mcp-gateway'
 import { registerModelPolicyRoutes } from './model-policy'
+import { registerAdminSpeechEvidenceRoutes } from './admin-speech-evidence'
 
 registerAdminCoreRoutes()
 registerLiveRoutes()
@@ -30,3 +31,4 @@ registerSeatTimelineRoutes()
 registerInsightsRoutes()
 registerMcpGatewayRoutes()
 registerModelPolicyRoutes()
+registerAdminSpeechEvidenceRoutes()

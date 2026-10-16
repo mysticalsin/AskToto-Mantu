@@ -1,0 +1,227 @@
+{
+  "fixtureId": "speech-relay-protocol-v1-synthetic",
+  "protocolVersion": 1,
+  "syntheticOnly": true,
+  "runtimeOnlySlots": {
+    "grantToken": {
+      "encoding": "base64url",
+      "byteLength": 32,
+      "wireLength": 43,
+      "valueIncluded": false
+    },
+    "grantDigest": {
+      "encoding": "lowercase-hex-sha256",
+      "wireLength": 64,
+      "valueIncluded": false
+    }
+  },
+  "routes": {
+    "routeA": {
+      "routeId": "deepgram-via-gateway",
+      "modelId": "nova-3",
+      "policyVersion": "fixture-policy-a-v1",
+      "configVersion": "fixture-config-a-v1",
+      "language": "multi"
+    },
+    "routeB": {
+      "routeId": "workers-ai-nova3",
+      "modelId": "@cf/deepgram/nova-3",
+      "policyVersion": "fixture-policy-b-v1",
+      "configVersion": "fixture-config-b-v1",
+      "language": "en"
+    }
+  },
+  "limits": {
+    "maxStreamMs": 60000,
+    "drainWindowMs": 5000,
+    "maxInputBytesPerTrack": 1920000,
+    "maxClientFrameBytes": 65536,
+    "maxOutputBytesPerTrack": 1048576
+  },
+  "capability": {
+    "request": {
+      "operation": "speech-capability"
+    },
+    "readyResponse": {
+      "ok": true,
+      "protocolVersion": 1,
+      "selected": { "routeId": "deepgram-via-gateway", "modelId": "nova-3" },
+      "allowed": [{ "routeId": "deepgram-via-gateway", "modelId": "nova-3" }],
+      "ready": true,
+      "routeId": "deepgram-via-gateway",
+      "modelId": "nova-3",
+      "configVersion": "fixture-config-a-v1",
+      "policyVersion": "fixture-policy-a-v1",
+      "languages": ["multi", "en", "fr", "es", "pt", "it"],
+      "format": { "encoding": "pcm_s16le", "sampleRate": 16000, "channels": 1 },
+      "validUntil": 1893456060000,
+      "limits": {
+        "maxStreamMs": 60000,
+        "drainWindowMs": 5000,
+        "maxInputBytesPerTrack": 1920000,
+        "maxClientFrameBytes": 65536,
+        "maxOutputBytesPerTrack": 1048576
+      }
+    },
+    "refusedResponse": {
+      "ok": true,
+      "protocolVersion": 1,
+      "selected": null,
+      "allowed": [],
+      "ready": false,
+      "code": "ROUTE_NOT_READY",
+      "validUntil": 1893456000000
+    }
+  },
+  "create": {
+    "request": {
+      "operation": "create-session",
+      "captureGeneration": 7,
+      "tracks": ["microphone", "system"],
+      "language": "multi",
+      "consent": {
+        "accepted": true,
+        "captureGeneration": 7,
+        "tracks": ["microphone", "system"],
+        "issuedAt": 1893456000000,
+        "expiresAt": 1893456060000
+      }
+    },
+    "responseTemplate": {
+      "ok": true,
+      "protocolVersion": 1,
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "routeId": "deepgram-via-gateway",
+      "model": "nova-3",
+      "configVersion": "fixture-config-a-v1",
+      "policyVersion": "fixture-policy-a-v1",
+      "language": "multi",
+      "captureGeneration": 7,
+      "grantExpiresAt": 1893456060000,
+      "leaseExpiresAt": 1893456060000,
+      "limits": {
+        "maxStreamMs": 60000,
+        "audioDeadlineAt": 1893456055000,
+        "drainWindowMs": 5000,
+        "maxInputBytesPerTrack": 1920000,
+        "maxClientFrameBytes": 65536,
+        "maxOutputBytesPerTrack": 1048576
+      },
+      "grants": [{ "track": "microphone", "streamEpoch": 11 }, { "track": "system", "streamEpoch": 11 }]
+    }
+  },
+  "upgrade": {
+    "descriptorTemplate": {
+      "operation": "open-track",
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "track": "microphone",
+      "captureGeneration": 7,
+      "streamEpoch": 11
+    },
+    "grantDigestSlot": "runtimeOnlySlots.grantDigest"
+  },
+  "status": {
+    "request": {
+      "operation": "session-status",
+      "sessionId": "00000000-0000-4000-8000-000000000101"
+    },
+    "response": {
+      "ok": true,
+      "protocolVersion": 1,
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "captureGeneration": 7,
+      "status": "active",
+      "cancellationRequested": false,
+      "tracks": [
+        {
+          "track": "microphone",
+          "streamEpoch": 11,
+          "phase": "open",
+          "closeConfirmed": false,
+          "tail": null,
+          "lastSequence": 1
+        },
+        {
+          "track": "system",
+          "streamEpoch": 11,
+          "phase": "ready",
+          "closeConfirmed": false,
+          "tail": null,
+          "lastSequence": 0
+        }
+      ]
+    }
+  },
+  "cancel": {
+    "request": {
+      "operation": "cancel-session",
+      "sessionId": "00000000-0000-4000-8000-000000000101"
+    },
+    "response": {
+      "ok": true,
+      "protocolVersion": 1,
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "cancelled": false,
+      "cancellationRequested": true
+    }
+  },
+  "events": {
+    "partial": {
+      "type": "transcript",
+      "protocolVersion": 1,
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "captureGeneration": 7,
+      "track": "microphone",
+      "streamEpoch": 11,
+      "sequence": 1,
+      "segmentIndex": 1,
+      "revision": 1,
+      "text": "Hello",
+      "startMs": 0,
+      "endMs": 450,
+      "final": false,
+      "languages": ["en"],
+      "words": [{ "text": "Hello", "startMs": 0, "endMs": 450, "language": "en", "speaker": 0 }]
+    },
+    "final": {
+      "type": "transcript",
+      "protocolVersion": 1,
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "captureGeneration": 7,
+      "track": "microphone",
+      "streamEpoch": 11,
+      "sequence": 2,
+      "segmentIndex": 1,
+      "revision": 2,
+      "text": "Hello, world.",
+      "startMs": 0,
+      "endMs": 900,
+      "final": true,
+      "languages": ["en", "fr"],
+      "words": [
+        { "text": "Hello,", "startMs": 0, "endMs": 450, "language": "en", "speaker": 0 },
+        { "text": "bonjour.", "startMs": 500, "endMs": 900, "language": "fr", "speaker": 0 }
+      ]
+    },
+    "terminal": {
+      "type": "terminal",
+      "protocolVersion": 1,
+      "sessionId": "00000000-0000-4000-8000-000000000101",
+      "captureGeneration": 7,
+      "track": "microphone",
+      "streamEpoch": 11,
+      "lastSequence": 2,
+      "closeConfirmed": true,
+      "tail": "complete",
+      "reason": "normal"
+    }
+  },
+  "epochProgression": {
+    "captureGeneration": 7,
+    "track": "microphone",
+    "sessions": [
+      { "sessionId": "00000000-0000-4000-8000-000000000101", "streamEpoch": 11 },
+      { "sessionId": "00000000-0000-4000-8000-000000000102", "streamEpoch": 12 }
+    ]
+  }
+}
