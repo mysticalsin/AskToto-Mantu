@@ -31,13 +31,51 @@ function fixture() {
 afterEach(() => vi.useRealTimers())
 
 describe('main-owned application command session', () => {
-  it.each([['open Notes', 'Open', 'R1'], ['focus Notes', 'Focus', 'R1'], ['quit Notes', 'Quit gracefully', 'R2'], ['close Notes', 'Quit gracefully', 'R2']])('proposes exact catalog selection for %s without exposing intent', async (text, actionLabel, risk) => {
+  it.each([['open Notes', 'Open', 'R1'], ['focus Notes', 'Focus', 'R1'], ['quit Notes', 'Quit gracefully', 'R2']])('proposes exact catalog selection for %s without exposing intent', async (text, actionLabel, risk) => {
     const f = fixture(), dto = await f.submit(text)
     expect(dto).toMatchObject({ phase: 'proposal', revision: 1, actionLabel, targetLabel: 'Notes', risk, expiresAt: 16000 })
     expect(Object.keys(dto).sort()).toEqual(['actionLabel', 'expiresAt', 'nonce', 'phase', 'proposalId', 'revision', 'risk', 'targetLabel'])
     expect(dto.proposalId).toMatch(/^[a-f0-9]{48}$/)
     expect(dto.nonce).toMatch(/^[a-f0-9]{48}$/)
     expect(f.discovery).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['close Notes', 'CLOSE Notes', '  ClOsE   Notes  ', 'close Unknown', 'close Notes window'])('refuses ambiguous close command %s before parsing or discovery', async text => {
+    const f = fixture()
+    expect(await f.submit(text)).toEqual({ phase: 'unrecognized', revision: 1 })
+    expect(f.service.state(owner)).toEqual({ phase: 'unrecognized', revision: 1 })
+    expect(f.parser).not.toHaveBeenCalled()
+    expect(f.discovery).not.toHaveBeenCalled()
+  })
+
+  it('clears an earlier proposal when close is submitted and still permits explicit quit', async () => {
+    const f = fixture(), old = await f.submit()
+    f.parser.mockClear(); f.discovery.mockClear(); f.advance(300)
+    expect(await f.submit('close Notes', 2)).toEqual({ phase: 'unrecognized', revision: 2 })
+    expect(f.service.cancel(owner, old.proposalId!, old.nonce!)).toBe(false)
+    expect(f.parser).not.toHaveBeenCalled()
+    expect(f.discovery).not.toHaveBeenCalled()
+    f.advance(300)
+    expect(await f.submit('quit Notes', 3)).toMatchObject({
+      phase: 'proposal', revision: 3, actionLabel: 'Quit gracefully', targetLabel: 'Notes', risk: 'R2'
+    })
+    expect(f.parser).toHaveBeenLastCalledWith({
+      operation: 'apps.quit', applicationId: expect.any(String),
+      candidateSet: expect.any(Object), mode: 'graceful'
+    })
+  })
+
+  it('does not let pending catalog work restore a proposal after close is refused', async () => {
+    const f = fixture(), resolved = await f.catalog.resolve('Notes')
+    let release!: (value: typeof resolved) => void
+    const resolve = vi.spyOn(f.catalog, 'resolve').mockImplementationOnce(() => new Promise(done => { release = done }))
+    const pending = f.submit()
+    f.advance(300)
+    expect(await f.submit('close Notes', 2)).toEqual({ phase: 'unrecognized', revision: 2 })
+    release(resolved)
+    expect(await pending).toEqual({ phase: 'replaced', revision: 1 })
+    expect(f.service.state(owner)).toEqual({ phase: 'unrecognized', revision: 2 })
+    expect(resolve).toHaveBeenCalledTimes(1)
   })
 
   it('lists without making a target proposal or issuing confirmation authority', async () => {
