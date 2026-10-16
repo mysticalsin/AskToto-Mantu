@@ -84,7 +84,7 @@ describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
 
   it('has the same continue-on-error as st1-mac-fifo, so it is blocking exactly when that job is', () => {
     const fifo = jobContinueOnError(jobBlock('st1-mac-fifo'))
-    expect(fifo).toBeDefined()
+    expect(fifo).toBe('false')
     expect(jobContinueOnError(job)).toBe(fifo)
   })
 
@@ -266,27 +266,27 @@ describe('QA candidate History design evidence (M2-0032)', () => {
   })
 })
 
-describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
+describe('QA candidate strict ST-1 hosted filesystem rows', () => {
   const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
 
-  it('moves only the strict fifo and control rows to the owner self-hosted Mac label', () => {
+  it('runs fifo and control on disposable hosted macOS without a job skip condition', () => {
     for (const name of strictJobs) {
-      expect(job(name)).toMatch(/^    runs-on: \[self-hosted, macOS, ARM64, metis-owner-mac\]$/m)
+      expect(job(name)).toMatch(/^    runs-on: macos-latest$/m)
+      expect(job(name)).not.toMatch(/^    if:/m)
     }
-
-    expect(job('st1-mac-dataless-synthetic')).toMatch(/^    runs-on: macos-latest$/m)
-    expect(job('st1-mac-history')).toMatch(/^    runs-on: macos-latest$/m)
-    expect(job('st1-mac-window')).toMatch(/^    runs-on: macos-latest$/m)
+    for (const name of ['st1-mac-dataless-synthetic', 'st1-mac-history', 'st1-mac-window']) {
+      expect(job(name)).toMatch(/^    runs-on: macos-latest$/m)
+    }
   })
 
-  it('disables every non-hosted job while owner-account isolation is on architectural hold', () => {
-    const nonHosted = [...jobBlocks].filter(
-      ([, block]) => !/^ {4}runs-on: (?:ubuntu|macos|windows)-latest$/m.test(block)
-    )
-    expect(nonHosted.map(([name]) => name)).toEqual(strictJobs)
-    for (const [, block] of nonHosted) {
-      expect(block).toMatch(/^ {4}if: \$\{\{ false \}\}$/m)
+  it('keeps every candidate job hosted while personal-device admission remains on hold', () => {
+    for (const [name, block] of jobBlocks) {
+      expect(block, name).toMatch(/^ {4}runs-on: (?:ubuntu|macos|windows)-latest$/m)
+      expect(block, name).not.toMatch(/self-hosted|metis-owner-mac/)
     }
+    const wrapper = readFileSync(join(root, 'scripts/hermetic/run-under-owner-sandbox.sh'), 'utf8')
+    expect(wrapper).toContain('if [ "${OWNER_SANDBOX_ROUTE:-}" = owner ]; then')
+    expect(wrapper).toContain('owner route disabled: architectural isolation hold')
   })
 
   it('tests the direct owner-route refusal in an independent blocking hosted job', () => {
@@ -308,25 +308,17 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(block).toMatch(/^ {6}- run: node --test scripts\/hermetic\/owner-route-hold\.test\.mjs$/m)
   })
 
-  it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
+  it('uses hosted isolation without an owner-account sandbox probe or owner cleanup', () => {
     for (const name of strictJobs) {
-      const jobSteps = steps(name)
-      const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
-      const probe = jobSteps.findIndex((step) =>
-        step.includes('name: Prove owner-account sandbox denies private state')
-      )
-      const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
-      const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
-
-      expect(checkout).toBe(0)
-      expect(probe).toBe(1)
-      expect(probe).toBeLessThan(setup)
-      expect(probe).toBeLessThan(download)
-
-      const block = jobSteps[probe]
-      expect(block).toContain('bash scripts/hermetic/prove-owner-sandbox.sh')
+      const block = job(name)
+      expect(steps(name)[0]).toContain('actions/checkout@')
+      expect(block).not.toContain('Prove owner-account sandbox denies private state')
+      expect(block).not.toContain('run-under-owner-sandbox.sh')
+      expect(block).not.toContain('Remove ST-1 temporary state')
+      expect(block).not.toContain('$HOME')
+      expect(block).not.toContain('security delete-generic-password')
     }
-
+    // Owner denial probes remain protected even though these jobs no longer execute on that account.
     expect(workflow).toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
@@ -468,41 +460,29 @@ exit 1
     }
   })
 
-  it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
+  it('verifies and measures the same QA candidate directly with strict hosted exit statuses', () => {
     for (const name of strictJobs) {
       const block = job(name)
-      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
-      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
-      expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
-    }
-  })
-
-  it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {
-    for (const name of strictJobs) {
-      const block = job(name)
-      expect(jobContinueOnError(block)).toBe('true')
+      expect(block).toContain('run: node scripts/qa/provenance.mjs verify')
+      expect(block).toContain('          node scripts/qa/st-1.mjs')
+      expect(jobContinueOnError(block)).toBe('false')
       expect(block).not.toMatch(/^    env:/m)
       for (const step of steps(name)) {
         expect(step).toContain('TMPDIR: ${{ runner.temp }}')
       }
-
-      const cleanup = steps(name).find((step) => step.includes('name: Remove ST-1 temporary state')) ?? ''
-      expect(cleanup).toMatch(/^        if: always\(\)$/m)
-      expect(cleanup).toContain('rm -rf')
-      expect(cleanup).toContain('"$RUNNER_TEMP"/metis-st1-*')
-      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-unzip-*')
-      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-witness-*')
-      expect(cleanup).toContain('"$HOME/Library/Logs/asktoto-qa"')
-      expect(cleanup).toContain('"$HOME/Library/Preferences/com.mantu.asktoto.qa.plist"')
-      expect(cleanup).toContain('"$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState"')
-      expect(cleanup).toContain('"$HOME/Library/Caches/com.mantu.asktoto.qa"')
-      expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
+      const measure = steps(name).find((step) => step.includes('scripts/qa/st-1.mjs')) ?? ''
+      expect(measure).not.toContain('continue-on-error')
+      expect(measure).toContain('--minutes 5')
+      expect(measure).toContain('--provenance provenance/provenance.json')
+      expect(measure).toContain(`--fixtures ${name === 'st1-mac-fifo' ? 'fifo' : 'none'}`)
+      const [upload] = uploads(block)
+      expect(upload).toContain('if: always()')
+      expect(upload).toContain('if-no-files-found: error')
     }
   })
 
   it('re-downloads and re-verifies the candidate once after a failed byte check, and fails hard on a second bad download', () => {
-    const verifyRun =
-      'run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity\n'
+    const verifyRun = 'run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity\n'
     const retryIf = "        if: steps.verify1.outcome != 'success'\n"
     const pinnedDownload = /uses: (actions\/download-artifact@[0-9a-f]{40}) # v\S+/
     for (const name of strictJobs) {
@@ -551,19 +531,307 @@ exit 1
       expect(jobSteps[verify2]).not.toContain('continue-on-error')
     }
 
-    // Hosted jobs keep their single, hard verify.
+    // Other hosted jobs keep their single, hard verify.
     for (const [name, block] of jobBlocks) {
       if (strictJobs.includes(name)) continue
-      expect(block, `${name} carries the owner-Mac retry`).not.toContain('steps.verify1')
+      expect(block, `${name} carries the diagnostic retry`).not.toContain('steps.verify1')
     }
   })
 
-  it('gives each owner-Mac job time for two candidate downloads plus its measurement', () => {
+  it('preserves each diagnostic job budget for two candidate downloads plus its measurement', () => {
     // One owner-Mac candidate download took 6-10 min on 2026-10-06 (run 37522538424); with the retry the
     // control job spent 16 min downloading and the old 20-minute limit cancelled it 4 min into the measurement.
     for (const name of strictJobs) {
       expect(jobBlocks.get(name), `${name} timeout`).toMatch(/^ {4}timeout-minutes: 45$/m)
     }
+  })
+})
+
+describe('QA candidate strict hosted ST-1 final reports', () => {
+  const rows = [
+    ['st1-mac-fifo', 'fifo', 'st-1-macos-fifo.json'],
+    ['st1-mac-control', 'none', 'st-1-macos-none.json'],
+    ['st1-mac-dataless-synthetic', 'synthetic-dataless', 'st-1-macos-synthetic-dataless.json']
+  ]
+  const installer = 'Metis-QA.zip'
+  const sha = 'a'.repeat(64)
+  const candidateRun = 1234
+
+  it.each(
+    rows
+  )('%s rejects partial, failed, stale or unacknowledged evidence with the actual workflow predicate', (name, row, report) => {
+    const block = job(name)
+    expect(jobContinueOnError(block)).toBe('false')
+    const measurement = steps(name).find((step) => step.includes('scripts/qa/st-1.mjs')) ?? ''
+    expect(measurement).not.toContain('continue-on-error')
+    const gate =
+      steps(name).find((step) => step.includes('Require a complete PASS report bound to this candidate')) ?? ''
+    expect(gate).toContain('if: always()')
+    expect(gate).not.toContain('continue-on-error')
+    expect(gate).toContain('select(.variant == "mac-qa-identity")')
+    expect(gate).toContain('if length == 1 then .[0].sha256 else error("expected one QA installer") end')
+    const match = gate.match(
+      /jq -es --arg name "\$name" --arg sha "\$sha" --arg row "([^"]+)" --argjson run "\$GITHUB_RUN_ID" '([\s\S]+?)'\s+"st1-report\/([^"]+)"/
+    )
+    expect(match, 'extract the real workflow predicate').not.toBeNull()
+    expect(match?.[1]).toBe(row)
+    expect(match?.[3]).toBe(report)
+
+    const safe = {
+      harness: 'ST-1',
+      platform: 'darwin',
+      row,
+      installer,
+      build_run_id: candidateRun,
+      artifact_sha256: sha,
+      complete: true,
+      verdict: 'PASS',
+      teardown: { state: 'acknowledged' },
+      criteria: [
+        { name: 'inspector', pass: true },
+        { name: 'loop', pass: true }
+      ]
+    }
+    const rejected = [
+      null,
+      [],
+      {},
+      { ...safe, harness: 'other' },
+      { ...safe, platform: 'win32' },
+      { ...safe, row: 'dataless' },
+      { ...safe, installer: 'different.zip' },
+      { ...safe, build_run_id: candidateRun + 1 },
+      { ...safe, build_run_id: String(candidateRun) },
+      { ...safe, artifact_sha256: 'b'.repeat(64) },
+      { ...safe, complete: false },
+      { ...safe, complete: undefined },
+      { ...safe, verdict: 'FAIL' },
+      { ...safe, verdict: 'INCOMPLETE' },
+      { ...safe, verdict: 'NOT_EXERCISED' },
+      { ...safe, purpose: 'window-construction' },
+      { ...safe, st1Evidence: false },
+      { ...safe, teardown: undefined },
+      { ...safe, teardown: { state: 'unacknowledged' } },
+      { ...safe, teardown: { state: 'acknowledged', extra: true } },
+      { ...safe, criteria: [] },
+      { ...safe, criteria: undefined },
+      { ...safe, criteria: [{ name: 'loop', pass: false }] },
+      { ...safe, criteria: [{ name: 'loop' }] }
+    ]
+    const cases: [string, boolean][] = [
+      [JSON.stringify(safe), true],
+      ...rejected.map((value): [string, boolean] => [JSON.stringify(value), false]),
+      ['{', false],
+      ['', false],
+      [' \n\t', false],
+      [JSON.stringify(safe) + '\n' + JSON.stringify(safe), false],
+      [JSON.stringify({ ...safe, verdict: 'FAIL' }) + '\n' + JSON.stringify(safe), false],
+      [JSON.stringify(safe) + '\n' + JSON.stringify({ ...safe, verdict: 'FAIL' }), false]
+    ]
+    for (const [input, passes] of cases) {
+      const result = spawnSync(
+        'jq',
+        [
+          '-es',
+          '--arg',
+          'name',
+          installer,
+          '--arg',
+          'sha',
+          sha,
+          '--arg',
+          'row',
+          row,
+          '--argjson',
+          'run',
+          String(candidateRun),
+          match![2]
+        ],
+        { input, encoding: 'utf8', timeout: 5_000 }
+      )
+      expect(result.error, 'jq must execute the actual workflow predicate').toBeUndefined()
+      expect(result.status === 0, input).toBe(passes)
+    }
+  })
+
+  it('keeps real cloud dataless proof explicitly unrun rather than treating synthetic success as cloud success', () => {
+    const block = job('st1-mac-dataless-synthetic')
+    expect(block).toContain('row: "dataless-real-cloud"')
+    expect(block).toContain('verdict: "NOT_RUN_ON_HOSTED"')
+    expect(block).toContain('Hosted runners have no cloud-file provider account')
+    expect(block).not.toMatch(/dataless-real-cloud[\s\S]*verdict: "PASS"/)
+    const recording =
+      steps('st1-mac-dataless-synthetic').find((step) => step.includes('Record the real-cloud dataless row')) ?? ''
+    expect(recording).toContain('if: always()')
+  })
+})
+
+describe('strict hosted ST-1 report notices remain diagnostic only', () => {
+  const jobs = [
+    ['st1-mac-fifo', 'fifo', 'st-1-macos-fifo.json'],
+    ['st1-mac-control', 'none', 'st-1-macos-none.json'],
+    ['st1-mac-dataless-synthetic', 'synthetic-dataless', 'st-1-macos-synthetic-dataless.json']
+  ]
+
+  it.each(
+    jobs
+  )('%s emits a bounded notice after measurement and before the unchanged strict gate', (name, row, report) => {
+    const jobSteps = steps(name)
+    const measurementIndex = jobSteps.findIndex((step) => step.includes('scripts/qa/st-1.mjs'))
+    const noticeIndex = jobSteps.findIndex((step) => step.includes('Summarize strict ST-1 report as a bounded notice'))
+    const gateIndex = jobSteps.findIndex((step) =>
+      step.includes('Require a complete PASS report bound to this candidate')
+    )
+    const notice = jobSteps[noticeIndex] ?? ''
+    expect(measurementIndex).toBeGreaterThan(-1)
+    expect(noticeIndex).toBeGreaterThan(measurementIndex)
+    expect(gateIndex).toBeGreaterThan(noticeIndex)
+    expect(notice).toContain('if: always()')
+    expect(notice).toContain('continue-on-error: true')
+    expect(notice).toContain('scripts/qa/st1-evidence-notice.mjs')
+    expect(notice).toContain(`--report st1-report/${report}`)
+    expect(notice).toContain(`--row ${row}`)
+    expect(jobContinueOnError(job(name))).toBe('false')
+    expect(jobSteps[gateIndex]).toContain('.verdict == "PASS"')
+    expect(jobSteps[gateIndex]).not.toContain('st1-evidence-notice')
+  })
+
+  it('runs a self-test when the notice serializer changes', () => {
+    expect(workflow).toContain('      - scripts/qa/st1-evidence-notice.mjs')
+  })
+})
+
+describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
+  const strictJobs = ['st1-mac-fifo', 'st1-mac-control', 'st1-mac-dataless-synthetic']
+  const bindingName = 'Bind QA provenance to this workflow identity'
+  const expected = {
+    repository: 'mysticalsin/AskToto-Mantu',
+    commit: 'a'.repeat(40),
+    run: '12345678901',
+    attempt: '2'
+  }
+  const producer = {
+    schema: 2,
+    repository: expected.repository,
+    commit: expected.commit,
+    run: { id: 12345678901, attempt: 2 }
+  }
+
+  it('places one hard identity check after provenance download and before installer downloads, byte checks, and ST-1', () => {
+    const predicates: string[] = []
+    for (const name of strictJobs) {
+      const jobSteps = steps(name)
+      const bindings = jobSteps.filter((step) => step.includes(`name: ${bindingName}`))
+      expect(bindings, `${name} binding count`).toHaveLength(1)
+      const binding = bindings[0]
+      const bindingIndex = jobSteps.indexOf(binding)
+      const provenanceIndex = jobSteps.findIndex((step) => step.includes('name: candidate-provenance'))
+      expect(provenanceIndex).toBeGreaterThan(-1)
+      expect(bindingIndex).toBeGreaterThan(provenanceIndex)
+      for (const [index, step] of jobSteps.entries()) {
+        if (step.includes('name: candidate-mac')) expect(bindingIndex).toBeLessThan(index)
+        if (step.includes('scripts/qa/provenance.mjs verify')) expect(bindingIndex).toBeLessThan(index)
+        if (step.includes('scripts/qa/st-1.mjs')) expect(bindingIndex).toBeLessThan(index)
+      }
+      expect(binding).toMatch(/^        env:\n          TMPDIR: \$\{\{ runner\.temp \}\}$/m)
+      expect(binding).not.toMatch(/^        if:/m)
+      expect(binding).not.toMatch(/^        continue-on-error:/m)
+      expect(binding).not.toMatch(/secrets\.|inputs\.|github\.event\./)
+      expect(binding).toContain('provenance/provenance.json > /dev/null 2>&1')
+      for (const key of ['GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) {
+        expect(binding).toContain(`"$${key}"`)
+      }
+      expect(binding).toContain('::error::QA provenance does not match this workflow identity')
+      predicates.push(
+        binding.match(/--arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/)?.[1] ?? ''
+      )
+    }
+    expect(predicates.every((predicate) => predicate.length > 0)).toBe(true)
+    expect(new Set(predicates).size).toBe(1)
+  })
+
+  it('evaluates the exact workflow jq predicate against matching and mismatched producer identity', () => {
+    const binding = steps('st1-mac-fifo').find((step) => step.includes(`name: ${bindingName}`)) ?? ''
+    const match = binding.match(/--arg attempt "\$GITHUB_RUN_ATTEMPT" '([\s\S]+?)'\s+provenance\/provenance\.json/)
+    expect(match, 'extract the actual workflow predicate').not.toBeNull()
+    const predicate = match![1]
+
+    const evaluate = (input: string, context = expected) => {
+      const result = spawnSync(
+        'jq',
+        [
+          '-es',
+          '--arg',
+          'repository',
+          context.repository,
+          '--arg',
+          'commit',
+          context.commit,
+          '--arg',
+          'run',
+          context.run,
+          '--arg',
+          'attempt',
+          context.attempt,
+          predicate
+        ],
+        { input, encoding: 'utf8', timeout: 5_000 }
+      )
+      expect(result.error, 'jq must execute the actual workflow predicate').toBeUndefined()
+      return result.status === 0
+    }
+    const document = JSON.stringify(producer)
+    expect(evaluate(document)).toBe(true)
+
+    const producerFailures = [
+      { ...producer, repository: 'other/AskToto-Mantu' },
+      { ...producer, repository: undefined },
+      { ...producer, commit: 'b'.repeat(40) },
+      { ...producer, commit: undefined },
+      { ...producer, schema: 1 },
+      { ...producer, schema: undefined },
+      { ...producer, run: { id: 12345678902, attempt: 2 } },
+      { ...producer, run: { id: 12345678901, attempt: 3 } },
+      { ...producer, run: { id: '12345678901', attempt: 2 } },
+      { ...producer, run: { id: 12345678901, attempt: '2' } },
+      { ...producer, run: { id: 0, attempt: 2 } },
+      { ...producer, run: { id: -1, attempt: 2 } },
+      { ...producer, run: { id: 1.5, attempt: 2 } },
+      { ...producer, run: { id: 9007199254740992, attempt: 2 } },
+      { ...producer, run: { id: 12345678901, attempt: 0 } },
+      { ...producer, run: { id: 12345678901, attempt: -1 } },
+      { ...producer, run: { id: 12345678901, attempt: 1.5 } },
+      { ...producer, run: { id: 12345678901, attempt: 9007199254740992 } },
+      { ...producer, run: { id: 12345678901 } },
+      { ...producer, run: { attempt: 2 } },
+      { ...producer, run: undefined },
+      { ...producer, run: null },
+      { ...producer, run: [] }
+    ]
+    for (const invalid of producerFailures) expect(evaluate(JSON.stringify(invalid))).toBe(false)
+
+    for (const invalid of [null, [], true, 2, 'text']) expect(evaluate(JSON.stringify(invalid))).toBe(false)
+    const mismatch = JSON.stringify({ ...producer, repository: 'other/repo' })
+    for (const input of [
+      '',
+      ' \n\t',
+      '{',
+      `${document}\n${document}`,
+      `${document}\n${mismatch}`,
+      `${mismatch}\n${document}`
+    ]) {
+      expect(evaluate(input)).toBe(false)
+    }
+
+    const invalidContexts = [
+      { ...expected, repository: '' },
+      { ...expected, repository: 'no-slash' },
+      { ...expected, commit: '' },
+      { ...expected, commit: 'a'.repeat(39) },
+      ...['', '0', '-1', '1.0', '1e3', '01'].map((run) => ({ ...expected, run })),
+      ...['', '0', '-1', '1.0', '1e3', '01'].map((attempt) => ({ ...expected, attempt }))
+    ]
+    for (const context of invalidContexts) expect(evaluate(document, context)).toBe(false)
   })
 })
 

@@ -25,6 +25,7 @@ on:
       - scripts/qa/provenance.mjs
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
+      - scripts/qa/st1-evidence-notice.mjs
       - scripts/qa/lib/st-1-core.mjs
       - scripts/qa/lib/st-1-termination.mjs
       - scripts/qa/lib/st-1-termination.test.ts
@@ -519,25 +520,19 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only per owner decision OD-24; M2-0433 makes it blocking again once ST-1 passes strictly (OD-21).
+  # Strict synthetic POSIX stall/control evidence on disposable hosted runners; never an owner route.
   st1-mac-fifo:
     name: ST-1 fifo stall row (macOS)
     needs: provenance
-    # HOLD: owner-account isolation is not proven; do not assign this job to a personal-device runner.
-    if: ${{ false }}
-    runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
+    runs-on: macos-latest
     timeout-minutes: 45
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
-      - name: Prove owner-account sandbox denies private state
-        env:
-          TMPDIR: ${{ runner.temp }}
-        run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         env:
           TMPDIR: ${{ runner.temp }}
@@ -549,7 +544,31 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
-      # The owner Mac has intermittently received a truncated candidate zip while download-artifact
+      - name: Bind QA provenance to this workflow identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if ! jq -es \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" '
+            ($repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+            ($commit | test("^[0-9a-f]{40}$")) and
+            ($run | test("^[1-9][0-9]*$")) and
+            ($attempt | test("^[1-9][0-9]*$")) and
+            length == 1 and (.[0] |
+              type == "object" and .schema == 2 and
+              .repository == $repository and .commit == $commit and
+              (.run | type == "object") and
+              (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
+              (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
+            )
+          ' provenance/provenance.json > /dev/null 2>&1; then
+            echo "::error::QA provenance does not match this workflow identity"
+            exit 1
+          fi
+      # A candidate download has previously been truncated while download-artifact
       # still reported success. Verify, and on a failed byte check re-download once and verify again;
       # the retry verify has no continue-on-error, so a second bad download still fails the job.
       - id: download1
@@ -565,7 +584,7 @@ jobs:
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Re-download the candidate after a failed byte check
         if: steps.verify1.outcome != 'success'
         env:
@@ -585,9 +604,8 @@ jobs:
         if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
-        continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
@@ -597,26 +615,34 @@ jobs:
             echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
             exit 1
           fi
-          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs \
+          node scripts/qa/st-1.mjs \
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures fifo \
             --minutes 5 \
             --out st1-report/st-1-macos-fifo.json
-      - name: Remove ST-1 temporary state
+      - name: Summarize strict ST-1 report as a bounded notice
+        if: always()
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: node scripts/qa/st1-evidence-notice.mjs --report st1-report/st-1-macos-fifo.json --provenance provenance/provenance.json --row fifo
+      - name: Require a complete PASS report bound to this candidate
         if: always()
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
-          rm -rf \
-            "$RUNNER_TEMP"/metis-st1-* \
-            "$RUNNER_TEMP"/st1-unzip-* \
-            "$RUNNER_TEMP"/st1-witness-* \
-            "$HOME/Library/Logs/asktoto-qa" \
-            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
-            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
-            "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          name=$(basename "$installer")
+          sha=$(jq -er --arg name "$name" '[.builds[] | select(.variant == "mac-qa-identity") | .assets[] | select(.name == $name)] | if length == 1 then .[0].sha256 else error("expected one QA installer") end' provenance/provenance.json)
+          jq -es --arg name "$name" --arg sha "$sha" --arg row "fifo" --argjson run "$GITHUB_RUN_ID" '
+            length == 1 and (.[0] |
+            type == "object" and .harness == "ST-1" and .platform == "darwin" and
+            .row == $row and .installer == $name and .build_run_id == $run and .artifact_sha256 == $sha and
+            .complete == true and .verdict == "PASS" and .purpose == null and .st1Evidence != false and
+            .teardown == {"state":"acknowledged"} and
+            (.criteria | type == "array" and length > 0 and all(.[]; .pass == true)))
+          ' "st1-report/st-1-macos-fifo.json" > /dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
@@ -634,14 +660,14 @@ jobs:
   # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
   # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
   # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
-  # continue-on-error equals st1-mac-fifo's: report-only while that job is, blocking once M2-0433 makes the
-  # ST-1 jobs blocking.
+  # synthetic filesystem measurement is blocking like the fifo row. The distinct real-cloud dataless
+  # row remains NOT_RUN_ON_HOSTED and is never substituted by these synthetic fixtures.
   st1-mac-dataless-synthetic:
     name: ST-1 synthetic dataless row and stat-flags (macOS)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 25
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -653,6 +679,30 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
+      - name: Bind QA provenance to this workflow identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if ! jq -es \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" '
+            ($repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+            ($commit | test("^[0-9a-f]{40}$")) and
+            ($run | test("^[1-9][0-9]*$")) and
+            ($attempt | test("^[1-9][0-9]*$")) and
+            length == 1 and (.[0] |
+              type == "object" and .schema == 2 and
+              .repository == $repository and .commit == $commit and
+              (.run | type == "object") and
+              (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
+              (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
+            )
+          ' provenance/provenance.json > /dev/null 2>&1; then
+            echo "::error::QA provenance does not match this workflow identity"
+            exit 1
+          fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-mac-qa-identity
@@ -666,7 +716,6 @@ jobs:
           node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
           node scripts/qa/provenance.mjs verify provenance/provenance.json assets-mac mac
       - name: Measure packaged stall resilience on the synthetic dataless profile
-        continue-on-error: true
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -681,6 +730,26 @@ jobs:
             --history after-idle \
             --minutes 5 \
             --out st1-report/st-1-macos-synthetic-dataless.json
+      - name: Summarize strict ST-1 report as a bounded notice
+        if: always()
+        continue-on-error: true
+        run: node scripts/qa/st1-evidence-notice.mjs --report st1-report/st-1-macos-synthetic-dataless.json --provenance provenance/provenance.json --row synthetic-dataless
+      - name: Require a complete PASS report bound to this candidate
+        if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          name=$(basename "$installer")
+          sha=$(jq -er --arg name "$name" '[.builds[] | select(.variant == "mac-qa-identity") | .assets[] | select(.name == $name)] | if length == 1 then .[0].sha256 else error("expected one QA installer") end' provenance/provenance.json)
+          jq -es --arg name "$name" --arg sha "$sha" --arg row "synthetic-dataless" --argjson run "$GITHUB_RUN_ID" '
+            length == 1 and (.[0] |
+            type == "object" and .harness == "ST-1" and .platform == "darwin" and
+            .row == $row and .installer == $name and .build_run_id == $run and .artifact_sha256 == $sha and
+            .complete == true and .verdict == "PASS" and .purpose == null and .st1Evidence != false and
+            .teardown == {"state":"acknowledged"} and
+            (.criteria | type == "array" and length > 0 and all(.[]; .pass == true)))
+          ' "st1-report/st-1-macos-synthetic-dataless.json" > /dev/null
       - name: Record the real-cloud dataless row as not run on hosted runners
         if: always()
         run: |
@@ -768,26 +837,20 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only: the same candidate and measurement with no fixture, so a block the fifo row shows can be
-  # told apart from a block that happens at every launch. Its verdict never fails the run.
+  # Strict control: the same candidate and measurement with no fixture distinguishes a FIFO-only
+  # stall from one present at every launch. A failed or incomplete verdict fails this hosted job.
   st1-mac-control:
     name: ST-1 control (no fixtures)
     needs: provenance
-    # HOLD: owner-account isolation is not proven; do not assign this job to a personal-device runner.
-    if: ${{ false }}
-    runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
+    runs-on: macos-latest
     timeout-minutes: 45
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
-      - name: Prove owner-account sandbox denies private state
-        env:
-          TMPDIR: ${{ runner.temp }}
-        run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         env:
           TMPDIR: ${{ runner.temp }}
@@ -799,7 +862,31 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
-      # The owner Mac has intermittently received a truncated candidate zip while download-artifact
+      - name: Bind QA provenance to this workflow identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if ! jq -es \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" '
+            ($repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+            ($commit | test("^[0-9a-f]{40}$")) and
+            ($run | test("^[1-9][0-9]*$")) and
+            ($attempt | test("^[1-9][0-9]*$")) and
+            length == 1 and (.[0] |
+              type == "object" and .schema == 2 and
+              .repository == $repository and .commit == $commit and
+              (.run | type == "object") and
+              (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
+              (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
+            )
+          ' provenance/provenance.json > /dev/null 2>&1; then
+            echo "::error::QA provenance does not match this workflow identity"
+            exit 1
+          fi
+      # A candidate download has previously been truncated while download-artifact
       # still reported success. Verify, and on a failed byte check re-download once and verify again;
       # the retry verify has no continue-on-error, so a second bad download still fails the job.
       - id: download1
@@ -815,7 +902,7 @@ jobs:
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Re-download the candidate after a failed byte check
         if: steps.verify1.outcome != 'success'
         env:
@@ -835,9 +922,8 @@ jobs:
         if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
-        continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
@@ -847,26 +933,34 @@ jobs:
             echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
             exit 1
           fi
-          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs \
+          node scripts/qa/st-1.mjs \
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures none \
             --minutes 5 \
             --out st1-report/st-1-macos-none.json
-      - name: Remove ST-1 temporary state
+      - name: Summarize strict ST-1 report as a bounded notice
+        if: always()
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: node scripts/qa/st1-evidence-notice.mjs --report st1-report/st-1-macos-none.json --provenance provenance/provenance.json --row none
+      - name: Require a complete PASS report bound to this candidate
         if: always()
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
-          rm -rf \
-            "$RUNNER_TEMP"/metis-st1-* \
-            "$RUNNER_TEMP"/st1-unzip-* \
-            "$RUNNER_TEMP"/st1-witness-* \
-            "$HOME/Library/Logs/asktoto-qa" \
-            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
-            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
-            "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          name=$(basename "$installer")
+          sha=$(jq -er --arg name "$name" '[.builds[] | select(.variant == "mac-qa-identity") | .assets[] | select(.name == $name)] | if length == 1 then .[0].sha256 else error("expected one QA installer") end' provenance/provenance.json)
+          jq -es --arg name "$name" --arg sha "$sha" --arg row "none" --argjson run "$GITHUB_RUN_ID" '
+            length == 1 and (.[0] |
+            type == "object" and .harness == "ST-1" and .platform == "darwin" and
+            .row == $row and .installer == $name and .build_run_id == $run and .artifact_sha256 == $sha and
+            .complete == true and .verdict == "PASS" and .purpose == null and .st1Evidence != false and
+            .teardown == {"state":"acknowledged"} and
+            (.criteria | type == "array" and length > 0 and all(.[]; .pass == true)))
+          ' "st1-report/st-1-macos-none.json" > /dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
@@ -874,13 +968,13 @@ jobs:
         with:
           name: st-1-macos-control
           path: st1-report/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
   # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms; each History call
   # is also timed on its own and judged by historySummary (first recallList < 250 ms, M2-0512). Report-only per
-  # owner decision OD-24, like the fifo row. The real dataless half needs a cloud provider's evicted files,
+  # owner decision OD-24. The real dataless half needs a cloud provider's evicted files,
   # which a hosted runner has none of: it is recorded as BLOCKED_EXTERNAL with its unblock step.
   st1-mac-history:
     name: ST-1 History row (macOS)
