@@ -34,6 +34,7 @@ import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
 import { draftFilename, snapshotDraftWrites, trackDraftWrite } from './infra/storage/draft-transcript-write-state'
+import { createWriteAdmissionGuard } from './infra/storage/write-with-admission'
 import type { FileClass } from './infra/storage/gateway'
 import { speakerLabel } from './features/meetings/transcript-format'
 import {
@@ -891,19 +892,7 @@ export async function saveDraftTranscript(
   beforeReplace?: () => void
 ): Promise<SaveDraftTranscriptResult> {
   let finishWrite: (() => void) | undefined
-  let admissionFailed = false
-  let admissionFailure: unknown
-  const admitReplacement = beforeReplace
-    ? () => {
-        try {
-          beforeReplace()
-        } catch (error) {
-          admissionFailed = true
-          admissionFailure = error
-          throw error
-        }
-      }
-    : undefined
+  const admission = createWriteAdmissionGuard(beforeReplace)
   // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
   // Leave previously permitted files untouched, as the normal summary-only save does.
   if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings)))
@@ -942,10 +931,11 @@ export async function saveDraftTranscript(
       'save (crash / force quit). If Métis is still running this meeting, ignore this file — the real ' +
       'save replaces it when the meeting ends.\n\n' +
       `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
-    await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admitReplacement)
+    await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admission.guard)
     return { status: 'saved' }
   } catch {
-    if (admissionFailed) throw admissionFailure
+    const refusal = admission.refusal
+    if (refusal) throw refusal.error
     // Keep ordinary failures nonthrowing while allowing the renderer to report an unsaved snapshot.
     return { status: 'failed' }
   } finally {
