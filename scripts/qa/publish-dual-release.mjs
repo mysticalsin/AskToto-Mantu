@@ -183,6 +183,13 @@ export async function publishDualRelease(input, { request, persist }) {
     return { ok: false, code: 'input-invalid', urls: [] }
   }
 
+  // The legacy lane binds installer bytes to a candidate run but cannot prove Métis 2.0's
+  // installed-app lifecycle. Refuse both publication and dry-run until trusted 2.0 evidence is wired;
+  // dry-run still creates and deletes remote drafts.
+  if (/^2\.0\./.test(input.version)) {
+    return { ok: false, code: 'metis-2.0-acceptance-required', urls: [] }
+  }
+
   const suffix = input.publish ? '' : `.dryrun.${input.candidateRun}.${input.promotionRun}.${input.promotionAttempt}`
   const title = `Métis ${input.version} (unsigned, manual install)`
   const receipt = {
