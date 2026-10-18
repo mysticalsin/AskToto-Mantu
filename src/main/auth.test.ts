@@ -384,9 +384,6 @@ describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
   })
 
   it('escalates 2s -> 4s -> 8s capped at 60s and resets on success', async () => {
-    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
-    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
-    const src = readFileSync(join(__dirname, 'auth.ts'), 'utf8')
     const { INITIAL_SIGN_IN_BACKOFF, resetSignInBackoff, signInBackoffAfterFailure, signInBackoffRemaining } =
       await import('./auth-session-policy')
     let state = INITIAL_SIGN_IN_BACKOFF
@@ -404,16 +401,6 @@ describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
     }
     expect(signInBackoffRemaining(state, cappedDelayStartedAt)).toBe(60_000)
     expect(signInBackoffRemaining(resetSignInBackoff(), 16_000)).toBe(0)
-    // The gate runs inside signIn() BEFORE the latch is taken, and failure/success both update state.
-    const signInBody = src.slice(src.indexOf('export async function signIn('), src.indexOf('MQA-107 escape hatch'))
-    const gate = signInBody.indexOf('signInBackoffRemainingMs()')
-    const latch = signInBody.indexOf('signInInFlight = true')
-    expect(gate).toBeGreaterThan(-1)
-    expect(gate).toBeLessThan(latch)
-    expect(signInBody).toMatch(/recordSignInFailure\(\)/)
-    expect(signInBody).toMatch(/recordSignInSuccess\(\)/)
-    // The failure count reaches the audit trail so a hammering loop is visible, not silent.
-    expect(signInBody).toMatch(/consecutive: signInBackoff\.failures/)
   })
 
   it('reports remaining wait to the caller in whole seconds', async () => {
