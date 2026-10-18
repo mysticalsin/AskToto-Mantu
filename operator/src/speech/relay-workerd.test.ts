@@ -591,8 +591,12 @@ describe('workerd fixture initialization', () => {
     const refusal = new Error('Synthetic fixture setup cancellation')
     let release!: () => void
     let entered!: () => void
-    const held = new Promise<void>((resolve) => { release = resolve })
-    const reached = new Promise<void>((resolve) => { entered = resolve })
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve
+    })
     let disposed = false
     let owned: Miniflare | undefined
     const dispose = Miniflare.prototype.dispose
@@ -600,7 +604,9 @@ describe('workerd fixture initialization', () => {
       await dispose.call(this)
       disposed = true
     })
-    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (this: Miniflare) {
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (
+      this: Miniflare
+    ) {
       owned = this
       entered()
       await held
@@ -610,7 +616,9 @@ describe('workerd fixture initialization', () => {
     const owner = createFixtureOwner(controller.signal)
     const pending = makeRuntime('deepgram-via-gateway', owner)
     let releaseBody!: () => void
-    const body = new Promise<void>((resolve) => { releaseBody = resolve })
+    const body = new Promise<void>((resolve) => {
+      releaseBody = resolve
+    })
     let restoreDispatch: (() => void) | undefined
     try {
       await reached
@@ -618,7 +626,9 @@ describe('workerd fixture initialization', () => {
       release()
       await expect(pending).rejects.toBe(refusal)
       let settled = false
-      const settlement = owner.settle(pending, body).then(() => { settled = true })
+      const settlement = owner.settle(pending, body).then(() => {
+        settled = true
+      })
       await Promise.resolve()
       expect(disposeSpy).toHaveBeenCalledOnce()
       expect(disposed).toBe(true)
@@ -626,16 +636,24 @@ describe('workerd fixture initialization', () => {
       expect(() => owner.check()).toThrow(refusal)
       if (!owned) throw new Error('Expected the canceled fixture to own its real runtime')
       const dispatchSpy = vi.spyOn(owned, 'dispatchFetch')
-      restoreDispatch = () => { dispatchSpy.mockRestore() }
-      await expect(dispatchOwnedRequest(owner, owned, {
-        license: 'not-used', now: Date.now(), path: '/v1/speech/capability', method: 'POST'
-      })).rejects.toBe(refusal)
+      restoreDispatch = () => {
+        dispatchSpy.mockRestore()
+      }
+      await expect(
+        dispatchOwnedRequest(owner, owned, {
+          license: 'not-used',
+          now: Date.now(),
+          path: '/v1/speech/capability',
+          method: 'POST'
+        })
+      ).rejects.toBe(refusal)
       expect(dispatchSpy).not.toHaveBeenCalled()
       releaseBody()
       await settlement
       expect(settled).toBe(true)
-      expect(phases.mock.calls.filter(([label]) => label === '[relay-fixture-phase]').map(([, value]) => value.phase))
-        .toEqual(['bundle', 'runtime'])
+      expect(
+        phases.mock.calls.filter(([label]) => label === '[relay-fixture-phase]').map(([, value]) => value.phase)
+      ).toEqual(['bundle', 'runtime'])
     } finally {
       release()
       releaseBody()
