@@ -393,9 +393,17 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
   })
 })
 
+function normalizeMutationSource(source: string): string {
+  return source
+}
+
 describe('QA rebuild contracts — Wave 1 provisional strip', () => {
-  it('connects the consumed draft registration and refuses disconnected production dependencies', () => {
+  it.each(['\n', '\r\n'])(
+    'connects the consumed draft registration and refuses disconnected production dependencies with %j newlines',
+    (newline) => {
     expect(draftRegistrationConnected(mainSource)).toBe(true)
+    const source = normalizeMutationSource(mainSource.text.replace(/\r?\n/g, newline))
+    expect(draftRegistrationConnected(parseInlineTypeScript(source))).toBe(true)
     const mutations = [
       ["'./ipc/draft-transcript-ipc'", "'./disconnected-draft-handler'"],
       ['  captureAuthSessionBoundary,', '  captureAuthSessionBoundary as disconnectedAuthBoundary,'],
@@ -409,10 +417,11 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
       ['  registerDraftTranscriptIpc({', '  const getSettings = () => ({})\n  registerDraftTranscriptIpc({']
     ]
     for (const [before, after] of mutations) {
-      expect(mainSource.text).toContain(before)
-      expect(draftRegistrationConnected(parseInlineTypeScript(mainSource.text.replace(before, after)))).toBe(false)
+      expect(source).toContain(before)
+      expect(draftRegistrationConnected(parseInlineTypeScript(source.replace(before, after)))).toBe(false)
     }
-  })
+    }
+  )
 
   it('executes the registered draft schema, sender/auth gates and provisional filtering with typed dependencies', async () => {
     type Dependencies = Parameters<typeof registerDraftTranscriptIpc>[0]
