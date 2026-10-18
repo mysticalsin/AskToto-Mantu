@@ -18,6 +18,7 @@ import { useStorageForTests } from '../../src/main/infra/storage/meetings-storag
 import { startDraftAutosave } from '../../src/renderer/src/lib/draft-autosave'
 import { SpeechAuthLeaseController, type SpeechAuthSession } from '../../src/main/auth-speech-lease'
 import { captureDraftSettingsBoundary, publishSettingsSnapshot } from '../../src/main/settings-observation'
+import { registerDraftTranscriptIpc } from '../../src/main/draft-transcript-ipc'
 
 vi.mock('electron')
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -59,9 +60,7 @@ const main = source('index.ts')
 const mainRegistration = findOne(
   main,
   (node) =>
-    ts.isCallExpression(node) &&
-    node.expression.getText(main) === 'ipcMain.handle' &&
-    node.arguments[0]?.getText(main) === 'IPC.saveDraftTranscript'
+    ts.isCallExpression(node) && node.expression.getText(main) === 'registerDraftTranscriptIpc'
 ) as ts.CallExpression
 const preload = source('../preload/index.ts')
 const preloadMethod = findOne(
@@ -90,6 +89,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
   })
 
   function host(authenticated = true) {
+    let handler!: (event: unknown, payload: unknown) => Promise<unknown>
     let session: SpeechAuthSession | null = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }
     let sessionEpoch = 0
     let profile = folder
@@ -109,12 +109,11 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       requireAuth,
       captureAuthSessionBoundary: () => auth.captureSessionBoundary(requireAuth),
       captureDraftSettingsBoundary,
+      registerDraftTranscriptIpc,
+      ipcMain: { handle(channel: string, callback: typeof handler) { expect(channel).toBe(IPC.saveDraftTranscript); handler = callback } },
       getSettings: () => { onSettingsRead(); publishSettingsSnapshot(settings, canRead); return settings }
     })
-    const handler = evaluate<(event: unknown, payload: unknown) => Promise<unknown>>(
-      mainRegistration.arguments[1]!.getText(main),
-      mainContext
-    )
+    evaluate<void>(mainRegistration.getText(main), mainContext)
     const invoke = vi.fn((channel: string, payload: unknown) => {
       expect(channel).toBe(IPC.saveDraftTranscript)
       return handler({}, payload)
@@ -219,6 +218,24 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     } finally {
       h.cleanup()
     }
+  })
+
+  it('connects the production registration to the imported draft IPC module', () => {
+    expect(main.statements.some((statement) => ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === './draft-transcript-ipc' &&
+      statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings) &&
+      statement.importClause.namedBindings.elements.some((binding) => binding.name.text === 'registerDraftTranscriptIpc' &&
+        (!binding.propertyName || binding.propertyName.text === 'registerDraftTranscriptIpc')))).toBe(true)
+  })
+
+  it('retains the actual sender validation before any snapshot IO', async () => {
+    const h = host()
+    const refusal = new Error('Synthetic private sender canary')
+    try {
+      h.mainContext.assertMainWindow = () => { throw refusal }
+      await expect(h.handler({}, {})).rejects.toBe(refusal)
+      expect(readdirSync(folder)).toEqual([])
+    } finally { h.cleanup() }
   })
 
   it('does not acknowledge unauthenticated or malformed requests as saved', async () => {
