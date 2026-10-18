@@ -38,14 +38,14 @@
     "src/shared/contracts/knowledge/record.ts": 1
   },
   "FF-04": {
-    "src/main/auth.ts": 986,
+    "src/main/auth.ts": 981,
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3076,
     "src/main/brain/publish.ts": 954,
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 999,
-    "src/main/index.ts": 10286,
+    "src/main/index.ts": 10283,
     "src/main/store.ts": 1361,
     "src/main/transcripts.ts": 1086,
     "src/renderer/src/App.tsx": 4794,
@@ -61,7 +61,7 @@
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3120,
-    "src/shared/ipc.ts": 2400
+    "src/shared/ipc.ts": 2393
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
