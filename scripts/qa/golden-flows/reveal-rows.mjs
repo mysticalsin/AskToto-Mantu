@@ -21,26 +21,41 @@ const RV_AUDIT_AFTER = 40
 
 export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-1-macos-open-activate', platform: 'darwin', reason: 'activate', automation: 'open-app-path' },
-  { id: 'RV-2-macos-open-new-instance', platform: 'darwin', reason: 'second-instance', automation: 'open-new-instance' },
+  {
+    id: 'RV-2-macos-open-new-instance',
+    platform: 'darwin',
+    reason: 'second-instance',
+    automation: 'open-new-instance'
+  },
   { id: 'RV-3-windows-exe-relaunch', platform: 'win32', reason: 'second-instance', automation: 'exe-relaunch' },
   { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'tray-menu' },
   { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'global-hotkey' },
-  { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'finder-open-app-file' },
-  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' },
+  {
+    id: 'RV-1-macos-finder-spotlight-launchpad',
+    platform: 'darwin',
+    reason: 'activate',
+    automation: 'finder-open-app-file'
+  },
+  {
+    id: 'RV-3-windows-shortcut-relaunch',
+    platform: 'win32',
+    reason: 'second-instance',
+    automation: 'windows-shortcut'
+  },
   { id: RV_BOOT_ROW_ID, platform: 'darwin', reason: 'activate', automation: 'launchservices-cold-launch' }
 ])
 
 export function initialRvRows(platform) {
-  return RV_SCENARIOS
-    .filter((scenario) => scenario.platform === 'all' || scenario.platform === platform)
-    .map((scenario) => ({
+  return RV_SCENARIOS.filter((scenario) => scenario.platform === 'all' || scenario.platform === platform).map(
+    (scenario) => ({
       id: scenario.id,
       reason: scenario.reason,
       automation: scenario.automation,
       status: 'PENDING',
       evidence: null,
       unblock: null
-    }))
+    })
+  )
 }
 
 function completeRvRow(rows, id, patch) {
@@ -53,7 +68,11 @@ async function runAppleScript(script, timeoutMs) {
 }
 
 async function runPowerShell(script, timeoutMs) {
-  return runProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], timeoutMs)
+  return runProcess(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    timeoutMs
+  )
 }
 
 async function waitForReveal(auditLogPath, reason, seenCount, timeoutMs = RV_TIMEOUT_MS) {
@@ -173,13 +192,15 @@ export async function runRevealRow({
   }
   completeRvRow(rows, id, {
     status: pass ? 'PASS' : 'FAIL',
-    evidence: reveal ? {
-      event: 'reveal',
-      reason,
-      outcome: reveal.outcome ?? null,
-      parked: reveal.parked === true,
-      layout: typeof reveal.layout === 'string' ? reveal.layout : null
-    } : null,
+    evidence: reveal
+      ? {
+          event: 'reveal',
+          reason,
+          outcome: reveal.outcome ?? null,
+          parked: reveal.parked === true,
+          layout: typeof reveal.layout === 'string' ? reveal.layout : null
+        }
+      : null,
     unblock: pass ? null : failure,
     ...(diagnostics ? { diagnostics } : {})
   })
@@ -266,7 +287,8 @@ export async function runPackagedRvRows({ platform, target, executable, auditLog
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
       prepare: hideBeforeReveal,
-      run: () => runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000),
+      run: () =>
+        runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
@@ -304,7 +326,8 @@ export async function runPackagedRvRows({ platform, target, executable, auditLog
       // the relaunched instance boots after run() resolves: its boot budget is part of the reveal window.
       run: () => runPowerShell(launchScript, 30_000),
       revealTimeoutMs: RELAUNCH_BOOT_MS + RV_TIMEOUT_MS,
-      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
+      failure:
+        'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
     })
 
     await runRevealRow({
@@ -313,7 +336,11 @@ export async function runPackagedRvRows({ platform, target, executable, auditLog
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
       prepare: hideBeforeReveal,
-      run: () => runPowerShell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')", 10_000),
+      run: () =>
+        runPowerShell(
+          "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')",
+          10_000
+        ),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
