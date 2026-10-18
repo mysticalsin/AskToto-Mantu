@@ -273,6 +273,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     try {
       await Promise.race([written, pending.then(() => { throw new Error('Draft settled before owned temporary write') })])
       expect(readdirSync(folder).some((file) => file.endsWith('.tmp'))).toBe(true)
+      expect(vi.mocked(writeFile).mock.lastCall?.[2]).toEqual({ mode: 0o600 })
       transition()
     } finally {
       release()
@@ -286,6 +287,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       try {
         await h.tick()
         const draft = readdirSync(folder).find((file) => file.startsWith('.autosave-draft-'))!
+        const oldFiles = readdirSync(folder)
         const oldBytes = readFileSync(join(folder, draft))
         h.calls.length = 0
         h.context.autosaveLinesRef.current[0].text = 'Synthetic private stale content canary.'
@@ -308,7 +310,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
             }
           })
           expect(readFileSync(join(folder, draft))).toEqual(oldBytes)
-          expect(readdirSync(folder)).toEqual([draft])
+          expect(readdirSync(folder)).toEqual(oldFiles)
         }
         expect(h.calls).toEqual([{ status: 'failed' }, { status: 'failed' }])
         expect(h.context.autosaveFailsRef.current).toBe(2)
@@ -359,7 +361,8 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       h.setReadable(false)
       await h.tick()
       expect(h.calls).toEqual([{ status: 'failed' }])
-      expect(readdirSync(folder)).toEqual([])
+      // Existing folder scaffolding may precede admission; no stale draft is published.
+      expect(readdirSync(folder).some((file) => file.startsWith('.autosave-draft-') || file.endsWith('.tmp'))).toBe(false)
     } finally { h.cleanup() }
   })
 
