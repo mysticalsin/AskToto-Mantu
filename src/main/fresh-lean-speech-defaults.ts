@@ -27,7 +27,7 @@ export type FreshLeanSpeechDefaultContext = {
 
 const FRESH_LEAN_BROKER_DEFAULT = Object.freeze({
   transport: 'broker-v1' as const,
-  engine: 'cloudflare-nova3' as const
+  engine: 'deepgram-nova3' as const
 })
 
 type SettingsShape = Record<string, { safeParse: (value: unknown) => { success: boolean; data?: unknown } }>
