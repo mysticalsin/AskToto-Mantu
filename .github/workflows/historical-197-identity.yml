@@ -1,4 +1,5 @@
 name: Historical 1.9.7 input identity
+run-name: ${{ github.event_name == 'pull_request' && 'Historical 1.9.7 input identity (registration)' || 'Historical 1.9.7 input identity' }}
 
 # Source-only preparation for a manual main dispatch after review and merge. Registration runs skip
 # the sole job. This verifies original public inputs, not installation, safety or release readiness.
