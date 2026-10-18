@@ -18,7 +18,7 @@ import {
   runOwnedInstaller,
   cleanupWindowsOwnership
 } from './historical-197-windows-upgrade.mjs'
-import { ownedCensus, waitForChildExit, disposeFreshOnboardingTransports, killOwned } from './lib/app-driver.mjs'
+import { ownedCensus, waitForChildExit, disposeFreshOnboardingTransports, killOwned, launchPackagedCdp } from './lib/app-driver.mjs'
 import { listProcesses } from './owned-processes.mjs'
 
 vi.mock('node:child_process', async (original) => {
@@ -28,7 +28,8 @@ vi.mock('node:child_process', async (original) => {
 vi.mock('./lib/app-driver.mjs', async (original) => {
   const actual = await original<typeof import('./lib/app-driver.mjs')>()
   return { ...actual, ownedCensus: vi.fn(actual.ownedCensus), waitForChildExit: vi.fn(actual.waitForChildExit),
-    disposeFreshOnboardingTransports: vi.fn(actual.disposeFreshOnboardingTransports), killOwned: vi.fn() }
+    disposeFreshOnboardingTransports: vi.fn(actual.disposeFreshOnboardingTransports), killOwned: vi.fn(),
+    launchPackagedCdp: vi.fn(actual.launchPackagedCdp) }
 })
 vi.mock('./owned-processes.mjs', async (original) => {
   const actual = await original<typeof import('./owned-processes.mjs')>()
@@ -256,6 +257,7 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
       assets: join(temp, 'assets'), baseline: join(temp, 'baseline.exe'), harnessCommit: 'c'.repeat(40) }
     const driver = createWindowsDriver(options)
     const plan = await driver.prepare()
+    vi.mocked(listProcesses).mockReturnValue([])
     return { temp, options, driver, plan }
   }
   it('refuses a real effective-storage junction before credential or transcript IPC writes', async () => {
@@ -403,5 +405,51 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
       vi.useRealTimers()
       await rm(fixture.temp, { recursive: true, force: true })
     }
+  })
+  it.each(['root', 'parent'] as const)('does not claim or kill an unrelated process reusing the original %s PID', async (reuse) => {
+    const fixture = await setup()
+    try {
+      const records: object[] = []
+      const parent = { pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }
+      const oldChild = { pid: 4322, ppid: 4321, startedMs: 2, exe: join(fixture.temp, 'old-helper.exe') }
+      const replacement = { pid: reuse === 'root' ? 4321 : 4322, ppid: 99, startedMs: 10, exe: join(fixture.temp, 'unrelated.exe') }
+      const unrelatedChild = { pid: 4999, ppid: replacement.pid, startedMs: 11, exe: join(fixture.temp, 'unrelated-child.exe') }
+      const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
+      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(ownedCensus).mockReturnValue({ owned: reuse === 'root' ? [parent] : [parent, oldChild], roles: {} })
+      vi.mocked(waitForChildExit).mockImplementation(async () => { child.exitCode = 0; return true })
+      vi.mocked(disposeFreshOnboardingTransports).mockResolvedValue(true)
+      vi.mocked(listProcesses).mockReturnValue([replacement, unrelatedChild])
+      vi.mocked(killOwned).mockImplementation(() => { vi.mocked(listProcesses).mockReturnValue([]) })
+      await expect(runOwnedInstaller(fixture.options.baseline, join(fixture.options.root, 'install'), installerPaths(fixture.options.root), records)).resolves.toMatchObject({ closed: true })
+      expect(killOwned).not.toHaveBeenCalled()
+      expect(child.kill).not.toHaveBeenCalled()
+      const owned = Reflect.get(records[0], 'owned')
+      expect(owned.has(`${replacement.pid}:10`)).toBe(false)
+      expect(owned.has('4999:11')).toBe(false)
+    } finally { await rm(fixture.temp, { recursive: true, force: true }) }
+  })
+  it.each(['throw', 'invalid'] as const)('records app launch %s before the shared spawn boundary and retains its namespace', async (failure) => {
+    const fixture = await setup()
+    try {
+      await writeFile(join(fixture.options.root, 'install', 'Metis.exe'), 'synthetic executable boundary; never launched')
+      vi.mocked(launchPackagedCdp).mockImplementation(() => {
+        if (failure === 'throw') throw new Error('synthetic early spawn failure')
+        return Object.create(null)
+      })
+      await expect(fixture.driver.launch('1.9.6')).rejects.toThrow()
+      expect(await fixture.driver.cleanup()).toBe(false)
+      expect(listProcesses).toHaveBeenCalledWith('win32')
+      await expect(validateOwnedStoragePath(fixture.temp, fixture.options.root)).resolves.toBeTruthy()
+    } finally { await rm(fixture.temp, { recursive: true, force: true }) }
+  })
+  it('requires a final root census even when no process receipt exists and never deletes an occupied root', async () => {
+    const fixture = await setup()
+    try {
+      vi.mocked(listProcesses).mockReturnValue([{ pid: 8000, ppid: 1, startedMs: 1, exe: join(fixture.options.root, 'install', 'unexpected.exe') }])
+      expect(await fixture.driver.cleanup()).toBe(false)
+      expect(killOwned).not.toHaveBeenCalled()
+      await expect(validateOwnedStoragePath(fixture.temp, fixture.options.root)).resolves.toBeTruthy()
+    } finally { await rm(fixture.temp, { recursive: true, force: true }) }
   })
 })
