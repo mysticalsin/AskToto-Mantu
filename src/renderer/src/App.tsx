@@ -27,6 +27,7 @@ import {
 import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
 import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
+import { startDraftAutosave } from './lib/draft-autosave'
 import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
@@ -1148,58 +1149,20 @@ export function App(): JSX.Element {
     document.documentElement.style.setProperty('--overlay-opacity-scale', String(settings?.overlayOpacity ?? 1))
   }, [settings?.overlayOpacity])
 
-  // Crash-recovery autosave: while a meeting is being listened to, periodically snapshot the transcript
-  // to disk. Without this, the transcript exists ONLY in this component's React state until the recap
-  // finishes at the end — a renderer crash or force-quit mid-meeting loses everything. Runs regardless of
-  // pause (a redundant overwrite of identical content is harmless; skipping it on pause would just widen
-  // the loss window right when nothing new is happening anyway, for no real benefit).
-  //
-  // linesRef exists so the interval below can read the LATEST transcript without listen.lines being a
-  // dependency of the effect that creates it. listen.lines is a new array reference on every transcribed
-  // line — if it were a dependency, the interval would be torn down and recreated (restarting its 60s
-  // countdown from zero) every single time someone spoke, so during an actively talkative meeting — the
-  // exact moment autosave matters most — it would rarely if ever reach 60s and actually fire.
+  // Keep live transcript access separate from the listening/mode lifecycle so speech never resets its timer.
   const autosaveLinesRef = useRef(listen.lines)
   autosaveLinesRef.current = listen.lines
   useEffect(() => {
     if (!listen.listening) return
-    let active = true
-    autosaveFailsRef.current = 0
-    setAutosaveWarn(false)
-    const AUTOSAVE_MS = 60_000
-    const iv = setInterval(() => {
-      const lines = autosaveLinesRef.current
-      if (!lines.length) return
-      const title = defaultMeetingTitle(lines, mode)
-      const startedAt = meetingStartRef.current
-      void window.toto
-        .saveDraftTranscript({ title, mode, startedAt, lines, recap: '' })
-        .then((result) => {
-          if (!active || meetingStartRef.current !== startedAt) return
-          // Retention-disabled snapshots neither claim a save nor count as a failed write.
-          if (result?.status === 'disabled') return
-          if (result?.status !== 'saved') {
-            autosaveFailsRef.current += 1
-            if (autosaveFailsRef.current >= 2) setAutosaveWarn(true)
-            return
-          }
-          // A good save clears any prior warning — a transient blip shouldn't leave a stale banner up.
-          autosaveFailsRef.current = 0
-          setAutosaveWarn(false)
-        })
-        .catch(() => {
-          if (!active || meetingStartRef.current !== startedAt) return
-          // Best-effort, but a RUN of failures (disk full / permissions) risks losing the whole meeting
-          // silently. After 2 consecutive misses (~2 min), warn so the user can act before the recap save
-          // also fails — a single blip stays quiet.
-          autosaveFailsRef.current += 1
-          if (autosaveFailsRef.current >= 2) setAutosaveWarn(true)
-        })
-    }, AUTOSAVE_MS)
-    return () => {
-      active = false
-      clearInterval(iv)
-    }
+    return startDraftAutosave({
+      mode,
+      getLines: () => autosaveLinesRef.current,
+      getStartedAt: () => meetingStartRef.current,
+      title: defaultMeetingTitle,
+      save: window.toto.saveDraftTranscript,
+      failures: autosaveFailsRef,
+      warn: setAutosaveWarn
+    })
   }, [listen.listening, mode])
 
   // Gates whether the "Seen Ns ago" screen-freshness chip shows at all — screenCapturedAt itself is
