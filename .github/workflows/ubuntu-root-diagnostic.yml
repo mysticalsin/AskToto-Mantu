@@ -1,0 +1,63 @@
+name: Ubuntu root suite diagnostics
+
+on:
+  push:
+    branches: [fix/2.12-reviewed-acceptance-20261018]
+
+# This independent runtime evidence does not qualify the Build & Test architecture gate or packaging.
+# Keep their original failures blocking while collecting the unchanged root/proxy/Operator pipeline.
+permissions:
+  contents: read
+
+jobs:
+  root-diagnostic:
+    name: Diagnostic root suite (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run complete test pipeline
+        id: complete_tests
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })" && npm test
+      - name: Audit declared skips from root report
+        id: declared_skips
+        if: ${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest.json
+        run: npm run check:skips -- "${{ env.METIS_CI_ROOT_REPORT }}"
+      - name: Log bounded root report diagnostic
+        if: ${{ always() }}
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest.json
+          METIS_CI_RUNNER_TEMP: ${{ runner.temp }}
+          METIS_CI_WORKSPACE: ${{ github.workspace }}
+          METIS_CI_RUN_ID: ${{ github.run_id }}
+          METIS_CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          METIS_CI_MATRIX_OS: ubuntu-latest
+          METIS_CI_PIPELINE_OUTCOME: ${{ steps.complete_tests.outcome }}
+          METIS_CI_AUDIT_OUTCOME: ${{ steps.declared_skips.outcome }}
+        run: node scripts/ci/root-report-diagnostic.mjs
+      - name: Retain original root test report
+        if: ${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest
+          path: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
