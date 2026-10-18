@@ -17,6 +17,7 @@ const MULTILINGUAL_DANGLING =
 // complete questions may naturally end with a pronoun ("Qué quieres tú") or a finite verb.
 const FRENCH_INCOMPLETE_SUBJECT =
   /^(?:(?:pourquoi|comment|quand|où|qui|que|quoi|quel(?:le|s|les)?)\s+est-ce que|qu['’]est-ce (?:que|qui)|est-ce que)\s+(?:je|tu|il|elle|on|nous|vous|ils|elles)$/i
+const FRENCH_INCOMPLETE_CLITIC = /^qu['’]est-ce qui se$/i
 const SPANISH_INCOMPLETE_CLITIC = /^(?:por qué|qué|cómo|cuándo|dónde|quién(?:es)?|cuál(?:es)?|cuánto(?:s|a|as)?)\s+se$/i
 const PORTUGUESE_INCOMPLETE_TAIL =
   /^(?:o que\s+(?:eu|você|vocês|ele|ela|nós|eles|elas|está)|(?:o que|por que|como|quando|onde|aonde|quem|qual(?:is)?|quanto(?:s|a|as)?)\b.*\s+no)$/i
@@ -49,6 +50,7 @@ export function isQuestion(t: string): boolean {
   if (
     MULTILINGUAL_DANGLING.test(completedText) ||
     FRENCH_INCOMPLETE_SUBJECT.test(completedText) ||
+    FRENCH_INCOMPLETE_CLITIC.test(completedText) ||
     SPANISH_INCOMPLETE_CLITIC.test(completedText) ||
     PORTUGUESE_INCOMPLETE_TAIL.test(completedText)
   ) {
