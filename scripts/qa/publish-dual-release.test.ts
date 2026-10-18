@@ -215,16 +215,16 @@ describe('dual repository promotion', () => {
     { version: '2.0.1', publish: false },
     { version: '2.0.0-rc.1', publish: true },
     { version: '2.0.0-rc.1', publish: false }
-  ])(
-    'refuses 2.0 promotion without authenticated lifecycle evidence: $version (publish=$publish)',
-    async ({ version, publish }) => {
-      const h = harness()
-      const result = await run(h, { version, publish })
-      expect(result.ok).toBe(false)
-      expect(result.code).toBe('metis-2.0-acceptance-required')
-      expect(calls(h)).toEqual([])
-    }
-  )
+  ])('refuses 2.0 promotion without authenticated lifecycle evidence: $version (publish=$publish)', async ({
+    version,
+    publish
+  }) => {
+    const h = harness()
+    const result = await run(h, { version, publish })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('metis-2.0-acceptance-required')
+    expect(h.events).toEqual([])
+  })
 
   it.each([
     { manifest: [...manifest, manifest[0]] },
