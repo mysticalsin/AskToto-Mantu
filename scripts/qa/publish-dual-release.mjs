@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { Transform, pipeline } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import { uploadProblems } from './provenance.mjs'
+import { METIS_2_0_ACCEPTANCE_REQUIRED, requiresMetis20Acceptance } from './metis-2.0-release-policy.mjs'
 
 const REPOSITORIES = Object.freeze(['mysticalsin/AskToto-Mantu', 'mysticalsin/Metis-Releases'])
 const SHA256 = /^[0-9a-f]{64}$/
@@ -186,8 +187,8 @@ export async function publishDualRelease(input, { request, persist }) {
   // The legacy lane binds installer bytes to a candidate run but cannot prove Métis 2.0's
   // installed-app lifecycle. Refuse both publication and dry-run until trusted 2.0 evidence is wired;
   // dry-run still creates and deletes remote drafts.
-  if (/^2\.0\./.test(input.version)) {
-    return { ok: false, code: 'metis-2.0-acceptance-required', urls: [] }
+  if (requiresMetis20Acceptance(input.version)) {
+    return { ok: false, code: METIS_2_0_ACCEPTANCE_REQUIRED, urls: [] }
   }
 
   const suffix = input.publish ? '' : `.dryrun.${input.candidateRun}.${input.promotionRun}.${input.promotionAttempt}`

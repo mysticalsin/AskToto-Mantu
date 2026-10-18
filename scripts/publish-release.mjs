@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { sha256File, uploadProblems } from './qa/provenance.mjs'
+import { METIS_2_0_ACCEPTANCE_REQUIRED, requiresMetis20Acceptance } from './qa/metis-2.0-release-policy.mjs'
 import { verifyUpdateMetadata } from './check-update-metadata.mjs'
 
 export const PLATFORMS = Object.freeze({
@@ -279,8 +280,13 @@ function joinRelease({ platform, tag, feed, release, bundle }) {
 
 export async function publishPlatform({ platform, tag, bundleDir, feed, repo = '<the feed>' }) {
   if (!Object.hasOwn(PLATFORMS, platform)) throw new Error(`unknown platform: ${platform}`)
-  if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error(`release tag must be a plain vX.Y.Z tag: ${tag}`)
+  if (!/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(tag)) {
+    throw new Error(`release tag must be a canonical vX.Y.Z tag: ${tag}`)
+  }
   const version = tag.slice(1)
+  // This production publisher is the signed macOS/Windows release.yml path. Block before bundle
+  // reads or feed access until its exact-artifact lifecycle evidence is wired to a trusted gate.
+  if (requiresMetis20Acceptance(version)) throw new Error(METIS_2_0_ACCEPTANCE_REQUIRED)
   const bundle = await readBundle(platform, version, bundleDir)
   const releases = feed.releasesTagged(tag)
   const plan = planPublication(platform, version, releases)
