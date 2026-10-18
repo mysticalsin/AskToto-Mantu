@@ -14,7 +14,7 @@ const REPOSITORIES = Object.freeze(['mysticalsin/AskToto-Mantu', 'mysticalsin/Me
 const SHA256 = /^[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40}$/
 const RUN_ID = /^[1-9][0-9]{0,19}$/
-const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/
+const VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/
 const MAX_JSON = 2 * 1024 * 1024
 const MAX_PAGES = 100
 
