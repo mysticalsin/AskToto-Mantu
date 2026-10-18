@@ -60,6 +60,11 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Por que o serviço reiniciou')).toBe(true)
     expect(isQuestion('Como funciona a recuperação')).toBe(true)
     expect(isQuestion('Onde está o relatório')).toBe(true)
+    expect(isQuestion('Como você está')).toBe(true)
+    expect(isQuestion('Onde ele está')).toBe(true)
+    expect(isQuestion('Quem eles são')).toBe(true)
+    expect(isQuestion('Por que ele foi')).toBe(true)
+    expect(isQuestion('O que é isso')).toBe(true)
   })
 
   it('detects complete Spanish questions, including an opening inverted question mark', () => {
@@ -67,6 +72,12 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Por qué se cayó el servicio')).toBe(true)
     expect(isQuestion('Cómo funciona el respaldo')).toBe(true)
     expect(isQuestion('Dónde está el informe')).toBe(true)
+    expect(isQuestion('Por qué no')).toBe(true)
+  })
+
+  it('holds a French clitic fragment until the predicate arrives', () => {
+    expect(isQuestion('Qu’est-ce qui se')).toBe(false)
+    expect(isQuestion('Qu’est-ce qui se passe')).toBe(true)
   })
 
   it('keeps stranded-preposition questions (they DO end real questions)', () => {
@@ -85,7 +96,9 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Pourquoi est-ce que')).toBe(false)
     expect(isQuestion('Quel est le')).toBe(false)
     expect(isQuestion('O que você')).toBe(false)
+    expect(isQuestion('O que é')).toBe(false)
     expect(isQuestion('O que é a')).toBe(false)
+    expect(isQuestion('O que você viu no')).toBe(false)
     expect(isQuestion('¿Qué es lo que')).toBe(false)
   })
 
@@ -216,7 +229,10 @@ describe('themTracksLookDead — positive death evidence for an already-healthy 
     expect(themTracksLookDead([{ readyState: 'live', muted: false }])).toBe(false)
     // A dead track alongside a live one is not yet fully dead (still delivering audio).
     expect(
-      themTracksLookDead([{ readyState: 'ended', muted: false }, { readyState: 'live', muted: false }])
+      themTracksLookDead([
+        { readyState: 'ended', muted: false },
+        { readyState: 'live', muted: false }
+      ])
     ).toBe(false)
   })
 
@@ -224,7 +240,10 @@ describe('themTracksLookDead — positive death evidence for an already-healthy 
     expect(themTracksLookDead([{ readyState: 'ended', muted: false }])).toBe(true)
     expect(themTracksLookDead([{ readyState: 'live', muted: true }])).toBe(true)
     expect(
-      themTracksLookDead([{ readyState: 'ended', muted: false }, { readyState: 'live', muted: true }])
+      themTracksLookDead([
+        { readyState: 'ended', muted: false },
+        { readyState: 'live', muted: true }
+      ])
     ).toBe(true)
   })
 
@@ -275,9 +294,7 @@ describe('shouldProbeLanguageWindow — auto-language probe cadence (MQA-012)', 
   })
 
   it('is the cadence pump() actually uses', () => {
-    expect(listenSrc).toMatch(
-      /shouldProbeLanguageWindow\(probeWindowCountRef\.current, probePinnedRef\.current\)/
-    )
+    expect(listenSrc).toMatch(/shouldProbeLanguageWindow\(probeWindowCountRef\.current, probePinnedRef\.current\)/)
   })
 })
 
@@ -424,9 +441,7 @@ describe('sysRetryDelayMs — the Windows loopback retry is paced, never abandon
       /if \(isWindows\) \{\n {8}void recoverSystemAudioRef\.current\?\.\(\)\n {8}return\n {6}\}/
     )
     expect(listenSrc).toMatch(/if \(now < sysRetryNextAtRef\.current\) return/)
-    expect(listenSrc).toMatch(
-      /sysRetryNextAtRef\.current = now \+ sysRetryDelayMs\(sysRetryAttemptsRef\.current\+\+\)/
-    )
+    expect(listenSrc).toMatch(/sysRetryNextAtRef\.current = now \+ sysRetryDelayMs\(sysRetryAttemptsRef\.current\+\+\)/)
     // Reset in all three places recovery becomes plausible again: a new session, a successful re-acquire,
     // and a real device change (which must get an immediate attempt, not wait out the backoff).
     expect(listenSrc.match(/sysRetryAttemptsRef\.current = 0/g)).toHaveLength(3)
@@ -452,7 +467,9 @@ describe('themRecoveryFailureIsNoop — a repeated failure must not re-render th
     expect(listenSrc).toMatch(/themRecoveryFailureIsNoop\(s\.error, s\.captureDegraded\)\n\s*\? s\n\s*:/)
     // The write itself still only ever RAISES — an existing captureDegraded carries the more specific
     // start-time cause (the Screen-Recording copy) and must survive the retry.
-    expect(listenSrc).toMatch(/captureDegraded: s\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/)
+    expect(listenSrc).toMatch(
+      /captureDegraded: s\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/
+    )
   })
 })
 
@@ -628,7 +645,9 @@ describe('advanceLanguageProbe — live first-pin needs SWITCH_AFTER (MQA-235)',
 
   it('is what useListen feeds into pinLanguage (source contract)', () => {
     expect(listenSrc).toMatch(/advanceLanguageProbe\(\{/)
-    expect(listenSrc).toMatch(/workerRef\.current\?\.postMessage\(\{ type: 'pinLanguage', language: next\.pinnedLang \}\)/)
+    expect(listenSrc).toMatch(
+      /workerRef\.current\?\.postMessage\(\{ type: 'pinLanguage', language: next\.pinnedLang \}\)/
+    )
   })
 
   it('a mixed window confirms a mid-meeting switch immediately (does not keep the first pin forever)', () => {
@@ -687,23 +706,17 @@ describe('speakerEmbedResultIsStale — late Whisper labels stay in their meetin
 
 describe('cloud them named WHO — attach upgrades + embed after final', () => {
   it('attachSpeakerName upgrades session/unknown placeholders via canUpgradeSpeakerLabel', () => {
-    expect(listenSrc).toMatch(
-      /l\.t === t && l\.speaker === 'them' && canUpgradeSpeakerLabel\(l\.name\)/
-    )
+    expect(listenSrc).toMatch(/l\.t === t && l\.speaker === 'them' && canUpgradeSpeakerLabel\(l\.name\)/)
     expect(listenSrc).toMatch(/import \{ canUpgradeSpeakerLabel \} from '@shared\/speaker-names'/)
   })
 
   it('cloud pump stashes lastThemEmbedRef for them windows', () => {
     expect(listenSrc).toMatch(/lastThemEmbedRef\.current = \{\s*audio: job\.audio\.slice\(\)/)
-    expect(listenSrc).toMatch(
-      /cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you', cloudCaptureId\)/
-    )
+    expect(listenSrc).toMatch(/cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you', cloudCaptureId\)/)
   })
 
   it('onCloudSttFinal voiceprints them session/unknown lines then attachSpeakerName', () => {
-    expect(listenSrc).toMatch(
-      /const committedAt = commitLine\(line\.text, line\.speaker, line\.name\)/
-    )
+    expect(listenSrc).toMatch(/const committedAt = commitLine\(line\.text, line\.speaker, line\.name\)/)
     expect(listenSrc).toMatch(/\.speakerEmbed\(emb\.audio, 'them', emb\.startedAt\)/)
     expect(listenSrc).toMatch(/if \(res\?\.name\) attachSpeakerName\(committedAt, res\.name\)/)
     expect(listenSrc).toMatch(
