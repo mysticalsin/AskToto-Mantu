@@ -134,6 +134,17 @@ jobs:
           METIS_CI_PIPELINE_OUTCOME: ${{ steps.complete_tests.outcome }}
           METIS_CI_AUDIT_OUTCOME: ${{ steps.declared_skips.outcome }}
         run: node scripts/ci/root-report-diagnostic.mjs
+      # Retain only the original hermetic root-suite report, including failed attempts. The bounded
+      # diagnostic stays content-free; the unchanged strict audit and pipeline remain authoritative.
+      - name: Retain original root test report
+        if: ${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
       # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
       - run: npm run check:colors
