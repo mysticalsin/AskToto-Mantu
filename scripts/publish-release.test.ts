@@ -202,6 +202,32 @@ afterEach(() => {
 })
 
 describe('publish-release platform rules (M2-0053)', () => {
+  describe('Métis 2.0 lifecycle acceptance barrier', () => {
+    for (const platform of ['mac', 'win'] as Platform[]) {
+      it(`refuses ${platformLabels[platform]} 2.0.0 before reading bundles or contacting the feed`, async () => {
+        const feed = new FakeFeed()
+
+        await expect(
+          publishPlatform({ platform, tag: 'v2.0.0', bundleDir: 'missing-release-bundle', feed })
+        ).rejects.toThrow('metis-2.0-acceptance-required')
+
+        expect(feed.listings).toBe(0)
+        expect(feed.mutations).toEqual([])
+      })
+    }
+
+    it('rejects a noncanonical zero-padded 2.0 release tag', async () => {
+      const feed = new FakeFeed()
+
+      await expect(
+        publishPlatform({ platform: 'mac', tag: 'v02.0.0', bundleDir: 'missing-release-bundle', feed })
+      ).rejects.toThrow(/release tag/)
+
+      expect(feed.listings).toBe(0)
+      expect(feed.mutations).toEqual([])
+    })
+  })
+
   describe('planBuild', () => {
     for (const platform of ['mac', 'win'] as Platform[]) {
       it(`refuses to build ${platformLabels[platform]} when the platform is already fully published`, () => {

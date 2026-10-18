@@ -28,4 +28,4 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Verify the publisher state machine and 2.0 fail-closed contract
-        run: npx vitest run scripts/qa/publish-dual-release.test.ts
+        run: npx vitest run scripts/qa/publish-dual-release.test.ts scripts/publish-release.test.ts
