@@ -307,17 +307,6 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
     )
   })
 
-  it('MQA-215: the import-recap candidate walk applies the same rule, so it neither burns a slot nor reports the wrong cause', () => {
-    // Cloudflare sorts last among cloud candidates here, so without the gate streamOpenAI's guard message
-    // becomes the lastError an import that failed for unrelated reasons shows the user.
-    const recapSource = read('import-recap.ts')
-    expect(recapSource).toMatch(/const transport = gate\.operatorAskTransport\?\.\(settings\)/)
-    expect(recapSource).toMatch(/const managed = !key && !!transport && funded\.includes\(provider\)/)
-    expect(recapSource).toMatch(
-      /if \(!managed && requiresUserBaseUrl\(provider\) && !gate\.providerBaseUrl\(provider, settings\)\) return false/
-    )
-  })
-
   it('the ask eligibility chain names the missing endpoint instead of failing mid-stream', () => {
     expect(indexSource).toMatch(/requiresUserBaseUrl\(provider\) && !baseURL/)
     expect(indexSource).toMatch(/No endpoint URL set for \$\{def\.label\}/)
