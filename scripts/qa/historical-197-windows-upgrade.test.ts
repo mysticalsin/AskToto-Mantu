@@ -443,12 +443,33 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
       await expect(validateOwnedStoragePath(fixture.temp, fixture.options.root)).resolves.toBeTruthy()
     } finally { await rm(fixture.temp, { recursive: true, force: true }) }
   })
-  it('requires a final root census even when no process receipt exists and never deletes an occupied root', async () => {
+  it.each(['occupied', 'unavailable'] as const)('requires a final root census with zero process receipts and retains an %s root', async (condition) => {
     const fixture = await setup()
     try {
-      vi.mocked(listProcesses).mockReturnValue([{ pid: 8000, ppid: 1, startedMs: 1, exe: join(fixture.options.root, 'install', 'unexpected.exe') }])
+      if (condition === 'occupied') vi.mocked(listProcesses).mockReturnValue([{ pid: 8000, ppid: 1, startedMs: 1, exe: join(fixture.options.root, 'install', 'unexpected.exe') }])
+      else vi.mocked(listProcesses).mockImplementation(() => { throw new Error('synthetic unavailable final census') })
       expect(await fixture.driver.cleanup()).toBe(false)
       expect(killOwned).not.toHaveBeenCalled()
+      await expect(validateOwnedStoragePath(fixture.temp, fixture.options.root)).resolves.toBeTruthy()
+    } finally { await rm(fixture.temp, { recursive: true, force: true }) }
+  })
+  it('does not kill a captured PID/start pair whose current executable no longer matches', async () => {
+    const fixture = await setup()
+    try {
+      const records: object[] = []
+      const original = { pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }
+      const conflict = { ...original, exe: join(fixture.temp, 'different-image.exe') }
+      const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
+      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(ownedCensus).mockReturnValue({ owned: [original], roles: {} })
+      vi.mocked(waitForChildExit).mockImplementation(async () => { child.exitCode = 0; return true })
+      vi.mocked(disposeFreshOnboardingTransports).mockResolvedValue(true)
+      vi.mocked(listProcesses).mockReturnValue([conflict])
+      await expect(runOwnedInstaller(fixture.options.baseline, join(fixture.options.root, 'install'), installerPaths(fixture.options.root), records)).rejects.toThrow()
+      expect(killOwned).not.toHaveBeenCalled()
+      expect(child.kill).not.toHaveBeenCalled()
+      const stamp = await lstat(fixture.options.root)
+      expect(await cleanupWindowsOwnership(records, { path: fixture.options.root, dev: stamp.dev, ino: stamp.ino })).toBe(false)
       await expect(validateOwnedStoragePath(fixture.temp, fixture.options.root)).resolves.toBeTruthy()
     } finally { await rm(fixture.temp, { recursive: true, force: true }) }
   })

@@ -11,7 +11,7 @@ import {
   killOwned, launchPackagedCdp, ownedCensus, packagedLaunchFailed, strictLaunchEnvironment,
   waitFor, waitForChildExit
 } from './lib/app-driver.mjs'
-import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
+import { listProcesses } from './owned-processes.mjs'
 
 export const BASELINE = Object.freeze({
   repository: 'mysticalsin/Metis-Releases', releaseId: 395306225, tag: 'v1.9.6-unsigned', assetId: 585098577,
@@ -226,22 +226,63 @@ async function boundedOwnedFile(root, path) {
 function remember(session) {
   try {
     const census = ownedCensus({ platform: 'win32', mainPid: session.child.pid, installRoot: session.installRoot })
-    requireValue(census.owned.some((entry) => entry.pid === session.child.pid))
-    for (const entry of census.owned) session.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
+    const root = census.owned.find((entry) => entry.pid === session.child.pid)
+    requireValue(root && Number.isFinite(root.startedMs) && typeof root.exe === 'string' && pathEqual(root.exe, session.executablePath))
+    if (session.rootIdentity) requireValue(sameProcess(root, session.rootIdentity))
+    else session.rootIdentity = Object.freeze({ ...root })
+    for (const entry of census.owned) {
+      requireValue(Number.isFinite(entry.startedMs) && typeof entry.exe === 'string' && entry.exe.length > 0)
+      session.owned.set(`${entry.pid}:${entry.startedMs}`, Object.freeze({ ...entry }))
+    }
     session.censusConfirmed = true
   } catch (error) { session.uncertain = true; throw error }
+}
+
+function sameProcess(actual, captured) {
+  return actual.pid === captured.pid && actual.startedMs === captured.startedMs &&
+    typeof actual.exe === 'string' && typeof captured.exe === 'string' && pathEqual(actual.exe, captured.exe)
 }
 
 function refreshOwnership(record) {
   try {
     const current = listProcesses('win32')
-    // Preserve observed ancestry when a parent exits before a child. Identity includes start time.
-    const keys = new Set(current.map((entry) => `${entry.pid}:${entry.startedMs}`))
-    const ancestry = [...current, ...[...record.owned.values()].filter((entry) => !keys.has(`${entry.pid}:${entry.startedMs}`))]
-    for (const entry of ownedProcesses(ancestry, { mainPid: record.child.pid, installRoot: record.installRoot, platform: 'win32' })) {
-      record.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
+    const captured = [...record.owned.values()]
+    const safe = new Map()
+    const conflict = new Set()
+    for (const entry of current) {
+      const key = `${entry.pid}:${entry.startedMs}`
+      const original = record.owned.get(key)
+      if (original && !sameProcess(entry, original)) { record.uncertain = true; conflict.add(key); continue }
+      // Install-root residence is an independent existing ownership rule, not authority from a recycled PID.
+      if (original || (typeof entry.exe === 'string' && insideWindows(record.installRoot, entry.exe))) safe.set(key, entry)
     }
-    return survivors([...record.owned.values()], current, { installRoot: record.installRoot, platform: 'win32' })
+    let expanded = true
+    while (expanded) {
+      expanded = false
+      for (const entry of current) {
+        const key = `${entry.pid}:${entry.startedMs}`
+        if (safe.has(key) || conflict.has(key)) continue
+        const parent = [...safe.values()].find((known) => known.pid === entry.ppid)
+        if (!parent || entry.startedMs < parent.startedMs) continue
+        if (!Number.isFinite(entry.startedMs) || typeof entry.exe !== 'string' || entry.exe.length === 0) {
+          record.uncertain = true
+          continue
+        }
+        safe.set(key, entry)
+        expanded = true
+      }
+    }
+    for (const entry of current) {
+      if (safe.has(`${entry.pid}:${entry.startedMs}`)) continue
+      const oldParent = captured.find((known) => known.pid === entry.ppid && entry.startedMs >= known.startedMs)
+      const liveParent = current.find((parent) => parent.pid === entry.ppid)
+      // Do not adopt a possible orphan using an absent numeric parent. Retain the namespace instead.
+      if (oldParent && (!liveParent || entry.startedMs < liveParent.startedMs)) record.uncertain = true
+    }
+    for (const [key, entry] of safe) {
+      record.owned.set(key, Object.freeze({ ...entry }))
+    }
+    return [...safe.values()]
   } catch (error) { record.uncertain = true; throw error }
 }
 
@@ -268,7 +309,7 @@ async function stopWindowsRecord(record) {
       if (rootExited && remaining.length === 0) { exited = record.censusConfirmed === true; break }
       forced = true
       if (remaining.length) killOwned(remaining)
-      else if (!rootExited) record.child.kill('SIGTERM')
+      else if (!rootExited) record.uncertain = true // no numeric-PID fallback without current identity proof
     } catch { /* uncertainty prevents deletion even if a later census succeeds */ }
     await new Promise((done) => setTimeout(done, 250))
   }
@@ -282,7 +323,7 @@ async function stopWindowsRecord(record) {
 
 /** Consumed only after driver's unchanged real installer hash admission; no identity success is inferred here. */
 export async function runOwnedInstaller(installer, installRoot, paths, records) {
-  const record = { kind: 'installer', child: null, installRoot, owned: new Map(), censusConfirmed: false,
+  const record = { kind: 'installer', child: null, executablePath: installer, installRoot, owned: new Map(), censusConfirmed: false,
     uncertain: true, spawnError: false, stopped: false, clean: false, safeToRemove: false }
   const env = strictLaunchEnvironment(process.env, paths, 'win32')
   records.push(record)
@@ -312,6 +353,13 @@ export async function cleanupWindowsOwnership(records, rootStamp) {
     try { clean = (await stopWindowsRecord(record)) && clean } catch { record.uncertain = true; clean = false }
   }
   if (!rootStamp) return clean
+  try {
+    const current = listProcesses('win32')
+    requireValue(!current.some((entry) => typeof entry.exe === 'string' && insideWindows(rootStamp.path, entry.exe)))
+    for (const record of records) for (const captured of record.owned.values()) {
+      requireValue(!current.some((entry) => entry.pid === captured.pid && entry.startedMs === captured.startedMs))
+    }
+  } catch { return false }
   if (records.some((record) => record.uncertain || !record.safeToRemove)) return false
   try {
     const stat = await lstat(rootStamp.path)
@@ -389,27 +437,36 @@ export function createWindowsDriver(options) {
       const cdpPort = await freeLoopbackPort()
       let inspectPort = await freeLoopbackPort()
       while (inspectPort === cdpPort) inspectPort = await freeLoopbackPort()
-      const launched = launchPackagedCdp({ executablePath: exe, env, cdpPort, inspectPort, platform: 'win32' })
-      const session = { ...launched, kind: 'app', censusConfirmed: false, uncertain: false, pid: launched.child.pid, version, installRoot, owned: new Map(), browser: null, page: null,
+      const session = { kind: 'app', executablePath: exe, child: null, latches: null, censusConfirmed: false, uncertain: true, pid: null, version, installRoot, owned: new Map(), browser: null, page: null,
         transportUncertain: false, lateReleases: [], stopped: false, clean: false, safeToRemove: false }
       sessions.push(session)
-      remember(session)
-      const attached = await attachOwnedCdp({ endpoint: launched.cdpEndpoint, childPid: launched.child.pid, timeoutMs: 30_000 })
-      session.browser = attached.browser
-      session.transportUncertain = attached.transportUncertain
-      if (attached.lateRelease) session.lateReleases.push(attached.lateRelease)
-      requireValue(attached.browser && !attached.failure && !packagedLaunchFailed(session.child, session.latches))
-      session.page = await waitFor(async () => {
-        if (packagedLaunchFailed(session.child, session.latches)) throw new Error('historical-launch-exited')
+      try {
+        const launched = launchPackagedCdp({ executablePath: exe, env, cdpPort, inspectPort, platform: 'win32' })
+        requireValue(launched?.child && typeof launched.child.once === 'function')
+        session.child = launched.child
+        session.pid = launched.child.pid
+        session.latches = launched.latches
+        requireValue(Number.isSafeInteger(session.pid) && session.pid > 1 && session.latches)
+        session.uncertain = false
+        session.child.once('error', () => { session.uncertain = true })
         remember(session)
-        for (const context of session.browser.contexts()) for (const page of context.pages()) {
-          if (await call(page, () => Boolean(window.toto?.authStatus && window.toto?.getSettings))) return page
-        }
-        return null
-      }, 'historical-preload-unavailable', 30_000, 150)
-      const settings = await call(session.page, () => window.toto.getSettings())
-      requireValue(settings.version === version && insideWindows(profile, settings.resolvedMeetingsFolder))
-      return session
+        const attached = await attachOwnedCdp({ endpoint: launched.cdpEndpoint, childPid: launched.child.pid, timeoutMs: 30_000 })
+        session.browser = attached.browser
+        session.transportUncertain = attached.transportUncertain
+        if (attached.lateRelease) session.lateReleases.push(attached.lateRelease)
+        requireValue(attached.browser && !attached.failure && !packagedLaunchFailed(session.child, session.latches))
+        session.page = await waitFor(async () => {
+          if (packagedLaunchFailed(session.child, session.latches)) throw new Error('historical-launch-exited')
+          remember(session)
+          for (const context of session.browser.contexts()) for (const page of context.pages()) {
+            if (await call(page, () => Boolean(window.toto?.authStatus && window.toto?.getSettings))) return page
+          }
+          return null
+        }, 'historical-preload-unavailable', 30_000, 150)
+        const settings = await call(session.page, () => window.toto.getSettings())
+        requireValue(settings.version === version && insideWindows(profile, settings.resolvedMeetingsFolder))
+        return session
+      } catch (error) { session.uncertain = true; throw error }
     },
     async seed(session, plan) {
       const path = await configureAndSeed(session.page, plan, async (effectiveRoot) => {
