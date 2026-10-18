@@ -9,6 +9,10 @@ on:
       - 'src/main/store.ts'
       - 'src/main/store.test.ts'
       - 'src/main/index.ts'
+      - 'src/main/legacy-cloud-stt-admission.ts'
+      - 'src/main/legacy-cloud-stt-admission.test.ts'
+      - 'src/main/managed-speech-providers.ts'
+      - 'src/main/win-security.ts'
       - 'src/shared/cloud-stt-start.ts'
       - 'src/shared/cloud-stt-start.test.ts'
       - '.github/workflows/fresh-lean-speech-focused.yml'
@@ -19,6 +23,10 @@ on:
       - 'src/main/store.ts'
       - 'src/main/store.test.ts'
       - 'src/main/index.ts'
+      - 'src/main/legacy-cloud-stt-admission.ts'
+      - 'src/main/legacy-cloud-stt-admission.test.ts'
+      - 'src/main/managed-speech-providers.ts'
+      - 'src/main/win-security.ts'
       - 'src/shared/cloud-stt-start.ts'
       - 'src/shared/cloud-stt-start.test.ts'
       - '.github/workflows/fresh-lean-speech-focused.yml'
@@ -45,3 +53,4 @@ jobs:
           ./node_modules/.bin/vitest run
           src/main/fresh-lean-speech-defaults.test.ts
           src/main/store.test.ts
+          src/main/legacy-cloud-stt-admission.test.ts
