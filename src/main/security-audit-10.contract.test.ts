@@ -1,10 +1,119 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { createListeningStateHandler } from './listening-state-ipc'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const importSnapshotSrc = readFileSync(join(__dirname, 'import-jobs-snapshot-ipc.ts'), 'utf8')
+
+function onlySourceNode<T>(nodes: T[], label: string): T {
+  if (nodes.length !== 1) throw new Error(`Expected one ${label}, found ${nodes.length}`)
+  return nodes[0]
+}
+
+/** Bind the extracted contracts to actual imports, registrations and returned public fields. */
+function requireImportSnapshotConnection(indexText: string, helperText: string): void {
+  const index = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
+  const helper = ts.createSourceFile('import-jobs-snapshot-ipc.ts', helperText, ts.ScriptTarget.Latest, true)
+  const compact = (node: ts.Node): string => node.getText().replace(/\s+/g, '')
+  const snapshotImport = onlySourceNode(
+    index.statements.filter(
+      (node): node is ts.ImportDeclaration =>
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) &&
+        node.moduleSpecifier.text === './import-jobs-snapshot-ipc'
+    ),
+    'snapshot module import'
+  ).importClause
+  expect(snapshotImport?.isTypeOnly).toBe(false)
+  if (!snapshotImport?.namedBindings || !ts.isNamespaceImport(snapshotImport.namedBindings))
+    throw new Error('Expected runtime snapshot namespace import')
+  expect(snapshotImport.namedBindings.name.text).toBe('importJobsSnapshotIpc')
+
+  const registerIpc = onlySourceNode(
+    index.statements.filter(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'registerIpc'
+    ),
+    'top-level registerIpc declaration'
+  )
+  if (!registerIpc.body) throw new Error('Expected actual registerIpc body')
+  const registration = onlySourceNode(
+    registerIpc.body.statements.filter(ts.isExpressionStatement).map((node) => node.expression).filter(
+      (node): node is ts.CallExpression =>
+        ts.isCallExpression(node) &&
+        compact(node.expression) === 'ipcMain.handle' &&
+        node.arguments[0] && compact(node.arguments[0]) === 'IPC.importJobsList'
+    ),
+    'direct importJobsList registration'
+  )
+  expect(registration.arguments).toHaveLength(2)
+  const handler = registration.arguments[1]
+  if (!ts.isArrowFunction(handler) || !ts.isBlock(handler.body)) throw new Error('Expected registered handler')
+  expect(handler.parameters.map(compact)).toEqual(['e'])
+  expect(handler.body.statements.map(compact)).toEqual([
+    'assertMainWindow(e)',
+    'returnimportJobsSnapshotIpc.listImportJobsSnapshot(e,()=>win,()=>getImportJobs().snapshot(),importJobView)'
+  ])
+  const mapper = onlySourceNode(
+    index.statements.filter(ts.isVariableStatement).flatMap((node) =>
+      [...node.declarationList.declarations].filter((item) => compact(item.name) === 'importJobView')
+    ),
+    'public mapper binding'
+  )
+  expect(mapper.initializer && compact(mapper.initializer)).toBe(
+    'importJobsSnapshotIpc.createImportJobView(()=>importJobs?.list()??[])'
+  )
+
+  const exportedFunction = (name: string): ts.FunctionDeclaration => onlySourceNode(
+    helper.statements.filter(
+      (node): node is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(node) && node.name?.text === name &&
+        !!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+    ),
+    `exported ${name}`
+  )
+  const authImport = onlySourceNode(
+    helper.statements.filter(
+      (node): node is ts.ImportDeclaration => ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === './auth'
+    ),
+    'auth import'
+  ).importClause
+  expect(authImport?.isTypeOnly).toBe(false)
+  if (!authImport?.namedBindings || !ts.isNamedImports(authImport.namedBindings)) throw new Error('Expected auth bindings')
+  expect(authImport.namedBindings.elements.some((item) =>
+    !item.isTypeOnly && item.name.text === 'requireAuth' && (item.propertyName?.text ?? item.name.text) === 'requireAuth'
+  )).toBe(true)
+  const list = exportedFunction('listImportJobsSnapshot')
+  expect(list.parameters.map((parameter) => compact(parameter.name))).toEqual(['event', 'currentWindow', 'readSnapshot', 'toView'])
+  expect(list.body?.statements.map(compact)).toEqual([
+    'returnreadImportJobsSnapshot(requireAuth,()=>captureImportJobsSnapshotScope(event,currentWindow),readSnapshot,toView)'
+  ])
+  exportedFunction('captureImportJobsSnapshotScope')
+  const read = exportedFunction('readImportJobsSnapshot')
+  expect(read.parameters.map((parameter) => compact(parameter.name))).toEqual(['isAuthorized', 'captureScope', 'readSnapshot', 'toView'])
+  expect(read.body?.statements.map(compact)).toEqual([
+    'if(!isAuthorized())returnemptyImportJobsSnapshot()',
+    'constscopeIsCurrent=captureScope()',
+    'if(!scopeIsCurrent)returnemptyImportJobsSnapshot()',
+    'constsnapshot=awaitreadSnapshot()',
+    'if(!scopeIsCurrent())returnemptyImportJobsSnapshot()',
+    'return{...snapshot,jobs:snapshot.jobs.map(toView)}'
+  ])
+  const factory = exportedFunction('createImportJobView')
+  const result = factory.body?.statements[0]
+  if (!result || !ts.isReturnStatement(result) || !result.expression || !ts.isArrowFunction(result.expression) ||
+    !ts.isBlock(result.expression.body)) throw new Error('Expected returned public mapper')
+  const publicReturn = result.expression.body.statements.at(-1)
+  if (!publicReturn || !ts.isReturnStatement(publicReturn) || !publicReturn.expression ||
+    !ts.isObjectLiteralExpression(publicReturn.expression)) throw new Error('Expected public view object')
+  expect(publicReturn.expression.properties.every((property) => !ts.isSpreadAssignment(property))).toBe(true)
+  expect(publicReturn.expression.properties.map((property) => property.name && compact(property.name))).toEqual([
+    'jobId', 'title', 'state', 'cursor', 'totalChunks', 'pct', 'error', 'recapError', 'file', 'createdAt', 'updatedAt', 'queuePosition'
+  ])
+}
 
 function sliceBetween(from: string, to: string): string {
   const start = sourceIndexOf(indexSrc, from)
@@ -294,7 +403,19 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(start).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
     const listAndMutations = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.on(IPC.importDecoderReady')
-    expect(listAndMutations).toMatch(/getImportJobs\(\)\.list\(\)/)
+    requireImportSnapshotConnection(indexSrc, importSnapshotSrc)
+    expect(listAndMutations).not.toMatch(/getImportJobs\(\)\.list\(\)/)
+    const registrationText = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.handle(IPC.importJobCancel').trim()
+    // These mutations must break the actual connection, not leave a disconnected passing helper.
+    for (const [indexText, helperText] of [
+      [indexSrc.replace("import * as importJobsSnapshotIpc", "import type * as importJobsSnapshotIpc"), importSnapshotSrc],
+      [indexSrc.replace('import * as importJobsSnapshotIpc', 'import * as detachedSnapshotIpc'), importSnapshotSrc],
+      [indexSrc.replace(registrationText, `function unusedImportRegistration() { ${registrationText} }`), importSnapshotSrc],
+      [indexSrc.replace('importJobsSnapshotIpc.listImportJobsSnapshot(', 'detachedSnapshotIpc.listImportJobsSnapshot('), importSnapshotSrc],
+      [indexSrc.replace('() => getImportJobs().snapshot()', '() => getImportJobs().list()'), importSnapshotSrc],
+      [indexSrc, importSnapshotSrc.replace('    requireAuth,', '    () => true,')],
+      [indexSrc, importSnapshotSrc.replace('jobs: snapshot.jobs.map(toView)', 'jobs: snapshot.jobs')]
+    ]) expect(() => requireImportSnapshotConnection(indexText, helperText)).toThrow()
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.cancel\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.resume\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.remove\(parsed\.jobId\)/)

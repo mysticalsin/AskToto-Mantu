@@ -156,6 +156,13 @@ describe('speech broker client', () => {
   })
 
   it('cancels the exact allocation if a transport returns a late successful create after owner abort', async () => {
+    const response = {
+      ...fixture.create.responseTemplate,
+      grants: [
+        { track: 'microphone', streamEpoch: 11, token: 'A'.repeat(43) },
+        { track: 'system', streamEpoch: 11, token: 'B'.repeat(43) }
+      ]
+    }
     const controller = new AbortController()
     let resolveFetch!: (response: Response) => void
     const fetchImpl = vi.fn(
@@ -186,7 +193,7 @@ describe('speech broker client', () => {
     })
     controller.abort()
     resolveFetch(
-      new Response(JSON.stringify(fixture.create.responseTemplate), {
+      new Response(JSON.stringify(response), {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })

@@ -247,6 +247,18 @@ let lastModelPaths: ModelPaths | null = null
 // fallback after will-quit has already completed. A subsequent start receives a new generation and owns
 // any child it spawns; stale continuations must never mutate that newer child's state.
 let startGeneration = 0
+// stop() also retires requests still awaiting package authority or another start/drain. A start's own
+// generation advance must not retire concurrent callers that legitimately share that start.
+let stopEpoch = 0
+interface StartRequestOwnership {
+  id: number
+  stopEpoch: number
+}
+let latestStartRequest = 0
+
+function captureStartRequest(): StartRequestOwnership {
+  return { id: ++latestStartRequest, stopEpoch }
+}
 // The in-flight start() call, if any (F1: startup race). A second concurrent caller while state ===
 // 'starting' awaits THIS SAME promise instead of racing ahead on its own — so baseURL()/sessionKey() are
 // never reachable by a caller whose await resolved before the sidecar actually finished spawning + health.
@@ -565,8 +577,11 @@ function maybeAutoRestart(platform: LlamaPlatform): void {
   restartTimestamps.push(now)
   if (!lastModelPaths) return
   auditLog('local.runtime.restart', { platform })
-  void start(lastModelPaths, platform).catch(() => {
-    state = 'unavailable'
+  const request = captureStartRequest()
+  void startRequest(lastModelPaths, platform, request).catch(() => {
+    // A stopped or superseded automatic request cannot overwrite a newer request's state, including
+    // when the late failure is a real package refusal rather than a StartCancelledError.
+    if (request.stopEpoch === stopEpoch && request.id === latestStartRequest) state = 'unavailable'
   })
 }
 
@@ -597,6 +612,10 @@ class StartCancelledError extends Error {
 
 function assertCurrentGeneration(generation: number): void {
   if (generation !== startGeneration) throw new StartCancelledError()
+}
+
+function assertNotStopped(epoch: number): void {
+  if (epoch !== stopEpoch) throw new StartCancelledError()
 }
 
 async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, generation: number): Promise<void> {
@@ -647,11 +666,21 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
  * candidate fails — the caller (Rock 3's eligibility check) treats a rejection as "local ineligible now."
  */
 export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = detectPlatform()): Promise<void> {
+  return startRequest(modelPaths, platform, captureStartRequest())
+}
+
+async function startRequest(
+  modelPaths: ModelPaths,
+  platform: LlamaPlatform,
+  request: StartRequestOwnership
+): Promise<void> {
   await assertLegacyRuntimeClosure('local LLM')
+  assertNotStopped(request.stopEpoch)
   if (state === 'unavailable') throw new Error('local runtime unavailable for this session (restart budget exhausted)')
   if (state === 'starting') {
     await startPromise
-    return start(modelPaths, platform)
+    assertNotStopped(request.stopEpoch)
+    return startRequest(modelPaths, platform, request)
   }
   if (state === 'running') {
     if (samePaths(lastModelPaths, modelPaths)) return
@@ -665,7 +694,8 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
       // security-relevant action has happened yet; the eventual stop/start still audits as it always did.
       mainLog.info('local runtime: model switch deferred — stream(s) active', { activeStreamCount })
       await waitForDrain()
-      return start(modelPaths, platform)
+      assertNotStopped(request.stopEpoch)
+      return startRequest(modelPaths, platform, request)
     }
     // Model switch: kill the running sidecar synchronously before spawning the newly requested model.
     clearIdleTimer()
@@ -693,6 +723,7 @@ function stopChildProcess(): void {
 
 /** Kill the sidecar (SIGKILL) and clear idle bookkeeping. Idempotent. */
 export function stop(): void {
+  stopEpoch++
   clearIdleTimer()
   const wasRunning = state === 'running' || state === 'starting'
   startGeneration++

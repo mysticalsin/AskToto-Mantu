@@ -226,7 +226,8 @@ describe('MQA-297 automatic summaries with a Métis license', () => {
     await manager.finishDecoding('contained-local')
     expect(saveMeeting).toHaveBeenCalledOnce()
     expect(saveMeeting).toHaveBeenCalledWith(
-      expect.objectContaining({ recap: '', lines: [expect.objectContaining({ text: lines[0].text })] })
+      expect.objectContaining({ recap: '', lines: [expect.objectContaining({ text: lines[0].text })] }),
+      expect.any(Function)
     )
     expect(manager.get('contained-local')).toMatchObject({
       state: 'done',

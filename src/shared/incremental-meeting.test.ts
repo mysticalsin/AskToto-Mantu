@@ -98,6 +98,7 @@ describe('incremental meeting command contract', () => {
         text: 'A cloud transcript.',
         t: 1_700_000_000_000,
         speech: {
+          type: 'segment',
           captureId: speech.captureId,
           captureGeneration: speech.captureGeneration,
           sequence: 1,
@@ -174,7 +175,7 @@ describe('incremental meeting command contract', () => {
         operation: 'finalize',
         meetingId,
         frontier: 2,
-        metadata: { title: 'Meeting', startedAt: 1_700_000_000_000 }
+        metadata: { title: 'Meeting', startedAt: 1_700_000_000_000, endedAt: 1_700_000_060_000 }
       }).ok
     ).toBe(true)
     expect(

@@ -30,7 +30,7 @@ const request: CloudSpeechStartRequest = {
   consent: { accepted: true, disclosureVersion: 'cloud-speech-v1' }
 }
 
-function createdSession(configVersion = 'config-r1', policyVersion = 'policy-r1') {
+function createdSession(configVersion = 'config-r1', policyVersion = 'policy-r1', wallNow = Date.now()) {
   return {
     ok: true as const,
     value: {
@@ -43,22 +43,22 @@ function createdSession(configVersion = 'config-r1', policyVersion = 'policy-r1'
       policyVersion,
       language: 'en-US',
       captureGeneration: 7,
-      grantExpiresAt: Date.now() + 60_000,
-      leaseExpiresAt: Date.now() + 60_000,
+      grantExpiresAt: wallNow + 60_000,
+      leaseExpiresAt: wallNow + 60_000,
       limits: {
         maxStreamMs: 60_000,
         drainWindowMs: 5_000,
         maxInputBytesPerTrack: 1_920_000,
         maxClientFrameBytes: 3_200,
         maxOutputBytesPerTrack: 1_048_576,
-        audioDeadlineAt: Date.now() + 60_000
+        audioDeadlineAt: wallNow + 60_000
       },
       grants: [{ track: 'microphone' as const, streamEpoch: 3, token: 'A'.repeat(43) }]
     }
   } satisfies Awaited<ReturnType<SpeechBrokerClient['createSession']>>
 }
 
-function readyCapability() {
+function readyCapability(wallNow = Date.now()) {
   return {
     ok: true as const,
     value: {
@@ -73,7 +73,7 @@ function readyCapability() {
       policyVersion: 'policy-r1',
       languages: ['multi', 'en-US'],
       format: { encoding: 'pcm_s16le' as const, sampleRate: 16_000 as const, channels: 1 as const },
-      validUntil: Date.now() + 60_000,
+      validUntil: wallNow + 60_000,
       limits: {
         maxStreamMs: 60_000,
         drainWindowMs: 5_000,
@@ -176,7 +176,8 @@ function makeHarness(
 function readyRelay(
   sessionId = '93d23d44-347e-490c-841b-0ff31facbc7e',
   trackDefinitions: Array<{ track: SpeechTrack; streamEpoch: number }> = [{ track: 'microphone', streamEpoch: 3 }],
-  finalEventSequence = 0
+  finalEventSequence = 0,
+  wallNow = Date.now()
 ) {
   const session = {
     identity: {
@@ -187,7 +188,7 @@ function readyRelay(
       language: request.language,
       configVersion: 'config-r1',
       policyVersion: 'policy-r1',
-      audioDeadlineAt: Date.now() + 60_000,
+      audioDeadlineAt: wallNow + 60_000,
       limits: {
         maxStreamMs: 60_000,
         drainWindowMs: 5_000,
@@ -212,6 +213,51 @@ function readyRelay(
     cancel: vi.fn(async (): Promise<void> => undefined)
   }
   return session
+}
+
+function captureClock(wallStart = 1_700_000_000_000, monotonicStart = 0) {
+  let wallNow = wallStart
+  let monotonicNow = monotonicStart
+  const tasks: Array<{ dueAt: number; active: boolean; callback: () => void }> = []
+  const pendingAt = (dueAt: number) => tasks.filter((task) => task.active && task.dueAt === dueAt)
+  const advanceTo = (executedAt: number) => {
+    expect(executedAt).toBeGreaterThanOrEqual(monotonicNow)
+    monotonicNow = executedAt
+    wallNow = wallStart + Math.floor(executedAt - monotonicStart)
+  }
+  return {
+    wallNow: () => wallNow,
+    monotonicNow: () => monotonicNow,
+    advanceTo,
+    pendingAt,
+    schedule: (callback: () => void, delayMs: number) => {
+      const task = { dueAt: monotonicNow + delayMs, active: true, callback }
+      tasks.push(task)
+      return () => { task.active = false }
+    },
+    runAt: (dueAt: number, executedAt = dueAt) => {
+      const matching = pendingAt(dueAt)
+      expect(matching).toHaveLength(1)
+      expect(executedAt).toBeGreaterThanOrEqual(dueAt)
+      const task = matching[0]!
+      advanceTo(executedAt)
+      task.active = false
+      task.callback()
+    }
+  }
+}
+
+async function rotationReceipt(h: ReturnType<typeof makeHarness>, stage: 'closed' | 'opened', previousEpoch: number) {
+  return vi.waitFor(() => {
+    const events = h.sender.send.mock.calls
+      .map((call) => call[1] as Record<string, unknown>)
+      .filter((event) =>
+        event.type === 'epoch-transition' && event.stage === stage &&
+        (event.streams as Array<{ previousEpoch: number }>).some((stream) => stream.previousEpoch === previousEpoch)
+      )
+    expect(events).toHaveLength(1)
+    return events[0]!
+  })
 }
 
 afterEach(() => relayHarness.create.mockReset())
@@ -479,7 +525,24 @@ describe('cloud speech main IPC authority boundary', () => {
     expect(session.pushFrame).not.toHaveBeenCalled()
   })
 
-  it('does not create if credential or policy authority changes while capability is pending', async () => {
+  it('refuses initial unready policy before capability or allocation', async () => {
+    const h = makeHarness()
+    h.currentAuthority.value = { ...h.currentAuthority.value, policyReady: false }
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({
+      ok: false,
+      code: 'POLICY',
+      captureId,
+      captureGeneration: 7
+    })
+    expect(h.client.capability).not.toHaveBeenCalled()
+    expect(h.client.createSession).not.toHaveBeenCalled()
+    expect(relayHarness.create).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['credentialRevision', 'credential-r2'],
+    ['policyRevision', 'policy-r2']
+  ] as const)('does not create if %s changes while capability is pending', async (revision, value) => {
     const h = makeHarness()
     const ready = readyCapability()
     let resolveCapability!: (value: Awaited<ReturnType<FakeClient['capability']>>) => void
@@ -488,9 +551,12 @@ describe('cloud speech main IPC authority boundary', () => {
     ) as FakeClient['capability']
     const starting = h.invoke(CLOUD_SPEECH_IPC.start, [request]) as Promise<unknown>
     await vi.waitFor(() => expect(h.client.capability).toHaveBeenCalledTimes(1))
-    h.currentAuthority.value = { ...h.currentAuthority.value, policyRevision: 'policy-r2' }
+    expect(h.client.createSession).not.toHaveBeenCalled()
+    expect(relayHarness.create).not.toHaveBeenCalled()
+    h.currentAuthority.value = { ...h.currentAuthority.value, [revision]: value }
     resolveCapability(ready)
-    await expect(starting).resolves.toMatchObject({ ok: false, code: 'POLICY', captureId, captureGeneration: 7 })
+    await expect(starting).resolves.toMatchObject({ ok: false, code: 'CLOSED', captureId, captureGeneration: 7 })
+    expect(h.client.createSession).not.toHaveBeenCalled()
     expect(relayHarness.create).not.toHaveBeenCalled()
   })
 
@@ -518,18 +584,17 @@ describe('cloud speech main IPC authority boundary', () => {
   })
 
   it('keeps a candidate allocation owned when the old allocation is closed but the candidate is still open', async () => {
-    const timers: Array<{ callback: () => void; delay: number }> = []
+    const clock = captureClock()
     const releaseCaptureOwner = vi.fn()
     const h = makeHarness(
+      clock.wallNow,
       undefined,
-      undefined,
-      (callback, delay) => {
-        timers.push({ callback, delay })
-        return () => undefined
-      },
-      releaseCaptureOwner
+      clock.schedule,
+      releaseCaptureOwner,
+      clock.monotonicNow
     )
-    const oldSession = readyRelay()
+    h.client.capability = vi.fn(async () => readyCapability(clock.wallNow()))
+    const oldSession = readyRelay(undefined, undefined, 0, clock.wallNow())
     const candidateId = 'c3d23d44-347e-490c-841b-0ff31facbc7e'
     let relayOptions: { client: SpeechBrokerClient } | null = null
     relayHarness.create.mockImplementation(
@@ -539,9 +604,11 @@ describe('cloud speech main IPC authority boundary', () => {
         return { ok: true, value: oldSession }
       }
     )
-    const candidateAllocation = createdSession()
-    candidateAllocation.value.sessionId = candidateId
-    h.client.createSession = vi.fn(async () => candidateAllocation) as FakeClient['createSession']
+    h.client.createSession = vi.fn(async () => {
+      const allocation = createdSession(undefined, undefined, clock.wallNow())
+      allocation.value.sessionId = candidateId
+      return allocation
+    }) as FakeClient['createSession']
     h.client.status = vi.fn(async (sessionId: string) => ({
       ok: true as const,
       value: {
@@ -570,19 +637,12 @@ describe('cloud speech main IPC authority boundary', () => {
       return renewalPending
     })
     await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
-    expect(timers.length).toBeGreaterThanOrEqual(2)
-    timers[0]!.callback()
-    await vi.waitFor(() => expect(timers.length).toBeGreaterThanOrEqual(3))
-    timers[timers.length - 1]!.callback()
-    await vi.waitFor(() =>
-      expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'epoch-transition')).toBe(
-        true
-      )
-    )
-    const closed = h.sender.send.mock.calls
-      .map((call) => call[1] as Record<string, unknown>)
-      .find((value) => value.type === 'epoch-transition')!
-    await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
+    clock.runAt(53_000) // lease preflight, two seconds before the 55s cutoff
+    await vi.waitFor(() => expect(clock.pendingAt(55_000)).toHaveLength(1))
+    expect(h.client.capability).toHaveBeenCalledTimes(2)
+    clock.runAt(55_000)
+    const closed = await rotationReceipt(h, 'closed', 3)
+    await expect(h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])).resolves.toMatchObject({ ok: true })
     await vi.waitFor(() => expect(h.client.createSession).toHaveBeenCalledTimes(1))
     await expect(h.invoke(CLOUD_SPEECH_IPC.cancel, [{ captureId, captureGeneration: 7 }])).resolves.toMatchObject({
       ok: true,
@@ -605,14 +665,12 @@ describe('cloud speech main IPC authority boundary', () => {
   })
 
   it('buffers candidate transcripts until the exact opened receipt is applied', async () => {
-    const timers: Array<{ callback: () => void; delay: number }> = []
-    const h = makeHarness(undefined, undefined, (callback, delay) => {
-      timers.push({ callback, delay })
-      return () => undefined
-    })
-    const oldSession = readyRelay()
+    const clock = captureClock()
+    const h = makeHarness(clock.wallNow, undefined, clock.schedule, undefined, clock.monotonicNow)
+    h.client.capability = vi.fn(async () => readyCapability(clock.wallNow()))
+    const oldSession = readyRelay(undefined, undefined, 0, clock.wallNow())
     const candidateId = 'c3d23d44-347c-490c-841b-0ff31facbc7e'
-    const candidateSession = readyRelay(candidateId, [{ track: 'microphone', streamEpoch: 4 }])
+    const candidateSession = readyRelay(candidateId, [{ track: 'microphone', streamEpoch: 4 }], 0, clock.wallNow())
     let onTranscript: ((event: unknown, context: unknown) => void) | undefined
     let renewalClient: SpeechBrokerClient | undefined
     relayHarness.create.mockImplementation(
@@ -627,34 +685,28 @@ describe('cloud speech main IPC authority boundary', () => {
         return { ok: true, value: oldSession }
       }
     )
-    const candidateAllocation = createdSession()
-    candidateAllocation.value.sessionId = candidateId
-    h.client.createSession = vi.fn(async () => candidateAllocation) as FakeClient['createSession']
+    h.client.createSession = vi.fn(async () => {
+      const allocation = createdSession(undefined, undefined, clock.wallNow())
+      allocation.value.sessionId = candidateId
+      return allocation
+    }) as FakeClient['createSession']
     ;(oldSession as unknown as { renew: (createRequest: unknown) => Promise<unknown> }).renew = vi.fn(
       async (createRequest: unknown) => {
         const created = await renewalClient!.createSession(createRequest)
         if (!created.ok) throw new Error('candidate allocation failed')
+        candidateSession.identity.audioDeadlineAt = created.value.limits.audioDeadlineAt
         return { ok: true, value: candidateSession }
       }
     )
 
     await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
-    timers[0]!.callback()
-    await vi.waitFor(() => expect(timers.length).toBeGreaterThanOrEqual(3))
-    timers[timers.length - 1]!.callback()
-    await vi.waitFor(() =>
-      expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'epoch-transition')).toBe(
-        true
-      )
-    )
-    const transitions = () =>
-      h.sender.send.mock.calls
-        .map((call) => call[1] as Record<string, unknown>)
-        .filter((value) => value.type === 'epoch-transition')
-    const closed = transitions()[0]!
-    await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
-    await vi.waitFor(() => expect(transitions()).toHaveLength(2))
-    const opened = transitions()[1]!
+    clock.runAt(53_000)
+    await vi.waitFor(() => expect(clock.pendingAt(55_000)).toHaveLength(1))
+    expect(h.client.capability).toHaveBeenCalledTimes(2)
+    clock.runAt(55_000)
+    const closed = await rotationReceipt(h, 'closed', 3)
+    await expect(h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])).resolves.toMatchObject({ ok: true })
+    const opened = await rotationReceipt(h, 'opened', 3)
     expect(opened.stage).toBe('opened')
 
     onTranscript?.(
@@ -691,27 +743,16 @@ describe('cloud speech main IPC authority boundary', () => {
     expect(candidateSession.cancel).not.toHaveBeenCalled()
   })
 
-  it('keeps renewed consent timestamps valid across late fractional rotations and stops at the capture ceiling', async () => {
-    const timers: Array<{ callback: () => void; delay: number }> = []
-    const wallStart = Date.now()
-    let wallNow = wallStart
+  it('keeps renewed consent timestamps valid across delayed authorized fractional cutoffs and stops at the capture ceiling', async () => {
     const captureStart = 0.5
     const captureDeadline = captureStart + 4 * 60 * 60 * 1_000
-    let monotonicNow = captureStart
-    const h = makeHarness(
-      () => wallNow,
-      undefined,
-      (callback, delay) => {
-        timers.push({ callback, delay })
-        return () => undefined
-      },
-      undefined,
-      () => monotonicNow
-    )
-    const oldSession = readyRelay()
+    const clock = captureClock(undefined, captureStart)
+    const h = makeHarness(clock.wallNow, undefined, clock.schedule, undefined, clock.monotonicNow)
+    h.client.capability = vi.fn(async () => readyCapability(clock.wallNow()))
+    const oldSession = readyRelay(undefined, undefined, 0, clock.wallNow())
     const candidateIds = ['c3d23d44-347c-490c-841b-0ff31facbc7e', 'd3d23d44-347c-490c-841b-0ff31facbc7e']
     const candidateSessions = candidateIds.map((id, index) =>
-      readyRelay(id, [{ track: 'microphone', streamEpoch: index + 4 }])
+      readyRelay(id, [{ track: 'microphone', streamEpoch: index + 4 }], 0, clock.wallNow())
     )
     let renewalClient: SpeechBrokerClient | undefined
     relayHarness.create.mockImplementation(
@@ -725,7 +766,7 @@ describe('cloud speech main IPC authority boundary', () => {
     let allocation = 0
     h.client.createSession = vi.fn(async (raw: unknown) => {
       consentRequests.push(raw as { consent: { issuedAt: number; expiresAt: number } })
-      const value = createdSession()
+      const value = createdSession(undefined, undefined, clock.wallNow())
       value.value.sessionId = candidateIds[allocation++]!
       return value
     }) as FakeClient['createSession']
@@ -734,6 +775,7 @@ describe('cloud speech main IPC authority boundary', () => {
         async (createRequest: unknown) => {
           const created = await renewalClient!.createSession(createRequest)
           if (!created.ok) throw new Error('candidate allocation failed')
+          next.identity.audioDeadlineAt = created.value.limits.audioDeadlineAt
           return { ok: true, value: next }
         }
       )
@@ -746,25 +788,25 @@ describe('cloud speech main IPC authority boundary', () => {
       h.sender.send.mock.calls
         .map((call) => call[1] as Record<string, unknown>)
         .filter((value) => value.type === 'epoch-transition')
-    const completeRotation = async (preflightIndex: number, monotonicAt: number, count: number) => {
-      monotonicNow = monotonicAt
-      const timerCount = timers.length
-      timers[preflightIndex]!.callback()
+    const completeRotation = async (cutoffAt: number, delayedCutoffAt: number, previousEpoch: number, count: number) => {
+      // First establish authority before cutoff; only the already-authorized cutoff is delayed.
+      clock.runAt(cutoffAt - 2_000)
+      await vi.waitFor(() => expect(clock.pendingAt(cutoffAt)).toHaveLength(1))
+      expect(h.client.capability).toHaveBeenCalledTimes(count + 1)
+      clock.runAt(cutoffAt, delayedCutoffAt)
+      const closed = await rotationReceipt(h, 'closed', previousEpoch)
       await vi.waitFor(() => expect(transitions()).toHaveLength(count * 2 - 1))
-      const closed = transitions()[count * 2 - 2]!
-      await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
+      await expect(h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])).resolves.toMatchObject({ ok: true })
+      const opened = await rotationReceipt(h, 'opened', previousEpoch)
       await vi.waitFor(() => expect(transitions()).toHaveLength(count * 2))
-      const opened = transitions()[count * 2 - 1]!
-      await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...opened, type: 'epoch-transition-ack' }])
+      await expect(h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...opened, type: 'epoch-transition-ack' }])).resolves.toMatchObject({ ok: true })
       await vi.waitFor(() => expect(consentRequests).toHaveLength(count))
-      await vi.waitFor(() => expect(timers.length).toBeGreaterThan(timerCount + 1))
+      expect(clock.pendingAt(delayedCutoffAt + 2_000)).toHaveLength(0) // both receipt timers were cancelled
+      await vi.waitFor(() => expect(clock.pendingAt(delayedCutoffAt + 53_000)).toHaveLength(1))
     }
 
-    timers[0]!.callback()
-    await vi.waitFor(() => expect(timers.length).toBeGreaterThanOrEqual(3))
-    await completeRotation(2, captureDeadline - 60_000.5, 1)
-    wallNow += 1
-    await completeRotation(timers.length - 1, captureDeadline - 1_000.25, 2)
+    await completeRotation(captureStart + 55_000, captureDeadline - 60_000.5, 3, 1)
+    await completeRotation(clock.monotonicNow() + 55_000, captureDeadline - 1_000.25, 4, 2)
     expect(consentRequests).toHaveLength(2)
     for (const [index, value] of consentRequests.entries()) {
       expect(Number.isSafeInteger(value.consent.issuedAt)).toBe(true)
@@ -776,8 +818,7 @@ describe('cloud speech main IPC authority boundary', () => {
       }
     }
 
-    monotonicNow = captureDeadline
-    timers[1]!.callback()
+    clock.runAt(captureDeadline)
     await vi.waitFor(() =>
       expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'capture-ceiling')).toBe(
         true
@@ -786,7 +827,8 @@ describe('cloud speech main IPC authority boundary', () => {
     const ceiling = h.sender.send.mock.calls
       .map((call) => call[1] as Record<string, unknown>)
       .find((value) => value.type === 'capture-ceiling')!
-    await h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [
+    expect(candidateSessions[1]!.finish).not.toHaveBeenCalled()
+    await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [
       {
         type: 'capture-ceiling-ack',
         captureId,
@@ -794,8 +836,30 @@ describe('cloud speech main IPC authority boundary', () => {
         ceilingId: ceiling.ceilingId,
         tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 0 }]
       }
-    ])
+    ])).resolves.toMatchObject({ ok: true })
     expect(h.client.createSession).toHaveBeenCalledTimes(2)
+    expect(candidateSessions[1]!.finish).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a first rotation preflight that arrives at cutoff without an authorized binding', async () => {
+    const clock = captureClock()
+    const h = makeHarness(clock.wallNow, undefined, clock.schedule, undefined, clock.monotonicNow)
+    h.client.capability = vi.fn(async () => readyCapability(clock.wallNow()))
+    const session = readyRelay(undefined, undefined, 0, clock.wallNow())
+    relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
+      options.onAllocated?.(session.identity.sessionId)
+      return { ok: true, value: session }
+    })
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
+
+    clock.runAt(53_000, 55_000) // genuinely late first preflight, not a previously authorized cutoff
+    await vi.waitFor(() => expect(session.cancel).toHaveBeenCalledTimes(1))
+    expect(session.finish).not.toHaveBeenCalled()
+    expect(h.client.capability).toHaveBeenCalledTimes(1)
+    expect(h.client.createSession).not.toHaveBeenCalled()
+    expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'epoch-transition')).toBe(false)
+    expect(clock.pendingAt(55_000)).toHaveLength(0)
+    expect(clock.pendingAt(4 * 60 * 60 * 1_000)).toHaveLength(0)
   })
 
   it('bounds overlapping start records while predecessor closure is unresolved', async () => {
@@ -896,14 +960,20 @@ describe('cloud speech main IPC authority boundary', () => {
   })
 
   it('seals the exact four-hour frontier and finishes only after an applied ceiling receipt', async () => {
-    const tasks: Array<{ callback: () => void; delay: number }> = []
-    const h = makeHarness(undefined, undefined, (callback, delay) => {
-      tasks.push({ callback, delay })
-      return () => undefined
-    })
-    const session = readyRelay(undefined, [{ track: 'microphone', streamEpoch: 3 }], 1)
-    relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
+    const clock = captureClock()
+    const captureDeadline = 4 * 60 * 60 * 1_000
+    const tailBytes = 1_600
+    const finalSampleOffset = tailBytes / Int16Array.BYTES_PER_ELEMENT
+    const h = makeHarness(clock.wallNow, undefined, clock.schedule, undefined, clock.monotonicNow)
+    h.client.capability = vi.fn(async () => readyCapability(clock.wallNow()))
+    const session = readyRelay(undefined, [{ track: 'microphone', streamEpoch: 3 }], 1, clock.wallNow())
+    let onTranscript: ((event: unknown, context: unknown) => void) | undefined
+    relayHarness.create.mockImplementation(async (options: {
+      onAllocated?: (id: string) => void
+      onTranscript?: (event: unknown, context: unknown) => void
+    }) => {
       options.onAllocated?.(session.identity.sessionId)
+      onTranscript = options.onTranscript
       return { ok: true, value: session }
     })
     await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
@@ -916,23 +986,49 @@ describe('cloud speech main IPC authority boundary', () => {
           sequence: 1,
           sampleOffset: 0,
           kind: 'sealed-final',
-          pcm16le: new ArrayBuffer(3_200)
+          pcm16le: new ArrayBuffer(tailBytes)
         }
       ])
-    ).resolves.toMatchObject({ ok: true, nextSampleOffset: 1_600 })
-    const captureDeadline = tasks.find((task) => task.delay > 60_000)
-    expect(captureDeadline).toBeDefined()
-    captureDeadline!.callback()
+    ).resolves.toMatchObject({ ok: true, nextSampleOffset: finalSampleOffset })
+    expect(onTranscript).toBeTypeOf('function')
+    onTranscript!(
+      {
+        protocolVersion: 1,
+        sessionId: session.identity.sessionId,
+        captureGeneration: 7,
+        track: 'microphone',
+        streamEpoch: 3,
+        type: 'transcript',
+        sequence: 1,
+        segmentIndex: 1,
+        revision: 1,
+        text: 'sealed tail transcript',
+        startMs: 0,
+        endMs: finalSampleOffset / 16_000 * 1_000,
+        final: true
+      },
+      { timeBase: 'stream', firstCaptureSampleOffset: 0, sessionId: session.identity.sessionId }
+    )
+    expect(h.sender.send).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      type: 'segment',
+      sequence: 1,
+      segment: expect.objectContaining({ stream: { generation: 7, track: 'microphone', epoch: 3 } })
+    }))
+    expect(session.finish).not.toHaveBeenCalled()
+    clock.runAt(captureDeadline)
     const ceilingEvent = h.sender.send.mock.calls
       .map((call) => call[1] as { type: string; ceilingId?: string })
       .find((value) => value.type === 'capture-ceiling')
     expect(ceilingEvent).toBeDefined()
+    expect(clock.pendingAt(captureDeadline + 5_000)).toHaveLength(1)
+    clock.advanceTo(captureDeadline + 4_999)
+    expect(session.finish).not.toHaveBeenCalled()
     const ack = {
       type: 'capture-ceiling-ack',
       captureId,
       captureGeneration: 7,
       ceilingId: ceilingEvent!.ceilingId,
-      tracks: [{ track: 'microphone', finalSequence: 1, finalSampleOffset: 1_600 }]
+      tracks: [{ track: 'microphone', finalSequence: 1, finalSampleOffset }]
     }
     await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [ack])).resolves.toEqual({
       ok: true,
@@ -949,7 +1045,66 @@ describe('cloud speech main IPC authority boundary', () => {
       ceilingId: ceilingEvent!.ceilingId,
       tracks: ack.tracks
     })
+    expect(session.finish).toHaveBeenCalledTimes(1)
+    expect(session.cancel).not.toHaveBeenCalled()
+    expect(clock.pendingAt(captureDeadline + 5_000)).toHaveLength(0)
   })
+
+  it.each(['wrong-sequence', 'wrong-offset', 'late-ack', 'sealed-full-quantum'] as const)(
+    'does not finish a capture for %s at the ceiling boundary', async (refusal) => {
+      const clock = captureClock()
+      const captureDeadline = 4 * 60 * 60 * 1_000
+      const tailBytes = 1_600
+      const finalSampleOffset = tailBytes / Int16Array.BYTES_PER_ELEMENT
+      const h = makeHarness(clock.wallNow, undefined, clock.schedule, undefined, clock.monotonicNow)
+      h.client.capability = vi.fn(async () => readyCapability(clock.wallNow()))
+      const session = readyRelay(undefined, undefined, 0, clock.wallNow())
+      relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
+        options.onAllocated?.(session.identity.sessionId)
+        return { ok: true, value: session }
+      })
+      await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
+      const frame = {
+        captureId,
+        captureGeneration: 7,
+        track: 'microphone',
+        sequence: 1,
+        sampleOffset: 0,
+        kind: 'sealed-final',
+        pcm16le: new ArrayBuffer(refusal === 'sealed-full-quantum' ? 3_200 : tailBytes)
+      }
+      if (refusal === 'sealed-full-quantum') {
+        await expect(h.invoke(CLOUD_SPEECH_IPC.frame, [frame])).resolves.toMatchObject({ ok: false, code: 'INVALID_REQUEST' })
+        expect(session.pushFrame).not.toHaveBeenCalled()
+        expect(session.finish).not.toHaveBeenCalled()
+        return
+      }
+      await expect(h.invoke(CLOUD_SPEECH_IPC.frame, [frame])).resolves.toMatchObject({ ok: true, nextSampleOffset: finalSampleOffset })
+      clock.runAt(captureDeadline)
+      const ceiling = h.sender.send.mock.calls
+        .map((call) => call[1] as Record<string, unknown>)
+        .find((event) => event.type === 'capture-ceiling')!
+      expect(ceiling).toBeDefined()
+      expect(clock.pendingAt(captureDeadline + 5_000)).toHaveLength(1)
+      expect(session.finish).not.toHaveBeenCalled()
+      if (refusal === 'late-ack') clock.advanceTo(captureDeadline + 5_000)
+      const ack = {
+        type: 'capture-ceiling-ack',
+        captureId,
+        captureGeneration: 7,
+        ceilingId: ceiling.ceilingId,
+        tracks: [{
+          track: 'microphone',
+          finalSequence: refusal === 'wrong-sequence' ? 0 : 1,
+          finalSampleOffset: refusal === 'wrong-offset' ? 0 : finalSampleOffset
+        }]
+      }
+      await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [ack])).resolves.toMatchObject({ ok: false, code: 'ORDER' })
+      await vi.waitFor(() => expect(session.cancel).toHaveBeenCalledTimes(1))
+      expect(session.finish).not.toHaveBeenCalled()
+      expect(clock.pendingAt(captureDeadline + 5_000)).toHaveLength(0)
+    }
+  )
 
   it('does not route an old microphone owner through a newer accepted Listen context', async () => {
     const h = makeHarness()

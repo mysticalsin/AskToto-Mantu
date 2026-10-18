@@ -334,6 +334,7 @@ interface Harness {
   logger: typeof import('../logger')
   procs: FakeProc[]
   calls: Array<{ path: string; args: string[] }>
+  waitForSpawn(procIndex: number): Promise<void>
   registry: {
     recordSidecarIntent: ReturnType<typeof vi.fn>
     recordSidecarSpawned: ReturnType<typeof vi.fn>
@@ -348,6 +349,16 @@ async function loadIsolatedRuntime(options: {
   vi.resetModules()
   const procs: FakeProc[] = []
   const calls: Array<{ path: string; args: string[] }> = []
+  const spawnWaiters = new Map<number, Array<() => void>>()
+  const waitForSpawn = (procIndex: number): Promise<void> => {
+    if (procs[procIndex]) return Promise.resolve()
+    // Observe the fake spawn directly: polling timers cannot advance under the port-line test's clock.
+    return new Promise((resolve) => {
+      const waiters = spawnWaiters.get(procIndex) ?? []
+      waiters.push(resolve)
+      spawnWaiters.set(procIndex, waiters)
+    })
+  }
   const registry = {
     recordSidecarIntent: vi.fn(),
     recordSidecarSpawned: vi.fn(() => options.spawnedRegistryWrite ?? Promise.resolve()),
@@ -368,6 +379,10 @@ async function loadIsolatedRuntime(options: {
       })
       procs.push(proc)
       calls.push({ path, args })
+      const procIndex = procs.length - 1
+      const waiters = spawnWaiters.get(procIndex) ?? []
+      spawnWaiters.delete(procIndex)
+      for (const resolve of waiters) resolve()
       return proc
     })
     return { spawn }
@@ -448,10 +463,11 @@ async function loadIsolatedRuntime(options: {
   // holds — the module-level vi.mock factories re-run on reset and hand out new vi.fn()s.
   const runtime = await import('./local-runtime')
   const logger = await import('../logger')
-  return { runtime, logger, procs, calls, registry }
+  return { runtime, logger, procs, calls, waitForSpawn, registry }
 }
 
-function emitListening(h: Harness, procIndex: number, port: number): void {
+async function emitListening(h: Harness, procIndex: number, port: number): Promise<void> {
+  await h.waitForSpawn(procIndex)
   h.procs[procIndex].stdout.emit(
     'data',
     Buffer.from(`0.00.787.103 I srv llama_server: listening on http://127.0.0.1:${port}\n`)
@@ -493,6 +509,7 @@ describe('port-line timeout — a sidecar that starts but never reports a listen
     // The child spawned fine — it just never prints "listening on http://127.0.0.1:<port>" (wrong build,
     // GPU driver stall, a llama.cpp log-format change). Nothing else settles this promise: the
     // HEALTH_BUDGET_MS deadline only starts counting once that line has been parsed.
+    await h.waitForSpawn(0)
     expect(h.calls).toHaveLength(1)
     h.procs[0].stdout.emit('data', Buffer.from('0.00.050.937 I srv load_model: loading model\n'))
 
@@ -535,7 +552,7 @@ describe('sidecar registry ordering', () => {
     const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
       resolved = true
     })
-    emitListening(h, 0, 55901)
+    await emitListening(h, 0, 55901)
     await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
     await Promise.resolve()
 
@@ -559,7 +576,7 @@ describe('sidecar registry ordering', () => {
     const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
       resolved = true
     })
-    emitListening(h, 0, 55902)
+    await emitListening(h, 0, 55902)
     await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
     await Promise.resolve()
 
@@ -595,7 +612,7 @@ describe('supervised launch registry coverage', () => {
     const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
       resolved = true
     })
-    emitListening(h, 0, 55903)
+    await emitListening(h, 0, 55903)
     await waitUntil(() => h.registry.recordSidecarSupervisedSpawned.mock.calls.length === 1)
     await Promise.resolve()
 
@@ -625,8 +642,9 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
     const paths = { gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
 
     const p = h.runtime.start(paths, 'win')
+    await h.waitForSpawn(0)
     expect(h.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
-    emitListening(h, 0, 55901)
+    await emitListening(h, 0, 55901)
     await p
     expect(h.runtime.isRunning()).toBe(true)
 
@@ -639,7 +657,7 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
     // calls[1] was the same Vulkan build — which crashes again, exhausts the restart budget, and strands
     // the session 'unavailable' without ever trying the bundled CPU build.
     expect(h.calls[1].path).toContain(join('win', 'cpu', 'llama-server.exe'))
-    emitListening(h, 1, 55902)
+    await emitListening(h, 1, 55902)
     await waitUntil(() => h.runtime.isRunning())
     expect(h.runtime.baseURL()).toBe('http://127.0.0.1:55902/v1')
     expect(h.logger.mainLog.warn).toHaveBeenCalledWith(
@@ -655,13 +673,13 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
     const paths = { gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
 
     const p = h.runtime.start(paths, 'win')
-    emitListening(h, 0, 56001)
+    await emitListening(h, 0, 56001)
     await p
     // A model SWITCH is not a crash — the GPU build must still be preferred.
     const p2 = h.runtime.start({ gguf: '/m/b.gguf', vision: false, mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }, 'win')
     await waitUntil(() => h.calls.length === 2)
     expect(h.calls[1].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
-    emitListening(h, 1, 56002)
+    await emitListening(h, 1, 56002)
     await p2
     h.runtime.stop()
   })

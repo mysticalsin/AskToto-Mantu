@@ -7,7 +7,7 @@ import { atomicSavedWriteStream } from '../../infra/storage/atomic-saved-write'
 import { withIncrementalMeetingMutation } from './incremental-meeting-mutation-lock'
 import { createBoundedJournalFileReader } from './incremental-meeting-journal-file-read'
 import { createIncrementalMeetingJournalRoot } from './incremental-meeting-journal-root'
-import { consumeIncrementalRecordReceipt } from './incremental-record-receipt'
+import { consumeIncrementalRecordReceipt } from '../../infra/storage/incremental-record-receipt'
 import {
   SHA256,
   UUID,

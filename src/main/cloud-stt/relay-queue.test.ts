@@ -35,9 +35,9 @@ describe('BoundedRelayPcmQueue', () => {
       if (sequence === 2) throw new Error('ambiguous transport failure')
     })
 
-    expect(await queue.drain(send)).toEqual({ ok: false, code: 'SEND_FAILED' })
+    expect(await queue.drain(send, 1_000)).toEqual({ ok: false, code: 'SEND_FAILED' })
     expect(send.mock.calls.map(([, sequence]) => sequence)).toEqual([1, 2])
-    expect(await queue.drain(send)).toMatchObject({ ok: false, code: 'CLOSED' })
+    expect(await queue.drain(send, 1_000)).toMatchObject({ ok: false, code: 'CLOSED' })
     expect(send.mock.calls).toHaveLength(2)
   })
 
@@ -75,9 +75,9 @@ describe('BoundedRelayPcmQueue', () => {
       if (sequence === 1) await gate
     }
 
-    const draining = queue.drain(send)
+    const draining = queue.drain(send, 1_000)
     queue.enqueue(frame(2), 1_000)
-    expect(queue.drain(send)).toBe(draining)
+    expect(queue.drain(send, 1_000)).toBe(draining)
     release()
     expect(await draining).toEqual({ ok: true })
     expect(sent).toEqual([1, 2])

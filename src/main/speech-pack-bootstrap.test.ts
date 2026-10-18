@@ -24,7 +24,9 @@ const mocks = vi.hoisted(() => {
     registerSpeechPackIpc: vi.fn(() => unregister),
     getPackageRuntimeContract: vi.fn(),
     readSettingsAtAuthorityBoundary: vi.fn(),
-    getSpeechPolicyAuthorityStatus: vi.fn()
+    getSpeechPolicyAuthorityStatus: vi.fn(),
+    asrModelPath: vi.fn(() => { throw new Error('Refused ASR request reached model-path I/O') }),
+    asrFetch: vi.fn(() => { throw new Error('Refused ASR request reached network I/O') })
   }
 })
 vi.mock('./features/components', () => ({
@@ -48,7 +50,8 @@ vi.mock('./model-policy-client', () => ({
   getSpeechPolicyAuthorityStatus: mocks.getSpeechPolicyAuthorityStatus
 }))
 vi.mock('@shared/package-profile', () => ({ METIS_PACKAGE_PROFILE: 'full' }))
-vi.mock('electron', () => ({ app: { getVersion: () => '2.1.0' } }))
+vi.mock('electron', () => ({ app: { getVersion: () => '2.1.0', getPath: mocks.asrModelPath }, net: { fetch: mocks.asrFetch } }))
+vi.mock('./logger', () => ({ mainLog: { warn: vi.fn() } }))
 
 afterEach(() => {
   vi.useRealTimers()
@@ -69,6 +72,77 @@ const options = () => ({
 })
 
 describe('speech-pack desktop lifecycle', () => {
+  it.each([
+    'authentication',
+    'invalid runtime',
+    'lean runtime',
+    'unreadable settings',
+    'blocked local policy',
+    'unverified policy',
+    'configured without verified policy'
+  ] as const)('the real composed ASR handler refuses %s without transfer', async (refusal) => {
+    const handlers = new Map<string, (...args: any[]) => Promise<unknown>>()
+    const ipcMain = { handle: (channel: string, handler: (...args: any[]) => Promise<unknown>) => handlers.set(channel, handler) } as unknown as Electron.IpcMain
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      enterpriseLive: { ...DEFAULT_SETTINGS.enterpriseLive, managed: false, inferenceMode: 'legacy' as const },
+      operatorUrl: refusal === 'configured without verified policy' ? 'https://operator.example.test' : '',
+      operatorIngestSecret: '',
+      operatorLicenseToken: ''
+    }
+    mocks.getPackageRuntimeContract.mockResolvedValue({
+      status: refusal === 'invalid runtime' ? 'invalid' : 'legacy-full',
+      profile: refusal === 'lean runtime' ? 'lean' : 'full',
+      inventory: null
+    })
+    mocks.readSettingsAtAuthorityBoundary.mockResolvedValue({
+      settings,
+      readable: refusal !== 'unreadable settings',
+      allowedProviders: null,
+      localSpeechPack: refusal === 'blocked local policy' ? 'blocked' : null
+    })
+    mocks.getSpeechPolicyAuthorityStatus.mockReturnValue({
+      status: refusal === 'unverified policy' ? 'unverified' : 'unconfigured',
+      identity: 'fixture-policy'
+    })
+    const assertMainWindow = vi.fn()
+    const requireAuth = vi.fn(() => refusal !== 'authentication')
+    const auditAsrTransfer = vi.fn()
+    const ensureLocalModel = vi.fn(async () => false)
+    registerOptionalModelProvisioningIpc({
+      ipcMain,
+      assertMainWindow,
+      requireAuth,
+      ensureLocalModel,
+      captureActive: () => false,
+      captureIdentity: () => 'capture:0',
+      localModelIdentity: () => 'model:0',
+      currentModelPolicyIdentity: () => 'policy:0',
+      refreshScreenPreprocess: vi.fn(),
+      logProvisioningFailure: vi.fn(),
+      auditAsrTransfer
+    })
+    expect(handlers.has(IPC.localModelsEnsure)).toBe(true)
+    expect(mocks.getPackageRuntimeContract).not.toHaveBeenCalled()
+    expect(mocks.readSettingsAtAuthorityBoundary).not.toHaveBeenCalled()
+    expect(mocks.getSpeechPolicyAuthorityStatus).not.toHaveBeenCalled()
+    expect(requireAuth).not.toHaveBeenCalled()
+    const handler = handlers.get(IPC.asrModelFetch)
+    if (!handler) throw new Error('Actual composed ASR fetch handler was not registered')
+    const event = {} as Electron.IpcMainInvokeEvent
+    await expect(handler(event)).resolves.toEqual({ ok: false })
+    expect(assertMainWindow).toHaveBeenCalledExactlyOnceWith(event)
+    expect(requireAuth).toHaveBeenCalledOnce()
+    expect(mocks.getPackageRuntimeContract).toHaveBeenCalledTimes(refusal === 'authentication' ? 0 : 1)
+    const reachesPolicy = !['authentication', 'invalid runtime', 'lean runtime'].includes(refusal)
+    expect(mocks.readSettingsAtAuthorityBoundary).toHaveBeenCalledTimes(reachesPolicy ? 1 : 0)
+    expect(mocks.getSpeechPolicyAuthorityStatus).toHaveBeenCalledTimes(reachesPolicy && refusal !== 'unreadable settings' ? 1 : 0)
+    expect(auditAsrTransfer).not.toHaveBeenCalled()
+    expect(ensureLocalModel).not.toHaveBeenCalled()
+    expect(mocks.asrModelPath).not.toHaveBeenCalled()
+    expect(mocks.asrFetch).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['admitted', true],
     ['unreadable policy', false]

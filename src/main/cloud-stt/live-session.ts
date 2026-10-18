@@ -61,6 +61,7 @@ type TrackSession = {
   closeAcknowledged: boolean
   /** The provider confirmed it processed the graceful end-of-stream request. */
   terminalReceived: boolean
+  transportFailureReported: boolean
 }
 
 export type CloudSttLiveStopResult = { timedOut: boolean }
@@ -168,8 +169,9 @@ export class CloudSttLiveSession {
     const pcm = float32ToPcm16le(samples)
     try {
       track.ws.send(pcm)
-    } catch (e) {
-      mainLog.warn('[cloud-stt] send failed', e instanceof Error ? e.message : e)
+    } catch {
+      if (this.closed || this.closing) return
+      this.reportTrackTransportFailure(track, `Cloud STT audio could not be sent (${channel}).`)
     }
   }
 
@@ -330,10 +332,12 @@ export class CloudSttLiveSession {
         open: false,
         diarize,
         closeAcknowledged: false,
-        terminalReceived: false
+        terminalReceived: false,
+        transportFailureReported: false
       }
       this.tracks.set(channel, track)
       let settled = false
+      let opened = false
 
       const timer = setTimeout(() => {
         if (settled) return
@@ -348,6 +352,7 @@ export class CloudSttLiveSession {
       }, 12_000)
 
       ws.once('open', () => {
+        opened = true
         track.open = true
         if (!settled) {
           settled = true
@@ -370,13 +375,16 @@ export class CloudSttLiveSession {
         } else if (this.closing) {
           this.acknowledgeTrackClose(track, track.terminalReceived)
         } else {
-          this.handlers.onError?.(`Cloud STT ${kind} WebSocket error (${channel})`)
+          this.reportTrackTransportFailure(track, `Cloud STT ${kind} WebSocket error (${channel})`)
         }
       })
 
       ws.once('close', () => {
         track.open = false
         if (this.closing) this.acknowledgeTrackClose(track, track.terminalReceived)
+        else if (!this.closed && opened) {
+          this.reportTrackTransportFailure(track, `Cloud STT provider connection closed unexpectedly (${channel}).`)
+        }
         if (!settled) {
           settled = true
           clearTimeout(timer)
@@ -384,6 +392,15 @@ export class CloudSttLiveSession {
         }
       })
     })
+  }
+
+  private reportTrackTransportFailure(track: TrackSession, message: string): void {
+    // A failed track must stop accepting PCM before notifying the renderer. The surviving track and
+    // already-delivered finals remain usable; recovery/fallback is still the caller's decision.
+    track.open = false
+    if (track.transportFailureReported) return
+    track.transportFailureReported = true
+    this.handlers.onError?.(message)
   }
 
   private onMessage(channel: CloudSttLineSpeaker, kind: 'nova' | 'soniox', data: WebSocket.RawData): void {

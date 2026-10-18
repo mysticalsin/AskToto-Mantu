@@ -105,7 +105,7 @@ describe('refreshModelPolicy / getActiveModelPolicy', () => {
     const settings = { ...SPEECH_SETTINGS, operatorIngestSecret: 'shared-secret' }
     useSpeechIdentity(settings)
     expect(getSpeechPolicyAuthorityStatus(settings).status).toBe('unverified')
-    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW)))
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW, SPEECH_TOKEN)))
 
     await refreshModelPolicyChecked(settings)
 
@@ -424,6 +424,64 @@ describe('verified speech policy authority', () => {
     await refreshModelPolicyChecked(SPEECH_SETTINGS)
     expect(getVerifiedSpeechPolicySnapshot()).not.toBeNull()
     expect(events).toEqual([])
+  })
+
+  it.each([
+    { version: NOW, status: 'unverified', event: { kind: 'revoked', reason: 'policy-conflict' } },
+    { version: NOW + 1, status: 'managed', event: { kind: 'changed', reason: 'policy-changed' } }
+  ])('notifies an idle unmanaged owner immediately on a signed managed $status transition', async ({ version, status, event }) => {
+    useSpeechIdentity()
+    const events: unknown[] = []
+    setSpeechPolicyProofRevocationListener((notification) => events.push(notification))
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW, SPEECH_TOKEN)))
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(getSpeechPolicyAuthorityStatus(SPEECH_SETTINGS).status).toBe('unmanaged')
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+
+    const lower = { ...policy(), version: NOW - 1, updatedAt: NOW - 1 }
+    setModelPolicyFetchForTests(async () =>
+      jsonResponse({ ok: true, policy: lower, signature: sign(SPEECH_TOKEN, lower) })
+    )
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(events).toEqual([])
+    expect(getSpeechPolicyAuthorityStatus(SPEECH_SETTINGS).status).toBe('unmanaged')
+
+    let resolveHeld!: (response: Response) => void
+    const heldResponse = new Promise<Response>((resolve) => {
+      resolveHeld = resolve
+    })
+    setModelPolicyFetchForTests(async () => heldResponse)
+    const heldRefresh = refreshModelPolicyChecked(SPEECH_SETTINGS)
+
+    const managed = { ...policy(), version, updatedAt: version }
+    setModelPolicyFetchForTests(async () =>
+      jsonResponse({ ok: true, policy: managed, signature: sign(SPEECH_TOKEN, managed) })
+    )
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    // The idle runtime must receive retirement without polling authority status first.
+    expect(events).toEqual([event])
+    expect(getSpeechPolicyAuthorityStatus(SPEECH_SETTINGS).status).toBe(status)
+    expect(getVerifiedSpeechPolicySnapshot()?.policy.version).toBe(status === 'managed' ? version : undefined)
+
+    await refreshModelPolicyChecked(SPEECH_SETTINGS)
+    expect(events).toEqual([event])
+    const late = { ...policy(), version: NOW + 2, updatedAt: NOW + 2 }
+    resolveHeld(jsonResponse({ ok: true, policy: late, signature: sign(SPEECH_TOKEN, late) }))
+    await heldRefresh
+    expect(events).toEqual([event])
+    expect(getSpeechPolicyAuthorityStatus(SPEECH_SETTINGS).status).toBe(status)
+    expect(getVerifiedSpeechPolicySnapshot()?.policy.version).toBe(status === 'managed' ? version : undefined)
+
+    if (status === 'unverified') {
+      const recovery = { ...policy(), version: NOW + 1, updatedAt: NOW + 1 }
+      setModelPolicyFetchForTests(async () =>
+        jsonResponse({ ok: true, policy: recovery, signature: sign(SPEECH_TOKEN, recovery) })
+      )
+      await refreshModelPolicyChecked(SPEECH_SETTINGS)
+      expect(events).toEqual([event])
+      expect(getSpeechPolicyAuthorityStatus(SPEECH_SETTINGS).status).toBe('managed')
+      expect(getVerifiedSpeechPolicySnapshot()?.policy.version).toBe(NOW + 1)
+    }
   })
 
   it('notifies an idle owner on same-version explicit denial and on a real policy revision change', async () => {

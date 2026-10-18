@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -890,7 +890,6 @@ describe('speech auth lease (auth module authority)', () => {
     await writeSessionFile()
     const adminPath = join(ud, 'admin-managed-config.json')
     writeFileSync(adminPath, '{}', 'utf8')
-    const { readTrustedAdminManagedBytes } = await import('./win-security')
     let began!: () => void
     let release!: () => void
     const started = new Promise<void>((resolve) => {
@@ -899,10 +898,13 @@ describe('speech auth lease (auth module authority)', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
+    // Model trusted bytes only for this fixture; readTrustedAdminText retains its real before/after
+    // lstat file-stability checks. An ordinary temp file does not establish Windows machine ACL trust.
     const auth = await prepareAuth(async (path) => {
+      if (path !== adminPath) throw new Error('Unexpected admin policy fixture path')
       began()
       await gate
-      return readTrustedAdminManagedBytes(path)
+      return readFileSync(path)
     })
 
     const older = auth.refreshSpeechAuthLease()
@@ -956,7 +958,6 @@ describe('speech auth lease (auth module authority)', () => {
           idTokenClaims: { tid: TENANT_GUID }
         }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>
     )
-    const { readTrustedAdminManagedBytes } = await import('./win-security')
     let adminReads = 0
     let began!: () => void
     let release!: () => void
@@ -966,13 +967,16 @@ describe('speech auth lease (auth module authority)', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
+    // Keep the same test-owned trusted-byte seam while the production reader checks file stability
+    // and the lease controller retains its session/profile/settings/authority epoch fences.
     const auth = await prepareAuth(async (path) => {
+      if (path !== join(ud, 'admin-managed-config.json')) throw new Error('Unexpected admin policy fixture path')
       adminReads += 1
       if (adminReads === 2) {
         began()
         await gate
       }
-      return readTrustedAdminManagedBytes(path)
+      return readFileSync(path)
     })
     const lease = await auth.refreshSpeechAuthLease()
     expect(lease).not.toBeNull()

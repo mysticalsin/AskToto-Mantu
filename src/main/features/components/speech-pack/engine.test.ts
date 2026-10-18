@@ -376,7 +376,8 @@ describe('speech-pack engine', () => {
         const first = make([c])
         first.enqueue([WHISPER])
         await first.whenIdle()
-        rmSync(marker(WHISPER))
+        const priorMarker = readFileSync(marker(WHISPER))
+        const priorBytes = c.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))
 
         let replacing!: ReturnType<typeof make>
         replacing = make([c], {
@@ -384,12 +385,13 @@ describe('speech-pack engine', () => {
             if (step === 'marker-written') replacing.cancel(WHISPER)
           }
         })
-        replacing.enqueue([WHISPER])
+        replacing.repair(WHISPER)
         await replacing.whenIdle()
 
         expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
         expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
-        expect(existsSync(marker(WHISPER))).toBe(false)
+        expect(readFileSync(marker(WHISPER))).toEqual(priorMarker)
+        expect(c.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))).toEqual(priorBytes)
       })
 
       it.each([
@@ -428,7 +430,8 @@ describe('speech-pack engine', () => {
         const first = make([c])
         first.enqueue([WHISPER])
         await first.whenIdle()
-        rmSync(marker(WHISPER))
+        const priorMarker = readFileSync(marker(WHISPER))
+        const priorBytes = c.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))
 
         let entered = false
         let releaseGate!: () => void
@@ -444,7 +447,7 @@ describe('speech-pack engine', () => {
             }
           }
         })
-        replacing.enqueue([WHISPER])
+        replacing.repair(WHISPER)
         try {
           await vi.waitFor(() => expect(entered).toBe(true))
           replacing.cancel(WHISPER)
@@ -454,8 +457,50 @@ describe('speech-pack engine', () => {
         await replacing.whenIdle()
         expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
         expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
-        expect(existsSync(marker(WHISPER))).toBe(false)
+        expect(readFileSync(marker(WHISPER))).toEqual(priorMarker)
+        expect(c.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))).toEqual(priorBytes)
         expect(readdirSync(join(root, WHISPER)).some((name) => name.includes('.old-'))).toBe(false)
+      })
+
+      it.each([
+        'marker-written',
+        'ready-check'
+      ] as const)('never restores unmarked bytes as active when cancelled at %s', async (step) => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const first = make([c])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const priorBytes = c.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))
+        rmSync(marker(WHISPER))
+
+        let originalAside: string | undefined
+        let replacing!: ReturnType<typeof make>
+        replacing = make([c], {
+          onActivationStep: (at) => {
+            if (at === 'old-moved-aside') {
+              const asides = readdirSync(join(root, WHISPER)).filter((name) => name.includes('.old-'))
+              expect(asides).toHaveLength(1)
+              originalAside = join(root, WHISPER, asides[0])
+            }
+            if (at === step) replacing.cancel(WHISPER)
+          }
+        })
+        replacing.enqueue([WHISPER])
+        await replacing.whenIdle()
+
+        expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+        expect(originalAside).toBeDefined()
+        expect(packMatches(c, originalAside!)).toBe(true)
+        expect(c.files.map((file) => readFileSync(join(originalAside!, file.path)))).toEqual(priorBytes)
+        expect(existsSync(marker(WHISPER))).toBe(false)
+        expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+        const next = make([c])
+        await next.initialise()
+        expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(existsSync(marker(WHISPER))).toBe(false)
+        expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+        expect(packMatches(c, originalAside!)).toBe(true)
       })
     })
   })
@@ -514,11 +559,24 @@ describe('speech-pack engine', () => {
       }
       // A complete but unmarked set is reusable only after this explicit install request re-verifies
       // and self-tests it; startup never creates an activation receipt on the user's behalf.
+      const retainedBeforeInstall = asideDirs()
       next.enqueue([WHISPER])
       await next.whenIdle()
       expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
       expect(packMatches(c, active)).toBe(true)
       expect(existsSync(marker(WHISPER))).toBe(true)
+      const retainedAfterInstall = asideDirs()
+      if (step === 'marker-written') expect(retainedAfterInstall).toEqual([])
+      else expect(retainedAfterInstall.length).toBeGreaterThan(0)
+      expect(retainedAfterInstall).toEqual(expect.arrayContaining(retainedBeforeInstall))
+      for (const aside of retainedAfterInstall) expect(packMatches(c, join(root, WHISPER, aside))).toBe(true)
+      const activatedMarker = readFileSync(marker(WHISPER))
+      // Only a later startup with a verified active pack and receipt may discard rollback bytes.
+      const later = make([c])
+      await later.initialise()
+      expect(later.getState(WHISPER)).toEqual({ status: 'ready' })
+      expect(readFileSync(marker(WHISPER))).toEqual(activatedMarker)
+      expect(packMatches(c, active)).toBe(true)
       expect(asideDirs()).toEqual([])
       expect(server.requests.length).toBe(before)
     })
@@ -758,11 +816,27 @@ describe('speech-pack engine', () => {
         expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
         expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
 
-        const recovered = make([nextVersion])
+        const before = server.requests.length
+        const selfTest = vi.fn(async ({ packDir }: { packDir: string }) => {
+          expect(packDir).toBe(join(root, '.staging', WHISPER, '2'))
+          expect(packMatches(nextVersion, packDir)).toBe(true)
+          expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+          return 'hello world'
+        })
+        const recovered = make([nextVersion], { selfTest })
         await recovered.initialise()
+        expect(recovered.getState(WHISPER)).toEqual({ status: 'not-installed' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
+        expect(selfTest).not.toHaveBeenCalled()
+        recovered.enqueue([WHISPER])
+        await recovered.whenIdle()
         expect(recovered.getState(WHISPER)).toEqual({ status: 'ready' })
+        expect(selfTest).toHaveBeenCalledTimes(1)
         expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).version).toBe('2')
         expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
+        expect(server.requests.length).toBe(before)
       })
     })
 

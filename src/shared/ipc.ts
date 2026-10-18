@@ -486,6 +486,9 @@ export const SaveMeetingSchema = z
   .superRefine(validateRecapStatus)
 export type SaveMeeting = z.infer<typeof SaveMeetingSchema>
 
+/** Folder snapshot outcome; saved means the existing write completed, not a durable revision ACK. */
+export type SaveDraftTranscriptResult = { status: 'saved' | 'disabled' | 'failed' }
+
 export const SaveNoteSchema = z.object({
   title: z.string().default(''),
   mode: z.string().default('general'),

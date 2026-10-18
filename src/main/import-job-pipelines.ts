@@ -264,7 +264,10 @@ export async function finalizeImportJob(
         recapPersisted = true
       } else job.recapError = 'No AI provider is configured to create the automatic summary.'
     } catch (error) {
-      if (error instanceof StaleImportJobWriteError) return
+      if (error instanceof StaleImportJobWriteError) {
+        await host.abandonIfCancelled(job, file)
+        return
+      }
       if (error instanceof ImportRetentionBlockedError) throw error
       job.recapError = message(error)
     }

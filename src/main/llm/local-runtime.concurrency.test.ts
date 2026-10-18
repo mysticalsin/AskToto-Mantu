@@ -7,7 +7,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'node:path'
+import { setImmediate as yieldImmediate } from 'node:timers/promises'
 import { LOCAL_MODELS, spawnProfileFor } from './local-models'
+import type { PackageRuntimeContract } from '../features/components/speech-pack/package-contract'
+import { configurePackageRuntimeContractProvider } from '../features/components/speech-pack/package-runtime-state'
 
 // MQA-248: these literals used to be `{ gguf, mmproj }` alone, missing the ctxSize/parallel/gpuLayers that
 // ModelPaths gained when the sidecar learned to size itself to the machine. That is the identical defect
@@ -18,7 +21,8 @@ import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 // Derived from the real profile rather than hardcoded, so it cannot drift from production again.
 const SPAWN_PROFILE = { ...spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1], 16, 8), vision: false }
 
-vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
+const electron = vi.hoisted(() => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
+vi.mock('electron', () => electron)
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
 // The fake binary must "exist" so start() never short-circuits on the missing-binary path — only the
@@ -40,7 +44,8 @@ interface FakeProc {
 
 const spawnState = vi.hoisted(() => ({
   procs: [] as FakeProc[],
-  calls: [] as { path: string; args: string[] }[]
+  calls: [] as { path: string; args: string[] }[],
+  observers: [] as (() => void)[]
 }))
 
 vi.mock('node:child_process', async () => {
@@ -57,6 +62,7 @@ vi.mock('node:child_process', async () => {
     })
     spawnState.procs.push(proc)
     spawnState.calls.push({ path, args })
+    for (const observe of [...spawnState.observers]) observe()
     return proc
   })
   return { spawn }
@@ -67,13 +73,53 @@ import { auditLog, mainLog } from '../logger'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
+const developmentRuntime: PackageRuntimeContract = { status: 'development', profile: 'development', inventory: null }
+const fullRuntime: PackageRuntimeContract = { status: 'legacy-full', profile: 'full', inventory: null }
+const invalidRuntime: PackageRuntimeContract = { status: 'invalid', reason: 'inventory-invalid', profile: null, inventory: null }
+let runtimeContract: Promise<PackageRuntimeContract> = Promise.resolve(developmentRuntime)
+// The configured provider is one-shot; retain its identity and reset only its per-test result.
+const runtimeContractProvider = vi.fn(() => runtimeContract)
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+function heldRuntimeAuthority() {
+  const authority = deferred<PackageRuntimeContract>()
+  runtimeContract = authority.promise
+  electron.app.isPackaged = true
+  return authority
+}
+
+/** A regression that spawns instead of rejecting fails on that actual spawn, without waiting for health timeout. */
+async function expectRefusalBeforeSpawn(pending: Promise<void>, message: RegExp): Promise<void> {
+  const spawned = deferred<{ kind: 'spawned' }>()
+  const observe = () => spawned.resolve({ kind: 'spawned' })
+  spawnState.observers.push(observe)
+  try {
+    const outcome = await Promise.race([
+      spawned.promise,
+      pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
+    ])
+    expect(outcome.kind).toBe('rejected')
+    if (outcome.kind === 'rejected') expect(outcome.error).toMatchObject({ message: expect.stringMatching(message) })
+  } finally {
+    spawnState.observers = spawnState.observers.filter((item) => item !== observe)
+  }
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
   spawnState.procs = []
   spawnState.calls = []
+  spawnState.observers = []
+  electron.app.isPackaged = false
+  runtimeContract = Promise.resolve(developmentRuntime)
+  configurePackageRuntimeContractProvider(runtimeContractProvider)
   fetchImpl = async () => ({ status: 200 })
-  vi.stubGlobal('fetch', (...args: unknown[]) => fetchImpl(...args))
+  vi.stubGlobal('fetch', vi.fn((...args: unknown[]) => fetchImpl(...args)))
 })
 
 afterEach(() => {
@@ -81,7 +127,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function emitListening(procIndex: number, port: number): void {
+async function emitListening(procIndex: number, port: number): Promise<void> {
+  await waitUntil(() => spawnState.procs[procIndex] !== undefined)
   spawnState.procs[procIndex].stdout.emit('data', Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`))
 }
 
@@ -108,10 +155,11 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     const p1 = start(paths, 'mac')
     const p2 = start(paths, 'mac') // second caller arrives while state === 'starting'
 
+    await waitUntil(() => spawnState.calls.length >= 1)
     // Only ONE spawn for two concurrent callers targeting the same model — no duplicate process.
     expect(spawnState.calls.length).toBe(1)
 
-    emitListening(0, 55123) // the sidecar "prints" its listening line so pollHealth can begin
+    await emitListening(0, 55123) // the sidecar "prints" its listening line so pollHealth can begin
 
     let p1ResolvedAfterHealth = false
     let p2ResolvedAfterHealth = false
@@ -143,6 +191,77 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
 })
 
 describe('quit cancellation — Windows fallback', () => {
+  it('an immediate stop cancels a request still held by real package authority before any spawn', async () => {
+    const authority = heldRuntimeAuthority()
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pending = start(paths, 'win')
+    const refused = expectRefusalBeforeSpawn(pending, /start cancelled/)
+    try {
+      // No admission await before stop: authority is genuinely held and neither candidate exists.
+      expect(runtimeContractProvider).toHaveBeenCalledTimes(1)
+      expect(spawnState.calls).toHaveLength(0)
+      expect(stop()).toBeUndefined()
+      expect(getState()).toBe('stopped')
+      authority.resolve(fullRuntime)
+      await refused
+      expect(spawnState.calls).toHaveLength(0)
+      expect(fetch).not.toHaveBeenCalled()
+      expect(isRunning()).toBe(false)
+      expect(getState()).toBe('stopped')
+      expect(() => baseURL()).toThrow(/not running/)
+    } finally {
+      stop()
+      authority.resolve(invalidRuntime)
+      await pending.catch(() => {})
+    }
+  })
+
+  it('a stopped held request cannot replace or kill a newer healthy sidecar when authority later allows it', async () => {
+    const authority = heldRuntimeAuthority()
+    const old = start({ gguf: '/m/old.gguf', mmproj: '/m/old.mmproj', ...SPAWN_PROFILE }, 'win')
+    void old.catch(() => {})
+    let fresh: Promise<void> | undefined
+    try {
+      expect(runtimeContractProvider).toHaveBeenCalledTimes(1)
+      expect(spawnState.calls).toHaveLength(0)
+      stop()
+      runtimeContract = Promise.resolve(fullRuntime)
+      fresh = start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
+      await emitListening(0, 55911)
+      await fresh
+      const refused = expectRefusalBeforeSpawn(old, /start cancelled/)
+      authority.resolve(fullRuntime)
+      await refused
+      expect(spawnState.calls).toHaveLength(1)
+      expect(spawnState.calls[0].args).toContain('/m/fresh.gguf')
+      expect(spawnState.procs[0].kill).not.toHaveBeenCalled()
+      expect(isRunning()).toBe(true)
+      expect(baseURL()).toBe('http://127.0.0.1:55911/v1')
+    } finally {
+      stop()
+      authority.resolve(invalidRuntime)
+      await Promise.allSettled([old, ...(fresh ? [fresh] : [])])
+    }
+  })
+
+  it('keeps real package refusal ahead of spawn when held authority denies the runtime', async () => {
+    const authority = heldRuntimeAuthority()
+    const pending = start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+    const refused = expectRefusalBeforeSpawn(pending, /optional local LLM runtime is not configured/)
+    try {
+      expect(runtimeContractProvider).toHaveBeenCalledTimes(1)
+      authority.resolve(invalidRuntime)
+      await refused
+      expect(spawnState.calls).toHaveLength(0)
+      expect(fetch).not.toHaveBeenCalled()
+      expect(getState()).toBe('stopped')
+    } finally {
+      stop()
+      authority.resolve(invalidRuntime)
+      await pending.catch(() => {})
+    }
+  })
+
   it('stop() during the first Windows candidate cancels startup instead of spawning the CPU fallback', async () => {
     const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     let outcome: 'resolved' | 'rejected' | undefined
@@ -155,6 +274,7 @@ describe('quit cancellation — Windows fallback', () => {
         outcome = 'rejected'
       }
     )
+    await waitUntil(() => spawnState.calls.length >= 1)
     expect(spawnState.calls).toHaveLength(1)
     expect(spawnState.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
 
@@ -184,6 +304,7 @@ describe('quit cancellation — Windows fallback', () => {
         outcomeA = 'rejected'
       }
     )
+    await waitUntil(() => spawnState.procs[0] !== undefined)
     const procA = spawnState.procs[0]
     // Hold A's OS exit notification so a new generation can become healthy first, then simulate the
     // buffered stdout line from A arriving late after it was detached by stop().
@@ -194,11 +315,11 @@ describe('quit cancellation — Windows fallback', () => {
 
     const startB = start(pathsB, 'mac')
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55902)
+    await emitListening(1, 55902)
     await startB
     expect(baseURL()).toBe('http://127.0.0.1:55902/v1')
 
-    emitListening(0, 55901)
+    await emitListening(0, 55901)
     await waitUntil(() => outcomeA !== undefined)
 
     expect(outcomeA).toBe('rejected')
@@ -215,7 +336,7 @@ describe('F2 — model switch', () => {
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55201)
+    await emitListening(0, 55201)
     await p1
     expect(isRunning()).toBe(true)
     const procA = spawnState.procs[0]
@@ -223,7 +344,7 @@ describe('F2 — model switch', () => {
 
     const p2 = start(pathsB, 'mac')
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55202)
+    await emitListening(1, 55202)
     await p2
 
     expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
@@ -235,7 +356,7 @@ describe('F2 — model switch', () => {
   it('calling start() again with the SAME model while running is a no-op — no restart, no new spawn', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55301)
+    await emitListening(0, 55301)
     await p1
     const procA = spawnState.procs[0]
 
@@ -247,7 +368,7 @@ describe('F2 — model switch', () => {
   })
 
   it('a switch requested while the FIRST model is still starting awaits it, then restarts with the new model', async () => {
-    let releaseHealthA: () => void = () => {}
+    let releaseHealthA: (() => void) | undefined
     fetchImpl = () =>
       new Promise((resolve) => {
         releaseHealthA = () => resolve({ status: 200 })
@@ -257,22 +378,23 @@ describe('F2 — model switch', () => {
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac') // still "starting" — health never resolves until released below
-    emitListening(0, 55401)
+    await emitListening(0, 55401)
 
     const p2 = start(pathsB, 'mac') // wants a DIFFERENT model while the first is still starting
 
+    await waitUntil(() => releaseHealthA !== undefined)
     // p2 must not have spawned B yet — it's awaiting A's in-flight start first.
     expect(spawnState.calls.length).toBe(1)
 
     fetchImpl = async () => ({ status: 200 }) // B's own health check, once it spawns, should resolve fast
-    releaseHealthA() // let A's health complete
+    releaseHealthA!() // let A's health complete
     await p1
     // NOTE: by the time p1 settles, p2's queued continuation (awaiting the SAME in-flight promise) may
     // already have run too and kicked off the switch to B — so state here can be 'running' (A) or already
     // 'starting' (B); either is a valid interleaving. What must hold is the end state once p2 also settles.
 
     await waitUntil(() => spawnState.calls.length === 2) // B's switch-spawn happens once A settles
-    emitListening(1, 55402)
+    await emitListening(1, 55402)
     await p2
 
     expect(spawnState.calls[1].args).toContain('/m/b.gguf')
@@ -289,12 +411,42 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     endStream()
   })
 
+  it('a switch held by an active stream stays cancelled after stop and the later stream drain', async () => {
+    runtimeContract = Promise.resolve(fullRuntime)
+    electron.app.isPackaged = true
+    const first = start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+    let switching: Promise<void> | undefined
+    try {
+      await emitListening(0, 55921)
+      await first
+      const procA = spawnState.procs[0]
+      beginStream()
+      switching = start({ gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }, 'mac')
+      const refused = expectRefusalBeforeSpawn(switching, /start cancelled/)
+      // This is the actual post-authority drain branch while the old stream is still held.
+      await waitUntil(() => vi.mocked(mainLog.info).mock.calls.some(([message]) => /switch deferred/.test(message)))
+      expect(procA.kill).not.toHaveBeenCalled()
+      expect(spawnState.calls).toHaveLength(1)
+      stop()
+      expect(procA.kill).toHaveBeenCalledTimes(1)
+      endStream()
+      await refused
+      expect(spawnState.calls).toHaveLength(1)
+      expect(getState()).toBe('stopped')
+      expect(isRunning()).toBe(false)
+    } finally {
+      stop()
+      endStream()
+      await Promise.allSettled([first, ...(switching ? [switching] : [])])
+    }
+  })
+
   it('does NOT kill the running sidecar while a stream is active — defers until the stream ends, then switches', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55601)
+    await emitListening(0, 55601)
     await p1
     const procA = spawnState.procs[0]
 
@@ -302,8 +454,8 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
 
     const p2 = start(pathsB, 'mac') // Settings 'Use this model' -> next local request requests a switch to B
 
-    // Give the deferred branch several microtask turns to (not) act while the stream is still open.
-    for (let i = 0; i < 5; i++) await Promise.resolve()
+    // Observe the real deferred branch while the stream is still held open.
+    await waitUntil(() => vi.mocked(mainLog.info).mock.calls.some(([message]) => /switch deferred/.test(message)))
     expect(procA.kill).not.toHaveBeenCalled()
     expect(spawnState.calls.length).toBe(1) // B has not spawned — the switch is deferred, not abandoned
     expect(isRunning()).toBe(true)
@@ -312,7 +464,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     endStream() // the in-flight request finishes (onDone/onError/abort)
 
     await waitUntil(() => spawnState.calls.length === 2) // NOW the deferred switch proceeds
-    emitListening(1, 55602)
+    await emitListening(1, 55602)
     await p2
 
     expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
@@ -330,7 +482,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
   it('a caller re-requesting the SAME (already-running) model while a stream is active resolves immediately — no deferral needed', async () => {
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55701)
+    await emitListening(0, 55701)
     await p1
     const procA = spawnState.procs[0]
 
@@ -345,13 +497,13 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55801)
+    await emitListening(0, 55801)
     await p1
     const procA = spawnState.procs[0]
 
     const p2 = start(pathsB, 'mac')
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55802)
+    await emitListening(1, 55802)
     await p2
 
     expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
@@ -365,7 +517,7 @@ describe('G1 — exit handler generation guard', () => {
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
-    emitListening(0, 55501)
+    await emitListening(0, 55501)
     await p1
     const procA = spawnState.procs[0]
 
@@ -379,7 +531,7 @@ describe('G1 — exit handler generation guard', () => {
 
     const p2 = start(pathsB, 'mac')
     await waitUntil(() => spawnState.calls.length === 2)
-    emitListening(1, 55502)
+    await emitListening(1, 55502)
     await p2
     expect(isRunning()).toBe(true)
     expect(baseURL()).toBe('http://127.0.0.1:55502/v1')
@@ -413,5 +565,95 @@ describe('G1 — exit handler generation guard', () => {
     proc.emit('exit', 1, null)
 
     await expect(p).rejects.toThrow(/exited before becoming healthy/)
+  })
+})
+
+describe('automatic restart failure ownership', () => {
+  async function freshRuntime() {
+    // stop() intentionally retains the restart budget. Each crash scenario gets a fresh real module,
+    // and its provider must be configured on that same module graph, never on the static graph above.
+    vi.resetModules()
+    const runtime = await import('./local-runtime')
+    const authority = await import('../features/components/speech-pack/package-runtime-state')
+    authority.configurePackageRuntimeContractProvider(runtimeContractProvider)
+    runtimeContract = Promise.resolve(fullRuntime)
+    electron.app.isPackaged = true
+    return runtime
+  }
+
+  async function observeRejectedAuthorityTurn(): Promise<void> {
+    // After an invalid provider result, the real guard/start/catch path has only promise jobs and
+    // synchronous work left. A real immediate observes that job queue drained; no elapsed-time slack.
+    await yieldImmediate()
+  }
+
+  it.each(['stop', 'stop-then-fresh', 'fresh-without-stop', 'current'] as const)(
+    'handles a late real automatic-restart guard failure with current ownership: %s',
+    async (scenario) => {
+      const runtime = await freshRuntime()
+      let authority: ReturnType<typeof heldRuntimeAuthority> | undefined
+      try {
+        const first = runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+        await emitListening(0, 55931)
+        await first
+        authority = heldRuntimeAuthority()
+        spawnState.procs[0].emit('exit', 1, null)
+        expect(auditLog).toHaveBeenCalledWith('local.runtime.restart', { platform: 'mac' })
+        expect(runtimeContractProvider).toHaveBeenCalledTimes(2)
+        expect(spawnState.calls).toHaveLength(1)
+        if (scenario === 'stop' || scenario === 'stop-then-fresh') expect(runtime.stop()).toBeUndefined()
+        if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
+          runtimeContract = Promise.resolve(fullRuntime)
+          const fresh = runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
+          await emitListening(1, 55932)
+          await fresh
+          expect(runtime.isRunning()).toBe(true)
+        }
+        authority.resolve(invalidRuntime)
+        await observeRejectedAuthorityTurn()
+        expect(vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'local.runtime.restart')).toHaveLength(1)
+        if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
+          expect(runtime.getState()).toBe('running')
+          expect(runtime.baseURL()).toBe('http://127.0.0.1:55932/v1')
+          expect(spawnState.procs[1].kill).not.toHaveBeenCalled()
+          expect(spawnState.calls).toHaveLength(2)
+        } else {
+          expect(runtime.getState()).toBe(scenario === 'current' ? 'unavailable' : 'stopped')
+          expect(runtime.isRunning()).toBe(false)
+          expect(spawnState.calls).toHaveLength(1)
+          expect(() => runtime.baseURL()).toThrow(/not running/)
+          if (scenario === 'current') {
+            runtimeContract = Promise.resolve(fullRuntime)
+            await expect(runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac'))
+              .rejects.toThrow(/unavailable for this session/)
+            expect(spawnState.calls).toHaveLength(1)
+          }
+        }
+      } finally {
+        runtime.stop()
+        authority?.resolve(invalidRuntime)
+      }
+    }
+  )
+
+  it('retains the one automatic restart per window limit after a successful restart', async () => {
+    const runtime = await freshRuntime()
+    try {
+      const first = runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      await emitListening(0, 55941)
+      await first
+      spawnState.procs[0].emit('exit', 1, null)
+      await emitListening(1, 55942)
+      await waitUntil(() => runtime.isRunning())
+      spawnState.procs[1].emit('exit', 1, null)
+      expect(runtime.getState()).toBe('unavailable')
+      expect(spawnState.calls).toHaveLength(2)
+      expect(auditLog).toHaveBeenCalledWith('local.runtime.missing', {
+        platform: 'mac', reason: 'restart_budget_exhausted'
+      })
+      expect(vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'local.runtime.restart')).toHaveLength(1)
+    } finally {
+      runtime.stop()
+    }
   })
 })

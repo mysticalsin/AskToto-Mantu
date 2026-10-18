@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import ts from 'typescript'
 import { makeVad, isSpeechLikeWindow } from './vad'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
+import { createListenAudioRecovery, type ListenAudioRecoveryHost } from './listen-audio-recovery'
+import type { ScreenDiagnosis } from '@shared/screen-permission'
 
 const SR = 16000
 const FRAME = 128 // one AudioWorklet quantum
@@ -231,10 +234,12 @@ describe('isSpeechLikeWindow — steady-background gate (them-channel boost fall
 
   it('is scale-invariant: the 3.0× channel gain cannot change the verdict', () => {
     const bed = envelope([BED])
-    const speech = envelope([0, 0, 0, 0].flatMap(() => [
-      { rms: 0.08, sec: 0.4 },
-      { rms: 0.001, sec: 0.2 }
-    ]))
+    const speech = envelope(
+      [0, 0, 0, 0].flatMap(() => [
+        { rms: 0.08, sec: 0.4 },
+        { rms: 0.001, sec: 0.2 }
+      ])
+    )
     const boost = (b: Float32Array): Float32Array => b.map((v) => v * 3)
     expect(isSpeechLikeWindow(boost(bed), bed.length)).toBe(false)
     expect(isSpeechLikeWindow(boost(speech), speech.length)).toBe(true)
@@ -263,10 +268,15 @@ describe('whisper worklet source', () => {
   })
 
   /** Instantiate the ACTUAL worklet source with the realtime globals stubbed, capturing emitted windows. */
-  function instantiateWorklet(messages: Array<{ audio?: Float32Array; sampleRate?: number }>, sourceRate = SR): {
+  function instantiateWorklet(
+    messages: Array<{ audio?: Float32Array; sampleRate?: number }>,
+    sourceRate = SR
+  ): {
     process: (inputs: Float32Array[][]) => boolean
   } {
-    let Registered: (new () => { process: (inputs: Float32Array[][]) => boolean }) | null = null
+    const registration: { processor: (new () => { process: (inputs: Float32Array[][]) => boolean }) | null } = {
+      processor: null
+    }
     class FakeProcessor {
       port = {
         onmessage: null as ((e: MessageEvent) => void) | null,
@@ -276,11 +286,11 @@ describe('whisper worklet source', () => {
     new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', WHISPER_WORKLET_SRC)(
       FakeProcessor,
       (_name: string, cls: new () => { process: (inputs: Float32Array[][]) => boolean }): void =>
-        void (Registered = cls),
+        void (registration.processor = cls),
       sourceRate
     )
-    if (!Registered) throw new Error('worklet source registered no processor')
-    return new Registered()
+    if (!registration.processor) throw new Error('worklet source registered no processor')
+    return new registration.processor()
   }
 
   function tone(sec: number, amp: number, hz = 440): Float32Array {
@@ -336,10 +346,7 @@ describe('whisper worklet source', () => {
     const messages: Array<{ audio?: Float32Array }> = []
     const w = instantiateWorklet(messages)
     const silence = (sec: number): Float32Array => new Float32Array(Math.round(sec * SR))
-    feed(
-      w,
-      concat(tone(0.4, 0.2), silence(0.2), tone(0.4, 0.2), silence(0.2), tone(0.4, 0.2), silence(0.8))
-    )
+    feed(w, concat(tone(0.4, 0.2), silence(0.2), tone(0.4, 0.2), silence(0.2), tone(0.4, 0.2), silence(0.8)))
     const finals = messages.filter((m) => !(m as { partial?: boolean }).partial)
     expect(finals).toHaveLength(1)
     expect(finals[0].audio!.length).toBeGreaterThan(0)
@@ -375,7 +382,322 @@ describe('whisper worklet source', () => {
 
 // Normalize CRLF → LF (same rationale as listen.test.ts): a Windows checkout would otherwise break any
 // anchor whose newline sits mid-string.
-const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
+const listenPath = join(__dirname, 'listen.ts')
+const listenSrc = readFileSync(listenPath, 'utf8').replace(/\r\n/g, '\n')
+
+function descendants(node: ts.Node): ts.Node[] {
+  const found: ts.Node[] = []
+  const visit = (child: ts.Node): void => {
+    found.push(child)
+    ts.forEachChild(child, visit)
+  }
+  visit(node)
+  return found
+}
+
+function only<T>(values: T[], description: string): T {
+  if (values.length !== 1) throw new Error(`Expected one ${description}, found ${values.length}`)
+  return values[0]
+}
+
+function requireImportedCall(call: ts.CallExpression, source: ts.SourceFile, name: string): void {
+  if (!ts.isIdentifier(call.expression) || call.expression.text !== name) throw new Error(`Expected ${name} call`)
+  const binds = (binding: ts.BindingName): boolean =>
+    ts.isIdentifier(binding)
+      ? binding.text === name
+      : binding.elements.some((element) => !ts.isOmittedExpression(element) && binds(element.name))
+  const declares = (node: ts.Node): boolean =>
+    ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && binds(node.name)) ||
+    ((ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isModuleDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node)) &&
+      node.name?.text === name)
+  if (
+    source.statements.some(
+      (statement) =>
+        (ts.isVariableStatement(statement) &&
+          statement.declarationList.declarations.some((item) => binds(item.name))) ||
+        ((ts.isFunctionDeclaration(statement) ||
+          ts.isClassDeclaration(statement) ||
+          ts.isEnumDeclaration(statement) ||
+          ts.isImportEqualsDeclaration(statement)) &&
+          statement.name?.text === name)
+    )
+  )
+    throw new Error(`Module-level ${name} shadows its import`)
+  for (let scope: ts.Node | undefined = call.parent; scope && scope !== source; scope = scope.parent) {
+    if (
+      (ts.isFunctionDeclaration(scope) ||
+        ts.isFunctionExpression(scope) ||
+        ts.isArrowFunction(scope) ||
+        ts.isMethodDeclaration(scope) ||
+        ts.isConstructorDeclaration(scope) ||
+        ts.isGetAccessorDeclaration(scope) ||
+        ts.isSetAccessorDeclaration(scope)) &&
+      (scope.parameters.some((parameter) => binds(parameter.name)) ||
+        (scope.body && descendants(scope.body).some(declares)))
+    )
+      throw new Error(`Shadowed ${name} call`)
+  }
+}
+
+function requireRecoveryConsumerBinding(): void {
+  const source = ts.createSourceFile(listenPath, listenSrc, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const sourceDiagnostics = ts.transpileModule(listenSrc, { fileName: listenPath, reportDiagnostics: true }).diagnostics
+  if (!sourceDiagnostics || sourceDiagnostics.length) throw new Error('Invalid listen syntax')
+  const nodes = descendants(source)
+  const factoryBinding = only(
+    nodes.filter(
+      (node): node is ts.ImportSpecifier => ts.isImportSpecifier(node) && node.name.text === 'createListenAudioRecovery'
+    ),
+    'runtime recovery factory binding'
+  )
+  const factoryImport = factoryBinding.parent.parent.parent
+  if (
+    !ts.isImportDeclaration(factoryImport) ||
+    factoryImport.moduleSpecifier.getText(source) !== "'./listen-audio-recovery'" ||
+    factoryImport.importClause?.isTypeOnly ||
+    factoryBinding.isTypeOnly ||
+    (factoryBinding.propertyName?.text ?? factoryBinding.name.text) !== 'createListenAudioRecovery'
+  )
+    throw new Error('Expected runtime recovery factory import')
+  const useListen = only(
+    source.statements.filter(
+      (node): node is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(node) &&
+        node.name?.text === 'useListen' &&
+        !!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+    ),
+    'exported useListen declaration'
+  )
+  const audioRecovery = only(
+    nodes.filter(
+      (node): node is ts.VariableDeclaration =>
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === 'audioRecovery' &&
+        !!node.initializer
+    ),
+    'audioRecovery binding'
+  )
+  if (!useListen.body || audioRecovery.parent.parent.parent !== useListen.body)
+    throw new Error('audioRecovery must bind directly in useListen')
+  if (
+    !ts.isCallExpression(audioRecovery.initializer!) ||
+    audioRecovery.initializer!.expression.getText(source) !== 'useMemo'
+  )
+    throw new Error('Expected audioRecovery useMemo initializer')
+  const memo = audioRecovery.initializer!.arguments[0]
+  if (!memo || !ts.isArrowFunction(memo) || ts.isBlock(memo.body)) throw new Error('Expected returned recovery factory')
+  let factoryExpression: ts.Expression = memo.body
+  while (ts.isParenthesizedExpression(factoryExpression)) factoryExpression = factoryExpression.expression
+  if (
+    !ts.isCallExpression(factoryExpression) ||
+    factoryExpression.expression.getText(source) !== 'createListenAudioRecovery'
+  )
+    throw new Error('Expected actual returned recovery factory')
+  const factory = factoryExpression
+  requireImportedCall(factory, source, 'createListenAudioRecovery')
+  const hostFactory = factory.arguments[0]
+  if (!hostFactory || !ts.isArrowFunction(hostFactory)) throw new Error('Expected recovery host callback')
+  if (ts.isBlock(hostFactory.body)) throw new Error('Expected returned host object')
+  let hostExpression: ts.Expression = hostFactory.body
+  while (ts.isParenthesizedExpression(hostExpression)) hostExpression = hostExpression.expression
+  if (!ts.isObjectLiteralExpression(hostExpression)) throw new Error('Expected actual returned host object')
+  const names = hostExpression.properties.map((entry) => {
+    if ((!ts.isPropertyAssignment(entry) && !ts.isShorthandPropertyAssignment(entry)) || !ts.isIdentifier(entry.name))
+      throw new Error('Recovery host requires plain identifier properties')
+    return entry.name.text
+  })
+  if (new Set(names).size !== names.length) throw new Error('Duplicate recovery host property')
+  const property = (name: string) =>
+    only(
+      hostExpression.properties.filter(
+        (entry): entry is ts.PropertyAssignment =>
+          ts.isPropertyAssignment(entry) && ts.isIdentifier(entry.name) && entry.name.text === name
+      ),
+      name
+    )
+  for (const [name, value] of Object.entries({
+    currentEpoch: '() => sessionEpochRef.current',
+    admissionOpen: 'captureAdmissionIsOpen',
+    wantsSystemAudio: '() => wantsSystemRef.current',
+    isListening: '() => liveRef.current',
+    getPermissions: '() => window.toto.getPermissions()',
+    isWindows: '() => isWindows'
+  }))
+    expect(property(name).initializer.getText(source)).toBe(value)
+  const refWiring = nodes.filter(
+    (node): node is ts.BinaryExpression =>
+      ts.isBinaryExpression(node) &&
+      node.left.getText(source) === 'recoverSystemAudioRef.current' &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      node.right.getText(source) === 'audioRecovery.recoverSystemAudio'
+  )
+  const ref = only(refWiring, 'recovery method ref wiring')
+  if (ref.parent.parent !== audioRecovery.parent.parent.parent)
+    throw new Error('Recovery ref must bind in the factory scope')
+  const directRecovery = property('recoverSystemNow')
+  if (!ts.isArrowFunction(directRecovery.initializer) || !ts.isBlock(directRecovery.initializer.body))
+    throw new Error('Expected guarded recovery callback block')
+  expect(directRecovery.initializer.body.statements.map((statement) => statement.getText(source))).toEqual([
+    "if (failBrokerAudioRecovery('system')) return",
+    'void recoverSystemAudioRef.current?.()'
+  ])
+  const effect = only(
+    nodes.filter(
+      (node): node is ts.CallExpression =>
+        ts.isCallExpression(node) &&
+        node.expression.getText(source) === 'useEffect' &&
+        node.arguments[0]?.getText(source) === '() => audioRecovery.watchSystemPermission()'
+    ),
+    'permission watcher effect'
+  )
+  if (effect.parent.parent !== audioRecovery.parent.parent.parent)
+    throw new Error('Permission effect must bind in the factory scope')
+  expect(effect.arguments[1]?.getText(source)).toBe('[audioRecovery, state.listening]')
+  const admission = only(
+    nodes.filter(
+      (node): node is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(node) && node.name?.text === 'captureAdmissionIsOpen'
+    ),
+    'capture admission function'
+  )
+  expect(
+    only(
+      descendants(admission).filter((node): node is ts.ReturnStatement => ts.isReturnStatement(node)),
+      'admission result'
+    ).expression?.getText(source)
+  ).toBe('liveRef.current && !stoppingRef.current && sessionEpochRef.current === epoch')
+}
+
+function recoveryFixture(overrides: Partial<ListenAudioRecoveryHost> = {}) {
+  const controls = {
+    epoch: 7,
+    admitted: true,
+    wants: true,
+    listening: true,
+    hasThem: false
+  }
+  const recoverNow = vi.fn()
+  const getPermissions = vi.fn(async () => ({ screenRecording: 'denied' }))
+  const systemSucceeded = vi.fn()
+  const systemFailed = vi.fn()
+  const permissionNote = vi.fn()
+  const unused = (name: string) => (): never => {
+    throw new Error(`Unexpected recovery host call: ${name}`)
+  }
+  const host: ListenAudioRecoveryHost = {
+    currentEpoch: () => controls.epoch,
+    admissionOpen: (epoch) => controls.admitted && controls.epoch === epoch,
+    wantsSystemAudio: () => controls.wants,
+    micDeviceId: () => '',
+    acquireMic: unused('acquireMic'),
+    acquireLoopback: unused('acquireLoopback'),
+    armAudio: unused('armAudio'),
+    openChannel: unused('openChannel'),
+    hasChannel: (speaker) => speaker === 'them' && controls.hasThem,
+    stopStream: unused('stopStream'),
+    publishMicRecoveryFailure: unused('publishMicRecoveryFailure'),
+    micRecoverySucceeded: unused('micRecoverySucceeded'),
+    micRecoveryFailed: unused('micRecoveryFailed'),
+    systemRecoverySucceeded: systemSucceeded,
+    systemRecoveryFailed: systemFailed,
+    isLive: () => controls.listening,
+    isStopping: () => false,
+    isPaused: () => false,
+    isListening: () => controls.listening,
+    scheduleThemProbation: unused('scheduleThemProbation'),
+    themChannel: () => undefined,
+    themHeard: () => false,
+    themWindowSeen: () => false,
+    setThemWindowSeen: unused('setThemWindowSeen'),
+    onThemProbationRecycle: unused('onThemProbationRecycle'),
+    themProbationDuration: () => 1,
+    themDeviceChangeAction: () => 'ignore',
+    recoverMicNow: unused('recoverMicNow'),
+    recoverSystemNow: recoverNow,
+    setSystemPermissionNote: permissionNote,
+    getPermissions,
+    deviceChangeTarget: () => new EventTarget(),
+    isWindows: () => true,
+    ...overrides
+  }
+  return {
+    controls,
+    host,
+    recoverNow,
+    getPermissions: vi.mocked(host.getPermissions),
+    systemSucceeded,
+    systemFailed,
+    permissionNote
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+
+function syntheticStream(): MediaStream {
+  const track = { readyState: 'live', stop: vi.fn() }
+  return { getAudioTracks: () => [track] } as unknown as MediaStream
+}
+
+async function withWatch(
+  fixture: ReturnType<typeof recoveryFixture>,
+  recovery: ReturnType<typeof createListenAudioRecovery>,
+  entryTimers: number,
+  body: (dispose: () => void) => Promise<void> | void,
+  finish?: () => Promise<void>
+): Promise<void> {
+  const dispose = recovery.watchSystemPermission()
+  const failures: unknown[] = []
+  try {
+    await body(dispose)
+  } catch (error) {
+    failures.push(error)
+  }
+  try {
+    dispose()
+  } catch (error) {
+    failures.push(error)
+  }
+  try {
+    expect(vi.getTimerCount()).toBe(entryTimers)
+  } catch (error) {
+    failures.push(error)
+  }
+  try {
+    await finish?.()
+  } catch (error) {
+    failures.push(error)
+  }
+  try {
+    const observed = [
+      fixture.recoverNow,
+      fixture.getPermissions,
+      fixture.permissionNote,
+      fixture.systemSucceeded,
+      fixture.systemFailed
+    ]
+    const calls = observed.map((spy) => spy.mock.calls.length)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(observed.map((spy) => spy.mock.calls.length)).toEqual(calls)
+    expect(vi.getTimerCount()).toBe(entryTimers)
+  } catch (error) {
+    failures.push(error)
+  }
+  if (failures.length) throw new AggregateError(failures, 'Watcher body or cleanup failed')
+}
 
 // MQA-041 — the same commit that taught the system-audio watcher to retry off capture state on Windows
 // left an earlier `isWindows ||` in the effect's own early return, so the interval was never created there
@@ -384,25 +706,183 @@ const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r
 // whole meeting mic-only: no 'them' track exists, so no 'ended' event can fire, and the devicechange
 // handler only re-acquires the mic. The only recovery left was Stop → Listen, which splits the transcript.
 describe('windows system-audio retry watcher (MQA-041)', () => {
-  it('creates the interval on Windows — the effect gates on session state only', () => {
-    expect(listenSrc).toMatch(/if \(!state\.listening \|\| !wantsSystemRef\.current\) return\n {4}const iv = setInterval/)
-    expect(listenSrc).not.toMatch(/if \(isWindows \|\| !state\.listening/)
+  it('creates the interval on Windows — the effect gates on session state only', async () => {
+    requireRecoveryConsumerBinding()
+    vi.useFakeTimers()
+    const entryTimers = vi.getTimerCount()
+    try {
+      for (const [listening, wants] of [
+        [false, true],
+        [true, false],
+        [true, true]
+      ]) {
+        const fixture = recoveryFixture()
+        fixture.controls.listening = listening
+        fixture.controls.wants = wants
+        const recovery = createListenAudioRecovery(() => fixture.host)
+        await withWatch(fixture, recovery, entryTimers, () => {
+          if (!listening || !wants) {
+            expect(vi.getTimerCount()).toBe(entryTimers)
+            vi.advanceTimersByTime(6_000)
+          } else {
+            vi.advanceTimersByTime(2_999)
+            expect(fixture.recoverNow).not.toHaveBeenCalled()
+            vi.advanceTimersByTime(1)
+          }
+          expect(fixture.recoverNow).toHaveBeenCalledTimes(listening && wants ? 1 : 0)
+          expect(fixture.getPermissions).not.toHaveBeenCalled()
+        })
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('retries capture directly on Windows instead of polling a permission that never flips', () => {
-    // Anchored on the branch's CONTENT, not its exact text: MQA-163 added backoff pacing inside it, and
-    // what MQA-041 needs pinned is that the Windows tick re-acquires off capture state and never reaches
-    // the permission poll below.
-    const branch = listenSrc.match(/\n {6}if \(isWindows\) \{\n([\s\S]*?)\n {6}\}\n {6}void window\.toto/)
-    expect(branch).not.toBeNull()
-    expect(branch![1]).toContain('void recoverSystemAudioRef.current?.()')
-    expect(branch![1]).not.toContain('getPermissions')
-    // The macOS path keeps its permission gate — a granted flip is still what resumes 'them' there.
-    expect(listenSrc).toMatch(
-      /captureAdmissionIsOpen\(originEpoch\) &&\n {12}wantsSystemRef\.current &&\n {12}p\?\.screenRecording === 'granted' &&\n {12}!channels\.current\.them/
-    )
-    expect(listenSrc).toMatch(
-      /const iv = setInterval\(\(\) => \{\n {6}const originEpoch = sessionEpochRef\.current\n {6}if \(!captureAdmissionIsOpen\(originEpoch\) \|\| !wantsSystemRef\.current\) return/
-    )
+  it('retries capture directly on Windows instead of polling a permission that never flips', async () => {
+    requireRecoveryConsumerBinding()
+    vi.useFakeTimers()
+    const entryTimers = vi.getTimerCount()
+    try {
+      const direct = recoveryFixture()
+      const directRecovery = createListenAudioRecovery(() => direct.host)
+      await withWatch(direct, directRecovery, entryTimers, () => {
+        for (const calls of [1, 2, 2, 3]) {
+          vi.advanceTimersByTime(3_000)
+          expect(direct.recoverNow).toHaveBeenCalledTimes(calls)
+        }
+        expect(direct.getPermissions).not.toHaveBeenCalled()
+      })
+      expect(direct.recoverNow).toHaveBeenCalledTimes(3)
+
+      for (const refusal of [{ admitted: false }, { wants: false }, { hasThem: true }]) {
+        const fixture = recoveryFixture()
+        if (!('wants' in refusal)) Object.assign(fixture.controls, refusal)
+        const recovery = createListenAudioRecovery(() => fixture.host)
+        await withWatch(fixture, recovery, entryTimers, () => {
+          if ('wants' in refusal) fixture.controls.wants = false
+          vi.advanceTimersByTime(3_000)
+          expect(fixture.recoverNow).not.toHaveBeenCalled()
+          expect(fixture.getPermissions).not.toHaveBeenCalled()
+        })
+      }
+
+      const acquisition = deferred<MediaStream>()
+      const acquire = vi.fn(() => acquisition.promise)
+      const arm = vi.fn(async (_armed: boolean) => {})
+      const open = vi.fn(async (_speaker: string, _stream: MediaStream, _epoch: number) => true)
+      const pending = recoveryFixture({
+        acquireLoopback: acquire,
+        armAudio: arm,
+        openChannel: open
+      })
+      const pendingRecovery = createListenAudioRecovery(() => pending.host)
+      let operation: Promise<void> | undefined
+      await withWatch(
+        pending,
+        pendingRecovery,
+        entryTimers,
+        async () => {
+          operation = pendingRecovery.recoverSystemAudio()
+          await vi.advanceTimersByTimeAsync(0)
+          expect(acquire).toHaveBeenCalledTimes(1)
+          expect(acquire.mock.results[0].value).toBe(acquisition.promise)
+          expect(arm).toHaveBeenCalledWith(true)
+          vi.advanceTimersByTime(3_000)
+          expect(acquire).toHaveBeenCalledTimes(1)
+          expect(pending.recoverNow).not.toHaveBeenCalled()
+          expect(pending.getPermissions).not.toHaveBeenCalled()
+        },
+        async () => {
+          const stream = syntheticStream()
+          acquisition.resolve(stream)
+          if (!operation) throw new Error('Missing original recovery operation')
+          await operation
+          expect(acquire).toHaveBeenCalledTimes(1)
+          expect(arm.mock.calls).toEqual([[true], [false]])
+          expect(open).toHaveBeenCalledTimes(1)
+          expect(open).toHaveBeenCalledWith('them', stream, 7)
+          expect(pending.systemSucceeded).toHaveBeenCalledTimes(1)
+        }
+      )
+      expect(pending.systemSucceeded).toHaveBeenCalledTimes(1)
+      expect(pending.systemFailed).not.toHaveBeenCalled()
+
+      const deniedDiagnosis: ScreenDiagnosis = {
+        state: 'denied',
+        reasons: [],
+        action: 'open-settings',
+        duplicates: [],
+        grantedFor: null,
+        repairFailed: false
+      }
+      const permissionResults: Awaited<ReturnType<ListenAudioRecoveryHost['getPermissions']>>[] = [
+        { screenRecording: 'granted' },
+        { screenRecording: 'denied', screenDiagnosis: deniedDiagnosis }
+      ]
+      for (const [index, permission] of permissionResults.entries()) {
+        const result = deferred<(typeof permissionResults)[number]>()
+        const permissionSpy = vi.fn(() => result.promise)
+        const fixture = recoveryFixture({ isWindows: () => false, getPermissions: permissionSpy })
+        await withWatch(
+          fixture,
+          createListenAudioRecovery(() => fixture.host),
+          entryTimers,
+          async (stop) => {
+            vi.advanceTimersByTime(3_000)
+            expect(permissionSpy).toHaveBeenCalledTimes(1)
+            expect(permissionSpy.mock.results[0].value).toBe(result.promise)
+            expect(fixture.recoverNow).not.toHaveBeenCalled()
+            stop()
+            result.resolve(permission)
+            await vi.advanceTimersByTimeAsync(0)
+            expect(fixture.recoverNow).toHaveBeenCalledTimes(index === 0 ? 1 : 0)
+            expect(fixture.permissionNote).toHaveBeenCalledTimes(index === 0 ? 0 : 1)
+            if (index === 1) expect(fixture.permissionNote).toHaveBeenCalledWith(deniedDiagnosis)
+          },
+          async () => {
+            result.resolve(permission)
+            await result.promise
+            await vi.advanceTimersByTimeAsync(0)
+          }
+        )
+      }
+
+      for (const stale of ['epoch', 'wants', 'channel', 'reject']) {
+        const result = deferred<{ screenRecording?: string }>()
+        const permissionSpy = vi.fn(() => result.promise)
+        const fixture = recoveryFixture({
+          isWindows: () => false,
+          getPermissions: permissionSpy
+        })
+        await withWatch(
+          fixture,
+          createListenAudioRecovery(() => fixture.host),
+          entryTimers,
+          async (stop) => {
+            vi.advanceTimersByTime(3_000)
+            expect(permissionSpy).toHaveBeenCalledTimes(1)
+            expect(permissionSpy.mock.results[0].value).toBe(result.promise)
+            stop()
+            if (stale === 'epoch') fixture.controls.epoch += 1
+            if (stale === 'wants') fixture.controls.wants = false
+            if (stale === 'channel') fixture.controls.hasThem = true
+            if (stale === 'reject') result.reject(new Error('synthetic permission failure'))
+            else result.resolve({ screenRecording: 'granted' })
+            await vi.advanceTimersByTimeAsync(0)
+            expect(fixture.recoverNow).not.toHaveBeenCalled()
+            if (stale === 'wants') expect(fixture.permissionNote).toHaveBeenCalledTimes(1)
+            else expect(fixture.permissionNote).not.toHaveBeenCalled()
+          },
+          async () => {
+            if (stale === 'reject') result.reject(new Error('synthetic permission failure'))
+            else result.resolve({ screenRecording: 'granted' })
+            await result.promise.catch(() => {})
+            await vi.advanceTimersByTimeAsync(0)
+          }
+        )
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

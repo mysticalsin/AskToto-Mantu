@@ -214,11 +214,12 @@ export class SpeechPolicyAuthority {
       return 'conflict'
     }
     const previous = this.snapshots.get(identity.scopeKey)
+    const previousUnmanaged = this.unmanagedProofs.get(identity.scopeKey)?.epoch === this.identityEpoch
     const result = this.compareAndRecord(identity.scopeKey, policy.version, revision, 'managed')
     if (result !== 'accepted') {
       if (result === 'conflict' && this.activeScopeKey === identity.scopeKey) {
         this.identityEpoch++
-        if (previous) this.emit({ kind: 'revoked', reason: 'policy-conflict' })
+        if (previous || previousUnmanaged) this.emit({ kind: 'revoked', reason: 'policy-conflict' })
       }
       return result
     }
@@ -231,7 +232,10 @@ export class SpeechPolicyAuthority {
       policy: clonePolicy(policy)
     })
     this.unmanagedProofs.delete(identity.scopeKey)
-    if (previous && previous.revision !== revision && this.activeScopeKey === identity.scopeKey) {
+    if (
+      (previousUnmanaged || (previous && previous.revision !== revision)) &&
+      this.activeScopeKey === identity.scopeKey
+    ) {
       this.identityEpoch++
       this.emit({ kind: 'changed', reason: 'policy-changed' })
     }

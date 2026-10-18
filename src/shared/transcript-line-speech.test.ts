@@ -9,7 +9,7 @@ const speech = {
   segment: {
     stream: { generation: 1, track: 'system' as const, epoch: 1 },
     engine: 'deepgram-nova3' as const,
-    index: 0,
+    index: 1,
     revision: 1,
     final: true,
     text: 'Hello bonjour',

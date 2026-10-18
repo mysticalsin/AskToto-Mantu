@@ -12,6 +12,7 @@ on:
       - scripts/qa/run-incremental-core-validation.mjs
       - src/main/features/meetings/incremental-meeting-*.ts
       - src/main/features/meetings/incremental-record-*.ts
+      - src/main/infra/storage/incremental-record-*.ts
       - src/main/features/meetings/meeting-public-projection*
       - src/main/infra/storage/gateway*
       - src/main/infra/storage/atomic-saved-write*

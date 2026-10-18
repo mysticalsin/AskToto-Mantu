@@ -104,6 +104,7 @@ jobs:
       # The root config adds JSON only when this quality-scoped destination is set. Keep npm test as the
       # sole mode-lock/root/proxy/Operator pipeline and clear only this attempt's report before it starts.
       - name: Run complete test pipeline
+        id: complete_tests
         env:
           METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
         run: |
@@ -111,10 +112,28 @@ jobs:
       # MQA-252 (M2-0048): every skipped test must be declared and stay within its per-OS baseline, so a
       # newly-skipped test fails the build instead of quietly joining the pile. Audit the JSON from the
       # root suite npm test just completed rather than starting a second root Vitest pass.
+      # Inspect the same report after pipeline failure too; the original strict audit still rejects a
+      # failed/incomplete root report. This never converts a failed pipeline into a successful job.
       - name: Audit declared skips from root report
+        id: declared_skips
+        if: ${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}
         env:
           METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
         run: npm run check:skips -- "${{ env.METIS_CI_ROOT_REPORT }}"
+      # Diagnostic only: retain bounded counts and source-bound skip digests in existing job logs.
+      # The complete pipeline and original audit remain authoritative; missing/failed evidence is not PASS.
+      - name: Log bounded root report diagnostic
+        if: ${{ always() }}
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          METIS_CI_RUNNER_TEMP: ${{ runner.temp }}
+          METIS_CI_WORKSPACE: ${{ github.workspace }}
+          METIS_CI_RUN_ID: ${{ github.run_id }}
+          METIS_CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          METIS_CI_MATRIX_OS: ${{ matrix.os }}
+          METIS_CI_PIPELINE_OUTCOME: ${{ steps.complete_tests.outcome }}
+          METIS_CI_AUDIT_OUTCOME: ${{ steps.declared_skips.outcome }}
+        run: node scripts/ci/root-report-diagnostic.mjs
       # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
       - run: npm run check:colors

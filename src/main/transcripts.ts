@@ -11,9 +11,9 @@ import {
 } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
-import { join, basename } from 'node:path'
+import { join, basename, resolve } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
-import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
+import type { SaveDraftTranscriptResult, SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
@@ -874,6 +874,27 @@ export async function appendDebrief(
 const draftFilename = (started: number): string =>
   `.autosave-draft-${stamp(started)}-${String(started % 1000).padStart(3, '0')}.md`
 
+// Cleanup must join autosaves already rendering/encrypting/replacing this exact draft. Otherwise a
+// normal final save can remove the old draft before a pending autosave publishes a new orphan copy.
+// Entries exist only while writes are in flight; later writes remain permitted after cleanup.
+const draftWritesInFlight = new Map<string, Set<Promise<void>>>()
+
+function trackDraftWrite(file: string): () => void {
+  const key = resolve(file)
+  let settle!: () => void
+  const pending = new Promise<void>((done) => {
+    settle = done
+  })
+  const writes = draftWritesInFlight.get(key) ?? new Set<Promise<void>>()
+  writes.add(pending)
+  draftWritesInFlight.set(key, writes)
+  return () => {
+    writes.delete(pending)
+    if (!writes.size) draftWritesInFlight.delete(key)
+    settle()
+  }
+}
+
 /**
  * Periodic best-effort snapshot of an IN-PROGRESS meeting (see the renderer's autosave timer while
  * Listen is active). Overwrites this ONE meeting's own draft file every tick — never touches index.md.
@@ -891,7 +912,8 @@ export async function saveDraftTranscript(
   settings: Settings,
   m: SaveMeeting,
   beforeReplace?: () => void
-): Promise<void> {
+): Promise<SaveDraftTranscriptResult> {
+  let finishWrite: (() => void) | undefined
   let admissionFailed = false
   let admissionFailure: unknown
   const admitReplacement = beforeReplace
@@ -907,11 +929,13 @@ export async function saveDraftTranscript(
     : undefined
   // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
   // Leave previously permitted files untouched, as the normal summary-only save does.
-  if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))) return
+  if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))) return { status: 'disabled' }
   try {
     const folder = ensureMeetingsFolder(settings)
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
+    // Register synchronously before the first await so completed-save cleanup sees this operation.
+    finishWrite = trackDraftWrite(file)
     const title = cleanTitle(m.title) || `${m.mode} meeting`
     refuseReservedSpeechProse(title, m.mode)
     const transcript = await renderMeetingTranscriptAsync(m.lines)
@@ -941,9 +965,13 @@ export async function saveDraftTranscript(
       'save replaces it when the meeting ends.\n\n' +
       `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
     await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admitReplacement)
+    return { status: 'saved' }
   } catch {
     if (admissionFailed) throw admissionFailure
-    /* best-effort — an autosave failure must never interrupt the meeting */
+    // Keep ordinary failures nonthrowing while allowing the renderer to report an unsaved snapshot.
+    return { status: 'failed' }
+  } finally {
+    finishWrite?.()
   }
 }
 
@@ -961,6 +989,10 @@ export async function saveDraftTranscript(
 export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
   try {
     const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt))
+    // Join only writes accepted before this cleanup. This is not a terminal owner/quit acknowledgement
+    // and deliberately does not suppress another draft operation admitted after this snapshot.
+    const writes = draftWritesInFlight.get(resolve(file))
+    if (writes) await Promise.all([...writes])
     if (!existsSync(file)) return
     for (let attempt = 0; ; attempt++) {
       try {

@@ -73,6 +73,7 @@ let blockedRelease: { generation: HostGeneration; error: Error } | null = null
 let nextGeneration = 1
 let nextRequest = 1
 let admittedPcmBytes = 0
+let admittedRequests = 0
 let operationRevision = 0
 
 function modelDir(): Promise<string> {
@@ -90,6 +91,21 @@ function modelFiles(dir: string): ModelFiles {
 
 function assertCurrentOperation(revision: number): void {
   if (revision !== operationRevision) throw new Error('Parakeet processing was cancelled.')
+}
+
+async function admitted<T>(bytes: number, run: (revision: number) => Promise<T>): Promise<T> {
+  if (admittedRequests >= MAX_PENDING_REQUESTS || admittedPcmBytes + bytes > MAX_QUEUED_PCM_BYTES) {
+    throw new ParakeetBusyError()
+  }
+  const revision = operationRevision
+  admittedRequests++
+  admittedPcmBytes += bytes
+  try {
+    return await run(revision)
+  } finally {
+    admittedPcmBytes -= bytes
+    admittedRequests--
+  }
 }
 
 function asError(error: unknown): Error {
@@ -279,8 +295,11 @@ export async function parakeetModelReady(): Promise<boolean> {
 /** Probe native addon availability in the helper without constructing model weights. */
 export async function parakeetAddonError(): Promise<string | null> {
   try {
-    await assertLegacyRuntimeClosure('asr')
-    await requestHost({ type: 'probe' })
+    await admitted(0, async (revision) => {
+      await assertLegacyRuntimeClosure('asr')
+      assertCurrentOperation(revision)
+      await requestHost({ type: 'probe' }, revision)
+    })
     return null
   } catch (error) {
     return asError(error).message
@@ -289,36 +308,39 @@ export async function parakeetAddonError(): Promise<string | null> {
 
 /** Ensure model assets and prewarm genuine weights in the isolated helper. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
-  await assertLegacyRuntimeClosure('asr')
-  const revision = operationRevision
-  const initialDir = await modelDir()
-  assertCurrentOperation(revision)
-  const initiallyReady = await parakeetFilesReady(initialDir)
-  assertCurrentOperation(revision)
-  if (!initiallyReady) {
-    await ensureParakeetAssets(onProgress)
+  return admitted(0, async (revision) => {
+    await assertLegacyRuntimeClosure('asr')
     assertCurrentOperation(revision)
-  }
-  const dir = await modelDir()
-  assertCurrentOperation(revision)
-  const ready = await parakeetFilesReady(dir)
-  assertCurrentOperation(revision)
-  if (!ready) throw new Error(ASR_ASSETS_MISSING)
-  const files = modelFiles(dir)
-  // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
-  // treats malformed protobufs as a process-fatal error in some builds.
-  try {
-    const encoderInfo = await stat(files.encoder)
+    const initialDir = await modelDir()
     assertCurrentOperation(revision)
-    if (encoderInfo.size > 1_024) await requestHost({ type: 'warmup', files }, revision)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
+    const initiallyReady = await parakeetFilesReady(initialDir)
+    assertCurrentOperation(revision)
+    if (!initiallyReady) {
+      await ensureParakeetAssets(onProgress)
+      assertCurrentOperation(revision)
+    }
+    const dir = await modelDir()
+    assertCurrentOperation(revision)
+    const ready = await parakeetFilesReady(dir)
+    assertCurrentOperation(revision)
+    if (!ready) throw new Error(ASR_ASSETS_MISSING)
+    const files = modelFiles(dir)
+    // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
+    // treats malformed protobufs as a process-fatal error in some builds.
+    try {
+      const encoderInfo = await stat(files.encoder)
+      assertCurrentOperation(revision)
+      if (encoderInfo.size > 1_024) await requestHost({ type: 'warmup', files }, revision)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  })
 }
 
 /** Transcribe one mono 16kHz Float32 PCM window. Empty text means genuine silence. */
 export async function parakeetTranscribe(samples: Float32Array): Promise<string> {
-  await assertLegacyRuntimeClosure('asr')
+  // Validation and bounded reservation precede authority so the caller cannot mutate an awaited view.
+  // Malformed/busy inputs take precedence over a simultaneous runtime refusal; valid work still gates host use.
   if (!(samples instanceof Float32Array)) throw new Error('Parakeet PCM must be Float32 samples.')
   if (samples.length > MAX_SAMPLES) throw new Error('Parakeet PCM is too large.')
   for (const sample of samples) {
@@ -327,23 +349,18 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
   // The caller still owns this view and may detach or resize its buffer while decode is pending.
   // Capture the admitted amount once; accounting must never reread mutable caller-owned metadata.
   const admittedBytes = samples.byteLength
-  if (admittedPcmBytes + admittedBytes > MAX_QUEUED_PCM_BYTES) {
-    throw new ParakeetBusyError()
-  }
-  admittedPcmBytes += admittedBytes
-  const revision = operationRevision
-  try {
+  return admitted(admittedBytes, async (revision) => {
     // Reserve first, then clone. Rejected callers never allocate a second PCM buffer and are never
     // parked in an await queue that would retain their original audio indefinitely.
     const pcm = new Float32Array(samples).buffer
+    await assertLegacyRuntimeClosure('asr')
+    assertCurrentOperation(revision)
     const dir = await modelDir()
     assertCurrentOperation(revision)
     const files = modelFiles(dir)
     const response = await requestHost({ type: 'transcribe', files, pcm }, revision)
     return String(response.text ?? '').trim()
-  } finally {
-    admittedPcmBytes -= admittedBytes
-  }
+  })
 }
 
 /** Kill the exact helper generation and resolve only after Electron reports its exit. */

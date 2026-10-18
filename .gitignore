@@ -147,3 +147,7 @@ operator/backups/
 
 # wrangler dev bundle/state scratch (operator/.wrangler/), never source.
 .wrangler/
+
+# Private planning and working records (not application source)
+.codex-plans/
+.codex-plan-*.md

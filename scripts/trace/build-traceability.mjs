@@ -1,18 +1,71 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { buildM2_0016Artifacts, writeM2_0016Artifacts } from './m2-0016-lock.mjs'
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const DEFAULT_OUT = 'out/m2-0018-targeted-review'
+const SOURCE_REFERENCE_HASH_POLICY = 'sha256-utf8-crlf-to-lf'
+const SOURCE_REFERENCE_EXPECTATIONS = Object.freeze([
+  {
+    reference_commit: 'bf38b0bc74c91a7cf35b22829a0aac85746034e8',
+    reference_path: 'src/main/brain/corrections.ts',
+    expected_sha256: 'c8a7100d88e65c1d61cc053bd13cf55a4d852589977ede648f534034017e7041',
+    hash_policy: SOURCE_REFERENCE_HASH_POLICY
+  },
+  {
+    reference_commit: 'bf38b0bc74c91a7cf35b22829a0aac85746034e8',
+    reference_path: 'src/main/brain/publish.ts',
+    expected_sha256: '816569fbd476427ed9ac34660c00fc5cfafcb81e4cbc1e3e2c96ad8dcb8f0a26',
+    hash_policy: SOURCE_REFERENCE_HASH_POLICY
+  },
+  {
+    reference_commit: 'bf38b0bc74c91a7cf35b22829a0aac85746034e8',
+    reference_path: 'src/main/llm/prewarm.ts',
+    expected_sha256: '10f3e540fd0d463a507fa316d450325c23d8aad4c01d176afa3991d9a3310c22',
+    hash_policy: SOURCE_REFERENCE_HASH_POLICY
+  },
+  {
+    reference_commit: 'bf38b0bc74c91a7cf35b22829a0aac85746034e8',
+    reference_path: 'src/main/brain/publish-provenance.ts',
+    expected_sha256: '9f349c962bff0daf6e715a15ff8f8c3fcf9d534d263168b4996707ae530752b4',
+    hash_policy: SOURCE_REFERENCE_HASH_POLICY
+  }
+])
+const HISTORICAL_SOURCE_REFERENCES = Object.freeze([
+  {
+    reference_commit: '981555a91b15b55dd0a866d728a91b0360d55c41',
+    reference_path: 'src/main/brain/corrections.ts',
+    sha256: 'c8a7100d88e65c1d61cc053bd13cf55a4d852589977ede648f534034017e7041'
+  },
+  {
+    reference_commit: '981555a91b15b55dd0a866d728a91b0360d55c41',
+    reference_path: 'src/main/brain/publish.ts',
+    sha256: '67f6ac7bd9a1d497a4e0b779328fdf542f41edbffe0ec0646ebf5b94864f74f8',
+    lines: 974
+  },
+  {
+    reference_commit: '981555a91b15b55dd0a866d728a91b0360d55c41',
+    reference_path: 'src/main/llm/prewarm.ts',
+    sha256: '10f3e540fd0d463a507fa316d450325c23d8aad4c01d176afa3991d9a3310c22'
+  }
+])
+const HISTORICAL_FINDINGS_ORIGIN = Object.freeze({
+  commit: 'eae96341c3771748b0bcfaf12de48cdb6e114d40',
+  path: 'scripts/trace/build-traceability.mjs',
+  sha256: '8e0827da4d904a4d5b0fc561c8b57d425e1c044826e4eecb6b41077b307863e9'
+})
+const SOURCE_REFERENCE_LIMIT =
+  'SOURCE_REFERENCE_ONLY: exact source identity and structural traceability; runtime and installed-app qualification remain separate.'
 
 const reviewedScopes = [
-  { path: 'src/main/brain/corrections.ts', expectedLines: 1637, axis: 'brain-corrections' },
-  { path: 'src/main/brain/publish.ts', expectedLines: 974, axis: 'brain-publish' },
-  { path: 'src/main/llm/prewarm.ts', expectedLines: 64, axis: 'local-model-prewarm' },
+  { path: 'src/main/brain/corrections.ts', axis: 'brain-corrections' },
+  { path: 'src/main/brain/publish.ts', axis: 'brain-publish' },
+  { path: 'src/main/llm/prewarm.ts', axis: 'local-model-prewarm' },
+  { path: 'src/main/brain/publish-provenance.ts', axis: 'brain-publish' },
   { path: 'src/main/index.ts', axis: 'local-model-prewarm' },
   { path: 'src/main/infra/scheduler/maintenance.ts', axis: 'scheduler-policy' },
   { path: 'src/main/infra/scheduler/policy.ts', axis: 'scheduler-policy' },
@@ -387,7 +440,12 @@ const REQUIRED_FINDING_MAPPINGS = [
   ['M2-0018-F03', 'local-model-prewarm', 'acceptance_line', 'M2-0018'],
   ['M2-0018-F04', 'proof-harnesses', 'new_ticket', 'Add Windows packaged ASR decode gate to candidate validation'],
   ['M2-0018-F05', 'proof-harnesses', 'new_ticket', 'Bind packaged lifecycle smoke evidence to candidate artifacts'],
-  ['M2-0018-F06', 'proof-harnesses', 'new_ticket', 'Cover packaged native audio picker wiring separately from ASR decode'],
+  [
+    'M2-0018-F06',
+    'proof-harnesses',
+    'new_ticket',
+    'Cover packaged native audio picker wiring separately from ASR decode'
+  ],
   ['M2-0018-F07', 'proof-harnesses', 'new_ticket', 'Add macOS packaged two-slice launch evidence'],
   ['M2-0018-F08', 'proof-harnesses', 'new_ticket', 'Run packaged visual onboarding smoke after install'],
   ['M2-0018-F09', 'packaging-inputs', 'new_ticket', 'Add a lightweight online installer profile'],
@@ -408,7 +466,12 @@ export const SECTION_25_COVERAGE_ROWS = Object.freeze([
   ['COV-03', 'Minimal release-branch repair of both P1 blockers', ['M2-0042', 'M2-0046'], 'NOT_STARTED'],
   ['COV-04', 'Working signed Windows EXE on GitHub', ['M2-0058', 'M2-0174'], 'NOT_STARTED'],
   ['COV-05', 'Real native Mac product built using Codex', ['M2-0118'], 'NOT_STARTED'],
-  ['COV-06', 'Mac public DMG waits only for legitimate Apple release prerequisites', ['M2-0175', 'M2-0186'], 'NOT_STARTED'],
+  [
+    'COV-06',
+    'Mac public DMG waits only for legitimate Apple release prerequisites',
+    ['M2-0175', 'M2-0186'],
+    'NOT_STARTED'
+  ],
   ['COV-07', 'Apple intelligence/PCC where truly eligible, with honest portal tracking', ['M2-0175'], 'NOT_STARTED'],
   ['COV-08', 'Hey Metis activation with no ambient cloud listening', ['M2-0081'], 'NOT_STARTED'],
   ['COV-09', 'Orb-only ARMED; solving orb inside active beam bar; caption above', ['M2-0093'], 'NOT_STARTED'],
@@ -420,7 +483,12 @@ export const SECTION_25_COVERAGE_ROWS = Object.freeze([
   ['COV-15', 'Apple-minded four-destination Settings, with every old option dispositioned', ['M2-0101'], 'DONE'],
   ['COV-16', 'Cloudflare-hosted speech is the actual default everywhere', ['M2-0107', 'M2-0112'], 'NOT_STARTED'],
   ['COV-17', 'The strongest qualified transcript fidelity, not fluent invention', ['M2-0113'], 'NOT_STARTED'],
-  ['COV-18', 'No Cloudflare content persistence; no-training is a separate statement', ['M2-0111', 'M2-0149'], 'NOT_STARTED'],
+  [
+    'COV-18',
+    'No Cloudflare content persistence; no-training is a separate statement',
+    ['M2-0111', 'M2-0149'],
+    'NOT_STARTED'
+  ],
   ['COV-19', 'Independent optional local speech/generation fitted to actual hardware', ['M2-0116'], 'NOT_STARTED'],
   ['COV-20', 'No covert fallback, background bulk downloads or local-only cloud leaks', ['M2-0116'], 'NOT_STARTED'],
   ['COV-21', 'A truly lightweight application, not only a small bootstrap', ['M2-0164'], 'NOT_STARTED'],
@@ -439,13 +507,23 @@ export const SECTION_25_COVERAGE_ROWS = Object.freeze([
   ['COV-34', 'Accurate token, speech, decision and cost consumption', ['M2-0106'], 'NOT_STARTED'],
   ['COV-35', 'Keep standalone Metis and add useful Teams surfaces', ['M2-0152'], 'NOT_STARTED'],
   ['COV-36', 'Entra authentication and scoped service/agent permissions', ['M2-0121'], 'NOT_STARTED'],
-  ['COV-37', 'Automatically join eligible meetings when they actually start', ['M2-0151', 'M2-0153', 'M2-0154'], 'NOT_STARTED'],
+  [
+    'COV-37',
+    'Automatically join eligible meetings when they actually start',
+    ['M2-0151', 'M2-0153', 'M2-0154'],
+    'NOT_STARTED'
+  ],
   ['COV-38', 'Real Teams media plus honest other-platform support', ['M2-0151', 'M2-0155', 'M2-0156'], 'NOT_STARTED'],
   ['COV-39', 'GDPR/privacy readiness and proper sharing-not a Teams badge', ['M2-0150'], 'NOT_STARTED'],
   ['COV-40', 'Whole meeting to knowledge to Dust update to skill to portal journey', ['M2-0176'], 'NOT_STARTED'],
   ['COV-41', 'Refactor the existing product with the actual supplied skill', ['M2-0059'], 'NOT_STARTED'],
   ['COV-42', 'Find code quickly with a persistent map and lean coding context', ['M2-0011'], 'IN_PROGRESS'],
-  ['COV-43', 'Review every supplied repository/reference, including GitHub UI improvements', ['M2-0015'], 'NOT_STARTED'],
+  [
+    'COV-43',
+    'Review every supplied repository/reference, including GitHub UI improvements',
+    ['M2-0015'],
+    'NOT_STARTED'
+  ],
   ['COV-44', 'End-to-end deployed quality, recovery and durable handoff', ['M2-0183'], 'NOT_STARTED']
 ])
 
@@ -468,16 +546,49 @@ function readRel(path) {
   return readFileSync(join(ROOT, path), 'utf8')
 }
 
-function sha256(text) {
-  return createHash('sha256').update(text).digest('hex')
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
 }
 
-function scopeRecord(scope) {
-  const abs = join(ROOT, scope.path)
-  if (!existsSync(abs)) return { ...scope, exists: false }
-  const text = readFileSync(abs, 'utf8')
+function canonicalSourceText(bytes) {
+  return bytes.toString('utf8').replace(/\r\n/g, '\n')
+}
+
+function scopeRecord(sourceRoot, scope) {
+  const abs = resolve(sourceRoot, ...scope.path.split('/'))
+  let bytes
+  try {
+    bytes = readFileSync(abs)
+  } catch (error) {
+    const missing = error?.code === 'ENOENT'
+    return { ...scope, exists: !missing, readable: false, lines: null, sha256: null }
+  }
+  const text = bytes.toString('utf8')
   const lines = text.split(/\r?\n/).length - (text.endsWith('\n') ? 1 : 0)
-  return { ...scope, exists: true, lines, sha256: sha256(text) }
+  const sourceReference = SOURCE_REFERENCE_EXPECTATIONS.find((reference) => reference.reference_path === scope.path)
+  return {
+    ...scope,
+    exists: true,
+    readable: true,
+    lines,
+    sha256: sha256(bytes),
+    ...(sourceReference ? { canonical_source_sha256: sha256(canonicalSourceText(bytes)) } : {})
+  }
+}
+
+function sourceReferenceObservations(scopes) {
+  return SOURCE_REFERENCE_EXPECTATIONS.map((reference) => {
+    const scopeMatches = scopes.filter((scope) => scope.path === reference.reference_path)
+    const scope = scopeMatches.length === 1 ? scopeMatches[0] : null
+    const observedCanonical = scope?.canonical_source_sha256 ?? null
+    return {
+      classification: 'SOURCE_REFERENCE_ONLY',
+      ...reference,
+      observed_raw_sha256: scope?.sha256 ?? null,
+      observed_canonical_sha256: observedCanonical,
+      matches_expected: observedCanonical === reference.expected_sha256
+    }
+  })
 }
 
 function leadAction(finding) {
@@ -497,12 +608,36 @@ function findingReportRecord(finding) {
   }
 }
 
-function checkReport(report) {
+export function checkTraceabilityReport(report) {
   const problems = []
+  if (!report || typeof report !== 'object' || Array.isArray(report)) {
+    return ['traceability report: expected an object']
+  }
+  const scopes = Array.isArray(report.reviewed_scopes) ? report.reviewed_scopes : []
+  if (!Array.isArray(report.reviewed_scopes)) problems.push('reviewed scopes: expected an array')
+  const scopeCounts = new Map()
+  for (const scope of scopes) {
+    if (!scope || typeof scope !== 'object' || typeof scope.path !== 'string') {
+      problems.push('reviewed scope: malformed record')
+      continue
+    }
+    scopeCounts.set(scope.path, (scopeCounts.get(scope.path) ?? 0) + 1)
+  }
+  const requiredScopePaths = new Set(reviewedScopes.map((scope) => scope.path))
+  for (const path of requiredScopePaths) {
+    const count = scopeCounts.get(path) ?? 0
+    if (count !== 1) problems.push(`${path}: expected exactly one reviewed scope record, found ${count}`)
+  }
+  for (const [path, count] of scopeCounts) {
+    if (!requiredScopePaths.has(path)) problems.push(`${path}: unexpected reviewed scope record`)
+    if (count > 1) problems.push(`${path}: duplicate reviewed scope record`)
+  }
+
   const coverageRows = Array.isArray(report.rows)
     ? report.rows.filter((row) => row.family === 'COV' && row.section === 25)
     : []
-  if (coverageRows.length === 0) {
+  if (!Array.isArray(report.rows)) problems.push('traceability rows: expected an array')
+  if (coverageRows.length !== SECTION_25_COVERAGE_ROWS.length) {
     problems.push('traceability rows: missing Section 25 COV rows')
   }
   for (const row of coverageRows) {
@@ -511,23 +646,123 @@ function checkReport(report) {
     if (!Array.isArray(row.tickets) || row.tickets.length === 0) problems.push(`${row.id}: missing ticket coverage`)
     if (typeof row.status !== 'string' || row.status.length === 0) problems.push(`${row.id}: missing status`)
   }
-  const scopeAxes = new Set(report.reviewed_scopes.map((scope) => scope.axis))
+  const scopeAxes = new Set(scopes.map((scope) => scope?.axis))
   for (const axis of REQUIRED_SCOPE_AXES) {
     if (!scopeAxes.has(axis)) problems.push(`scope axis ${axis}: missing reviewed scope`)
   }
-  for (const scope of report.reviewed_scopes) {
+  for (const scope of scopes) {
+    if (!scope || typeof scope !== 'object' || typeof scope.path !== 'string') continue
     if (!scope.exists) problems.push(`${scope.path}: missing scoped file`)
-    if (scope.expectedLines !== undefined && scope.lines !== scope.expectedLines) {
-      problems.push(`${scope.path}: expected ${scope.expectedLines} lines, found ${scope.lines}`)
+    else if (!scope.readable) problems.push(`${scope.path}: scoped file is unreadable`)
+    if (!Number.isSafeInteger(scope.lines) || scope.lines < 0)
+      problems.push(`${scope.path}: invalid observed line count`)
+    if (typeof scope.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(scope.sha256)) {
+      problems.push(`${scope.path}: missing raw source digest`)
     }
   }
-  const findingAxes = new Set(report.findings.map((finding) => finding.axis))
+
+  const scopeByPath = new Map()
+  for (const scope of scopes) {
+    if (scope && typeof scope === 'object' && typeof scope.path === 'string' && !scopeByPath.has(scope.path)) {
+      scopeByPath.set(scope.path, scope)
+    }
+  }
+  const observations = Array.isArray(report.source_reference_observations) ? report.source_reference_observations : []
+  if (!Array.isArray(report.source_reference_observations)) {
+    problems.push('source references: missing required observation array')
+  }
+  const observationCounts = new Map()
+  for (const observation of observations) {
+    const path = observation?.reference_path
+    if (typeof path !== 'string') {
+      problems.push('source reference observation: missing reference path')
+      continue
+    }
+    observationCounts.set(path, (observationCounts.get(path) ?? 0) + 1)
+    if (!SOURCE_REFERENCE_EXPECTATIONS.some((reference) => reference.reference_path === path)) {
+      problems.push(`${path}: unexpected source reference observation`)
+    }
+  }
+  for (const expected of SOURCE_REFERENCE_EXPECTATIONS) {
+    const matching = observations.filter((observation) => observation?.reference_path === expected.reference_path)
+    if (matching.length !== 1) {
+      problems.push(
+        `${expected.reference_path}: expected exactly one source reference observation, found ${matching.length}`
+      )
+      continue
+    }
+    const observation = matching[0]
+    const expectedKeys = [
+      'classification',
+      'reference_commit',
+      'reference_path',
+      'expected_sha256',
+      'hash_policy',
+      'observed_raw_sha256',
+      'observed_canonical_sha256',
+      'matches_expected'
+    ].sort()
+    const actualKeys = Object.keys(observation).sort()
+    if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
+      problems.push(`${expected.reference_path}: malformed source reference observation fields`)
+    }
+    for (const key of ['classification', 'reference_commit', 'reference_path', 'expected_sha256', 'hash_policy']) {
+      if (observation[key] !== (key === 'classification' ? 'SOURCE_REFERENCE_ONLY' : expected[key])) {
+        problems.push(`${expected.reference_path}: source reference ${key} does not match fixed builder metadata`)
+      }
+    }
+    const scope = scopeByPath.get(expected.reference_path)
+    if (!scope || !scope.exists || !scope.readable) {
+      problems.push(`${expected.reference_path}: required source reference file is missing or unreadable`)
+    }
+    if (!/^[a-f0-9]{64}$/.test(observation.observed_raw_sha256 ?? '')) {
+      problems.push(`${expected.reference_path}: malformed observed raw source digest`)
+    }
+    if (!/^[a-f0-9]{64}$/.test(observation.observed_canonical_sha256 ?? '')) {
+      problems.push(`${expected.reference_path}: malformed observed canonical source digest`)
+    }
+    if (observation.observed_raw_sha256 !== (scope?.sha256 ?? null)) {
+      problems.push(`${expected.reference_path}: observed raw source digest does not match reviewed scope`)
+    }
+    if (observation.observed_canonical_sha256 !== (scope?.canonical_source_sha256 ?? null)) {
+      problems.push(`${expected.reference_path}: observed canonical source digest does not match reviewed scope`)
+    }
+    if (observation.observed_canonical_sha256 !== expected.expected_sha256 || observation.matches_expected !== true) {
+      problems.push(`${expected.reference_path}: source reference digest mismatch`)
+    }
+  }
+  for (const [path, count] of observationCounts) {
+    if (count > 1) problems.push(`${path}: duplicate source reference observation`)
+  }
+  if (
+    !Array.isArray(report.historical_source_references) ||
+    JSON.stringify(report.historical_source_references) !== JSON.stringify(HISTORICAL_SOURCE_REFERENCES)
+  ) {
+    problems.push('historical source references: required prior source identities changed or missing')
+  }
+  if (
+    !report.historical_findings_origin ||
+    JSON.stringify(report.historical_findings_origin) !== JSON.stringify(HISTORICAL_FINDINGS_ORIGIN)
+  ) {
+    problems.push('historical findings origin: required prior producer provenance changed or missing')
+  }
+  if (report.source_reference_limit !== SOURCE_REFERENCE_LIMIT) {
+    problems.push('source reference limit: runtime and installed-app qualification must remain separate')
+  }
+
+  const findings = Array.isArray(report.findings) ? report.findings : []
+  if (!Array.isArray(report.findings)) problems.push('findings: expected an array')
+  const findingAxes = new Set(findings.map((finding) => finding?.axis))
   for (const axis of REQUIRED_FINDING_AXES) {
     if (!findingAxes.has(axis)) problems.push(`finding axis ${axis}: missing mapped finding`)
   }
   const refs = new Set()
   const findingsByRef = new Map()
-  for (const finding of report.findings) {
+  for (const finding of findings) {
+    if (!finding || typeof finding !== 'object') {
+      problems.push('finding: malformed record')
+      continue
+    }
     if (refs.has(finding.public_ref)) problems.push(`${finding.public_ref}: duplicate public_ref`)
     refs.add(finding.public_ref)
     findingsByRef.set(finding.public_ref, finding)
@@ -535,7 +770,11 @@ function checkReport(report) {
     if (finding.ledger_action?.kind === 'new_ticket' && !Array.isArray(finding.ledger_action.acceptance)) {
       problems.push(`${finding.public_ref}: new_ticket requires acceptance lines`)
     }
-    if (finding.ledger_action?.kind === 'new_ticket' && Array.isArray(finding.ledger_action.acceptance) && finding.ledger_action.acceptance.length === 0) {
+    if (
+      finding.ledger_action?.kind === 'new_ticket' &&
+      Array.isArray(finding.ledger_action.acceptance) &&
+      finding.ledger_action.acceptance.length === 0
+    ) {
       problems.push(`${finding.public_ref}: new_ticket acceptance lines cannot be empty`)
     }
     if (finding.ledger_action?.kind === 'acceptance_line' && !/^M2-\d{4}$/.test(finding.ledger_action.ticket ?? '')) {
@@ -553,7 +792,9 @@ function checkReport(report) {
     }
     if (finding.axis !== axis) problems.push(`${publicRef}: expected axis ${axis}, found ${finding.axis}`)
     if (finding.ledger_action?.kind !== kind) {
-      problems.push(`${publicRef}: expected ledger_action kind ${kind}, found ${finding.ledger_action?.kind ?? 'missing'}`)
+      problems.push(
+        `${publicRef}: expected ledger_action kind ${kind}, found ${finding.ledger_action?.kind ?? 'missing'}`
+      )
       continue
     }
     const actualTarget = kind === 'new_ticket' ? finding.ledger_action.title : finding.ledger_action.ticket
@@ -573,9 +814,10 @@ function checkReport(report) {
 
 function markdown(report) {
   const findingLines = report.findings.map((finding) => {
-    const action = finding.ledger_action.kind === 'new_ticket'
-      ? `lead must create a new ticket: ${finding.ledger_action.title}`
-      : `lead must add an acceptance line to ${finding.ledger_action.ticket}`
+    const action =
+      finding.ledger_action.kind === 'new_ticket'
+        ? `lead must create a new ticket: ${finding.ledger_action.title}`
+        : `lead must add an acceptance line to ${finding.ledger_action.ticket}`
     return `- ${finding.public_ref} (${finding.axis}): ${finding.verdict}; ${action}; ${finding.lead_action}`
   })
   return [
@@ -587,7 +829,23 @@ function markdown(report) {
     '',
     '## Scope',
     '',
-    ...report.reviewed_scopes.map((scope) => `- ${scope.path}: ${scope.exists ? `${scope.lines} lines` : 'missing'}`),
+    ...report.reviewed_scopes.map(
+      (scope) =>
+        `- ${scope.path}: ${scope.exists && scope.readable ? `${scope.lines} observed lines` : 'missing or unreadable'}`
+    ),
+    '',
+    '## Source Reference Only',
+    '',
+    SOURCE_REFERENCE_LIMIT,
+    '',
+    ...report.source_reference_observations.map(
+      (reference) =>
+        `- ${reference.reference_path}: ${reference.observed_canonical_sha256 ?? 'unavailable'} (${reference.matches_expected ? 'matches' : 'mismatch'}; raw byte digest retained separately).`
+    ),
+    '',
+    `Historical finding text and line anchors originate from ${report.historical_findings_origin.commit}:${report.historical_findings_origin.path} (${report.historical_findings_origin.sha256}); they are preserved as historical records, not new runtime or privacy acceptance.`,
+    '',
+    'Historical source references retain their original commit, digest and line-count metadata; current line counts are observations only.',
     '',
     '## Findings And Ledger Actions',
     '',
@@ -599,26 +857,33 @@ function markdown(report) {
     '',
     '## Verification',
     '',
-    `- ${report.check.problems.length === 0 ? 'PASS' : 'FAIL'}: required scope axes, finding mappings, lead actions, and private-reference hygiene passed.`
+    `- ${report.check.problems.length === 0 ? 'PASS' : 'FAIL'}: scope, source-reference identity, finding mappings, lead actions, and private-reference hygiene were checked. Source-reference identity does not qualify runtime behavior or an installed application.`
   ].join('\n')
 }
 
 export function buildTraceabilityReport(options = {}) {
   const {
     generatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-    includeSection25Rows = true
+    includeSection25Rows = true,
+    sourceRoot = ROOT
   } = options
+  const resolvedSourceRoot = resolve(sourceRoot)
+  const scopeRecords = reviewedScopes.map((scope) => scopeRecord(resolvedSourceRoot, scope))
   const report = {
     schema: 1,
     ticket: 'M2-0018',
     evidence_level: 'DESIGNED',
     generated_at: generatedAt,
-    reviewed_scopes: reviewedScopes.map(scopeRecord),
+    reviewed_scopes: scopeRecords,
+    source_reference_observations: sourceReferenceObservations(scopeRecords),
+    historical_source_references: HISTORICAL_SOURCE_REFERENCES.map((reference) => ({ ...reference })),
+    historical_findings_origin: { ...HISTORICAL_FINDINGS_ORIGIN },
+    source_reference_limit: SOURCE_REFERENCE_LIMIT,
     findings: ticketActions.map(findingReportRecord),
     rows: includeSection25Rows ? section25CoverageRows() : [],
     check: { problems: [] }
   }
-  report.check.problems = checkReport(report)
+  report.check.problems = checkTraceabilityReport(report)
   return report
 }
 

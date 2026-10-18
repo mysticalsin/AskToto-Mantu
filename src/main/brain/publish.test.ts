@@ -17,7 +17,8 @@ import {
 import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, writeIndex, slugify } from './store'
 import { readAliasMap } from './corrections'
 import { ingestExtraction } from './ingest'
-import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { storageAt, useStorageForTests } from '../infra/storage/meetings-storage'
+import * as transcripts from '../transcripts'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   publishEntity,
@@ -467,13 +468,31 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       writeMeetingFile(folder, 'foreign-key.md', { date: '2026-01-03' })
       // Neither faulted file carries `confidential: true` on disk — what puts them in the set is that this
       // device cannot establish that they DON'T, and every consumer treats absence as permission to render.
-      readFaults.throwOn.add('locked.md')
-      readFaults.emptyOn.add('foreign-key.md')
+      // The asynchronous meeting path consumes gateway results and decoded bytes; the older
+      // readSavedFile fault wrapper above still serves the synchronous brain readers.
+      const gateway = storageAt(folder)
+      const originalRead = gateway.read.bind(gateway)
+      const originalDecode = transcripts.decodeSavedMeetingAsync
+      const readSpy = vi.spyOn(gateway, 'read').mockImplementation(async (path, options) => {
+        if (path === 'locked.md') return { status: 'unavailable', code: 'EBUSY' }
+        return originalRead(path, options)
+      })
+      const decodeSpy = vi.spyOn(transcripts, 'decodeSavedMeetingAsync').mockImplementation(async (...args) => {
+        if (args[2] === join(folder, 'foreign-key.md')) return { ok: true, text: '' }
+        return originalDecode(...args)
+      })
 
-      const set = await readConfidentialMeetings(s)
-      expect(set.has('locked.md')).toBe(true)
-      expect(set.has('foreign-key.md')).toBe(true)
-      expect(set.has('readable.md')).toBe(false)
+      try {
+        const set = await readConfidentialMeetings(s)
+        expect(set.has('locked.md')).toBe(true)
+        expect(set.has('foreign-key.md')).toBe(true)
+        expect(set.has('readable.md')).toBe(false)
+        expect(readSpy).toHaveBeenCalledWith('locked.md', expect.any(Object))
+        expect(decodeSpy).toHaveBeenCalledWith(expect.any(Buffer), false, join(folder, 'foreign-key.md'))
+      } finally {
+        readSpy.mockRestore()
+        decodeSpy.mockRestore()
+      }
     })
 
     it('a confidential meeting locked at publish time keeps its amount, commitment and title out of every wiki surface', async () => {

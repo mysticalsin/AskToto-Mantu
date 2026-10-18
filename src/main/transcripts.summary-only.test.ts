@@ -78,7 +78,7 @@ describe('enterprise-live summary-only saveMeeting', () => {
       enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true }
     } as Settings
 
-    await saveDraftTranscript(settings, meeting())
+    await expect(saveDraftTranscript(settings, meeting())).resolves.toEqual({ status: 'disabled' })
 
     expect(existsSync(folder)).toBe(false)
     expect(readdirSync(dir)).toEqual([])

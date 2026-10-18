@@ -7,8 +7,10 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import ts from 'typescript'
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../src/shared/ipc'
+import { ManagedPolicyAuthority } from '../../src/main/fresh-lean-speech-defaults'
 
 const REPO = join(__dirname, '..', '..')
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').replace(/\r\n/g, '\n')
@@ -18,9 +20,9 @@ const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').repl
  * Every entry names the file and the identifier in it that reads the key; a self-check below verifies both.
  */
 const GOVERNANCE_KEYS: Record<string, { file: string; symbol: string }> = {
-  locked: { file: 'src/main/store.ts', symbol: 'obj.locked ?? obj.lockedKeys' },
+  locked: { file: 'src/main/store.ts', symbol: 'managedPolicyAuthority.parseLocked' },
   requireAuth: { file: 'src/main/auth.ts', symbol: 'authEnforced' },
-  allowedProviders: { file: 'src/main/store.ts', symbol: 'parseAllowedContent' },
+  allowedProviders: { file: 'src/main/store.ts', symbol: 'managedPolicyAuthority.parseAllowed' },
   escrowPubKey: { file: 'src/main/transcripts.ts', symbol: 'escrowPubKey' },
   disableAutoUpdate: { file: 'src/main/updater.ts', symbol: 'disableAutoUpdate' },
   updateFeedUrl: { file: 'src/main/updater.ts', symbol: 'updateFeedUrl' },
@@ -72,10 +74,76 @@ function markdownFiles(dir: string): string[] {
   })
 }
 
+function parseTypeScript(rel: string): ts.SourceFile {
+  return ts.createSourceFile(rel, read(rel), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+}
+
+function visit(node: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node[] {
+  const found: ts.Node[] = []
+  const walk = (current: ts.Node): void => {
+    if (predicate(current)) found.push(current)
+    current.forEachChild(walk)
+  }
+  walk(node)
+  return found
+}
+
+function hasNamedImport(source: ts.SourceFile, moduleName: string, importedName: string): boolean {
+  return source.statements.some((statement) => {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== moduleName ||
+      statement.importClause?.isTypeOnly
+    )
+      return false
+    const bindings = statement.importClause?.namedBindings
+    return (
+      !!bindings &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.some(
+        (element) =>
+          !element.isTypeOnly &&
+          (element.propertyName?.text ?? element.name.text) === importedName &&
+          element.name.text === importedName
+      )
+    )
+  })
+}
+
+function authorityCalls(source: ts.SourceFile, method: 'parseLocked' | 'parseAllowed'): ts.CallExpression[] {
+  return visit(
+    source,
+    (node) =>
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'managedPolicyAuthority' &&
+      node.expression.name.text === method
+  ) as ts.CallExpression[]
+}
+
 const settingsKeys = Object.keys(DEFAULT_SETTINGS)
 const governanceKeys = Object.keys(GOVERNANCE_KEYS)
 
 describe('managed-config check functions fire on a bad fixture', () => {
+  it('requires a runtime governance import under the actual constructor name', () => {
+    for (const binding of [
+      'type { ManagedPolicyAuthority }',
+      '{ type ManagedPolicyAuthority }',
+      '{ ManagedPolicyAuthority as OtherAuthority }'
+    ]) {
+      const fixture = ts.createSourceFile(
+        '<inline>',
+        `import ${binding} from './fresh-lean-speech-defaults'`,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS
+      )
+      expect(hasNamedImport(fixture, './fresh-lean-speech-defaults', 'ManagedPolicyAuthority'), binding).toBe(false)
+    }
+  })
+
   it('flags a key that is neither a Settings key nor a governance key', () => {
     const fixture = JSON.stringify({ provider: 'dust', notARealKey: true, _comment: 'x' })
     expect(unknownKeys(fixture, settingsKeys, governanceKeys)).toEqual(['notARealKey'])
@@ -90,7 +158,9 @@ describe('managed-config check functions fire on a bad fixture', () => {
   it('flags licenseGateEnabled whether set or only locked', () => {
     expect(setsLicenseGate(JSON.stringify({ licenseGateEnabled: true }))).toBe(true)
     expect(setsLicenseGate(JSON.stringify({ locked: ['licenseGateEnabled'] }))).toBe(true)
-    expect(setsLicenseGate(JSON.stringify({ locked: ['provider'], _comment_license: 'licenseGateEnabled' }))).toBe(false)
+    expect(setsLicenseGate(JSON.stringify({ locked: ['provider'], _comment_license: 'licenseGateEnabled' }))).toBe(
+      false
+    )
   })
 
   it('flags a doc that lists the license gate as an enforced control', () => {
@@ -102,6 +172,29 @@ describe('managed-config check functions fire on a bad fixture', () => {
   it('the governance list documents where every key is read', () => {
     for (const [key, { file, symbol }] of Object.entries(GOVERNANCE_KEYS)) {
       expect(read(file), `${key}: ${file} must contain ${symbol}`).toContain(symbol)
+    }
+    expect(GOVERNANCE_KEYS.allowedProviders.file).toBe(GOVERNANCE_KEYS.locked.file)
+    const store = parseTypeScript(GOVERNANCE_KEYS.locked.file)
+    expect(hasNamedImport(store, './fresh-lean-speech-defaults', 'ManagedPolicyAuthority')).toBe(true)
+    expect(
+      visit(
+        store,
+        (node) =>
+          ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.name.text === 'managedPolicyAuthority' &&
+          !!node.initializer &&
+          ts.isNewExpression(node.initializer) &&
+          ts.isIdentifier(node.initializer.expression) &&
+          node.initializer.expression.text === 'ManagedPolicyAuthority'
+      )
+    ).toHaveLength(1)
+    for (const method of ['parseLocked', 'parseAllowed'] as const) {
+      const calls = authorityCalls(store, method)
+      expect(calls.length, `store must call ManagedPolicyAuthority.${method}`).toBeGreaterThan(0)
+      expect(new Set(calls.map((call) => call.arguments[1]?.getText(store).replaceAll("'", '')))).toEqual(
+        new Set(['admin', 'user'])
+      )
     }
   })
 })
@@ -149,5 +242,57 @@ describe('the shipped examples and docs list only enforced controls', () => {
       licenseGateClaims(readFileSync(file, 'utf8')).map((line) => `${relative(REPO, file)}: ${line.trim()}`)
     )
     expect(offenders).toEqual([])
+  })
+})
+
+describe('managed-config policy authority parser compatibility', () => {
+  it('honors locked precedence and legacy lockedKeys while retaining malformed-policy unreadability', () => {
+    const legacyAlias = new ManagedPolicyAuthority()
+    expect(legacyAlias.parseLocked(JSON.stringify({ lockedKeys: ['provider', 'provider'] }), 'user')).toEqual([
+      'provider'
+    ])
+    expect(legacyAlias.readable).toBe(true)
+
+    const explicitEmpty = new ManagedPolicyAuthority()
+    expect(explicitEmpty.parseLocked(JSON.stringify({ locked: [], lockedKeys: ['provider'] }), 'admin')).toEqual([])
+    expect(explicitEmpty.readable).toBe(true)
+
+    const malformedExplicitAdmin = new ManagedPolicyAuthority()
+    expect(
+      malformedExplicitAdmin.parseLocked(JSON.stringify({ locked: null, lockedKeys: ['provider'] }), 'admin')
+    ).toEqual([])
+    expect(malformedExplicitAdmin.readable).toBe(false)
+
+    const malformedUser = new ManagedPolicyAuthority()
+    expect(malformedUser.parseLocked('{', 'user')).toEqual([])
+    expect(malformedUser.readable).toBe(false)
+  })
+
+  it('distinguishes absent allowedProviders from explicit deny-all and malformed policy', () => {
+    const absent = new ManagedPolicyAuthority()
+    expect(absent.parseAllowed(JSON.stringify({ provider: 'openai' }), 'user')).toBeNull()
+    expect(absent.readable).toBe(true)
+
+    const denyAll = new ManagedPolicyAuthority()
+    expect(denyAll.parseAllowed(JSON.stringify({ allowedProviders: [] }), 'admin')).toEqual([])
+    expect(denyAll.readable).toBe(true)
+
+    const duplicates = new ManagedPolicyAuthority()
+    expect(
+      duplicates.parseAllowed(JSON.stringify({ allowedProviders: ['openai', 'openai', 'anthropic'] }), 'user')
+    ).toEqual(['openai', 'anthropic'])
+    expect(duplicates.readable).toBe(true)
+
+    const nullPolicy = new ManagedPolicyAuthority()
+    expect(nullPolicy.parseAllowed(JSON.stringify({ allowedProviders: null }), 'admin')).toBeNull()
+    expect(nullPolicy.readable).toBe(false)
+
+    const mixedTypes = new ManagedPolicyAuthority()
+    expect(mixedTypes.parseAllowed(JSON.stringify({ allowedProviders: ['openai', 7] }), 'user')).toEqual(['openai'])
+    expect(mixedTypes.readable).toBe(false)
+
+    const malformedJson = new ManagedPolicyAuthority()
+    expect(malformedJson.parseAllowed('{', 'admin')).toBeNull()
+    expect(malformedJson.readable).toBe(false)
   })
 })

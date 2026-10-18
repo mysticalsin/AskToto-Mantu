@@ -207,6 +207,23 @@ async function admitted<T>(
     throw new SpeakerEmbeddingBusyError()
   }
   const epoch = ownerEpoch[owner]
+  admittedRequests++
+  admittedPcmBytes += bytes
+  try {
+    return await run(epoch)
+  } finally {
+    admittedPcmBytes -= bytes
+    admittedRequests--
+  }
+}
+
+/** Only authorized host work may delay another owner's release or supersede an older teardown. */
+async function activeHostWork<T>(
+  owner: SpeakerEmbeddingOwner,
+  epoch: number,
+  run: () => Promise<T>
+): Promise<T> {
+  if (ownerEpoch[owner] !== epoch) throw new Error('Speaker embedding processing was cancelled.')
   let finishWork = (): void => {}
   const work: AdmittedWork = {
     done: new Promise<void>((resolve) => {
@@ -214,15 +231,11 @@ async function admitted<T>(
     }),
     finish: () => finishWork()
   }
-  admittedRequests++
   ownerAdmissionVersion[owner]++
-  admittedPcmBytes += bytes
   admittedWorkByOwner[owner].add(work)
   try {
-    return await run(epoch)
+    return await run()
   } finally {
-    admittedPcmBytes -= bytes
-    admittedRequests--
     admittedWorkByOwner[owner].delete(work)
     work.finish()
   }
@@ -234,8 +247,10 @@ export async function speakerEmbeddingAvailable(
 ): Promise<boolean> {
   if (!model) return false
   try {
-    await assertLegacyRuntimeClosure('speaker embedding')
-    await admitted(owner, 0, (epoch) => requestHost({ type: 'warmup', model }, owner, epoch))
+    await admitted(owner, 0, async (epoch) => {
+      await assertLegacyRuntimeClosure('speaker embedding')
+      return activeHostWork(owner, epoch, () => requestHost({ type: 'warmup', model }, owner, epoch))
+    })
     return true
   } catch (error) {
     if (error instanceof SpeakerEmbeddingBusyError) throw error
@@ -253,26 +268,29 @@ export async function computeSpeakerEmbedding(
   for (const sample of samples) {
     if (!Number.isFinite(sample)) throw new Error('Speaker PCM samples must be finite.')
   }
-  try {
-    await assertLegacyRuntimeClosure('speaker embedding')
-  } catch {
-    return null
-  }
   // Immutable admission accounting: caller-owned views may be detached/resized while this awaits.
+  // Capacity refusal precedes authority refusal; valid work with capacity still returns null on denial.
   const admittedBytes = samples.byteLength
   return admitted(owner, admittedBytes, async (epoch) => {
     // Reserve before this allocation. A busy caller never creates a second PCM buffer.
     const pcm = new Float32Array(samples).buffer
-    const response = await requestHost({ type: 'embed', model, pcm }, owner, epoch)
-    if (!(response.embedding instanceof ArrayBuffer)) throw new Error('Speaker helper returned no embedding.')
-    const embedding = new Float32Array(response.embedding)
-    if (embedding.length !== SPEAKER_EMBEDDING_DIMENSIONS) {
-      throw new Error(`Speaker embedding must contain exactly ${SPEAKER_EMBEDDING_DIMENSIONS} values.`)
+    try {
+      await assertLegacyRuntimeClosure('speaker embedding')
+    } catch {
+      return null
     }
-    for (const value of embedding) {
-      if (!Number.isFinite(value)) throw new Error('Speaker embedding values must be finite.')
-    }
-    return new Float32Array(embedding)
+    return activeHostWork(owner, epoch, async () => {
+      const response = await requestHost({ type: 'embed', model, pcm }, owner, epoch)
+      if (!(response.embedding instanceof ArrayBuffer)) throw new Error('Speaker helper returned no embedding.')
+      const embedding = new Float32Array(response.embedding)
+      if (embedding.length !== SPEAKER_EMBEDDING_DIMENSIONS) {
+        throw new Error(`Speaker embedding must contain exactly ${SPEAKER_EMBEDDING_DIMENSIONS} values.`)
+      }
+      for (const value of embedding) {
+        if (!Number.isFinite(value)) throw new Error('Speaker embedding values must be finite.')
+      }
+      return new Float32Array(embedding)
+    })
   })
 }
 
@@ -302,9 +320,11 @@ export async function releaseSpeakerEmbedding(
   return hasNewOwner() ? 'superseded' : 'released'
 }
 
-/** Quit-time teardown only: kill the live helper outright, skipping releaseSpeakerEmbedding's owner/epoch
- *  coordination (there is no other owner left to wait for). Signal-only, never waits; safe when idle. */
+/** Quit-time teardown only: invalidate both owners and kill the live helper outright without waiting
+ *  for releaseSpeakerEmbedding's owner coordination. Signal-only, never waits; safe when idle. */
 export function killSpeakerEmbeddingHostForQuit(): void {
+  ownerEpoch.live++
+  ownerEpoch.import++
   try {
     current?.child.kill()
   } catch (error) {

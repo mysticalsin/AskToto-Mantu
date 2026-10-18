@@ -167,11 +167,21 @@ describe('main speech capture transition owner', () => {
       ceilingId: ceiling.event.ceilingId,
       tracks: [{ track: 'microphone', finalSequence: 20, finalSampleOffset: 32_000 }]
     }
-    expect(h.acknowledgeCeiling({ ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 32_002 }] })).toBe(false)
+    // Before the first receipt, this owner enforces global bounds and exact identity/track inventory.
+    // The IPC owner separately knows the captured PCM frontier.
+    for (const invalid of [
+      { ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 230_400_001 }] },
+      { ...ack, captureGeneration: 5 },
+      { ...ack, tracks: [{ ...ack.tracks[0], track: 'system' }] }
+    ]) expect(h.acknowledgeCeiling(invalid)).toBe(false)
+    expect(h.acknowledgeCeiling(ack)).toBe(true)
+    const conflicting = { ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 32_002 }] }
+    expect(h.acknowledgeCeiling(conflicting)).toBe(false)
     expect(h.acknowledgeCeiling(ack)).toBe(true)
     await expect(ceiling.applied).resolves.toEqual(ack)
     h.completeCeiling()
     expect(h.acknowledgeCeiling(ack)).toBe(true)
+    expect(h.acknowledgeCeiling(conflicting)).toBe(false)
     expect(h.acknowledgeCeiling({ ...ack, ceilingId: '00000000-0000-4000-8000-000000000999' })).toBe(false)
   })
 })

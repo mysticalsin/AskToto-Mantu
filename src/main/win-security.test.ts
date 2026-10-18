@@ -10,7 +10,8 @@ const probes = vi.hoisted(() => ({ count: 0 }))
 const managedBytesRace = vi.hoisted(() => ({
   afterOpen: null as ((path: string) => void) | null,
   beforeRead: null as ((path: string) => void) | null,
-  aclOutput: null as string | null
+  aclOutput: null as string | null,
+  captureProbe: null as ((args: unknown[]) => void) | null
 }))
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
@@ -18,6 +19,7 @@ vi.mock('node:child_process', async (importOriginal) => {
     ...actual,
     execFileSync: (...args: unknown[]) => {
       probes.count++
+      managedBytesRace.captureProbe?.(args)
       if (managedBytesRace.aclOutput !== null) return managedBytesRace.aclOutput
       return (actual.execFileSync as (...a: unknown[]) => unknown)(...args)
     }
@@ -54,6 +56,8 @@ import {
   evaluateAclTrust,
   isAdminManagedTrusted,
   readAclForTest,
+  aclProbeCommand,
+  parseAclOutput,
   readManagedPolicyAuthorityFile,
   readTrustedAdminManaged,
   readTrustedAdminManagedBytes,
@@ -73,6 +77,7 @@ afterEach(() => {
   managedBytesRace.afterOpen = null
   managedBytesRace.beforeRead = null
   managedBytesRace.aclOutput = null
+  managedBytesRace.captureProbe = null
 })
 
 // The ACL verdict memo is a module singleton; clear it before every test so the probe-count assertions
@@ -91,6 +96,65 @@ const USERS = 'S-1-5-32-545'
 const AUTH_USERS = 'S-1-5-11'
 const EVERYONE = 'S-1-1-0'
 const ATTACKER = 'S-1-5-21-111-222-333-1005' // a normal domain/local user RID
+
+describe('ACL probe transport and parser', () => {
+  it('passes a quoted Unicode path as UTF-8 data to a pinned encoded command', () => {
+    const path = String.raw`C:\temp\Métis $() &; ' quote\policy.json`
+    const spec = aclProbeCommand(path)
+    expect(spec.command).toBe(WINDOWS_POWERSHELL)
+    expect(spec.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    expect(spec.input).toEqual(Buffer.from(path, 'utf8'))
+    const script = Buffer.from(spec.args[3], 'base64').toString('utf16le')
+    expect(script).not.toContain(path)
+    expect(script).toContain('Get-Acl -LiteralPath $path')
+    expect(script).toContain('Microsoft.PowerShell.Security.psd1')
+  })
+
+  it('accepts a real SID and a single complete ACE', () => {
+    expect(parseAclOutput(JSON.stringify({ owner: SYSTEM, aces: { sid: SYSTEM, rights: FULL, type: 'Allow' } }))).toEqual({
+      owner: SYSTEM,
+      aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }]
+    })
+  })
+
+  it.each([
+    '',
+    'not json',
+    '{}',
+    JSON.stringify({ owner: '', aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] }),
+    JSON.stringify({ owner: SYSTEM, aces: [] }),
+    JSON.stringify({ owner: SYSTEM, aces: [{ sid: 'BUILTIN\\Users', rights: FULL, type: 'Allow' }] }),
+    JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: 'FullControl', type: 'Allow' }] })
+  ])('rejects incomplete or malformed ACL output: %s', (output) => {
+    expect(parseAclOutput(output)).toBeNull()
+  })
+
+  it('uses the encoded transport and fail-closed parser through the actual ACL reader', () => {
+    const path = "C:\\temp\\Métis $env:USERNAME $(1+1) `n &; ' quote\\policy.json"
+    const captured: unknown[][] = []
+    managedBytesRace.captureProbe = (args) => captured.push(args)
+    const acl: AclProbe = { owner: SYSTEM, aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] }
+    managedBytesRace.aclOutput = JSON.stringify(acl)
+    expect(readAclForTest(path)).toEqual(acl)
+    expect(captured).toHaveLength(1)
+    const [command, args, options] = captured[0] as [string, string[], { input: Buffer; stdio: string[]; timeout: number }]
+    expect(command).toBe(WINDOWS_POWERSHELL)
+    expect(args).toHaveLength(4)
+    expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    expect(options.input).toEqual(Buffer.from(path, 'utf8'))
+    expect(options.stdio).toEqual(['pipe', 'pipe', 'ignore'])
+    expect(options.timeout).toBe(8000)
+    const script = Buffer.from(args[3], 'base64').toString('utf16le')
+    expect(script).not.toContain(path)
+    expect(script).not.toContain('$env:USERNAME')
+    expect(script).not.toContain('$(1+1)')
+    expect(script).toContain('Get-Acl -LiteralPath $path')
+    expect(script).toContain('Microsoft.PowerShell.Security.psd1')
+    managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: 'FullControl', type: 'Allow' }] })
+    expect(readAclForTest(path)).toBeNull()
+    expect(captured).toHaveLength(2)
+  })
+})
 
 describe('WINDOWS_POWERSHELL — the shared pinned interpreter path', () => {
   // Every main-process powershell spawn resolves through this constant, so pin its shape here once:
@@ -452,7 +516,9 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
   it('forces a new descriptor-bound ACL probe at an explicit authority boundary', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(Date.now())
+    managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }] })
     const first = readTrustedAdminManaged(file)
+    expect(first).toBe(CONTENT)
     const fresh = await readManagedPolicyAuthorityFile(file, undefined, true)
     expect(fresh.status).toBe('present')
     if (fresh.status === 'present') expect(Buffer.from(fresh.bytes).toString('utf8')).toBe(first)

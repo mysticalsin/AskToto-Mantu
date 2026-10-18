@@ -469,13 +469,20 @@ async function probeRefreshToken(): Promise<'valid' | 'revoked' | 'unknown'> {
 async function revalidateSession(): Promise<void> {
   loadSession()
   if (!session) return
+  const owner = session
+  const ownerEpoch = speechAuthSessionEpoch
+  const ownerProfile = app.getPath('userData')
   const reason = expiryReason(session, readConfig())
   if (reason) {
     clearSession()
     auditLog('auth.expired', { reason })
     return
   }
-  if ((await probeRefreshToken()) === 'revoked') {
+  const result = await probeRefreshToken()
+  // Sign-in, sign-out and profile recovery can replace this owner while MSAL is pending. A stale
+  // rejection must not clear the replacement session, its cache or its privileged surfaces.
+  if (session !== owner || speechAuthSessionEpoch !== ownerEpoch || app.getPath('userData') !== ownerProfile) return
+  if (result === 'revoked') {
     clearSession()
     auditLog('auth.refresh_failed', {})
   }

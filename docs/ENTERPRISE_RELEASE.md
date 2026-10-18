@@ -1,77 +1,10 @@
-# Enterprise Release Checklist - Métis
+# Release build requirements
 
-**Each platform's public release is blocked until that platform's production signing lane passes.**
-A held or failing macOS lane never blocks a signed Windows release, and a failing Windows lane never
-blocks a notarized macOS release.
-
-`.github/workflows/release.yml` requires the full Apple Developer ID and notarization secret set before
-the macOS Electron DMG can publish, and a trusted Authenticode identity before Windows can publish. It
-does not publish an ad-hoc macOS artifact. The native SwiftUI ZIP is excluded from public releases until
-it has its own verified Developer ID signing and notarization pipeline. This repository holds no signing
-material, and a merged version bump is not a published release. Unsigned owner-channel prereleases are a
-separate lane, described in `docs/SIGNING.md`.
-
-Use this before any customer build or public tag.
-
-**External-state check required:** a 2026-07-10 observation recorded GitHub Actions runs ending before
-their first step because of an organization billing block. Re-check the current run before naming that
-as today's cause; repository code cannot prove mutable GitHub billing or secret state. If it recurs,
-none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded Mantu IT ask.
-
-## Verified In Repo
-
-- Direct macOS updates publish through GitHub Releases in `electron-builder.yml`.
-- Direct Windows updates publish through the same feed.
-- Windows tagged release scripts fail if `WIN_CSC_*` signing inputs are missing. macOS tagged
-  release fails unless Developer ID + notarization inputs are present, then verifies Gatekeeper
-  acceptance before the macOS publish job can run.
-- `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
-- Machine-wide managed config can lock SSO, license server URL, provider policy, encryption, redaction, and retention. The license gate is compiled off until the licensing tickets re-enable and verify it, so it is not a lockable control. The Windows admin path is `%ProgramData%\Métis\managed-config.json` (`adminManagedConfigPath`), the only one the app reads.
-- The license server supports activation, heartbeat, revocation, expiry, and seat caps.
-
-## Operator Setup
-
-1. Deploy `license-server/` behind HTTPS.
-2. Set a long random `LICENSE_ADMIN_TOKEN`.
-3. Back up `licenses.json` daily.
-4. Mint the customer license and seat cap.
-5. Fill `build/managed-config.enterprise.example.json`.
-6. Deploy the filled file as machine-wide `managed-config.json`.
-7. Add release secrets in GitHub Actions. When the Apple set (`CSC_LINK`, `CSC_KEY_PASSWORD`,
-   `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) is complete, **delete the two
-   `process.platform === 'darwin'` guards in `src/main/updater.ts` in the same commit** — they exist
-   only because Squirrel.Mac cannot install over an ad-hoc-signed bundle, and leaving them in would
-   keep macOS in-app updates switched off after you have paid for the certificate. Note that
-   Squirrel validates a candidate against the *running* app, so every Mac already on an adhoc build
-   (1.8.3 / 1.8.4 / 1.8.7 and any adhoc 1.8.x) still needs one final manual DMG install before
-   in-app update starts working for them.
-8. Seed the `ffmpeg-sidecar-v1` release once (see "ffmpeg Sidecar Provisioning" below) — release CI cannot
-   build without it.
-9. Bump `package.json`'s `version`, then tag `vX.Y.Z` from `main` — the tag must exactly match, or
-   `release.yml`'s first step fails the job before any build work starts.
-10. Publish the update feed on `mysticalsin/Metis-Releases`, then **immediately push the release
-    tag to the Forgejo twin** (`ssh://forgejo/tony/Metis-Releases.git`). Forgejo push-mirrors both
-    repos to GitHub and deletes any ref it does not hold — a tag that exists only on GitHub gets
-    deleted on the next sync, which demotes the published release to a hidden draft and silently
-    rolls `/releases/latest` back to an older version (this happened to v1.6.3/v1.6.5/v1.6.6 on
-    2026-08-26). A release is not landed until its tag exists on both remotes. As a backstop, the
-    GitHub ruleset `protect-release-tags` on Metis-Releases blocks tag deletion outright; to
-    intentionally delete a release tag, disable the ruleset, delete, and re-arm it.
-11. The same mirror rule binds this code repo: `tony/AskToto-Mantu` on Forgejo push-mirrors to
-    GitHub every 8h and deletes any ref it does not hold. GitHub is private on the free plan, so
-    no ruleset backstop is possible here — the only protection is never leaving a ref on one
-    remote. Push through `bash scripts/push-both.sh <refspec>` (pushes GitHub and Forgejo in one
-    command, fails loudly if either is unreachable), and after merging a PR in the GitHub web UI,
-    fetch and push the merge to Forgejo before the next sync.
-12. Verify install, activation, heartbeat, revoke, and auto-update on a clean machine.
+Public source-version reference; no release authorization, private account status or qualification claim. Preserve manifest hashes, architecture-specific native payloads, update compatibility, provenance and fail-closed gates. Missing evidence, unexplained skips or failed acceptance block qualification.
 
 ## ffmpeg Sidecar Provisioning
 
-The reviewed platform binaries under `resources/ffmpeg/` are untracked, but their hash-pinned
-`manifest.json` and LGPL license are tracked in git. `.github/workflows/build.yml` and `release.yml`
-restore the binaries from this repo's `ffmpeg-sidecar-v1` GitHub release, with `actions/cache` as an
-optimization; the tracked manifest remains the verification trust anchor. Seed the release once from a
-checkout that already has the reviewed binaries:
+The tracked `resources/ffmpeg/manifest.json` and LGPL license define the reviewed binaries. CI restores binaries from the `ffmpeg-sidecar-v1` release and verifies them against the manifest; a cache hit is not a substitute for verification. All three platform assets are required. The following documents the complete seed operation for a separately authorized release operator; it is not a command to execute during development:
 
 ```bash
 cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64
@@ -81,138 +14,21 @@ gh release create ffmpeg-sidecar-v1 \
   /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe \
   resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt \
   --repo <owner>/<repo> --title "ffmpeg sidecar v1" \
-  --notes "Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s)."
+  --notes "Reviewed LGPL-only binaries; verify against manifest.json."
 ```
 
-One asset per binary pinned in `manifest.json` — three, not two. The mac build is **universal**, so
-both mac arches are load-bearing: `predist` runs `check-ffmpeg-sidecar.mjs mac arm64` *and* `mac x64`,
-and `check-packaged-runtime.mjs mac --arches=arm64,x64` hashes both `darwin-<arch>/ffmpeg` files back
-out of the finished `.app`. Omitting `ffmpeg-darwin-x64` does not yield an arm64-only build; it fails
-`npm run dist` on its second command, on every Mac and in CI's own `build-macos` job.
+Do not replace missing assets with arbitrary downloaded binaries or delete the verification gate. Build macOS assets from the reviewed source using `scripts/build-ffmpeg-sidecar-mac.sh arm64` and `scripts/build-ffmpeg-sidecar-mac.sh x64` on an authorized build host. The x64 cross-build on Apple Silicon needs `nasm` and Rosetta 2 for the executable verification step. The build verifies the source hash, disables GPL/nonfree/autodetected dependencies and checks for non-system dylibs. Preserve that portability check and the packaged hash checks. See [macOS sidecar rebuild](MAC_SIDECAR_REBUILD.md).
 
-Adding one asset to a release that already exists (no delete, no re-upload of the others):
+## Managed configuration
 
-```bash
-gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --clobber --repo <owner>/<repo>
-```
-
-Re-run the full seed above (deleting the old release first, `gh release delete ffmpeg-sidecar-v1 --repo
-<owner>/<repo>`) only if the reviewed binaries themselves change — CI's `scripts/check-ffmpeg-sidecar.mjs` verifies the
-downloaded binary's SHA256 against `manifest.json` regardless of how it was provisioned.
-
-### Building the macOS sidecar
-
-**Never seed a macOS binary copied from a package manager or from a build that picked up locally
-installed libraries.** A binary built on a Mac that has Homebrew links Homebrew's dylibs by absolute
-path, runs perfectly on that Mac, and then fails on every user's machine with `Library not loaded`.
-This shipped once: the seeded asset linked `/opt/homebrew/opt/sdl2/lib/libSDL2-2.0.0.dylib`, matched
-its reviewed SHA-256, and aborted under dyld on the CI runner.
-
-Build it from source instead — on a Mac, `./scripts/build-ffmpeg-sidecar-mac.sh arm64` and
-`./scripts/build-ffmpeg-sidecar-mac.sh x64`. The x64 asset is a **cross-build produced on Apple
-Silicon**: it needs `nasm` on the build host (x86 SIMD) and Rosetta 2 to run the licence-banner
-check, neither of which is linked into the result — see the `darwin-x64/ffmpeg` note in
-`resources/ffmpeg/manifest.json`. Without nasm that cross-build fails at `configure`, not at the
-licence check. Each run verifies
-the FFmpeg source tarball against the reviewed SHA-256, configures with `--disable-gpl
---disable-nonfree --disable-autodetect` (the last flag is what stops configure linking whatever it
-finds on the build machine), confirms with `otool -L` that the result links nothing outside `/usr/lib`
-and `/System/Library`, checks the LGPL banner, ad-hoc signs it, and prints the new SHA-256 plus the
-re-seed commands. **Full step-by-step, including how to verify it in the packaged app:
-[`MAC_SIDECAR_REBUILD.md`](MAC_SIDECAR_REBUILD.md).**
-
-`check-ffmpeg-sidecar.mjs` independently reads the Mach-O load commands and fails the build if the
-sidecar declares any non-system dylib, so a non-portable binary cannot reach a release even if it was
-seeded by mistake. That check runs from any host, so `node scripts/check-ffmpeg-sidecar.mjs mac arm64`
-is a valid pre-flight from a Windows or Linux checkout too.
-
-## Sherpa (Native ASR) Provisioning
-
-`sherpa-onnx-node` (the native Parakeet on-device ASR addon) ships as per-platform optional npm
-packages (`sherpa-onnx-darwin-arm64`, `-win-x64`, etc.). `scripts/check-sherpa-platform.mjs` is wired
-into every relevant npm script (`release`, `release:win`, `release:mas`, `release:win:store`,
-`installers*`, `dist:local`, `predist:win`) and hard-fails the build if the target platform's addon
-package isn't present, after first attempting an auto-provision (`npm install --force`). If
-auto-provision fails (no network access, or the package genuinely isn't published for that
-platform/arch), build on a native host or CI runner matching the target platform instead — there is
-no manual seeding step for this one, unlike the ffmpeg sidecar above.
-
-## Release CI Gates
-
-- `scripts/check-version-parity.mjs <mac|win>` runs first in each platform's build job: the pushed tag must equal
-  `v<package.json version>` exactly, and the feed must be able to take this platform's installers for that tag
-  (the rule below); otherwise the job stops before any build work.
-- `publish-macos` needs only `release-macos`, and `publish-windows` needs only `release-windows`; both reach the
-  shared source gate `release-quality` through their build job. A platform whose build fails, or whose signing
-  inputs are missing, is not published for that tag.
-- `scripts/publish-release.mjs` publishes one platform's exact asset set (macOS: DMG, ZIP, their blockmaps,
-  `latest-mac.yml`; Windows: Setup EXE, its blockmap, `latest.yml`) after checking the update
-  metadata against the bytes. The first platform for a tag goes to a fresh draft, is read back (asset set and
-  GitHub's sha256 digest of every asset), then becomes public and Latest. The second platform joins that public
-  release: installers first, then, only once GitHub's digests of those installers match, its update metadata.
-  Latest does not change. It refuses a prerelease (the owner channel), a release holding a foreign asset, and a
-  release holding this platform's assets only partially; a release already carrying this platform's complete,
-  verified assets is a no-op. It deletes leftover drafts only when every asset belongs to one of the two platform
-  release sets, including the other platform's leftover draft or an empty draft. The two publish jobs of one tag
-  take turns, so they never write the release at the same time.
-- A single-platform release is honest about what shipped: installed apps on the other platform find no update
-  metadata in it and keep their version, and the in-app check says the latest release is not yet published for
-  their platform.
-- Recovery: if a joining platform's upload is interrupted, its job stops before the update metadata is uploaded and
-  names the partial assets. Delete them (`gh release delete-asset v<version> <asset> --repo
-  mysticalsin/Metis-Releases`), then re-run the failed publish job. The build artifact is kept for one day; after
-  that, re-run that platform's build job too.
-
-## Direct Release Commands
-
-macOS:
-
-```bash
-npm run release
-```
-
-Windows:
-
-```bash
-npm run release:win
-```
-
-Windows releases are not deferred or allowed to publish unsigned. The tagged workflow fails closed
-unless `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, and `WIN_CSC_EXPECTED_SUBJECT` are provisioned, then
-verifies that the Authenticode certificate subject or common name matches that expected value exactly.
-Unsigned Windows candidates reach people only as owner-channel prereleases (`docs/SIGNING.md`).
-`Metis-Portable-*.exe` is built only for QA launch coverage, never promoted or published as a customer
-release asset, because it has no auto-update channel.
-
-## Store Release Commands
-
-Mac App Store:
-
-```bash
-MAS_PROVISIONING_PROFILE="/secure/path/Métis_AppStore.provisionprofile" npm run release:mas
-```
-
-Microsoft Store:
-
-```bash
-npm run release:win:store
-```
+Verify actual paths and implemented policy keys against this source version; public templates do not authorize or enact controls.
 
 ## Customer Control Proof
 
-Before shipping, demonstrate:
-
-- Managed config prevents user edits to locked keys.
-- Auto-update installs a newer signed direct-release build.
-
-Device licensing is **not** on this list, and must not be added back to it while enforcement is compiled
-off (MQA-068). The six seat/revocation/grace proofs that used to sit here — "a fresh install blocks when
-`licenseGateEnabled` is true", seat consumption, seat cap, revocation, offline grace — describe behaviour
-no shipped build can produce: `App.tsx`'s `LICENSE_ENFORCEMENT` and `Settings.tsx`'s `LICENSE_UI_ENABLED`
-are both `false`, so the gate never renders, there is no activation form, `licenseValid` can never be set
-and the revocation heartbeat never runs. A pre-ship proof that can never pass is worse than no proof: it
-gets ticked off. Restore them in the same change that flips both constants.
+MQA-068: `LICENSE_ENFORCEMENT = false` and `LICENSE_UI_ENABLED = false`; the device license gate is compiled off. A setting or separately deployed service does not activate these compiled-out paths. Do not advertise activation, seats or revocation as installed-app controls.
 
 ## Store Caveat
 
-Mac App Store builds must pass sandbox testing and Apple review. Métis's overlay, screen/system-audio capture, local CLI providers, and native ASR resources are all review-sensitive. Treat MAS as a separate Store profile, not a guarantee that the full direct build will be accepted unchanged.
+Distribution channels need separate platform qualification. Preserve original release bytes and provenance privately; rewritten source is not a new attestation for old binaries. Test packaged macOS/Windows lifecycle, encrypted upgrade, preservation, recovery, rollback and security before claiming readiness.
+
+The source-defined Windows machine policy path is `%ProgramData%\Métis\managed-config.json`; verify trusted administrator ownership and only implemented keys.

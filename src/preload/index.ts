@@ -11,6 +11,7 @@ import {
   type CaptureResult,
   type ScreenContextResult,
   type SaveMeeting,
+  type SaveDraftTranscriptResult,
   type SaveNote,
   type RecapExport,
   type MeetingSummary,
@@ -286,7 +287,7 @@ const api = {
   armAudio: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.armAudio, on),
   saveTranscript: (m: SaveMeeting): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveTranscript, m),
   // Periodic crash-recovery snapshot of an in-progress meeting — fire-and-forget, best-effort.
-  saveDraftTranscript: (m: SaveMeeting): Promise<void> => ipcRenderer.invoke(IPC.saveDraftTranscript, m),
+  saveDraftTranscript: (m: SaveMeeting): Promise<SaveDraftTranscriptResult> => ipcRenderer.invoke(IPC.saveDraftTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
   // Import audio file: pick → hand off to the main-owned background job. The overlay never receives raw audio bytes.
   importAudioPick: (): Promise<ImportAudioPickResult> => ipcRenderer.invoke(IPC.importAudioPick),

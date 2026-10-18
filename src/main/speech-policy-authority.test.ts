@@ -73,6 +73,55 @@ describe('strict speech policy identity', () => {
 })
 
 describe('speech policy scope high-water authority', () => {
+  it.each([
+    { version: NOW, result: 'conflict', event: { kind: 'revoked', reason: 'policy-conflict' } },
+    { version: NOW + 1, result: 'accepted', event: { kind: 'changed', reason: 'policy-changed' } }
+  ])('retires a live unmanaged proof on managed $result before another authority read', ({ version, result, event }) => {
+    const authority = new SpeechPolicyAuthority()
+    const currentIdentity = identity()
+    const events: unknown[] = []
+    authority.setProofListener((notification) => events.push(notification))
+    authority.observeIdentity(currentIdentity)
+    expect(authority.acceptUnmanaged(currentIdentity, NOW, 'unmanaged-1', NOW, 100)).toBe('unmanaged')
+    const pending = authority.capture(currentIdentity)
+
+    expect(authority.acceptUnmanaged(currentIdentity, NOW, 'unmanaged-1', NOW + 1, 101)).toBe('unmanaged')
+    expect(authority.acceptManaged(currentIdentity, policy(NOW - 1), NOW + 2, 'lower')).toBe('lower-version')
+    expect(events).toEqual([])
+    expect(authority.isCurrent(pending, currentIdentity)).toBe(true)
+    expect(authority.authorityStatus(currentIdentity, NOW + 2, 102).status).toBe('unmanaged')
+
+    expect(authority.acceptManaged(currentIdentity, policy(version), NOW + 3, 'managed-1')).toBe(result)
+    expect(events).toEqual([event])
+    expect(authority.isCurrent(pending, currentIdentity)).toBe(false)
+    expect(authority.authorityStatus(currentIdentity, NOW + 3, 103).status).toBe(
+      result === 'accepted' ? 'managed' : 'unverified'
+    )
+
+    expect(authority.acceptManaged(currentIdentity, policy(version), NOW + 4, 'managed-1')).toBe(result)
+    expect(events).toEqual([event])
+    if (result === 'conflict') {
+      expect(authority.acceptManaged(currentIdentity, policy(NOW - 1), NOW + 5, 'lower')).toBe('lower-version')
+      expect(authority.acceptManaged(currentIdentity, policy(NOW + 1), NOW + 6, 'recovery')).toBe('accepted')
+      expect(events).toEqual([event])
+      expect(authority.authorityStatus(currentIdentity, NOW + 6, 106).status).toBe('managed')
+    }
+  })
+
+  it.each([false, true])('does not notify for an inactive or ABA-retired unmanaged proof (ABA=%s)', (returnToScope) => {
+    const authority = new SpeechPolicyAuthority()
+    const first = identity()
+    const events: unknown[] = []
+    authority.setProofListener((event) => events.push(event))
+    authority.observeIdentity(first)
+    expect(authority.acceptUnmanaged(first, NOW, 'unmanaged-1', NOW, 100)).toBe('unmanaged')
+    authority.observeIdentity(identity('1123456789abcdef', 'device-02'))
+    if (returnToScope) authority.observeIdentity(first)
+
+    expect(authority.acceptManaged(first, policy(NOW + 1), NOW + 1, 'managed-1')).toBe('accepted')
+    expect(events).toEqual([])
+  })
+
   it('requires a verified signed-unmanaged receipt and advances identity across scope ABA', () => {
     const authority = new SpeechPolicyAuthority()
     const first = identity()

@@ -4,7 +4,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import type { AnswerState } from './state'
-import type { SaveMeeting, TranscriptLine } from '@shared/ipc'
+import type { SaveDraftTranscriptResult, SaveMeeting, TranscriptLine } from '@shared/ipc'
 import { recapPersistAction } from './lib/transcript'
 import {
   OwnedOperationGate, RecapWriteCoordinator, beginOwnedMeetingExit,
@@ -344,5 +344,163 @@ describe('actual App generated-write to Review manual-edit wiring', () => {
     expect(context.setPastMeeting).not.toHaveBeenCalled()
     expect(editor.window.toto.recallUpdateRecap).not.toHaveBeenCalled()
     expect(target).toBeNull()
+  })
+})
+
+describe('actual App periodic draft autosave ownership', () => {
+  function autosaveHost(listening = true, currentLines = lines) {
+    const writes: ReturnType<typeof deferred<SaveDraftTranscriptResult>>[] = []
+    const ticks: Array<() => void> = []
+    const cleanups: Array<() => void> = []
+    const saveDraftTranscript = vi.fn((_payload: SaveMeeting) => {
+      const write = deferred<SaveDraftTranscriptResult>()
+      writes.push(write)
+      return write.promise
+    })
+    const context = vm.createContext({
+      TITLE_BUDGET: 50, mode: 'meeting', listen: { listening },
+      meetingStartRef: ref(100), autosaveLinesRef: ref(currentLines), autosaveFailsRef: ref(0),
+      setAutosaveWarn: vi.fn(),
+      window: { toto: { saveDraftTranscript } },
+      setInterval: vi.fn((tick: () => void, _ms: number) => { ticks.push(tick); return ticks.length }),
+      clearInterval: vi.fn()
+    })
+    context.defaultMeetingTitle = callback('defaultMeetingTitle', context)
+    const node = uniqueNode(app, node => ts.isCallExpression(node) &&
+      node.expression.getText(app) === 'useEffect' &&
+      node.arguments[0]?.getText(app).includes('const AUTOSAVE_MS = 60_000')) as ts.CallExpression
+    const effect = evaluate<() => (() => void) | undefined>(node.arguments[0]!.getText(app), context)
+    return {
+      context, saveDraftTranscript, writes, ticks,
+      start() {
+        const cleanup = effect()
+        if (cleanup) cleanups.push(cleanup)
+        return cleanup
+      },
+      async settle(index: number, outcome: 'success' | 'failure' | 'failed' | 'disabled') {
+        if (outcome === 'success') writes[index]!.resolve({ status: 'saved' })
+        else if (outcome === 'failed' || outcome === 'disabled') writes[index]!.resolve({ status: outcome })
+        else writes[index]!.reject(new Error('Synthetic draft IPC failure'))
+        await new Promise<void>(resolve => setImmediate(resolve))
+      },
+      async dispose() {
+        cleanups.forEach(cleanup => cleanup())
+        writes.forEach(write => write.resolve({ status: 'disabled' }))
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
+    }
+  }
+
+  it.each([
+    { retirement: 'changed meeting without cleanup', outcome: 'success' },
+    { retirement: 'changed meeting without cleanup', outcome: 'failure' },
+    { retirement: 'changed meeting without cleanup', outcome: 'failed' },
+    { retirement: 'changed meeting without cleanup', outcome: 'disabled' },
+    { retirement: 'same meeting after cleanup', outcome: 'success' },
+    { retirement: 'same meeting after cleanup', outcome: 'failure' },
+    { retirement: 'same meeting after cleanup', outcome: 'failed' },
+    { retirement: 'same meeting after cleanup', outcome: 'disabled' }
+  ] as const)('a late $outcome cannot change the active warning after $retirement', async ({ retirement, outcome }) => {
+    const h = autosaveHost()
+    try {
+      const cleanup = h.start()!
+      h.ticks[0]!() // A remains held while the active owner accumulates its own failures.
+      let activeTick = h.ticks[0]!
+      if (retirement === 'changed meeting without cleanup') h.context.meetingStartRef.current = 200
+      else {
+        cleanup()
+        expect(h.context.clearInterval).toHaveBeenCalledExactlyOnceWith(1)
+        h.start() // Same startedAt deliberately proves the lifetime fence independently of identity.
+        activeTick = h.ticks[1]!
+      }
+      activeTick()
+      await h.settle(1, 'failure')
+      activeTick()
+      await h.settle(2, 'failure')
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(true)
+      h.context.setAutosaveWarn.mockClear()
+      await h.settle(0, outcome)
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).not.toHaveBeenCalled()
+    } finally {
+      await h.dispose()
+    }
+  })
+
+  it('preserves the actual interval, payload, two-failure threshold and current-success reset', async () => {
+    const h = autosaveHost()
+    try {
+      h.start()
+      expect(h.context.setInterval).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 60_000)
+      expect(h.context.autosaveFailsRef.current).toBe(0)
+      expect(h.context.setAutosaveWarn).toHaveBeenCalledExactlyOnceWith(false)
+      h.context.setAutosaveWarn.mockClear()
+      h.ticks[0]!()
+      expect(h.saveDraftTranscript).toHaveBeenCalledExactlyOnceWith({
+        title: 'Synthetic meeting A speech.', mode: 'meeting', startedAt: 100, lines, recap: ''
+      })
+      await h.settle(0, 'failure')
+      expect(h.context.autosaveFailsRef.current).toBe(1)
+      expect(h.context.setAutosaveWarn).not.toHaveBeenCalled()
+      h.ticks[0]!()
+      await h.settle(1, 'failure')
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).toHaveBeenCalledExactlyOnceWith(true)
+      h.ticks[0]!()
+      await h.settle(2, 'success')
+      expect(h.context.autosaveFailsRef.current).toBe(0)
+      expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(false)
+    } finally {
+      await h.dispose()
+    }
+  })
+
+  it('counts failed receipts and treats retention-disabled as neither saved nor failed', async () => {
+    const h = autosaveHost()
+    try {
+      h.start()
+      h.ticks[0]!()
+      await h.settle(0, 'failed')
+      h.ticks[0]!()
+      await h.settle(1, 'disabled')
+      expect(h.context.autosaveFailsRef.current).toBe(1)
+      h.ticks[0]!()
+      await h.settle(2, 'failed')
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(true)
+      h.context.setAutosaveWarn.mockClear()
+      h.ticks[0]!()
+      await h.settle(3, 'disabled')
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).not.toHaveBeenCalled()
+    } finally {
+      await h.dispose()
+    }
+  })
+
+  it('does not schedule autosave while not listening', async () => {
+    const h = autosaveHost(false)
+    try {
+      expect(h.start()).toBeUndefined()
+      expect(h.context.setInterval).not.toHaveBeenCalled()
+      expect(h.context.setAutosaveWarn).not.toHaveBeenCalled()
+      expect(h.saveDraftTranscript).not.toHaveBeenCalled()
+    } finally {
+      await h.dispose()
+    }
+  })
+
+  it('skips an empty transcript tick and clears the actual interval on cleanup', async () => {
+    const h = autosaveHost(true, [])
+    try {
+      const cleanup = h.start()!
+      h.ticks[0]!()
+      expect(h.saveDraftTranscript).not.toHaveBeenCalled()
+      cleanup()
+      expect(h.context.clearInterval).toHaveBeenCalledExactlyOnceWith(1)
+    } finally {
+      await h.dispose()
+    }
   })
 })

@@ -11,6 +11,7 @@ import {
 import { CLOUD_STT_CREDENTIALS_MISSING } from './credentials'
 import { mapCloudFinalsToLines } from '../../shared/cloud-stt-line-map'
 import { normalizeNova3ResultsMessage } from './adapter'
+import { mainLog } from '../logger'
 
 class MockWs extends EventEmitter {
   static OPEN = 1
@@ -122,6 +123,198 @@ class ErrorOnTerminateWs extends MockWs {
 }
 
 describe('CloudSttLiveSession', () => {
+  it.each([
+    { provider: 'cloudflare-nova3' as const, failedChannel: 'you' as const },
+    { provider: 'cloudflare-nova3' as const, failedChannel: 'them' as const },
+    { provider: 'soniox' as const, failedChannel: 'you' as const },
+    { provider: 'soniox' as const, failedChannel: 'them' as const }
+  ])('surfaces a synchronous $provider PCM send failure on $failedChannel once and keeps the other track usable', async ({ provider, failedChannel }) => {
+    TrackingMockWs.reset()
+    const errors: string[] = []
+    const finals: unknown[] = []
+    const warn = vi.spyOn(mainLog, 'warn').mockImplementation(() => {})
+    let session!: CloudSttLiveSession
+    session = new CloudSttLiveSession(
+      {
+        provider,
+        cloudflareToken: 'test-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        sonioxApiKey: 'test-key',
+        WebSocketImpl: TrackingMockWs as unknown as typeof WebSocket
+      },
+      {
+        onFinal: (line) => finals.push(line),
+        onError: (message) => {
+          errors.push(message)
+          // Reentrant renderer/caller work must already see the failed track as closed to PCM.
+          session.pushFloat32(failedChannel, new Float32Array([0.2]))
+        }
+      }
+    )
+    try {
+      await expect(session.start()).resolves.toEqual({ ok: true })
+      const tracks = (session as unknown as { tracks: Map<string, { ws: TrackingMockWs }> }).tracks
+      const failed = tracks.get(failedChannel)!.ws
+      const survivingChannel = failedChannel === 'you' ? 'them' : 'you'
+      const surviving = tracks.get(survivingChannel)!.ws
+      const finalMessage = provider === 'soniox'
+        ? { tokens: [{ text: 'Preserved', is_final: true, start_ms: 0, end_ms: 200 }] }
+        : { type: 'Results', is_final: true, channel: { alternatives: [{ words: [{ word: 'Preserved', start: 0, end: 0.2 }] }] } }
+      failed.emit('message', Buffer.from(JSON.stringify(finalMessage)))
+      expect(finals).toEqual([expect.objectContaining({ text: 'Preserved', speaker: failedChannel })])
+      const originalSend = failed.send.bind(failed)
+      const failingSend = vi.fn((data: unknown): void => {
+        if (Buffer.isBuffer(data)) throw new Error('synthetic-private-provider-diagnostic')
+        originalSend(data)
+      })
+      failed.send = failingSend
+
+      expect(() => session.pushFloat32(failedChannel, new Float32Array([0.1]))).not.toThrow()
+      session.pushFloat32(failedChannel, new Float32Array([0.1]))
+      failed.emit('error', new Error('synthetic-private-provider-diagnostic'))
+      failed.close()
+      session.pushFloat32(survivingChannel, new Float32Array([0.1]))
+      surviving.emit('message', Buffer.from(JSON.stringify(finalMessage)))
+
+      expect(errors).toEqual([`Cloud STT audio could not be sent (${failedChannel}).`])
+      expect(failingSend).toHaveBeenCalledTimes(1)
+      expect(warn).not.toHaveBeenCalled()
+      expect(surviving.sent.filter(Buffer.isBuffer)).toHaveLength(1)
+      expect(finals).toEqual([
+        expect.objectContaining({ text: 'Preserved', speaker: failedChannel }),
+        expect.objectContaining({ text: 'Preserved', speaker: survivingChannel })
+      ])
+    } finally {
+      session.close()
+      warn.mockRestore()
+    }
+  })
+
+  it.each(['explicit', 'graceful'] as const)('does not attempt PCM sends or report send failures after %s shutdown', async (kind) => {
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: MockWs }> }).tracks
+    const senders = [...tracks.values()].map(({ ws }) => {
+      const originalSend = ws.send.bind(ws)
+      const send = vi.fn((data: unknown): void => {
+        if (Buffer.isBuffer(data)) throw new Error('synthetic-private-provider-diagnostic')
+        originalSend(data)
+      })
+      ws.send = send
+      return send
+    })
+    if (kind === 'explicit') session.close()
+    else await expect(session.closeGracefully(1_000)).resolves.toEqual({ timedOut: false })
+    const counts = senders.map((send) => send.mock.calls.length)
+    session.pushFloat32('you', new Float32Array([0.1]))
+    session.pushFloat32('them', new Float32Array([0.1]))
+    expect(senders.map((send) => send.mock.calls.length)).toEqual(counts)
+    expect(errors).toEqual([])
+  })
+
+  it.each(['explicit', 'graceful'] as const)('keeps a send exception quiet when send synchronously initiates %s shutdown', async (kind) => {
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: MockWs }> }).tracks
+    const you = tracks.get('you')!.ws
+    const originalSend = you.send.bind(you)
+    let stopping: Promise<{ timedOut: boolean }> | undefined
+    you.send = (data: unknown): void => {
+      if (!Buffer.isBuffer(data)) return originalSend(data)
+      if (kind === 'explicit') session.close()
+      else stopping = session.closeGracefully(1_000)
+      throw new Error('synthetic-private-provider-diagnostic')
+    }
+    session.pushFloat32('you', new Float32Array([0.1]))
+    if (stopping) await expect(stopping).resolves.toEqual({ timedOut: false })
+    expect(errors).toEqual([])
+  })
+
+  it.each([1000, 1006])('reports an unexpected post-open close (%s), preserves finals, and leaves the other track usable', async (code) => {
+    TrackingMockWs.reset()
+    const errors: string[] = []
+    const finals: unknown[] = []
+    const session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        cloudflareToken: 'test-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: TrackingMockWs as unknown as typeof WebSocket
+      },
+      { onFinal: (line) => finals.push(line), onError: (message) => errors.push(message) }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const [you, them] = TrackingMockWs.instances
+    you.emit('message', Buffer.from(JSON.stringify({
+      type: 'Results', is_final: true,
+      channel: { alternatives: [{ words: [{ word: 'Preserved', start: 0, end: 0.2 }] }] }
+    })))
+    you.readyState = MockWs.CLOSED
+    you.emit('close', code, Buffer.alloc(0))
+    you.emit('close', code, Buffer.alloc(0))
+    session.pushFloat32('you', new Float32Array([0.1]))
+    session.pushFloat32('them', new Float32Array([0.1]))
+    expect(errors).toEqual(['Cloud STT provider connection closed unexpectedly (you).'])
+    expect(finals).toEqual([expect.objectContaining({ text: 'Preserved' })])
+    expect(you.sent.filter(Buffer.isBuffer)).toHaveLength(0)
+    expect(them.sent.filter(Buffer.isBuffer)).toHaveLength(1)
+    session.close()
+    expect(errors).toHaveLength(1)
+  })
+
+  it('reports an established socket error and subsequent close only once per failed track', async () => {
+    TrackingMockWs.reset()
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: TrackingMockWs as unknown as typeof WebSocket },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const [you, them] = TrackingMockWs.instances
+    you.emit('error', new Error('synthetic transport error'))
+    session.pushFloat32('you', new Float32Array([0.1]))
+    you.close()
+    them.close()
+    expect(errors).toEqual([
+      'Cloud STT soniox WebSocket error (you)',
+      'Cloud STT provider connection closed unexpectedly (them).'
+    ])
+    expect(you.sent.filter(Buffer.isBuffer)).toHaveLength(0)
+    session.close()
+  })
+
+  it('does not report transport loss for an explicit close', async () => {
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: ErrorOnTerminateWs as unknown as typeof WebSocket },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    session.close()
+    expect(errors).toEqual([])
+  })
+
+  it('does not report transport loss during provider-confirmed graceful finalization', async () => {
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    await expect(session.closeGracefully(1_000)).resolves.toEqual({ timedOut: false })
+    expect(errors).toEqual([])
+  })
+
   it('returns honest CREDENTIALS error without opening sockets when Nova creds missing', async () => {
     const onFinal = vi.fn()
     const session = new CloudSttLiveSession(

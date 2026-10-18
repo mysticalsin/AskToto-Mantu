@@ -821,6 +821,7 @@ import {
   asrModelProtocolSpeechPackOptions
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
+import { createImportMeetingWriteAdapters } from './import-meeting-write-adapters'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
@@ -1967,7 +1968,7 @@ function initializeImportJobs(): void {
         mainLog.error('[intelligence-index] import-idle pass failed:', e)
       )
     },
-    saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
+    ...createImportMeetingWriteAdapters({ getSettings, saveMeeting, updateMeetingRecap }),
     deleteMeeting,
     enqueueIngest,
     recordMeetingSummarized,
@@ -1976,10 +1977,6 @@ function initializeImportJobs(): void {
       if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: file } })
     },
     generateRecap: runImportedRecap,
-    updateRecap: async (file, recap, status) => {
-      const result = await updateMeetingRecap(getSettings(), file, recap, status)
-      if (!result.ok) throw new Error(result.error || 'Could not save the imported summary.')
-    },
     onChange: publishImportJob,
     onCancel: closeImportDecoder,
     personaMode: () => getSettings().mode,
@@ -9082,16 +9079,16 @@ function registerIpc(): void {
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while
-  // Listen is active — see App.tsx). Never throws into the caller; a failed autosave must not interrupt
+  // Listen is active — see App.tsx). Ordinary failures return a content-free receipt and must not interrupt
   // the meeting. See saveDraftTranscript's own doc comment for why this exists (crash/force-quit recovery).
   ipcMain.handle(IPC.saveDraftTranscript, async (e, raw) => {
     assertMainWindow(e)
-    if (!requireAuth()) return
+    if (!requireAuth()) return { status: 'failed' }
     const parsed = SaveMeetingSchema.safeParse(raw)
-    if (!parsed.success) return
+    if (!parsed.success) return { status: 'failed' }
     // Same provisional-line guard as the real saveTranscript handler above — this periodic crash-
     // recovery snapshot must never resurrect a UI-only "…" placeholder into a recovered draft.
-    await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
+    return await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {

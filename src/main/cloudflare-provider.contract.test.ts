@@ -14,9 +14,11 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import ts from 'typescript'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { PROVIDERS } from '@shared/providers'
+import { providerEnvironmentVariable } from './secrets'
 import {
   COOLDOWN_MS,
   isCoolingDown,
@@ -26,18 +28,78 @@ import {
   resetAllProviderHealth
 } from './llm/provider-health'
 
+// Only the pure provider-name lookup is executed; no profile or encryption backend is opened here.
+vi.mock('electron', () => ({ app: {}, safeStorage: {} }))
+
 // Normalize CRLF to LF so every anchor is line-ending independent on a Windows checkout.
 const read = (...p: string[]): string => readFileSync(join(__dirname, ...p), 'utf8').replace(/\r\n/g, '\n')
 
 const indexSource = read('index.ts')
 const ingestSource = read('brain', 'ingest.ts')
 const storeSource = read('store.ts')
+const secretsSource = read('secrets.ts')
 const openaiSource = read('llm', 'openai.ts')
 const settingsSource = read('..', 'renderer', 'src', 'features', 'settings', 'AiSection.tsx')
 const indexHtml = read('..', 'renderer', 'index.html')
 
+/** Follow the moved map through the actual reader and both encrypted writer branches. */
+function encryptedProxyKeyRoute(store: string, secrets: string): boolean {
+  const parse = (text: string) => ts.createSourceFile('keys.ts', text, ts.ScriptTarget.Latest, true)
+  const nodes = (root: ts.Node): ts.Node[] => {
+    const found: ts.Node[] = []
+    const visit = (node: ts.Node): void => { found.push(node); ts.forEachChild(node, visit) }
+    visit(root)
+    return found
+  }
+  const compact = (node: ts.Node) => node.getText().replace(/\s/g, '')
+  const source = parse(store)
+  const secretSource = parse(secrets)
+  const imported = (name: string, module: string) => source.statements.some((node) =>
+    ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === module &&
+    !node.importClause?.isTypeOnly && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings) &&
+    node.importClause.namedBindings.elements.some((item) => item.name.text === name && !item.propertyName && !item.isTypeOnly))
+  const functionBody = (file: ts.SourceFile, name: string) => file.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name
+  )?.body
+  const getter = functionBody(source, 'getApiKey')
+  const setter = functionBody(source, 'setApiKey')
+  const lookup = functionBody(secretSource, 'providerEnvironmentVariable')
+  if (!getter || !setter || !lookup || !imported('providerEnvironmentVariable', './secrets') ||
+    !imported('encryptSecret', './secrets') || !imported('decryptSecret', './secrets') || !imported('safeStorage', 'electron')) return false
+  const secretNodes = nodes(secretSource)
+  const map = secretNodes.find((node): node is ts.VariableDeclaration => ts.isVariableDeclaration(node) && node.name.getText() === 'PROVIDER_ENV_VARIABLE')
+  if (!map?.initializer || !ts.isObjectLiteralExpression(map.initializer) || !map.initializer.properties.some(
+    (node) => ts.isPropertyAssignment(node) && node.name.getText() === 'cloudflare' && ts.isStringLiteral(node.initializer) && node.initializer.text === 'METIS_PROXY_KEY'
+  ) || !lookup.statements.some((node) => ts.isReturnStatement(node) && node.expression?.getText() === 'PROVIDER_ENV_VARIABLE[provider]')) return false
+  const reader = nodes(getter)
+  if (reader.some((node) => ts.isVariableDeclaration(node) && node.name.getText() === 'providerEnvironmentVariable')) return false
+  const env = reader.find((node) => ts.isVariableDeclaration(node) && compact(node) === 'env=process.env[providerEnvironmentVariable(provider)]')
+  const liveEnv = getter.statements.find((node) => ts.isIfStatement(node) && compact(node) === 'if(env)returnenv')
+  const cached = reader.find((node) => ts.isCallExpression(node) && compact(node) === '_apiKeyCache.has(provider)')
+  const readerHas = (text: string) => reader.some((node) => ts.isCallExpression(node) && compact(node) === text)
+  if (!env || !liveEnv || !cached || env.pos >= liveEnv.pos || liveEnv.pos >= cached.pos ||
+    !readerHas('readFileSync(keyPath(provider))') || !readerHas('decryptSecret(buf.subarray(AES_KEY_MARKER.length))') ||
+    !readerHas('safeStorage.decryptString(buf)')) return false
+  const path = source.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : []).find((node) => node.name.getText() === 'keyPath')
+  if (!path?.initializer || compact(path.initializer) !== '(provider:ProviderId)=>join(dir(),`key-${provider}.bin`)') return false
+  const writer = nodes(setter)
+  const branch = setter.statements.find((node): node is ts.IfStatement => ts.isIfStatement(node) && compact(node.expression) === 'useFileBackend()')
+  if (!branch || !ts.isBlock(branch.thenStatement) || !branch.elseStatement || !ts.isBlock(branch.elseStatement)) return false
+  const assignments = writer.filter((node): node is ts.BinaryExpression => ts.isBinaryExpression(node) && compact(node.left) === 'blob' && node.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+  const writes = setter.statements.find((node): node is ts.TryStatement => ts.isTryStatement(node))?.tryBlock.statements
+  return writer.some((node) => ts.isVariableDeclaration(node) && compact(node) === 'p=keyPath(provider)') &&
+    writer.some((node) => ts.isVariableDeclaration(node) && compact(node) === 'trimmed=key.trim()') &&
+    writer.some((node) => ts.isVariableDeclaration(node) && compact(node) === 'tmp=`${p}.tmp`') &&
+    assignments.length === 2 &&
+    nodes(branch.thenStatement).some((node) => ts.isBinaryExpression(node) && compact(node) === 'blob=Buffer.concat([AES_KEY_MARKER,encryptSecret(trimmed)])') &&
+    nodes(branch.elseStatement).some((node) => ts.isBinaryExpression(node) && compact(node) === 'blob=safeStorage.encryptString(trimmed)') &&
+    nodes(branch.elseStatement).some((node) => ts.isIfStatement(node) && compact(node.expression) === '!safeStorage.isEncryptionAvailable()' && nodes(node.thenStatement).some(ts.isThrowStatement)) &&
+    [branch.thenStatement, branch.elseStatement].every((block) => nodes(block).some((node) => ts.isCallExpression(node) && compact(node) === 'prepareFileKeyForWrite()')) &&
+    !!writes && writes.length >= 2 && compact(writes[0]) === 'writeFileSync(tmp,blob,{mode:0o600})' && compact(writes[1]) === 'renameSync(tmp,p)'
+}
+
 describe('no Cloudflare account token can reach a build', () => {
-  const shipped = [indexSource, ingestSource, storeSource, openaiSource, settingsSource]
+  const shipped = [indexSource, ingestSource, storeSource, secretsSource, openaiSource, settingsSource]
 
   it('embeds no Cloudflare account id and no bearer credential in any source that ships', () => {
     for (const source of shipped) {
@@ -58,10 +120,32 @@ describe('no Cloudflare account token can reach a build', () => {
   })
 
   it('routes the per-user proxy key through the encrypted key store, not settings.json', () => {
-    // ENV_VAR is the getApiKey/setApiKey map — the same encrypted path every other provider key uses.
-    expect(storeSource).toMatch(/cloudflare: 'METIS_PROXY_KEY'/)
+    expect(providerEnvironmentVariable('cloudflare')).toBe('METIS_PROXY_KEY')
+    expect(encryptedProxyKeyRoute(storeSource, secretsSource)).toBe(true)
     // The key must never be declared as a settings field alongside the URL.
     expect(read('..', 'shared', 'ipc.ts')).not.toMatch(/cloudflareApiKey|cloudflareToken|metisProxyKey/i)
+  })
+
+  it('rejects a disconnected secret lookup or plaintext provider-key write', () => {
+    const mutations = [
+      ['store', '  providerEnvironmentVariable,', '  type providerEnvironmentVariable,'],
+      ['store', "} from './secrets'", "} from './unused-secrets'"],
+      ['store', 'process.env[providerEnvironmentVariable(provider)]', "process.env['CLOUDFLARE_API_TOKEN']"],
+      ['store', 'blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])', 'blob = Buffer.from(trimmed)'],
+      ['store', 'blob = safeStorage.encryptString(trimmed)', 'blob = Buffer.from(trimmed)'],
+      ['store', 'writeFileSync(tmp, blob, { mode: 0o600 })', 'writeFileSync(tmp, trimmed, { mode: 0o600 })'],
+      ['store', 'writeFileSync(tmp, blob, { mode: 0o600 })\n    renameSync(tmp, p)', 'writeFileSync(tmp, blob, { mode: 0o600 })\n    renameSync(tmp, settingsPath())'],
+      ['store', 'prepareFileKeyForWrite()\n    if (!safeStorage.isEncryptionAvailable())', 'prepareFileKeyForWrite()\n    if (false)'],
+      ['secrets', "cloudflare: 'METIS_PROXY_KEY'", "cloudflare: 'CLOUDFLARE_API_TOKEN'"],
+      ['secrets', 'return PROVIDER_ENV_VARIABLE[provider]', "return 'CLOUDFLARE_API_TOKEN'"]
+    ] as const
+    for (const [file, before, after] of mutations) {
+      const source = file === 'store' ? storeSource : secretsSource
+      expect(source, before).toContain(before)
+      const changed = source.replace(before, after)
+      expect(changed, before).not.toBe(source)
+      expect(encryptedProxyKeyRoute(file === 'store' ? changed : storeSource, file === 'secrets' ? changed : secretsSource), before).toBe(false)
+    }
   })
 })
 

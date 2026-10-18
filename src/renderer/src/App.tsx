@@ -1163,6 +1163,7 @@ export function App(): JSX.Element {
   autosaveLinesRef.current = listen.lines
   useEffect(() => {
     if (!listen.listening) return
+    let active = true
     autosaveFailsRef.current = 0
     setAutosaveWarn(false)
     const AUTOSAVE_MS = 60_000
@@ -1170,14 +1171,24 @@ export function App(): JSX.Element {
       const lines = autosaveLinesRef.current
       if (!lines.length) return
       const title = defaultMeetingTitle(lines, mode)
+      const startedAt = meetingStartRef.current
       void window.toto
-        .saveDraftTranscript({ title, mode, startedAt: meetingStartRef.current, lines, recap: '' })
-        .then(() => {
+        .saveDraftTranscript({ title, mode, startedAt, lines, recap: '' })
+        .then((result) => {
+          if (!active || meetingStartRef.current !== startedAt) return
+          // Retention-disabled snapshots neither claim a save nor count as a failed write.
+          if (result?.status === 'disabled') return
+          if (result?.status !== 'saved') {
+            autosaveFailsRef.current += 1
+            if (autosaveFailsRef.current >= 2) setAutosaveWarn(true)
+            return
+          }
           // A good save clears any prior warning — a transient blip shouldn't leave a stale banner up.
           autosaveFailsRef.current = 0
           setAutosaveWarn(false)
         })
         .catch(() => {
+          if (!active || meetingStartRef.current !== startedAt) return
           // Best-effort, but a RUN of failures (disk full / permissions) risks losing the whole meeting
           // silently. After 2 consecutive misses (~2 min), warn so the user can act before the recap save
           // also fails — a single blip stays quiet.
@@ -1185,7 +1196,10 @@ export function App(): JSX.Element {
           if (autosaveFailsRef.current >= 2) setAutosaveWarn(true)
         })
     }, AUTOSAVE_MS)
-    return () => clearInterval(iv)
+    return () => {
+      active = false
+      clearInterval(iv)
+    }
   }, [listen.listening, mode])
 
   // Gates whether the "Seen Ns ago" screen-freshness chip shows at all — screenCapturedAt itself is

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, it, expect } from 'vitest'
+import ts from 'typescript'
 import {
   clampAxis,
   clampAxisMargin,
@@ -68,6 +69,66 @@ import { RE_REVEAL_DWELL_MS, RE_UNHOVERED_REVEAL_GRACE_MS } from '@shared/right-
 const RETINA_WORK_AREA: Rect = { x: 0, y: 0, width: 3840, height: 2112 }
 const LAPTOP_WORK_AREA: Rect = { x: 0, y: 0, width: 1512, height: 944 } // 14"/16" MBP notch dims
 const LAPTOP_RIGHT_WORK_AREA: Rect = { x: 3840, y: 0, width: 1512, height: 944 }
+
+/** Follow the extracted welcome component, so an unused copy cannot satisfy the byline contract. */
+function connectedWelcome(experience: string, welcome: string): boolean {
+  const parse = (source: string) => ts.createSourceFile('welcome.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const find = <T extends ts.Node>(node: ts.Node, predicate: (item: ts.Node) => item is T): T | undefined => {
+    if (predicate(node)) return node
+    return ts.forEachChild(node, (child) => find(child, predicate))
+  }
+  const main = parse(experience)
+  const component = parse(welcome)
+  const importsWelcome = main.statements.some(
+    (node) =>
+      ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === './OnboardingWelcomeScene' &&
+      !node.importClause?.isTypeOnly &&
+      node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings) &&
+      node.importClause.namedBindings.elements.some((binding) => binding.name.text === 'HeroWelcome' && !binding.propertyName && !binding.isTypeOnly)
+  )
+  const hero = component.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'HeroWelcome'
+  )
+  const screen = main.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'OnboardingExperience'
+  )
+  if (!importsWelcome || !hero?.body || !hero.modifiers?.some((item) => item.kind === ts.SyntaxKind.ExportKeyword) || !screen?.body) return false
+  const attribute = (node: ts.JsxAttributes, name: string) => node.properties.find(
+    (item): item is ts.JsxAttribute => ts.isJsxAttribute(item) && item.name.getText() === name
+  )?.initializer
+  const literal = (node: ts.JsxAttributes, name: string) => {
+    const value = attribute(node, name)
+    return value && ts.isStringLiteral(value) ? value.text : undefined
+  }
+  const anchor = find(hero.body, (node): node is ts.JsxElement => ts.isJsxElement(node) &&
+    node.openingElement.tagName.getText() === 'a' &&
+    literal(node.openingElement.attributes, 'href') === 'https://www.linkedin.com/in/tonywalteur/' &&
+    literal(node.openingElement.attributes, 'target') === '_blank' &&
+    literal(node.openingElement.attributes, 'rel') === 'noopener noreferrer' &&
+    node.children.some((child) => ts.isJsxText(child) && child.text.trim() === 'Metis Maintainers'))
+  const next = find(hero.body, (node): node is ts.JsxElement => {
+    if (!ts.isJsxElement(node) || node.openingElement.tagName.getText() !== 'button') return false
+    const attrs = node.openingElement.attributes
+    const click = attribute(attrs, 'onClick')
+    return literal(attrs, 'className') === 'onboard-cta no-drag focus-ring' &&
+      !!click && ts.isJsxExpression(click) && click.expression?.getText() === 'onBegin' &&
+      node.children.some((child) => ts.isJsxText(child) && child.text.trim() === 'Next')
+  })
+  const render = find(screen.body, (node): node is ts.JsxSelfClosingElement => {
+    if (!ts.isJsxSelfClosingElement(node) || node.tagName.getText() !== 'HeroWelcome') return false
+    const begin = attribute(node.attributes, 'onBegin')
+    if (!begin || !ts.isJsxExpression(begin) || !begin.expression || !ts.isArrowFunction(begin.expression)) return false
+    const body = begin.expression.body
+    if (!ts.isBlock(body) || body.statements[0]?.getText().replace(/\s/g, '') !== "setScene('problem')") return false
+    for (let parent: ts.Node | undefined = node.parent; parent && parent !== screen; parent = parent.parent) {
+      if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+        parent.left.getText().replace(/\s/g, '') === "scene==='hero'") return true
+    }
+    return false
+  })
+  return !!anchor && !!next && !!render
+}
 
 function metrics(overrides: Partial<DisplayMetrics> & { workArea: Rect }): DisplayMetrics {
   return {
@@ -817,9 +878,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(demo).toMatch(/Set me up/)
     expect(demo).toMatch(/This clip plays on its own/)
     expect(demo).not.toMatch(/anywhere on the stage/)
-    expect(experience).toMatch(/href="https:\/\/www\.linkedin\.com\/in\/tonywalteur\/"/)
-    expect(experience).toMatch(/Metis Maintainers/)
-    expect(experience).toMatch(/<a[\s\S]*tonywalteur[\s\S]*Metis Maintainers/)
+    const welcome = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingWelcomeScene.tsx'), 'utf8')
+    expect(connectedWelcome(experience, welcome)).toBe(true)
     expect(experience).toMatch(/createOnboardingMusicBed/)
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).toMatch(/Mute music/)
@@ -849,6 +909,35 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index).toMatch(/transparent: chrome\.transparent/)
     expect(index).toMatch(/backgroundColor: chrome\.backgroundColor/)
     expect(index).not.toMatch(/transparent:\s*true/)
+  })
+
+  it('rejects a disconnected welcome, unsafe byline or disconnected Next action', () => {
+    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
+    const welcome = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingWelcomeScene.tsx'), 'utf8')
+    const mutations = [
+      ['experience', "from './OnboardingWelcomeScene'", "from './UnusedWelcomeScene'"],
+      ['experience', 'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }', 'import type { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'],
+      ['experience', 'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }', 'import { type HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'],
+      ['experience', '<HeroWelcome', '<UnusedWelcome'],
+      ['experience', "scene === 'hero' && (", "scene === 'unused' && ("],
+      ['experience', "setScene('problem')", "setScene('hero')"],
+      ['welcome', 'https://www.linkedin.com/in/tonywalteur/', 'https://example.test/'],
+      ['welcome', 'Metis Maintainers', 'Unused Maintainers'],
+      ['welcome', 'rel="noopener noreferrer"', 'rel="opener"'],
+      ['welcome', 'target="_blank"', 'target="_self"'],
+      ['welcome', 'onClick={onBegin}', 'onClick={() => undefined}'],
+      ['welcome', 'className="onboard-cta no-drag focus-ring"', 'className="no-drag focus-ring"']
+    ] as const
+    for (const [file, before, after] of mutations) {
+      const source = file === 'experience' ? experience : welcome
+      expect(source, before).toContain(before)
+      const changed = source.replace(before, after)
+      expect(changed, before).not.toBe(source)
+      expect(connectedWelcome(file === 'experience' ? changed : experience, file === 'welcome' ? changed : welcome), before).toBe(false)
+    }
+    // Correct markup in an unused component cannot hide a broken real HeroWelcome anchor.
+    const decoy = '\nexport function UnusedByline() { return <a href="https://www.linkedin.com/in/tonywalteur/" target="_blank" rel="noopener noreferrer">Metis Maintainers</a> }'
+    expect(connectedWelcome(experience, welcome.replace('Metis Maintainers', 'Other') + decoy)).toBe(false)
   })
 })
 

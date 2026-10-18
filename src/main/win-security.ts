@@ -99,11 +99,16 @@ export function readAclForTest(path: string): AclProbe | null {
   return readAcl(path)
 }
 
-function readAcl(path: string): AclProbe | null {
-  const ps = `
+/** Path bytes enter through stdin so no Windows path can become PowerShell source text. */
+const ACL_PROBE_SCRIPT = `
 $ErrorActionPreference='Stop'
+$env:PSModulePath=$PSHOME+'\\Modules'
+Import-Module ($PSHOME+'\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+$inputBytes = New-Object System.IO.MemoryStream
+[Console]::OpenStandardInput().CopyTo($inputBytes)
+$path = [Text.Encoding]::UTF8.GetString($inputBytes.ToArray())
 try {
-  $a = Get-Acl -LiteralPath ${JSON.stringify(path)}
+  $a = Get-Acl -LiteralPath $path
   function SidOf($ref){ try { return $ref.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { return $ref.Value } }
   # MQA-008: the owner MUST come from GetOwner(), not from the .Owner property. FileSecurity.Owner is a
   # System.String (e.g. "BUILTIN\\Administrators"), not an IdentityReference — so SidOf() threw on
@@ -121,17 +126,61 @@ try {
   }
   $out | ConvertTo-Json -Compress -Depth 5
 } catch { '' }`
+
+/** The executable and module path are pinned to the same Windows PowerShell installation. */
+export function aclProbeCommand(path: string): { command: string; args: string[]; input: Buffer } {
+  return {
+    command: WINDOWS_POWERSHELL,
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(ACL_PROBE_SCRIPT, 'utf16le').toString('base64')
+    ],
+    input: Buffer.from(path, 'utf8')
+  }
+}
+
+/** A partial or unparseable ACL is never authority for machine-managed settings. */
+export function parseAclOutput(output: string): AclProbe | null {
   try {
-    const out = execFileSync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps], {
+    const parsed: unknown = JSON.parse(output.trim())
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const record = parsed as Record<string, unknown>
+    if (typeof record.owner !== 'string' || !/^S-1-\d+(-\d+)+$/.test(record.owner)) return null
+    // ConvertTo-Json can emit one ACE as a bare object. Normalize before checking every field.
+    const entries = Array.isArray(record.aces) ? record.aces : record.aces ? [record.aces] : []
+    if (entries.length === 0) return null
+    const aces: AclProbe['aces'] = []
+    for (const entry of entries) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null
+      const ace = entry as Record<string, unknown>
+      if (
+        typeof ace.sid !== 'string' ||
+        !/^S-1-\d+(-\d+)+$/.test(ace.sid) ||
+        typeof ace.rights !== 'number' ||
+        !Number.isInteger(ace.rights) ||
+        (ace.type !== 'Allow' && ace.type !== 'Deny')
+      )
+        return null
+      aces.push({ sid: ace.sid, rights: ace.rights, type: ace.type })
+    }
+    return { owner: record.owner, aces }
+  } catch {
+    return null
+  }
+}
+
+function readAcl(path: string): AclProbe | null {
+  const spec = aclProbeCommand(path)
+  try {
+    const output = execFileSync(spec.command, spec.args, {
+      input: spec.input,
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'ignore'],
       timeout: 8000
-    }).trim()
-    if (!out) return null
-    const parsed = JSON.parse(out)
-    // ConvertTo-Json emits a bare object for a single ACE; normalize to an array.
-    const aces = Array.isArray(parsed.aces) ? parsed.aces : parsed.aces ? [parsed.aces] : []
-    return { owner: String(parsed.owner || ''), aces }
+    })
+    return parseAclOutput(output)
   } catch {
     return null
   }

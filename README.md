@@ -95,7 +95,7 @@ Two things `npm install` at the repo root does **not** cover:
 - **The LGPL ffmpeg sidecar binaries** under `resources/ffmpeg/<platform>-<arch>/` are deliberately
   git-ignored and not fetched by `npm install`; the reviewed hash manifest and LGPL license in the
   directory are tracked. Missing binaries don't break `npm run dev` — only "import audio file" cannot
-  decode. See `docs/ENTERPRISE_RELEASE.md`'s ffmpeg sidecar section to provision them locally.
+  decode. See `docs/ENTERPRISE_RELEASE.md`'s ffmpeg sidecar section for provisioning requirements.
 
 ## Script reference
 
@@ -280,13 +280,13 @@ superseded. The operating procedures are the runbooks — [QA](docs/runbooks/qa.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — dev-environment setup, gotchas, and internal patterns
   (IPC contract, state management, native-module packaging, debugging)
 - [`docs/SIGNING.md`](docs/SIGNING.md) — code-signing / notarization setup
-- [`docs/ENTERPRISE_RELEASE.md`](docs/ENTERPRISE_RELEASE.md) — enterprise release checklist
+- [`docs/ENTERPRISE_RELEASE.md`](docs/ENTERPRISE_RELEASE.md) — release build requirements
 - [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) — the Cloudflare provider: why it needs a Worker the
   operator deploys, what that operator stands up, and what a user types into Settings
 - [`docs/asktoto-architecture.md`](docs/asktoto-architecture.md) — architecture reference
 - [`docs/qa/BUG-LEDGER.md`](docs/qa/BUG-LEDGER.md) — defect ledger
 - [`docs/asktoto-hardening-backlog.md`](docs/asktoto-hardening-backlog.md) — deferred hardening items
-- [`docs/license-platform-plan.md`](docs/license-platform-plan.md) — license/activation platform design
+- [`docs/license-platform-plan.md`](docs/license-platform-plan.md) — licensing implementation status
 - `docs/design/` — design spec
 
 ## Known gaps (honest)

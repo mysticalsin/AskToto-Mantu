@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ImportJob, ImportJobSource, ImportJobStore } from './import-jobs'
 import { ImportJobManager } from './import-jobs'
 import { SUMMARY_ONLY_IMPORT_REFUSAL } from './import-retention-policy'
+import { StaleImportJobWriteError } from './import-job-retention-coordinator'
 
 class RetentionStore implements ImportJobStore {
   readonly jobs = new Map<string, ImportJob>()
@@ -87,10 +88,11 @@ function createManager(
   const onCancel = vi.fn()
   const disposeSpeakers = vi.fn()
   const validateSource = vi.fn()
+  const installedValidateSource = overrides.validateSource ?? validateSource
   const manager = new ImportJobManager({
     store,
     canRetainTranscript: canRetain,
-    validateSource,
+    validateSource: installedValidateSource,
     decode,
     transcribe,
     saveMeeting: vi.fn(async () => 'saved-import.md'),
@@ -105,7 +107,7 @@ function createManager(
     newId: () => 'job-1',
     ...overrides
   })
-  return { manager, decode, transcribe, onCancel, disposeSpeakers, validateSource }
+  return { manager, decode, transcribe, onCancel, disposeSpeakers, validateSource: installedValidateSource }
 }
 
 describe('ImportJobManager summary-only retention boundary', () => {
@@ -406,19 +408,26 @@ describe('ImportJobManager summary-only retention boundary', () => {
       }
       await originalSave(job, beforeReplace)
     }
-    const { manager } = createManager(store, () => canRetain)
+    const { manager } = createManager(store, () => canRetain, { freeMemoryBytes: () => 0 })
     const job = await manager.start(source)
+    expect(job.pipeline).toBeUndefined()
     const pendingProgress = manager.reportProgress(job.jobId, 50)
-    await blockedSaveStarted
+    let explicitResume: Promise<ImportJob> | undefined
+    try {
+      await blockedSaveStarted
 
-    canRetain = false
-    await manager.snapshot()
-    canRetain = true
-    const explicitResume = manager.resume(job.jobId)
-    releaseBlockedSave()
+      canRetain = false
+      await manager.snapshot()
+      canRetain = true
+      explicitResume = manager.resume(job.jobId)
+      releaseBlockedSave()
 
-    await expect(pendingProgress).rejects.toThrow(/summary-only/i)
-    await explicitResume
+      await expect(pendingProgress).rejects.toBeInstanceOf(StaleImportJobWriteError)
+      await explicitResume
+    } finally {
+      releaseBlockedSave()
+      await Promise.allSettled([pendingProgress, ...(explicitResume ? [explicitResume] : [])])
+    }
     expect(store.jobs.get(job.jobId)).toMatchObject({ state: 'decoding' })
     expect(store.jobs.get(job.jobId)?.progressPct).toBeUndefined()
     expect(store.held.has(job.jobId)).toBe(false)
@@ -448,17 +457,26 @@ describe('ImportJobManager summary-only retention boundary', () => {
     const job = await manager.start(source)
     await manager.acceptDecodedChunk(job.jobId, 0, 1, new Float32Array(1_600).fill(0.1))
     const finalizing = manager.finishDecoding(job.jobId, 1)
-    await saveStarted
+    try {
+      await saveStarted
 
-    canRetain = false
-    await manager.snapshot()
-    releaseSave()
-    await finalizing
+      canRetain = false
+      await manager.snapshot()
+      const heldCheckpoint = structuredClone(store.jobs.get(job.jobId))
+      releaseSave()
+      await finalizing
 
-    expect(saveMeeting).toHaveBeenCalledTimes(1)
-    expect(saveMeeting.mock.calls[0]?.[1]).toBeTypeOf('function')
-    expect(manager.get(job.jobId)).toMatchObject({ state: 'policy-held' })
-    expect(manager.get(job.jobId)?.file).toBeUndefined()
+      expect(saveMeeting).toHaveBeenCalledTimes(1)
+      expect(saveMeeting.mock.calls[0]?.[1]).toBeTypeOf('function')
+      expect(manager.get(job.jobId)).toBeUndefined()
+      expect(manager.list()).toEqual([])
+      expect(store.held.has(job.jobId)).toBe(true)
+      expect(store.jobs.get(job.jobId)).toEqual(heldCheckpoint)
+      expect(store.jobs.get(job.jobId)?.file).toBeUndefined()
+    } finally {
+      releaseSave()
+      await Promise.allSettled([finalizing])
+    }
   })
 
   it('stops the decoder and detaches PCM before awaiting a slow hold-marker write', async () => {
@@ -556,10 +574,11 @@ describe('ImportJobManager summary-only retention boundary', () => {
     })
     store.held.add('job-1')
     const { manager, decode, validateSource } = createManager(store, () => true, {
-      validateSource: () => {
+      validateSource: vi.fn(() => {
         throw new Error('source changed')
-      }
+      })
     })
+    await manager.recover()
 
     await expect(manager.resume('job-1')).rejects.toThrow('source changed')
 

@@ -5,7 +5,8 @@ import { readFile, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
-import { setImmediate } from 'node:timers/promises'
+import { setImmediate } from 'node:timers'
+import { setImmediate as yieldImmediate } from 'node:timers/promises'
 import { app } from 'electron'
 import type { SaveMeeting, Settings, TranscriptLine } from '@shared/ipc'
 import { SaveMeetingSchema } from '@shared/ipc'
@@ -129,6 +130,33 @@ afterEach(async () => {
   configureMeetingSpeechLimits(undefined)
 })
 
+describe('inline speech worker fixture protocol', () => {
+  it('processes a posted request asynchronously and emits exactly one reply', async () => {
+    const worker = new InlineSpeechWorker()
+    const onMessage = vi.fn()
+    worker.on('message', onMessage)
+    worker.postMessage({
+      protocol: 1,
+      id: 17,
+      generation: 3,
+      operation: 'render',
+      policy: { limits: testBudget, ...testServiceBounds },
+      input: [{ speaker: 'you', text: 'Synthetic protocol fixture', t: startedAt }]
+    })
+    expect(onMessage).not.toHaveBeenCalled()
+    await yieldImmediate()
+    expect(onMessage).toHaveBeenCalledTimes(1)
+    expect(onMessage).toHaveBeenCalledWith({
+      protocol: 1,
+      id: 17,
+      generation: 3,
+      result: { ok: true, value: expect.stringContaining('You:** Synthetic protocol fixture') }
+    })
+    await yieldImmediate()
+    expect(onMessage).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('actual declared speech persistence resource measurements', () => {
   it.each([false, true])('measures actual save/encryption/read without truncation, encrypted=%s', async (encrypted) => {
     const folder = mkdtempSync(join(tmpdir(), 'metis-speech-resource-'))
@@ -153,7 +181,7 @@ describe('actual declared speech persistence resource measurements', () => {
           : { workerFactory: () => new InlineSpeechWorker() })
       })
       configureMeetingSpeechPersistence(service)
-      await setImmediate()
+      await yieldImmediate()
       const before = process.memoryUsage()
       const fixtureStart = performance.now()
       const input = SaveMeetingSchema.parse(workload())
@@ -201,7 +229,7 @@ describe('actual declared speech persistence resource measurements', () => {
       const draftDecodeMs = performance.now() - draftDecodeStart
       expect(draftDecoded.ok && draftDecoded.status).toBe('valid')
       if (draftDecoded.ok && draftDecoded.status === 'valid') expect(draftDecoded.lines).toEqual(input.lines)
-      await setImmediate()
+      await yieldImmediate()
       const after = process.memoryUsage()
       const metrics = {
         host: process.platform,

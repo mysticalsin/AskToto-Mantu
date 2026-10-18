@@ -412,7 +412,7 @@ describe('ImportJobManager', () => {
     await manager.start(source)
     await manager.acceptDecodedChunk('job-1', 0, 0, pcm)
     await manager.finishDecoding('job-1')
-    expect(saveMeeting).toHaveBeenCalledWith(expect.objectContaining({ durationMs: 3000 }))
+    expect(saveMeeting).toHaveBeenCalledWith(expect.objectContaining({ durationMs: 3000 }), expect.any(Function))
   })
 
   // MQA-235: phase 1 (acceptDecodedChunk) only BUFFERS decoded slabs now — no ASR, no per-chunk state
@@ -1145,11 +1145,19 @@ describe('ImportJobManager', () => {
       const beginSpeakers = vi.fn(() => true)
       const { manager, decode } = createManager({ store, beginSpeakers })
       const starting = manager.start(source)
-      await enteredDecodePersist.promise
-
-      await manager.cancel('job-1')
-      releaseDecodePersist.resolve()
-      await starting
+      let cancelling: Promise<void> | undefined
+      try {
+        await enteredDecodePersist.promise
+        // Cancellation changes ownership before its checkpoint write queues behind the held save.
+        // Do not await that write until the test has released the admission persistence hold.
+        cancelling = manager.cancel('job-1')
+        expect(manager.get('job-1')?.state).toBe('cancelled')
+        expect(beginSpeakers).not.toHaveBeenCalled()
+        expect(decode).not.toHaveBeenCalled()
+      } finally {
+        releaseDecodePersist.resolve()
+        await Promise.all([starting, cancelling])
+      }
 
       expect(manager.get('job-1')?.state).toBe('cancelled')
       expect(beginSpeakers).not.toHaveBeenCalled()
@@ -1317,7 +1325,8 @@ describe('ImportJobManager', () => {
         title: 'Interview',
         recap: '',
         lines: [expect.objectContaining({ speaker: 'unknown' })]
-      })
+      }),
+      expect.any(Function)
     )
     // Ingest only after the recap has been saved, so Mantu Intelligence sees the completed note rather
     // than racing an empty-recap version of the same import.
