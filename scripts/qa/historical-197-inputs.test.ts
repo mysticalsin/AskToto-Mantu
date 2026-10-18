@@ -341,18 +341,83 @@ describe('historical input file admission and streaming bytes', () => {
     await writeFile(file, 'abc')
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
     let opened: Awaited<ReturnType<typeof open>> | undefined
+    let closes = 0
     vi.mocked(open).mockImplementationOnce(async (...args) => {
       const handle = await actual.open(...args)
       opened = handle
       const close = handle.close.bind(handle)
       handle.close = async () => {
+        closes += 1
         await close()
         throw new Error('Synthetic private close canary')
       }
       return handle
     })
-    await expect(hashHistorical197File(file, ABC)).rejects.toMatchObject({ code: 'input-unreadable' })
+    await expect(hashHistorical197File(file, ABC)).rejects.toMatchObject({ code: 'input-unreadable', message: 'input-unreadable' })
+    // Let close-triggered callbacks settle; a late rejection must remain a test-runner error.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(closes).toBe(1)
     expect(opened).toBeDefined()
+    await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' })
+  })
+
+  it('hashes multiple bounded chunks from one real descriptor and closes it once', async () => {
+    const dir = await directory()
+    const file = join(dir, 'owned-multiple-chunks.bin')
+    const bytes = Buffer.from(Array.from({ length: 131_089 }, (_, index) => (index * 31) % 251))
+    const expected = { size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    await writeFile(file, bytes)
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    let opened: Awaited<ReturnType<typeof open>> | undefined
+    let reads: readonly (readonly unknown[])[] = []
+    let closes = 0
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await actual.open(...args)
+      opened = handle
+      reads = vi.spyOn(handle, 'read').mock.calls
+      const close = handle.close.bind(handle)
+      handle.close = async () => {
+        closes += 1
+        await close()
+      }
+      return handle
+    })
+    await expect(hashHistorical197File(file, expected)).resolves.toEqual(expected)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(reads.length).toBeGreaterThanOrEqual(3)
+    expect(reads.every(([buffer]) => Buffer.isBuffer(buffer) && buffer.length <= 64 * 1024)).toBe(true)
+    expect(closes).toBe(1)
+    await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' })
+  })
+
+  it('refuses a later read rejection after real bytes and still closes its one descriptor', async () => {
+    const dir = await directory()
+    const file = join(dir, 'owned-read-failure.bin')
+    const bytes = Buffer.alloc(131_089, 7)
+    await writeFile(file, bytes)
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    let opened: Awaited<ReturnType<typeof open>> | undefined
+    let reads: readonly (readonly unknown[])[] = []
+    let closes = 0
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await actual.open(...args)
+      opened = handle
+      const read = handle.read.bind(handle)
+      const observer = vi.spyOn(handle, 'read').mockImplementationOnce(read)
+        .mockRejectedValueOnce(new Error('Synthetic private read canary'))
+      reads = observer.mock.calls
+      const close = handle.close.bind(handle)
+      handle.close = async () => {
+        closes += 1
+        await close()
+      }
+      return handle
+    })
+    const expected = { size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    await expect(hashHistorical197File(file, expected)).rejects.toMatchObject({ code: 'input-unreadable', message: 'input-unreadable' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(reads).toHaveLength(2)
+    expect(closes).toBe(1)
     await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' })
   })
 
