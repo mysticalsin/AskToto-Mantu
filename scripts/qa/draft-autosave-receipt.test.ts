@@ -90,6 +90,8 @@ describe('draft receipt reaches the actual renderer through main and preload', (
 
   function host(authenticated = true) {
     let handler!: (event: unknown, payload: unknown) => Promise<unknown>
+    let backend = saveDraftTranscript
+    let senderFailure: Error | undefined
     let session: SpeechAuthSession | null = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }
     let sessionEpoch = 0
     let profile = folder
@@ -104,8 +106,8 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     const mainContext = vm.createContext({
       SaveMeetingSchema,
       stripProvisionalLines,
-      saveDraftTranscript,
-      assertMainWindow: vi.fn(),
+      saveDraftTranscript: (...args: Parameters<typeof saveDraftTranscript>) => backend(...args),
+      assertMainWindow: () => { if (senderFailure) throw senderFailure },
       requireAuth,
       captureAuthSessionBoundary: () => auth.captureSessionBoundary(requireAuth),
       captureDraftSettingsBoundary,
@@ -171,6 +173,8 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       handler,
       cleanup,
       mainContext,
+      denySender(failure: Error) { senderFailure = failure },
+      rejectBackend(failure: unknown) { backend = () => Promise.reject(failure) },
       renew() { authenticated = true; session = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }; sessionEpoch += 1; profile = folder },
       revoke() { authenticated = false; session = null; sessionEpoch += 1 },
       replaceSession() { session = { ...session! }; sessionEpoch += 1 },
@@ -232,7 +236,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     const h = host()
     const refusal = new Error('Synthetic private sender canary')
     try {
-      h.mainContext.assertMainWindow = () => { throw refusal }
+      h.denySender(refusal)
       await expect(h.handler({}, {})).rejects.toBe(refusal)
       expect(readdirSync(folder)).toEqual([])
     } finally { h.cleanup() }
@@ -362,7 +366,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
   it.each([undefined, null, new Error('Synthetic private backend canary')])('preserves unrelated backend rejection identity (%s)', async (failure) => {
     const h = host()
     try {
-      h.mainContext.saveDraftTranscript = () => Promise.reject(failure)
+      h.rejectBackend(failure)
       await expect(h.handler({}, { mode: 'meeting', title: 'Synthetic', startedAt: 1, lines: [], recap: '' })).rejects.toBe(failure)
     } finally { h.cleanup() }
   })
