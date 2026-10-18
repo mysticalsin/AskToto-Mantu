@@ -1,0 +1,194 @@
+name: Metis Operator country map RED (temporary)
+run-name: ${{ github.event_name == 'pull_request' && 'Metis Operator country map RED (registration)' || 'Metis Operator country map RED' }}
+
+# Diagnostic only. Remove after one hosted observation and no later than 2026-10-11T21:10:00Z.
+# A passing job means only the two pinned synthetic assertions failed as expected.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/metis-operator-map-country-red.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metis-operator-map-country-red
+  cancel-in-progress: false
+
+jobs:
+  observe-red:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Refuse a foreign repository, event or branch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" != workflow_dispatch ] || [ "$REPOSITORY" != mysticalsin/AskToto-Mantu ] || [ "$REF" != refs/heads/main ]; then
+            echo 'map-red:WRONG_DISPATCH'
+            exit 1
+          fi
+      - name: Enforce temporary workflow expiry
+        shell: bash
+        run: |
+          if (( $(date -u +%s) >= $(date -ud '2026-10-11T21:10:00Z' +%s) )); then
+            echo 'map-red:EXPIRED'
+            exit 1
+          fi
+      - name: Checkout dispatched main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: base
+          persist-credentials: false
+      - name: Checkout pinned test-only fixture
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 47213b8d62006d14e2a34faa2707c62fc1eb2349
+          path: fixture
+          fetch-depth: 4
+          persist-credentials: false
+      - name: Refuse stale or mutated fixture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_sha='47213b8d62006d14e2a34faa2707c62fc1eb2349'
+          fixture_parent='ffdf5937e8b8df431074df663a1b5e027a6eaa64'
+          fixture_grandparent='7582185569628a2d2a698e630e81fa95b3d8f0b6'
+          fixture_base='41d94bb80b0d8694755aa444d1d1073603db3713'
+          fixture_tree='c118d972977320e891f4c1a188fd04456692755b'
+          base_tree='04f3fac1d394d5c186bf217e18ee42dd5c6f7d26'
+          test_path='operator/src/realtime-map.country-contract.test.ts'
+          if [ "$(git -C base rev-parse HEAD 2>/dev/null)" != "$GITHUB_SHA" ]; then
+            echo 'map-red:BASE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD 2>/dev/null)" != "$fixture_sha" ] ||
+             [ "$(git -C fixture rev-parse HEAD^ 2>/dev/null)" != "$fixture_parent" ] ||
+             [ "$(git -C fixture rev-parse HEAD^^ 2>/dev/null)" != "$fixture_grandparent" ] ||
+             [ "$(git -C fixture rev-parse HEAD^^^ 2>/dev/null)" != "$fixture_base" ] ||
+             [ "$(git -C fixture rev-parse HEAD^{tree} 2>/dev/null)" != "$fixture_tree" ] ||
+             [ "$(git -C fixture rev-parse HEAD~3^{tree} 2>/dev/null)" != "$base_tree" ]; then
+            echo 'map-red:FIXTURE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null)" != "$test_path" ] ||
+             [ "$(git -C fixture diff-tree --no-commit-id --name-only -r HEAD^ 2>/dev/null)" != "$test_path" ] ||
+             [ "$(git -C fixture diff-tree --no-commit-id --name-only -r HEAD^^ 2>/dev/null)" != "$test_path" ]; then
+            echo 'map-red:FIXTURE_SCOPE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C base rev-parse HEAD:operator 2>/dev/null)" != "$(git -C fixture rev-parse HEAD~3:operator 2>/dev/null)" ]; then
+            echo 'map-red:CONTRACT_STALE'
+            exit 1
+          fi
+          for path in package.json package-lock.json operator/vitest.config.ts \
+            tsconfig.node.json tsconfig.web.json tsconfig.tests.json \
+            scripts/check-test-types.mjs; do
+            if ! cmp -s "base/$path" "fixture/$path"; then
+              echo 'map-red:CONTRACT_STALE'
+              exit 1
+            fi
+          done
+          echo 'map-red:FIXTURE_PINNED'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install, typecheck and prepare hosted Chromium
+        working-directory: fixture
+        shell: bash
+        run: |
+          if ! npm ci --no-audit --no-fund > "$RUNNER_TEMP/map-red-npm.log" 2>&1; then
+            echo 'map-red:INSTALL_FAILED'
+            exit 1
+          fi
+          if ! npm run typecheck > "$RUNNER_TEMP/map-red-types.log" 2>&1; then
+            echo 'map-red:TYPECHECK_FAILED'
+            exit 1
+          fi
+          if ! ./node_modules/.bin/playwright install --with-deps chromium > "$RUNNER_TEMP/map-red-browser.log" 2>&1; then
+            echo 'map-red:BROWSER_SETUP_FAILED'
+            exit 1
+          fi
+          echo 'map-red:ENVIRONMENT_READY'
+      - name: Classify only the two named RED assertions
+        working-directory: fixture
+        shell: bash
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 ./node_modules/.bin/vitest run \
+            --config operator/vitest.config.ts \
+            operator/src/realtime-map.country-contract.test.ts \
+            -t 'counts unique devices with a country only while their heartbeat is younger than 120 seconds|applies a polled country change to the open map without resetting its zoom or pan' \
+            --reporter=json \
+            > "$RUNNER_TEMP/map-red-vitest.json" \
+            2> "$RUNNER_TEMP/map-red-vitest.stderr"
+          test_exit=$?
+          set -e
+          if [ "$test_exit" -ne 1 ]; then
+            echo 'map-red:UNEXPECTED_EXIT'
+            exit 1
+          fi
+          VITEST_REPORT="$RUNNER_TEMP/map-red-vitest.json" node <<'NODE'
+          const { readFileSync } = require('node:fs')
+          let report
+          try {
+            report = JSON.parse(readFileSync(process.env.VITEST_REPORT, 'utf8'))
+          } catch {
+            console.error('map-red:REPORT_INVALID')
+            process.exit(1)
+          }
+          const suites = report.testResults
+          const assertions = Array.isArray(suites) && suites.length === 1 &&
+            Array.isArray(suites[0].assertionResults) ? suites[0].assertionResults : []
+          const ran = assertions.filter((assertion) => assertion.status === 'failed' || assertion.status === 'passed')
+          const aggregation = 'counts unique devices with a country only while their heartbeat is younger than 120 seconds'
+          const browser = 'applies a polled country change to the open map without resetting its zoom or pan'
+          const expected = new Map([
+            [aggregation, (message) => message.includes('to deeply equal') && message.includes('CA') && message.includes('2')],
+            [browser, (message) => message.includes('to contain') && message.includes('United States')]
+          ])
+          if (
+            report.success !== false ||
+            report.numFailedTests !== 2 ||
+            report.numPassedTests !== 0 ||
+            suites?.length !== 1 ||
+            !suites[0].name?.endsWith('/operator/src/realtime-map.country-contract.test.ts') ||
+            ran.length !== expected.size ||
+            ran.some((assertion) => {
+              const message = assertion.failureMessages?.[0]
+              return assertion.status !== 'failed' ||
+                assertion.failureMessages?.length !== 1 ||
+                typeof message !== 'string' ||
+                !/^AssertionError: expected /.test(message) ||
+                !expected.get(assertion.title)?.(message)
+            }) ||
+            new Set(ran.map((assertion) => assertion.title)).size !== expected.size
+          ) {
+            // Fixed predicate identifiers only; never emit the report, assertion values or stack.
+            const failedChecks = [
+              ['report', report.success === false],
+              ['count', report.numFailedTests === 2 && report.numPassedTests === 0],
+              ['suite', suites?.length === 1 && suites?.[0]?.name?.endsWith('/operator/src/realtime-map.country-contract.test.ts') === true],
+              ['executed', ran.length === expected.size],
+              ['titles', new Set(ran.map((assertion) => assertion.title)).size === expected.size],
+              ['aggregation', ran.some((assertion) => assertion.title === aggregation &&
+                assertion.status === 'failed' && assertion.failureMessages?.length === 1 &&
+                /^AssertionError: expected /.test(assertion.failureMessages[0]) &&
+                expected.get(aggregation)(assertion.failureMessages[0]))],
+              ['browser', ran.some((assertion) => assertion.title === browser &&
+                assertion.status === 'failed' && assertion.failureMessages?.length === 1 &&
+                /^AssertionError: expected /.test(assertion.failureMessages[0]) &&
+                expected.get(browser)(assertion.failureMessages[0]))]
+            ].filter(([, ok]) => !ok).map(([name]) => name)
+            console.error(`map-red:UNEXPECTED_TEST_RESULT:${failedChecks.join(',')}`)
+            process.exit(1)
+          }
+          console.log('map-red:EXPECTED_COUNTRY_AGGREGATION_FAILURE')
+          console.log('map-red:EXPECTED_LIVE_MAP_STALE_FAILURE')
+          NODE
