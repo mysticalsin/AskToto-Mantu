@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type Settings, type TranscriptLine } from '@shared/ipc'
 import { PORTAL_CF_DEEPSEEK_FLASH } from '@shared/ask-routing'
+import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { redactSecrets } from '@shared/redact'
 import type { StreamOptions } from './llm/shared'
 import { IMPORT_RECAP_SYSTEM_PREFIX, pickImportRecapCandidates, runImportedRecap } from './import-recap'
@@ -38,6 +39,103 @@ describe('MQA-297 automatic summaries with a Métis license', () => {
     expect(pickImportRecapCandidates(settings(), { ...gate, operatorAskTransport: () => null })).toEqual([])
     expect(pickImportRecapCandidates(settings(), { ...gate, getAllowedProviders: () => ['local'] })).toEqual([])
   })
+
+  it.each([
+    { label: 'funded transport', key: '', funded: true, connected: true, endpoint: '', route: 'managed' },
+    { label: 'transport without funding', key: '', funded: false, connected: true, endpoint: '', route: 'refused' },
+    { label: 'funding without transport', key: '', funded: true, connected: false, endpoint: '', route: 'refused' },
+    { label: 'BYOK without endpoint', key: 'synthetic-key', funded: false, connected: false, endpoint: '', route: 'refused' },
+    { label: 'funded BYOK without endpoint', key: 'synthetic-key', funded: true, connected: true, endpoint: '', route: 'refused' },
+    { label: 'funded BYOK with endpoint', key: 'synthetic-key', funded: true, connected: true, endpoint: 'https://worker.example.test/v1', route: 'direct' }
+  ])('MQA-215 routes the real import recap for $label without unintended stream work', async ({ key, funded, connected, endpoint, route }) => {
+    const s = settings({ cloudflareBaseUrl: endpoint, redactSensitive: true })
+    const providerBaseUrl = vi.fn(() => endpoint)
+    const candidateGate = {
+      getApiKey: (provider: ProviderId) => provider === 'cloudflare' ? key : '',
+      providerBaseUrl,
+      getAllowedProviders: () => ['cloudflare'],
+      operatorFundedProviders: () => funded ? ['cloudflare'] : [],
+      operatorAskTransport: () => connected ? transport : null
+    }
+    const createStream = vi.fn((opts: StreamOptions) => {
+      opts.handlers.onDelta('## Overview\nSynthetic routed recap.')
+      opts.handlers.onDone({})
+      return { abort: () => {} }
+    })
+    const redact = vi.fn((text: string) => text)
+    expect(pickImportRecapCandidates(s, candidateGate)).toEqual(route === 'refused' ? [] : ['cloudflare'])
+    const recap = await runImportedRecap(
+      { jobId: 'endpoint-gate', mode: 'meeting', lines },
+      { ...candidateGate, getSettings: () => s, redactSecrets: redact, createStream }
+    )
+    if (route === 'refused') {
+      expect(recap).toBeUndefined()
+      expect(createStream).not.toHaveBeenCalled()
+      expect(redact).not.toHaveBeenCalled()
+      return
+    }
+    expect(recap).toBe('## Overview\nSynthetic routed recap.')
+    expect(createStream).toHaveBeenCalledOnce()
+    expect(redact).toHaveBeenCalledOnce()
+    expect(createStream.mock.calls[0][0]).toMatchObject({
+      providerId: 'cloudflare',
+      apiKey: route === 'managed' ? '' : key,
+      viaOperator: route === 'managed',
+      operatorTransport: route === 'managed' ? transport : undefined,
+      baseURL: route === 'direct' ? endpoint : undefined
+    })
+    if (route === 'managed') expect(providerBaseUrl).not.toHaveBeenCalled()
+  })
+
+  it.each(['success', 'failure'] as const)(
+    'MQA-215 excludes an endpointless BYOK candidate from the three real attempts and preserves last eligible %s',
+    async (outcome) => {
+      const eligible: ProviderId[] = ['anthropic', 'openai', 'deepseek']
+      const s = settings({
+        provider: 'cloudflare',
+        cloudflareBaseUrl: '',
+        providerModels: {
+          ...DEFAULT_SETTINGS.providerModels,
+          anthropic: PROVIDERS.anthropic.defaultModel,
+          openai: PROVIDERS.openai.defaultModel,
+          deepseek: PROVIDERS.deepseek.defaultModel
+        }
+      })
+      const candidateGate = {
+        getApiKey: (provider: ProviderId) => [...eligible, 'cloudflare'].includes(provider) ? 'synthetic-key' : '',
+        providerBaseUrl: () => '',
+        getAllowedProviders: () => [...eligible, 'cloudflare'],
+        operatorFundedProviders: () => ['cloudflare'],
+        operatorAskTransport: () => transport
+      }
+      const createStream = vi.fn((opts: StreamOptions) => {
+        if (opts.providerId === 'deepseek' && outcome === 'success') {
+          opts.handlers.onDelta('## Overview\nThird eligible provider completed.')
+          opts.handlers.onDone({})
+        } else {
+          opts.handlers.onError(`synthetic ${opts.providerId} cause`)
+        }
+        return { abort: () => {} }
+      })
+      expect(pickImportRecapCandidates(s, candidateGate)).toEqual(eligible)
+      const recap = runImportedRecap(
+        { jobId: 'endpoint-attempts', mode: 'meeting', lines },
+        { ...candidateGate, getSettings: () => s, redactSecrets, createStream }
+      )
+      if (outcome === 'success') {
+        await expect(recap).resolves.toBe('## Overview\nThird eligible provider completed.')
+      } else {
+        await expect(recap).rejects.toThrow('Summary provider failed before completion (synthetic deepseek cause). Please retry.')
+      }
+      expect(createStream.mock.calls.map(([opts]) => opts.providerId)).toEqual(eligible)
+      expect(createStream).toHaveBeenCalledTimes(3)
+      for (const [sent] of createStream.mock.calls) {
+        expect(sent.viaOperator).toBe(false)
+        expect(sent.operatorTransport).toBeUndefined()
+        expect(sent.apiKey).toBe('synthetic-key')
+      }
+    }
+  )
 
   it('redacts secrets before licensed cloud summary generation while preserving the original transcript', async () => {
     const secret = 'sk-synthetic-example-credential-abcdefghijklmnop'
