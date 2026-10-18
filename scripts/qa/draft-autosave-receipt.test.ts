@@ -3,8 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node
 import { rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import vm from 'node:vm'
-import ts from 'typescript'
+import type { IpcMainInvokeEvent } from 'electron'
 import { IPC, type SaveDraftTranscriptResult, type SaveMeeting, type Settings } from '@shared/ipc'
 import { saveDraftTranscript } from '../../src/main/transcripts'
 import { useStorageForTests } from '../../src/main/infra/storage/meetings-storage'
@@ -54,13 +53,23 @@ function exposedDraftBridge(): TotoApi['saveDraftTranscript'] {
 
 describe('actual exposed draft preload transport', () => {
   const payload: SaveMeeting = {
-    mode: 'meeting', title: 'Synthetic draft transport', startedAt: 1, lines: [], recap: ''
+    mode: 'meeting',
+    title: 'Synthetic draft transport',
+    startedAt: 1,
+    lines: [],
+    recap: ''
   }
-  beforeEach(() => { electronBoundary.invoke.mockReset() })
-  afterEach(() => { electronBoundary.invoke.mockReset() })
+  beforeEach(() => {
+    electronBoundary.invoke.mockReset()
+  })
+  afterEach(() => {
+    electronBoundary.invoke.mockReset()
+  })
 
   it.each<SaveDraftTranscriptResult>([
-    { status: 'saved' }, { status: 'failed' }, { status: 'disabled' }
+    { status: 'saved' },
+    { status: 'failed' },
+    { status: 'disabled' }
   ])('forwards the exact payload and unchanged %s receipt through the exposed preload', async (receipt) => {
     const result = Promise.resolve(receipt)
     electronBoundary.invoke.mockReturnValueOnce(result)
@@ -72,7 +81,8 @@ describe('actual exposed draft preload transport', () => {
   })
 
   it.each([undefined, null, new Error('Synthetic private preload refusal')])(
-    'preserves an external invoke rejection without claiming saved (%s)', async (refusal) => {
+    'preserves an external invoke rejection without claiming saved (%s)',
+    async (refusal) => {
       electronBoundary.invoke.mockRejectedValueOnce(refusal)
       await expect(exposedDraftBridge()(payload)).rejects.toBe(refusal)
       expect(electronBoundary.invoke).toHaveBeenCalledExactlyOnceWith(IPC.saveDraftTranscript, payload)
@@ -80,53 +90,18 @@ describe('actual exposed draft preload transport', () => {
   )
 })
 
-// Execute the real registered IPC callback, preload method and consumed autosave lifecycle. The App
-// delegation is checked by app-recap-lifecycle; this path retains real snapshot IO and failure feedback.
-const mainRoot = join(__dirname, '..', '..', 'src', 'main')
-function source(relative: string): ts.SourceFile {
-  const path = join(mainRoot, relative)
-  return ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-}
-
-function findOne(file: ts.SourceFile, predicate: (node: ts.Node) => boolean): ts.Node {
-  const matches: ts.Node[] = []
-  const visit = (node: ts.Node): void => {
-    if (predicate(node)) matches.push(node)
-    ts.forEachChild(node, visit)
-  }
-  visit(file)
-  if (matches.length !== 1) throw new Error(`Expected one production boundary, found ${matches.length}`)
-  return matches[0]!
-}
-
-function evaluate<T>(expression: string, context: vm.Context): T {
-  vm.runInContext(
-    ts.transpileModule(`globalThis.result = (${expression});`, {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
-    }).outputText,
-    context,
-    { timeout: 1_000 }
-  )
-  return context.result as T
-}
-
-const main = source('index.ts')
-const mainRegistration = findOne(
-  main,
-  (node) => ts.isCallExpression(node) && node.expression.getText(main) === 'registerDraftTranscriptIpc'
-) as ts.CallExpression
-const preload = source('../preload/index.ts')
-const preloadMethod = findOne(
-  preload,
-  (node) => ts.isPropertyAssignment(node) && node.name.getText(preload) === 'saveDraftTranscript'
-) as ts.PropertyAssignment
-
-describe('draft receipt reaches the actual renderer through main and preload', () => {
+// The actual index registration and all seven disconnected-wiring negatives remain in rebuild-waves.
+// This path imports the exposed preload, registered draft handler and consumed renderer lifecycle,
+// retaining real snapshot IO and failure feedback without executing source fragments or main boot.
+describe('draft receipt reaches the renderer through the imported draft registrar and actual preload', () => {
   let folder: string
   let settings: Settings
   let actualFs: typeof import('node:fs/promises')
+  let activeHost: symbol | undefined
 
   beforeEach(async () => {
+    expect(activeHost).toBeUndefined()
+    electronBoundary.invoke.mockReset()
     useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-draft-receipt-'))
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
@@ -137,11 +112,15 @@ describe('draft receipt reaches the actual renderer through main and preload', (
   })
 
   afterEach(() => {
+    activeHost = undefined
+    electronBoundary.invoke.mockReset()
     vi.restoreAllMocks()
     rmSync(folder, { recursive: true, force: true })
   })
 
   function host(authenticated = true) {
+    if (activeHost) throw new Error('The previous draft transport host must be cleaned up before replacement')
+    const owner = Symbol('draft transport host')
     let handler!: (event: unknown, payload: unknown) => Promise<unknown>
     let backend = saveDraftTranscript
     let senderFailure: Error | undefined
@@ -170,7 +149,8 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       validateSession: () => {},
       sessionIsValid: () => true
     })
-    const mainContext = vm.createContext({
+    const registered: string[] = []
+    const dependencies: Parameters<typeof registerDraftTranscriptIpc>[0] = {
       saveDraftTranscript: (...args: Parameters<typeof saveDraftTranscript>) => backend(...args),
       assertMainWindow: () => {
         if (senderFailure) throw senderFailure
@@ -178,11 +158,11 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       requireAuth,
       captureAuthSessionBoundary: () => auth.captureSessionBoundary(requireAuth),
       captureDraftSettingsBoundary,
-      registerDraftTranscriptIpc,
       ipcMain: {
-        handle(channel: string, callback: typeof handler) {
+        handle(channel, callback) {
           expect(channel).toBe(IPC.saveDraftTranscript)
-          handler = callback
+          registered.push(channel)
+          handler = (event, payload) => Promise.resolve(callback(event as IpcMainInvokeEvent, payload))
         }
       },
       getSettings: () => {
@@ -190,16 +170,16 @@ describe('draft receipt reaches the actual renderer through main and preload', (
         publishSettingsSnapshot(settings, canRead)
         return settings
       }
-    })
-    evaluate<void>(mainRegistration.getText(main), mainContext)
-    const invoke = vi.fn((channel: string, payload: unknown) => {
-      expect(channel).toBe(IPC.saveDraftTranscript)
+    }
+    registerDraftTranscriptIpc(dependencies)
+    expect(registered).toEqual([IPC.saveDraftTranscript])
+    electronBoundary.invoke.mockImplementation((channel, payload) => {
+      if (channel !== IPC.saveDraftTranscript || activeHost !== owner) {
+        return Promise.reject(new Error('Draft preload invoked an unregistered transport channel'))
+      }
       return handler({}, payload)
     })
-    const bridge = evaluate<(payload: SaveMeeting) => Promise<SaveDraftTranscriptResult>>(
-      preloadMethod.initializer.getText(preload),
-      vm.createContext({ IPC, ipcRenderer: { invoke } })
-    )
+    const bridge = exposedDraftBridge()
     let tick!: () => void
     let pending: Promise<SaveDraftTranscriptResult> | undefined
     const calls: unknown[] = []
@@ -215,20 +195,21 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       return 1 as unknown as ReturnType<typeof setInterval>
     })
     const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {})
-    const context = vm.createContext({
+    const context = {
       listen: { listening: true },
       mode: 'meeting',
       meetingStartRef: { current: 1_700_000_000_000 },
       autosaveLinesRef: {
         current: [
-          { speaker: 'them', text: 'Synthetic final speech.', t: 1_700_000_000_000 },
-          { speaker: 'them', text: 'Synthetic provisional.', t: 1_700_000_000_001, provisional: true }
+          { speaker: 'them' as const, text: 'Synthetic final speech.', t: 1_700_000_000_000 },
+          { speaker: 'them' as const, text: 'Synthetic provisional.', t: 1_700_000_000_001, provisional: true }
         ]
       },
       autosaveFailsRef: { current: 0 },
       setAutosaveWarn: vi.fn(),
       defaultMeetingTitle: () => 'Synthetic meeting'
-    })
+    }
+    activeHost = owner
     const stop = startDraftAutosave({
       mode: 'meeting',
       getLines: () => context.autosaveLinesRef.current,
@@ -239,9 +220,16 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       save
     })
     const cleanup = () => {
-      stop()
-      setIntervalSpy.mockRestore()
-      clearIntervalSpy.mockRestore()
+      try {
+        stop()
+      } finally {
+        setIntervalSpy.mockRestore()
+        clearIntervalSpy.mockRestore()
+        if (activeHost === owner) {
+          activeHost = undefined
+          electronBoundary.invoke.mockReset()
+        }
+      }
     }
     return {
       context,
@@ -323,24 +311,6 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     } finally {
       h.cleanup()
     }
-  })
-
-  it('connects the production registration to the imported draft IPC module', () => {
-    expect(
-      main.statements.some(
-        (statement) =>
-          ts.isImportDeclaration(statement) &&
-          ts.isStringLiteral(statement.moduleSpecifier) &&
-          statement.moduleSpecifier.text === './ipc/draft-transcript-ipc' &&
-          statement.importClause?.namedBindings &&
-          ts.isNamedImports(statement.importClause.namedBindings) &&
-          statement.importClause.namedBindings.elements.some(
-            (binding) =>
-              binding.name.text === 'registerDraftTranscriptIpc' &&
-              (!binding.propertyName || binding.propertyName.text === 'registerDraftTranscriptIpc')
-          )
-      )
-    ).toBe(true)
   })
 
   it('retains the actual sender validation before any snapshot IO', async () => {
