@@ -424,7 +424,7 @@ describe('RelaySpeechSession', () => {
       expect(operation.deadlineAt - performance.now()).toBe(20)
       // Transport closure without a relay terminal cannot confirm predecessor closure.
       socket.close()
-      await expect(renewing).resolves.toEqual({ ok: false, code: 'TIMEOUT' })
+      await expect(renewing).resolves.toEqual({ ok: false, code: 'CLOSURE_UNCONFIRMED' })
       await expect(finishing).resolves.toMatchObject({
         complete: false,
         tracks: [{ closeConfirmed: false, tail: 'incomplete' }]
