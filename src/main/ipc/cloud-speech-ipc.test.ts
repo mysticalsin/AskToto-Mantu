@@ -1099,6 +1099,15 @@ describe('cloud speech main IPC authority boundary', () => {
           finalSampleOffset: refusal === 'wrong-offset' ? 0 : finalSampleOffset
         }]
       }
+      if (refusal === 'wrong-sequence') {
+        const malformed = { ...ack, tracks: [{ ...ack.tracks[0], finalSequence: 0 }] }
+        await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [malformed])).resolves.toMatchObject({
+          ok: false, code: 'INVALID_REQUEST'
+        })
+        expect(session.finish).not.toHaveBeenCalled()
+        expect(session.cancel).not.toHaveBeenCalled()
+        expect(clock.pendingAt(captureDeadline + 5_000)).toHaveLength(1)
+      }
       await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [ack])).resolves.toMatchObject({ ok: false, code: 'ORDER' })
       await vi.waitFor(() => expect(session.cancel).toHaveBeenCalledTimes(1))
       expect(session.finish).not.toHaveBeenCalled()
