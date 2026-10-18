@@ -233,8 +233,7 @@ describe('quit cancellation — Windows fallback', () => {
       fresh = start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
       await emitListening(0, 55911)
       await fresh
-      expect(spawnState.calls[0].path).toBe(join(PACKAGED_RESOURCES, 'llama',
-        process.arch === 'arm64' ? 'llama-server-macos-arm64' : 'llama-server-macos-x64'))
+      expect(spawnState.calls[0].path).toBe(join(PACKAGED_RESOURCES, 'llama', 'mac', process.arch, 'llama-server'))
       const refused = expectRefusalBeforeSpawn(old, /start cancelled/)
       authority.resolve(fullRuntime)
       await refused
