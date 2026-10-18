@@ -597,6 +597,7 @@ describe('workerd fixture initialization', () => {
     const pending = makeRuntime('deepgram-via-gateway', owner)
     let releaseBody!: () => void
     const body = new Promise<void>((resolve) => { releaseBody = resolve })
+    let restoreDispatch: (() => void) | undefined
     try {
       await reached
       controller.abort(refusal)
@@ -611,11 +612,11 @@ describe('workerd fixture initialization', () => {
       expect(() => owner.check()).toThrow(refusal)
       if (!owned) throw new Error('Expected the canceled fixture to own its real runtime')
       const dispatchSpy = vi.spyOn(owned, 'dispatchFetch')
+      restoreDispatch = () => { dispatchSpy.mockRestore() }
       await expect(dispatchOwnedRequest(owner, owned, {
         license: 'not-used', now: Date.now(), path: '/v1/speech/capability', method: 'POST'
       })).rejects.toBe(refusal)
       expect(dispatchSpy).not.toHaveBeenCalled()
-      dispatchSpy.mockRestore()
       releaseBody()
       await settlement
       expect(settled).toBe(true)
@@ -624,10 +625,14 @@ describe('workerd fixture initialization', () => {
     } finally {
       release()
       releaseBody()
-      await owner.settle(pending, body)
-      phases.mockRestore()
-      databaseSpy.mockRestore()
-      disposeSpy.mockRestore()
+      try {
+        await owner.settle(pending, body)
+      } finally {
+        restoreDispatch?.()
+        phases.mockRestore()
+        databaseSpy.mockRestore()
+        disposeSpy.mockRestore()
+      }
     }
   })
 
