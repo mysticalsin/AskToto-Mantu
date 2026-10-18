@@ -83,6 +83,11 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
   `src/main/features/meetings/transcript-format.ts` owns the pure display projection;
   `src/main/features/meetings/meeting-document.ts` owns frontmatter and recap-section boundaries;
   `src/main/recall.ts` owns typed History reads and edits.
+- Incremental meeting record canonicalization and receipt custody →
+  `src/main/infra/storage/incremental-record-canonical.ts` and
+  `src/main/infra/storage/incremental-record-receipt.ts` (moved from the same filenames under
+  `src/main/features/meetings/`, including the canonicalization test). Features and the speech worker
+  host share this infrastructure implementation; receipt issuance and consumption retain one authority.
 - Recording imports → `src/main/import-retention-policy.ts` resolves trusted retention policy;
   `src/main/import-job-retention-coordinator.ts` owns bounded checkpoint inventory, explicit Resume, and
   owner-bound checkpoint writes; `src/main/import-job-store.ts` owns encrypted checkpoints and content-free
