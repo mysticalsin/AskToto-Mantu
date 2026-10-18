@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import vm from 'node:vm'
 import ts from 'typescript'
-import { IPC, SaveMeetingSchema, stripProvisionalLines, type Settings } from '@shared/ipc'
+import { IPC, SaveMeetingSchema, stripProvisionalLines, type SaveDraftTranscriptResult, type SaveMeeting, type Settings } from '@shared/ipc'
 import { saveDraftTranscript } from './transcripts'
 import { useStorageForTests } from './infra/storage/meetings-storage'
+import { startDraftAutosave } from '../renderer/src/lib/draft-autosave'
 
 vi.mock('electron')
 vi.mock('node:fs/promises', async (importOriginal) => ({
@@ -15,12 +16,11 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
   rename: vi.fn(async (from: string, to: string) => renameSync(from, to))
 }))
 
-// Execute the real registered IPC callback, preload method and App effect. Only Electron/React
-// hosting is supplied here; the snapshot writer and its filesystem failure are real production code.
+// Execute the real registered IPC callback, preload method and consumed autosave lifecycle. The App
+// delegation is checked by app-recap-lifecycle; this path retains real snapshot IO and failure feedback.
 function source(relative: string): ts.SourceFile {
   const path = join(__dirname, relative)
-  const kind = path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  return ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, kind)
+  return ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
 
 function findOne(file: ts.SourceFile, predicate: (node: ts.Node) => boolean): ts.Node {
@@ -48,10 +48,6 @@ const mainRegistration = findOne(main, node => ts.isCallExpression(node) &&
 const preload = source('../preload/index.ts')
 const preloadMethod = findOne(preload, node => ts.isPropertyAssignment(node) &&
   node.name.getText(preload) === 'saveDraftTranscript') as ts.PropertyAssignment
-const app = source('../renderer/src/App.tsx')
-const appEffect = findOne(app, node => ts.isCallExpression(node) &&
-  node.expression.getText(app) === 'useEffect' &&
-  node.arguments[0]?.getText(app).includes('const AUTOSAVE_MS = 60_000')) as ts.CallExpression
 
 describe('draft receipt reaches the actual renderer through main and preload', () => {
   let folder: string
@@ -80,15 +76,20 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       expect(channel).toBe(IPC.saveDraftTranscript)
       return handler({}, payload)
     })
-    const bridge = evaluate<(payload: unknown) => Promise<unknown>>(preloadMethod.initializer.getText(preload),
+    const bridge = evaluate<(payload: SaveMeeting) => Promise<SaveDraftTranscriptResult>>(preloadMethod.initializer.getText(preload),
       vm.createContext({ IPC, ipcRenderer: { invoke } }))
     let tick!: () => void
-    let pending: Promise<unknown> | undefined
+    let pending: Promise<SaveDraftTranscriptResult> | undefined
     const calls: unknown[] = []
-    const save = vi.fn((payload: unknown) => {
+    const save = vi.fn((payload: SaveMeeting) => {
       pending = bridge(payload).then(result => { calls.push(result); return result })
       return pending
     })
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockImplementation(callback => {
+      tick = callback as () => void
+      return 1 as unknown as ReturnType<typeof setInterval>
+    })
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {})
     const context = vm.createContext({
       listen: { listening: true }, mode: 'meeting',
       meetingStartRef: { current: 1_700_000_000_000 },
@@ -97,10 +98,18 @@ describe('draft receipt reaches the actual renderer through main and preload', (
         { speaker: 'them', text: 'Synthetic provisional.', t: 1_700_000_000_001, provisional: true }
       ] },
       autosaveFailsRef: { current: 0 }, setAutosaveWarn: vi.fn(),
-      defaultMeetingTitle: () => 'Synthetic meeting', window: { toto: { saveDraftTranscript: save } },
-      setInterval: (callback: () => void) => { tick = callback; return 1 }, clearInterval: vi.fn()
+      defaultMeetingTitle: () => 'Synthetic meeting'
     })
-    const cleanup = evaluate<() => () => void>(appEffect.arguments[0]!.getText(app), context)()
+    const stop = startDraftAutosave({
+      mode: 'meeting', getLines: () => context.autosaveLinesRef.current,
+      getStartedAt: () => context.meetingStartRef.current, title: context.defaultMeetingTitle,
+      failures: context.autosaveFailsRef, warn: context.setAutosaveWarn, save
+    })
+    const cleanup = () => {
+      stop()
+      setIntervalSpy.mockRestore()
+      clearIntervalSpy.mockRestore()
+    }
     return {
       context, calls, handler, cleanup,
       async tick() {

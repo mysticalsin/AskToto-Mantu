@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AnswerState } from './state'
 import type { SaveDraftTranscriptResult, SaveMeeting, TranscriptLine } from '@shared/ipc'
 import { recapPersistAction } from './lib/transcript'
+import { startDraftAutosave } from './lib/draft-autosave'
 import {
   OwnedOperationGate, RecapWriteCoordinator, beginOwnedMeetingExit,
   persistRecapOnExit, recapFileIdentity, retireRecapWriteKeys
@@ -347,28 +348,50 @@ describe('actual App generated-write to Review manual-edit wiring', () => {
   })
 })
 
+function draftAutosaveEffect(source = app): ts.CallExpression {
+  const imported = source.statements.filter((node): node is ts.ImportDeclaration =>
+    ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) &&
+    node.moduleSpecifier.text === './lib/draft-autosave')
+  const binding = imported[0]?.importClause
+  if (imported.length !== 1 || !binding || binding.isTypeOnly ||
+    !binding.namedBindings || !ts.isNamedImports(binding.namedBindings) ||
+    !binding.namedBindings.elements.some(item => item.name.text === 'startDraftAutosave' &&
+      !item.propertyName && !item.isTypeOnly)) throw new Error('Expected real autosave lifecycle import')
+  const effect = uniqueNode(source, node => ts.isCallExpression(node) &&
+    node.expression.getText(source) === 'useEffect' && node.arguments[0] !== undefined &&
+    ts.isArrowFunction(node.arguments[0]) && ts.isBlock(node.arguments[0].body) &&
+    node.arguments[0].body.statements.some(statement => ts.isReturnStatement(statement) &&
+      statement.expression !== undefined && ts.isCallExpression(statement.expression) &&
+      statement.expression.expression.getText(source) === 'startDraftAutosave')) as ts.CallExpression
+  if (effect.arguments[1]?.getText(source).replace(/\s/g, '') !== '[listen.listening,mode]')
+    throw new Error('Autosave lifecycle must keep the listening and mode dependencies')
+  return effect
+}
+
 describe('actual App periodic draft autosave ownership', () => {
   function autosaveHost(listening = true, currentLines = lines) {
     const writes: ReturnType<typeof deferred<SaveDraftTranscriptResult>>[] = []
     const ticks: Array<() => void> = []
     const cleanups: Array<() => void> = []
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockImplementation((tick) => {
+      ticks.push(tick as () => void)
+      return ticks.length as unknown as ReturnType<typeof setInterval>
+    })
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {})
     const saveDraftTranscript = vi.fn((_payload: SaveMeeting) => {
       const write = deferred<SaveDraftTranscriptResult>()
       writes.push(write)
       return write.promise
     })
     const context = vm.createContext({
-      TITLE_BUDGET: 50, mode: 'meeting', listen: { listening },
+      TITLE_BUDGET: 50, mode: 'meeting', listen: { listening }, startDraftAutosave,
       meetingStartRef: ref(100), autosaveLinesRef: ref(currentLines), autosaveFailsRef: ref(0),
       setAutosaveWarn: vi.fn(),
       window: { toto: { saveDraftTranscript } },
-      setInterval: vi.fn((tick: () => void, _ms: number) => { ticks.push(tick); return ticks.length }),
-      clearInterval: vi.fn()
+      setInterval: setIntervalSpy, clearInterval: clearIntervalSpy
     })
     context.defaultMeetingTitle = callback('defaultMeetingTitle', context)
-    const node = uniqueNode(app, node => ts.isCallExpression(node) &&
-      node.expression.getText(app) === 'useEffect' &&
-      node.arguments[0]?.getText(app).includes('const AUTOSAVE_MS = 60_000')) as ts.CallExpression
+    const node = draftAutosaveEffect()
     const effect = evaluate<() => (() => void) | undefined>(node.arguments[0]!.getText(app), context)
     return {
       context, saveDraftTranscript, writes, ticks,
@@ -377,9 +400,10 @@ describe('actual App periodic draft autosave ownership', () => {
         if (cleanup) cleanups.push(cleanup)
         return cleanup
       },
-      async settle(index: number, outcome: 'success' | 'failure' | 'failed' | 'disabled') {
+      async settle(index: number, outcome: 'success' | 'failure' | 'failed' | 'disabled' | 'missing') {
         if (outcome === 'success') writes[index]!.resolve({ status: 'saved' })
         else if (outcome === 'failed' || outcome === 'disabled') writes[index]!.resolve({ status: outcome })
+        else if (outcome === 'missing') writes[index]!.resolve(undefined as unknown as SaveDraftTranscriptResult)
         else writes[index]!.reject(new Error('Synthetic draft IPC failure'))
         await new Promise<void>(resolve => setImmediate(resolve))
       },
@@ -387,6 +411,8 @@ describe('actual App periodic draft autosave ownership', () => {
         cleanups.forEach(cleanup => cleanup())
         writes.forEach(write => write.resolve({ status: 'disabled' }))
         await new Promise<void>(resolve => setImmediate(resolve))
+        setIntervalSpy.mockRestore()
+        clearIntervalSpy.mockRestore()
       }
     }
   }
@@ -476,6 +502,57 @@ describe('actual App periodic draft autosave ownership', () => {
       expect(h.context.setAutosaveWarn).not.toHaveBeenCalled()
     } finally {
       await h.dispose()
+    }
+  })
+
+  it('reads updated transcript and meeting refs without restarting the original timer', async () => {
+    const h = autosaveHost()
+    try {
+      h.start()
+      const updated: TranscriptLine[] = [{ speaker: 'them', text: 'Latest synthetic speech.', t: 2 }]
+      h.context.autosaveLinesRef.current = updated
+      h.context.meetingStartRef.current = 200
+      h.ticks[0]!()
+      expect(h.context.setInterval).toHaveBeenCalledTimes(1)
+      expect(h.saveDraftTranscript).toHaveBeenCalledExactlyOnceWith({
+        title: 'Latest synthetic speech.', mode: 'meeting', startedAt: 200, lines: updated, recap: ''
+      })
+      expect(h.saveDraftTranscript.mock.calls[0]![0].lines).toBe(updated)
+      await h.settle(0, 'success')
+    } finally { await h.dispose() }
+  })
+
+  it('counts a missing receipt as failure instead of acknowledging a save', async () => {
+    const h = autosaveHost()
+    try {
+      h.start()
+      h.context.setAutosaveWarn.mockClear()
+      h.ticks[0]!()
+      await h.settle(0, 'missing')
+      expect(h.context.autosaveFailsRef.current).toBe(1)
+      expect(h.context.setAutosaveWarn).not.toHaveBeenCalled()
+      h.ticks[0]!()
+      await h.settle(1, 'missing')
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).toHaveBeenCalledExactlyOnceWith(true)
+    } finally { await h.dispose() }
+  })
+
+  it('requires the real lifecycle import, returned cleanup and stable effect dependencies', () => {
+    const source = app.getFullText()
+    const mutations = [
+      ['import { startDraftAutosave }', 'import type { startDraftAutosave }'],
+      ["from './lib/draft-autosave'", "from './lib/unused-draft-autosave'"],
+      ['return startDraftAutosave(', 'startDraftAutosave('],
+      ['[listen.listening, mode]', '[listen.listening, mode, listen.lines]']
+    ] as const
+    for (const [before, after] of mutations) {
+      expect(source).toContain(before)
+      const changed = source.replace(before, after)
+      expect(changed).not.toBe(source)
+      expect(() => draftAutosaveEffect(ts.createSourceFile(
+        'App', changed, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX
+      ))).toThrow()
     }
   })
 
