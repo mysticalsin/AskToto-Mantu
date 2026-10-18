@@ -176,11 +176,36 @@ const SOURCE = '98461f85dcca49a2ded3f1489daed10d194f5229'
 const HARNESS = '16db3db5715b7f7f6a9ba6658bfaae97d111f3fa'
 const REPOSITORY = { id: 1282463398, full_name: 'mysticalsin/AskToto-Mantu' }
 const PUBLIC_ASSETS = [
-  { id: 645178383, name: 'Metis-1.9.7.dmg', size: 1827516056, digest: 'sha256:3ff51e9d50eb1413361c7be68ab542361bae5dad63fa22031e08b5be7bc5a304' },
-  { id: 645180903, name: 'Metis-1.9.7.zip', size: 1826734829, digest: 'sha256:6fbf0b72fba0e2f70ee53adf2f7e73224d2deab432a79afc2ed1874396cb8edc' },
-  { id: 645183715, name: 'Metis-Setup-1.9.7.exe', size: 1533431944, digest: 'sha256:40a791388df139e0cd1c01cdf33ccf1f0a530192820434a967802371de0f3416' },
-  { id: 645185922, name: 'provenance.json', size: 4106, digest: 'sha256:d3a6872da5e1b3fb3aed651d860c399265d20edaa88fb27cc4d3ffd18a092104' },
-  { id: 645185936, name: 'SHA256SUMS.txt', size: 252, digest: 'sha256:39aec8ab23e19d6f0e5d240a86072c2b904caed651296d6e8d2a4d863802ddc3' }
+  {
+    id: 645178383,
+    name: 'Metis-1.9.7.dmg',
+    size: 1827516056,
+    digest: 'sha256:3ff51e9d50eb1413361c7be68ab542361bae5dad63fa22031e08b5be7bc5a304'
+  },
+  {
+    id: 645180903,
+    name: 'Metis-1.9.7.zip',
+    size: 1826734829,
+    digest: 'sha256:6fbf0b72fba0e2f70ee53adf2f7e73224d2deab432a79afc2ed1874396cb8edc'
+  },
+  {
+    id: 645183715,
+    name: 'Metis-Setup-1.9.7.exe',
+    size: 1533431944,
+    digest: 'sha256:40a791388df139e0cd1c01cdf33ccf1f0a530192820434a967802371de0f3416'
+  },
+  {
+    id: 645185922,
+    name: 'provenance.json',
+    size: 4106,
+    digest: 'sha256:d3a6872da5e1b3fb3aed651d860c399265d20edaa88fb27cc4d3ffd18a092104'
+  },
+  {
+    id: 645185936,
+    name: 'SHA256SUMS.txt',
+    size: 252,
+    digest: 'sha256:39aec8ab23e19d6f0e5d240a86072c2b904caed651296d6e8d2a4d863802ddc3'
+  }
 ]
 
 function context() {
@@ -188,15 +213,25 @@ function context() {
     repository: { ...REPOSITORY },
     harnessCommit: HARNESS,
     candidateRun: {
-      id: 38795048288, run_attempt: 1, path: '.github/workflows/qa-candidate.yml',
-      event: 'workflow_dispatch', head_branch: 'main', head_sha: SOURCE,
-      status: 'completed', conclusion: 'success',
-      repository: { ...REPOSITORY }, head_repository: { ...REPOSITORY }
+      id: 38795048288,
+      run_attempt: 1,
+      path: '.github/workflows/qa-candidate.yml',
+      event: 'workflow_dispatch',
+      head_branch: 'main',
+      head_sha: SOURCE,
+      status: 'completed',
+      conclusion: 'success',
+      repository: { ...REPOSITORY },
+      head_repository: { ...REPOSITORY }
     },
     release: {
-      id: 414278048, tag_name: 'metis-unsigned-v1.9.7',
-      name: 'Métis 1.9.7 (unsigned, manual install)', target_commitish: SOURCE,
-      draft: false, prerelease: true, assets: PUBLIC_ASSETS.map(asset => ({ ...asset }))
+      id: 414278048,
+      tag_name: 'metis-unsigned-v1.9.7',
+      name: 'Métis 1.9.7 (unsigned, manual install)',
+      target_commitish: SOURCE,
+      draft: false,
+      prerelease: true,
+      assets: PUBLIC_ASSETS.map((asset) => ({ ...asset }))
     }
   }
 }
@@ -218,17 +253,32 @@ interface OriginalProvenance {
 describe('historical 1.9.7 immutable public input identity', () => {
   it('accepts the actual schema-2 top-level version and retains all four original build declarations', () => {
     expect(Buffer.byteLength(ORIGINAL_PROVENANCE)).toBe(4106)
-    expect(createHash('sha256').update(ORIGINAL_PROVENANCE).digest('hex')).toBe('d3a6872da5e1b3fb3aed651d860c399265d20edaa88fb27cc4d3ffd18a092104')
+    expect(createHash('sha256').update(ORIGINAL_PROVENANCE).digest('hex')).toBe(
+      'd3a6872da5e1b3fb3aed651d860c399265d20edaa88fb27cc4d3ffd18a092104'
+    )
     expect(Buffer.byteLength(ORIGINAL_SUMS)).toBe(252)
-    expect(createHash('sha256').update(ORIGINAL_SUMS).digest('hex')).toBe('39aec8ab23e19d6f0e5d240a86072c2b904caed651296d6e8d2a4d863802ddc3')
+    expect(createHash('sha256').update(ORIGINAL_SUMS).digest('hex')).toBe(
+      '39aec8ab23e19d6f0e5d240a86072c2b904caed651296d6e8d2a4d863802ddc3'
+    )
     const original = JSON.parse(ORIGINAL_PROVENANCE)
-    expect(original.builds.map((build: { variant: string }) => build.variant)).toEqual(['mac', 'mac-qa-identity', 'win', 'win-portable'])
+    expect(original.builds.map((build: { variant: string }) => build.variant)).toEqual([
+      'mac',
+      'mac-qa-identity',
+      'win',
+      'win-portable'
+    ])
     expect(original.builds.every((build: object) => !Object.hasOwn(build, 'version'))).toBe(true)
     const receipt = validate()
     expect(receipt).toMatchObject({
-      scope: 'IDENTITY_ONLY', outcome: 'VERIFIED', verification: 'metadata-only',
-      artifact_source: SOURCE, harness_commit: HARNESS, candidate_run: 38795048288,
-      candidate_attempt: 1, release_id: 414278048, tag: 'metis-unsigned-v1.9.7'
+      scope: 'IDENTITY_ONLY',
+      outcome: 'VERIFIED',
+      verification: 'metadata-only',
+      artifact_source: SOURCE,
+      harness_commit: HARNESS,
+      candidate_run: 38795048288,
+      candidate_attempt: 1,
+      release_id: 414278048,
+      tag: 'metis-unsigned-v1.9.7'
     })
     expect(receipt).toMatchObject({
       assets: PUBLIC_ASSETS.map(({ digest, ...asset }) => ({ ...asset, sha256: digest.slice('sha256:'.length) }))
@@ -236,8 +286,17 @@ describe('historical 1.9.7 immutable public input identity', () => {
     expect(JSON.stringify(receipt)).not.toContain('Metis-QA')
     expect(JSON.stringify(receipt)).not.toContain('Metis-Portable')
     expect(Object.keys(receipt).sort()).toEqual([
-      'artifact_source', 'assets', 'candidate_attempt', 'candidate_run', 'harness_commit',
-      'outcome', 'release_id', 'repository', 'scope', 'tag', 'verification'
+      'artifact_source',
+      'assets',
+      'candidate_attempt',
+      'candidate_run',
+      'harness_commit',
+      'outcome',
+      'release_id',
+      'repository',
+      'scope',
+      'tag',
+      'verification'
     ])
     const regularRelease = context()
     regularRelease.release.prerelease = false
@@ -246,33 +305,168 @@ describe('historical 1.9.7 immutable public input identity', () => {
   })
 
   it.each<[string, (metadata: ReturnType<typeof context>) => void]>([
-    ['repository', value => { value.repository.id += 1 }],
-    ['head repository', value => { value.candidateRun.head_repository.full_name = 'other/repository' }],
-    ['run repository', value => { value.candidateRun.repository.id += 1 }],
-    ['run ID', value => { value.candidateRun.id += 1 }],
-    ['attempt', value => { value.candidateRun.run_attempt = 2 }],
-    ['workflow', value => { value.candidateRun.path = '.github/workflows/build.yml' }],
-    ['event', value => { value.candidateRun.event = 'pull_request' }],
-    ['ref', value => { value.candidateRun.head_branch = 'release/1.9.x' }],
-    ['artifact source', value => { value.candidateRun.head_sha = HARNESS }],
-    ['status', value => { value.candidateRun.status = 'in_progress' }],
-    ['conclusion', value => { value.candidateRun.conclusion = 'failure' }],
-    ['harness SHA', value => { value.harnessCommit = 'private-path-canary' }],
-    ['missing harness SHA', value => { Reflect.deleteProperty(value, 'harnessCommit') }],
-    ['extra context field', value => { Object.assign(value, { privateCanary: 'private-path-canary' }) }],
-    ['extra run field', value => { Object.assign(value.candidateRun, { privateCanary: 'private-path-canary' }) }],
-    ['extra asset field', value => { Object.assign(value.release.assets[0], { privateCanary: 'private-path-canary' }) }],
-    ['release ID', value => { value.release.id += 1 }],
-    ['release tag', value => { value.release.tag_name = 'v1.9.7' }],
-    ['release source alias', value => { value.release.target_commitish = 'main' }],
-    ['draft', value => { value.release.draft = true }],
-    ['asset ID', value => { value.release.assets[0].id += 1 }],
-    ['asset name', value => { value.release.assets[0].name = '../private-path-canary' }],
-    ['asset bytes', value => { value.release.assets[0].size -= 1 }],
-    ['asset digest', value => { value.release.assets[0].digest = 'sha256:' + '0'.repeat(64) }],
-    ['missing asset', value => { value.release.assets.pop() }],
-    ['extra asset', value => { value.release.assets.push({ ...value.release.assets[0], id: 1 }) }],
-    ['duplicate asset', value => { value.release.assets[1] = { ...value.release.assets[0] } }]
+    [
+      'repository',
+      (value) => {
+        value.repository.id += 1
+      }
+    ],
+    [
+      'head repository',
+      (value) => {
+        value.candidateRun.head_repository.full_name = 'other/repository'
+      }
+    ],
+    [
+      'run repository',
+      (value) => {
+        value.candidateRun.repository.id += 1
+      }
+    ],
+    [
+      'run ID',
+      (value) => {
+        value.candidateRun.id += 1
+      }
+    ],
+    [
+      'attempt',
+      (value) => {
+        value.candidateRun.run_attempt = 2
+      }
+    ],
+    [
+      'workflow',
+      (value) => {
+        value.candidateRun.path = '.github/workflows/build.yml'
+      }
+    ],
+    [
+      'event',
+      (value) => {
+        value.candidateRun.event = 'pull_request'
+      }
+    ],
+    [
+      'ref',
+      (value) => {
+        value.candidateRun.head_branch = 'release/1.9.x'
+      }
+    ],
+    [
+      'artifact source',
+      (value) => {
+        value.candidateRun.head_sha = HARNESS
+      }
+    ],
+    [
+      'status',
+      (value) => {
+        value.candidateRun.status = 'in_progress'
+      }
+    ],
+    [
+      'conclusion',
+      (value) => {
+        value.candidateRun.conclusion = 'failure'
+      }
+    ],
+    [
+      'harness SHA',
+      (value) => {
+        value.harnessCommit = 'private-path-canary'
+      }
+    ],
+    [
+      'missing harness SHA',
+      (value) => {
+        Reflect.deleteProperty(value, 'harnessCommit')
+      }
+    ],
+    [
+      'extra context field',
+      (value) => {
+        Object.assign(value, { privateCanary: 'private-path-canary' })
+      }
+    ],
+    [
+      'extra run field',
+      (value) => {
+        Object.assign(value.candidateRun, { privateCanary: 'private-path-canary' })
+      }
+    ],
+    [
+      'extra asset field',
+      (value) => {
+        Object.assign(value.release.assets[0], { privateCanary: 'private-path-canary' })
+      }
+    ],
+    [
+      'release ID',
+      (value) => {
+        value.release.id += 1
+      }
+    ],
+    [
+      'release tag',
+      (value) => {
+        value.release.tag_name = 'v1.9.7'
+      }
+    ],
+    [
+      'release source alias',
+      (value) => {
+        value.release.target_commitish = 'main'
+      }
+    ],
+    [
+      'draft',
+      (value) => {
+        value.release.draft = true
+      }
+    ],
+    [
+      'asset ID',
+      (value) => {
+        value.release.assets[0].id += 1
+      }
+    ],
+    [
+      'asset name',
+      (value) => {
+        value.release.assets[0].name = '../private-path-canary'
+      }
+    ],
+    [
+      'asset bytes',
+      (value) => {
+        value.release.assets[0].size -= 1
+      }
+    ],
+    [
+      'asset digest',
+      (value) => {
+        value.release.assets[0].digest = 'sha256:' + '0'.repeat(64)
+      }
+    ],
+    [
+      'missing asset',
+      (value) => {
+        value.release.assets.pop()
+      }
+    ],
+    [
+      'extra asset',
+      (value) => {
+        value.release.assets.push({ ...value.release.assets[0], id: 1 })
+      }
+    ],
+    [
+      'duplicate asset',
+      (value) => {
+        value.release.assets[1] = { ...value.release.assets[0] }
+      }
+    ]
   ])('refuses changed %s without exposing the supplied value', (_name, mutate) => {
     const metadata = context()
     mutate(metadata)
@@ -281,24 +475,74 @@ describe('historical 1.9.7 immutable public input identity', () => {
   })
 
   it.each<[string, (value: OriginalProvenance) => void]>([
-    ['schema', value => { value.schema = 1 }],
-    ['top-level version', value => { value.version = '1.9.8' }],
-    ['build.version added', value => { value.builds[0].version = '1.9.7' }],
-    ['missing QA declaration', value => { value.builds.splice(1, 1) }],
-    ['extra build', value => { value.builds.push(value.builds[0]) }],
-    ['configuration digest', value => { value.builds[0].builder_config[0].sha256 = '0'.repeat(64) }],
-    ['runner fact', value => { value.builds[0].runner.arch = 'X64' }],
-    ['signing fact', value => { value.builds[0].signing.mode = 'developer-id' }]
+    [
+      'schema',
+      (value) => {
+        value.schema = 1
+      }
+    ],
+    [
+      'top-level version',
+      (value) => {
+        value.version = '1.9.8'
+      }
+    ],
+    [
+      'build.version added',
+      (value) => {
+        value.builds[0].version = '1.9.7'
+      }
+    ],
+    [
+      'missing QA declaration',
+      (value) => {
+        value.builds.splice(1, 1)
+      }
+    ],
+    [
+      'extra build',
+      (value) => {
+        value.builds.push(value.builds[0])
+      }
+    ],
+    [
+      'configuration digest',
+      (value) => {
+        value.builds[0].builder_config[0].sha256 = '0'.repeat(64)
+      }
+    ],
+    [
+      'runner fact',
+      (value) => {
+        value.builds[0].runner.arch = 'X64'
+      }
+    ],
+    [
+      'signing fact',
+      (value) => {
+        value.builds[0].signing.mode = 'developer-id'
+      }
+    ]
   ])('refuses tampered original %s', (_name, mutate) => {
     const value: OriginalProvenance = JSON.parse(ORIGINAL_PROVENANCE)
     mutate(value)
-    expect(validate(context(), JSON.stringify(value, null, 2) + '\n')).toMatchObject({ outcome: 'REFUSED', code: 'provenance-mismatch' })
+    expect(validate(context(), JSON.stringify(value, null, 2) + '\n')).toMatchObject({
+      outcome: 'REFUSED',
+      code: 'provenance-mismatch'
+    })
   })
 
   it('refuses non-original provenance bytes, checksum lines and missing context fields', () => {
-    expect(validate(context(), ORIGINAL_PROVENANCE + '\n')).toMatchObject({ outcome: 'REFUSED', code: 'provenance-mismatch' })
-    expect(validate(context(), ORIGINAL_PROVENANCE, ORIGINAL_SUMS.replace('Metis-1.9.7.zip', 'Metis-QA-1.9.7.zip'))).toMatchObject({ outcome: 'REFUSED', code: 'checksums-mismatch' })
-    expect(validateHistorical197Metadata({}, Buffer.from(ORIGINAL_PROVENANCE), Buffer.from(ORIGINAL_SUMS))).toMatchObject({ outcome: 'REFUSED', code: 'context-mismatch' })
+    expect(validate(context(), ORIGINAL_PROVENANCE + '\n')).toMatchObject({
+      outcome: 'REFUSED',
+      code: 'provenance-mismatch'
+    })
+    expect(
+      validate(context(), ORIGINAL_PROVENANCE, ORIGINAL_SUMS.replace('Metis-1.9.7.zip', 'Metis-QA-1.9.7.zip'))
+    ).toMatchObject({ outcome: 'REFUSED', code: 'checksums-mismatch' })
+    expect(
+      validateHistorical197Metadata({}, Buffer.from(ORIGINAL_PROVENANCE), Buffer.from(ORIGINAL_SUMS))
+    ).toMatchObject({ outcome: 'REFUSED', code: 'context-mismatch' })
   })
 })
 
@@ -319,9 +563,15 @@ describe('historical input file admission and streaming bytes', () => {
     const file = join(dir, 'owned.bin')
     await writeFile(file, 'abc')
     await expect(hashHistorical197File(file, ABC)).resolves.toEqual(ABC)
-    await expect(hashHistorical197File(file, { ...ABC, size: 2 })).rejects.toMatchObject({ code: 'asset-bytes-mismatch' })
-    await expect(hashHistorical197File(file, { ...ABC, sha256: '0'.repeat(64) })).rejects.toMatchObject({ code: 'asset-bytes-mismatch' })
-    await expect(hashHistorical197File(join(dir, 'missing-private-canary'), ABC)).rejects.toMatchObject({ code: 'input-unreadable' })
+    await expect(hashHistorical197File(file, { ...ABC, size: 2 })).rejects.toMatchObject({
+      code: 'asset-bytes-mismatch'
+    })
+    await expect(hashHistorical197File(file, { ...ABC, sha256: '0'.repeat(64) })).rejects.toMatchObject({
+      code: 'asset-bytes-mismatch'
+    })
+    await expect(hashHistorical197File(join(dir, 'missing-private-canary'), ABC)).rejects.toMatchObject({
+      code: 'input-unreadable'
+    })
   })
 
   it('refuses directories and a real directory symlink or Windows junction before opening data', async () => {
@@ -332,7 +582,10 @@ describe('historical input file admission and streaming bytes', () => {
     await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir')
     await expect(hashHistorical197File(target, ABC)).rejects.toMatchObject({ code: 'unsafe-file' })
     await expect(hashHistorical197File(link, ABC)).rejects.toMatchObject({ code: 'unsafe-file' })
-    expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: link })).toMatchObject({ outcome: 'REFUSED', code: 'unsafe-file' })
+    expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: link })).toMatchObject({
+      outcome: 'REFUSED',
+      code: 'unsafe-file'
+    })
   })
 
   it('refuses a close failure after streaming real bytes and actually closing its descriptor', async () => {
@@ -353,7 +606,10 @@ describe('historical input file admission and streaming bytes', () => {
       }
       return handle
     })
-    await expect(hashHistorical197File(file, ABC)).rejects.toMatchObject({ code: 'input-unreadable', message: 'input-unreadable' })
+    await expect(hashHistorical197File(file, ABC)).rejects.toMatchObject({
+      code: 'input-unreadable',
+      message: 'input-unreadable'
+    })
     // Let close-triggered callbacks settle; a late rejection must remain a test-runner error.
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(closes).toBe(1)
@@ -403,7 +659,9 @@ describe('historical input file admission and streaming bytes', () => {
       const handle = await actual.open(...args)
       opened = handle
       const read = handle.read.bind(handle)
-      const observer = vi.spyOn(handle, 'read').mockImplementationOnce(read)
+      const observer = vi
+        .spyOn(handle, 'read')
+        .mockImplementationOnce(read)
         .mockRejectedValueOnce(new Error('Synthetic private read canary'))
       reads = observer.mock.calls
       const close = handle.close.bind(handle)
@@ -414,7 +672,10 @@ describe('historical input file admission and streaming bytes', () => {
       return handle
     })
     const expected = { size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
-    await expect(hashHistorical197File(file, expected)).rejects.toMatchObject({ code: 'input-unreadable', message: 'input-unreadable' })
+    await expect(hashHistorical197File(file, expected)).rejects.toMatchObject({
+      code: 'input-unreadable',
+      message: 'input-unreadable'
+    })
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(reads).toHaveLength(2)
     expect(closes).toBe(1)
@@ -423,11 +684,17 @@ describe('historical input file admission and streaming bytes', () => {
 
   it('rejects missing, extra and tiny substituted installer sets; never fakes a five-asset positive', async () => {
     const dir = await directory()
-    expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: dir })).toMatchObject({ outcome: 'REFUSED', code: 'asset-set-mismatch' })
+    expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: dir })).toMatchObject({
+      outcome: 'REFUSED',
+      code: 'asset-set-mismatch'
+    })
     for (const asset of PUBLIC_ASSETS) await writeFile(join(dir, asset.name), 'abc')
     await writeFile(join(dir, 'provenance.json'), ORIGINAL_PROVENANCE)
     await writeFile(join(dir, 'SHA256SUMS.txt'), ORIGINAL_SUMS)
-    expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: dir })).toMatchObject({ outcome: 'REFUSED', code: 'asset-bytes-mismatch' })
+    expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: dir })).toMatchObject({
+      outcome: 'REFUSED',
+      code: 'asset-bytes-mismatch'
+    })
     await writeFile(join(dir, 'extra-private-path-canary'), 'not an asset')
     const refusal = await verifyHistorical197Inputs({ metadata: context(), assetDirectory: dir })
     expect(refusal).toMatchObject({ outcome: 'REFUSED', code: 'asset-set-mismatch' })
@@ -437,7 +704,11 @@ describe('historical input file admission and streaming bytes', () => {
 
   it('returns fixed refusals for malformed IO requests rather than leaking destructuring errors', async () => {
     for (const input of [undefined, null, {}, { metadata: context(), assetDirectory: null }]) {
-      expect(await verifyHistorical197Inputs(input)).toMatchObject({ scope: 'IDENTITY_ONLY', outcome: 'REFUSED', code: 'invalid-input' })
+      expect(await verifyHistorical197Inputs(input)).toMatchObject({
+        scope: 'IDENTITY_ONLY',
+        outcome: 'REFUSED',
+        code: 'invalid-input'
+      })
     }
   })
 
@@ -455,9 +726,11 @@ describe('historical input file admission and streaming bytes', () => {
     const metadataPath = join(dir, 'private-context-canary.json')
     await writeFile(metadataPath, JSON.stringify(context()))
     const script = fileURLToPath(new URL('./historical-197-inputs.mjs', import.meta.url))
-    const child = spawnSync(process.execPath, [
-      script, '--metadata', metadataPath, '--assets', dir, '--harness-commit', 'f'.repeat(40)
-    ], { encoding: 'utf8', timeout: 5_000 })
+    const child = spawnSync(
+      process.execPath,
+      [script, '--metadata', metadataPath, '--assets', dir, '--harness-commit', 'f'.repeat(40)],
+      { encoding: 'utf8', timeout: 5_000 }
+    )
     expect(child.status).toBe(1)
     expect(child.stderr).toBe('')
     expect(JSON.parse(child.stdout)).toEqual({ scope: 'IDENTITY_ONLY', outcome: 'REFUSED', code: 'context-mismatch' })

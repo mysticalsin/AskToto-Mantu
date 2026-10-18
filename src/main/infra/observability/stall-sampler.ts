@@ -116,10 +116,14 @@ function spawnWatcher(opts: StallSamplerOptions): ChildProcess | undefined {
       opts.command,
       [
         'stall-watch',
-        '--pid', String(process.pid),
-        '--alive', runAlivePath(opts.userData),
-        '--capture-prefix', join(captureDir(opts.userData), opts.bootId),
-        '--stale-after-ms', String(opts.aliveIntervalMs + OVERDUE_MS)
+        '--pid',
+        String(process.pid),
+        '--alive',
+        runAlivePath(opts.userData),
+        '--capture-prefix',
+        join(captureDir(opts.userData), opts.bootId),
+        '--stale-after-ms',
+        String(opts.aliveIntervalMs + OVERDUE_MS)
       ],
       { stdio: ['ignore', 'pipe', 'ignore'] }
     )

@@ -31,7 +31,7 @@ function samplerDeps(
 /** `ChildProcess['stdout']` is typed as a plain `Readable`, but fakeChild() always backs it with a
  *  `PassThrough`, which is writable too — this seam lets tests push chunks through it. */
 function writeStdout(child: ChildProcess, chunk: string): void {
-  (child.stdout as unknown as PassThrough).write(chunk)
+  ;(child.stdout as unknown as PassThrough).write(chunk)
 }
 
 /** Lets pending microtasks (the sampler's internal `collecting` promise chain) settle. */
@@ -99,7 +99,9 @@ describe('startStallSampler', () => {
     const audit = vi.fn()
     const collect = vi.fn(async (): Promise<CaptureOutcome[]> => [])
     let resolvePgid: (pgid: number | null) => void = () => {}
-    const pgid = new Promise<number | null>((resolve) => { resolvePgid = resolve })
+    const pgid = new Promise<number | null>((resolve) => {
+      resolvePgid = resolve
+    })
     const resolveProcessGroupId = vi.fn(() => pgid)
     const sampler = startStallSampler({
       command: COMMAND,
@@ -119,9 +121,17 @@ describe('startStallSampler', () => {
       await Promise.resolve()
       expect(audit.mock.calls).toEqual([
         ['sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: null }],
-        ['sidecar.exit', {
-          name: 'stall-watch', pid: 9876, pgid: null, code: 0, signal: null, uptimeMs: expect.any(Number)
-        }]
+        [
+          'sidecar.exit',
+          {
+            name: 'stall-watch',
+            pid: 9876,
+            pgid: null,
+            code: 0,
+            signal: null,
+            uptimeMs: expect.any(Number)
+          }
+        ]
       ])
     } finally {
       resolvePgid(null)
@@ -154,9 +164,17 @@ describe('startStallSampler', () => {
       child.emit('exit', 1, 'SIGTERM')
       expect(audit.mock.calls).toEqual([
         ['sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: 5151 }],
-        ['sidecar.exit', {
-          name: 'stall-watch', pid: 9876, pgid: 5151, code: 1, signal: 'SIGTERM', uptimeMs: expect.any(Number)
-        }]
+        [
+          'sidecar.exit',
+          {
+            name: 'stall-watch',
+            pid: 9876,
+            pgid: 5151,
+            code: 1,
+            signal: 'SIGTERM',
+            uptimeMs: expect.any(Number)
+          }
+        ]
       ])
     } finally {
       sampler.stop()
@@ -169,7 +187,9 @@ describe('startStallSampler', () => {
     const child = fakeChild(9876)
     const audit = vi.fn()
     let rejectPgid: (error: Error) => void = () => {}
-    const pgid = new Promise<number | null>((_resolve, reject) => { rejectPgid = reject })
+    const pgid = new Promise<number | null>((_resolve, reject) => {
+      rejectPgid = reject
+    })
     const sampler = startStallSampler({
       command: COMMAND,
       userData,
@@ -191,9 +211,17 @@ describe('startStallSampler', () => {
       await Promise.resolve()
       expect(audit.mock.calls).toEqual([
         ['sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: null }],
-        ['sidecar.exit', {
-          name: 'stall-watch', pid: 9876, pgid: null, code: 0, signal: null, uptimeMs: expect.any(Number)
-        }]
+        [
+          'sidecar.exit',
+          {
+            name: 'stall-watch',
+            pid: 9876,
+            pgid: null,
+            code: 0,
+            signal: null,
+            uptimeMs: expect.any(Number)
+          }
+        ]
       ])
     } finally {
       rejectPgid(new Error('synthetic resolver cleanup'))
@@ -208,7 +236,9 @@ describe('startStallSampler', () => {
     const child = fakeChild(9876)
     const audit = vi.fn()
     let resolvePgid: (pgid: number | null) => void = () => {}
-    const pgid = new Promise<number | null>((resolve) => { resolvePgid = resolve })
+    const pgid = new Promise<number | null>((resolve) => {
+      resolvePgid = resolve
+    })
     const sampler = startStallSampler({
       command: COMMAND,
       userData,
@@ -228,9 +258,17 @@ describe('startStallSampler', () => {
       await pgid
       expect(audit.mock.calls).toEqual([
         ['sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: 5151 }],
-        ['sidecar.exit', {
-          name: 'stall-watch', pid: 9876, pgid: 5151, code: 2, signal: null, uptimeMs: expect.any(Number)
-        }]
+        [
+          'sidecar.exit',
+          {
+            name: 'stall-watch',
+            pid: 9876,
+            pgid: 5151,
+            code: 2,
+            signal: null,
+            uptimeMs: expect.any(Number)
+          }
+        ]
       ])
     } finally {
       resolvePgid(null)
@@ -244,7 +282,12 @@ describe('startStallSampler', () => {
   it("collects once at start, before any stdout line — an outcome for a different bootId is audited under that outcome's own bootId", async () => {
     const child = fakeChild()
     const audit = vi.fn()
-    const otherBootOutcome: CaptureOutcome = { kind: 'bundled', bootId: 'previous-boot', stalledMs: 42, bundle: 'b.txt' }
+    const otherBootOutcome: CaptureOutcome = {
+      kind: 'bundled',
+      bootId: 'previous-boot',
+      stalledMs: 42,
+      bundle: 'b.txt'
+    }
     let resolveCollect: (v: CaptureOutcome[]) => void = () => {}
     const collect = vi.fn(() => new Promise<CaptureOutcome[]>((resolve) => (resolveCollect = resolve)))
     startStallSampler({
@@ -280,7 +323,11 @@ describe('startStallSampler', () => {
     writeStdout(child, 'led\n')
     await flush()
     expect(collect).toHaveBeenCalledTimes(2)
-    expect(audit).toHaveBeenCalledWith('app.stall.sampled', { bootId: 'this-boot', stalledMs: 30_000, bundle: 'b1.txt' })
+    expect(audit).toHaveBeenCalledWith('app.stall.sampled', {
+      bootId: 'this-boot',
+      stalledMs: 30_000,
+      bundle: 'b1.txt'
+    })
   })
 
   it("'failed' audits app.stall.sample_failed with reason 'sample' under this boot's id, without collecting; unknown lines are ignored", async () => {
@@ -374,7 +421,9 @@ describe('startStallSampler', () => {
       audit.mockClear()
       emit(child)
       await flush()
-      const watcherFailures = audit.mock.calls.filter((c) => c[0] === 'app.stall.sample_failed' && (c[1] as { reason?: string })?.reason === 'watcher')
+      const watcherFailures = audit.mock.calls.filter(
+        (c) => c[0] === 'app.stall.sample_failed' && (c[1] as { reason?: string })?.reason === 'watcher'
+      )
       expect(watcherFailures).toHaveLength(1)
     }
   })
@@ -395,11 +444,13 @@ describe('startStallSampler', () => {
     })
     await flush()
     expect(spawn).not.toHaveBeenCalled()
-    const watcherFailures = audit.mock.calls.filter((c) => c[0] === 'app.stall.sample_failed' && (c[1] as { reason?: string })?.reason === 'watcher')
+    const watcherFailures = audit.mock.calls.filter(
+      (c) => c[0] === 'app.stall.sample_failed' && (c[1] as { reason?: string })?.reason === 'watcher'
+    )
     expect(watcherFailures).toHaveLength(1)
   })
 
-  it("stop() kills the helper once even when called twice, and a later close or stdout line audits nothing", async () => {
+  it('stop() kills the helper once even when called twice, and a later close or stdout line audits nothing', async () => {
     const child = fakeChild()
     const audit = vi.fn()
     const collect = vi.fn().mockResolvedValue([])
