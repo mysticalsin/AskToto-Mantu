@@ -883,6 +883,14 @@ describe('bounded native launch diagnostics', () => {
     ], 5_000)).resolves.toEqual({ code: 1, signal: null, error: false })
   })
 
+  it('continues draining a large owned stream after its retained prefix is full', async () => {
+    await expect(appDriver.runProcess(process.execPath, ['-e',
+      "process.stderr.write('NSOSStatusErrorDomain Code=-10810\\n' + 'x'.repeat(1024 * 1024)); process.exitCode = 1"
+    ], 5_000, capture)).resolves.toEqual({
+      code: 1, signal: null, error: false, launchDiagnostic: { kind: 'truncated', osStatus: null }
+    })
+  })
+
   it('preserves default settlement on exit without waiting for stderr close', async () => {
     const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) })
     const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => child as unknown as ReturnType<typeof childProcess.spawn>)
@@ -988,6 +996,26 @@ describe('bounded native launch diagnostics', () => {
     } finally { log.mockRestore() }
   })
 
+  it('contains a throwing optional diagnostic getter without exposing its error', async () => {
+    const rows = initialRvRows('darwin')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await runRevealRow({
+        auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'), rows,
+        id: 'RV-1-macos-finder-spotlight-launchpad', reason: 'activate', prepare: undefined,
+        run: async () => Object.defineProperty({ code: 1, signal: null, error: false }, 'launchDiagnostic', {
+          get: () => { throw new Error('/private/synthetic-getter-token') }
+        }),
+        waitForRevealRecord: async () => ({ parked: true, outcome: 'shown' }), failure: 'native launch failed'
+      })
+      expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
+        status: 'FAIL', diagnostics: { launch: { launchDiagnostic: { kind: 'not-observed', osStatus: null } } }
+      })
+      expect(JSON.stringify(rows)).not.toContain('/private/synthetic-getter-token')
+      expect(JSON.stringify(log.mock.calls)).not.toContain('/private/synthetic-getter-token')
+    } finally { log.mockRestore() }
+  })
+
   it('passes numeric-only diagnostics from the actual Finder helper into its failed row', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'metis-rv-native-'))
     const auditLogPath = join(dir, 'audit.log')
@@ -1027,6 +1055,7 @@ describe('bounded native launch diagnostics', () => {
       code: 1, signal: null, error: false, launchDiagnostic: { kind: 'os-status', osStatus: -10810 }
     } : { code: 0, signal: null, error: false })
     const attach = vi.spyOn(navigationRows, 'withOverlayPage').mockRejectedValue(new Error('Synthetic unavailable CDP'))
+    const port = vi.spyOn(appDriver, 'freeLoopbackPort').mockResolvedValue(41973)
     const census = vi.spyOn(ownedProcessDriver, 'listProcesses').mockReturnValue([])
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
@@ -1050,7 +1079,7 @@ describe('bounded native launch diagnostics', () => {
         } }
       })
     } finally {
-      log.mockRestore(); census.mockRestore(); attach.mockRestore(); run.mockRestore()
+      log.mockRestore(); census.mockRestore(); port.mockRestore(); attach.mockRestore(); run.mockRestore()
     }
   })
 })
