@@ -445,6 +445,68 @@ describe('workerd fixture initialization', () => {
     }
   })
 
+  it('stops a canceled initialization before schema or seeds and joins its owned disposal', async () => {
+    const controller = new AbortController()
+    const refusal = new Error('Synthetic fixture setup cancellation')
+    let release!: () => void
+    let entered!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const reached = new Promise<void>((resolve) => { entered = resolve })
+    let disposed = false
+    const dispose = Miniflare.prototype.dispose
+    const disposeSpy = vi.spyOn(Miniflare.prototype, 'dispose').mockImplementation(async function (this: Miniflare) {
+      await dispose.call(this)
+      disposed = true
+    })
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async () => {
+      entered()
+      await held
+      throw refusal
+    })
+    const phases = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const owner = createFixtureOwner(controller.signal)
+    const pending = makeRuntime('deepgram-via-gateway', owner)
+    try {
+      await reached
+      controller.abort(refusal)
+      release()
+      await expect(pending).rejects.toBe(refusal)
+      await owner.settle(pending)
+      expect(disposeSpy).toHaveBeenCalledOnce()
+      expect(disposed).toBe(true)
+      expect(phases.mock.calls.filter(([label]) => label === '[relay-fixture-phase]').map(([, value]) => value.phase))
+        .toEqual(['bundle', 'runtime'])
+    } finally {
+      release()
+      await owner.settle(pending)
+      phases.mockRestore()
+      databaseSpy.mockRestore()
+      disposeSpy.mockRestore()
+    }
+  })
+
+  it('reports owned cleanup refusal alongside the original initialization refusal', async () => {
+    const refusal = new Error('Synthetic fixture initialization refusal')
+    const cleanupRefusal = new Error('Synthetic fixture disposal refusal')
+    const dispose = Miniflare.prototype.dispose
+    const disposeSpy = vi.spyOn(Miniflare.prototype, 'dispose').mockImplementation(async function (this: Miniflare) {
+      await dispose.call(this)
+      throw cleanupRefusal
+    })
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockRejectedValue(refusal)
+    const owner = createFixtureOwner()
+    const pending = makeRuntime('deepgram-via-gateway', owner)
+    try {
+      await expect(pending).rejects.toMatchObject({ errors: [refusal, cleanupRefusal] })
+      await expect(owner.settle(pending)).rejects.toBe(cleanupRefusal)
+      expect(disposeSpy).toHaveBeenCalledOnce()
+    } finally {
+      await owner.settle(pending).catch(() => {})
+      databaseSpy.mockRestore()
+      disposeSpy.mockRestore()
+    }
+  })
+
   it('awaits owned runtime disposal before preserving an initialization rejection', async () => {
     const refusal = new Error('Synthetic fixture database initialization refusal')
     let owned: Miniflare | undefined
