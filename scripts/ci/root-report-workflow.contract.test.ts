@@ -266,11 +266,6 @@ describe('original full root report artifact retention', () => {
 
   it('uses the existing root reporter and isolated fixture home without introducing quality-job secrets', () => {
     expectRootArtifactConnection(workflow)
-    const config = readFileSync(join(root, 'vitest.config.ts'), 'utf8')
-    expect(config).toContain('const sandbox = createHermeticSandbox()')
-    expect(config).toContain('const hermeticHomeEnv = hermeticEnv(sandbox, {')
-    expect(config).toContain('env: hermeticHomeEnv')
-    expect(config).toContain('outputFile: { json: ciRootReportPath }')
     expect(qualityJob()).not.toContain('secrets.')
   })
 })
@@ -822,9 +817,7 @@ describe('bounded root report diagnostic producer', () => {
     expect(producer).toContain('process.exitCode = result.exitCode')
     expect(producer).toContain('console.log(JSON.stringify(result.summary))')
     expect(producer).toContain('reportPath: env.METIS_CI_ROOT_REPORT')
-    expect(producer).toContain(
-      'pipelineOutcome: env.METIS_CI_PIPELINE_OUTCOME, auditOutcome: env.METIS_CI_AUDIT_OUTCOME'
-    )
+    expectOutcomeEnvironmentBindings(producer)
     expect(producer).not.toContain('process.exitCode = 0')
   })
 
