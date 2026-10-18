@@ -1861,6 +1861,38 @@ export async function runReplay() {
           JSON.stringify(row.frontier) === JSON.stringify(reduced.frontier),
         'sample and durable frontier mirror'
       )
+      if (id === 'N04' && row.diagnosticStatus !== reduced.diagnosticStatus) {
+        const ordinal = (entry) => (entry && Number.isSafeInteger(entry.ordinal) ? entry.ordinal : null)
+        const endpoints = ['reader3', 'writer4'].map((endpoint) => {
+          const currentEnd = parsed.timeline.find(
+            (entry) => entry.item.op === 'stream-end' && entry.item.endpoint === endpoint
+          )
+          const parentEnd = parsed.timeline.find(
+            (entry) => entry.origin === 'parent' && entry.item.op === 'stream-end' && entry.item.endpoint === endpoint
+          )
+          const parentClose = parsed.timeline.find(
+            (entry) => entry.origin === 'parent' && entry.item.op === 'peer-close' && entry.item.endpoint === endpoint
+          )
+          return {
+            endpoint,
+            selectedEnd: currentEnd ? { ordinal: ordinal(currentEnd), origin: currentEnd.origin } : null,
+            parentEndOrdinal: ordinal(parentEnd),
+            parentCloseOrdinal: ordinal(parentClose),
+            parentDestroyPresent: parsed.timeline.some(
+              (entry) =>
+                entry.origin === 'parent' && entry.item.op === 'peer-destroy' && entry.item.endpoint === endpoint
+            )
+          }
+        })
+        console.error(
+          `METIS_N0_EPOCH_DIAGNOSTIC ${JSON.stringify({
+            caseId: 'N04',
+            collectorStatus: row.diagnosticStatus,
+            replayStatus: reduced.diagnosticStatus,
+            endpoints
+          }).slice(0, 768)}`
+        )
+      }
       verifyReplayCaseClaims(id, row, reduced)
       assert(
         JSON.stringify(row.signals) === JSON.stringify(reduced.signals) &&
