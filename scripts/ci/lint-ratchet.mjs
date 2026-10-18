@@ -105,9 +105,12 @@ function changedFiles(mergeBase) {
 
 function main(argv) {
   const mode = argv[0] === 'format-patch' ? 'format-patch' : argv[0] === 'format' ? 'format' : 'lint'
-  if (mode === 'format-patch' &&
-      (process.env.CI !== 'true' || process.env.GITHUB_ACTIONS !== 'true' ||
-       process.env.RUNNER_ENVIRONMENT !== 'github-hosted')) {
+  if (
+    mode === 'format-patch' &&
+    (process.env.CI !== 'true' ||
+      process.env.GITHUB_ACTIONS !== 'true' ||
+      process.env.RUNNER_ENVIRONMENT !== 'github-hosted')
+  ) {
     console.error('Format repair is restricted to GitHub-hosted CI.')
     return 1
   }
@@ -132,9 +135,15 @@ function main(argv) {
       console.error('The pinned formatter could not produce a complete repair patch.')
       return 1
     }
-    const patch = execFileSync('git', ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--binary', '--', ...files], {
-      cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024
-    })
+    const patch = execFileSync(
+      'git',
+      ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--binary', '--', ...files],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        maxBuffer: 8 * 1024 * 1024
+      }
+    )
     console.log('FORMAT_REPAIR_PATCH_BEGIN')
     process.stdout.write(patch)
     console.log('FORMAT_REPAIR_PATCH_END')
