@@ -402,6 +402,30 @@ describe('bounded root report diagnostic producer', () => {
     expectNotPass(diagnoseRootReport(fixture.context, { ...fs, fstatSync: () => huge }), 'NOT_PASS_LIMIT')
   }))
 
+  it.each(['complete', 'limit', 'unstable', 'read-failed'] as const)('keeps close failure authoritative after a %s read without leaking diagnostics', (kind) => withReport((fixture) => {
+    let closeCalls = 0
+    const io = {
+      ...fs,
+      fstatSync: (fd: number) => {
+        const metadata = fs.fstatSync(fd)
+        if (kind === 'limit') metadata.size = MAX_REPORT_BYTES + 1
+        if (kind === 'unstable') metadata.mtimeMs += 1
+        return metadata
+      },
+      readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: null) => {
+        if (kind === 'read-failed') throw new Error(canary)
+        return fs.readSync(fd, buffer, offset, length, position)
+      },
+      closeSync: (fd: number) => {
+        closeCalls += 1
+        fs.closeSync(fd)
+        throw new Error(canary)
+      }
+    }
+    expectNotPass(diagnose(fixture, io), 'NOT_PASS_UNREADABLE')
+    expect(closeCalls).toBe(1)
+  }))
+
   it('rejects a swapped descriptor snapshot and post-read file identity', () => withReport((fixture) => {
     writeFileSync(fixture.context.reportPath, JSON.stringify(fixture.report))
     let stats = 0
