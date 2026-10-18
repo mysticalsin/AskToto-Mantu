@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
-import { rename } from 'node:fs/promises'
+import { rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import vm from 'node:vm'
@@ -16,12 +16,14 @@ import {
 import { saveDraftTranscript } from '../../src/main/transcripts'
 import { useStorageForTests } from '../../src/main/infra/storage/meetings-storage'
 import { startDraftAutosave } from '../../src/renderer/src/lib/draft-autosave'
+import { SpeechAuthLeaseController, type SpeechAuthSession } from '../../src/main/auth-speech-lease'
+import { captureDraftSettingsBoundary, publishSettingsSnapshot } from '../../src/main/settings-observation'
 
 vi.mock('electron')
-vi.mock('node:fs/promises', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('node:fs/promises')>()),
-  rename: vi.fn(async (from: string, to: string) => renameSync(from, to))
-}))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, writeFile: vi.fn(actual.writeFile), rename: vi.fn(async (from: string, to: string) => renameSync(from, to)) }
+})
 
 // Execute the real registered IPC callback, preload method and consumed autosave lifecycle. The App
 // delegation is checked by app-recap-lifecycle; this path retains real snapshot IO and failure feedback.
@@ -70,11 +72,15 @@ const preloadMethod = findOne(
 describe('draft receipt reaches the actual renderer through main and preload', () => {
   let folder: string
   let settings: Settings
+  let actualFs: typeof import('node:fs/promises')
 
-  beforeEach(() => {
+  beforeEach(async () => {
     useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-draft-receipt-'))
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+    publishSettingsSnapshot(settings, true)
+    actualFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(writeFile).mockImplementation(actualFs.writeFile)
     vi.mocked(rename).mockImplementation(async (from, to) => renameSync(from, to))
   })
 
@@ -84,13 +90,26 @@ describe('draft receipt reaches the actual renderer through main and preload', (
   })
 
   function host(authenticated = true) {
+    let session: SpeechAuthSession | null = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }
+    let sessionEpoch = 0
+    let profile = folder
+    let canRead = true
+    let onSettingsRead = () => {}
+    let onAuthorize = () => {}
+    const requireAuth = () => { onAuthorize(); return authenticated }
+    const auth = new SpeechAuthLeaseController({
+      prepareSession: () => {}, readSession: () => session, readSessionEpoch: () => sessionEpoch,
+      readProfilePath: () => profile, readBoundary: async () => null, validateSession: () => {}, sessionIsValid: () => true
+    })
     const mainContext = vm.createContext({
       SaveMeetingSchema,
       stripProvisionalLines,
       saveDraftTranscript,
       assertMainWindow: vi.fn(),
-      requireAuth: () => authenticated,
-      getSettings: () => settings
+      requireAuth,
+      captureAuthSessionBoundary: () => auth.captureSessionBoundary(requireAuth),
+      captureDraftSettingsBoundary,
+      getSettings: () => { onSettingsRead(); publishSettingsSnapshot(settings, canRead); return settings }
     })
     const handler = evaluate<(event: unknown, payload: unknown) => Promise<unknown>>(
       mainRegistration.arguments[1]!.getText(main),
@@ -152,6 +171,15 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       calls,
       handler,
       cleanup,
+      mainContext,
+      renew() { authenticated = true; session = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }; sessionEpoch += 1; profile = folder },
+      revoke() { authenticated = false; session = null; sessionEpoch += 1 },
+      replaceSession() { session = { ...session! }; sessionEpoch += 1 },
+      resetProfileEpoch() { sessionEpoch += 1 },
+      moveProfile() { profile = `${folder}-other` },
+      onSettingsRead(callback: () => void) { onSettingsRead = callback },
+      onAuthorize(callback: () => void) { onAuthorize = callback },
+      setReadable(value: boolean) { canRead = value },
       async tick() {
         tick()
         await pending
@@ -208,5 +236,117 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       admitted.cleanup()
     }
     expect(readdirSync(folder)).toEqual([])
+  })
+
+  async function duringOwnedTemp(h: ReturnType<typeof host>, transition: () => void): Promise<void> {
+    let release!: () => void
+    let didWrite!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const written = new Promise<void>((resolve) => { didWrite = resolve })
+    vi.mocked(writeFile).mockImplementationOnce(async (...args) => {
+      await actualFs.writeFile(...args)
+      didWrite()
+      await gate
+    })
+    const pending = h.tick()
+    try {
+      await Promise.race([written, pending.then(() => { throw new Error('Draft settled before owned temporary write') })])
+      expect(readdirSync(folder).some((file) => file.endsWith('.tmp'))).toBe(true)
+      transition()
+    } finally {
+      release()
+      await pending
+    }
+  }
+
+  it.each(['session revocation', 'session replacement', 'profile reset epoch', 'profile path', 'root ABA', 'encryption ABA', 'retention ABA', 'auth configuration ABA', 'readability ABA'])(
+    'refuses stale %s publication, preserves old bytes, and reaches the existing warning privately', async (kind) => {
+      const h = host()
+      try {
+        await h.tick()
+        const draft = readdirSync(folder).find((file) => file.startsWith('.autosave-draft-'))!
+        const oldBytes = readFileSync(join(folder, draft))
+        h.calls.length = 0
+        h.context.autosaveLinesRef.current[0].text = 'Synthetic private stale content canary.'
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          // Each request starts with a valid owner, then loses its captured authority before replacement.
+          h.renew()
+          await duringOwnedTemp(h, () => {
+            if (kind === 'session revocation') h.revoke()
+            else if (kind === 'session replacement') h.replaceSession()
+            else if (kind === 'profile reset epoch') h.resetProfileEpoch()
+            else if (kind === 'profile path') h.moveProfile()
+            else {
+              const change = kind === 'root ABA' ? { meetingsFolder: `${folder}-private-canary` }
+                : kind === 'encryption ABA' ? { encryptTranscripts: true }
+                  : kind === 'retention ABA' ? { enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const, summaryOnly: true } }
+                    : { azureTenantId: 'synthetic-private-tenant-canary' }
+              if (kind === 'readability ABA') publishSettingsSnapshot(settings, false)
+              else publishSettingsSnapshot({ ...settings, ...change }, true)
+              publishSettingsSnapshot(settings, true)
+            }
+          })
+          expect(readFileSync(join(folder, draft))).toEqual(oldBytes)
+          expect(readdirSync(folder)).toEqual([draft])
+        }
+        expect(h.calls).toEqual([{ status: 'failed' }, { status: 'failed' }])
+        expect(h.context.autosaveFailsRef.current).toBe(2)
+        expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(true)
+        expect(JSON.stringify(h.calls)).not.toContain('canary')
+      } finally { h.cleanup() }
+    }
+  )
+
+  it('allows equivalent and unrelated publications, then a new current save after a refused ABA', async () => {
+    const h = host()
+    try {
+      await duringOwnedTemp(h, () => {
+        settings = { ...settings, autoSaveTranscripts: true }
+        publishSettingsSnapshot(settings, true)
+      })
+      expect(h.calls.at(-1)).toEqual({ status: 'saved' })
+      await duringOwnedTemp(h, () => {
+        publishSettingsSnapshot({ ...settings, encryptTranscripts: true }, true)
+        publishSettingsSnapshot(settings, true)
+      })
+      expect(h.calls.at(-1)).toEqual({ status: 'failed' })
+      await h.tick()
+      expect(h.calls.at(-1)).toEqual({ status: 'saved' })
+    } finally { h.cleanup() }
+  })
+
+  it('captures auth before settings publication and checks settings after reentrant authorization', async () => {
+    const h = host()
+    try {
+      h.onSettingsRead(() => { h.replaceSession() })
+      await h.tick()
+      expect(h.calls.at(-1)).toEqual({ status: 'failed' })
+      h.onSettingsRead(() => {})
+      await duringOwnedTemp(h, () => {
+        h.onAuthorize(() => {
+          publishSettingsSnapshot({ ...settings, encryptTranscripts: true }, true)
+          publishSettingsSnapshot(settings, true)
+        })
+      })
+      expect(h.calls.at(-1)).toEqual({ status: 'failed' })
+    } finally { h.cleanup() }
+  })
+
+  it('refuses initially unreadable settings without reporting a saved draft', async () => {
+    const h = host()
+    try {
+      h.setReadable(false)
+      await h.tick()
+      expect(h.calls).toEqual([{ status: 'failed' }])
+      expect(readdirSync(folder)).toEqual([])
+    } finally { h.cleanup() }
+  })
+
+  it.each([undefined, null, new Error('Synthetic private backend canary')])('preserves unrelated backend rejection identity (%s)', async (failure) => {
+    const h = host()
+    try {
+      h.mainContext.saveDraftTranscript = () => Promise.reject(failure)
+      await expect(h.handler({}, { mode: 'meeting', title: 'Synthetic', startedAt: 1, lines: [], recap: '' })).rejects.toBe(failure)
+    } finally { h.cleanup() }
   })
 })

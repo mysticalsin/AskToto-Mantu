@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS } from '@shared/ipc'
+import { DEFAULT_SETTINGS, type Settings } from '@shared/ipc'
 
 describe('settings publication', () => {
   beforeEach(() => vi.resetModules())
@@ -55,5 +55,63 @@ describe('settings publication', () => {
     const invalidated = bus.getSettingsObservationEpoch()
     expect(() => bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)).not.toThrow()
     expect(bus.getSettingsObservationEpoch()).toBeGreaterThan(invalidated)
+  })
+
+  it('keeps equivalent and unrelated publications current without depending on the speech epoch', async () => {
+    const bus = await import('./settings-observation')
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      azureClientId: ' client ',
+      azureTenantId: ' tenant ',
+      azureAllowedDomain: ' @example.invalid '
+    }
+    bus.publishSettingsSnapshot(settings, true)
+    const current = bus.captureDraftSettingsBoundary()
+    const epoch = bus.getSettingsObservationEpoch()
+    bus.publishSettingsSnapshot({ ...settings }, true)
+    bus.publishSettingsSnapshot({ ...settings, azureClientId: 'client', azureTenantId: 'tenant', azureAllowedDomain: 'example.invalid', autoSaveTranscripts: !settings.autoSaveTranscripts }, true)
+    expect(bus.getSettingsObservationEpoch()).toBeGreaterThan(epoch)
+    expect(current()).toBe(true)
+  })
+
+  it.each([
+    ['configured root', { meetingsFolder: 'synthetic-other-root' }],
+    ['encryption', { encryptTranscripts: !DEFAULT_SETTINGS.encryptTranscripts }],
+    ['retention', { enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true } }],
+    ['client', { azureClientId: 'synthetic-other-client' }],
+    ['tenant', { azureTenantId: 'synthetic-other-tenant' }],
+    ['domain', { azureAllowedDomain: 'other.invalid' }]
+  ] satisfies Array<[string, Partial<Settings>]>)('retires observed %s ABA even after the same object returns', async (_label, change) => {
+    const bus = await import('./settings-observation')
+    const settings = { ...DEFAULT_SETTINGS }
+    bus.publishSettingsSnapshot(settings, true)
+    const current = bus.captureDraftSettingsBoundary()
+    const prior = { ...settings }
+    Object.assign(settings, change)
+    bus.publishSettingsSnapshot(settings, true)
+    Object.assign(settings, prior)
+    bus.publishSettingsSnapshot(settings, true)
+    expect(current()).toBe(false)
+    expect(bus.captureDraftSettingsBoundary()()).toBe(true)
+  })
+
+  it('refuses missing or unreadable authority and retains observed readability loss after recovery', async () => {
+    const bus = await import('./settings-observation')
+    const missing = bus.captureDraftSettingsBoundary()
+    bus.publishSettingsSnapshot(DEFAULT_SETTINGS, false)
+    const unreadable = bus.captureDraftSettingsBoundary()
+    bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)
+    const current = bus.captureDraftSettingsBoundary()
+    bus.publishSettingsSnapshot(DEFAULT_SETTINGS, false)
+    bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)
+    expect(missing()).toBe(false)
+    expect(unreadable()).toBe(false)
+    expect(current()).toBe(false)
+    const recovered = bus.captureDraftSettingsBoundary()
+    const stop = bus.observeSettingsSnapshot(() => { throw new Error('synthetic private observer failure') })
+    stop()
+    bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)
+    expect(recovered()).toBe(false)
+    expect(bus.captureDraftSettingsBoundary()()).toBe(true)
   })
 })
