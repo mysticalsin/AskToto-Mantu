@@ -405,7 +405,7 @@ describe('RelaySpeechSession', () => {
       }
     }
     expect(globalThis.performance).toBe(performance)
-    let monotonicAt = performance.now()
+    let monotonicAt = 1_000
     const monotonicNow = vi.spyOn(performance, 'now').mockImplementation(() => monotonicAt)
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
     const owned: Promise<unknown>[] = []
@@ -652,7 +652,7 @@ describe('RelaySpeechSession', () => {
     const socket = MockRelaySocket.instances[0]!
     socket.onFinish = undefined
     expect(globalThis.performance).toBe(performance)
-    let monotonicAt = performance.now()
+    let monotonicAt = 1_000
     const monotonicNow = vi.spyOn(performance, 'now').mockImplementation(() => monotonicAt)
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
     const owned: Promise<unknown>[] = []
