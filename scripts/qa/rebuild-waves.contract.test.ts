@@ -399,10 +399,7 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     const mutations = [
       ["'./ipc/draft-transcript-ipc'", "'./disconnected-draft-handler'"],
       ['  captureAuthSessionBoundary,', '  captureAuthSessionBoundary as disconnectedAuthBoundary,'],
-      [
-        '  registerDraftTranscriptIpc({',
-        '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'
-      ],
+      ['  registerDraftTranscriptIpc({', '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'],
       ['  registerDraftTranscriptIpc({', '  registerDraftTranscriptIpc({})\n  registerDraftTranscriptIpc({'],
       [
         '    captureDraftSettingsBoundary,\n    saveDraftTranscript',

@@ -177,10 +177,7 @@ export default {
 };
 `
 
-async function fixturePhase<T>(
-  phase: 'bundle' | 'runtime' | 'schema' | 'seeds',
-  action: () => Promise<T>
-): Promise<T> {
+async function fixturePhase<T>(phase: 'bundle' | 'runtime' | 'schema' | 'seeds', action: () => Promise<T>): Promise<T> {
   const started = performance.now()
   try {
     return await action()
@@ -322,12 +319,14 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
           )
           .run()
       }
-      const refs = ['gateway-readback', 'provider-retention', 'synthetic-sink-test', 'relay-runtime-test'].map((kind) => ({
-        kind,
-        reference: `fixture:${kind}`,
-        digest: `sha256:${'a'.repeat(64)}`,
-        outcome: 'passed'
-      }))
+      const refs = ['gateway-readback', 'provider-retention', 'synthetic-sink-test', 'relay-runtime-test'].map(
+        (kind) => ({
+          kind,
+          reference: `fixture:${kind}`,
+          digest: `sha256:${'a'.repeat(64)}`,
+          outcome: 'passed'
+        })
+      )
       await database
         .prepare(`INSERT INTO speech_route_evidence (
           id, evidence_key, tenant_id, audience, deployment_id, account_id, gateway_id, route_id, model_id,
@@ -401,7 +400,9 @@ describe('workerd fixture initialization', () => {
           if (property === 'batch') {
             return new Proxy(value, {
               async apply(method, _receiver, argumentsList) {
-                batches.push((argumentsList[0] as object[]).map((statement) => preparedQueries.get(statement) ?? 'unknown'))
+                batches.push(
+                  (argumentsList[0] as object[]).map((statement) => preparedQueries.get(statement) ?? 'unknown')
+                )
                 const results = await Reflect.apply(method, target, argumentsList)
                 batchResults = results
                 batchSettled = true
@@ -453,7 +454,9 @@ describe('workerd fixture initialization', () => {
       await dispose.call(this)
       disposed = true
     })
-    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (this: Miniflare) {
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (
+      this: Miniflare
+    ) {
       owned = this
       throw refusal
     })

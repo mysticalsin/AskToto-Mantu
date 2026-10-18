@@ -19,7 +19,9 @@ describe('saved-write admission capture', () => {
     ['object', { reason: 'synthetic owner changed' }],
     ['error', new Error('Synthetic owner changed')]
   ] as const)('captures a thrown %s synchronously without changing its identity', (_name, error) => {
-    const admission = createWriteAdmissionGuard(() => { throw error })
+    const admission = createWriteAdmissionGuard(() => {
+      throw error
+    })
     let thrown = false
     let caught: unknown
     try {
@@ -38,31 +40,60 @@ describe('saved-write admission capture', () => {
     const admission = createWriteAdmissionGuard(undefined)
     expect(admission.guard).toBeUndefined()
     expect(admission.refusal).toBeUndefined()
-    await expect(writeWithAdmission(undefined, async (guard) => {
-      expect(guard).toBeUndefined()
-    })).resolves.toEqual({ kind: 'written' })
-    await expect(writeWithAdmission(() => {}, async (guard) => {
-      guard?.()
-      throw new Error('Synthetic filesystem failure')
-    })).resolves.toEqual({ kind: 'write-failed' })
+    await expect(
+      writeWithAdmission(undefined, async (guard) => {
+        expect(guard).toBeUndefined()
+      })
+    ).resolves.toEqual({ kind: 'written' })
+    await expect(
+      writeWithAdmission(
+        () => {},
+        async (guard) => {
+          guard?.()
+          throw new Error('Synthetic filesystem failure')
+        }
+      )
+    ).resolves.toEqual({ kind: 'write-failed' })
   })
 
-  it.each([undefined, null, 0, new Error('Synthetic refusal')])(
-    'preserves an admission refusal when the writer subsequently throws a different error: %s',
-    async (error) => {
-      const result = await writeWithAdmission(() => { throw error }, async (guard) => {
-        try { guard?.() } catch { /* The writer may translate an error before rejecting. */ }
+  it.each([
+    undefined,
+    null,
+    0,
+    new Error('Synthetic refusal')
+  ])('preserves an admission refusal when the writer subsequently throws a different error: %s', async (error) => {
+    const result = await writeWithAdmission(
+      () => {
+        throw error
+      },
+      async (guard) => {
+        try {
+          guard?.()
+        } catch {
+          /* The writer may translate an error before rejecting. */
+        }
         throw new Error('Synthetic later write error')
-      })
-      expect(result.kind).toBe('admission-refused')
-      if (result.kind !== 'admission-refused') throw new Error('Expected the admission refusal')
-      expect(result.error).toBe(error)
-    }
-  )
+      }
+    )
+    expect(result.kind).toBe('admission-refused')
+    if (result.kind !== 'admission-refused') throw new Error('Expected the admission refusal')
+    expect(result.error).toBe(error)
+  })
 
   it('retains the written result when a writer catches a refusal and still resolves', async () => {
-    await expect(writeWithAdmission(() => { throw undefined }, async (guard) => {
-      try { guard?.() } catch { /* Preserve the existing resolved-write contract. */ }
-    })).resolves.toEqual({ kind: 'written' })
+    await expect(
+      writeWithAdmission(
+        () => {
+          throw undefined
+        },
+        async (guard) => {
+          try {
+            guard?.()
+          } catch {
+            /* Preserve the existing resolved-write contract. */
+          }
+        }
+      )
+    ).resolves.toEqual({ kind: 'written' })
   })
 })

@@ -5,12 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import vm from 'node:vm'
 import ts from 'typescript'
-import {
-  IPC,
-  type SaveDraftTranscriptResult,
-  type SaveMeeting,
-  type Settings
-} from '@shared/ipc'
+import { IPC, type SaveDraftTranscriptResult, type SaveMeeting, type Settings } from '@shared/ipc'
 import { saveDraftTranscript } from '../../src/main/transcripts'
 import { useStorageForTests } from '../../src/main/infra/storage/meetings-storage'
 import { startDraftAutosave } from '../../src/renderer/src/lib/draft-autosave'
@@ -61,8 +56,7 @@ function evaluate<T>(expression: string, context: vm.Context): T {
 const main = source('index.ts')
 const mainRegistration = findOne(
   main,
-  (node) =>
-    ts.isCallExpression(node) && node.expression.getText(main) === 'registerDraftTranscriptIpc'
+  (node) => ts.isCallExpression(node) && node.expression.getText(main) === 'registerDraftTranscriptIpc'
 ) as ts.CallExpression
 const preload = source('../preload/index.ts')
 const preloadMethod = findOne(
@@ -362,51 +356,48 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     'retention ABA',
     'auth configuration ABA',
     'readability ABA'
-  ])(
-    'refuses stale %s publication, preserves old bytes, and reaches the existing warning privately',
-    async (kind) => {
-      const h = host()
-      try {
-        await h.tick()
-        const draft = readdirSync(folder).find((file) => file.startsWith('.autosave-draft-'))!
-        const oldFiles = readdirSync(folder)
-        const oldBytes = readFileSync(join(folder, draft))
-        h.calls.length = 0
-        h.context.autosaveLinesRef.current[0].text = 'Synthetic private stale content canary.'
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          // Each request starts with a valid owner, then loses its captured authority before replacement.
-          h.renew()
-          await duringOwnedTemp(h, () => {
-            if (kind === 'session revocation') h.revoke()
-            else if (kind === 'session replacement') h.replaceSession()
-            else if (kind === 'profile reset epoch') h.resetProfileEpoch()
-            else if (kind === 'profile path') h.moveProfile()
-            else {
-              const change =
-                kind === 'root ABA'
-                  ? { meetingsFolder: `${folder}-private-canary` }
-                  : kind === 'encryption ABA'
-                    ? { encryptTranscripts: true }
-                    : kind === 'retention ABA'
-                      ? { enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const, summaryOnly: true } }
-                      : { azureTenantId: 'synthetic-private-tenant-canary' }
-              if (kind === 'readability ABA') publishSettingsSnapshot(settings, false)
-              else publishSettingsSnapshot({ ...settings, ...change }, true)
-              publishSettingsSnapshot(settings, true)
-            }
-          })
-          expect(readFileSync(join(folder, draft))).toEqual(oldBytes)
-          expect(readdirSync(folder)).toEqual(oldFiles)
-        }
-        expect(h.calls).toEqual([{ status: 'failed' }, { status: 'failed' }])
-        expect(h.context.autosaveFailsRef.current).toBe(2)
-        expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(true)
-        expect(JSON.stringify(h.calls)).not.toContain('canary')
-      } finally {
-        h.cleanup()
+  ])('refuses stale %s publication, preserves old bytes, and reaches the existing warning privately', async (kind) => {
+    const h = host()
+    try {
+      await h.tick()
+      const draft = readdirSync(folder).find((file) => file.startsWith('.autosave-draft-'))!
+      const oldFiles = readdirSync(folder)
+      const oldBytes = readFileSync(join(folder, draft))
+      h.calls.length = 0
+      h.context.autosaveLinesRef.current[0].text = 'Synthetic private stale content canary.'
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        // Each request starts with a valid owner, then loses its captured authority before replacement.
+        h.renew()
+        await duringOwnedTemp(h, () => {
+          if (kind === 'session revocation') h.revoke()
+          else if (kind === 'session replacement') h.replaceSession()
+          else if (kind === 'profile reset epoch') h.resetProfileEpoch()
+          else if (kind === 'profile path') h.moveProfile()
+          else {
+            const change =
+              kind === 'root ABA'
+                ? { meetingsFolder: `${folder}-private-canary` }
+                : kind === 'encryption ABA'
+                  ? { encryptTranscripts: true }
+                  : kind === 'retention ABA'
+                    ? { enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const, summaryOnly: true } }
+                    : { azureTenantId: 'synthetic-private-tenant-canary' }
+            if (kind === 'readability ABA') publishSettingsSnapshot(settings, false)
+            else publishSettingsSnapshot({ ...settings, ...change }, true)
+            publishSettingsSnapshot(settings, true)
+          }
+        })
+        expect(readFileSync(join(folder, draft))).toEqual(oldBytes)
+        expect(readdirSync(folder)).toEqual(oldFiles)
       }
+      expect(h.calls).toEqual([{ status: 'failed' }, { status: 'failed' }])
+      expect(h.context.autosaveFailsRef.current).toBe(2)
+      expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(true)
+      expect(JSON.stringify(h.calls)).not.toContain('canary')
+    } finally {
+      h.cleanup()
     }
-  )
+  })
 
   it('allows equivalent and unrelated publications, then a new current save after a refused ABA', async () => {
     const h = host()
@@ -464,18 +455,19 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     }
   })
 
-  it.each([undefined, null, new Error('Synthetic private backend canary')])(
-    'preserves unrelated backend rejection identity (%s)',
-    async (failure) => {
-      const h = host()
-      try {
-        h.rejectBackend(failure)
-        await expect(
-          h.handler({}, { mode: 'meeting', title: 'Synthetic', startedAt: 1, lines: [], recap: '' })
-        ).rejects.toBe(failure)
-      } finally {
-        h.cleanup()
-      }
+  it.each([
+    undefined,
+    null,
+    new Error('Synthetic private backend canary')
+  ])('preserves unrelated backend rejection identity (%s)', async (failure) => {
+    const h = host()
+    try {
+      h.rejectBackend(failure)
+      await expect(
+        h.handler({}, { mode: 'meeting', title: 'Synthetic', startedAt: 1, lines: [], recap: '' })
+      ).rejects.toBe(failure)
+    } finally {
+      h.cleanup()
     }
-  )
+  })
 })

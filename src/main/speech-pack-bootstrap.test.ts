@@ -162,7 +162,9 @@ describe('speech-pack desktop lifecycle', () => {
     else await expect(handler(event)).resolves.toEqual({ ok: false })
     expect(assertMainWindow).toHaveBeenCalledExactlyOnceWith(event)
     expect(requireAuth).toHaveBeenCalledTimes(refusal === 'sender' ? 0 : 1)
-    expect(mocks.getPackageRuntimeContract).toHaveBeenCalledTimes(['sender', 'authentication'].includes(refusal) ? 0 : 1)
+    expect(mocks.getPackageRuntimeContract).toHaveBeenCalledTimes(
+      ['sender', 'authentication'].includes(refusal) ? 0 : 1
+    )
     const reachesPolicy = !['sender', 'authentication', 'invalid runtime', 'lean runtime'].includes(refusal)
     expect(mocks.readSettingsAtAuthorityBoundary).toHaveBeenCalledTimes(reachesPolicy ? 1 : 0)
     expect(mocks.getSpeechPolicyAuthorityStatus).toHaveBeenCalledTimes(
@@ -184,7 +186,9 @@ describe('speech-pack desktop lifecycle', () => {
     const settings = {
       ...DEFAULT_SETTINGS,
       enterpriseLive: { ...DEFAULT_SETTINGS.enterpriseLive, managed: false, inferenceMode: 'legacy' as const },
-      operatorUrl: '', operatorIngestSecret: '', operatorLicenseToken: ''
+      operatorUrl: '',
+      operatorIngestSecret: '',
+      operatorLicenseToken: ''
     }
     mocks.getPackageRuntimeContract.mockImplementation(async () => {
       order.push('runtime')
@@ -198,7 +202,9 @@ describe('speech-pack desktop lifecycle', () => {
       order.push('policy')
       return { status: 'unconfigured', identity: 'fixture-policy' }
     })
-    const auditAsrTransfer = vi.fn(() => { order.push('audit') })
+    const auditAsrTransfer = vi.fn(() => {
+      order.push('audit')
+    })
     mocks.asrModelPath.mockImplementation((name) => {
       expect(name).toBe('userData')
       expect(auditAsrTransfer).toHaveBeenCalledOnce()
@@ -206,20 +212,34 @@ describe('speech-pack desktop lifecycle', () => {
       return root
     })
     mocks.asrFetch.mockImplementation(async (url) => {
-      expect(url).toBe('https://huggingface.co/fixture/asr-provisioning/resolve/0123456789012345678901234567890123456789/model.bin')
+      expect(url).toBe(
+        'https://huggingface.co/fixture/asr-provisioning/resolve/0123456789012345678901234567890123456789/model.bin'
+      )
       expect(auditAsrTransfer).toHaveBeenCalledOnce()
       order.push('network')
       return new Response('abc', { headers: { 'content-length': '3' } })
     })
     const ensureLocalModel = vi.fn(async () => false)
-    const assertMainWindow = vi.fn(() => { order.push('sender') })
-    const requireAuth = vi.fn(() => { order.push('authentication'); return true })
+    const assertMainWindow = vi.fn(() => {
+      order.push('sender')
+    })
+    const requireAuth = vi.fn(() => {
+      order.push('authentication')
+      return true
+    })
     try {
       registerOptionalModelProvisioningIpc({
-        ipcMain, assertMainWindow, requireAuth, ensureLocalModel,
-        captureActive: () => false, captureIdentity: () => 'capture:0',
-        localModelIdentity: () => 'model:0', currentModelPolicyIdentity: () => 'policy:0',
-        refreshScreenPreprocess: vi.fn(), logProvisioningFailure: vi.fn(), auditAsrTransfer
+        ipcMain,
+        assertMainWindow,
+        requireAuth,
+        ensureLocalModel,
+        captureActive: () => false,
+        captureIdentity: () => 'capture:0',
+        localModelIdentity: () => 'model:0',
+        currentModelPolicyIdentity: () => 'policy:0',
+        refreshScreenPreprocess: vi.fn(),
+        logProvisioningFailure: vi.fn(),
+        auditAsrTransfer
       })
       expect(order).toEqual([])
       expect(mocks.asrModelPath).not.toHaveBeenCalled()
@@ -242,8 +262,12 @@ describe('speech-pack desktop lifecycle', () => {
       mocks.getPackageRuntimeContract.mockReset()
       mocks.readSettingsAtAuthorityBoundary.mockReset()
       mocks.getSpeechPolicyAuthorityStatus.mockReset()
-      mocks.asrModelPath.mockImplementation(() => { throw new Error('Refused ASR request reached model-path I/O') })
-      mocks.asrFetch.mockImplementation(() => { throw new Error('Refused ASR request reached network I/O') })
+      mocks.asrModelPath.mockImplementation(() => {
+        throw new Error('Refused ASR request reached model-path I/O')
+      })
+      mocks.asrFetch.mockImplementation(() => {
+        throw new Error('Refused ASR request reached network I/O')
+      })
       rmSync(root, { recursive: true, force: true })
     }
   })
