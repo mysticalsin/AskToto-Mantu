@@ -5,7 +5,7 @@
  */
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { runProcess, sleep } from '../lib/app-driver.mjs'
+import { projectMacLaunchDiagnostic, runProcess, sleep } from '../lib/app-driver.mjs'
 import { AUDIT_POLL_MS, parkAndProve, parseAuditLog, readAuditLog } from './smoke-support.mjs'
 
 const RV_TIMEOUT_MS = 15_000
@@ -64,7 +64,7 @@ function completeRvRow(rows, id, patch) {
 }
 
 async function runAppleScript(script, timeoutMs) {
-  return runProcess('osascript', ['-e', script], timeoutMs)
+  return runProcess('osascript', ['-e', script], timeoutMs, { captureMacLaunchStatus: true })
 }
 
 async function runPowerShell(script, timeoutMs) {
@@ -113,10 +113,11 @@ export function auditDiagnostic(record) {
 
 /** @typedef {'success' | 'nonzero-exit' | 'signal' | 'timeout' | 'spawn-error' | 'invalid-receipt'} ProcessReason */
 /** @typedef {{code: number | null, signal: 'signal' | 'timeout' | null,
- *   error: boolean, reason: ProcessReason}} RevealProcessOutcome */
+ *   error: boolean, reason: ProcessReason,
+ *   launchDiagnostic?: import('../lib/app-driver.mjs').MacLaunchDiagnostic}} RevealProcessOutcome */
 
 /** @param {unknown} result @returns {RevealProcessOutcome} */
-function processOutcome(result) {
+export function processOutcome(result) {
   /** @type {number | null} */
   let code = null
   /** @type {RevealProcessOutcome['signal']} */
@@ -151,7 +152,8 @@ function processOutcome(result) {
     else if (code === 0) reason = 'success'
     else if (code !== null) reason = 'nonzero-exit'
   }
-  return { code, signal, error, reason }
+  const launchDiagnostic = projectMacLaunchDiagnostic(result)
+  return launchDiagnostic ? { code, signal, error, reason, launchDiagnostic } : { code, signal, error, reason }
 }
 
 export async function runRevealRow({
