@@ -177,10 +177,22 @@ export default {
 };
 `
 
+async function fixturePhase<T>(
+  phase: 'bundle' | 'runtime' | 'schema' | 'seeds',
+  action: () => Promise<T>
+): Promise<T> {
+  const started = performance.now()
+  try {
+    return await action()
+  } finally {
+    console.info('[relay-fixture-phase]', { phase, durationMs: Math.round(performance.now() - started) })
+  }
+}
+
 async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' = 'deepgram-via-gateway') {
   const route = routeId === 'deepgram-via-gateway' ? ROUTE_A : ROUTE_B
   const modelId = route.modelId
-  const operatorBundle = await bundleEntry()
+  const operatorBundle = await fixturePhase('bundle', () => bundleEntry())
   const runtime = new Miniflare(
     convertV4MiniflareOptions({
       workers: [
@@ -231,111 +243,130 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
       ]
     })
   )
-  const database = (await runtime.getD1Database('DB')) as unknown as {
-    prepare(query: string): {
-      run(): Promise<unknown>
-      first<T>(): Promise<T | null>
-      bind(...values: unknown[]): { first<T>(): Promise<T | null>; run(): Promise<unknown> }
+  try {
+    const database = (await fixturePhase('runtime', () => runtime.getD1Database('DB'))) as unknown as {
+      prepare(query: string): {
+        run(): Promise<unknown>
+        first<T>(): Promise<T | null>
+        bind(...values: unknown[]): { first<T>(): Promise<T | null>; run(): Promise<unknown> }
+      }
+      batch(statements: unknown[]): Promise<Array<{ success: boolean }>>
     }
-  }
-  const directory = dirname(fileURLToPath(import.meta.url))
-  // D1 exec expects one complete statement per line; the real schema contains comments and multiline DDL.
-  // Apply every statement with the same parser/order as the production migration runner.
-  for (const statement of parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8'))) {
-    await database.prepare(statement).run()
-  }
-  const store = d1Store(database as never)
-  const now = Date.now()
-  await store.putTier({
-    id: 'metis',
-    label: 'Métis',
-    entitlements_json: JSON.stringify(['listen', 'operator_keys']),
-    updated_at: now
-  })
-  const license = await generateOperatorLicense(TEST_INGEST_SECRET, { days: 7, now, jti: LICENSE_JTI })
-  await store.putIssuedLicense({
-    ...license.claims,
-    last4: license.last4,
-    key_hash: await sha256Hex(license.token),
-    days: 7,
-    revoked: 0,
-    created_at: now,
-    created_by: 'fixture-reviewer',
-    tier: 'metis',
-    activated_device: DEVICE,
-    activated_at: now
-  })
-  await store.upsertSeat({
-    device_id: DEVICE,
-    seat_hash: 'synthetic-seat-hash',
-    os: 'linux',
-    app_version: 'fixture',
-    first_seen: now,
-    last_seen: now,
-    country: null,
-    city: null,
-    region: null,
-    lat: null,
-    lon: null,
-    last_index_at: null,
-    hostname: null,
-    sso_email: null,
-    license: 'licensed',
-    approval: 'approved',
-    license_jti: LICENSE_JTI
-  })
-  for (const track of ['microphone', 'system'] as const) {
-    await database
-      .prepare(`INSERT INTO speech_capture_epochs (
-        tenant_id, audience, license_jti, device_id, capture_generation, track, last_epoch, expires_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(
-        TENANT,
-        AUDIENCE,
-        LICENSE_JTI,
-        DEVICE,
-        PROTOCOL_FIXTURE.create.request.captureGeneration,
-        track,
-        10,
-        now + 300_000,
-        now
+    const directory = dirname(fileURLToPath(import.meta.url))
+    await fixturePhase('schema', async () => {
+      // Preserve the production migration parser and statement order, with one real D1 bridge call.
+      const statements = parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8')).map(
+        (statement: string) => database.prepare(statement)
       )
-      .run()
+      const results = await database.batch(statements)
+      if (results.length !== statements.length || results.some((result) => result.success !== true)) {
+        throw new Error('Fixture schema initialization did not complete')
+      }
+    })
+    const seeded = await fixturePhase('seeds', async () => {
+      const store = d1Store(database as never)
+      const now = Date.now()
+      await store.putTier({
+        id: 'metis',
+        label: 'Métis',
+        entitlements_json: JSON.stringify(['listen', 'operator_keys']),
+        updated_at: now
+      })
+      const license = await generateOperatorLicense(TEST_INGEST_SECRET, { days: 7, now, jti: LICENSE_JTI })
+      await store.putIssuedLicense({
+        ...license.claims,
+        last4: license.last4,
+        key_hash: await sha256Hex(license.token),
+        days: 7,
+        revoked: 0,
+        created_at: now,
+        created_by: 'fixture-reviewer',
+        tier: 'metis',
+        activated_device: DEVICE,
+        activated_at: now
+      })
+      await store.upsertSeat({
+        device_id: DEVICE,
+        seat_hash: 'synthetic-seat-hash',
+        os: 'linux',
+        app_version: 'fixture',
+        first_seen: now,
+        last_seen: now,
+        country: null,
+        city: null,
+        region: null,
+        lat: null,
+        lon: null,
+        last_index_at: null,
+        hostname: null,
+        sso_email: null,
+        license: 'licensed',
+        approval: 'approved',
+        license_jti: LICENSE_JTI
+      })
+      for (const track of ['microphone', 'system'] as const) {
+        await database
+          .prepare(`INSERT INTO speech_capture_epochs (
+            tenant_id, audience, license_jti, device_id, capture_generation, track, last_epoch, expires_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(
+            TENANT,
+            AUDIENCE,
+            LICENSE_JTI,
+            DEVICE,
+            PROTOCOL_FIXTURE.create.request.captureGeneration,
+            track,
+            10,
+            now + 300_000,
+            now
+          )
+          .run()
+      }
+      const refs = ['gateway-readback', 'provider-retention', 'synthetic-sink-test', 'relay-runtime-test'].map((kind) => ({
+        kind,
+        reference: `fixture:${kind}`,
+        digest: `sha256:${'a'.repeat(64)}`,
+        outcome: 'passed'
+      }))
+      await database
+        .prepare(`INSERT INTO speech_route_evidence (
+          id, evidence_key, tenant_id, audience, deployment_id, account_id, gateway_id, route_id, model_id,
+          config_version, policy_version, implementation_revision, reviewer_email, imported_by, evidence_refs_json,
+          expires_at, version, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          'fixture-evidence',
+          'fixture-evidence-key',
+          TENANT,
+          AUDIENCE,
+          DEPLOYMENT,
+          ACCOUNT,
+          GATEWAY,
+          routeId,
+          modelId,
+          route.configVersion,
+          route.policyVersion,
+          IMPLEMENTATION_REVISION,
+          'reviewer@example.invalid',
+          'reviewer@example.invalid',
+          JSON.stringify(refs),
+          now + 300_000,
+          1,
+          now
+        )
+        .run()
+      return { now, license: license.token }
+    })
+    return { runtime, database, ...seeded, routeId, modelId }
+  } catch (error) {
+    // A failed factory never hands ownership to the caller's disposal finally block.
+    try {
+      await runtime.dispose()
+    } catch {
+      // The initialization error owns the result even if disposal also fails.
+    }
+    throw error
   }
-  const refs = ['gateway-readback', 'provider-retention', 'synthetic-sink-test', 'relay-runtime-test'].map((kind) => ({
-    kind,
-    reference: `fixture:${kind}`,
-    digest: `sha256:${'a'.repeat(64)}`,
-    outcome: 'passed'
-  }))
-  await database
-    .prepare(`INSERT INTO speech_route_evidence (
-      id, evidence_key, tenant_id, audience, deployment_id, account_id, gateway_id, route_id, model_id,
-      config_version, policy_version, implementation_revision, reviewer_email, imported_by, evidence_refs_json,
-      expires_at, version, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(
-      'fixture-evidence',
-      'fixture-evidence-key',
-      TENANT,
-      AUDIENCE,
-      DEPLOYMENT,
-      ACCOUNT,
-      GATEWAY,
-      routeId,
-      modelId,
-      route.configVersion,
-      route.policyVersion,
-      IMPLEMENTATION_REVISION,
-      'reviewer@example.invalid',
-      'reviewer@example.invalid',
-      JSON.stringify(refs),
-      now + 300_000,
-      1,
-      now
-    )
-    .run()
-  return { runtime, database, now, license: license.token, routeId, modelId }
 }
 
 describe('workerd fixture initialization', () => {
@@ -348,29 +379,36 @@ describe('workerd fixture initialization', () => {
     let batchSettled = false
     let batchResults: Array<{ success: boolean }> = []
     const getDatabase = Miniflare.prototype.getD1Database
-    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (this: Miniflare, ...args) {
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (
+      this: Miniflare,
+      ...args
+    ) {
       const database = await getDatabase.apply(this, args)
       return new Proxy(database, {
         get(target, property) {
           const value = Reflect.get(target, property, target)
-          if (property === 'prepare') return new Proxy(value, {
-            apply(method, _receiver, argumentsList) {
-              const query = argumentsList[0] as string
-              const statement = Reflect.apply(method, target, argumentsList)
-              preparedQueries.set(statement, query)
-              if (!batchSettled) preparedBeforeBatchSettled.push(query)
-              return statement
-            }
-          })
-          if (property === 'batch') return new Proxy(value, {
-            async apply(method, _receiver, argumentsList) {
-              batches.push((argumentsList[0] as object[]).map((statement) => preparedQueries.get(statement) ?? 'unknown'))
-              const results = await Reflect.apply(method, target, argumentsList)
-              batchResults = results
-              batchSettled = true
-              return results
-            }
-          })
+          if (property === 'prepare') {
+            return new Proxy(value, {
+              apply(method, _receiver, argumentsList) {
+                const query = argumentsList[0] as string
+                const statement = Reflect.apply(method, target, argumentsList)
+                preparedQueries.set(statement, query)
+                if (!batchSettled) preparedBeforeBatchSettled.push(query)
+                return statement
+              }
+            })
+          }
+          if (property === 'batch') {
+            return new Proxy(value, {
+              async apply(method, _receiver, argumentsList) {
+                batches.push((argumentsList[0] as object[]).map((statement) => preparedQueries.get(statement) ?? 'unknown'))
+                const results = await Reflect.apply(method, target, argumentsList)
+                batchResults = results
+                batchSettled = true
+                return results
+              }
+            })
+          }
           return typeof value === 'function' ? value.bind(target) : value
         }
       })
@@ -384,17 +422,22 @@ describe('workerd fixture initialization', () => {
       expect(batchResults).toHaveLength(statements.length)
       expect(batchResults.every((result) => result.success)).toBe(true)
       const database = await getDatabase.call(fixture.runtime, 'DB')
-      const objects = await database.prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all()
-      const expectedObjects = statements.map((statement) => {
-        const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS (\w+)/.exec(statement)
-        if (!match) throw new Error('Unexpected fixture schema statement')
-        return { type: match[1].toLowerCase(), name: match[2] }
-      }).sort((left, right) => left.name.localeCompare(right.name))
+      const objects = await database
+        .prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
+        .all()
+      const expectedObjects = statements
+        .map((statement) => {
+          const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS (\w+)/.exec(statement)
+          if (!match) throw new Error('Unexpected fixture schema statement')
+          return { type: match[1].toLowerCase(), name: match[2] }
+        })
+        .sort((left, right) => left.name.localeCompare(right.name))
       // D1 may also own internal metadata tables; every real fixture object must still exist.
       expect(objects.results).toEqual(expect.arrayContaining(expectedObjects))
       expect(await database.prepare("SELECT id FROM tiers WHERE id = 'metis'").first()).toEqual({ id: 'metis' })
-      expect(await database.prepare('SELECT approval FROM seats WHERE device_id = ?').bind(DEVICE).first())
-        .toEqual({ approval: 'approved' })
+      expect(await database.prepare('SELECT approval FROM seats WHERE device_id = ?').bind(DEVICE).first()).toEqual({
+        approval: 'approved'
+      })
     } finally {
       databaseSpy.mockRestore()
       await fixture?.runtime.dispose()
