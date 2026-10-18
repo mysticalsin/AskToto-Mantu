@@ -24,6 +24,7 @@ import { configurePackageRuntimeContractProvider } from '../features/components/
 const SPAWN_PROFILE = { ...spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1], 16, 8), vision: false }
 // Spawn and file existence are mocked; this unique fixture namespace needs no on-disk directory.
 const PACKAGED_RESOURCES = join(tmpdir(), `metis-runtime-concurrency-${randomUUID()}`)
+let originalResourcesPath: PropertyDescriptor | undefined
 
 const electron = vi.hoisted(() => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('electron', () => electron)
@@ -115,6 +116,8 @@ async function expectRefusalBeforeSpawn(pending: Promise<void>, message: RegExp)
 }
 
 beforeEach(() => {
+  originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
+  Object.defineProperty(process, 'resourcesPath', { configurable: true, value: PACKAGED_RESOURCES })
   vi.clearAllMocks()
   spawnState.procs = []
   spawnState.calls = []
@@ -127,8 +130,13 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  stop()
-  vi.unstubAllGlobals()
+  try {
+    stop()
+  } finally {
+    if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
+    else Reflect.deleteProperty(process, 'resourcesPath')
+    vi.unstubAllGlobals()
+  }
 })
 
 async function emitListening(procIndex: number, port: number): Promise<void> {
