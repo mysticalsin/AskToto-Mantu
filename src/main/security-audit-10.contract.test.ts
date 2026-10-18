@@ -4,6 +4,12 @@ import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { createListeningStateHandler } from './listening-state-ipc'
+import { calendarToday } from './calendar'
+import { getGraphToken } from './auth'
+import { auditLog } from './logger'
+
+vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'synthetic-calendar-security-token') }))
+vi.mock('./logger', () => ({ auditLog: vi.fn() }))
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const importSnapshotSrc = readFileSync(join(__dirname, 'import-jobs-snapshot-ipc.ts'), 'utf8')
@@ -421,6 +427,61 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     }
     expect(indexSrc).not.toMatch(/webviewTag:\s*true/)
     expect(indexSrc).not.toMatch(/<webview/)
+  })
+
+  it('actual Graph calendar output retains allowed links and refuses unsafe join URLs', async () => {
+    const cases: Array<{ url: unknown; expected: string | undefined }> = [
+      { url: ' HTTPS://teams.microsoft.com/l/meetup-join/synthetic ', expected: 'https://teams.microsoft.com/l/meetup-join/synthetic' },
+      { url: 'http://calendar.example.test/join', expected: 'http://calendar.example.test/join' },
+      { url: 'mailto:synthetic@example.test', expected: 'mailto:synthetic@example.test' },
+      { url: 'javascript:alert(1)', expected: undefined },
+      { url: 'JaVaScRiPt:alert(1)', expected: undefined },
+      { url: 'data:text/html,<script>alert(1)</script>', expected: undefined },
+      { url: 'file:///synthetic/private/meeting', expected: undefined },
+      { url: 'ms-msdt:/id synthetic', expected: undefined },
+      { url: '//untrusted.example.test/join', expected: undefined },
+      { url: 'https://calendar.example.test/join\r\nX-Injected: 1', expected: undefined },
+      { url: 'https://calendar.example.test/\0join', expected: undefined },
+      { url: `https://calendar.example.test/${'x'.repeat(2048)}`, expected: undefined },
+      { url: 42, expected: undefined },
+      { url: { href: 'https://calendar.example.test/join' }, expected: undefined },
+      { url: null, expected: undefined },
+      { url: undefined, expected: undefined }
+    ]
+    const rows = cases.map(({ url }, index) => ({
+      subject: `Synthetic security event ${index}`,
+      start: { dateTime: '2026-10-18T10:00:00' },
+      end: { dateTime: '2026-10-18T10:30:00' },
+      onlineMeeting: { joinUrl: url }
+    }))
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true, status: 200, json: async () => ({ value: rows })
+    }))
+    vi.mocked(getGraphToken).mockClear()
+    vi.mocked(auditLog).mockClear()
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = await calendarToday('UTC')
+      expect(getGraphToken).toHaveBeenCalledExactlyOnceWith(['Calendars.Read'])
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/^https:\/\/graph\.microsoft\.com\/v1\.0\/me\/calendarView\?/),
+        expect.objectContaining({
+          headers: {
+            Authorization: 'Bearer synthetic-calendar-security-token',
+            Prefer: 'outlook.timezone="UTC"'
+          },
+          signal: expect.any(AbortSignal)
+        })
+      )
+      expect(result.ok).toBe(true)
+      expect(result.events).toHaveLength(cases.length)
+      expect(result.events?.map((event) => event.joinUrl)).toEqual(cases.map(({ expected }) => expected))
+      expect(auditLog).toHaveBeenCalledExactlyOnceWith('calendar.read', { count: cases.length })
+    } finally {
+      vi.unstubAllGlobals()
+      vi.mocked(getGraphToken).mockClear()
+      vi.mocked(auditLog).mockClear()
+    }
   })
 
   it('markdown links and Graph join URLs go through safeHref', () => {
