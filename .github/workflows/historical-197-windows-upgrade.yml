@@ -1,0 +1,128 @@
+name: Historical Windows native upgrade
+run-name: ${{ github.event_name == 'pull_request' && 'Historical Windows native upgrade (registration)' || 'Historical Windows native upgrade' }}
+
+# Future canonical-main evidence, after reviewed integration. Registration skips the sole job.
+# Healthy native-profile preservation only; no recovery, rollback or full-release qualification.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/historical-197-windows-upgrade.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: historical-197-windows-upgrade-${{ github.run_id }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  upgrade:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - run: npm ci --ignore-scripts
+      - name: Bind the actual harness and allocate separate input and application paths
+        id: owned
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before retrieval"; exit 1; }
+          runner_temp_posix=$(cygpath -u "$RUNNER_TEMP")
+          inputs_root_posix=$(mktemp -d "$runner_temp_posix/metis-historical-197-inputs-XXXXXX")
+          inputs_root=$(cygpath -m "$inputs_root_posix")
+          app_root=$(cygpath -m "$runner_temp_posix/metis-historical-197-app-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
+          test ! -e "$app_root"
+          mkdir "$inputs_root/assets"
+          echo "inputs_root=$inputs_root" >> "$GITHUB_OUTPUT"
+          echo "app_root=$app_root" >> "$GITHUB_OUTPUT"
+      - name: Retrieve only the fixed public historical metadata and installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUTS_ROOT: ${{ steps.owned.outputs.inputs_root }}
+        run: |
+          gh api --method GET repos/mysticalsin/AskToto-Mantu > "$INPUTS_ROOT/repository.json"
+          gh api --method GET repos/mysticalsin/AskToto-Mantu/actions/runs/38795048288 > "$INPUTS_ROOT/run.json"
+          gh api --method GET repos/mysticalsin/AskToto-Mantu/releases/414278048 > "$INPUTS_ROOT/release.json"
+          jq -n --arg harness "$GITHUB_SHA" \
+            --slurpfile repository "$INPUTS_ROOT/repository.json" \
+            --slurpfile run "$INPUTS_ROOT/run.json" \
+            --slurpfile release "$INPUTS_ROOT/release.json" '
+              def repo: {id, full_name};
+              {
+                repository: ($repository[0] | repo),
+                candidateRun: ($run[0] | {id, run_attempt, path, event, head_branch, head_sha, status, conclusion,
+                  repository: (.repository | repo), head_repository: (.head_repository | repo)}),
+                release: ($release[0] | {id, tag_name, name, target_commitish, draft, prerelease,
+                  assets: [.assets[] | {id, name, size, digest}]}),
+                harnessCommit: $harness
+              }
+            ' > "$INPUTS_ROOT/context.json"
+          gh api --method GET repos/mysticalsin/Metis-Releases/releases/395306225 > "$INPUTS_ROOT/baseline-release.json"
+          jq -e '
+            .id == 395306225 and .tag_name == "v1.9.6-unsigned" and .draft == false and
+            ([.assets[] | select(.id == 585098577 and .name == "Metis-Setup-1.9.6.exe" and
+              .size == 1532977165 and .digest == "sha256:77a532f3c33a0be6f9315e7e0df02c2420c25a297e90c5fa6baff18f84193df8")] | length) == 1
+          ' "$INPUTS_ROOT/baseline-release.json" > /dev/null
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api --method GET -H "Accept: application/octet-stream" \
+              "repos/mysticalsin/AskToto-Mantu/releases/assets/$asset_id" > "$INPUTS_ROOT/assets/$asset_name"
+          done <<'ASSETS'
+          645178383	Metis-1.9.7.dmg
+          645180903	Metis-1.9.7.zip
+          645183715	Metis-Setup-1.9.7.exe
+          645185922	provenance.json
+          645185936	SHA256SUMS.txt
+          ASSETS
+          gh api --method GET -H "Accept: application/octet-stream" \
+            repos/mysticalsin/Metis-Releases/releases/assets/585098577 > "$INPUTS_ROOT/Metis-Setup-1.9.6.exe"
+      - name: Run the actual original-profile upgrade harness
+        id: upgrade
+        env:
+          INPUTS_ROOT: ${{ steps.owned.outputs.inputs_root }}
+          APP_ROOT: ${{ steps.owned.outputs.app_root }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before execution"; exit 1; }
+          node scripts/qa/historical-197-windows-upgrade.mjs --baseline "$INPUTS_ROOT/Metis-Setup-1.9.6.exe" --historical-metadata "$INPUTS_ROOT/context.json" --historical-assets "$INPUTS_ROOT/assets" --harness-commit "$GITHUB_SHA" --root "$APP_ROOT" --report "$INPUTS_ROOT/report.json"
+      - name: Validate original closed report and preserve its acceptance result
+        id: report
+        if: always() && (steps.upgrade.outcome == 'success' || steps.upgrade.outcome == 'failure')
+        env:
+          INPUTS_ROOT: ${{ steps.owned.outputs.inputs_root }}
+        run: |
+          set +e
+          node scripts/qa/historical-197-windows-report.mjs --report "$INPUTS_ROOT/report.json" --harness-commit "$GITHUB_SHA"
+          gate_status=$?
+          set -e
+          case "$gate_status" in 0|3) echo "closed=true" >> "$GITHUB_OUTPUT" ;; esac
+          exit "$gate_status"
+      - name: Retain only the original validated closed report
+        if: always() && steps.report.outputs.closed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: historical-197-windows-upgrade-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.owned.outputs.inputs_root }}/report.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+      - name: Remove only the allocated historical input directory
+        if: always()
+        env:
+          INPUTS_ROOT: ${{ steps.owned.outputs.inputs_root }}
+        run: |
+          runner_temp_windows=$(cygpath -m "$RUNNER_TEMP")
+          case "$INPUTS_ROOT" in
+            "$runner_temp_windows"/metis-historical-197-inputs-*) rm -rf -- "$INPUTS_ROOT" ;;
+            '') ;;
+            *) echo "Owned input cleanup refused"; exit 1 ;;
+          esac
