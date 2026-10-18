@@ -156,10 +156,14 @@ async function readOwnedFile(path, maximum, exactSize, consume) {
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
     const opened = await handle.stat()
     requireValue(unchanged(initial, opened), 'file-changed')
-    for await (const chunk of handle.createReadStream({ autoClose: false })) {
-      count += chunk.length
+    // Keep one close owner: FileHandle-backed streams also close on the handle's close event.
+    while (true) {
+      const chunk = Buffer.allocUnsafe(64 * 1024)
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null)
+      if (bytesRead === 0) break
+      count += bytesRead
       requireValue(count <= maximum, 'asset-bytes-mismatch')
-      consume(chunk)
+      consume(chunk.subarray(0, bytesRead))
     }
     requireValue(count === initial.size && unchanged(opened, await handle.stat()), 'file-changed')
   } catch (error) {
