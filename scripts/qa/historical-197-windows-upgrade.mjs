@@ -134,7 +134,29 @@ export function assessHistoricalUpgradeReport(report) {
       row.meetingSha256 === report.nativeSnapshots[0].meetingSha256 && row.providerSha256 === report.nativeSnapshots[0].providerSha256)
 }
 
-/** The default CLI supplies real system boundaries below; injected drivers exist solely for harness contract tests. */
+/**
+ * The orchestrator consumes this public driver contract, rather than the default driver's private
+ * launch-attempt registry. A successful launch has already validated its positive process identity.
+ * @typedef {{ profileRoot: string, meetingsRoot: string, title: string, line: string, key: string, startedAt: number, file?: string }} HistoricalUpgradePlan
+ * @typedef {{ pid: number, version: string }} HistoricalUpgradeSession
+ * @typedef {{ pid: number, exitCode: number, censusConfirmed: boolean, closed: boolean }} HistoricalInstallerReceipt
+ * @typedef {{ native: boolean, settingsSha256: string, providerSha256: string, meetingSha256: string, fileKeyPresent: boolean }} HistoricalNativeSnapshot
+ * @typedef {object} HistoricalUpgradeDriver
+ * @property {() => Promise<boolean>} verifyInputs
+ * @property {() => Promise<HistoricalUpgradePlan>} prepare
+ * @property {(version: string) => Promise<HistoricalInstallerReceipt>} install
+ * @property {(version: string) => Promise<HistoricalUpgradeSession>} launch
+ * @property {(session: HistoricalUpgradeSession, plan: HistoricalUpgradePlan) => Promise<string>} seed
+ * @property {(session: HistoricalUpgradeSession, plan: HistoricalUpgradePlan, version: string) => Promise<unknown>} read
+ * @property {(path: string, plan: HistoricalUpgradePlan) => Promise<HistoricalNativeSnapshot>} inspect
+ * @property {(session: HistoricalUpgradeSession) => Promise<boolean>} stop
+ * @property {() => Promise<boolean>} cleanup
+ */
+
+/**
+ * The default CLI supplies real system boundaries below; injected drivers exist solely for harness contract tests.
+ * @param {HistoricalUpgradeDriver} [driver]
+ */
 export async function runHistoricalUpgrade(options, driver = createWindowsDriver(options)) {
   const report = {
     schema: 1, scope: 'HEALTHY_NATIVE_196_TO_PUBLISHED_197_ONLY', platform: 'win32', harnessCommit: COMMIT.test(options.harnessCommit ?? '') ? options.harnessCommit : null,
@@ -427,6 +449,11 @@ export function createWindowsDriver(options) {
       await validateOwnedStoragePath(options.root, exe, true)
       return receipt
     },
+    /**
+     * The success path below requires a safe integer PID greater than one before returning.
+     * @param {string} version
+     * @returns {Promise<HistoricalUpgradeSession>}
+     */
     async launch(version) {
       requireValue(sessions.every((session) => session.stopped && session.clean))
       await validateOwnedStoragePath(options.root, exe, true)
