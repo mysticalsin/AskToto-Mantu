@@ -714,7 +714,7 @@ describe('runRevealRow', () => {
     ['partial receipt', { error: false }, 'invalid-receipt'],
     ['fractional exit', { code: 0.5, signal: null, error: false }, 'invalid-receipt'],
     ['nonfinite exit', { code: Number.NaN, signal: null, error: false }, 'invalid-receipt'],
-    ['out-of-range exit', { code: 2 ** 40, signal: null, error: false }, 'invalid-receipt'],
+    ['unsafe integer exit', { code: Number.MAX_SAFE_INTEGER + 1, signal: null, error: false }, 'invalid-receipt'],
     ['missing exit and signal', { code: null, signal: null, error: false }, 'invalid-receipt']
   ])('refuses %s without waiting for or accepting a reveal', async (_name, receipt, reason) => {
     const rows = initialRvRows('darwin')
