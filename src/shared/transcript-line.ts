@@ -28,3 +28,18 @@ export const TranscriptLineSchema = z
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['speech'] })
   })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+
+/** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
+ *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
+ *  transcript.ts) is the live-text guard; this is the save-path guard, applied once at the IPC boundary
+ *  (main/index.ts's saveTranscript/saveDraftTranscript handlers) so every caller is covered even one that
+ *  forgot to filter — belt-and-suspenders, since commitLine already removes the placeholder it's
+ *  replacing before pushing the real line, so in the common case there is nothing left to strip. Returns
+ *  the input array unchanged (same reference) when nothing needed removing, so a save of an ordinary
+ *  meeting with no provisional lines never pays a spurious copy. */
+export function stripProvisionalLines(lines: TranscriptLine[]): TranscriptLine[] {
+  return lines.some((l) => l.provisional) ? lines.filter((l) => !l.provisional) : lines
+}
+
+/** Folder snapshot outcome; saved means the existing write completed, not a durable revision ACK. */
+export type SaveDraftTranscriptResult = { status: 'saved' | 'disabled' | 'failed' }

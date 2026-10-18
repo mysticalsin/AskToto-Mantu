@@ -444,19 +444,12 @@ export const ProfileSchema = z.object({
 })
 export type Profile = z.infer<typeof ProfileSchema>
 
-export { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
-
-/** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
- *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
- *  transcript.ts) is the live-text guard; this is the save-path guard, applied once at the IPC boundary
- *  (main/index.ts's saveTranscript/saveDraftTranscript handlers) so every caller is covered even one that
- *  forgot to filter — belt-and-suspenders, since commitLine already removes the placeholder it's
- *  replacing before pushing the real line, so in the common case there is nothing left to strip. Returns
- *  the input array unchanged (same reference) when nothing needed removing, so a save of an ordinary
- *  meeting with no provisional lines never pays a spurious copy. */
-export function stripProvisionalLines(lines: TranscriptLine[]): TranscriptLine[] {
-  return lines.some((l) => l.provisional) ? lines.filter((l) => !l.provisional) : lines
-}
+export {
+  TranscriptLineSchema,
+  stripProvisionalLines,
+  type TranscriptLine,
+  type SaveDraftTranscriptResult
+} from './transcript-line'
 
 /** Single source of truth for the import pipeline's decode window. Both decoders that turn a recording
  *  into PCM windows — main's ffmpeg sidecar (main/ffmpeg-decoder.ts) and the renderer's Chromium
@@ -485,9 +478,6 @@ export const SaveMeetingSchema = z
   })
   .superRefine(validateRecapStatus)
 export type SaveMeeting = z.infer<typeof SaveMeetingSchema>
-
-/** Folder snapshot outcome; saved means the existing write completed, not a durable revision ACK. */
-export type SaveDraftTranscriptResult = { status: 'saved' | 'disabled' | 'failed' }
 
 export const SaveNoteSchema = z.object({
   title: z.string().default(''),
