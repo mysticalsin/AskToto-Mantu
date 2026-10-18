@@ -43,6 +43,31 @@ function failedReport() {
   return report
 }
 
+function lateFailedReport() {
+  const report = successfulReport()
+  const failedIndex = REQUIRED_CHECKS.indexOf('fresh_stop')
+  report.checks = REQUIRED_CHECKS.map((id, index) => ({
+    id,
+    status: index < failedIndex ? 'PASS' : index === failedIndex ? 'FAIL' : id === 'cleanup' ? 'PASS' : 'NOT_RUN'
+  }))
+  report.error = 'fresh_stop'
+  report.accepted = false
+  return report
+}
+
+function leafPaths(value: unknown, prefix: string[] = []): string[][] {
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, child]) => leafPaths(child, [...prefix, key]))
+  }
+  return [prefix]
+}
+
+function replaceLeaf(value: unknown, path: string[], replacement: unknown) {
+  let current = value as Record<string, unknown>
+  for (const key of path.slice(0, -1)) current = current[key] as Record<string, unknown>
+  current[path[path.length - 1]!] = replacement
+}
+
 const writeReport = (path: string, report: unknown) => fs.writeFile(path, `${JSON.stringify(report, null, 2)}\n`)
 
 describe('actual closed historical Windows report gate', () => {
@@ -85,16 +110,25 @@ describe('actual closed historical Windows report gate', () => {
     expect(assessClosedHistoricalWindowsReport(report, harness)).toEqual({ closed: false, accepted: false })
   })
 
-  it('refuses failed reports whose error and ordered check progress disagree', () => {
+  it('refuses failed reports whose error, check order and progress disagree', async () => {
     const wrongErrorRow = failedReport()
     wrongErrorRow.checks.find((row) => row.id === 'inputs')!.status = 'NOT_RUN'
     const progressAfterFailure = failedReport()
     progressAfterFailure.checks.find((row) => row.id === 'prepared')!.status = 'PASS'
     const unrelatedFailure = failedReport()
     unrelatedFailure.checks.find((row) => row.id === 'upgrade_read')!.status = 'FAIL'
-    for (const report of [wrongErrorRow, progressAfterFailure, unrelatedFailure]) {
+    const permutedRows = failedReport()
+    permutedRows.checks[0]!.id = 'baseline_install'
+    permutedRows.checks[2]!.id = 'inputs'
+    for (const report of [wrongErrorRow, progressAfterFailure, unrelatedFailure, permutedRows]) {
       expect(assessClosedHistoricalWindowsReport(report, harness)).toEqual({ closed: false, accepted: false })
     }
+    await writeReport(reportPath, permutedRows)
+    expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
+    const child = spawnSync(process.execPath, [gatePath, '--report', reportPath, '--harness-commit', harness], { encoding: 'utf8', timeout: 10_000 })
+    expect(child.status).toBe(2)
+    expect(child.stdout).toBe('historical-windows-report:REFUSED\n')
+    expect(child.stderr).toBe('')
   })
 
   it('refuses missing process, installer closure and native snapshot evidence', () => {
@@ -111,15 +145,12 @@ describe('actual closed historical Windows report gate', () => {
 
   it('refuses private text in extra and known fields before original-report retention', async () => {
     const privateText = '/private/synthetic-report-canary'
-    const variants = [
-      { ...successfulReport(), extra: privateText },
-      { ...successfulReport(), scope: privateText },
-      { ...successfulReport(), error: privateText, accepted: false },
-      { ...successfulReport(), limitations: [privateText] },
-      { ...successfulReport(), nativeSnapshots: [{ ...successfulReport().nativeSnapshots[0], providerSha256: privateText }] },
-      { ...successfulReport(), installers: [{ ...successfulReport().installers[0], pid: privateText }] },
-      { ...failedReport(), checks: [{ id: privateText, status: 'FAIL' }] }
-    ]
+    const variants: unknown[] = [{ ...successfulReport(), extra: privateText }]
+    for (const path of leafPaths(lateFailedReport())) {
+      const report = JSON.parse(JSON.stringify(lateFailedReport())) as unknown
+      replaceLeaf(report, path, privateText)
+      variants.push(report)
+    }
     for (const report of variants) {
       await writeReport(reportPath, report)
       expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
@@ -153,6 +184,7 @@ describe('actual closed historical Windows report gate', () => {
     const aliasDirectory = join(root, 'alias')
     await fs.mkdir(targetDirectory)
     await writeReport(join(targetDirectory, 'report.json'), successfulReport())
+    expect(await readClosedHistoricalWindowsReport(join(targetDirectory, 'report.json'), harness)).toEqual({ closed: true, accepted: true })
     await fs.rm(reportPath)
     await fs.symlink(targetDirectory, aliasDirectory, 'junction')
     expect(await readClosedHistoricalWindowsReport(join(aliasDirectory, 'report.json'), harness)).toEqual({ closed: false, accepted: false })
