@@ -673,13 +673,16 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     const otherSettings = different === 'folder' ? { ...settings, meetingsFolder: join(folder, 'other') } : settings
     const other = different === 'meeting' ? { ...meeting, startedAt: meeting.startedAt + 500 } : meeting
     await saveDraftTranscript(otherSettings, other)
+    const otherDrafts = readdirSync(otherSettings.meetingsFolder).filter((file) => file.startsWith('.autosave-draft-') && file.endsWith('.md'))
+    expect(otherDrafts).toHaveLength(1)
+    const otherDraftPath = join(otherSettings.meetingsFolder, otherDrafts[0])
     const held = holdDraftRename()
     const draft = saveDraftTranscript(settings, meeting)
     const draftPath = await held.entered
     try {
       await clearDraftTranscript(otherSettings, other.startedAt)
       expect(existsSync(draftPath)).toBe(false)
-      expect(readdirSync(otherSettings.meetingsFolder).some((file) => file.startsWith('.autosave-draft-'))).toBe(false)
+      expect(existsSync(otherDraftPath)).toBe(false)
     } finally {
       held.release()
       await draft
