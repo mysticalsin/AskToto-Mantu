@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { convertV4MiniflareOptions, Miniflare, type WebSocket as WorkerdWebSocket } from 'miniflare'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { d1Store } from '../d1'
 import { hmacHex } from '../hmac'
 import { OPERATOR_HMAC_HEADERS, OPERATOR_LICENSE_HEADER, ingestCanonical } from '../../../src/shared/operator-hmac'
@@ -186,10 +186,79 @@ async function fixturePhase<T>(phase: 'bundle' | 'runtime' | 'schema' | 'seeds',
   }
 }
 
-async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' = 'deepgram-via-gateway') {
+function createFixtureOwner(signal?: AbortSignal) {
+  let runtime: Miniflare | undefined
+  let disposal: Promise<void> | undefined
+  let closed = false
+  const dispose = () => {
+    closed = true
+    if (!runtime) return Promise.resolve()
+    const owned = runtime
+    disposal ??= Promise.resolve().then(async () => {
+      const started = performance.now()
+      let outcome: 'passed' | 'failed' = 'failed'
+      try {
+        await owned.dispose()
+        outcome = 'passed'
+      } finally {
+        console.info('[relay-fixture-lifecycle]', {
+          phase: 'dispose',
+          outcome,
+          durationMs: Math.round(performance.now() - started)
+        })
+      }
+    })
+    return disposal
+  }
+  const abort = () => {
+    void dispose().catch(() => {})
+  }
+  signal?.addEventListener('abort', abort, { once: true })
+  return {
+    check() {
+      signal?.throwIfAborted()
+      if (closed) throw new Error('Fixture initialization owner is closed')
+    },
+    own(value: Miniflare) {
+      runtime = value
+      if (closed || signal?.aborted) abort()
+    },
+    dispose,
+    async settle(pending: Promise<unknown>, body?: Promise<unknown>) {
+      const started = performance.now()
+      const [cleanup, initialization, callback] = await Promise.allSettled([dispose(), pending, body])
+      signal?.removeEventListener('abort', abort)
+      console.info('[relay-fixture-lifecycle]', {
+        phase: 'settlement',
+        disposal: cleanup.status,
+        initialization: initialization.status,
+        body: body ? callback.status : 'not-started',
+        durationMs: Math.round(performance.now() - started)
+      })
+      if (cleanup.status === 'rejected') throw cleanup.reason
+    }
+  }
+}
+
+async function makeRuntime(
+  routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' = 'deepgram-via-gateway',
+  owner = createFixtureOwner()
+) {
+  const phase = <T>(name: Parameters<typeof fixturePhase>[0], action: () => Promise<T>) =>
+    fixturePhase(name, async () => {
+      owner.check()
+      try {
+        const value = await action()
+        owner.check()
+        return value
+      } catch (error) {
+        owner.check()
+        throw error
+      }
+    })
   const route = routeId === 'deepgram-via-gateway' ? ROUTE_A : ROUTE_B
   const modelId = route.modelId
-  const operatorBundle = await fixturePhase('bundle', () => bundleEntry())
+  const operatorBundle = await phase('bundle', () => bundleEntry())
   const runtime = new Miniflare(
     convertV4MiniflareOptions({
       workers: [
@@ -240,8 +309,9 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
       ]
     })
   )
+  owner.own(runtime)
   try {
-    const database = (await fixturePhase('runtime', () => runtime.getD1Database('DB'))) as unknown as {
+    const database = (await phase('runtime', () => runtime.getD1Database('DB'))) as unknown as {
       prepare(query: string): {
         run(): Promise<unknown>
         first<T>(): Promise<T | null>
@@ -250,7 +320,7 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
       batch(statements: unknown[]): Promise<Array<{ success: boolean }>>
     }
     const directory = dirname(fileURLToPath(import.meta.url))
-    await fixturePhase('schema', async () => {
+    await phase('schema', async () => {
       // Preserve the production migration parser and statement order, with one real D1 bridge call.
       const statements = parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8')).map(
         (statement: string) => database.prepare(statement)
@@ -260,7 +330,7 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
         throw new Error('Fixture schema initialization did not complete')
       }
     })
-    const seeded = await fixturePhase('seeds', async () => {
+    const seeded = await phase('seeds', async () => {
       const store = d1Store(database as never)
       const now = Date.now()
       await store.putTier({
@@ -269,11 +339,15 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
         entitlements_json: JSON.stringify(['listen', 'operator_keys']),
         updated_at: now
       })
+      owner.check()
       const license = await generateOperatorLicense(TEST_INGEST_SECRET, { days: 7, now, jti: LICENSE_JTI })
+      owner.check()
+      const keyHash = await sha256Hex(license.token)
+      owner.check()
       await store.putIssuedLicense({
         ...license.claims,
         last4: license.last4,
-        key_hash: await sha256Hex(license.token),
+        key_hash: keyHash,
         days: 7,
         revoked: 0,
         created_at: now,
@@ -282,6 +356,7 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
         activated_device: DEVICE,
         activated_at: now
       })
+      owner.check()
       await store.upsertSeat({
         device_id: DEVICE,
         seat_hash: 'synthetic-seat-hash',
@@ -301,6 +376,7 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
         approval: 'approved',
         license_jti: LICENSE_JTI
       })
+      owner.check()
       for (const track of ['microphone', 'system'] as const) {
         await database
           .prepare(`INSERT INTO speech_capture_epochs (
@@ -318,6 +394,7 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
             now
           )
           .run()
+        owner.check()
       }
       const refs = ['gateway-readback', 'provider-retention', 'synthetic-sink-test', 'relay-runtime-test'].map(
         (kind) => ({
@@ -358,26 +435,74 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
     })
     return { runtime, database, ...seeded, routeId, modelId }
   } catch (error) {
-    // A failed factory never hands ownership to the caller's disposal finally block.
     try {
-      await runtime.dispose()
-    } catch {
-      // The initialization error owns the result even if disposal also fails.
+      await owner.dispose()
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Fixture initialization and owned disposal failed')
     }
     throw error
   }
 }
 
+function useRuntime(routeId: Parameters<typeof makeRuntime>[0], observe?: () => () => void) {
+  let owner: ReturnType<typeof createFixtureOwner> | undefined
+  let pending: ReturnType<typeof makeRuntime> | undefined
+  let fixture: Awaited<ReturnType<typeof makeRuntime>> | undefined
+  let body: Promise<void> | undefined
+  let restore: (() => void) | undefined
+  // The existing Vitest 10s hook deadline owns real per-case setup; protocol bodies retain 5s.
+  beforeEach(async ({ signal }) => {
+    body = undefined
+    restore = observe?.()
+    owner = createFixtureOwner(signal)
+    pending = makeRuntime(routeId, owner)
+    fixture = await pending
+  })
+  afterEach(async () => {
+    try {
+      if (owner && pending) await owner.settle(pending, body)
+    } finally {
+      restore?.()
+      fixture = undefined
+    }
+  })
+  return {
+    get() {
+      owner?.check()
+      if (!fixture) throw new Error('Fixture setup did not publish an owned runtime')
+      return fixture
+    },
+    dispatch(runtime: Miniflare, input: Parameters<typeof signedRequest>[0]) {
+      if (!owner) throw new Error('Fixture setup has no request owner')
+      return dispatchOwnedRequest(owner, runtime, input)
+    },
+    check() {
+      owner?.check()
+    },
+    run(action: () => Promise<void>) {
+      return () => {
+        body = action()
+        return body
+      }
+    }
+  }
+}
+
 describe('workerd fixture initialization', () => {
-  it('initializes every real schema object in one ordered D1 batch before seeding', async () => {
-    const directory = dirname(fileURLToPath(import.meta.url))
-    const statements = parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8')) as string[]
-    const preparedQueries = new WeakMap<object, string>()
-    const preparedBeforeBatchSettled: string[] = []
-    const batches: string[][] = []
-    let batchSettled = false
-    let batchResults: Array<{ success: boolean }> = []
-    const getDatabase = Miniflare.prototype.getD1Database
+  const directory = dirname(fileURLToPath(import.meta.url))
+  const statements = parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8')) as string[]
+  const getDatabase = Miniflare.prototype.getD1Database
+  let preparedQueries: WeakMap<object, string>
+  let preparedBeforeBatchSettled: string[]
+  let batches: string[][]
+  let batchSettled: boolean
+  let batchResults: Array<{ success: boolean }>
+  const currentFixture = useRuntime('deepgram-via-gateway', () => {
+    preparedQueries = new WeakMap<object, string>()
+    preparedBeforeBatchSettled = []
+    batches = []
+    batchSettled = false
+    batchResults = []
     const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (
       this: Miniflare,
       ...args
@@ -414,9 +539,12 @@ describe('workerd fixture initialization', () => {
         }
       })
     })
-    let fixture: Awaited<ReturnType<typeof makeRuntime>> | undefined
-    try {
-      fixture = await makeRuntime()
+    return () => databaseSpy.mockRestore()
+  })
+  it(
+    'initializes every real schema object in one ordered D1 batch before seeding',
+    currentFixture.run(async () => {
+      const fixture = currentFixture.get()
       expect(statements).toHaveLength(55)
       expect(batches).toEqual([statements])
       expect(preparedBeforeBatchSettled).toEqual(statements)
@@ -439,12 +567,11 @@ describe('workerd fixture initialization', () => {
       expect(await database.prepare('SELECT approval FROM seats WHERE device_id = ?').bind(DEVICE).first()).toEqual({
         approval: 'approved'
       })
-    } finally {
-      databaseSpy.mockRestore()
-      await fixture?.runtime.dispose()
-    }
-  })
+    })
+  )
+})
 
+describe('workerd fixture initialization', () => {
   it('stops a canceled initialization before schema or seeds and joins its owned disposal', async () => {
     const controller = new AbortController()
     const refusal = new Error('Synthetic fixture setup cancellation')
@@ -477,7 +604,7 @@ describe('workerd fixture initialization', () => {
       await expect(pending).rejects.toBe(refusal)
       let settled = false
       const settlement = owner.settle(pending, body).then(() => { settled = true })
-      await disposeSpy.mock.results[0].value
+      await Promise.resolve()
       expect(disposeSpy).toHaveBeenCalledOnce()
       expect(disposed).toBe(true)
       expect(settled).toBe(false)
@@ -588,12 +715,17 @@ async function signedRequest(input: {
   }
 }
 
-async function dispatchSignedRequest(
+async function dispatchOwnedRequest(
+  owner: ReturnType<typeof createFixtureOwner>,
   runtime: Miniflare,
   input: Parameters<typeof signedRequest>[0]
 ): Promise<Response> {
+  owner.check()
   const signed = await signedRequest(input)
-  return (await runtime.dispatchFetch(signed.url, signed.init)) as unknown as Response
+  owner.check()
+  const response = (await runtime.dispatchFetch(signed.url, signed.init)) as unknown as Response
+  owner.check()
+  return response
 }
 
 type RelayLifecycleDb = {
@@ -711,14 +843,18 @@ async function readRouteBLifecycleDiagnostic(
 }
 
 describe('speech relay on pinned hosted workerd', () => {
-  it('runs licensed create, actual Upgrade, binary forwarding, final drain and status without provider calls', async () => {
-    const { runtime, database, now, license } = await makeRuntime()
-    try {
+  const currentFixture = useRuntime('deepgram-via-gateway')
+  it(
+    'runs licensed create, actual Upgrade, binary forwarding, final drain and status without provider calls',
+    currentFixture.run(async () => {
+      const { runtime, database, now, license } = currentFixture.get()
+      const dispatchSignedRequest = currentFixture.dispatch
       const unauthenticated = await runtime.dispatchFetch('https://operator.fixture/v1/speech/sessions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ operation: 'create-session' })
       })
+      currentFixture.check()
       expect(unauthenticated.status).toBe(401)
       const gateway = (await runtime.getWorker('metis-synthetic-gateway')) as unknown as {
         fetch(input: string): Promise<Response>
@@ -868,6 +1004,7 @@ describe('speech relay on pinned hosted workerd', () => {
       socket.send(new Uint8Array([0, 0, 1, 0]).buffer)
       socket.send('{"type":"finish"}')
       await terminalReceived
+      currentFixture.check()
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ ...PROTOCOL_FIXTURE.events.partial, sessionId: created.sessionId }),
@@ -952,14 +1089,17 @@ describe('speech relay on pinned hosted workerd', () => {
         cancelled: true,
         cancellationRequested: false
       })
-    } finally {
-      await runtime.dispose()
-    }
-  })
+    })
+  )
+})
 
-  it('uses the distinct documented Workers AI Route B URL without Deepgram credentials', async () => {
-    const { runtime, database, now, license } = await makeRuntime('workers-ai-nova3')
-    try {
+describe('speech relay on pinned hosted workerd', () => {
+  const currentFixture = useRuntime('workers-ai-nova3')
+  it(
+    'uses the distinct documented Workers AI Route B URL without Deepgram credentials',
+    currentFixture.run(async () => {
+      const { runtime, database, now, license } = currentFixture.get()
+      const dispatchSignedRequest = currentFixture.dispatch
       const captureGeneration = PROTOCOL_FIXTURE.create.request.captureGeneration
       const createTemplate = PROTOCOL_FIXTURE.create.request
       const createBody = JSON.stringify({
@@ -1071,6 +1211,7 @@ describe('speech relay on pinned hosted workerd', () => {
         clearTimeout(timeout!)
         socket.removeEventListener('message', terminalListener!)
       }
+      currentFixture.check()
       const gateway = (await runtime.getWorker('metis-synthetic-gateway')) as unknown as {
         fetch(input: string): Promise<Response>
       }
@@ -1169,8 +1310,6 @@ describe('speech relay on pinned hosted workerd', () => {
         ],
         cancellationRequested: false
       })
-    } finally {
-      await runtime.dispose()
-    }
-  })
+    })
+  )
 })
