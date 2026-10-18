@@ -1320,11 +1320,12 @@ async function runOneCaseBody(state, globalOrdinal, targetMeta, outerDeadline) {
       (state.peer4Ended ||
         state.parentRecords.some((item) => item.op === 'peer-destroy' && item.endpoint === 'writer4')) &&
       (() => {
-        const position = (predicate) => state.timeline.find((entry) => predicate(entry.item))?.ordinal ?? null
+        const parentTimeline = state.timeline.filter((entry) => entry.origin === 'parent')
+        const position = (predicate) => parentTimeline.find((entry) => predicate(entry.item))?.ordinal ?? null
         const processCloseAt = position((item) => item.kind === 'process-terminal' && item.event === 'close')
         return (
           processCloseAt !== null &&
-          state.timeline.filter((entry) => entry.item.kind === 'process-terminal' && entry.item.event === 'close')
+          parentTimeline.filter((entry) => entry.item.kind === 'process-terminal' && entry.item.event === 'close')
             .length === 1 &&
           state.parentRecords.filter((item) => item.op === 'ipc-disconnect').length === 1 &&
           ['reader3', 'writer4'].every((endpoint) => {
