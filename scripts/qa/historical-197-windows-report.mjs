@@ -37,7 +37,7 @@ export function assessClosedHistoricalWindowsReport(report, harnessCommit) {
         typeof item.fileKeyPresent === 'boolean' && [item.settingsSha256, item.providerSha256, item.meetingSha256].every((hash) => typeof hash === 'string' && HASH.test(hash))) ||
       !Array.isArray(report.checks) || report.checks.length !== REQUIRED_CHECKS.length || !report.checks.every((row) =>
         exact(row, ['id', 'status']) && REQUIRED_CHECKS.includes(row.id) && ['PASS', 'FAIL', 'NOT_RUN'].includes(row.status)) ||
-      !REQUIRED_CHECKS.every((id) => report.checks.filter((row) => row.id === id).length === 1)) return REFUSED
+      !REQUIRED_CHECKS.every((id, index) => report.checks.filter((row) => row.id === id).length === 1 && report.checks[index].id === id)) return REFUSED
     if (!report.accepted) {
       const errorIndex = REQUIRED_CHECKS.indexOf(report.error)
       const cleanupIndex = REQUIRED_CHECKS.indexOf('cleanup')
@@ -80,9 +80,10 @@ export async function readClosedHistoricalWindowsReport(reportPath, harnessCommi
     const current = await fs.lstat(reportPath)
     if (count !== opened.size || count > MAX_REPORT_BYTES || !sameFile(opened, after) ||
       !current.isFile() || current.isSymbolicLink() || !sameFile(after, current) || !samePath(await fs.realpath(parent), parent)) return REFUSED
-    const raw = buffer.subarray(0, count).toString('utf8')
+    const bytes = buffer.subarray(0, count)
+    const raw = bytes.toString('utf8')
     const report = JSON.parse(raw)
-    result = raw === `${JSON.stringify(report, null, 2)}\n`
+    result = bytes.equals(Buffer.from(`${JSON.stringify(report, null, 2)}\n`, 'utf8'))
       ? assessClosedHistoricalWindowsReport(report, harnessCommit)
       : REFUSED
   } catch {
