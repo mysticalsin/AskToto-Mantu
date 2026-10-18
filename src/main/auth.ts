@@ -19,16 +19,12 @@ import {
 } from './auth-config'
 import {
   MAX_SESSION_AGE_MS,
-  INITIAL_SIGN_IN_BACKOFF,
   coarseSignInFailure,
+  createSignInBackoffController,
   expiryReason,
   expiryReasonAt,
-  resetSignInBackoff,
-  signInBackoffAfterFailure,
-  signInBackoffRemaining,
   tenantMatches,
-  type AuthSession,
-  type SignInBackoffState
+  type AuthSession
 } from './auth-session-policy'
 import { readSpeechAuthBoundary as readVerifiedSpeechAuthBoundary } from './auth-speech-boundary'
 import {
@@ -359,18 +355,10 @@ export function completeSpeechAuthProfileReset(): void {
 // "rate limit auth endpoints" discipline applied at the main-process trust boundary, not the renderer.
 let signInInFlight = false
 
-let signInBackoff: SignInBackoffState = INITIAL_SIGN_IN_BACKOFF
+const signInBackoff = createSignInBackoffController()
 
 export function signInBackoffRemainingMs(now = Date.now()): number {
-  return signInBackoffRemaining(signInBackoff, now)
-}
-
-function recordSignInFailure(now = Date.now()): void {
-  signInBackoff = signInBackoffAfterFailure(signInBackoff, now)
-}
-
-function recordSignInSuccess(): void {
-  signInBackoff = resetSignInBackoff()
+  return signInBackoff.remainingMs(now)
 }
 
 // Thread the signed-in user's identity into every audit record (auth.ts is the source of truth for who's
@@ -880,10 +868,10 @@ export async function signIn(): Promise<SignInResult> {
     writeLkgConfig(cfg)
     writeStickyConfigured()
     auditLog('auth.signin', { domain: cfg.allowedDomain })
-    recordSignInSuccess()
+    signInBackoff.recordSignInSuccess()
     return { ok: true, configured: true, email }
   } catch (e) {
-    recordSignInFailure()
+    signInBackoff.recordSignInFailure()
     auditLog('auth.signin_failed', { reason: coarseSignInFailure(e), consecutive: signInBackoff.failures })
     return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) }
   } finally {

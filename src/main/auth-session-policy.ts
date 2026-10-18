@@ -68,3 +68,22 @@ export function signInBackoffAfterFailure(state: SignInBackoffState, now: number
 export function resetSignInBackoff(): SignInBackoffState {
   return INITIAL_SIGN_IN_BACKOFF
 }
+
+/** Own consecutive sign-in failures without sharing mutable state between controllers. */
+export function createSignInBackoffController() {
+  let state = INITIAL_SIGN_IN_BACKOFF
+  return {
+    get failures(): number {
+      return state.failures
+    },
+    remainingMs(now = Date.now()): number {
+      return signInBackoffRemaining(state, now)
+    },
+    recordSignInFailure(now = Date.now()): void {
+      state = signInBackoffAfterFailure(state, now)
+    },
+    recordSignInSuccess(): void {
+      state = resetSignInBackoff()
+    }
+  }
+}
