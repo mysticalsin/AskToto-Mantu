@@ -235,8 +235,13 @@ describe('historical 1.9.7 immutable public input identity', () => {
     })
     expect(JSON.stringify(receipt)).not.toContain('Metis-QA')
     expect(JSON.stringify(receipt)).not.toContain('Metis-Portable')
+    expect(Object.keys(receipt).sort()).toEqual([
+      'artifact_source', 'assets', 'candidate_attempt', 'candidate_run', 'harness_commit',
+      'outcome', 'release_id', 'repository', 'scope', 'tag', 'verification'
+    ])
     const regularRelease = context()
     regularRelease.release.prerelease = false
+    regularRelease.release.assets.reverse()
     expect(validate(regularRelease).outcome).toBe('VERIFIED')
   })
 
@@ -378,6 +383,21 @@ describe('historical input file admission and streaming bytes', () => {
     expect(child.stderr).toBe('')
     expect(JSON.parse(child.stdout)).toEqual({ scope: 'IDENTITY_ONLY', outcome: 'REFUSED', code: 'invalid-input' })
     expect(child.stdout).not.toContain('private-path-canary')
+  })
+
+  it('binds CLI harness identity to the supplied actual SHA before asset verification', async () => {
+    const dir = await directory()
+    const metadataPath = join(dir, 'private-context-canary.json')
+    await writeFile(metadataPath, JSON.stringify(context()))
+    const script = fileURLToPath(new URL('./historical-197-inputs.mjs', import.meta.url))
+    const child = spawnSync(process.execPath, [
+      script, '--metadata', metadataPath, '--assets', dir, '--harness-commit', 'f'.repeat(40)
+    ], { encoding: 'utf8', timeout: 5_000 })
+    expect(child.status).toBe(1)
+    expect(child.stderr).toBe('')
+    expect(JSON.parse(child.stdout)).toEqual({ scope: 'IDENTITY_ONLY', outcome: 'REFUSED', code: 'context-mismatch' })
+    expect(child.stdout).not.toContain(dir)
+    expect(child.stdout).not.toContain('private-context-canary')
   })
 })
 
