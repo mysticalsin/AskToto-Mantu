@@ -5,6 +5,7 @@
 
 export const OPERATOR_LICENSE_PREFIX = 'METIS-OP-1'
 export const OPERATOR_LICENSE_MAX = 200
+export const OPERATOR_LICENSE_MAX_DAYS = 365
 export const OPERATOR_LICENSE_DAYS = [1, 7, 30, 90, 365] as const
 
 export type OperatorLicenseClaims = {
@@ -30,7 +31,7 @@ export function operatorLicenseCanonical(jti: string, iat: number, exp: number):
 
 export function parseOperatorLicenseDays(raw: unknown): number | null {
   const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
-  if (!Number.isInteger(n) || n < 1 || n > 365) return null
+  if (!Number.isInteger(n) || n < 1 || n > OPERATOR_LICENSE_MAX_DAYS) return null
   return n
 }
 

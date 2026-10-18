@@ -2,6 +2,9 @@ import { ModelPolicyDocumentSchema, type ModelPolicyDocument, type ModelPolicyEn
 import { parseBrokerSpeechSettings, type BrokerSpeechSettings } from '../shared/broker-speech-settings'
 import type { SpeechCapability } from './cloud-stt/broker-client'
 
+// Broker authority consumes the known top-level fields of the verified v1 snapshot.
+const BrokerModelPolicyDocumentSchema = ModelPolicyDocumentSchema.strict()
+
 export const SPEECH_POLICY_MAX_AGE_MS = 60_000
 
 export type VerifiedSpeechPolicySnapshot = {
@@ -160,7 +163,7 @@ export function resolveSpeechBrokerAuthority(
     snapshot.revision.length > 512
   )
     return { ok: false, code: 'POLICY_INVALID' }
-  const parsedPolicy = ModelPolicyDocumentSchema.safeParse(snapshot.policy)
+  const parsedPolicy = BrokerModelPolicyDocumentSchema.safeParse(snapshot.policy)
   if (!parsedPolicy.success) return { ok: false, code: 'POLICY_INVALID' }
 
   if (

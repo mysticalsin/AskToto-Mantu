@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { OPERATOR_LICENSE_MAX, parseOperatorLicense } from '@shared/operator-license'
+import { OPERATOR_LICENSE_MAX, OPERATOR_LICENSE_MAX_DAYS, parseOperatorLicense } from '@shared/operator-license'
 import { resolveOperatorBaseUrl } from '@shared/operator'
 import type { ModelPolicyDocument } from '@shared/model-policy'
 import { hashOperatorId } from './operator-hmac-sign'
@@ -113,6 +113,7 @@ export function resolveSpeechPolicyIdentity(
     !Number.isSafeInteger(parsed.exp) ||
     parsed.iat < 0 ||
     parsed.exp <= parsed.iat ||
+    parsed.exp - parsed.iat > OPERATOR_LICENSE_MAX_DAYS * 24 * 60 * 60 ||
     parsed.iat * 1000 > now ||
     parsed.exp * 1000 <= now
   ) {
