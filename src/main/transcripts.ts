@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
-import { join, basename, resolve } from 'node:path'
+import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveDraftTranscriptResult, SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
@@ -26,6 +26,7 @@ import { recapStatusValidationError } from '@shared/recap-status'
 import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
+import { draftFilename, snapshotDraftWrites, trackDraftWrite } from './infra/storage/draft-transcript-write-state'
 import type { FileClass } from './infra/storage/gateway'
 import { speakerLabel } from './features/meetings/transcript-format'
 import {
@@ -864,37 +865,6 @@ export async function appendDebrief(
   return { ok: true }
 }
 
-// Keyed by the meeting's OWN startedAt (like saveMeeting's real filename), not a single fixed name.
-// A fixed name would let the NEXT meeting's very first autosave tick silently overwrite a PREVIOUS
-// meeting's crash-recovery copy before anyone had a chance to notice it — defeating the whole point.
-// stamp() alone only has 1-second (HHMMSS) resolution, so two meetings starting in the same wall-clock
-// second would still collide on it — the millisecond suffix (kept behind its own "-", so it still reads
-// as "<HHMMSS>-<ms>" for recall.ts's FILENAME_TIMESTAMP retention regex, which only requires a literal
-// "-" right after the 6-digit time) closes that gap down to true per-meeting uniqueness.
-const draftFilename = (started: number): string =>
-  `.autosave-draft-${stamp(started)}-${String(started % 1000).padStart(3, '0')}.md`
-
-// Cleanup must join autosaves already rendering/encrypting/replacing this exact draft. Otherwise a
-// normal final save can remove the old draft before a pending autosave publishes a new orphan copy.
-// Entries exist only while writes are in flight; later writes remain permitted after cleanup.
-const draftWritesInFlight = new Map<string, Set<Promise<void>>>()
-
-function trackDraftWrite(file: string): () => void {
-  const key = resolve(file)
-  let settle!: () => void
-  const pending = new Promise<void>((done) => {
-    settle = done
-  })
-  const writes = draftWritesInFlight.get(key) ?? new Set<Promise<void>>()
-  writes.add(pending)
-  draftWritesInFlight.set(key, writes)
-  return () => {
-    writes.delete(pending)
-    if (!writes.size) draftWritesInFlight.delete(key)
-    settle()
-  }
-}
-
 /**
  * Periodic best-effort snapshot of an IN-PROGRESS meeting (see the renderer's autosave timer while
  * Listen is active). Overwrites this ONE meeting's own draft file every tick — never touches index.md.
@@ -933,7 +903,7 @@ export async function saveDraftTranscript(
   try {
     const folder = ensureMeetingsFolder(settings)
     const started = m.startedAt || Date.now()
-    const file = join(folder, draftFilename(started))
+    const file = join(folder, draftFilename(started, stamp(started)))
     // Register synchronously before the first await so completed-save cleanup sees this operation.
     finishWrite = trackDraftWrite(file)
     const title = cleanTitle(m.title) || `${m.mode} meeting`
@@ -988,11 +958,9 @@ export async function saveDraftTranscript(
  */
 export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
   try {
-    const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt))
-    // Join only writes accepted before this cleanup. This is not a terminal owner/quit acknowledgement
-    // and deliberately does not suppress another draft operation admitted after this snapshot.
-    const writes = draftWritesInFlight.get(resolve(file))
-    if (writes) await Promise.all([...writes])
+    const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt, stamp(startedAt)))
+    const writes = snapshotDraftWrites(file)
+    if (writes) await Promise.all(writes)
     if (!existsSync(file)) return
     for (let attempt = 0; ; attempt++) {
       try {
