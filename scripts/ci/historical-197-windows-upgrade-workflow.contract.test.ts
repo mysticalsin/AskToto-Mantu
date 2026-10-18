@@ -83,6 +83,18 @@ describe('actual closed historical Windows report gate', () => {
     expect(assessClosedHistoricalWindowsReport(report, harness)).toEqual({ closed: false, accepted: false })
   })
 
+  it('refuses failed reports whose error and ordered check progress disagree', () => {
+    const wrongErrorRow = failedReport()
+    wrongErrorRow.checks.find((row) => row.id === 'inputs')!.status = 'NOT_RUN'
+    const progressAfterFailure = failedReport()
+    progressAfterFailure.checks.find((row) => row.id === 'prepared')!.status = 'PASS'
+    const unrelatedFailure = failedReport()
+    unrelatedFailure.checks.find((row) => row.id === 'upgrade_read')!.status = 'FAIL'
+    for (const report of [wrongErrorRow, progressAfterFailure, unrelatedFailure]) {
+      expect(assessClosedHistoricalWindowsReport(report, harness)).toEqual({ closed: false, accepted: false })
+    }
+  })
+
   it('refuses missing process, installer closure and native snapshot evidence', () => {
     const noProcess = successfulReport()
     noProcess.processes.pop()
@@ -118,11 +130,13 @@ describe('actual closed historical Windows report gate', () => {
     expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
     await fs.writeFile(reportPath, ' '.repeat(65_537))
     expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
-    const target = join(root, 'target.json')
-    await fs.writeFile(target, JSON.stringify(successfulReport()))
+    const targetDirectory = join(root, 'target')
+    const aliasDirectory = join(root, 'alias')
+    await fs.mkdir(targetDirectory)
+    await fs.writeFile(join(targetDirectory, 'report.json'), JSON.stringify(successfulReport()))
     await fs.rm(reportPath)
-    await fs.symlink(target, reportPath, 'file')
-    expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
+    await fs.symlink(targetDirectory, aliasDirectory, 'junction')
+    expect(await readClosedHistoricalWindowsReport(join(aliasDirectory, 'report.json'), harness)).toEqual({ closed: false, accepted: false })
   })
 
   it('owns one real descriptor close and refuses retention when close refuses', async () => {
