@@ -345,9 +345,14 @@ export async function runBootLaunchActivateRow({ target, installRoot, platform, 
     port = await freeLoopbackPort()
     const appArgs = ['--args', `--remote-debugging-port=${port}`]
     method = 'open-env'
-    let launched = await runProcess('open', ['-a', target, '--env', `ASKTOTO_USERDATA=${profile}`, ...appArgs], 20_000, {
-      captureMacLaunchStatus: true
-    })
+    let launched = await runProcess(
+      'open',
+      ['-a', target, '--env', `ASKTOTO_USERDATA=${profile}`, ...appArgs],
+      20_000,
+      {
+        captureMacLaunchStatus: true
+      }
+    )
     launchAttempts.openEnv = processOutcome(launched)
     if (launched.error || launched.code !== 0) {
       method = 'launchctl-setenv'

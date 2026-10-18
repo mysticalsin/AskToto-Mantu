@@ -1049,16 +1049,21 @@ export function runProcess(file, args, timeoutMs, options = {}) {
       child.stderr?.destroy()
       resolve({ code: result.code, signal: result.signal, error: result.error, launchDiagnostic })
     }
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // Already gone.
-      }
-      finish({ code: null, signal: 'timeout', error: false })
-    }, captureMacLaunchStatus ? Math.max(0, timeoutMs - (performance.now() - launchedAt)) : timeoutMs)
+    const timer = setTimeout(
+      () => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // Already gone.
+        }
+        finish({ code: null, signal: 'timeout', error: false })
+      },
+      captureMacLaunchStatus ? Math.max(0, timeoutMs - (performance.now() - launchedAt)) : timeoutMs
+    )
     child.once('error', () => finish({ code: null, signal: null, error: true }))
-    child.once(captureMacLaunchStatus ? 'close' : 'exit', (code, signal) => finish({ code, signal, error: false }, true))
+    child.once(captureMacLaunchStatus ? 'close' : 'exit', (code, signal) =>
+      finish({ code, signal, error: false }, true)
+    )
   })
 }
 
