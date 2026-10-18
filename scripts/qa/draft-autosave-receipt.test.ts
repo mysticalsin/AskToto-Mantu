@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { IPC, SaveMeetingSchema, stripProvisionalLines, type SaveDraftTranscriptResult, type SaveMeeting, type Settings } from '@shared/ipc'
-import { saveDraftTranscript } from './transcripts'
-import { useStorageForTests } from './infra/storage/meetings-storage'
-import { startDraftAutosave } from '../renderer/src/lib/draft-autosave'
+import { saveDraftTranscript } from '../../src/main/transcripts'
+import { useStorageForTests } from '../../src/main/infra/storage/meetings-storage'
+import { startDraftAutosave } from '../../src/renderer/src/lib/draft-autosave'
 
 vi.mock('electron')
 vi.mock('node:fs/promises', async (importOriginal) => ({
@@ -18,8 +18,9 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 
 // Execute the real registered IPC callback, preload method and consumed autosave lifecycle. The App
 // delegation is checked by app-recap-lifecycle; this path retains real snapshot IO and failure feedback.
+const mainRoot = join(__dirname, '..', '..', 'src', 'main')
 function source(relative: string): ts.SourceFile {
-  const path = join(__dirname, relative)
+  const path = join(mainRoot, relative)
   return ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
 
