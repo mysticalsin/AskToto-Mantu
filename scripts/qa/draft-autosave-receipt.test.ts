@@ -7,8 +7,6 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import {
   IPC,
-  SaveMeetingSchema,
-  stripProvisionalLines,
   type SaveDraftTranscriptResult,
   type SaveMeeting,
   type Settings
@@ -23,7 +21,11 @@ import { registerDraftTranscriptIpc } from '../../src/main/draft-transcript-ipc'
 vi.mock('electron')
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, writeFile: vi.fn(actual.writeFile), rename: vi.fn(async (from: string, to: string) => renameSync(from, to)) }
+  return {
+    ...actual,
+    writeFile: vi.fn(actual.writeFile),
+    rename: vi.fn(async (from: string, to: string) => renameSync(from, to))
+  }
 })
 
 // Execute the real registered IPC callback, preload method and consumed autosave lifecycle. The App
@@ -92,28 +94,51 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     let handler!: (event: unknown, payload: unknown) => Promise<unknown>
     let backend = saveDraftTranscript
     let senderFailure: Error | undefined
-    let session: SpeechAuthSession | null = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }
+    const newSession = (): SpeechAuthSession => ({
+      email: 'synthetic@example.invalid',
+      domain: 'example.invalid',
+      tid: 'synthetic-tenant',
+      at: 1
+    })
+    let session: SpeechAuthSession | null = newSession()
     let sessionEpoch = 0
     let profile = folder
     let canRead = true
     let onSettingsRead = () => {}
     let onAuthorize = () => {}
-    const requireAuth = () => { onAuthorize(); return authenticated }
+    const requireAuth = () => {
+      onAuthorize()
+      return authenticated
+    }
     const auth = new SpeechAuthLeaseController({
-      prepareSession: () => {}, readSession: () => session, readSessionEpoch: () => sessionEpoch,
-      readProfilePath: () => profile, readBoundary: async () => null, validateSession: () => {}, sessionIsValid: () => true
+      prepareSession: () => {},
+      readSession: () => session,
+      readSessionEpoch: () => sessionEpoch,
+      readProfilePath: () => profile,
+      readBoundary: async () => null,
+      validateSession: () => {},
+      sessionIsValid: () => true
     })
     const mainContext = vm.createContext({
-      SaveMeetingSchema,
-      stripProvisionalLines,
       saveDraftTranscript: (...args: Parameters<typeof saveDraftTranscript>) => backend(...args),
-      assertMainWindow: () => { if (senderFailure) throw senderFailure },
+      assertMainWindow: () => {
+        if (senderFailure) throw senderFailure
+      },
       requireAuth,
       captureAuthSessionBoundary: () => auth.captureSessionBoundary(requireAuth),
       captureDraftSettingsBoundary,
       registerDraftTranscriptIpc,
-      ipcMain: { handle(channel: string, callback: typeof handler) { expect(channel).toBe(IPC.saveDraftTranscript); handler = callback } },
-      getSettings: () => { onSettingsRead(); publishSettingsSnapshot(settings, canRead); return settings }
+      ipcMain: {
+        handle(channel: string, callback: typeof handler) {
+          expect(channel).toBe(IPC.saveDraftTranscript)
+          handler = callback
+        }
+      },
+      getSettings: () => {
+        onSettingsRead()
+        publishSettingsSnapshot(settings, canRead)
+        return settings
+      }
     })
     evaluate<void>(mainRegistration.getText(main), mainContext)
     const invoke = vi.fn((channel: string, payload: unknown) => {
@@ -172,17 +197,42 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       calls,
       handler,
       cleanup,
-      mainContext,
-      denySender(failure: Error) { senderFailure = failure },
-      rejectBackend(failure: unknown) { backend = () => Promise.reject(failure) },
-      renew() { authenticated = true; session = { email: 'synthetic@example.invalid', domain: 'example.invalid', tid: 'synthetic-tenant', at: 1 }; sessionEpoch += 1; profile = folder },
-      revoke() { authenticated = false; session = null; sessionEpoch += 1 },
-      replaceSession() { session = { ...session! }; sessionEpoch += 1 },
-      resetProfileEpoch() { sessionEpoch += 1 },
-      moveProfile() { profile = `${folder}-other` },
-      onSettingsRead(callback: () => void) { onSettingsRead = callback },
-      onAuthorize(callback: () => void) { onAuthorize = callback },
-      setReadable(value: boolean) { canRead = value },
+      denySender(failure: Error) {
+        senderFailure = failure
+      },
+      rejectBackend(failure: unknown) {
+        backend = () => Promise.reject(failure)
+      },
+      renew() {
+        authenticated = true
+        session = newSession()
+        sessionEpoch += 1
+        profile = folder
+      },
+      revoke() {
+        authenticated = false
+        session = null
+        sessionEpoch += 1
+      },
+      replaceSession() {
+        session = { ...session! }
+        sessionEpoch += 1
+      },
+      resetProfileEpoch() {
+        sessionEpoch += 1
+      },
+      moveProfile() {
+        profile = `${folder}-other`
+      },
+      onSettingsRead(callback: () => void) {
+        onSettingsRead = callback
+      },
+      onAuthorize(callback: () => void) {
+        onAuthorize = callback
+      },
+      setReadable(value: boolean) {
+        canRead = value
+      },
       async tick() {
         tick()
         await pending
@@ -225,11 +275,21 @@ describe('draft receipt reaches the actual renderer through main and preload', (
   })
 
   it('connects the production registration to the imported draft IPC module', () => {
-    expect(main.statements.some((statement) => ts.isImportDeclaration(statement) &&
-      ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === './draft-transcript-ipc' &&
-      statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings) &&
-      statement.importClause.namedBindings.elements.some((binding) => binding.name.text === 'registerDraftTranscriptIpc' &&
-        (!binding.propertyName || binding.propertyName.text === 'registerDraftTranscriptIpc')))).toBe(true)
+    expect(
+      main.statements.some(
+        (statement) =>
+          ts.isImportDeclaration(statement) &&
+          ts.isStringLiteral(statement.moduleSpecifier) &&
+          statement.moduleSpecifier.text === './draft-transcript-ipc' &&
+          statement.importClause?.namedBindings &&
+          ts.isNamedImports(statement.importClause.namedBindings) &&
+          statement.importClause.namedBindings.elements.some(
+            (binding) =>
+              binding.name.text === 'registerDraftTranscriptIpc' &&
+              (!binding.propertyName || binding.propertyName.text === 'registerDraftTranscriptIpc')
+          )
+      )
+    ).toBe(true)
   })
 
   it('retains the actual sender validation before any snapshot IO', async () => {
@@ -239,7 +299,9 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       h.denySender(refusal)
       await expect(h.handler({}, {})).rejects.toBe(refusal)
       expect(readdirSync(folder)).toEqual([])
-    } finally { h.cleanup() }
+    } finally {
+      h.cleanup()
+    }
   })
 
   it('does not acknowledge unauthenticated or malformed requests as saved', async () => {
@@ -262,8 +324,12 @@ describe('draft receipt reaches the actual renderer through main and preload', (
   async function duringOwnedTemp(h: ReturnType<typeof host>, transition: () => void): Promise<void> {
     let release!: () => void
     let didWrite!: () => void
-    const gate = new Promise<void>((resolve) => { release = resolve })
-    const written = new Promise<void>((resolve) => { didWrite = resolve })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const written = new Promise<void>((resolve) => {
+      didWrite = resolve
+    })
     vi.mocked(writeFile).mockImplementationOnce(async (...args) => {
       await actualFs.writeFile(...args)
       didWrite()
@@ -271,7 +337,12 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     })
     const pending = h.tick()
     try {
-      await Promise.race([written, pending.then(() => { throw new Error('Draft settled before owned temporary write') })])
+      await Promise.race([
+        written,
+        pending.then(() => {
+          throw new Error('Draft settled before owned temporary write')
+        })
+      ])
       expect(readdirSync(folder).some((file) => file.endsWith('.tmp'))).toBe(true)
       expect(vi.mocked(writeFile).mock.lastCall?.[2]).toEqual({ mode: 0o600 })
       transition()
@@ -281,8 +352,19 @@ describe('draft receipt reaches the actual renderer through main and preload', (
     }
   }
 
-  it.each(['session revocation', 'session replacement', 'profile reset epoch', 'profile path', 'root ABA', 'encryption ABA', 'retention ABA', 'auth configuration ABA', 'readability ABA'])(
-    'refuses stale %s publication, preserves old bytes, and reaches the existing warning privately', async (kind) => {
+  it.each([
+    'session revocation',
+    'session replacement',
+    'profile reset epoch',
+    'profile path',
+    'root ABA',
+    'encryption ABA',
+    'retention ABA',
+    'auth configuration ABA',
+    'readability ABA'
+  ])(
+    'refuses stale %s publication, preserves old bytes, and reaches the existing warning privately',
+    async (kind) => {
       const h = host()
       try {
         await h.tick()
@@ -300,10 +382,14 @@ describe('draft receipt reaches the actual renderer through main and preload', (
             else if (kind === 'profile reset epoch') h.resetProfileEpoch()
             else if (kind === 'profile path') h.moveProfile()
             else {
-              const change = kind === 'root ABA' ? { meetingsFolder: `${folder}-private-canary` }
-                : kind === 'encryption ABA' ? { encryptTranscripts: true }
-                  : kind === 'retention ABA' ? { enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const, summaryOnly: true } }
-                    : { azureTenantId: 'synthetic-private-tenant-canary' }
+              const change =
+                kind === 'root ABA'
+                  ? { meetingsFolder: `${folder}-private-canary` }
+                  : kind === 'encryption ABA'
+                    ? { encryptTranscripts: true }
+                    : kind === 'retention ABA'
+                      ? { enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const, summaryOnly: true } }
+                      : { azureTenantId: 'synthetic-private-tenant-canary' }
               if (kind === 'readability ABA') publishSettingsSnapshot(settings, false)
               else publishSettingsSnapshot({ ...settings, ...change }, true)
               publishSettingsSnapshot(settings, true)
@@ -316,7 +402,9 @@ describe('draft receipt reaches the actual renderer through main and preload', (
         expect(h.context.autosaveFailsRef.current).toBe(2)
         expect(h.context.setAutosaveWarn).toHaveBeenLastCalledWith(true)
         expect(JSON.stringify(h.calls)).not.toContain('canary')
-      } finally { h.cleanup() }
+      } finally {
+        h.cleanup()
+      }
     }
   )
 
@@ -335,13 +423,17 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       expect(h.calls.at(-1)).toEqual({ status: 'failed' })
       await h.tick()
       expect(h.calls.at(-1)).toEqual({ status: 'saved' })
-    } finally { h.cleanup() }
+    } finally {
+      h.cleanup()
+    }
   })
 
   it('captures auth before settings publication and checks settings after reentrant authorization', async () => {
     const h = host()
     try {
-      h.onSettingsRead(() => { h.replaceSession() })
+      h.onSettingsRead(() => {
+        h.replaceSession()
+      })
       await h.tick()
       expect(h.calls.at(-1)).toEqual({ status: 'failed' })
       h.onSettingsRead(() => {})
@@ -352,7 +444,9 @@ describe('draft receipt reaches the actual renderer through main and preload', (
         })
       })
       expect(h.calls.at(-1)).toEqual({ status: 'failed' })
-    } finally { h.cleanup() }
+    } finally {
+      h.cleanup()
+    }
   })
 
   it('refuses initially unreadable settings without reporting a saved draft', async () => {
@@ -362,15 +456,26 @@ describe('draft receipt reaches the actual renderer through main and preload', (
       await h.tick()
       expect(h.calls).toEqual([{ status: 'failed' }])
       // Existing folder scaffolding may precede admission; no stale draft is published.
-      expect(readdirSync(folder).some((file) => file.startsWith('.autosave-draft-') || file.endsWith('.tmp'))).toBe(false)
-    } finally { h.cleanup() }
+      expect(readdirSync(folder).some((file) => file.startsWith('.autosave-draft-') || file.endsWith('.tmp'))).toBe(
+        false
+      )
+    } finally {
+      h.cleanup()
+    }
   })
 
-  it.each([undefined, null, new Error('Synthetic private backend canary')])('preserves unrelated backend rejection identity (%s)', async (failure) => {
-    const h = host()
-    try {
-      h.rejectBackend(failure)
-      await expect(h.handler({}, { mode: 'meeting', title: 'Synthetic', startedAt: 1, lines: [], recap: '' })).rejects.toBe(failure)
-    } finally { h.cleanup() }
-  })
+  it.each([undefined, null, new Error('Synthetic private backend canary')])(
+    'preserves unrelated backend rejection identity (%s)',
+    async (failure) => {
+      const h = host()
+      try {
+        h.rejectBackend(failure)
+        await expect(
+          h.handler({}, { mode: 'meeting', title: 'Synthetic', startedAt: 1, lines: [], recap: '' })
+        ).rejects.toBe(failure)
+      } finally {
+        h.cleanup()
+      }
+    }
+  )
 })

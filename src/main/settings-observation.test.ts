@@ -69,19 +69,28 @@ describe('settings publication', () => {
     const current = bus.captureDraftSettingsBoundary()
     const epoch = bus.getSettingsObservationEpoch()
     bus.publishSettingsSnapshot({ ...settings }, true)
-    bus.publishSettingsSnapshot({ ...settings, azureClientId: 'client', azureTenantId: 'tenant', azureAllowedDomain: 'example.invalid', autoSaveTranscripts: !settings.autoSaveTranscripts }, true)
+    bus.publishSettingsSnapshot(
+      {
+        ...settings,
+        azureClientId: 'client',
+        azureTenantId: 'tenant',
+        azureAllowedDomain: 'example.invalid',
+        autoSaveTranscripts: !settings.autoSaveTranscripts
+      },
+      true
+    )
     expect(bus.getSettingsObservationEpoch()).toBeGreaterThan(epoch)
     expect(current()).toBe(true)
   })
 
-  it.each([
+  it.each<[string, Partial<Settings>]>([
     ['configured root', { meetingsFolder: 'synthetic-other-root' }],
     ['encryption', { encryptTranscripts: !DEFAULT_SETTINGS.encryptTranscripts }],
     ['retention', { enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true } }],
     ['client', { azureClientId: 'synthetic-other-client' }],
     ['tenant', { azureTenantId: 'synthetic-other-tenant' }],
     ['domain', { azureAllowedDomain: 'other.invalid' }]
-  ] satisfies Array<[string, Partial<Settings>]>)('retires observed %s ABA even after the same object returns', async (_label, change) => {
+  ])('retires observed %s ABA even after the same object returns', async (_label, change) => {
     const bus = await import('./settings-observation')
     const settings = { ...DEFAULT_SETTINGS }
     bus.publishSettingsSnapshot(settings, true)
@@ -108,7 +117,9 @@ describe('settings publication', () => {
     expect(unreadable()).toBe(false)
     expect(current()).toBe(false)
     const recovered = bus.captureDraftSettingsBoundary()
-    const stop = bus.observeSettingsSnapshot(() => { throw new Error('synthetic private observer failure') })
+    const stop = bus.observeSettingsSnapshot(() => {
+      throw new Error('synthetic private observer failure')
+    })
     stop()
     bus.publishSettingsSnapshot(DEFAULT_SETTINGS, true)
     expect(recovered()).toBe(false)
