@@ -939,27 +939,131 @@ export function killOwned(entries, kill = (pid) => void process.kill(pid, 'SIGKI
   }
 }
 
-/** Run a helper process to completion or `timeoutMs`; never rejects. */
+/** @typedef {'os-status' | 'not-observed' | 'truncated' | 'close-unconfirmed'} MacLaunchDiagnosticKind */
+/** @typedef {{kind: MacLaunchDiagnosticKind, osStatus: number | null}} MacLaunchDiagnostic */
+
+/** @param {unknown} receipt @returns {MacLaunchDiagnostic | undefined} */
+export function projectMacLaunchDiagnostic(receipt) {
+  try {
+    if (!receipt || typeof receipt !== 'object' || !Object.hasOwn(receipt, 'launchDiagnostic')) return undefined
+    const diagnostic = /** @type {{launchDiagnostic?: unknown}} */ (receipt).launchDiagnostic
+    if (diagnostic && typeof diagnostic === 'object') {
+      const record = /** @type {{kind?: unknown, osStatus?: unknown}} */ (diagnostic)
+      const kind = record.kind
+      const code = record.osStatus
+      if (
+        kind === 'os-status' &&
+        typeof code === 'number' &&
+        Number.isInteger(code) &&
+        code >= -(2 ** 31) &&
+        code < 2 ** 31
+      )
+        return { kind, osStatus: code }
+      if ((kind === 'not-observed' || kind === 'truncated' || kind === 'close-unconfirmed') && code === null)
+        return { kind, osStatus: null }
+    }
+  } catch {
+    // Optional native diagnostics cannot publish arbitrary values or getter failures.
+  }
+  return { kind: 'not-observed', osStatus: null }
+}
+
+/** @param {string} text @returns {MacLaunchDiagnostic} */
+function nativeStatusFromStderr(text) {
+  const codes = []
+  for (const line of text.split(/\r?\n/)) {
+    for (const match of line.matchAll(/\bNSOSStatusErrorDomain[ \t]+Code=(-?\d+)(?=[ \t"]|$)/g))
+      codes.push(Number(match[1]))
+    const appleScript = /^(?:\d+:\d+:[ \t]*)?execution error:[^\r\n]*\((-?\d+)\)[ \t]*$/.exec(line)
+    if (appleScript) codes.push(Number(appleScript[1]))
+  }
+  if (codes.length === 1 && Number.isInteger(codes[0]) && codes[0] >= -(2 ** 31) && codes[0] < 2 ** 31)
+    return { kind: 'os-status', osStatus: codes[0] }
+  return { kind: 'not-observed', osStatus: null }
+}
+
+/**
+ * Run a helper process to completion or `timeoutMs`; never rejects.
+ * @param {string} file
+ * @param {string[]} args
+ * @param {number} timeoutMs
+ * @param {import('node:child_process').SpawnOptions & {captureMacLaunchStatus?: boolean}} [options]
+ */
 export function runProcess(file, args, timeoutMs, options = {}) {
   return new Promise((resolve) => {
+    const { captureMacLaunchStatus: requestedCapture = false, ...processOptions } = options
+    const captureMacLaunchStatus = requestedCapture === true
     let settled = false
-    const child = spawn(file, args, { stdio: 'ignore', detached: false, ...options })
-    const finish = (result) => {
+    const launchedAt = captureMacLaunchStatus ? performance.now() : 0
+    const child = spawn(file, args, {
+      stdio: 'ignore',
+      detached: false,
+      ...processOptions,
+      ...(captureMacLaunchStatus ? { stdio: ['ignore', 'ignore', 'pipe'] } : {})
+    })
+    const chunks = []
+    let retained = 0
+    let truncated = false
+    let readFailed = false
+    const collect = (chunk) => {
+      if (settled) return
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      const room = 4096 - retained
+      if (bytes.length > room) truncated = true
+      if (room > 0) {
+        const owned = Buffer.from(bytes.subarray(0, room))
+        chunks.push(owned)
+        retained += owned.length
+      }
+    }
+    const readError = () => {
+      readFailed = true
+    }
+    if (captureMacLaunchStatus) {
+      child.stderr?.on('data', collect)
+      child.stderr?.on('error', readError)
+    }
+    const finish = (result, closed = false) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve(result)
-    }
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // Already gone.
+      if (!captureMacLaunchStatus) {
+        resolve(result)
+        return
       }
-      finish({ code: null, signal: 'timeout', error: false })
-    }, timeoutMs)
+      /** @type {MacLaunchDiagnostic} */
+      let launchDiagnostic
+      if (!closed || readFailed) launchDiagnostic = { kind: 'close-unconfirmed', osStatus: null }
+      else if (truncated) launchDiagnostic = { kind: 'truncated', osStatus: null }
+      else {
+        const captured = Buffer.concat(chunks, retained)
+        launchDiagnostic = nativeStatusFromStderr(captured.toString('utf8'))
+        captured.fill(0)
+      }
+      for (const chunk of chunks) chunk.fill(0)
+      chunks.length = 0
+      child.stderr?.removeListener('data', collect)
+      child.stderr?.removeListener('error', readError)
+      // Destroying the owned pipe may report a pending read error after settlement.
+      child.stderr?.once('error', () => {})
+      child.stderr?.destroy()
+      resolve({ code: result.code, signal: result.signal, error: result.error, launchDiagnostic })
+    }
+    const timer = setTimeout(
+      () => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // Already gone.
+        }
+        finish({ code: null, signal: 'timeout', error: false })
+      },
+      captureMacLaunchStatus ? Math.max(0, timeoutMs - (performance.now() - launchedAt)) : timeoutMs
+    )
     child.once('error', () => finish({ code: null, signal: null, error: true }))
-    child.once('exit', (code, signal) => finish({ code, signal, error: false }))
+    child.once(captureMacLaunchStatus ? 'close' : 'exit', (code, signal) =>
+      finish({ code, signal, error: false }, true)
+    )
   })
 }
 

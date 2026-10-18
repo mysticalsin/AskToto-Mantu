@@ -67,7 +67,7 @@ import {
 } from './golden-flows/navigation-guard-rows.mjs'
 import { initialOverlayStabilityRows, runPackagedOverlayStabilityRows } from './golden-flows/overlay-stability-rows.mjs'
 import { initialRightEdgeHideRows, runPackagedRightEdgeHideRows } from './golden-flows/right-edge-hide-rows.mjs'
-import { initialRvRows, RV_BOOT_ROW_ID, runPackagedRvRows } from './golden-flows/reveal-rows.mjs'
+import { initialRvRows, processOutcome, RV_BOOT_ROW_ID, runPackagedRvRows } from './golden-flows/reveal-rows.mjs'
 import { AUDIT_POLL_MS, isOverlayUrl, parseAuditLog, readAuditLog } from './golden-flows/smoke-support.mjs'
 import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivors } from './owned-processes.mjs'
 
@@ -326,12 +326,13 @@ async function bootObservation({ port, auditLogPath }) {
  * or `launchctl setenv` when that is refused; the CDP port rides `--args`. The row records which method
  * carried it. It runs before the main smoke launch, in its own profile, and quits the app it started.
  */
-async function runBootLaunchActivateRow({ target, installRoot, platform, rows }) {
+export async function runBootLaunchActivateRow({ target, installRoot, platform, rows }) {
   const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-boot-'))
   const auditLogPath = join(profile, 'logs', 'audit.log')
   const launchctlKeys = []
   let port = null
   let method = null
+  const launchAttempts = { openEnv: null, launchctlOpen: null }
   const observation = {
     precondition: null,
     rendererReady: false,
@@ -344,7 +345,15 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
     port = await freeLoopbackPort()
     const appArgs = ['--args', `--remote-debugging-port=${port}`]
     method = 'open-env'
-    let launched = await runProcess('open', ['-a', target, '--env', `ASKTOTO_USERDATA=${profile}`, ...appArgs], 20_000)
+    let launched = await runProcess(
+      'open',
+      ['-a', target, '--env', `ASKTOTO_USERDATA=${profile}`, ...appArgs],
+      20_000,
+      {
+        captureMacLaunchStatus: true
+      }
+    )
+    launchAttempts.openEnv = processOutcome(launched)
     if (launched.error || launched.code !== 0) {
       method = 'launchctl-setenv'
       const set = await runProcess('launchctl', ['setenv', 'ASKTOTO_USERDATA', profile], 10_000)
@@ -353,7 +362,8 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
           'neither open --env nor launchctl setenv could pass the profile env through LaunchServices'
       } else {
         launchctlKeys.push('ASKTOTO_USERDATA')
-        launched = await runProcess('open', ['-a', target, ...appArgs], 20_000)
+        launched = await runProcess('open', ['-a', target, ...appArgs], 20_000, { captureMacLaunchStatus: true })
+        launchAttempts.launchctlOpen = processOutcome(launched)
         if (launched.error || launched.code !== 0)
           observation.precondition = 'open could not launch the app with the CDP port'
       }
@@ -411,6 +421,7 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
     status: verdict.status,
     evidence: {
       method,
+      launchAttempts,
       rendererReady: observation.rendererReady,
       activateReveals: observation.activateReveals,
       parked: observation.parked,
