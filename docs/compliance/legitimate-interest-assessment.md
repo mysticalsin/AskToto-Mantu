@@ -23,8 +23,8 @@ evidence using the [DPIA](dpia.md) and [recording policy](recording-policy.md).
 The Qwen3.5 0.8B default is bundled with its GGUF/projector pair (763,759,712 bytes).
 Optional Qwen3.5 4B requires explicit selection and a first-use download (3,584,533,344 bytes)
 into the profile. Local AI is off by default and existing selections are preserved; hardware capacity
-does not automatically select a larger model. Immutable upstream revisions and byte-size/SHA-256
-checks protect the payload. The compact default is available offline on supported hardware; optional
+does not automatically select a larger model. Model downloads use commit-pinned upstream revisions
+and byte-size/SHA-256 checks to validate the payload. The compact default is available offline on supported hardware; optional
 4B offline use requires pre-placing verified files. A corrupt packaged default requires installer repair.
 These source contracts do not qualify any historical release bytes or rewritten source.
 
