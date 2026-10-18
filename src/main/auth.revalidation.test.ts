@@ -53,6 +53,8 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
 
   beforeEach(async () => {
     vi.resetModules()
+    auditLog = (await import('./logger')).auditLog
+    vi.mocked(auditLog).mockClear()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-18T12:00:00.000Z'))
     root = mkdtempSync(join(tmpdir(), 'asktoto-auth-revalidation-'))
@@ -69,7 +71,6 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
     silent = vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenSilent')
     await writeSession()
     auth = await import('./auth')
-    auditLog = (await import('./logger')).auditLog
     teardown = vi.fn<() => void>()
     auth.setSessionClearedHandler(teardown)
   })
