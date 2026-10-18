@@ -10,6 +10,29 @@ const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'build.yml'), 'utf8').replace(/\r\n/g, '\n')
 const project = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
 
+function expectOutcomeEnvironmentBindings(producer: string): void {
+  expect(producer).toMatch(
+    /pipelineOutcome:\s*env\.METIS_CI_PIPELINE_OUTCOME\s*,\s*auditOutcome:\s*env\.METIS_CI_AUDIT_OUTCOME/
+  )
+}
+
+describe('actual diagnostic outcome environment bindings', () => {
+  it('accepts the real producer across formatter whitespace', () => {
+    const producer = readFileSync(join(root, 'scripts', 'ci', 'root-report-diagnostic.mjs'), 'utf8')
+    expectOutcomeEnvironmentBindings(producer)
+  })
+
+  it.each([
+    ['METIS_CI_PIPELINE_OUTCOME', 'METIS_CI_AUDIT_OUTCOME'],
+    ['METIS_CI_AUDIT_OUTCOME', 'METIS_CI_PIPELINE_OUTCOME']
+  ])('rejects substituting the actual %s binding with %s', (before, after) => {
+    const producer = readFileSync(join(root, 'scripts', 'ci', 'root-report-diagnostic.mjs'), 'utf8')
+    expectOutcomeEnvironmentBindings(producer)
+    expect(producer.split(before)).toHaveLength(2)
+    expect(() => expectOutcomeEnvironmentBindings(producer.replace(before, after))).toThrow()
+  })
+})
+
 function qualityJob(source = workflow): string {
   const lines = source.split('\n')
   const header = '  quality:'
