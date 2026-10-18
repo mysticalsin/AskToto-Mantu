@@ -2,7 +2,7 @@ name: Métis 2.0 promotion barrier
 
 on:
   push:
-    branches: [fix/metis-2.0-promotion-acceptance]
+    branches: [fix/metis-2.0-promotion-acceptance, fix/metis-2.0-acceptance-selection]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -28,4 +28,4 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Verify the publisher state machine and 2.0 fail-closed contract
-        run: npx vitest run scripts/qa/publish-dual-release.test.ts scripts/publish-release.test.ts
+        run: npx vitest run scripts/qa/metis-2.0-acceptance.test.ts scripts/qa/publish-dual-release.test.ts scripts/publish-release.test.ts

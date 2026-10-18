@@ -220,7 +220,11 @@ describe('dual repository promotion', () => {
     publish
   }) => {
     const h = harness()
-    const result = await run(h, { version, publish })
+    const result = await run(h, {
+      version,
+      publish,
+      acceptanceSelection: { authorized: true, verdict: 'PASS' }
+    })
     expect(result.ok).toBe(false)
     expect(result.code).toBe('metis-2.0-acceptance-required')
     expect(h.events).toEqual([])
