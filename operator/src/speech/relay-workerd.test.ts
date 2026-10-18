@@ -453,12 +453,14 @@ describe('workerd fixture initialization', () => {
     const held = new Promise<void>((resolve) => { release = resolve })
     const reached = new Promise<void>((resolve) => { entered = resolve })
     let disposed = false
+    let owned: Miniflare | undefined
     const dispose = Miniflare.prototype.dispose
     const disposeSpy = vi.spyOn(Miniflare.prototype, 'dispose').mockImplementation(async function (this: Miniflare) {
       await dispose.call(this)
       disposed = true
     })
-    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async () => {
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (this: Miniflare) {
+      owned = this
       entered()
       await held
       throw refusal
@@ -466,19 +468,36 @@ describe('workerd fixture initialization', () => {
     const phases = vi.spyOn(console, 'info').mockImplementation(() => {})
     const owner = createFixtureOwner(controller.signal)
     const pending = makeRuntime('deepgram-via-gateway', owner)
+    let releaseBody!: () => void
+    const body = new Promise<void>((resolve) => { releaseBody = resolve })
     try {
       await reached
       controller.abort(refusal)
       release()
       await expect(pending).rejects.toBe(refusal)
-      await owner.settle(pending)
+      let settled = false
+      const settlement = owner.settle(pending, body).then(() => { settled = true })
+      await disposeSpy.mock.results[0].value
       expect(disposeSpy).toHaveBeenCalledOnce()
       expect(disposed).toBe(true)
+      expect(settled).toBe(false)
+      expect(() => owner.check()).toThrow(refusal)
+      if (!owned) throw new Error('Expected the canceled fixture to own its real runtime')
+      const dispatchSpy = vi.spyOn(owned, 'dispatchFetch')
+      await expect(dispatchOwnedRequest(owner, owned, {
+        license: 'not-used', now: Date.now(), path: '/v1/speech/capability', method: 'POST'
+      })).rejects.toBe(refusal)
+      expect(dispatchSpy).not.toHaveBeenCalled()
+      dispatchSpy.mockRestore()
+      releaseBody()
+      await settlement
+      expect(settled).toBe(true)
       expect(phases.mock.calls.filter(([label]) => label === '[relay-fixture-phase]').map(([, value]) => value.phase))
         .toEqual(['bundle', 'runtime'])
     } finally {
       release()
-      await owner.settle(pending)
+      releaseBody()
+      await owner.settle(pending, body)
       phases.mockRestore()
       databaseSpy.mockRestore()
       disposeSpy.mockRestore()
