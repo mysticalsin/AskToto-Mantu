@@ -1,0 +1,35 @@
+name: Focused multilingual listen tests
+
+on:
+  push:
+    branches:
+      - fix/multilingual-question-detection
+    paths:
+      - src/renderer/src/lib/listen.test.ts
+      - src/renderer/src/lib/listen.ts
+      - .github/workflows/listen-question-focused.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - src/renderer/src/lib/listen.test.ts
+      - src/renderer/src/lib/listen.ts
+      - .github/workflows/listen-question-focused.yml
+
+permissions:
+  contents: read
+
+jobs:
+  listen-question-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - run: ./node_modules/.bin/vitest run src/renderer/src/lib/listen.test.ts
