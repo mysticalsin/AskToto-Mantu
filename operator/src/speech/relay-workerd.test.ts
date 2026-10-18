@@ -517,6 +517,9 @@ describe('workerd fixture initialization', () => {
     const pending = makeRuntime('deepgram-via-gateway', owner)
     try {
       await expect(pending).rejects.toMatchObject({ errors: [refusal, cleanupRefusal] })
+      const combined = await pending.catch((error) => error)
+      expect(combined.errors[0]).toBe(refusal)
+      expect(combined.errors[1]).toBe(cleanupRefusal)
       await expect(owner.settle(pending)).rejects.toBe(cleanupRefusal)
       expect(disposeSpy).toHaveBeenCalledOnce()
     } finally {
