@@ -80,14 +80,15 @@ describe('actual exposed draft preload transport', () => {
     expect(electronBoundary.invoke.mock.calls[0]?.[1]).toBe(payload)
   })
 
-  it.each([undefined, null, new Error('Synthetic private preload refusal')])(
-    'preserves an external invoke rejection without claiming saved (%s)',
-    async (refusal) => {
-      electronBoundary.invoke.mockRejectedValueOnce(refusal)
-      await expect(exposedDraftBridge()(payload)).rejects.toBe(refusal)
-      expect(electronBoundary.invoke).toHaveBeenCalledExactlyOnceWith(IPC.saveDraftTranscript, payload)
-    }
-  )
+  it.each([
+    undefined,
+    null,
+    new Error('Synthetic private preload refusal')
+  ])('preserves an external invoke rejection without claiming saved (%s)', async (refusal) => {
+    electronBoundary.invoke.mockRejectedValueOnce(refusal)
+    await expect(exposedDraftBridge()(payload)).rejects.toBe(refusal)
+    expect(electronBoundary.invoke).toHaveBeenCalledExactlyOnceWith(IPC.saveDraftTranscript, payload)
+  })
 })
 
 // The actual index registration and all seven disconnected-wiring negatives remain in rebuild-waves.

@@ -398,30 +398,30 @@ function normalizeMutationSource(source: string): string {
 }
 
 describe('QA rebuild contracts — Wave 1 provisional strip', () => {
-  it.each(['\n', '\r\n'])(
-    'connects the consumed draft registration and refuses disconnected production dependencies with %j newlines',
-    (newline) => {
-      expect(draftRegistrationConnected(mainSource)).toBe(true)
-      const source = normalizeMutationSource(mainSource.text.replace(/\r?\n/g, newline))
-      expect(draftRegistrationConnected(parseInlineTypeScript(source))).toBe(true)
-      const mutations = [
-        ["'./ipc/draft-transcript-ipc'", "'./disconnected-draft-handler'"],
-        ['  captureAuthSessionBoundary,', '  captureAuthSessionBoundary as disconnectedAuthBoundary,'],
-        ['  registerDraftTranscriptIpc({', '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'],
-        ['  registerDraftTranscriptIpc({', '  registerDraftTranscriptIpc({})\n  registerDraftTranscriptIpc({'],
-        [
-          '    captureDraftSettingsBoundary,\n    saveDraftTranscript',
-          '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'
-        ],
-        ['    saveDraftTranscript\n  })', '    saveDraftTranscript: saveMeeting\n  })'],
-        ['  registerDraftTranscriptIpc({', '  const getSettings = () => ({})\n  registerDraftTranscriptIpc({']
-      ]
-      for (const [before, after] of mutations) {
-        expect(source).toContain(before)
-        expect(draftRegistrationConnected(parseInlineTypeScript(source.replace(before, after)))).toBe(false)
-      }
+  it.each([
+    '\n',
+    '\r\n'
+  ])('connects the consumed draft registration and refuses disconnected production dependencies with %j newlines', (newline) => {
+    expect(draftRegistrationConnected(mainSource)).toBe(true)
+    const source = normalizeMutationSource(mainSource.text.replace(/\r?\n/g, newline))
+    expect(draftRegistrationConnected(parseInlineTypeScript(source))).toBe(true)
+    const mutations = [
+      ["'./ipc/draft-transcript-ipc'", "'./disconnected-draft-handler'"],
+      ['  captureAuthSessionBoundary,', '  captureAuthSessionBoundary as disconnectedAuthBoundary,'],
+      ['  registerDraftTranscriptIpc({', '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'],
+      ['  registerDraftTranscriptIpc({', '  registerDraftTranscriptIpc({})\n  registerDraftTranscriptIpc({'],
+      [
+        '    captureDraftSettingsBoundary,\n    saveDraftTranscript',
+        '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'
+      ],
+      ['    saveDraftTranscript\n  })', '    saveDraftTranscript: saveMeeting\n  })'],
+      ['  registerDraftTranscriptIpc({', '  const getSettings = () => ({})\n  registerDraftTranscriptIpc({']
+    ]
+    for (const [before, after] of mutations) {
+      expect(source).toContain(before)
+      expect(draftRegistrationConnected(parseInlineTypeScript(source.replace(before, after)))).toBe(false)
     }
-  )
+  })
 
   it('executes the registered draft schema, sender/auth gates and provisional filtering with typed dependencies', async () => {
     type Dependencies = Parameters<typeof registerDraftTranscriptIpc>[0]
