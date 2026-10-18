@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { convertV4MiniflareOptions, Miniflare, type WebSocket as WorkerdWebSocket } from 'miniflare'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { d1Store } from '../d1'
 import { hmacHex } from '../hmac'
 import { OPERATOR_HMAC_HEADERS, OPERATOR_LICENSE_HEADER, ingestCanonical } from '../../../src/shared/operator-hmac'
@@ -337,6 +337,95 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
     .run()
   return { runtime, database, now, license: license.token, routeId, modelId }
 }
+
+describe('workerd fixture initialization', () => {
+  it('initializes every real schema object in one ordered D1 batch before seeding', async () => {
+    const directory = dirname(fileURLToPath(import.meta.url))
+    const statements = parseStatements(readFileSync(join(directory, '../../schema.sql'), 'utf8')) as string[]
+    const preparedQueries = new WeakMap<object, string>()
+    const preparedBeforeBatchSettled: string[] = []
+    const batches: string[][] = []
+    let batchSettled = false
+    let batchResults: Array<{ success: boolean }> = []
+    const getDatabase = Miniflare.prototype.getD1Database
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (this: Miniflare, ...args) {
+      const database = await getDatabase.apply(this, args)
+      return new Proxy(database, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target)
+          if (property === 'prepare') return new Proxy(value, {
+            apply(method, _receiver, argumentsList) {
+              const query = argumentsList[0] as string
+              const statement = Reflect.apply(method, target, argumentsList)
+              preparedQueries.set(statement, query)
+              if (!batchSettled) preparedBeforeBatchSettled.push(query)
+              return statement
+            }
+          })
+          if (property === 'batch') return new Proxy(value, {
+            async apply(method, _receiver, argumentsList) {
+              batches.push((argumentsList[0] as object[]).map((statement) => preparedQueries.get(statement) ?? 'unknown'))
+              const results = await Reflect.apply(method, target, argumentsList)
+              batchResults = results
+              batchSettled = true
+              return results
+            }
+          })
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
+    })
+    let fixture: Awaited<ReturnType<typeof makeRuntime>> | undefined
+    try {
+      fixture = await makeRuntime()
+      expect(statements).toHaveLength(55)
+      expect(batches).toEqual([statements])
+      expect(preparedBeforeBatchSettled).toEqual(statements)
+      expect(batchResults).toHaveLength(statements.length)
+      expect(batchResults.every((result) => result.success)).toBe(true)
+      const database = await getDatabase.call(fixture.runtime, 'DB')
+      const objects = await database.prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all()
+      const expectedObjects = statements.map((statement) => {
+        const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS (\w+)/.exec(statement)
+        if (!match) throw new Error('Unexpected fixture schema statement')
+        return { type: match[1].toLowerCase(), name: match[2] }
+      }).sort((left, right) => left.name.localeCompare(right.name))
+      expect(objects.results).toEqual(expectedObjects)
+      expect(await database.prepare("SELECT id FROM tiers WHERE id = 'metis'").first()).toEqual({ id: 'metis' })
+      expect(await database.prepare('SELECT approval FROM seats WHERE device_id = ?').bind(DEVICE).first())
+        .toEqual({ approval: 'approved' })
+    } finally {
+      databaseSpy.mockRestore()
+      await fixture?.runtime.dispose()
+    }
+  })
+
+  it('awaits owned runtime disposal before preserving an initialization rejection', async () => {
+    const refusal = new Error('Synthetic fixture database initialization refusal')
+    let owned: Miniflare | undefined
+    let disposed = false
+    const dispose = Miniflare.prototype.dispose
+    const disposeSpy = vi.spyOn(Miniflare.prototype, 'dispose').mockImplementation(async function (this: Miniflare) {
+      await dispose.call(this)
+      disposed = true
+    })
+    const databaseSpy = vi.spyOn(Miniflare.prototype, 'getD1Database').mockImplementation(async function (this: Miniflare) {
+      owned = this
+      throw refusal
+    })
+    try {
+      await expect(makeRuntime()).rejects.toBe(refusal)
+      expect(disposeSpy).toHaveBeenCalledOnce()
+      expect(disposeSpy.mock.instances[0]).toBe(owned)
+      expect(disposed).toBe(true)
+    } finally {
+      databaseSpy.mockRestore()
+      disposeSpy.mockRestore()
+      // The pre-repair factory leaks on setup rejection; keep its tests-first failure owned.
+      if (owned && !disposed) await dispose.call(owned)
+    }
+  })
+})
 
 async function signedRequest(input: {
   license: string
