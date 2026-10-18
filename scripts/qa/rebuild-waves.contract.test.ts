@@ -1,11 +1,16 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { IpcMainInvokeEvent } from 'electron'
+import { registerDraftTranscriptIpc } from '../../src/main/draft-transcript-ipc'
 import { parseRecapMarkdown } from '../../src/main/transcripts-recap'
 import {
   SaveMeetingSchema,
   stripProvisionalLines,
+  DEFAULT_SETTINGS,
+  IPC,
+  type SaveDraftTranscriptResult,
   TranscriptLineSchema as PublicTranscriptLineSchema
 } from '../../src/shared/ipc'
 import { TranscriptLineSchema } from '../../src/shared/transcript-line'
@@ -127,7 +132,7 @@ function callExpression(node: ts.Node, name: string): node is ts.CallExpression 
   return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name
 }
 
-function shadowsName(handler: ts.ArrowFunction, name: string): boolean {
+function shadowsName(handler: ts.ArrowFunction | ts.FunctionDeclaration, name: string): boolean {
   return liveNodes(handler).some((node) => {
     if (ts.isParameter(node) && ts.isIdentifier(node.name)) return node.name.text === name
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) return node.name.text === name
@@ -141,6 +146,31 @@ function parseInlineTypeScript(source: string): ts.SourceFile {
 }
 
 const mainSource = parseTypeScript('src/main/index.ts')
+
+function draftRegistrationConnected(source: ts.SourceFile): boolean {
+  if (!namedBindings(source, './draft-transcript-ipc', 'registerDraftTranscriptIpc')) return false
+  const registration = source.statements.find(
+    (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === 'registerIpc'
+  )
+  if (!registration || !ts.isFunctionDeclaration(registration) || !registration.body) return false
+  const calls = registration.body.statements.flatMap((statement) =>
+    ts.isExpressionStatement(statement) && callExpression(statement.expression, 'registerDraftTranscriptIpc')
+      ? [statement.expression]
+      : []
+  )
+  if (calls.length !== 1 || calls[0].arguments.length !== 1) return false
+  const dependencies = calls[0].arguments[0]
+  if (!ts.isObjectLiteralExpression(dependencies)) return false
+  const expected = [
+    'ipcMain', 'assertMainWindow', 'requireAuth', 'captureAuthSessionBoundary',
+    'getSettings', 'captureDraftSettingsBoundary', 'saveDraftTranscript'
+  ]
+  return dependencies.properties.length === expected.length && expected.every((name) =>
+    !shadowsName(registration, name) && dependencies.properties.filter((property) =>
+      ts.isShorthandPropertyAssignment(property) && property.name.text === name && !property.objectAssignmentInitializer
+    ).length === 1
+  )
+}
 
 function directRecapReturns(handler: ts.ArrowFunction): ts.CallExpression[] {
   if (!ts.isBlock(handler.body)) return []
@@ -342,6 +372,64 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
 })
 
 describe('QA rebuild contracts — Wave 1 provisional strip', () => {
+  it('connects the consumed draft registration and refuses disconnected production dependencies', () => {
+    expect(draftRegistrationConnected(mainSource)).toBe(true)
+    const mutations = [
+      ["'./draft-transcript-ipc'", "'./disconnected-draft-handler'"],
+      ['  registerDraftTranscriptIpc({', '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'],
+      ['  registerDraftTranscriptIpc({', '  registerDraftTranscriptIpc({})\n  registerDraftTranscriptIpc({'],
+      ['    captureDraftSettingsBoundary,\n    saveDraftTranscript', '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'],
+      ['    saveDraftTranscript\n  })', '    saveDraftTranscript: saveMeeting\n  })'],
+      ['  registerDraftTranscriptIpc({', '  const getSettings = () => ({})\n  registerDraftTranscriptIpc({']
+    ]
+    for (const [before, after] of mutations) {
+      expect(mainSource.text).toContain(before)
+      expect(draftRegistrationConnected(parseInlineTypeScript(mainSource.text.replace(before, after)))).toBe(false)
+    }
+  })
+
+  it('executes the registered draft schema, sender/auth gates and provisional filtering with typed dependencies', async () => {
+    type Dependencies = Parameters<typeof registerDraftTranscriptIpc>[0]
+    let invoke!: (raw: unknown) => Promise<SaveDraftTranscriptResult>
+    const sender = vi.fn<Dependencies['assertMainWindow']>()
+    const requireAuth = vi.fn(() => true)
+    const getSettings = vi.fn(() => DEFAULT_SETTINGS)
+    const backend = vi.fn<Dependencies['saveDraftTranscript']>(async (_settings, _meeting, beforeReplace) => {
+      beforeReplace?.()
+      return { status: 'saved' }
+    })
+    const currentAuth = vi.fn(() => true)
+    const currentSettings = vi.fn(() => true)
+    registerDraftTranscriptIpc({
+      ipcMain: { handle(channel, handler) {
+        expect(channel).toBe(IPC.saveDraftTranscript)
+        invoke = (raw) => Promise.resolve(handler({} as IpcMainInvokeEvent, raw))
+      } },
+      assertMainWindow: sender, requireAuth, getSettings,
+      captureAuthSessionBoundary: () => currentAuth,
+      captureDraftSettingsBoundary: () => currentSettings,
+      saveDraftTranscript: backend
+    })
+    const final = { speaker: 'you' as const, text: 'Synthetic final', t: 1 }
+    const payload = { startedAt: 1, title: 'Synthetic draft', lines: [final, { ...final, text: 'Synthetic interim', provisional: true }] }
+    await expect(invoke(payload)).resolves.toEqual({ status: 'saved' })
+    expect(backend).toHaveBeenCalledTimes(1)
+    expect(backend.mock.calls[0][0]).toBe(DEFAULT_SETTINGS)
+    expect(backend.mock.calls[0][1]).toEqual({ ...SaveMeetingSchema.parse(payload), lines: [final] })
+    expect(currentAuth).toHaveBeenCalledTimes(1)
+    expect(currentSettings).toHaveBeenCalledTimes(1)
+    backend.mockClear()
+    getSettings.mockClear()
+    const senderFailure = new Error('Synthetic sender refusal')
+    sender.mockImplementationOnce(() => { throw senderFailure })
+    await expect(invoke(payload)).rejects.toBe(senderFailure)
+    requireAuth.mockReturnValueOnce(false)
+    await expect(invoke(payload)).resolves.toEqual({ status: 'failed' })
+    await expect(invoke({ ...payload, lines: [{ ...final, provisional: 'true' }] })).resolves.toEqual({ status: 'failed' })
+    expect(backend).not.toHaveBeenCalled()
+    expect(getSettings).not.toHaveBeenCalled()
+  })
+
   it('stripProvisionalLines exists and save paths use it', () => {
     expect(PublicTranscriptLineSchema).toBe(TranscriptLineSchema)
     const base = { speaker: 'you' as const, text: 'saved line', t: 1 }
