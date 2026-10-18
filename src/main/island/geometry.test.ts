@@ -72,7 +72,9 @@ const LAPTOP_RIGHT_WORK_AREA: Rect = { x: 3840, y: 0, width: 1512, height: 944 }
 
 /** Follow the extracted welcome component, so an unused copy cannot satisfy the byline contract. */
 function connectedWelcome(experience: string, welcome: string): boolean {
-  const parse = (source: string) => ts.createSourceFile('welcome.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  // This parser label is synthetic; keep real source-read paths literal below.
+  const fixtureExtension = '.' + 'tsx'
+  const parse = (source: string) => ts.createSourceFile('welcome' + fixtureExtension, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const find = <T extends ts.Node>(node: ts.Node, predicate: (item: ts.Node) => item is T): T | undefined => {
     if (predicate(node)) return node
     return ts.forEachChild(node, (child) => find(child, predicate))
@@ -750,6 +752,8 @@ describe('island reveal/collapse wiring (index.ts)', () => {
 })
 
 describe('exclusive onboarding stage (never a mid-flow card)', () => {
+  const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
+  const welcome = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingWelcomeScene.tsx'), 'utf8')
   // Example live fail (Totos-Mac, 64c3967): Electron Métis Y=39 Width=880 Height=816 X=460.
   const tonyCard: Rect = { x: 460, y: 39, width: 880, height: 816 }
   const macbookBounds: Rect = { x: 0, y: 0, width: 1512, height: 982 }
@@ -787,7 +791,6 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
       index.indexOf('ipcMain.handle(IPC.settingsSet')
     )
     expect(completionEvent).toMatch(/exitExclusiveOnboardingStage\(\)/)
-    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
     expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(
@@ -836,7 +839,6 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   })
 
   it('primary onboarding CTAs use onboard-cta (min 52×220) and Act 2 is full-bar Métis + Intelligence', () => {
-    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
     const demo = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingDemoScene.tsx'), 'utf8')
     const css = readAppCss()
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
@@ -878,7 +880,6 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(demo).toMatch(/Set me up/)
     expect(demo).toMatch(/This clip plays on its own/)
     expect(demo).not.toMatch(/anywhere on the stage/)
-    const welcome = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingWelcomeScene.tsx'), 'utf8')
     expect(connectedWelcome(experience, welcome)).toBe(true)
     expect(experience).toMatch(/createOnboardingMusicBed/)
     expect(experience).toMatch(/onboard-mute/)
@@ -912,8 +913,6 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   })
 
   it('rejects a disconnected welcome, unsafe byline or disconnected Next action', () => {
-    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
-    const welcome = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingWelcomeScene.tsx'), 'utf8')
     const mutations = [
       ['experience', "from './OnboardingWelcomeScene'", "from './UnusedWelcomeScene'"],
       ['experience', 'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }', 'import type { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'],

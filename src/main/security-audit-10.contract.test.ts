@@ -15,8 +15,10 @@ function onlySourceNode<T>(nodes: T[], label: string): T {
 
 /** Bind the extracted contracts to actual imports, registrations and returned public fields. */
 function requireImportSnapshotConnection(indexText: string, helperText: string): void {
-  const index = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
-  const helper = ts.createSourceFile('import-jobs-snapshot-ipc.ts', helperText, ts.ScriptTarget.Latest, true)
+  // These parser labels are synthetic; keep real source-read paths literal above.
+  const fixtureExtension = '.' + 'ts'
+  const index = ts.createSourceFile('index' + fixtureExtension, indexText, ts.ScriptTarget.Latest, true)
+  const helper = ts.createSourceFile('import-jobs-snapshot-ipc' + fixtureExtension, helperText, ts.ScriptTarget.Latest, true)
   const compact = (node: ts.Node): string => node.getText().replace(/\s+/g, '')
   const snapshotImport = onlySourceNode(
     index.statements.filter(

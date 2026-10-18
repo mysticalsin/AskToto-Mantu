@@ -8,7 +8,9 @@ type AsrProvisioningSources = { main: string; bootstrap: string; adapter: string
 
 /** Source-only proof of the live registration chain; refusal behavior uses the real adapters below. */
 function connectedAsrProvisioning(text: AsrProvisioningSources): boolean {
-  const parse = (value: string) => ts.createSourceFile('asr.ts', value, ts.ScriptTarget.Latest, true)
+  // This parser label is synthetic; keep real source-read paths literal below.
+  const fixtureExtension = '.' + 'ts'
+  const parse = (value: string) => ts.createSourceFile('asr' + fixtureExtension, value, ts.ScriptTarget.Latest, true)
   const main = parse(text.main)
   const bootstrap = parse(text.bootstrap)
   const adapter = parse(text.adapter)

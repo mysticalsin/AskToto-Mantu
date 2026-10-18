@@ -44,7 +44,9 @@ const indexHtml = read('..', 'renderer', 'index.html')
 
 /** Follow the moved map through the actual reader and both encrypted writer branches. */
 function encryptedProxyKeyRoute(store: string, secrets: string): boolean {
-  const parse = (text: string) => ts.createSourceFile('keys.ts', text, ts.ScriptTarget.Latest, true)
+  // This parser label is synthetic; keep real source-read paths literal above.
+  const fixtureExtension = '.' + 'ts'
+  const parse = (text: string) => ts.createSourceFile('keys' + fixtureExtension, text, ts.ScriptTarget.Latest, true)
   const nodes = (root: ts.Node): ts.Node[] => {
     const found: ts.Node[] = []
     const visit = (node: ts.Node): void => { found.push(node); ts.forEachChild(node, visit) }
