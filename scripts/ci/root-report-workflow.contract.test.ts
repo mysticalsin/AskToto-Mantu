@@ -92,7 +92,8 @@ function expectFailureAuditConnection(source: string): string {
   expect(pipeline).toContain(' && npm test')
   expect(pipeline.match(/\bnpm test\b/g)).toHaveLength(1)
   expect(pipeline).not.toMatch(/continue-on-error|\|\||npx\s+vitest/)
-  expect(job).not.toMatch(/upload-artifact|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|base64/)
+  const retention = namedStep(job, 'Retain original root test report')
+  expect(job.replace(retention, '')).not.toMatch(/upload-artifact|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|base64/)
   expect(job.indexOf(pipeline)).toBeLessThan(job.indexOf(audit))
   return gate
 }
@@ -130,6 +131,78 @@ describe('original strict skip audit after pipeline failure', () => {
     const audit = namedStep(qualityJob(), 'Audit declared skips from root report')
     const changed = audit.replace(/^ {8}if: .+$/m, `        ${replacement}`)
     expect(() => expectFailureAuditConnection(workflow.replace(audit, changed))).toThrow()
+  })
+})
+
+function expectRootArtifactConnection(source: string): string {
+  const job = qualityJob(source)
+  const retention = namedStep(job, 'Retain original root test report')
+  const gate = "!cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure')"
+  expect(retention).toContain(`        if: \${{ ${gate} }}\n`)
+  expect(retention).toContain('        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n')
+  expect(retention.match(/^ {8}uses:/gm)).toHaveLength(1)
+  expect(retention).toContain('          name: metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}\n')
+  expect(retention).toContain('          path: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json\n')
+  expect(retention).toContain('          if-no-files-found: error\n')
+  expect(retention).toContain('          retention-days: 1\n')
+  expect(retention).toContain('          overwrite: false\n')
+  expect(retention.match(/^ {10}[A-Za-z][A-Za-z0-9-]*:/gm)).toEqual([
+    '          name:', '          path:', '          if-no-files-found:', '          retention-days:', '          overwrite:'
+  ])
+  expect(retention).not.toMatch(/^\s+(?:run|env|shell):|continue-on-error|secrets\.|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|base64/m)
+  expect(job.indexOf(namedStep(job, 'Run complete test pipeline'))).toBeLessThan(job.indexOf(retention))
+  expect(job.indexOf(namedStep(job, 'Audit declared skips from root report'))).toBeLessThan(job.indexOf(retention))
+  expect(job.indexOf(namedStep(job, 'Log bounded root report diagnostic'))).toBeLessThan(job.indexOf(retention))
+  expect(job.indexOf(retention)).toBeLessThan(job.indexOf('      - run: npm run check:colors'))
+  return retention
+}
+
+describe('original full root report artifact retention', () => {
+  it.each([
+    { outcome: 'success', cancelled: false, allowed: true },
+    { outcome: 'failure', cancelled: false, allowed: true },
+    { outcome: 'skipped', cancelled: false, allowed: false },
+    { outcome: 'cancelled', cancelled: false, allowed: false },
+    { outcome: '', cancelled: false, allowed: false },
+    { outcome: 'success', cancelled: true, allowed: false },
+    { outcome: 'failure', cancelled: true, allowed: false },
+    { outcome: 'skipped', cancelled: true, allowed: false },
+    { outcome: 'cancelled', cancelled: true, allowed: false },
+    { outcome: '', cancelled: true, allowed: false }
+  ])('retains the original report for producer=$outcome cancellation=$cancelled', ({ outcome, cancelled, allowed }) => {
+    const retention = expectRootArtifactConnection(workflow)
+    const actual = retention.match(/^ {8}if: \$\{\{ (.+) \}\}$/m)![1]
+    const evaluate = new Function('cancelled', 'steps', `return (${actual})`) as
+      (cancelled: () => boolean, steps: { complete_tests: { outcome: string } }) => boolean
+    expect(evaluate(() => cancelled, { complete_tests: { outcome } })).toBe(allowed)
+  })
+
+  it.each([
+    ['success-only upload', "if: ${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}", 'if: success()'],
+    ['unpinned action', 'upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', 'upload-artifact@v4'],
+    ['foreign attempt', 'path: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json', 'path: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-999-${{ matrix.os }}.json'],
+    ['broad upload', 'path: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json', 'path: ${{ runner.temp }}/**'],
+    ['hidden extra path', '          path:', '          path: ${{ github.workspace }}/private\n          path:'],
+    ['missing report ignored', 'if-no-files-found: error', 'if-no-files-found: ignore'],
+    ['longer retention', 'retention-days: 1', 'retention-days: 14'],
+    ['overwrite permitted', 'overwrite: false', 'overwrite: true'],
+    ['failure masked', '        with:', '        continue-on-error: true\n        with:'],
+    ['raw report printing', '        with:', '        run: cat report.json\n        with:'],
+    ['extra credential', '        with:', '        env:\n          TOKEN: ${{ secrets.EXTRA_TOKEN }}\n        with:']
+  ])('rejects retention regression: %s', (_label, before, after) => {
+    const retention = expectRootArtifactConnection(workflow)
+    expect(retention.split(before)).toHaveLength(2)
+    expect(() => expectRootArtifactConnection(workflow.replace(retention, retention.replace(before, after)))).toThrow()
+  })
+
+  it('uses the existing root reporter and isolated fixture home without introducing quality-job secrets', () => {
+    expectRootArtifactConnection(workflow)
+    const config = readFileSync(join(root, 'vitest.config.ts'), 'utf8')
+    expect(config).toContain('const sandbox = createHermeticSandbox()')
+    expect(config).toContain('const hermeticHomeEnv = hermeticEnv(sandbox, {')
+    expect(config).toContain('env: hermeticHomeEnv')
+    expect(config).toContain('outputFile: { json: ciRootReportPath }')
+    expect(qualityJob()).not.toContain('secrets.')
   })
 })
 
