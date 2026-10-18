@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { countByFile, formatIsBlocking, lintablePaths, regressions } from './lint-ratchet.mjs'
 
@@ -116,6 +117,34 @@ describe('wiring', () => {
 })
 
 describe('format repair CLI admission', () => {
+  it('settles pending stdout before exiting with the original admission failure', () => {
+    const scriptPath = join(root, 'scripts', 'ci', 'lint-ratchet.mjs')
+    const output = `${'x'.repeat(128 * 1024)}\nCLI_STDOUT_FLUSHED_END\n`
+    const entrypoint = `
+      process.once('beforeExit', () => process.stdout.write('x'.repeat(128 * 1024) + '\\nCLI_STDOUT_FLUSHED_END\\n'))
+      process.argv = [process.execPath, ${JSON.stringify(scriptPath)}, 'format-patch']
+      await import(${JSON.stringify(pathToFileURL(scriptPath).href)})
+    `
+    const run = spawnSync(process.execPath, ['--input-type=module', '--eval', entrypoint], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CI: 'false',
+        GITHUB_ACTIONS: 'true',
+        RUNNER_ENVIRONMENT: 'github-hosted',
+        PATH: '',
+        Path: ''
+      },
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024
+    })
+    expect(run.error).toBeUndefined()
+    expect(run.signal).toBeNull()
+    expect(run.status).toBe(1)
+    expect(run.stderr.trim()).toBe('Format repair is restricted to GitHub-hosted CI.')
+    expect(run.stdout).toBe(output)
+  })
+
   it.each([
     { CI: 'false', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' },
     { CI: 'true', GITHUB_ACTIONS: 'false', RUNNER_ENVIRONMENT: 'github-hosted' },
