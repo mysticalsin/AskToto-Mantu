@@ -17,6 +17,7 @@ import { redactSecrets } from '@shared/redact'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
 import { crashDetail } from './infra/observability/crash-taxonomy'
+import { createImportMeetingWriteAdapters } from './import-meeting-write-adapters'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -637,6 +638,8 @@ describe('exact import attempt integration', () => {
     const api = sessionApi({ id })
     let captured: Record<string, any> | undefined
     const noop = () => undefined
+    const saveMeeting = vi.fn(() => { throw new Error('Unexpected meeting write in speaker wiring fixture') })
+    const updateMeetingRecap = vi.fn(() => { throw new Error('Unexpected recap write in speaker wiring fixture') })
     actualFunction('initializeImportJobs', {
       importJobs: null,
       wireIntelligenceIndexWork: noop,
@@ -646,6 +649,9 @@ describe('exact import attempt integration', () => {
         }
       },
       EncryptedImportJobStore: class {},
+      createImportMeetingWriteAdapters,
+      saveMeeting,
+      updateMeetingRecap,
       getSettings: () => ({ asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
       randomUUID,
       resetImportLanguageFollow: noop,
@@ -685,6 +691,8 @@ describe('exact import attempt integration', () => {
     expect(captured!.finalizeSpeakers(attempt)).toEqual(new Map([['Speaker 1', 'Speaker 1']]))
     captured!.disposeSpeakers(attempt)
     expect(api.captureImportSpeakerKey(attempt)).toBeNull()
+    expect(saveMeeting).not.toHaveBeenCalled()
+    expect(updateMeetingRecap).not.toHaveBeenCalled()
   })
 
   it('keeps live and import labels isolated and rejects stale same-job cleanup', async () => {

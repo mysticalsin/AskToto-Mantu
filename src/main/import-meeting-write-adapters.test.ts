@@ -149,6 +149,7 @@ describe('main import meeting write adapters', () => {
   ] as const)('routes the manager-owned %s guard through the adapter with %s ownership', async (kind, ownership) => {
     const f = fixture()
     const jobs = new Map<string, ImportJob>()
+    const markHeld = vi.fn(async (jobId: string) => jobs.has(jobId))
     const store: ImportJobStore = {
       async save(job, beforeReplace) {
         beforeReplace?.()
@@ -156,7 +157,7 @@ describe('main import meeting write adapters', () => {
       },
       async list() { return [...jobs.values()].map((job) => structuredClone(job)) },
       async remove(jobId) { jobs.delete(jobId) },
-      async markHeld(jobId) { return jobs.has(jobId) }
+      markHeld
     }
     let canRetain = true
     const savePort = vi.fn(f.saveMeeting)
@@ -201,7 +202,12 @@ describe('main import meeting write adapters', () => {
 
     if (ownership === 'retention' || ownership === 'retention-restored') {
       canRetain = false
-      await manager.snapshot()
+      expect(await manager.snapshot()).toMatchObject({
+        jobs: [], policyBlocked: true, heldJobIds: [job.jobId], policyHeldJobIds: [job.jobId]
+      })
+      expect(markHeld).toHaveBeenCalledWith(job.jobId)
+      expect(jobs.has(job.jobId)).toBe(true)
+      expect(manager.get(job.jobId)).toBeUndefined()
       // Restoring policy does not resume this attempt. Its held ownership must still refuse the write,
       // and the stale-error cleanup branch must preserve a non-cancelled import's existing file.
       if (ownership === 'retention-restored') canRetain = true
@@ -209,7 +215,8 @@ describe('main import meeting write adapters', () => {
     f.sink.release.resolve()
     await finalizing
 
-    expect(manager.get(job.jobId)?.state).toBe(
+    if (ownership === 'retention') expect(manager.get(job.jobId)).toBeUndefined()
+    else expect(manager.get(job.jobId)?.state).toBe(
       ownership === 'current' ? 'done' : ownership === 'cancel' ? 'cancelled' : 'policy-held'
     )
     expect(f.sink.writes).toEqual(ownership === 'current'
