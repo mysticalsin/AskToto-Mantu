@@ -965,6 +965,96 @@ describe('speech auth lease (auth module authority)', () => {
     expect(retry.isSpeechAuthLeaseCurrent(lease)).toBe(true)
   })
 
+  it('enforces interactive backoff before starting another flow, audits each failure, and resets after actual sign-in', async () => {
+    configureTenant()
+    const auth = await prepareAuth()
+    const { shell } = await import('electron')
+    const logger = await import('./logger')
+    const audit = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
+    const requireFixture = createRequire(import.meta.url)
+    const msal = requireFixture('@azure/msal-node') as typeof import('@azure/msal-node')
+    const http = requireFixture('node:http') as typeof import('node:http')
+    const ownedServers = new Set<import('node:http').Server>()
+    const originalListen = http.Server.prototype.listen
+    const listen = vi.spyOn(http.Server.prototype, 'listen').mockImplementation(function (
+      this: import('node:http').Server,
+      ...args: Parameters<typeof originalListen>
+    ) {
+      ownedServers.add(this)
+      return Reflect.apply(originalListen, this, args) as ReturnType<typeof originalListen>
+    })
+    const failure = new Error('synthetic-private-auth-failure')
+    const pkce = vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockRejectedValue(failure)
+    let callbackUrl = ''
+    let state = ''
+    const authorize = vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
+      callbackUrl = options.redirectUri || ''
+      state = options.state || ''
+      return 'https://login.example.test/authorize'
+    })
+    const token = vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockResolvedValue({
+      account: { username: 'user@example.com', name: 'Fixture' },
+      idTokenClaims: { tid: TENANT_GUID }
+    } as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>)
+    const browser = vi.spyOn(shell, 'openExternal').mockImplementation(async () => {
+      const response = await fetch(`${callbackUrl}/?code=auth-code&state=${state}`)
+      await response.text()
+      expect(response.status).toBe(200)
+    })
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const delays = [2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]
+    audit.mockClear()
+    try {
+      for (const [index, delay] of delays.entries()) {
+        expect(await auth.signIn()).toMatchObject({ ok: false, configured: true })
+        expect(auth.signInBackoffRemainingMs()).toBe(delay)
+        expect(pkce).toHaveBeenCalledTimes(index + 1)
+        expect(await auth.signIn()).toEqual({
+          ok: false, configured: true,
+          error: `Too many failed sign-in attempts. Try again in ${Math.ceil(delay / 1_000)}s.`
+        })
+        now += delay - 1
+        expect(await auth.signIn()).toEqual({
+          ok: false, configured: true, error: 'Too many failed sign-in attempts. Try again in 1s.'
+        })
+        expect(pkce).toHaveBeenCalledTimes(index + 1)
+        expect(listen).not.toHaveBeenCalled()
+        expect(authorize).not.toHaveBeenCalled()
+        expect(token).not.toHaveBeenCalled()
+        expect(browser).not.toHaveBeenCalled()
+        now += 1
+      }
+      expect(audit.mock.calls.filter(([event]) => event === 'auth.signin_failed')).toEqual(
+        delays.map((_delay, index) => ['auth.signin_failed', { reason: 'other', consecutive: index + 1 }])
+      )
+      expect(JSON.stringify(audit.mock.calls)).not.toContain(failure.message)
+
+      pkce.mockResolvedValueOnce({ verifier: 'verifier', challenge: 'challenge' })
+      expect(await auth.signIn()).toMatchObject({ ok: true, configured: true, email: 'user@example.com' })
+      expect(auth.authStatus().signedIn).toBe(true)
+      expect(auth.signInBackoffRemainingMs()).toBe(0)
+      expect(pkce).toHaveBeenCalledTimes(8)
+      expect(listen).toHaveBeenCalledTimes(1)
+      expect(authorize).toHaveBeenCalledTimes(1)
+      expect(token).toHaveBeenCalledTimes(1)
+      expect(browser).toHaveBeenCalledTimes(1)
+      expect(audit).toHaveBeenCalledWith('auth.signin', { domain: 'example.com' })
+
+      expect(await auth.signIn()).toMatchObject({ ok: false, configured: true })
+      expect(auth.signInBackoffRemainingMs()).toBe(2_000)
+      expect(audit).toHaveBeenLastCalledWith('auth.signin_failed', { reason: 'other', consecutive: 1 })
+      expect(JSON.stringify(audit.mock.calls)).not.toContain(failure.message)
+    } finally {
+      await Promise.all([...ownedServers].map((server) => new Promise<void>((resolveClose) => {
+        server.close(() => resolveClose())
+        server.closeAllConnections()
+      })))
+      clock.mockRestore()
+      listen.mockRestore()
+    }
+  })
+
   it('retires the old owner when actual sign-in replaces the in-memory session', async () => {
     configureTenant()
     await writeSessionFile()
