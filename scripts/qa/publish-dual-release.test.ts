@@ -209,6 +209,17 @@ describe('dual repository promotion', () => {
   })
 
   it.each([
+    true,
+    false
+  ])('refuses 2.0 promotion without authenticated lifecycle evidence (publish=%s)', async (publish) => {
+    const h = harness()
+    const result = await run(h, { version: '2.0.0', publish })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('metis-2.0-acceptance-required')
+    expect(calls(h)).toEqual([])
+  })
+
+  it.each([
     { manifest: [...manifest, manifest[0]] },
     { manifest: [{ ...manifest[0], name: '../secret' }] },
     { manifest: [{ ...manifest[0], name: 'latest.yml' }] },

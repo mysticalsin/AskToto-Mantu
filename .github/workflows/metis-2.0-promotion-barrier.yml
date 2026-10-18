@@ -1,0 +1,31 @@
+name: Métis 2.0 promotion barrier
+
+on:
+  push:
+    branches: [fix/metis-2.0-promotion-acceptance]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metis-2.0-promotion-barrier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publisher-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Verify the publisher state machine and 2.0 fail-closed contract
+        run: npx vitest run scripts/qa/publish-dual-release.test.ts
