@@ -20,7 +20,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runAlivePath } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
-import { observeSidecar } from './sidecar-events'
+import { observeSidecar, type ProcessGroupResolver } from './sidecar-events'
 import { captureDir, collectStallCaptures, type CaptureOutcome } from './stall-bundle'
 
 /** The ticket's "more than 10 s stale": how far past its scheduled rewrite the marker must be. */
@@ -36,8 +36,12 @@ export interface StallSamplerOptions {
   /** How often the caller rewrites run-alive.json. */
   aliveIntervalMs: number
   audit: AuditSink
-  /** Test seams only; production uses the real spawn and collector. */
-  deps?: { spawn?: typeof spawn; collect?: typeof collectStallCaptures }
+  /** Test seams only; production uses the real spawn, collector and process-group resolver. */
+  deps?: {
+    spawn?: typeof spawn
+    collect?: typeof collectStallCaptures
+    resolveProcessGroupId?: ProcessGroupResolver
+  }
 }
 
 export interface StallSampler {
@@ -81,7 +85,7 @@ export function startStallSampler(opts: StallSamplerOptions): StallSampler {
     onWatcherGone()
     return { stop: () => void (stopped = true) }
   }
-  observeSidecar('stall-watch', child, opts.audit)
+  observeSidecar('stall-watch', child, opts.audit, undefined, opts.deps?.resolveProcessGroupId)
   child.once('error', onWatcherGone)
   child.once('close', onWatcherGone)
   let partial = ''
