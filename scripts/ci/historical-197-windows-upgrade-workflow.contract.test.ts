@@ -43,6 +43,8 @@ function failedReport() {
   return report
 }
 
+const writeReport = (path: string, report: unknown) => fs.writeFile(path, `${JSON.stringify(report, null, 2)}\n`)
+
 describe('actual closed historical Windows report gate', () => {
   let root: string
   let reportPath: string
@@ -60,7 +62,7 @@ describe('actual closed historical Windows report gate', () => {
     expect(assessHistoricalUpgradeReport(report)).toBe(true)
     expect(assessClosedHistoricalWindowsReport(report, harness)).toEqual({ closed: true, accepted: true })
     expect(assessClosedHistoricalWindowsReport(report, 'e'.repeat(40))).toEqual({ closed: false, accepted: false })
-    await fs.writeFile(reportPath, JSON.stringify(report))
+    await writeReport(reportPath, report)
     expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: true, accepted: true })
   })
 
@@ -77,7 +79,7 @@ describe('actual closed historical Windows report gate', () => {
   it('retains only a genuinely closed failed result without making it acceptance', async () => {
     const report = failedReport()
     expect(assessHistoricalUpgradeReport(report)).toBe(false)
-    await fs.writeFile(reportPath, JSON.stringify(report))
+    await writeReport(reportPath, report)
     expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: true, accepted: false })
     report.accepted = true
     expect(assessClosedHistoricalWindowsReport(report, harness)).toEqual({ closed: false, accepted: false })
@@ -119,8 +121,25 @@ describe('actual closed historical Windows report gate', () => {
       { ...failedReport(), checks: [{ id: privateText, status: 'FAIL' }] }
     ]
     for (const report of variants) {
-      await fs.writeFile(reportPath, JSON.stringify(report))
+      await writeReport(reportPath, report)
       expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
+    }
+  })
+
+  it('refuses duplicate JSON properties that canonical parsing would otherwise discard', async () => {
+    const duplicateAccepted = `${JSON.stringify(successfulReport(), null, 2)}\n`.replace(
+      '  "error": null,\n', '  "error": "/private/duplicate-report-canary",\n  "error": null,\n'
+    )
+    const duplicateFailed = `${JSON.stringify(failedReport(), null, 2)}\n`.replace(
+      '  "error": "inputs",\n', '  "error": "/private/duplicate-report-canary",\n  "error": "inputs",\n'
+    )
+    for (const raw of [duplicateAccepted, duplicateFailed]) {
+      await fs.writeFile(reportPath, raw)
+      expect(await readClosedHistoricalWindowsReport(reportPath, harness)).toEqual({ closed: false, accepted: false })
+      const child = spawnSync(process.execPath, [gatePath, '--report', reportPath, '--harness-commit', harness], { encoding: 'utf8', timeout: 10_000 })
+      expect(child.status).toBe(2)
+      expect(child.stdout).toBe('historical-windows-report:REFUSED\n')
+      expect(child.stderr).toBe('')
     }
   })
 
@@ -133,14 +152,14 @@ describe('actual closed historical Windows report gate', () => {
     const targetDirectory = join(root, 'target')
     const aliasDirectory = join(root, 'alias')
     await fs.mkdir(targetDirectory)
-    await fs.writeFile(join(targetDirectory, 'report.json'), JSON.stringify(successfulReport()))
+    await writeReport(join(targetDirectory, 'report.json'), successfulReport())
     await fs.rm(reportPath)
     await fs.symlink(targetDirectory, aliasDirectory, 'junction')
     expect(await readClosedHistoricalWindowsReport(join(aliasDirectory, 'report.json'), harness)).toEqual({ closed: false, accepted: false })
   })
 
   it('owns one real descriptor close and refuses retention when close refuses', async () => {
-    await fs.writeFile(reportPath, JSON.stringify(successfulReport()))
+    await writeReport(reportPath, successfulReport())
     const realOpen = fs.open
     let closes = 0
     vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
@@ -163,7 +182,7 @@ describe('actual closed historical Windows report gate', () => {
       [failedReport(), 3, 'FAIL'],
       [{ ...successfulReport(), extra: '/private/synthetic-cli-canary' }, 2, 'REFUSED']
     ] as const) {
-      await fs.writeFile(reportPath, JSON.stringify(report))
+      await writeReport(reportPath, report)
       const child = spawnSync(process.execPath, [gatePath, '--report', reportPath, '--harness-commit', harness], { encoding: 'utf8', timeout: 10_000 })
       expect(child.status).toBe(status)
       expect(child.stdout).toBe(`historical-windows-report:${word}\n`)
