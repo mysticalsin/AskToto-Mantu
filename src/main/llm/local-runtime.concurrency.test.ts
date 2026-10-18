@@ -7,6 +7,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import { setImmediate as yieldImmediate } from 'node:timers/promises'
 import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 import type { PackageRuntimeContract } from '../features/components/speech-pack/package-contract'
@@ -20,6 +22,8 @@ import { configurePackageRuntimeContractProvider } from '../features/components/
 //
 // Derived from the real profile rather than hardcoded, so it cannot drift from production again.
 const SPAWN_PROFILE = { ...spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1], 16, 8), vision: false }
+// Spawn and file existence are mocked; this unique fixture namespace needs no on-disk directory.
+const PACKAGED_RESOURCES = join(tmpdir(), `metis-runtime-concurrency-${randomUUID()}`)
 
 const electron = vi.hoisted(() => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('electron', () => electron)
@@ -229,6 +233,8 @@ describe('quit cancellation — Windows fallback', () => {
       fresh = start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
       await emitListening(0, 55911)
       await fresh
+      expect(spawnState.calls[0].path).toBe(join(PACKAGED_RESOURCES, 'llama',
+        process.arch === 'arm64' ? 'llama-server-macos-arm64' : 'llama-server-macos-x64'))
       const refused = expectRefusalBeforeSpawn(old, /start cancelled/)
       authority.resolve(fullRuntime)
       await refused
