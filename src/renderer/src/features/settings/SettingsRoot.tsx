@@ -722,7 +722,6 @@ export function Settings({
               <AudioTab
                 settings={settings}
                 patch={patch}
-                refreshSettings={refreshSettings}
                 tapControl={<TapControlCard settings={settings} patch={patch} />}
               />
             )}

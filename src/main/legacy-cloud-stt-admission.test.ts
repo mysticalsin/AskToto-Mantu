@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/ipc'
 import type { SettingsPolicyAuthoritySnapshot } from './settings-observation'
 import type { ManagedSpeechPolicyRead } from './managed-speech-providers'
-import { legacyCloudSttAdmission } from './legacy-cloud-stt-admission'
+import { legacyCloudSttAdmission } from './legacy-cloud-stt-policy'
 
 const ABSENT_POLICY: ManagedSpeechPolicyRead = { state: 'absent' }
 

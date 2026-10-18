@@ -138,6 +138,7 @@ import {
   clearSonioxApiKey
 } from './store'
 import { createStream } from './llm'
+import { readLegacyCloudSttAdmission } from './legacy-cloud-stt-admission'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
 import { isBudgetExhausted, resetHeadroom } from './llm/usage-headroom'
@@ -7332,6 +7333,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.cloudSttStart, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Not signed in', code: 'AUTH' }
+    const admission = await readLegacyCloudSttAdmission()
+    if (!admission.ok) return admission
+    if (!requireAuth()) return { ok: false, error: 'Not signed in', code: 'AUTH' }
     const p = (payload ?? {}) as {
       provider?: string
       asrLanguage?: string
@@ -7340,12 +7344,12 @@ function registerIpc(): void {
       meetingId?: string
       captureId?: string
     }
-    const settings = getSettings()
+    const settings = admission.settings
     const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
     // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
     // redirect a live audio stream to another backend by supplying `payload.provider`.
     // M2-0412: the fleet policy's `stt` entry narrows this at session start only; live sessions are never rewritten.
-    const provider = resolveCloudSttStartProvider(getActiveModelPolicy(settings), profile, settings.cloudSttProvider)
+    let provider = resolveCloudSttStartProvider(getActiveModelPolicy(settings), profile, settings.cloudSttProvider)
     // An opaque capture identity scopes delayed force-stops to the session that requested them.
     // Keep the bound modest because this comes from the renderer IPC boundary.
     const captureId =
@@ -7361,19 +7365,32 @@ function registerIpc(): void {
       stop: () => stopCloudSttLive(),
       isCurrent: () => isCurrentCloudSttOwner(owner, e.sender),
       stale: () => ({ ok: false as const, error: 'Cloud speech session was replaced.', code: 'STALE' }),
-      start: () =>
-        startCloudSttLive(
+      start: async () => {
+        const currentAdmission = await readLegacyCloudSttAdmission()
+        if (!currentAdmission.ok) return currentAdmission
+        if (!requireAuth()) return { ok: false, error: 'Not signed in', code: 'AUTH' }
+        if (!isCurrentCloudSttOwner(owner, e.sender)) {
+          return { ok: false, error: 'Cloud speech session was replaced.', code: 'STALE' }
+        }
+        const currentSettings = currentAdmission.settings
+        const currentProfile = resolveEnterpriseLiveProfile(currentSettings.enterpriseLive ?? {})
+        provider = resolveCloudSttStartProvider(
+          getActiveModelPolicy(currentSettings),
+          currentProfile,
+          currentSettings.cloudSttProvider
+        )
+        return startCloudSttLive(
           {
             provider,
-            asrLanguage: p.asrLanguage ?? settings.asrLanguage,
+            asrLanguage: p.asrLanguage ?? currentSettings.asrLanguage,
             pinnedLang: p.pinnedLang,
-            profile: { name: settings.profile?.name, role: settings.profile?.role },
+            profile: { name: currentSettings.profile?.name, role: currentSettings.profile?.role },
             meetingId: p.meetingId,
             captureId,
             cloudflareToken: getApiKey('cloudflare'),
-            cloudflareBaseUrl: settings.cloudflareBaseUrl,
-            cloudflareAccountId: settings.cloudflareAccountId,
-            gatewayId: resolveCloudSttGatewayId(settings.cfAiGatewayId),
+            cloudflareBaseUrl: currentSettings.cloudflareBaseUrl,
+            cloudflareAccountId: currentSettings.cloudflareAccountId,
+            gatewayId: resolveCloudSttGatewayId(currentSettings.cfAiGatewayId),
             sonioxApiKey: getSonioxApiKey() || null,
             egressAllowlist: getEgressAllowlist()
           },
@@ -7391,6 +7408,7 @@ function registerIpc(): void {
             }
           }
         )
+      }
     })
     if (!result.ok && cloudSttIpcOwner === owner) {
       setCloudSttIpcOwner(null)

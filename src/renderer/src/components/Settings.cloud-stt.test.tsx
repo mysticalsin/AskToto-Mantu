@@ -40,14 +40,16 @@ afterEach(() => {
 })
 
 describe('enterprise-live Speech: cloud transcript source', () => {
-  it('CLOUD_ONLY shows Cloudflare Nova-3 as transcript source and hides on-device engines', () => {
+  it('CLOUD_ONLY hides direct provider credentials and on-device engines', () => {
     const html = renderSpeech({
       enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true },
       cloudSttProvider: 'unconfigured'
     })
-    expect(html.includes('aria-label="Transcript source"')).toBe(true)
-    expect(html.includes('Cloudflare Nova-3')).toBe(true)
-    expect(html.includes('Soniox')).toBe(true)
+    expect(html.includes('aria-label="Transcript source"')).toBe(false)
+    expect(html.includes('Cloudflare account id for Nova')).toBe(false)
+    expect(html.includes('CF AI Gateway id for Nova')).toBe(false)
+    expect(html.includes('Soniox API key')).toBe(false)
+    expect(html.includes('approved hosted speech route')).toBe(true)
     expect(html.includes('aria-label="Transcription engine"')).toBe(false)
     expect(html.includes('Parakeet · European languages')).toBe(false)
     expect(html.includes('—')).toBe(false)
@@ -62,36 +64,17 @@ describe('enterprise-live Speech: cloud transcript source', () => {
     expect(html.includes('aria-label="Transcript source"')).toBe(false)
   })
 
-  it('CLOUD_ONLY with Soniox selection stays cloud-labelled', () => {
+  it('managed legacy profiles do not show direct provider key controls', () => {
     const html = renderSpeech({
-      enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false },
-      cloudSttProvider: 'soniox'
-    })
-    expect(html.includes('aria-label="Transcript source"')).toBe(true)
-    expect(html.includes('value="soniox"')).toBe(true)
-  })
-
-  it('CLOUD_ONLY Nova shows account id and gateway seat fields', () => {
-    const html = renderSpeech({
-      enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true },
-      cloudSttProvider: 'cloudflare-nova3',
-      cloudflareAccountId: '',
-      cfAiGatewayId: ''
-    })
-    expect(html.includes('aria-label="Cloudflare account id for Nova"')).toBe(true)
-    expect(html.includes('aria-label="CF AI Gateway id for Nova"')).toBe(true)
-    expect(html.includes('—')).toBe(false)
-  })
-
-  it('CLOUD_ONLY Soniox shows Soniox key seat', () => {
-    const html = renderSpeech({
-      enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false },
+      enterpriseLive: { managed: true, inferenceMode: 'legacy', summaryOnly: false },
       cloudSttProvider: 'soniox',
-      hasKeys: { soniox: false }
+      hasKeys: { soniox: true }
     })
-    expect(html.includes('aria-label="Soniox API key"')).toBe(true)
-    expect(html.includes('Save Soniox key')).toBe(true)
+    expect(html.includes('aria-label="Transcript source"')).toBe(false)
+    expect(html.includes('Cloudflare account id for Nova')).toBe(false)
+    expect(html.includes('CF AI Gateway id for Nova')).toBe(false)
+    expect(html.includes('Soniox API key')).toBe(false)
+    expect(html.includes('approved hosted speech route')).toBe(true)
     expect(html.includes('—')).toBe(false)
   })
-
 })

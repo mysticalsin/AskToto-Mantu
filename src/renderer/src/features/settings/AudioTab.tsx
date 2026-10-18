@@ -3,11 +3,9 @@ import { AlertCircle, Headphones, Info, MessageSquare, MessageSquareQuote, Mic, 
 import type { PublicSettings } from '@shared/ipc'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
-import { effectiveCloudSttProvider, type CloudSttProviderId } from '@shared/cloud-stt-provider'
 import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
 import { isWindows } from '../../lib/keys'
 import { FieldHint, TextButton } from '../../components/ui'
-import { LazyInput } from '../../ui/LazyText'
 import { ctl } from '../../ui/ctl'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
@@ -146,96 +144,6 @@ function VocabSuggestions({
     </div>
   )
 }
-/** Seat Soniox API key for cloud STT (optional; Nova is the default transcript source). */
-function SonioxKeySeat({
-  hasKey,
-  envLocked,
-  onSaved
-}: {
-  hasKey: boolean
-  envLocked: boolean
-  onSaved: () => void
-}): JSX.Element {
-  const [key, setKey] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
-  const save = async (): Promise<void> => {
-    const trimmed = key.trim()
-    if (!trimmed) {
-      setMsg('Paste a Soniox API key first.')
-      return
-    }
-    setBusy(true)
-    setMsg(null)
-    try {
-      await window.toto.cloudSttSetSonioxKey(trimmed)
-      setKey('')
-      setMsg('Soniox key saved on this device.')
-      onSaved()
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Could not save Soniox key.')
-    } finally {
-      setBusy(false)
-    }
-  }
-  const clear = async (): Promise<void> => {
-    setBusy(true)
-    setMsg(null)
-    try {
-      await window.toto.cloudSttClearSonioxKey()
-      setMsg('Soniox key removed.')
-      onSaved()
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Could not remove Soniox key.')
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
-      <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-        Soniox runs only when selected here and a key is seated (or SONIOX_API_KEY is set). Nova stays the default
-        transcript source.
-        {envLocked
-          ? ' SONIOX_API_KEY env is active for this seat.'
-          : hasKey
-            ? ' A Soniox key is seated.'
-            : ' No Soniox key seated yet.'}
-      </p>
-      <input
-        type="password"
-        value={key}
-        disabled={envLocked || busy}
-        onChange={(e) => setKey(e.target.value)}
-        placeholder={hasKey && !envLocked ? '•••••• saved (paste to replace)' : 'Soniox API key'}
-        aria-label="Soniox API key"
-        className={'w-full ' + ctl}
-      />
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={envLocked || busy}
-          onClick={() => void save()}
-          className="no-drag cl-focus rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-        >
-          Save Soniox key
-        </button>
-        {hasKey && !envLocked && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void clear()}
-            className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06] disabled:opacity-50"
-          >
-            Remove
-          </button>
-        )}
-      </div>
-      {msg && <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">{msg}</p>}
-    </div>
-  )
-}
-
 function getAudioChoices(): {
   id: PublicSettings['audioSource']
   label: string
@@ -528,12 +436,10 @@ function MicPicker({
 export function AudioTab({
   settings,
   patch,
-  refreshSettings,
   tapControl
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => Promise<PublicSettings>
-  refreshSettings: () => Promise<void>
   tapControl: ReactNode
 }): JSX.Element {
   // Root wires these methods through the validated preload API; keep the local feature contract narrow.
@@ -654,74 +560,12 @@ export function AudioTab({
         {(() => {
           const liveProfile = resolveEnterpriseLiveProfile(settings.enterpriseLive)
           const cloudOnly = isCloudOnlyProfile(liveProfile)
-          const cloudProvider = effectiveCloudSttProvider(liveProfile, settings.cloudSttProvider)
-          if (cloudOnly) {
+          if (liveProfile.managed) {
             return (
-              <div className="flex flex-col gap-1.5 px-1 py-1">
-                <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-                  Transcript source
-                  <FieldHint text="This organization profile sends meeting audio to approved cloud speech recognition. Cloudflare Nova-3 is the default. Soniox is available when your organization has approved it. On-device Whisper, Parakeet, and Apple Speech stay off for this profile, including when cloud speech fails.">
-                    <Info
-                      size={12}
-                      className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-                    />
-                  </FieldHint>
-                  <ManagedChip keys={settings.managedKeys} k="cloudSttProvider" />
-                </label>
-                <select
-                  value={cloudProvider}
-                  onChange={(e) => patch({ cloudSttProvider: e.target.value as CloudSttProviderId })}
-                  disabled={settings.managedKeys.includes('cloudSttProvider')}
-                  aria-label="Transcript source"
-                  className={'w-full ' + ctl}
-                >
-                  <option value="cloudflare-nova3">Cloudflare Nova-3 · cloud speech</option>
-                  <option value="soniox">Soniox · cloud speech (when approved)</option>
-                </select>
-                <p className="pl-0.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                  Live captions use cloud speech. Audio capture stays on this device; transcripts are transient.
-                  Summaries and actions are what get saved.
-                </p>
-                {cloudProvider === 'cloudflare-nova3' && (
-                  <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
-                    <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      Nova needs a Cloudflare account token (Settings → AI / Keys), plus account id or an account-scoped
-                      base URL. Gateway id is optional (blank uses default).
-                      {settings.hasKeys?.cloudflare
-                        ? ' Cloudflare token is seated.'
-                        : ' Cloudflare token is not seated yet.'}
-                    </p>
-                    <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                      Cloudflare account id
-                      <LazyInput
-                        value={settings.cloudflareAccountId ?? ''}
-                        disabled={settings.managedKeys.includes('cloudflareAccountId')}
-                        onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
-                        placeholder="32 hex characters"
-                        aria-label="Cloudflare account id for Nova"
-                        className={'w-full ' + ctl}
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                      CF AI Gateway id
-                      <LazyInput
-                        value={settings.cfAiGatewayId ?? ''}
-                        disabled={settings.managedKeys.includes('cfAiGatewayId')}
-                        onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
-                        placeholder="default"
-                        aria-label="CF AI Gateway id for Nova"
-                        className={'w-full ' + ctl}
-                      />
-                    </label>
-                  </div>
-                )}
-                {cloudProvider === 'soniox' && (
-                  <SonioxKeySeat
-                    hasKey={!!settings.hasKeys?.soniox}
-                    envLocked={settings.envKeys.includes('soniox')}
-                    onSaved={() => void refreshSettings()}
-                  />
-                )}
+              <div className="rounded-lg border border-[var(--cl-border)] bg-white/[0.02] p-3 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                This organization-managed profile does not accept direct speech-provider credentials. Configure an
+                approved hosted speech route in organization policy or contact your administrator.
+                {cloudOnly && ' Local speech fallback is disabled for this profile.'}
               </div>
             )
           }
