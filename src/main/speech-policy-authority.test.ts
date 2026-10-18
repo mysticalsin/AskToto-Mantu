@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { emptyModelPolicyEntry, MODEL_POLICY_CAPABILITIES, type ModelPolicyDocument } from '@shared/model-policy'
+import { generateOperatorLicense } from '@shared/operator-license'
 import {
   normalizeSpeechPolicyOrigin,
   resolveSpeechPolicyIdentity,
@@ -9,8 +10,12 @@ import {
 
 const NOW = 1_900_000_000_000
 
-function license(jti = '0123456789abcdef', issuedAt = Math.floor(NOW / 1000) - 60): string {
-  return `METIS-OP-1.${jti}.${issuedAt}.${Math.floor(NOW / 1000) + 3600}.AAAAAAAAAAAAAAAAAAAA`
+function license(
+  jti = '0123456789abcdef',
+  issuedAt = Math.floor(NOW / 1000) - 60,
+  expiresAt = Math.floor(NOW / 1000) + 3600
+): string {
+  return `METIS-OP-1.${jti}.${issuedAt}.${expiresAt}.AAAAAAAAAAAAAAAAAAAA`
 }
 
 function policy(version = NOW): ModelPolicyDocument {
@@ -69,6 +74,25 @@ describe('strict speech policy identity', () => {
     expect(
       resolveSpeechPolicyIdentity({ ...settings, operatorLicenseToken: license('2123456789abcdef', 1) }, 'durable', NOW)
     ).toBeNull()
+  })
+
+  it.each([0, 364])('accepts an issuer-generated 365-day licence issued %i days ago while it remains live', async (ageDays) => {
+    const minted = await generateOperatorLicense('synthetic-speech-policy-issuer-secret', {
+      days: 365,
+      now: NOW - ageDays * 24 * 60 * 60 * 1000,
+      jti: '3123456789abcdef'
+    })
+    expect(resolveSpeechPolicyIdentity({
+      operatorUrl: 'https://operator.test', operatorLicenseToken: minted.token
+    }, 'durable-device', NOW)).not.toBeNull()
+  })
+
+  it('refuses a live licence whose issued lifetime exceeds the issuer maximum by one second', () => {
+    const issuedAt = Math.floor(NOW / 1000)
+    expect(resolveSpeechPolicyIdentity({
+      operatorUrl: 'https://operator.test',
+      operatorLicenseToken: license('4123456789abcdef', issuedAt, issuedAt + 365 * 24 * 60 * 60 + 1)
+    }, 'durable-device', NOW)).toBeNull()
   })
 })
 

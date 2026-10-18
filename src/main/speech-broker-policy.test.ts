@@ -108,6 +108,18 @@ describe('resolveSpeechBrokerAuthority', () => {
     })
   })
 
+  it('accepts known-field snapshots with the legacy local speech-pack default omitted', () => {
+    const current = snapshot({ provider: 'deepgram-nova3', model: 'nova-3', fallbacks: [] })
+    const { localSpeechPack: _omitted, ...legacyPolicy } = current.policy
+    void _omitted
+    expect(resolveAuthority({ snapshot: { ...current, policy: legacyPolicy as ModelPolicyDocument } })).toEqual({
+      ok: true,
+      engine: 'deepgram-nova3',
+      selected: { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
+      allowed: [{ engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }]
+    })
+  })
+
   it('includes only signed policy fallbacks permitted by managed provider policy', () => {
     const signedPolicy = snapshot({
       provider: 'deepgram-nova3',
