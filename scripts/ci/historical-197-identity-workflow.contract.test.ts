@@ -13,7 +13,8 @@ function requireIdentityWorkflow(source: string): void {
   expect(source).toContain('    timeout-minutes: 20\n')
   expect(source).toContain('          persist-credentials: false\n')
   expect(source).toContain('          node-version: 22.22.3\n')
-  expect(source).toContain('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"')
+  expect(source).toContain('test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before retrieval"; exit 1; }')
+  expect(source).toContain('test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before verification"; exit 1; }')
   expect(source).toContain('repos/mysticalsin/AskToto-Mantu/actions/runs/38795048288')
   expect(source).toContain('repos/mysticalsin/AskToto-Mantu/releases/414278048')
   expect(source).toContain('harnessCommit: $harness')
@@ -50,7 +51,8 @@ describe('historical 1.9.7 identity input consumer', () => {
 
   it.each([
     ['untrusted ref', "github.ref == 'refs/heads/main'", "github.ref != 'refs/heads/main'"],
-    ['foreign checkout', 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', 'true'],
+    ['foreign initial checkout', 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before retrieval"; exit 1; }', 'true'],
+    ['foreign verification checkout', 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before verification"; exit 1; }', 'true'],
     ['metadata-only gate', '.verification == "local-bytes"', '.verification == "metadata-only"'],
     ['artifact source substituted for harness', '--harness-commit "$GITHUB_SHA"', '--harness-commit "98461f85dcca49a2ded3f1489daed10d194f5229"'],
     ['missing published asset', '645180903\tMetis-1.9.7.zip\n', ''],
