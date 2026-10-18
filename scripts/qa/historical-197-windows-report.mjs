@@ -80,7 +80,11 @@ export async function readClosedHistoricalWindowsReport(reportPath, harnessCommi
     const current = await fs.lstat(reportPath)
     if (count !== opened.size || count > MAX_REPORT_BYTES || !sameFile(opened, after) ||
       !current.isFile() || current.isSymbolicLink() || !sameFile(after, current) || !samePath(await fs.realpath(parent), parent)) return REFUSED
-    result = assessClosedHistoricalWindowsReport(JSON.parse(buffer.subarray(0, count).toString('utf8')), harnessCommit)
+    const raw = buffer.subarray(0, count).toString('utf8')
+    const report = JSON.parse(raw)
+    result = raw === `${JSON.stringify(report, null, 2)}\n`
+      ? assessClosedHistoricalWindowsReport(report, harnessCommit)
+      : REFUSED
   } catch {
     result = REFUSED
   } finally {
