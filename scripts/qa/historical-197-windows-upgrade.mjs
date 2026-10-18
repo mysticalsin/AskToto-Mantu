@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Installed healthy native-profile evidence only. No build, download, signing, auth bypass or publication.
 import { randomBytes, createHash } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, relative, isAbsolute, win32 } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -11,7 +11,7 @@ import {
   killOwned, launchPackagedCdp, ownedCensus, packagedLaunchFailed, strictLaunchEnvironment,
   waitFor, waitForChildExit
 } from './lib/app-driver.mjs'
-import { listProcesses, survivors } from './owned-processes.mjs'
+import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
 
 export const BASELINE = Object.freeze({
   repository: 'mysticalsin/Metis-Releases', releaseId: 395306225, tag: 'v1.9.6-unsigned', assetId: 585098577,
@@ -78,7 +78,7 @@ function seededSettings(settings) {
 }
 
 /** Uses only ordinary shipped preload APIs shared by the two historical app versions. */
-export async function configureAndSeed(page, expected) {
+export async function configureAndSeed(page, expected, admitStorage) {
   const initial = await observeAdmission(page, expected, false)
   requireValue(initial.version === '1.9.6')
   const patch = {
@@ -91,9 +91,13 @@ export async function configureAndSeed(page, expected) {
   requireValue(pathEqual(saved?.meetingsFolder, expected.meetingsRoot) && pathEqual(saved?.resolvedMeetingsFolder, expected.meetingsRoot) &&
     Array.isArray(saved.allowedProviders) && saved.allowedProviders.length === 0 && saved.localLlm?.enabled === false)
   seededSettings(saved)
-  seededSettings(await observeAdmission(page, expected, true))
+  const effective = await observeAdmission(page, expected, true)
+  seededSettings(effective)
+  requireValue(typeof admitStorage === 'function')
+  await admitStorage(effective.resolvedMeetingsFolder)
   const keyResult = await call(page, (value) => window.toto.setApiKey('openai', value), expected.key)
   requireValue(keyResult?.hasKeys?.openai === true)
+  await admitStorage((await observeAdmission(page, expected, true)).resolvedMeetingsFolder)
   const meeting = await call(page, (value) => window.toto.saveTranscript(value), {
     title: expected.title, mode: 'general', startedAt: expected.startedAt, durationMs: 64000,
     lines: [{ speaker: 'you', text: expected.line, t: expected.startedAt + 2000 }], recap: ''
@@ -119,6 +123,9 @@ export function assessHistoricalUpgradeReport(report) {
   if (report?.schema !== 1 || report.platform !== 'win32' || report.error !== null || !COMMIT.test(report.harnessCommit ?? '') ||
     report.appSource !== HISTORICAL_197.artifactSource || JSON.stringify(report.baseline) !== JSON.stringify(BASELINE) ||
     JSON.stringify(report.candidate) !== JSON.stringify(HISTORICAL_197.assets[2]) || !Array.isArray(report.checks) || report.checks.length !== REQUIRED_CHECKS.length ||
+    !Array.isArray(report.installers) || report.installers.length !== 2 ||
+    !report.installers.every((item, index) => item?.version === ['1.9.6', '1.9.7'][index] && item.closed === true &&
+      item.censusConfirmed === true && item.exitCode === 0 && Number.isSafeInteger(item.pid) && item.pid > 1) ||
     !Array.isArray(report.processes) || report.processes.length !== 3 || new Set(report.processes).size !== 3 ||
     report.processes.some((pid) => !Number.isSafeInteger(pid) || pid <= 1) || !Array.isArray(report.nativeSnapshots) || report.nativeSnapshots.length !== 3 ||
     !report.checks.every((row) => row && REQUIRED_CHECKS.includes(row.id) && ['PASS', 'FAIL', 'NOT_RUN'].includes(row.status))) return false
@@ -132,7 +139,7 @@ export async function runHistoricalUpgrade(options, driver = createWindowsDriver
   const report = {
     schema: 1, scope: 'HEALTHY_NATIVE_196_TO_PUBLISHED_197_ONLY', platform: 'win32', harnessCommit: COMMIT.test(options.harnessCommit ?? '') ? options.harnessCommit : null,
     appSource: HISTORICAL_197.artifactSource, baseline: { ...BASELINE }, candidate: { ...HISTORICAL_197.assets[2] },
-    processes: [], nativeSnapshots: [], checks: REQUIRED_CHECKS.map((id) => ({ id, status: 'NOT_RUN' })), error: null, accepted: false,
+    processes: [], installers: [], nativeSnapshots: [], checks: REQUIRED_CHECKS.map((id) => ({ id, status: 'NOT_RUN' })), error: null, accepted: false,
     limitations: ['Baseline source attribution is not signed provenance.', 'No rollback, recovery, authenticated-enterprise, ACL, foreign-account, notes, recap-generation or full-release security qualification.']
   }
   let current = 'inputs'
@@ -146,7 +153,14 @@ export async function runHistoricalUpgrade(options, driver = createWindowsDriver
   try {
     await step('inputs', () => driver.verifyInputs())
     const plan = await step('prepared', () => driver.prepare())
-    await step('baseline_install', () => driver.install('1.9.6'))
+    const install = async (id, version) => await step(id, async () => {
+      const receipt = await driver.install(version)
+      requireValue(receipt?.closed === true && receipt.censusConfirmed === true && receipt.exitCode === 0 &&
+        Number.isSafeInteger(receipt.pid) && receipt.pid > 1)
+      report.installers.push({ version, ...receipt })
+      return true
+    })
+    await install('baseline_install', '1.9.6')
     let app
     const launch = async (version) => {
       const launched = await driver.launch(version)
@@ -166,7 +180,7 @@ export async function runHistoricalUpgrade(options, driver = createWindowsDriver
       return true
     })
     await inspect('baseline_native')
-    await step('upgrade_install', () => driver.install('1.9.7'))
+    await install('upgrade_install', '1.9.7')
     await step('upgrade_read', async () => { app = await launch('1.9.7'); return await driver.read(app, plan, '1.9.7') })
     await step('upgrade_stop', () => driver.stop(app))
     await inspect('upgrade_native')
@@ -210,48 +224,116 @@ async function boundedOwnedFile(root, path) {
   return bytes
 }
 function remember(session) {
-  const census = ownedCensus({ platform: 'win32', mainPid: session.child.pid, installRoot: session.installRoot })
-  requireValue(census.owned.some((entry) => entry.pid === session.child.pid))
-  for (const entry of census.owned) session.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
+  try {
+    const census = ownedCensus({ platform: 'win32', mainPid: session.child.pid, installRoot: session.installRoot })
+    requireValue(census.owned.some((entry) => entry.pid === session.child.pid))
+    for (const entry of census.owned) session.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
+    session.censusConfirmed = true
+  } catch (error) { session.uncertain = true; throw error }
+}
+
+function refreshOwnership(record) {
+  try {
+    const current = listProcesses('win32')
+    // Preserve observed ancestry when a parent exits before a child. Identity includes start time.
+    const keys = new Set(current.map((entry) => `${entry.pid}:${entry.startedMs}`))
+    const ancestry = [...current, ...[...record.owned.values()].filter((entry) => !keys.has(`${entry.pid}:${entry.startedMs}`))]
+    for (const entry of ownedProcesses(ancestry, { mainPid: record.child.pid, installRoot: record.installRoot, platform: 'win32' })) {
+      record.owned.set(`${entry.pid}:${entry.startedMs}`, entry)
+    }
+    return survivors([...record.owned.values()], current, { installRoot: record.installRoot, platform: 'win32' })
+  } catch (error) { record.uncertain = true; throw error }
+}
+
+async function stopWindowsRecord(record) {
+  if (record.stopped) return record.clean
+  if (!record.child || !Number.isSafeInteger(record.child.pid) || record.child.pid <= 1) {
+    record.uncertain = true
+    return false
+  }
+  let quit = record.kind === 'installer'
+  if (record.child.exitCode === null && record.child.signalCode === null) {
+    try { remember(record) } catch { /* uncertainty is sticky */ }
+  }
+  if (record.page) {
+    try { await call(record.page, () => window.toto.quit()); quit = true } catch { /* exit can close IPC before reply */ }
+  }
+  await waitForChildExit(record.child, 10_000)
+  let forced = false
+  let exited = false
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const remaining = refreshOwnership(record)
+      const rootExited = record.child.exitCode !== null || record.child.signalCode !== null
+      if (rootExited && remaining.length === 0) { exited = record.censusConfirmed === true; break }
+      forced = true
+      if (remaining.length) killOwned(remaining)
+      else if (!rootExited) record.child.kill('SIGTERM')
+    } catch { /* uncertainty prevents deletion even if a later census succeeds */ }
+    await new Promise((done) => setTimeout(done, 250))
+  }
+  const released = await disposeFreshOnboardingTransports({ browser: record.browser ?? null,
+    transportUncertain: record.transportUncertain === true, lateReleases: record.lateReleases ?? [] })
+  record.stopped = true
+  record.safeToRemove = exited && released && !record.uncertain
+  record.clean = quit && record.safeToRemove && !forced && record.child.exitCode === 0 && record.child.signalCode === null
+  return record.clean
+}
+
+/** Consumed only after driver's unchanged real installer hash admission; no identity success is inferred here. */
+export async function runOwnedInstaller(installer, installRoot, paths, records) {
+  const record = { kind: 'installer', child: null, installRoot, owned: new Map(), censusConfirmed: false,
+    uncertain: true, spawnError: false, stopped: false, clean: false, safeToRemove: false }
+  const env = strictLaunchEnvironment(process.env, paths, 'win32')
+  records.push(record)
+  let polling
+  try {
+    record.child = spawn(installer, ['/S', `/D=${installRoot}`], { env: { ...env }, windowsHide: true, stdio: 'ignore' })
+    record.child.once('error', () => { record.uncertain = true; record.spawnError = true })
+    requireValue(Number.isSafeInteger(record.child.pid) && record.child.pid > 1)
+    record.uncertain = record.spawnError
+    remember(record)
+    polling = setInterval(() => { try { refreshOwnership(record) } catch { /* sticky uncertainty */ } }, 250)
+    const exited = await waitForChildExit(record.child, 180_000)
+    if (!exited) record.uncertain = true
+    requireValue(exited && record.child.exitCode === 0 && record.child.signalCode === null && !record.uncertain)
+    requireValue(await stopWindowsRecord(record))
+    return { pid: record.child.pid, exitCode: record.child.exitCode, censusConfirmed: record.censusConfirmed, closed: record.safeToRemove }
+  } catch (error) {
+    if (!record.child || !record.censusConfirmed) record.uncertain = true
+    throw error
+  } finally { if (polling) clearInterval(polling) }
+}
+
+/** Same registry is used by the real driver for installers and application launches. */
+export async function cleanupWindowsOwnership(records, rootStamp) {
+  let clean = true
+  for (const record of records) {
+    try { clean = (await stopWindowsRecord(record)) && clean } catch { record.uncertain = true; clean = false }
+  }
+  if (!rootStamp) return clean
+  if (records.some((record) => record.uncertain || !record.safeToRemove)) return false
+  try {
+    const stat = await lstat(rootStamp.path)
+    requireValue(stat.isDirectory() && !stat.isSymbolicLink() && stat.dev === rootStamp.dev && stat.ino === rootStamp.ino &&
+      pathEqual(await realpath(rootStamp.path), resolve(rootStamp.path)))
+    await rm(rootStamp.path, { recursive: true, force: false })
+    return clean && !(await exists(rootStamp.path))
+  } catch { return false }
 }
 
 /** Creates real installed-system operations. No installer, IPC or native crypto implementation is mocked here. */
 export function createWindowsDriver(options) {
   const sessions = []
   let prepared = false
+  let rootStamp = null
   const profile = join(options.root, 'profile')
   const installRoot = join(options.root, 'install')
   const meetingsRoot = join(profile, 'meetings')
   const exe = join(installRoot, 'Metis.exe')
-  const stop = async (session) => {
-    if (session.stopped) return session.clean
-    let quit = false
-    let census = true
-    try { remember(session) } catch { census = false }
-    if (session.page) {
-      try { await call(session.page, () => window.toto.quit()); quit = true } catch { /* exit can close IPC before reply */ }
-    }
-    await waitForChildExit(session.child, 10_000)
-    let forced = false
-    let exited = false
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      try {
-        const current = listProcesses('win32')
-        const remaining = survivors([...session.owned.values()], current, { installRoot, platform: 'win32' })
-        const rootExited = session.child.exitCode !== null || session.child.signalCode !== null
-        if (rootExited && remaining.length === 0) { exited = census; break }
-        forced = true
-        if (remaining.length) killOwned(remaining)
-        else if (!rootExited) session.child.kill('SIGTERM')
-      } catch { census = false }
-      await new Promise((done) => setTimeout(done, 250))
-    }
-    const released = await disposeFreshOnboardingTransports({ browser: session.browser, transportUncertain: session.transportUncertain, lateReleases: session.lateReleases })
-    session.stopped = true
-    session.safeToRemove = exited && released
-    session.clean = quit && exited && released && !forced && session.child.exitCode === 0 && session.child.signalCode === null
-    return session.clean
-  }
+  const stop = stopWindowsRecord
+  const home = join(options.root, 'home')
+  const paths = { home, userProfile: home, appData: join(home, 'roaming'), localAppData: join(home, 'local'), temp: join(home, 'temp'), userData: profile }
   return {
     async verifyInputs() {
       requireValue(process.platform === 'win32' && COMMIT.test(options.harnessCommit ?? ''))
@@ -278,7 +360,10 @@ export function createWindowsDriver(options) {
       requireValue(!pathEqual(options.report, options.metadata) && !pathEqual(options.report, options.baseline) && !insideHost(options.assets, options.report))
       await mkdir(options.root)
       prepared = true
-      for (const path of [profile, installRoot, meetingsRoot, join(options.root, 'home')]) await mkdir(path, { recursive: true })
+      rootStamp = { path: options.root, dev: null, ino: null }
+      const stamp = await lstat(options.root)
+      rootStamp = { path: options.root, dev: stamp.dev, ino: stamp.ino }
+      for (const path of [profile, installRoot, meetingsRoot, ...Object.values(paths)]) await mkdir(path, { recursive: true })
       await validateOwnedStoragePath(options.root, meetingsRoot)
       requireValue(!(await exists(join(profile, 'AskToto Meetings'))))
       await writeFile(join(profile, 'managed-config.json'), '{"allowedProviders":[]}\n', { flag: 'wx', mode: 0o600 })
@@ -290,16 +375,14 @@ export function createWindowsDriver(options) {
       requireValue(prepared && sessions.every((session) => session.stopped && session.clean))
       const installer = version === '1.9.6' ? options.baseline : join(options.assets, HISTORICAL_197.assets[2].name)
       await hashHistorical197File(installer, version === '1.9.6' ? BASELINE : HISTORICAL_197.assets[2])
-      const result = spawnSync(installer, ['/S', `/D=${installRoot}`], { windowsHide: true, timeout: 180_000, stdio: 'ignore' })
-      requireValue(result.status === 0 && !result.error)
+      const receipt = await runOwnedInstaller(installer, installRoot, paths, sessions)
       await validateOwnedStoragePath(options.root, exe, true)
+      return receipt
     },
     async launch(version) {
       requireValue(sessions.every((session) => session.stopped && session.clean))
       await validateOwnedStoragePath(options.root, exe, true)
       requireValue(await readFile(join(profile, 'managed-config.json'), 'utf8') === '{"allowedProviders":[]}\n')
-      const home = join(options.root, 'home')
-      const paths = { home, userProfile: home, appData: join(home, 'roaming'), localAppData: join(home, 'local'), temp: join(home, 'temp'), userData: profile }
       for (const path of Object.values(paths)) await mkdir(path, { recursive: true })
       const env = strictLaunchEnvironment(process.env, paths, 'win32')
       requireValue(!env.ASKTOTO_LOCAL_KEYSTORE && !env.AZURE_CLIENT_ID && !env.ASKTOTO_REQUIRE_AUTH)
@@ -307,7 +390,7 @@ export function createWindowsDriver(options) {
       let inspectPort = await freeLoopbackPort()
       while (inspectPort === cdpPort) inspectPort = await freeLoopbackPort()
       const launched = launchPackagedCdp({ executablePath: exe, env, cdpPort, inspectPort, platform: 'win32' })
-      const session = { ...launched, pid: launched.child.pid, version, installRoot, owned: new Map(), browser: null, page: null,
+      const session = { ...launched, kind: 'app', censusConfirmed: false, uncertain: false, pid: launched.child.pid, version, installRoot, owned: new Map(), browser: null, page: null,
         transportUncertain: false, lateReleases: [], stopped: false, clean: false, safeToRemove: false }
       sessions.push(session)
       remember(session)
@@ -329,7 +412,14 @@ export function createWindowsDriver(options) {
       return session
     },
     async seed(session, plan) {
-      const path = await configureAndSeed(session.page, plan)
+      const path = await configureAndSeed(session.page, plan, async (effectiveRoot) => {
+        requireValue(pathEqual(effectiveRoot, meetingsRoot) && pathEqual(plan.profileRoot, profile))
+        const stamp = await lstat(options.root)
+        requireValue(rootStamp && stamp.dev === rootStamp.dev && stamp.ino === rootStamp.ino)
+        await validateOwnedStoragePath(options.root, profile)
+        await validateOwnedStoragePath(options.root, effectiveRoot)
+        requireValue(!(await exists(join(profile, 'AskToto Meetings'))))
+      })
       await validateOwnedStoragePath(meetingsRoot, path, true)
       return path
     },
@@ -348,19 +438,7 @@ export function createWindowsDriver(options) {
       return { ...native, fileKeyPresent: await exists(join(profile, 'secret-key.bin')) }
     },
     stop,
-    async cleanup() {
-      let clean = true
-      for (const session of sessions) {
-        try { clean = (await stop(session)) && clean } catch { clean = false }
-      }
-      if (!prepared) return clean
-      if (sessions.some((session) => !session.safeToRemove)) return false
-      try {
-        requireValue(pathEqual(await realpath(options.root), resolve(options.root)))
-        await rm(options.root, { recursive: true, force: false })
-        return clean && !(await exists(options.root))
-      } catch { return false }
-    }
+    async cleanup() { return await cleanupWindowsOwnership(sessions, rootStamp) }
   }
 }
 
