@@ -92,8 +92,47 @@ export function auditDiagnostic(record) {
   return out
 }
 
+/** @typedef {'success' | 'nonzero-exit' | 'signal' | 'timeout' | 'spawn-error' | 'invalid-receipt'} ProcessReason */
+/** @typedef {{code: number | null, signal: 'signal' | 'timeout' | null,
+ *   error: boolean, reason: ProcessReason}} RevealProcessOutcome */
+
+/** @param {unknown} result @returns {RevealProcessOutcome} */
 function processOutcome(result) {
-  return { code: result?.code ?? null, signal: result?.signal ?? null, error: result?.error === true }
+  /** @type {number | null} */
+  let code = null
+  /** @type {RevealProcessOutcome['signal']} */
+  let signal = null
+  let error = false
+  let valid = false
+  try {
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      const record = /** @type {Record<string, unknown>} */ (result)
+      const rawCode = record.code
+      const rawSignal = record.signal
+      const rawError = record.error
+      const validCode = typeof rawCode === 'number' && Number.isSafeInteger(rawCode)
+      if (validCode) code = rawCode
+      if (rawSignal === 'timeout') signal = 'timeout'
+      else if (typeof rawSignal === 'string' && rawSignal.length > 0) signal = 'signal'
+      error = rawError === true
+      valid =
+        (rawCode === null || validCode) &&
+        (rawSignal === null || (typeof rawSignal === 'string' && rawSignal.length > 0)) &&
+        typeof rawError === 'boolean'
+    }
+  } catch {
+    // A malformed receipt must not expose an arbitrary field or replace the row's failure.
+  }
+  /** @type {ProcessReason} */
+  let reason = 'invalid-receipt'
+  if (valid) {
+    if (error) reason = 'spawn-error'
+    else if (signal === 'timeout') reason = 'timeout'
+    else if (signal) reason = 'signal'
+    else if (code === 0) reason = 'success'
+    else if (code !== null) reason = 'nonzero-exit'
+  }
+  return { code, signal, error, reason }
 }
 
 export async function runRevealRow({
@@ -108,22 +147,24 @@ export async function runRevealRow({
   countReveals = revealCount,
   waitForRevealRecord = waitForReveal
 }) {
-  const prepared = prepare ? await prepare() : { error: false }
+  const prepared = processOutcome(prepare ? await prepare() : { code: 0, signal: null, error: false })
+  const prepareFailed = prepared.reason !== 'success'
   const baseline = auditRecords(auditLogPath).length
   const seen = countReveals(auditLogPath, reason)
   const launchedAt = Date.now()
-  const launched = prepared.error ? prepared : await run()
-  const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen, revealTimeoutMs)
-  const pass = isPassingRevealEvidence(reveal)
+  const launched = prepareFailed ? null : processOutcome(await run())
+  const launchFailed = launched === null || launched.reason !== 'success'
+  const reveal = launchFailed ? null : await waitForRevealRecord(auditLogPath, reason, seen, revealTimeoutMs)
+  const pass = !launchFailed && isPassingRevealEvidence(reveal)
   let diagnostics = null
   if (!pass) {
     // A rotated log restarts shorter than the baseline; every record in it is then after the relaunch.
     const records = auditRecords(auditLogPath)
     const split = records.length >= baseline ? baseline : 0
     diagnostics = {
-      stage: prepared.error ? 'prepare' : launched.error ? 'launch' : reveal === null ? 'no-reveal' : 'reveal-not-passing',
-      prepare: processOutcome(prepared),
-      launch: prepared.error ? null : processOutcome(launched),
+      stage: prepareFailed ? 'prepare' : launchFailed ? 'launch' : reveal === null ? 'no-reveal' : 'reveal-not-passing',
+      prepare: prepared,
+      launch: launched,
       waitedMs: Date.now() - launchedAt,
       auditBefore: records.slice(Math.max(0, split - RV_AUDIT_BEFORE), split).map(auditDiagnostic),
       auditAfter: records.slice(split, split + RV_AUDIT_AFTER).map(auditDiagnostic)
