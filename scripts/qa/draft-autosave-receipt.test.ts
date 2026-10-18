@@ -12,8 +12,28 @@ import { startDraftAutosave } from '../../src/renderer/src/lib/draft-autosave'
 import { SpeechAuthLeaseController, type SpeechAuthSession } from '../../src/main/auth-speech-lease'
 import { captureDraftSettingsBoundary, publishSettingsSnapshot } from '../../src/main/settings-observation'
 import { registerDraftTranscriptIpc } from '../../src/main/ipc/draft-transcript-ipc'
+import type { TotoApi } from '../../src/preload'
+import '../../src/preload'
 
-vi.mock('electron')
+const electronBoundary = vi.hoisted(() => ({
+  expose: vi.fn<(name: string, api: TotoApi) => void>(),
+  invoke: vi.fn<(channel: string, payload: unknown) => Promise<unknown>>()
+}))
+
+vi.mock('electron', async () => {
+  const existing = await import('../../__mocks__/electron')
+  return {
+    ...existing,
+    contextBridge: { exposeInMainWorld: electronBoundary.expose },
+    ipcRenderer: {
+      invoke: electronBoundary.invoke,
+      on: vi.fn(),
+      removeListener: vi.fn(),
+      send: vi.fn()
+    },
+    webUtils: { getPathForFile: vi.fn() }
+  }
+})
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
@@ -21,6 +41,43 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     writeFile: vi.fn(actual.writeFile),
     rename: vi.fn(async (from: string, to: string) => renameSync(from, to))
   }
+})
+
+function exposedDraftBridge(): TotoApi['saveDraftTranscript'] {
+  expect(electronBoundary.expose).toHaveBeenCalledTimes(1)
+  const exposed = electronBoundary.expose.mock.calls.filter(([name]) => name === 'toto')
+  expect(exposed).toHaveLength(1)
+  const api = exposed[0]?.[1]
+  if (!api || typeof api.saveDraftTranscript !== 'function') throw new Error('Actual preload did not expose draft save')
+  return api.saveDraftTranscript
+}
+
+describe('actual exposed draft preload transport', () => {
+  const payload: SaveMeeting = {
+    mode: 'meeting', title: 'Synthetic draft transport', startedAt: 1, lines: [], recap: ''
+  }
+  beforeEach(() => { electronBoundary.invoke.mockReset() })
+  afterEach(() => { electronBoundary.invoke.mockReset() })
+
+  it.each<SaveDraftTranscriptResult>([
+    { status: 'saved' }, { status: 'failed' }, { status: 'disabled' }
+  ])('forwards the exact payload and unchanged %s receipt through the exposed preload', async (receipt) => {
+    const result = Promise.resolve(receipt)
+    electronBoundary.invoke.mockReturnValueOnce(result)
+    const pending = exposedDraftBridge()(payload)
+    expect(pending).toBe(result)
+    await expect(pending).resolves.toBe(receipt)
+    expect(electronBoundary.invoke).toHaveBeenCalledExactlyOnceWith(IPC.saveDraftTranscript, payload)
+    expect(electronBoundary.invoke.mock.calls[0]?.[1]).toBe(payload)
+  })
+
+  it.each([undefined, null, new Error('Synthetic private preload refusal')])(
+    'preserves an external invoke rejection without claiming saved (%s)', async (refusal) => {
+      electronBoundary.invoke.mockRejectedValueOnce(refusal)
+      await expect(exposedDraftBridge()(payload)).rejects.toBe(refusal)
+      expect(electronBoundary.invoke).toHaveBeenCalledExactlyOnceWith(IPC.saveDraftTranscript, payload)
+    }
+  )
 })
 
 // Execute the real registered IPC callback, preload method and consumed autosave lifecycle. The App
