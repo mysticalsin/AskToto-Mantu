@@ -208,7 +208,13 @@ describe('publish-release platform rules (M2-0053)', () => {
         const feed = new FakeFeed()
 
         await expect(
-          publishPlatform({ platform, tag: 'v2.0.0', bundleDir: 'missing-release-bundle', feed })
+          publishPlatform({
+            platform,
+            tag: 'v2.0.0',
+            bundleDir: 'missing-release-bundle',
+            feed,
+            acceptanceSelection: { authorized: true, verdict: 'PASS' }
+          })
         ).rejects.toThrow('metis-2.0-acceptance-required')
 
         expect(feed.listings).toBe(0)
