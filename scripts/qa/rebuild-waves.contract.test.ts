@@ -394,7 +394,7 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
 })
 
 function normalizeMutationSource(source: string): string {
-  return source
+  return source.replace(/\r\n/g, '\n')
 }
 
 describe('QA rebuild contracts — Wave 1 provisional strip', () => {
