@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
-import { registerDraftTranscriptIpc } from '../../src/main/draft-transcript-ipc'
+import { registerDraftTranscriptIpc } from '../../src/main/ipc/draft-transcript-ipc'
 import { parseRecapMarkdown } from '../../src/main/transcripts-recap'
 import {
   SaveMeetingSchema,
@@ -148,7 +148,16 @@ function parseInlineTypeScript(source: string): ts.SourceFile {
 const mainSource = parseTypeScript('src/main/index.ts')
 
 function draftRegistrationConnected(source: ts.SourceFile): boolean {
-  if (!namedBindings(source, './draft-transcript-ipc', 'registerDraftTranscriptIpc')) return false
+  const imports = [
+    ['./ipc/draft-transcript-ipc', 'registerDraftTranscriptIpc'],
+    ['electron', 'ipcMain'],
+    ['./auth', 'requireAuth'],
+    ['./auth', 'captureAuthSessionBoundary'],
+    ['./store', 'getSettings'],
+    ['./settings-observation', 'captureDraftSettingsBoundary'],
+    ['./transcripts', 'saveDraftTranscript']
+  ]
+  if (!imports.every(([moduleName, name]) => namedBindings(source, moduleName, name))) return false
   const registration = source.statements.find(
     (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === 'registerIpc'
   )
@@ -375,7 +384,8 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
   it('connects the consumed draft registration and refuses disconnected production dependencies', () => {
     expect(draftRegistrationConnected(mainSource)).toBe(true)
     const mutations = [
-      ["'./draft-transcript-ipc'", "'./disconnected-draft-handler'"],
+      ["'./ipc/draft-transcript-ipc'", "'./disconnected-draft-handler'"],
+      ['  captureAuthSessionBoundary,', '  captureAuthSessionBoundary as disconnectedAuthBoundary,'],
       ['  registerDraftTranscriptIpc({', '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'],
       ['  registerDraftTranscriptIpc({', '  registerDraftTranscriptIpc({})\n  registerDraftTranscriptIpc({'],
       ['    captureDraftSettingsBoundary,\n    saveDraftTranscript', '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'],

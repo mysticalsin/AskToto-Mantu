@@ -16,7 +16,7 @@ import { useStorageForTests } from '../../src/main/infra/storage/meetings-storag
 import { startDraftAutosave } from '../../src/renderer/src/lib/draft-autosave'
 import { SpeechAuthLeaseController, type SpeechAuthSession } from '../../src/main/auth-speech-lease'
 import { captureDraftSettingsBoundary, publishSettingsSnapshot } from '../../src/main/settings-observation'
-import { registerDraftTranscriptIpc } from '../../src/main/draft-transcript-ipc'
+import { registerDraftTranscriptIpc } from '../../src/main/ipc/draft-transcript-ipc'
 
 vi.mock('electron')
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -280,7 +280,7 @@ describe('draft receipt reaches the actual renderer through main and preload', (
         (statement) =>
           ts.isImportDeclaration(statement) &&
           ts.isStringLiteral(statement.moduleSpecifier) &&
-          statement.moduleSpecifier.text === './draft-transcript-ipc' &&
+          statement.moduleSpecifier.text === './ipc/draft-transcript-ipc' &&
           statement.importClause?.namedBindings &&
           ts.isNamedImports(statement.importClause.namedBindings) &&
           statement.importClause.namedBindings.elements.some(
