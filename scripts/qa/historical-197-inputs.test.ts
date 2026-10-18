@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, open, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,11 @@ import {
   validateHistorical197Metadata,
   verifyHistorical197Inputs
 } from './historical-197-inputs.mjs'
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, open: vi.fn(actual.open) }
+})
 
 // Exact public original provenance, verified against the published asset digest; no invented build.version.
 const ORIGINAL_PROVENANCE = `{
@@ -225,7 +230,9 @@ describe('historical 1.9.7 immutable public input identity', () => {
       artifact_source: SOURCE, harness_commit: HARNESS, candidate_run: 38795048288,
       candidate_attempt: 1, release_id: 414278048, tag: 'metis-unsigned-v1.9.7'
     })
-    expect(receipt.assets?.map((asset: { name: string }) => asset.name)).toEqual(PUBLIC_ASSETS.map(asset => asset.name))
+    expect(receipt).toMatchObject({
+      assets: PUBLIC_ASSETS.map(({ digest, ...asset }) => ({ ...asset, sha256: digest.slice('sha256:'.length) }))
+    })
     expect(JSON.stringify(receipt)).not.toContain('Metis-QA')
     expect(JSON.stringify(receipt)).not.toContain('Metis-Portable')
     const regularRelease = context()
@@ -321,6 +328,27 @@ describe('historical input file admission and streaming bytes', () => {
     await expect(hashHistorical197File(target, ABC)).rejects.toMatchObject({ code: 'unsafe-file' })
     await expect(hashHistorical197File(link, ABC)).rejects.toMatchObject({ code: 'unsafe-file' })
     expect(await verifyHistorical197Inputs({ metadata: context(), assetDirectory: link })).toMatchObject({ outcome: 'REFUSED', code: 'unsafe-file' })
+  })
+
+  it('refuses a close failure after streaming real bytes and actually closing its descriptor', async () => {
+    const dir = await directory()
+    const file = join(dir, 'owned.bin')
+    await writeFile(file, 'abc')
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    let opened: Awaited<ReturnType<typeof open>> | undefined
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await actual.open(...args)
+      opened = handle
+      const close = handle.close.bind(handle)
+      handle.close = async () => {
+        await close()
+        throw new Error('Synthetic private close canary')
+      }
+      return handle
+    })
+    await expect(hashHistorical197File(file, ABC)).rejects.toMatchObject({ code: 'input-unreadable' })
+    expect(opened).toBeDefined()
+    await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' })
   })
 
   it('rejects missing, extra and tiny substituted installer sets; never fakes a five-asset positive', async () => {
