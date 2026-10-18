@@ -38,6 +38,14 @@ export function assessClosedHistoricalWindowsReport(report, harnessCommit) {
       !Array.isArray(report.checks) || report.checks.length !== REQUIRED_CHECKS.length || !report.checks.every((row) =>
         exact(row, ['id', 'status']) && REQUIRED_CHECKS.includes(row.id) && ['PASS', 'FAIL', 'NOT_RUN'].includes(row.status)) ||
       !REQUIRED_CHECKS.every((id) => report.checks.filter((row) => row.id === id).length === 1)) return REFUSED
+    if (!report.accepted) {
+      const errorIndex = REQUIRED_CHECKS.indexOf(report.error)
+      const cleanupIndex = REQUIRED_CHECKS.indexOf('cleanup')
+      if (errorIndex < 0 || report.checks[errorIndex].status !== 'FAIL' ||
+        report.checks.some((row, index) => index < errorIndex ? row.status !== 'PASS' :
+          index === errorIndex ? row.status !== 'FAIL' : index < cleanupIndex ? row.status !== 'NOT_RUN' :
+            !['PASS', 'FAIL'].includes(row.status))) return REFUSED
+    }
     const accepted = assessHistoricalUpgradeReport(report)
     if (report.accepted !== accepted) return REFUSED
     return { closed: true, accepted }
