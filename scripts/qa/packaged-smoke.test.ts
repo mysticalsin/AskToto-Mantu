@@ -719,7 +719,11 @@ describe('runRevealRow', () => {
   ])('refuses %s without waiting for or accepting a reveal', async (_name, receipt, reason) => {
     const rows = initialRvRows('darwin')
     const waitForRevealRecord = vi.fn(async () => ({
-      event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide'
+      event: 'reveal',
+      reason: 'activate',
+      outcome: 'shown',
+      parked: true,
+      layout: 'hide'
     }))
     await runRevealRow({
       auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
@@ -733,7 +737,8 @@ describe('runRevealRow', () => {
     })
     expect(waitForRevealRecord).not.toHaveBeenCalled()
     expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
-      status: 'FAIL', evidence: null,
+      status: 'FAIL',
+      evidence: null,
       diagnostics: { stage: 'launch', launch: { reason } }
     })
   })
@@ -750,13 +755,17 @@ describe('runRevealRow', () => {
       auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
       rows,
       id: 'RV-1-macos-finder-spotlight-launchpad',
-      reason: 'activate', prepare: async () => receipt, run, waitForRevealRecord,
+      reason: 'activate',
+      prepare: async () => receipt,
+      run,
+      waitForRevealRecord,
       failure: 'native preparation did not succeed'
     })
     expect(run).not.toHaveBeenCalled()
     expect(waitForRevealRecord).not.toHaveBeenCalled()
     expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
-      status: 'FAIL', diagnostics: { stage: 'prepare', launch: null }
+      status: 'FAIL',
+      diagnostics: { stage: 'prepare', launch: null }
     })
   })
 
@@ -797,8 +806,12 @@ describe('runRevealRow', () => {
       })
       const row = rows.find((entry) => entry.id === 'RV-1-macos-finder-spotlight-launchpad')
       expect(row).toMatchObject({
-        status: 'FAIL', evidence: null,
-        diagnostics: { stage: 'launch', launch: { code: null, signal: 'signal', error: false, reason: 'invalid-receipt' } }
+        status: 'FAIL',
+        evidence: null,
+        diagnostics: {
+          stage: 'launch',
+          launch: { code: null, signal: 'signal', error: false, reason: 'invalid-receipt' }
+        }
       })
       expect(JSON.stringify(row)).not.toContain(secret)
       expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret)
