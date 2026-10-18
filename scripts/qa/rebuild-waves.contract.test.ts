@@ -171,13 +171,26 @@ function draftRegistrationConnected(source: ts.SourceFile): boolean {
   const dependencies = calls[0].arguments[0]
   if (!ts.isObjectLiteralExpression(dependencies)) return false
   const expected = [
-    'ipcMain', 'assertMainWindow', 'requireAuth', 'captureAuthSessionBoundary',
-    'getSettings', 'captureDraftSettingsBoundary', 'saveDraftTranscript'
+    'ipcMain',
+    'assertMainWindow',
+    'requireAuth',
+    'captureAuthSessionBoundary',
+    'getSettings',
+    'captureDraftSettingsBoundary',
+    'saveDraftTranscript'
   ]
-  return dependencies.properties.length === expected.length && expected.every((name) =>
-    !shadowsName(registration, name) && dependencies.properties.filter((property) =>
-      ts.isShorthandPropertyAssignment(property) && property.name.text === name && !property.objectAssignmentInitializer
-    ).length === 1
+  return (
+    dependencies.properties.length === expected.length &&
+    expected.every(
+      (name) =>
+        !shadowsName(registration, name) &&
+        dependencies.properties.filter(
+          (property) =>
+            ts.isShorthandPropertyAssignment(property) &&
+            property.name.text === name &&
+            !property.objectAssignmentInitializer
+        ).length === 1
+    )
   )
 }
 
@@ -386,9 +399,15 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     const mutations = [
       ["'./ipc/draft-transcript-ipc'", "'./disconnected-draft-handler'"],
       ['  captureAuthSessionBoundary,', '  captureAuthSessionBoundary as disconnectedAuthBoundary,'],
-      ['  registerDraftTranscriptIpc({', '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'],
+      [
+        '  registerDraftTranscriptIpc({',
+        '  const unusedDraftRegistration = () => registerDraftTranscriptIpc({'
+      ],
       ['  registerDraftTranscriptIpc({', '  registerDraftTranscriptIpc({})\n  registerDraftTranscriptIpc({'],
-      ['    captureDraftSettingsBoundary,\n    saveDraftTranscript', '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'],
+      [
+        '    captureDraftSettingsBoundary,\n    saveDraftTranscript',
+        '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'
+      ],
       ['    saveDraftTranscript\n  })', '    saveDraftTranscript: saveMeeting\n  })'],
       ['  registerDraftTranscriptIpc({', '  const getSettings = () => ({})\n  registerDraftTranscriptIpc({']
     ]
@@ -411,17 +430,25 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     const currentAuth = vi.fn(() => true)
     const currentSettings = vi.fn(() => true)
     registerDraftTranscriptIpc({
-      ipcMain: { handle(channel, handler) {
-        expect(channel).toBe(IPC.saveDraftTranscript)
-        invoke = (raw) => Promise.resolve(handler({} as IpcMainInvokeEvent, raw))
-      } },
-      assertMainWindow: sender, requireAuth, getSettings,
+      ipcMain: {
+        handle(channel, handler) {
+          expect(channel).toBe(IPC.saveDraftTranscript)
+          invoke = (raw) => Promise.resolve(handler({} as IpcMainInvokeEvent, raw))
+        }
+      },
+      assertMainWindow: sender,
+      requireAuth,
+      getSettings,
       captureAuthSessionBoundary: () => currentAuth,
       captureDraftSettingsBoundary: () => currentSettings,
       saveDraftTranscript: backend
     })
     const final = { speaker: 'you' as const, text: 'Synthetic final', t: 1 }
-    const payload = { startedAt: 1, title: 'Synthetic draft', lines: [final, { ...final, text: 'Synthetic interim', provisional: true }] }
+    const payload = {
+      startedAt: 1,
+      title: 'Synthetic draft',
+      lines: [final, { ...final, text: 'Synthetic interim', provisional: true }]
+    }
     await expect(invoke(payload)).resolves.toEqual({ status: 'saved' })
     expect(backend).toHaveBeenCalledTimes(1)
     expect(backend.mock.calls[0][0]).toBe(DEFAULT_SETTINGS)
@@ -431,11 +458,15 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     backend.mockClear()
     getSettings.mockClear()
     const senderFailure = new Error('Synthetic sender refusal')
-    sender.mockImplementationOnce(() => { throw senderFailure })
+    sender.mockImplementationOnce(() => {
+      throw senderFailure
+    })
     await expect(invoke(payload)).rejects.toBe(senderFailure)
     requireAuth.mockReturnValueOnce(false)
     await expect(invoke(payload)).resolves.toEqual({ status: 'failed' })
-    await expect(invoke({ ...payload, lines: [{ ...final, provisional: 'true' }] })).resolves.toEqual({ status: 'failed' })
+    await expect(invoke({ ...payload, lines: [{ ...final, provisional: 'true' }] })).resolves.toEqual({
+      status: 'failed'
+    })
     expect(backend).not.toHaveBeenCalled()
     expect(getSettings).not.toHaveBeenCalled()
   })
@@ -503,49 +534,6 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     const disconnectedSave = (disconnectedSaveSource.statements[0] as ts.VariableStatement).declarationList
       .declarations[0].initializer as ts.ArrowFunction
     expect(directStripAssignmentIndex(disconnectedSave)).toBe(-1)
-
-    const draftHandler = ipcHandler(main, 'saveDraftTranscript')
-    const draftBody = draftHandler.body
-    expect(ts.isBlock(draftBody)).toBe(true)
-    if (!ts.isBlock(draftBody)) throw new Error('saveDraftTranscript must have a block body')
-    const draftCalls = directDraftSaveCalls(draftHandler)
-    expect(draftCalls).toHaveLength(1)
-    const draftCall = draftCalls[0]
-    expect(draftCall.arguments).toHaveLength(2)
-    expect(callExpression(draftCall.arguments[0], 'getSettings')).toBe(true)
-    expect(ts.isObjectLiteralExpression(draftCall.arguments[1])).toBe(true)
-    if (!ts.isObjectLiteralExpression(draftCall.arguments[1]))
-      throw new Error('draft save value must be an object literal')
-    const parsedDraft = draftBody.statements.find((statement) => {
-      if (!ts.isVariableStatement(statement)) return false
-      return statement.declarationList.declarations.some(
-        (declaration) =>
-          ts.isIdentifier(declaration.name) &&
-          declaration.name.text === 'parsed' &&
-          !!declaration.initializer &&
-          ts.isCallExpression(declaration.initializer) &&
-          ts.isPropertyAccessExpression(declaration.initializer.expression) &&
-          ts.isIdentifier(declaration.initializer.expression.expression) &&
-          declaration.initializer.expression.expression.text === 'SaveMeetingSchema' &&
-          declaration.initializer.expression.name.text === 'safeParse'
-      )
-    })
-    expect(parsedDraft).toBeDefined()
-    for (const importedName of ['SaveMeetingSchema', 'stripProvisionalLines', 'saveDraftTranscript', 'getSettings'])
-      expect(shadowsName(draftHandler, importedName), `draft handler must not shadow ${importedName}`).toBe(false)
-    const spreadParsed = draftCall.arguments[1].properties.some(
-      (property) => ts.isSpreadAssignment(property) && property.expression.getText() === 'parsed.data'
-    )
-    const strippedDraftLines = draftCall.arguments[1].properties.some(
-      (property) =>
-        ts.isPropertyAssignment(property) &&
-        property.name.getText() === 'lines' &&
-        callExpression(property.initializer, 'stripProvisionalLines') &&
-        property.initializer.arguments.length === 1 &&
-        property.initializer.arguments[0].getText() === 'parsed.data.lines'
-    )
-    expect(spreadParsed).toBe(true)
-    expect(strippedDraftLines).toBe(true)
 
     const returnedDraftSource = parseInlineTypeScript(`
       const returned = async () => {

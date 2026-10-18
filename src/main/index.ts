@@ -720,7 +720,7 @@ import {
 } from './lifecycle/first-show'
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { captureDraftSettingsBoundary, getPublishedSettingsObservation } from './settings-observation'
-import { registerDraftTranscriptIpc } from './draft-transcript-ipc'
+import { registerDraftTranscriptIpc } from './ipc/draft-transcript-ipc'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
