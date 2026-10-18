@@ -7,6 +7,7 @@ const read = () =>
   readFileSync(join(__dirname, '../../.github/workflows/historical-197-identity.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 function requireIdentityWorkflow(source: string): void {
+  expect(source).toContain("run-name: ${{ github.event_name == 'pull_request' && 'Historical 1.9.7 input identity (registration)' || 'Historical 1.9.7 input identity' }}")
   expect(source).toContain("if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'")
   expect(source).toContain('permissions:\n  contents: read\n  actions: read\n')
   expect(source).toContain('    runs-on: ubuntu-latest\n')
