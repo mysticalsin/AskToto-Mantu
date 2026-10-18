@@ -236,7 +236,7 @@ function withReport(run: (fixture: ReturnType<typeof reportFixture>) => void, sk
   try { run(fixture) } finally { rmSync(fixture.folder, { recursive: true, force: true }) }
 }
 
-function diagnose(fixture: ReturnType<typeof reportFixture>, io = fs): ReturnType<typeof diagnoseRootReport> {
+function diagnose(fixture: ReturnType<typeof reportFixture>, io: Parameters<typeof diagnoseRootReport>[1] = fs): ReturnType<typeof diagnoseRootReport> {
   writeFileSync(fixture.context.reportPath, JSON.stringify(fixture.report))
   return diagnoseRootReport(fixture.context, io)
 }
