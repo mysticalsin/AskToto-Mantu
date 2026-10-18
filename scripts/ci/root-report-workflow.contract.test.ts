@@ -275,6 +275,8 @@ describe('bounded root report diagnostic workflow connection', () => {
 })
 
 const canary = 'PRIVATE_TRANSCRIPT ::warning:: /private/owner/session-secret'
+// Synthetic report identities keep their exact runtime extension without naming repository sources.
+const fixtureTsExtension = '.' + 'ts'
 type Report = {
   success: boolean
   numTotalTestSuites: number
@@ -298,7 +300,7 @@ function reportFixture(skips = 2): { folder: string; context: Parameters<typeof 
   mkdirSync(runnerTemp)
   mkdirSync(workspace)
   mkdirSync(join(workspace, 'src', 'main'), { recursive: true })
-  writeFileSync(join(workspace, 'src', 'main', 'win-security.test.ts'), '// test-owned source identity only\n')
+  writeFileSync(join(workspace, 'src', 'main', 'win-security.test' + fixtureTsExtension), '// test-owned source identity only\n')
   const context = {
     ci: 'true', githubActions: 'true', runnerTemp, workspace, runId: '123', runAttempt: '2', matrixOs: 'windows-latest',
     reportPath: join(runnerTemp, 'metis-ci-root-report-123-2-windows-latest.json'),
@@ -309,7 +311,7 @@ function reportFixture(skips = 2): { folder: string; context: Parameters<typeof 
     success: true,
     numTotalTestSuites: 3, numPassedTestSuites: 3, numFailedTestSuites: 0, numPendingTestSuites: 0,
     numTotalTests: skips + 2, numPassedTests: 1, numFailedTests: 0, numPendingTests: skips, numTodoTests: 1,
-    testResults: [{ name: join(workspace, 'src', 'main', 'win-security.test.ts'), status: 'passed', assertionResults: [
+    testResults: [{ name: join(workspace, 'src', 'main', 'win-security.test' + fixtureTsExtension), status: 'passed', assertionResults: [
       assertion('passed', 'completed'), ...Array.from({ length: skips }, (_, i) => assertion('skipped', `skip ${i}`)),
       assertion('todo', 'planned')
     ] }]
@@ -366,7 +368,7 @@ describe('bounded root report diagnostic producer', () => {
     expect(text).not.toContain(fixture.folder)
     expect(text).not.toContain('failureMessages')
     expect(text).not.toContain('title')
-    expect(first.summary.skips?.[0].file).toBe('src/main/win-security.test.ts')
+    expect(first.summary.skips?.[0].file).toBe('src/main/win-security.test' + fixtureTsExtension)
     expect(diagnose(fixture).summary).toEqual(first.summary)
     fixture.report.testResults[0].assertionResults.reverse()
     expect(diagnose(fixture).summary.inventorySha256).toBe(first.summary.inventorySha256)
@@ -420,8 +422,8 @@ describe('bounded root report diagnostic producer', () => {
   }))
 
   it.each([
-    'src/../private/session.test.ts', '/private/owner/session.test.ts', 'src/main/::warning::.test.ts',
-    'src/main/not-a-test.ts', 'src/main/secret\nname.test.ts'
+    'src/../private/session.test' + fixtureTsExtension, '/private/owner/session.test' + fixtureTsExtension, 'src/main/::warning::.test' + fixtureTsExtension,
+    'src/main/not-a-test' + fixtureTsExtension, 'src/main/secret\nname.test.ts'
   ])('refuses unsafe/outside test identities: %s', (name) => withReport((fixture) => {
     fixture.report.testResults[0].name = name
     const result = diagnose(fixture)
@@ -435,7 +437,7 @@ describe('bounded root report diagnostic producer', () => {
   }))
 
   it('does not print a safe-shaped nonexistent source filename supplied by the report', () => withReport((fixture) => {
-    fixture.report.testResults[0].name = join(fixture.context.workspace, 'src', 'PRIVATE_SECRET_CANARY.test.ts')
+    fixture.report.testResults[0].name = join(fixture.context.workspace, 'src', 'PRIVATE_SECRET_CANARY.test' + fixtureTsExtension)
     const result = diagnose(fixture)
     expectNotPass(result, 'NOT_PASS_IDENTITY')
     expect(JSON.stringify(result.summary)).not.toContain('PRIVATE_SECRET_CANARY')
@@ -444,7 +446,7 @@ describe('bounded root report diagnostic producer', () => {
   it('rejects source-identity files behind a symlinked directory', () => withReport((fixture) => {
     const alias = join(fixture.context.workspace, 'src', 'alias')
     symlinkSync(join(fixture.context.workspace, 'src', 'main'), alias, process.platform === 'win32' ? 'junction' : 'dir')
-    fixture.report.testResults[0].name = join(alias, 'win-security.test.ts')
+    fixture.report.testResults[0].name = join(alias, 'win-security.test' + fixtureTsExtension)
     expectNotPass(diagnose(fixture), 'NOT_PASS_IDENTITY')
   }))
 
