@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
+import { performance } from 'node:perf_hooks'
 import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
 import { SpeechBrokerClient, type SpeechCreateRequest, type SpeechTrack } from './broker-client'
@@ -392,7 +393,8 @@ describe('RelaySpeechSession', () => {
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
-    MockRelaySocket.instances[0]!.onFinish = undefined
+    const socket = MockRelaySocket.instances[0]!
+    socket.onFinish = undefined
     const original = singleTrackCreateRequest()
     const renewedRequest: SpeechCreateRequest = {
       ...original,
@@ -402,12 +404,42 @@ describe('RelaySpeechSession', () => {
         expiresAt: original.consent.expiresAt + 10
       }
     }
-    const operation = { signal: new AbortController().signal, deadlineAt: performance.now() + 40 }
-    await expect(started.value.renew(renewedRequest, operation)).resolves.toEqual({
-      ok: false,
-      code: 'TIMEOUT'
-    })
-    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(globalThis.performance).toBe(performance)
+    let monotonicAt = performance.now()
+    const monotonicNow = vi.spyOn(performance, 'now').mockImplementation(() => monotonicAt)
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    const owned: Promise<unknown>[] = []
+    try {
+      const operation = { signal: new AbortController().signal, deadlineAt: monotonicAt + 40 }
+      const before = Date.now()
+      const renewing = started.value.renew(renewedRequest, operation)
+      const finishing = started.value.finish()
+      owned.push(renewing, finishing)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(socket.sent).toContain('{"type":"finish"}')
+      expect(createSession).toHaveBeenCalledTimes(1)
+      monotonicAt += 20
+      await vi.advanceTimersByTimeAsync(20)
+      expect(Date.now() - before).toBe(20)
+      expect(operation.deadlineAt - performance.now()).toBe(20)
+      // Transport closure without a relay terminal cannot confirm predecessor closure.
+      socket.close()
+      await expect(renewing).resolves.toEqual({ ok: false, code: 'TIMEOUT' })
+      await expect(finishing).resolves.toMatchObject({
+        complete: false,
+        tracks: [{ closeConfirmed: false, tail: 'incomplete' }]
+      })
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(MockRelaySocket.instances).toHaveLength(1)
+    } finally {
+      try {
+        await started.value.cancel()
+        await Promise.all(owned)
+      } finally {
+        vi.useRealTimers()
+        monotonicNow.mockRestore()
+      }
+    }
   })
 
   it('keeps close confirmation but reports an incomplete tail when a segment never becomes final', async () => {
@@ -617,17 +649,47 @@ describe('RelaySpeechSession', () => {
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
-    MockRelaySocket.instances[0]!.onFinish = undefined
-    const earlierFinish = started.value.finish(5_000)
-    const request = singleTrackCreateRequest()
-    request.consent.issuedAt += 10
-    request.consent.expiresAt += 10
-    const operation = { signal: new AbortController().signal, deadlineAt: performance.now() + 40 }
-    const before = Date.now()
-    await expect(started.value.renew(request, operation)).resolves.toEqual({ ok: false, code: 'TIMEOUT' })
-    expect(Date.now() - before).toBeLessThan(500)
-    expect(createSession).toHaveBeenCalledTimes(1)
-    await started.value.cancel()
-    await earlierFinish
+    const socket = MockRelaySocket.instances[0]!
+    socket.onFinish = undefined
+    expect(globalThis.performance).toBe(performance)
+    let monotonicAt = performance.now()
+    const monotonicNow = vi.spyOn(performance, 'now').mockImplementation(() => monotonicAt)
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    const owned: Promise<unknown>[] = []
+    try {
+      let earlierFinished = false
+      const earlierFinish = started.value.finish(5_000).then((result) => {
+        earlierFinished = true
+        return result
+      })
+      owned.push(earlierFinish)
+      const request = singleTrackCreateRequest()
+      request.consent.issuedAt += 10
+      request.consent.expiresAt += 10
+      const operation = { signal: new AbortController().signal, deadlineAt: monotonicAt + 40 }
+      const before = Date.now()
+      const renewing = started.value.renew(request, operation)
+      owned.push(renewing)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(socket.sent).toContain('{"type":"finish"}')
+      expect(earlierFinished).toBe(false)
+      monotonicAt += 40
+      await vi.advanceTimersByTimeAsync(40)
+      expect(Date.now() - before).toBe(40)
+      expect(performance.now()).toBe(operation.deadlineAt)
+      await expect(renewing).resolves.toEqual({ ok: false, code: 'TIMEOUT' })
+      expect(Date.now() - before).toBeLessThan(500)
+      expect(earlierFinished).toBe(false)
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(MockRelaySocket.instances).toHaveLength(1)
+    } finally {
+      try {
+        await started.value.cancel()
+        await Promise.all(owned)
+      } finally {
+        vi.useRealTimers()
+        monotonicNow.mockRestore()
+      }
+    }
   })
 })
