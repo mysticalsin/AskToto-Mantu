@@ -1026,15 +1026,20 @@ describe('bounded native launch diagnostics', () => {
   })
 
   it.each([
-    { kind: 'os-status', osStatus: '/private/synthetic-token' },
-    { kind: 'os-status', osStatus: 2 ** 40 },
-    { kind: '/private/synthetic-token', osStatus: -1743 },
-    Object.defineProperty({}, 'kind', {
-      get: () => {
-        throw new Error('/private/synthetic-token')
-      }
-    })
-  ])('does not copy malformed optional native diagnostics into a failed reveal row: %s', async (launchDiagnostic) => {
+    ['private-status', () => ({ kind: 'os-status', osStatus: '/private/synthetic-token' })],
+    ['out-of-range-status', () => ({ kind: 'os-status', osStatus: 2 ** 40 })],
+    ['private-kind', () => ({ kind: '/private/synthetic-token', osStatus: -1743 })],
+    [
+      'throwing-kind-getter',
+      () =>
+        Object.defineProperty({}, 'kind', {
+          get: () => {
+            throw new Error('/private/synthetic-token')
+          }
+        })
+    ]
+  ] as const)('does not copy malformed optional native diagnostics into a failed reveal row: %s', async (_label, createDiagnostic) => {
+    const launchDiagnostic = createDiagnostic()
     const rows = initialRvRows('darwin')
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
