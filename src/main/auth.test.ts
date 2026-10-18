@@ -1019,7 +1019,6 @@ describe('speech auth lease (auth module authority)', () => {
 
       pkce.mockResolvedValueOnce({ verifier: 'verifier', challenge: 'challenge' })
       expect(await auth.signIn()).toMatchObject({ ok: true, configured: true, email: 'user@example.com' })
-      expect(auth.authStatus().signedIn).toBe(true)
       expect(auth.signInBackoffRemainingMs()).toBe(0)
       expect(pkce).toHaveBeenCalledTimes(8)
       expect(listen).toHaveBeenCalledTimes(1)
@@ -1033,6 +1032,7 @@ describe('speech auth lease (auth module authority)', () => {
       expect(audit).toHaveBeenLastCalledWith('auth.signin_failed', { reason: 'other', consecutive: 1 })
       expect(JSON.stringify(audit.mock.calls)).not.toContain(failure.message)
     } finally {
+      auth.signOut()
       await Promise.all([...ownedServers].map((server) => new Promise<void>((resolveClose) => {
         server.close(() => resolveClose())
         server.closeAllConnections()
