@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFile
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   hoverWatchRestRect,
   parkAfterExclusiveOnboarding,
@@ -532,11 +532,11 @@ describe('runRevealRow', () => {
       reason: 'second-instance',
       prepare: async () => {
         reveals.push({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
-        return { error: false }
+        return { code: 0, signal: null, error: false }
       },
       run: async () => {
         exercisedReopen = true
-        return { error: false }
+        return { code: 0, signal: null, error: false }
       },
       countReveals: (_auditLogPath, reason) => reveals.filter((record) => record.reason === reason).length,
       waitForRevealRecord: async (_auditLogPath, reason, seenCount) =>
@@ -648,9 +648,9 @@ describe('runRevealRow', () => {
         | undefined
       expect(row).toMatchObject({ status: 'FAIL', evidence: null, unblock: 'missing Windows shortcut reveal' })
       expect(row?.diagnostics).toEqual({
-        stage: 'no-reveal',
-        prepare: { code: 0, signal: null, error: false },
-        launch: { code: null, signal: 'timeout', error: false },
+        stage: 'launch',
+        prepare: { code: 0, signal: null, error: false, reason: 'success' },
+        launch: { code: null, signal: 'timeout', error: false, reason: 'timeout' },
         waitedMs: expect.any(Number),
         auditBefore: [
           { event: 'app.started' },
@@ -696,11 +696,112 @@ describe('runRevealRow', () => {
       | undefined
     expect(row?.diagnostics).toMatchObject({
       stage: 'prepare',
-      prepare: { code: 1, signal: null, error: true },
+      prepare: { code: 1, signal: null, error: true, reason: 'spawn-error' },
       launch: null,
       auditBefore: [],
       auditAfter: []
     })
+  })
+
+  it.each([
+    ['nonzero exit', { code: 1, signal: null, error: false }, 'nonzero-exit'],
+    ['signal', { code: null, signal: 'SIGTERM', error: false }, 'signal'],
+    ['timeout', { code: null, signal: 'timeout', error: false }, 'timeout'],
+    ['spawn failure', { code: null, signal: null, error: true }, 'spawn-error'],
+    ['undefined receipt', undefined, 'invalid-receipt'],
+    ['null receipt', null, 'invalid-receipt'],
+    ['empty receipt', {}, 'invalid-receipt'],
+    ['partial receipt', { error: false }, 'invalid-receipt'],
+    ['fractional exit', { code: 0.5, signal: null, error: false }, 'invalid-receipt'],
+    ['nonfinite exit', { code: Number.NaN, signal: null, error: false }, 'invalid-receipt'],
+    ['out-of-range exit', { code: 2 ** 40, signal: null, error: false }, 'invalid-receipt'],
+    ['missing exit and signal', { code: null, signal: null, error: false }, 'invalid-receipt']
+  ])('refuses %s without waiting for or accepting a reveal', async (_name, receipt, reason) => {
+    const rows = initialRvRows('darwin')
+    const waitForRevealRecord = vi.fn(async () => ({
+      event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide'
+    }))
+    await runRevealRow({
+      auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
+      rows,
+      id: 'RV-1-macos-finder-spotlight-launchpad',
+      reason: 'activate',
+      run: async () => receipt,
+      waitForRevealRecord,
+      failure: 'native launch did not succeed'
+    })
+    expect(waitForRevealRecord).not.toHaveBeenCalled()
+    expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
+      status: 'FAIL', evidence: null,
+      diagnostics: { stage: 'launch', launch: { reason } }
+    })
+  })
+
+  it.each([
+    { code: 1, signal: null, error: false },
+    { code: null, signal: 'timeout', error: false },
+    undefined
+  ])('does not launch after an unsuccessful or missing preparation receipt: %s', async (receipt) => {
+    const rows = initialRvRows('darwin')
+    const run = vi.fn(async () => ({ code: 0, signal: null, error: false }))
+    const waitForRevealRecord = vi.fn(async () => null)
+    await runRevealRow({
+      auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
+      rows,
+      id: 'RV-1-macos-finder-spotlight-launchpad',
+      reason: 'activate', prepare: async () => receipt, run, waitForRevealRecord,
+      failure: 'native preparation did not succeed'
+    })
+    expect(run).not.toHaveBeenCalled()
+    expect(waitForRevealRecord).not.toHaveBeenCalled()
+    expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
+      status: 'FAIL', diagnostics: { stage: 'prepare', launch: null }
+    })
+  })
+
+  it('retains the default fifteen-second reveal window after an explicit successful launch', async () => {
+    const rows = initialRvRows('darwin')
+    let window: number | undefined
+    await runRevealRow({
+      auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
+      rows,
+      id: 'RV-1-macos-finder-spotlight-launchpad',
+      reason: 'activate',
+      run: async () => ({ code: 0, signal: null, error: false }),
+      waitForRevealRecord: async (_path, _reason, _seen, timeout) => {
+        window = timeout
+        return { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' }
+      },
+      failure: 'missing activate reveal'
+    })
+    expect(window).toBe(15_000)
+    expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({ status: 'PASS' })
+  })
+
+  it('projects only closed launch diagnostics from malformed receipt fields', async () => {
+    const secret = '/private/synthetic-meeting-path-and-token'
+    const rows = initialRvRows('darwin')
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await runRevealRow({
+        auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
+        rows,
+        id: 'RV-1-macos-finder-spotlight-launchpad',
+        reason: 'activate',
+        run: async () => ({ code: secret, signal: secret, error: { message: secret }, stderr: secret }),
+        waitForRevealRecord: async () => ({ outcome: 'shown', parked: true }),
+        failure: 'invalid launch receipt'
+      })
+      const row = rows.find((entry) => entry.id === 'RV-1-macos-finder-spotlight-launchpad')
+      expect(row).toMatchObject({
+        status: 'FAIL', evidence: null,
+        diagnostics: { stage: 'launch', launch: { code: null, signal: 'signal', error: false, reason: 'invalid-receipt' } }
+      })
+      expect(JSON.stringify(row)).not.toContain(secret)
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret)
+    } finally {
+      errorLog.mockRestore()
+    }
   })
 })
 
