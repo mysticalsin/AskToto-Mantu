@@ -719,7 +719,8 @@ import {
   withBootFirstShowDeferred
 } from './lifecycle/first-show'
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
-import { getPublishedSettingsObservation } from './settings-observation'
+import { captureDraftSettingsBoundary, getPublishedSettingsObservation } from './settings-observation'
+import { registerDraftTranscriptIpc } from './draft-transcript-ipc'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -736,6 +737,7 @@ import {
   signIn as authSignIn,
   signOut as authSignOut,
   requireAuth,
+  captureAuthSessionBoundary,
   setSessionClearedHandler,
   resetSpeechAuthProfile,
   completeSpeechAuthProfileReset,
@@ -9078,17 +9080,14 @@ function registerIpc(): void {
     return { items: computeAttention(getSettings()) }
   })
 
-  // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while
-  // Listen is active — see App.tsx). Ordinary failures return a content-free receipt and must not interrupt
-  // the meeting. See saveDraftTranscript's own doc comment for why this exists (crash/force-quit recovery).
-  ipcMain.handle(IPC.saveDraftTranscript, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { status: 'failed' }
-    const parsed = SaveMeetingSchema.safeParse(raw)
-    if (!parsed.success) return { status: 'failed' }
-    // Same provisional-line guard as the real saveTranscript handler above — this periodic crash-
-    // recovery snapshot must never resurrect a UI-only "…" placeholder into a recovered draft.
-    return await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
+  registerDraftTranscriptIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    captureAuthSessionBoundary,
+    getSettings,
+    captureDraftSettingsBoundary,
+    saveDraftTranscript
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {
