@@ -46,6 +46,7 @@ import {
   replayEventShape,
   verifySourceBinding,
   verifyCaseSummary,
+  verifyReplayCaseClaims,
   readFooter
 } from './persistence-fixed-stdio-native-evidence.mjs'
 
@@ -1860,21 +1861,7 @@ export async function runReplay() {
           JSON.stringify(row.frontier) === JSON.stringify(reduced.frontier),
         'sample and durable frontier mirror'
       )
-      for (const field of [
-        'capability',
-        'diagnosticStatus',
-        'naturalClose',
-        'exitCode',
-        'signal',
-        'callbackJoins',
-        'processClose',
-        'peer3Closed',
-        'peer4Closed',
-        'stderrClosed',
-        'ipcDisconnected',
-        'terminated'
-      ])
-        assert(row[field] === reduced[field], 'collector case claim: ' + field)
+      verifyReplayCaseClaims(id, row, reduced)
       assert(
         JSON.stringify(row.signals) === JSON.stringify(reduced.signals) &&
           JSON.stringify(row.errors) === JSON.stringify(reduced.errors) &&

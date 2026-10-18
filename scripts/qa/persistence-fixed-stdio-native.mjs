@@ -1257,13 +1257,14 @@ async function runOneCaseBody(state, globalOrdinal, targetMeta, outerDeadline) {
     state.phase = 'rescue'
     if (id === 'N03' || id === 'N04') {
       await sendCommand(state, 'rescue-destroy', deadline)
+      if (id === 'N03') await rescueInput(state, deadline)
       await waitFor(
         state,
         () => ['reader3', 'writer4'].every((endpoint) => state.closeEnds.has(endpoint)),
         deadline,
         'remaining child endpoints closed'
       )
-      await rescueInput(state, deadline)
+      if (id === 'N04') await rescueInput(state, deadline)
     } else if (BULK.has(id)) {
       if (state.childEvents.some((item) => item.op === 'goal' && item.id === 2 && item.state === 'rejected'))
         await sendCommand(state, 'rescue-destroy', deadline)

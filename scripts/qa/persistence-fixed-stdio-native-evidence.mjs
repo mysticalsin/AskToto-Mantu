@@ -1481,6 +1481,41 @@ function verifyCaseSummary(row, id) {
     )
 }
 
+function verifyReplayCaseClaims(id, collectorRow, reducedRow) {
+  const safeValue = (value) => {
+    if (value === null || typeof value === 'boolean') return String(value)
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value).slice(0, 48) : '<number>'
+    if (typeof value === 'string') return JSON.stringify(value.replace(/[^A-Za-z0-9_.:-]/g, '?').slice(0, 48))
+    return `<${typeof value}>`
+  }
+  const safeKey = (value, max) =>
+    String(value)
+      .replace(/[^A-Za-z0-9_.:-]/g, '?')
+      .slice(0, max)
+  const fields = [
+    'capability',
+    'diagnosticStatus',
+    'naturalClose',
+    'exitCode',
+    'signal',
+    'callbackJoins',
+    'processClose',
+    'peer3Closed',
+    'peer4Closed',
+    'stderrClosed',
+    'ipcDisconnected',
+    'terminated'
+  ]
+  for (const field of fields) {
+    const diagnostic = [
+      'METIS_N0_REPLAY_MISMATCH',
+      `case=${safeKey(id, 24)} field=${safeKey(field, 48)}`,
+      `collector=${safeValue(collectorRow[field])} replay=${safeValue(reducedRow[field])}`
+    ].join(' ')
+    assert(collectorRow[field] === reducedRow[field], diagnostic.slice(0, 512))
+  }
+}
+
 function readFooter(stderr, id) {
   const lines = stderr
     .toString('utf8')
@@ -1746,6 +1781,7 @@ export {
   validateErrorProjection,
   verifySourceBinding,
   verifyCaseSummary,
+  verifyReplayCaseClaims,
   readFooter,
   parseAggregate,
   recordCollectorExit,
