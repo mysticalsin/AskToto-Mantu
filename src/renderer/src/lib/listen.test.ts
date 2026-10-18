@@ -53,6 +53,10 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Qu’est-ce que vous proposez')).toBe(true)
     expect(isQuestion('Où se trouve le rapport')).toBe(true)
     expect(isQuestion('Est-ce que vous pouvez répéter')).toBe(true)
+    expect(isQuestion('Quel est le vôtre')).toBe(true)
+    expect(isQuestion('Quel est le sien')).toBe(true)
+    expect(isQuestion('Quel est le leur')).toBe(true)
+    expect(isQuestion('Quel est votre')).toBe(false)
   })
 
   it('detects complete Brazilian Portuguese questions from common interrogative openers', () => {
@@ -65,6 +69,13 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Quem eles são')).toBe(true)
     expect(isQuestion('Por que ele foi')).toBe(true)
     expect(isQuestion('O que é isso')).toBe(true)
+    expect(isQuestion('O que ele é')).toBe(true)
+    expect(isQuestion('Quais são as prioridades')).toBe(true)
+    expect(isQuestion('Qual é o seu')).toBe(true)
+    expect(isQuestion('Qual é sua')).toBe(true)
+    expect(isQuestion('Qual é meu')).toBe(true)
+    expect(isQuestion('Qual é o meu')).toBe(true)
+    expect(isQuestion('Qual é o nosso')).toBe(true)
   })
 
   it('detects complete Spanish questions, including an opening inverted question mark', () => {
@@ -73,6 +84,11 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Cómo funciona el respaldo')).toBe(true)
     expect(isQuestion('Dónde está el informe')).toBe(true)
     expect(isQuestion('Por qué no')).toBe(true)
+    expect(isQuestion('Qué fecha es esta')).toBe(true)
+    expect(isQuestion('Qué es nuestro')).toBe(true)
+    expect(isQuestion('Cuál es el nuestro')).toBe(true)
+    expect(isQuestion('Cuál es el vuestro')).toBe(true)
+    expect(isQuestion('Cuál es mi')).toBe(false)
   })
 
   it('holds a French clitic fragment until the predicate arrives', () => {
@@ -99,8 +115,10 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('O que é')).toBe(false)
     expect(isQuestion('O que está')).toBe(false)
     expect(isQuestion('O que é a')).toBe(false)
+    expect(isQuestion('Qual é o')).toBe(false)
     expect(isQuestion('O que você viu no')).toBe(false)
     expect(isQuestion('¿Qué es lo que')).toBe(false)
+    expect(isQuestion('¿Qué es esta')).toBe(false)
   })
 
   it('holds language-specific subject or clitic tails without rejecting completed pronoun/verb phrases', () => {
@@ -112,6 +130,15 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Pourquoi vous le dites')).toBe(true)
     expect(isQuestion('Qué quieres tú')).toBe(true)
     expect(isQuestion('O que eu escolhi')).toBe(true)
+    expect(isQuestion('Qu’est-ce que vous êtes en train de')).toBe(false)
+    expect(isQuestion('Qu’est-ce que tu es en train de')).toBe(false)
+    expect(isQuestion('Qu’est-ce que nous sommes en train de')).toBe(false)
+    expect(isQuestion('Qu’est-ce qu’il est en train de')).toBe(false)
+    expect(isQuestion('Qu’est-ce qu’elles sont en train de')).toBe(false)
+    expect(isQuestion('Por qué se ha')).toBe(false)
+    expect(isQuestion('Por que você está com')).toBe(false)
+    expect(isQuestion('Qu’est-ce que tu es en train de faire')).toBe(true)
+    expect(isQuestion('Qu’est-ce qu’il est en train de faire')).toBe(true)
   })
 
   it('resolves a split question once the coalesced run completes', () => {
@@ -127,9 +154,33 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('best way to deploy this')).toBe(false) // no interrogative opener
     expect(isQuestion('what is')).toBe(false) // under the 3-word floor, no "?"
     expect(isQuestion('Como gerente, eu aprovo o plano')).toBe(false)
+    expect(isQuestion('Como gerente eu aprovo o plano')).toBe(false)
+    expect(isQuestion('Como gerente, aprovo o plano')).toBe(false)
+    expect(isQuestion('Como gerente aprovo o plano')).toBe(false)
+    expect(isQuestion('Como gerente, devo mudar a política')).toBe(true)
+    expect(isQuestion('Como gerente, eu devo mudar a política')).toBe(true)
+    expect(isQuestion('Como gerente devo mudar a política')).toBe(true)
+    expect(isQuestion('Como gerente eu devo mudar a política')).toBe(true)
+    expect(isQuestion('Quand souhaitez-vous partir, le matin ou le soir')).toBe(true)
+    expect(isQuestion('Quand le service redémarre, le cache se vide')).toBe(false)
+    expect(isQuestion('Quand le déploiement termine, nous partons')).toBe(false)
+    expect(isQuestion('Quando o serviço reinicia, o cache é limpo')).toBe(false)
+    expect(isQuestion('Quando o serviço reinicia, eu limpo o cache')).toBe(false)
+    expect(isQuestion('Quando o serviço reinicia, como faço para limpar o cache')).toBe(true)
+    expect(isQuestion('Quand le service redémarre, faut-il vider le cache')).toBe(true)
+    expect(isQuestion('Quand partez-vous, demain ou vendredi')).toBe(true)
+    expect(isQuestion('Quand partez-vous, le matin ou le soir')).toBe(true)
+    expect(isQuestion('Quando você chega, hoje ou amanhã')).toBe(true)
+    expect(isQuestion('Como posso ajudar você')).toBe(true)
+    expect(isQuestion('Como você acha que eu devo proceder')).toBe(true)
     expect(isQuestion('Creo que el plan funciona')).toBe(false)
     expect(isQuestion('So we shipped the update. Pourquoi cette décision')).toBe(true)
     expect(isQuestion('')).toBe(false)
+  })
+
+  it('normalizes accents and repeated whitespace before classifying', () => {
+    expect(isQuestion('Ou\u0300 se trouve le rapport')).toBe(true)
+    expect(isQuestion('O  que você recomenda')).toBe(true)
   })
 })
 
