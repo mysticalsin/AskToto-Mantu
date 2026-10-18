@@ -516,6 +516,9 @@ describe('workerd fixture initialization', () => {
               apply(method, _receiver, argumentsList) {
                 const query = argumentsList[0] as string
                 const statement = Reflect.apply(method, target, argumentsList)
+                if (statement === null || typeof statement !== 'object') {
+                  throw new Error('Actual D1 prepare did not return a statement object')
+                }
                 preparedQueries.set(statement, query)
                 if (!batchSettled) preparedBeforeBatchSettled.push(query)
                 return statement
@@ -529,7 +532,18 @@ describe('workerd fixture initialization', () => {
                   (argumentsList[0] as object[]).map((statement) => preparedQueries.get(statement) ?? 'unknown')
                 )
                 const results = await Reflect.apply(method, target, argumentsList)
-                batchResults = results
+                if (!Array.isArray(results)) throw new Error('Actual D1 batch did not return a result array')
+                batchResults = results.map((result: unknown) => {
+                  if (
+                    result === null ||
+                    typeof result !== 'object' ||
+                    !('success' in result) ||
+                    typeof result.success !== 'boolean'
+                  ) {
+                    throw new Error('Actual D1 batch returned a result without a boolean success field')
+                  }
+                  return { success: result.success }
+                })
                 batchSettled = true
                 return results
               }
