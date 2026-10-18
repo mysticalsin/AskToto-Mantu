@@ -45,9 +45,9 @@
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 999,
-    "src/main/index.ts": 10283,
+    "src/main/index.ts": 10282,
     "src/main/store.ts": 1361,
-    "src/main/transcripts.ts": 1086,
+    "src/main/transcripts.ts": 1084,
     "src/renderer/src/App.tsx": 4771,
     "src/renderer/src/components/Bar.tsx": 962,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
@@ -314,7 +314,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 161
+    "src/main/index.ts": 160
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,
