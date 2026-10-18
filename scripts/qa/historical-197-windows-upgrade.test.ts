@@ -44,6 +44,7 @@ afterEach(() => {
 })
 
 const expected = {
+  profileRoot: 'C:\\owned\\profile',
   meetingsRoot: 'C:\\owned\\profile\\meetings',
   title: 'Synthetic title',
   line: 'Synthetic transcript canary',
@@ -283,7 +284,7 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
       vi.stubEnv('ASKTOTO_LOCAL_KEYSTORE', 'synthetic-must-not-inherit')
       const records: unknown[] = []
       const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
-      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>)
       vi.mocked(spawnSync).mockImplementation(() => { throw new Error('synchronous installer forbidden') })
       vi.mocked(ownedCensus).mockImplementation(() => {
         expect(records).toHaveLength(1)
@@ -339,7 +340,7 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
     try {
       const records: unknown[] = []
       const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
-      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>)
       vi.mocked(ownedCensus).mockImplementation(() => {
         if (failure === 'census') throw new Error('synthetic unavailable census')
         return { owned: [{ pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }], roles: {} }
@@ -366,9 +367,9 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
     try {
       const records: unknown[] = []
       const parent = { pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }
-      const descendant = { pid: 4322, ppid: 4321, startedMs: 2, exe: join(fixture.temp, 'installer-child.exe') }
+      const descendant = { pid: 4322, ppid: 4321, startedMs: 2, exe: join(fixture.temp, 'installer-child.exe'), role: 'installer-child.exe' }
       const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
-      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>)
       vi.mocked(ownedCensus).mockReturnValue({ owned: [parent, descendant], roles: {} })
       vi.mocked(waitForChildExit).mockImplementation(async () => { child.exitCode = 0; return true })
       vi.mocked(disposeFreshOnboardingTransports).mockResolvedValue(true)
@@ -385,9 +386,9 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
     try {
       const records: unknown[] = []
       const parent = { pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }
-      const descendant = { pid: 4322, ppid: 4321, startedMs: 2, exe: join(fixture.temp, 'installer-child.exe') }
+      const descendant = { pid: 4322, ppid: 4321, startedMs: 2, exe: join(fixture.temp, 'installer-child.exe'), role: 'installer-child.exe' }
       const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
-      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>)
       vi.mocked(ownedCensus).mockReturnValue({ owned: [parent, descendant], roles: {} })
       vi.mocked(waitForChildExit).mockImplementation(async () => { child.exitCode = 0; return true })
       vi.mocked(disposeFreshOnboardingTransports).mockResolvedValue(true)
@@ -412,10 +413,10 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
       const records: object[] = []
       const parent = { pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }
       const oldChild = { pid: 4322, ppid: 4321, startedMs: 2, exe: join(fixture.temp, 'old-helper.exe') }
-      const replacement = { pid: reuse === 'root' ? 4321 : 4322, ppid: 99, startedMs: 10, exe: join(fixture.temp, 'unrelated.exe') }
-      const unrelatedChild = { pid: 4999, ppid: replacement.pid, startedMs: 11, exe: join(fixture.temp, 'unrelated-child.exe') }
+      const replacement = { pid: reuse === 'root' ? 4321 : 4322, ppid: 99, startedMs: 10, exe: join(fixture.temp, 'unrelated.exe'), role: 'unrelated.exe' }
+      const unrelatedChild = { pid: 4999, ppid: replacement.pid, startedMs: 11, exe: join(fixture.temp, 'unrelated-child.exe'), role: 'unrelated-child.exe' }
       const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
-      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>)
       vi.mocked(ownedCensus).mockReturnValue({ owned: reuse === 'root' ? [parent] : [parent, oldChild], roles: {} })
       vi.mocked(waitForChildExit).mockImplementation(async () => { child.exitCode = 0; return true })
       vi.mocked(disposeFreshOnboardingTransports).mockResolvedValue(true)
@@ -446,7 +447,7 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
   it.each(['occupied', 'unavailable'] as const)('requires a final root census with zero process receipts and retains an %s root', async (condition) => {
     const fixture = await setup()
     try {
-      if (condition === 'occupied') vi.mocked(listProcesses).mockReturnValue([{ pid: 8000, ppid: 1, startedMs: 1, exe: join(fixture.options.root, 'install', 'unexpected.exe') }])
+      if (condition === 'occupied') vi.mocked(listProcesses).mockReturnValue([{ pid: 8000, ppid: 1, startedMs: 1, exe: join(fixture.options.root, 'install', 'unexpected.exe'), role: 'unexpected.exe' }])
       else vi.mocked(listProcesses).mockImplementation(() => { throw new Error('synthetic unavailable final census') })
       expect(await fixture.driver.cleanup()).toBe(false)
       expect(killOwned).not.toHaveBeenCalled()
@@ -458,9 +459,9 @@ describe('actual Windows driver boundaries (external Node/OS simulation, no inst
     try {
       const records: object[] = []
       const original = { pid: 4321, ppid: 1, startedMs: 1, exe: fixture.options.baseline }
-      const conflict = { ...original, exe: join(fixture.temp, 'different-image.exe') }
+      const conflict = { ...original, exe: join(fixture.temp, 'different-image.exe'), role: 'different-image.exe' }
       const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null as number | null, signalCode: null, kill: vi.fn() })
-      vi.mocked(spawn).mockReturnValue(child as ReturnType<typeof spawn>)
+      vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>)
       vi.mocked(ownedCensus).mockReturnValue({ owned: [original], roles: {} })
       vi.mocked(waitForChildExit).mockImplementation(async () => { child.exitCode = 0; return true })
       vi.mocked(disposeFreshOnboardingTransports).mockResolvedValue(true)
