@@ -239,6 +239,9 @@ describe('speech-pack desktop lifecycle', () => {
       expect(await isHighTierAsrModelReady(mocks.asrFixture, join(root, 'asr-models'))).toBe(true)
       expect(asrModelDownloadState()).toEqual({ status: 'ready', progress: 1 })
     } finally {
+      mocks.getPackageRuntimeContract.mockReset()
+      mocks.readSettingsAtAuthorityBoundary.mockReset()
+      mocks.getSpeechPolicyAuthorityStatus.mockReset()
       mocks.asrModelPath.mockImplementation(() => { throw new Error('Refused ASR request reached model-path I/O') })
       mocks.asrFetch.mockImplementation(() => { throw new Error('Refused ASR request reached network I/O') })
       rmSync(root, { recursive: true, force: true })
