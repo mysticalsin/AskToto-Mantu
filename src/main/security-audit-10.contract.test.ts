@@ -431,7 +431,10 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
 
   it('actual Graph calendar output retains allowed links and refuses unsafe join URLs', async () => {
     const cases: Array<{ url: unknown; expected: string | undefined }> = [
-      { url: ' HTTPS://teams.microsoft.com/l/meetup-join/synthetic ', expected: 'https://teams.microsoft.com/l/meetup-join/synthetic' },
+      {
+        url: ' HTTPS://teams.microsoft.com/l/meetup-join/synthetic ',
+        expected: 'https://teams.microsoft.com/l/meetup-join/synthetic'
+      },
       { url: 'http://calendar.example.test/join', expected: 'http://calendar.example.test/join' },
       { url: 'mailto:synthetic@example.test', expected: 'mailto:synthetic@example.test' },
       { url: 'javascript:alert(1)', expected: undefined },
@@ -455,7 +458,9 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
       onlineMeeting: { joinUrl: url }
     }))
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
-      ok: true, status: 200, json: async () => ({ value: rows })
+      ok: true,
+      status: 200,
+      json: async () => ({ value: rows })
     }))
     vi.mocked(getGraphToken).mockClear()
     vi.mocked(auditLog).mockClear()
@@ -484,11 +489,9 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     }
   })
 
-  it('markdown links and Graph join URLs go through safeHref', () => {
+  it('markdown links and agenda join URLs go through safeHref', () => {
     const md = readFileSync(join(__dirname, '../renderer/src/components/Markdown.tsx'), 'utf8')
     expect(md).toMatch(/safeHref\(href\)/)
-    const cal = readFileSync(join(__dirname, 'calendar.ts'), 'utf8')
-    expect(cal).toMatch(/safeHref\(ev\?\.onlineMeeting\?\.joinUrl\)/)
     const agenda = readFileSync(join(__dirname, '../renderer/src/components/AgendaView.tsx'), 'utf8')
     expect(agenda).toMatch(/safeHref\(ev\.joinUrl\)/)
   })
