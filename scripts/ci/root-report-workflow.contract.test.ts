@@ -99,6 +99,18 @@ function expectFailureAuditConnection(source: string): string {
 }
 
 describe('original strict skip audit after pipeline failure', () => {
+  it('ignores explanatory npm test mentions outside executable shell lines', () => {
+    const pipeline = namedStep(qualityJob(), 'Run complete test pipeline')
+    const changed = workflow.replace(pipeline, `${pipeline}\n      # npm test is still the sole pipeline.\n`)
+    expectFailureAuditConnection(changed)
+  })
+
+  it('rejects an actual additional npm test command', () => {
+    const pipeline = namedStep(qualityJob(), 'Run complete test pipeline')
+    const changed = pipeline.replace('&& npm test', '&& npm test\n          npm test')
+    expect(() => expectFailureAuditConnection(workflow.replace(pipeline, changed))).toThrow()
+  })
+
   it.each([
     { outcome: 'success', cancelled: false, allowed: true },
     { outcome: 'failure', cancelled: false, allowed: true },
