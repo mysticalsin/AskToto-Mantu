@@ -1,0 +1,110 @@
+name: Historical 1.9.7 input identity
+
+# Source-only preparation for a manual main dispatch after review and merge. Registration runs skip
+# the sole job. This verifies original public inputs, not installation, safety or release readiness.
+# It neither dispatches another workflow nor supplies a replacement for a denied execution route.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/historical-197-identity.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: historical-197-identity-${{ github.run_id }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  identity:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Bind the separately checked-out harness and allocate owned inputs
+        id: owned
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          owned_root=$(mktemp -d "$RUNNER_TEMP/metis-historical-197-XXXXXX")
+          mkdir "$owned_root/assets"
+          echo "root=$owned_root" >> "$GITHUB_OUTPUT"
+      - name: Read original public metadata and the five fixed release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNED_ROOT: ${{ steps.owned.outputs.root }}
+        run: |
+          gh api --method GET repos/mysticalsin/AskToto-Mantu > "$OWNED_ROOT/repository.json"
+          gh api --method GET repos/mysticalsin/AskToto-Mantu/actions/runs/38795048288 > "$OWNED_ROOT/run.json"
+          gh api --method GET repos/mysticalsin/AskToto-Mantu/releases/414278048 > "$OWNED_ROOT/release.json"
+          jq -n --arg harness "$GITHUB_SHA" \
+            --slurpfile repository "$OWNED_ROOT/repository.json" \
+            --slurpfile run "$OWNED_ROOT/run.json" \
+            --slurpfile release "$OWNED_ROOT/release.json" '
+              def repo: {id, full_name};
+              {
+                repository: ($repository[0] | repo),
+                candidateRun: ($run[0] | {
+                  id, run_attempt, path, event, head_branch, head_sha, status, conclusion,
+                  repository: (.repository | repo), head_repository: (.head_repository | repo)
+                }),
+                release: ($release[0] | {
+                  id, tag_name, name, target_commitish, draft, prerelease,
+                  assets: [.assets[] | {id, name, size, digest}]
+                }),
+                harnessCommit: $harness
+              }
+            ' > "$OWNED_ROOT/context.json"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api --method GET -H "Accept: application/octet-stream" \
+              "repos/mysticalsin/AskToto-Mantu/releases/assets/$asset_id" > "$OWNED_ROOT/assets/$asset_name"
+          done <<'ASSETS'
+          645178383	Metis-1.9.7.dmg
+          645180903	Metis-1.9.7.zip
+          645183715	Metis-Setup-1.9.7.exe
+          645185922	provenance.json
+          645185936	SHA256SUMS.txt
+          ASSETS
+      - name: Require full original byte identity
+        id: verified
+        env:
+          OWNED_ROOT: ${{ steps.owned.outputs.root }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node scripts/qa/historical-197-inputs.mjs --metadata "$OWNED_ROOT/context.json" --assets "$OWNED_ROOT/assets" --harness-commit "$GITHUB_SHA" > "$OWNED_ROOT/receipt.json"
+          jq -e --arg harness "$GITHUB_SHA" '
+            .scope == "IDENTITY_ONLY" and .outcome == "VERIFIED" and .verification == "local-bytes" and
+            .harness_commit == $harness and .artifact_source == "98461f85dcca49a2ded3f1489daed10d194f5229" and
+            .candidate_run == 38795048288 and .candidate_attempt == 1 and .release_id == 414278048 and
+            (.assets | length) == 5
+          ' "$OWNED_ROOT/receipt.json"
+      - name: Retain only the closed identity receipt
+        if: success() && steps.verified.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: historical-197-input-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.owned.outputs.root }}/receipt.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+      - name: Remove only the owned input directory
+        if: always()
+        env:
+          OWNED_ROOT: ${{ steps.owned.outputs.root }}
+        run: |
+          case "$OWNED_ROOT" in
+            "$RUNNER_TEMP"/metis-historical-197-*) rm -rf -- "$OWNED_ROOT" ;;
+            '') ;;
+            *) echo 'Unexpected input directory ownership'; exit 1 ;;
+          esac
