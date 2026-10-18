@@ -163,29 +163,36 @@ export function diagnoseRootReport(context, io = fs) {
   if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
   let fd
   let bytes
-  try {
-    if (io.realpathSync(dirname(reportPath)) !== roots.runnerTemp || io.realpathSync(reportPath) !== reportPath) return refuse('NOT_PASS_PATH')
-    fd = io.openSync(reportPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
-    const opened = io.fstatSync(fd)
-    if (opened.size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
-    if (!stable(before, opened)) return refuse('NOT_PASS_UNSTABLE')
-    const buffer = Buffer.alloc(before.size + 1)
-    let size = 0
-    while (size < buffer.length) {
-      const count = io.readSync(fd, buffer, size, buffer.length - size, null)
-      if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length - size) return refuse('NOT_PASS_UNREADABLE')
-      if (count === 0) break
-      size += count
+  let closeFailed = false
+  const read = () => {
+    try {
+      if (io.realpathSync(dirname(reportPath)) !== roots.runnerTemp || io.realpathSync(reportPath) !== reportPath) return refuse('NOT_PASS_PATH')
+      fd = io.openSync(reportPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+      const opened = io.fstatSync(fd)
+      if (opened.size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
+      if (!stable(before, opened)) return refuse('NOT_PASS_UNSTABLE')
+      const buffer = Buffer.alloc(before.size + 1)
+      let size = 0
+      while (size < buffer.length) {
+        const count = io.readSync(fd, buffer, size, buffer.length - size, null)
+        if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length - size) return refuse('NOT_PASS_UNREADABLE')
+        if (count === 0) break
+        size += count
+      }
+      if (size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
+      const after = io.lstatSync(reportPath)
+      if (size !== before.size || after.isSymbolicLink() || !stable(before, after) || !stable(before, io.fstatSync(fd))) {
+        return refuse('NOT_PASS_UNSTABLE')
+      }
+      bytes = buffer.subarray(0, size)
+    } catch { return refuse('NOT_PASS_UNREADABLE') } finally {
+      if (fd !== undefined) { try { io.closeSync(fd) } catch { closeFailed = true } }
     }
-    if (size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
-    const after = io.lstatSync(reportPath)
-    if (size !== before.size || after.isSymbolicLink() || !stable(before, after) || !stable(before, io.fstatSync(fd))) {
-      return refuse('NOT_PASS_UNSTABLE')
-    }
-    bytes = buffer.subarray(0, size)
-  } catch { return refuse('NOT_PASS_UNREADABLE') } finally {
-    if (fd !== undefined) { try { io.closeSync(fd) } catch { return refuse('NOT_PASS_UNREADABLE') } }
+    return null
   }
+  const failure = read()
+  if (closeFailed) return refuse('NOT_PASS_UNREADABLE')
+  if (failure) return failure
   let report
   try { report = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch { return refuse('NOT_PASS_SCHEMA') }
   try { return summarize(report, context, roots.workspace, io) } catch { return refuse('NOT_PASS_SCHEMA') }
