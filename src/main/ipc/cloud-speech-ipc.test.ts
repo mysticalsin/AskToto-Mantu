@@ -152,7 +152,8 @@ function makeHarness(
     ...(monotonicNow ? { monotonicNow } : {}),
     ...(now ? { now } : {})
   })
-  const invoke = (channel: string, args: unknown[] = [], callerEvent: unknown = event) => {
+  // Electron's renderer invoke resolves both synchronous and asynchronous main-handler results.
+  const invoke = async (channel: string, args: unknown[] = [], callerEvent: unknown = event) => {
     const handler = handlers.get(channel)
     if (!handler) throw new Error(`No IPC handler registered for ${channel}`)
     return handler(callerEvent, ...args)
@@ -1095,7 +1096,7 @@ describe('cloud speech main IPC authority boundary', () => {
         ceilingId: ceiling.ceilingId,
         tracks: [{
           track: 'microphone',
-          finalSequence: refusal === 'wrong-sequence' ? 0 : 1,
+          finalSequence: refusal === 'wrong-sequence' ? 2 : 1,
           finalSampleOffset: refusal === 'wrong-offset' ? 0 : finalSampleOffset
         }]
       }
