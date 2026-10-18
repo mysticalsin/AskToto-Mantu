@@ -37,13 +37,20 @@ let child: FakeChild
 
 const fullRuntime: PackageRuntimeContract = { status: 'legacy-full', profile: 'full', inventory: null }
 const invalidRuntime: PackageRuntimeContract = {
-  status: 'invalid', reason: 'inventory-invalid', profile: null, inventory: null
+  status: 'invalid',
+  reason: 'inventory-invalid',
+  profile: null,
+  inventory: null
 }
 
 async function heldRuntimeAuthority() {
-  const { configurePackageRuntimeContractProvider } = await import('./features/components/speech-pack/package-runtime-state')
+  const { configurePackageRuntimeContractProvider } = await import(
+    './features/components/speech-pack/package-runtime-state'
+  )
   let resolve!: (contract: PackageRuntimeContract) => void
-  let next = new Promise<PackageRuntimeContract>((done) => { resolve = done })
+  let next = new Promise<PackageRuntimeContract>((done) => {
+    resolve = done
+  })
   const provider = vi.fn(() => next)
   configurePackageRuntimeContractProvider(provider)
   electron.app.isPackaged = true
@@ -93,60 +100,68 @@ afterEach(() => {
 })
 
 describe('Parakeet utilityProcess client', () => {
-  it.each(['mutate', 'detach', 'resize'] as const)(
-    'snapshots PCM before held runtime authority when the caller immediately %ss its buffer',
-    async (change) => {
-      const authority = await heldRuntimeAuthority()
-      const buffer = new ResizableBuffer(8, { maxByteLength: 8 })
-      const samples = new Float32Array(buffer)
-      samples.set([0.25, -0.5])
-      const pending = api.parakeetTranscribe(samples)
-      if (change === 'mutate') samples.fill(1)
-      else if (change === 'detach') structuredClone(buffer, { transfer: [buffer] })
-      else buffer.resize(0)
-      try {
-        expect(authority.provider).toHaveBeenCalledTimes(1)
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-        authority.settle(fullRuntime)
-        const sent = await waitForRequest(child, 'transcribe')
-        child.emit('message', { type: 'result', id: sent.id, text: 'snapshot' })
-        await expect(pending).resolves.toBe('snapshot')
-        expect([...new Float32Array(sent.pcm as ArrayBuffer)]).toEqual([0.25, -0.5])
-      } finally {
-        await settleHeldWork(authority, [pending])
-      }
+  it.each([
+    'mutate',
+    'detach',
+    'resize'
+  ] as const)('snapshots PCM before held runtime authority when the caller immediately %ss its buffer', async (change) => {
+    const authority = await heldRuntimeAuthority()
+    const buffer = new ResizableBuffer(8, { maxByteLength: 8 })
+    const samples = new Float32Array(buffer)
+    samples.set([0.25, -0.5])
+    const pending = api.parakeetTranscribe(samples)
+    if (change === 'mutate') samples.fill(1)
+    else if (change === 'detach') structuredClone(buffer, { transfer: [buffer] })
+    else buffer.resize(0)
+    try {
+      expect(authority.provider).toHaveBeenCalledTimes(1)
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+      authority.settle(fullRuntime)
+      const sent = await waitForRequest(child, 'transcribe')
+      child.emit('message', { type: 'result', id: sent.id, text: 'snapshot' })
+      await expect(pending).resolves.toBe('snapshot')
+      expect([...new Float32Array(sent.pcm as ArrayBuffer)]).toEqual([0.25, -0.5])
+    } finally {
+      await settleHeldWork(authority, [pending])
     }
-  )
+  })
 
-  it.each(['transcribe', 'warmup', 'probe'] as const)(
-    'does not admit %s when release immediately wins over held runtime authority',
-    async (kind) => {
-      const authority = await heldRuntimeAuthority()
-      const pending = kind === 'transcribe' ? api.parakeetTranscribe(new Float32Array(1))
-        : kind === 'warmup' ? api.ensureParakeetModel() : api.parakeetAddonError()
-      const stopping = api.parakeetRelease()
-      try {
-        await stopping
-        expect(authority.provider).toHaveBeenCalledTimes(1)
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-        const refused = kind === 'probe'
+  it.each([
+    'transcribe',
+    'warmup',
+    'probe'
+  ] as const)('does not admit %s when release immediately wins over held runtime authority', async (kind) => {
+    const authority = await heldRuntimeAuthority()
+    const pending =
+      kind === 'transcribe'
+        ? api.parakeetTranscribe(new Float32Array(1))
+        : kind === 'warmup'
+          ? api.ensureParakeetModel()
+          : api.parakeetAddonError()
+    const stopping = api.parakeetRelease()
+    try {
+      await stopping
+      expect(authority.provider).toHaveBeenCalledTimes(1)
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+      const refused =
+        kind === 'probe'
           ? expect(pending).resolves.toMatch(/cancelled/i)
           : expect(pending).rejects.toThrow(/cancelled/i)
-        authority.settle(fullRuntime)
-        await refused
-        expect(child.postMessage).not.toHaveBeenCalled()
-        expect(child.kill).not.toHaveBeenCalled()
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-      } finally {
-        await settleHeldWork(authority, [pending, stopping])
-      }
+      authority.settle(fullRuntime)
+      await refused
+      expect(child.postMessage).not.toHaveBeenCalled()
+      expect(child.kill).not.toHaveBeenCalled()
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    } finally {
+      await settleHeldWork(authority, [pending, stopping])
     }
-  )
+  })
 
   it('reserves all sixteen request slots, including zero-byte work, before authority resolves', async () => {
     const authority = await heldRuntimeAuthority()
-    const pending = Array.from({ length: 16 }, (_, index) => index % 2
-      ? api.ensureParakeetModel() : api.parakeetTranscribe(new Float32Array(0)))
+    const pending = Array.from({ length: 16 }, (_, index) =>
+      index % 2 ? api.ensureParakeetModel() : api.parakeetTranscribe(new Float32Array(0))
+    )
     try {
       await expect(api.parakeetTranscribe(new Float32Array(0))).rejects.toMatchObject({ code: 'PARAKEET_BUSY' })
       await expect(api.ensureParakeetModel()).rejects.toMatchObject({ code: 'PARAKEET_BUSY' })
@@ -215,7 +230,9 @@ describe('Parakeet utilityProcess client', () => {
 
     await expect(api.parakeetAddonError()).resolves.toMatch(/optional asr runtime is not configured/i)
     await expect(api.ensureParakeetModel()).rejects.toThrow(/optional asr runtime is not configured/i)
-    await expect(api.parakeetTranscribe(new Float32Array(16))).rejects.toThrow(/optional asr runtime is not configured/i)
+    await expect(api.parakeetTranscribe(new Float32Array(16))).rejects.toThrow(
+      /optional asr runtime is not configured/i
+    )
 
     expect(child.postMessage).not.toHaveBeenCalled()
     expect(child.kill).not.toHaveBeenCalled()

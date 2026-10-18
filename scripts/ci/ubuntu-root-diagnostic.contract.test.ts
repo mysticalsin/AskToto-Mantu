@@ -5,8 +5,10 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..', '..')
 const readWorkflow = (): string =>
   readFileSync(join(root, '.github', 'workflows', 'ubuntu-root-diagnostic.yml'), 'utf8').replace(/\r\n/g, '\n')
-const report = '${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest.json'
-const attempted = "${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}"
+const report =
+  '${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest.json'
+const attempted =
+  "${{ !cancelled() && (steps.complete_tests.outcome == 'success' || steps.complete_tests.outcome == 'failure') }}"
 
 function step(source: string, name: string): string {
   const lines = source.split('\n')
@@ -38,7 +40,9 @@ function expectDiagnosticWorkflow(source: string): void {
     expect(block).toContain(`          METIS_CI_ROOT_REPORT: ${report}\n`)
   }
   expect(producer).toContain('        id: complete_tests\n')
-  expect(producer).toContain('        run: |\n          node -e "require(\'node:fs\').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })" && npm test')
+  expect(producer).toContain(
+    '        run: |\n          node -e "require(\'node:fs\').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })" && npm test'
+  )
   expect(source.match(/^ {10}.*\bnpm test\b/gm)).toHaveLength(1)
   expect(audit).toContain('        id: declared_skips\n')
   expect(audit).toContain(`        if: ${attempted}\n`)
@@ -53,12 +57,19 @@ function expectDiagnosticWorkflow(source: string): void {
     'METIS_CI_MATRIX_OS: ubuntu-latest',
     'METIS_CI_PIPELINE_OUTCOME: ${{ steps.complete_tests.outcome }}',
     'METIS_CI_AUDIT_OUTCOME: ${{ steps.declared_skips.outcome }}'
-  ]) expect(diagnostic).toContain(`          ${binding}\n`)
+  ])
+    expect(diagnostic).toContain(`          ${binding}\n`)
   expect(retention).toContain(`        if: ${attempted}\n`)
-  expect(retention).toContain('        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n')
+  expect(retention).toContain(
+    '        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n'
+  )
   expect(retention).toContain(`          path: ${report}\n`)
-  expect(retention).toContain('          name: metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest\n')
-  expect(retention).toContain('          if-no-files-found: error\n          retention-days: 1\n          overwrite: false')
+  expect(retention).toContain(
+    '          name: metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-latest\n'
+  )
+  expect(retention).toContain(
+    '          if-no-files-found: error\n          retention-days: 1\n          overwrite: false'
+  )
   expect(retention.match(/^ {10}[a-z][a-z-]*:/gm)).toHaveLength(5)
   expect(retention).not.toMatch(/^\s+(run|env|shell):/m)
   expect(source.indexOf(producer)).toBeLessThan(source.indexOf(audit))
@@ -79,7 +90,11 @@ describe('independent Ubuntu root diagnostic evidence', () => {
     ['broad upload', 'path: ' + report, 'path: ${{ runner.temp }}/**'],
     ['unpinned upload', 'upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', 'upload-artifact@v4'],
     ['missing report ignored', 'if-no-files-found: error', 'if-no-files-found: ignore'],
-    ['extra credential', '        with:\n          name:', '        env:\n          TOKEN: ${{ secrets.EXTRA }}\n        with:\n          name:']
+    [
+      'extra credential',
+      '        with:\n          name:',
+      '        env:\n          TOKEN: ${{ secrets.EXTRA }}\n        with:\n          name:'
+    ]
   ])('rejects diagnostic workflow regression: %s', (_label, before, after) => {
     const source = readWorkflow()
     expect(source).toContain(before)

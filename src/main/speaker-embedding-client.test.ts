@@ -23,14 +23,23 @@ const ResizableBuffer = ArrayBuffer as unknown as {
 
 const fullRuntime: PackageRuntimeContract = { status: 'legacy-full', profile: 'full', inventory: null }
 const invalidRuntime: PackageRuntimeContract = {
-  status: 'invalid', reason: 'inventory-invalid', profile: null, inventory: null
+  status: 'invalid',
+  reason: 'inventory-invalid',
+  profile: null,
+  inventory: null
 }
 
 async function heldRuntimeAuthority() {
-  const { configurePackageRuntimeContractProvider } = await import('./features/components/speech-pack/package-runtime-state')
+  const { configurePackageRuntimeContractProvider } = await import(
+    './features/components/speech-pack/package-runtime-state'
+  )
   let resolve!: (contract: PackageRuntimeContract) => void
   let next: Promise<PackageRuntimeContract>
-  const hold = () => { next = new Promise((done) => { resolve = done }) }
+  const hold = () => {
+    next = new Promise((done) => {
+      resolve = done
+    })
+  }
   hold()
   const provider = vi.fn(() => next)
   configurePackageRuntimeContractProvider(provider)
@@ -48,7 +57,9 @@ async function heldRuntimeAuthority() {
 async function settleHeldWork(authority: Awaited<ReturnType<typeof heldRuntimeAuthority>>, work: Promise<unknown>[]) {
   authority.settle(invalidRuntime)
   const settled = Promise.allSettled([
-    ...work, api.releaseSpeakerEmbedding('live'), api.releaseSpeakerEmbedding('import')
+    ...work,
+    api.releaseSpeakerEmbedding('live'),
+    api.releaseSpeakerEmbedding('import')
   ])
   for (const result of electron.utilityProcess.fork.mock.results) {
     if (result.type === 'return') (result.value as FakeChild).emit('exit', 0)
@@ -79,92 +90,103 @@ afterEach(() => {
 })
 
 describe('speaker embedding utility client', () => {
-  it.each(['mutate', 'detach', 'resize'] as const)(
-    'snapshots PCM before held runtime authority when the caller immediately %ss its buffer',
-    async (change) => {
-      const authority = await heldRuntimeAuthority()
-      const buffer = new ResizableBuffer(8, { maxByteLength: 8 })
-      const samples = new Float32Array(buffer)
-      samples.set([0.25, -0.5])
-      const pending = api.computeSpeakerEmbedding('/model.onnx', samples, 'live')
-      if (change === 'mutate') samples.fill(1)
-      else if (change === 'detach') structuredClone(buffer, { transfer: [buffer] })
-      else buffer.resize(0)
-      try {
-        expect(authority.provider).toHaveBeenCalledTimes(1)
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-        authority.settle(fullRuntime)
-        const sent = await request()
-        child.emit('message', { type: 'result', id: sent.id, embedding: new Float32Array(512).buffer })
-        await expect(pending).resolves.toHaveLength(512)
-        expect([...new Float32Array(sent.pcm as ArrayBuffer)]).toEqual([0.25, -0.5])
-      } finally {
-        await settleHeldWork(authority, [pending])
-      }
+  it.each([
+    'mutate',
+    'detach',
+    'resize'
+  ] as const)('snapshots PCM before held runtime authority when the caller immediately %ss its buffer', async (change) => {
+    const authority = await heldRuntimeAuthority()
+    const buffer = new ResizableBuffer(8, { maxByteLength: 8 })
+    const samples = new Float32Array(buffer)
+    samples.set([0.25, -0.5])
+    const pending = api.computeSpeakerEmbedding('/model.onnx', samples, 'live')
+    if (change === 'mutate') samples.fill(1)
+    else if (change === 'detach') structuredClone(buffer, { transfer: [buffer] })
+    else buffer.resize(0)
+    try {
+      expect(authority.provider).toHaveBeenCalledTimes(1)
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+      authority.settle(fullRuntime)
+      const sent = await request()
+      child.emit('message', { type: 'result', id: sent.id, embedding: new Float32Array(512).buffer })
+      await expect(pending).resolves.toHaveLength(512)
+      expect([...new Float32Array(sent.pcm as ArrayBuffer)]).toEqual([0.25, -0.5])
+    } finally {
+      await settleHeldWork(authority, [pending])
     }
-  )
-
-  it.each(['embed', 'warmup'] as const)(
-    'does not admit %s when same-owner release immediately wins over held authority',
-    async (kind) => {
-      const authority = await heldRuntimeAuthority()
-      const pending = kind === 'embed'
-        ? api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')
-        : api.speakerEmbeddingAvailable('/model.onnx', 'live')
-      const stopping = api.releaseSpeakerEmbedding('live')
-      try {
-        await expect(stopping).resolves.toBe('idle')
-        const refused = kind === 'embed' ? expect(pending).rejects.toThrow(/cancelled/i)
-          : expect(pending).resolves.toBe(false)
-        authority.settle(fullRuntime)
-        await refused
-        expect(child.postMessage).not.toHaveBeenCalled()
-        expect(child.kill).not.toHaveBeenCalled()
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-      } finally {
-        await settleHeldWork(authority, [pending, stopping])
-      }
-    }
-  )
+  })
 
   it.each([
-    ['embed', 'live'], ['embed', 'import'], ['warmup', 'live'], ['warmup', 'import']
-  ] as const)(
-    'does not admit %s for %s when quit immediately wins over held authority',
-    async (kind, owner) => {
-      const authority = await heldRuntimeAuthority()
-      const pending = kind === 'embed'
+    'embed',
+    'warmup'
+  ] as const)('does not admit %s when same-owner release immediately wins over held authority', async (kind) => {
+    const authority = await heldRuntimeAuthority()
+    const pending =
+      kind === 'embed'
+        ? api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')
+        : api.speakerEmbeddingAvailable('/model.onnx', 'live')
+    const stopping = api.releaseSpeakerEmbedding('live')
+    try {
+      await expect(stopping).resolves.toBe('idle')
+      const refused =
+        kind === 'embed' ? expect(pending).rejects.toThrow(/cancelled/i) : expect(pending).resolves.toBe(false)
+      authority.settle(fullRuntime)
+      await refused
+      expect(child.postMessage).not.toHaveBeenCalled()
+      expect(child.kill).not.toHaveBeenCalled()
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    } finally {
+      await settleHeldWork(authority, [pending, stopping])
+    }
+  })
+
+  it.each([
+    ['embed', 'live'],
+    ['embed', 'import'],
+    ['warmup', 'live'],
+    ['warmup', 'import']
+  ] as const)('does not admit %s for %s when quit immediately wins over held authority', async (kind, owner) => {
+    const authority = await heldRuntimeAuthority()
+    const pending =
+      kind === 'embed'
         ? api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), owner)
         : api.speakerEmbeddingAvailable('/model.onnx', owner)
-      api.killSpeakerEmbeddingHostForQuit()
-      try {
-        expect(authority.provider).toHaveBeenCalledTimes(1)
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-        const refused = kind === 'embed' ? expect(pending).rejects.toThrow(/cancelled/i)
-          : expect(pending).resolves.toBe(false)
-        authority.settle(fullRuntime)
-        await refused
-        expect(child.postMessage).not.toHaveBeenCalled()
-        expect(child.kill).not.toHaveBeenCalled()
-        expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
-      } finally {
-        await settleHeldWork(authority, [pending])
-      }
+    api.killSpeakerEmbeddingHostForQuit()
+    try {
+      expect(authority.provider).toHaveBeenCalledTimes(1)
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+      const refused =
+        kind === 'embed' ? expect(pending).rejects.toThrow(/cancelled/i) : expect(pending).resolves.toBe(false)
+      authority.settle(fullRuntime)
+      await refused
+      expect(child.postMessage).not.toHaveBeenCalled()
+      expect(child.kill).not.toHaveBeenCalled()
+      expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
+    } finally {
+      await settleHeldWork(authority, [pending])
     }
-  )
+  })
 
   it('bounds all sixteen reservations before authority and restores slots after real refusal', async () => {
     const authority = await heldRuntimeAuthority()
-    const pending = Array.from({ length: 16 }, (_, index) => index % 2
-      ? api.speakerEmbeddingAvailable('/model.onnx', 'live')
-      : api.computeSpeakerEmbedding('/model.onnx', new Float32Array(0), 'live'))
+    const pending = Array.from({ length: 16 }, (_, index) =>
+      index % 2
+        ? api.speakerEmbeddingAvailable('/model.onnx', 'live')
+        : api.computeSpeakerEmbedding('/model.onnx', new Float32Array(0), 'live')
+    )
     try {
-      await expect(api.speakerEmbeddingAvailable('/model.onnx', 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
-      await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(0), 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+      await expect(api.speakerEmbeddingAvailable('/model.onnx', 'live')).rejects.toMatchObject({
+        code: 'SPEAKER_EMBEDDING_BUSY'
+      })
+      await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(0), 'live')).rejects.toMatchObject({
+        code: 'SPEAKER_EMBEDDING_BUSY'
+      })
       expect(authority.provider).toHaveBeenCalledTimes(16)
       expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
       authority.settle(invalidRuntime)
-      await expect(Promise.all(pending)).resolves.toEqual(Array.from({ length: 16 }, (_, index) => index % 2 ? false : null))
+      await expect(Promise.all(pending)).resolves.toEqual(
+        Array.from({ length: 16 }, (_, index) => (index % 2 ? false : null))
+      )
       authority.settle(fullRuntime)
       const later = api.speakerEmbeddingAvailable('/model.onnx', 'live')
       pending.push(later)
@@ -182,7 +204,9 @@ describe('speaker embedding utility client', () => {
     const pending = windows.map((samples) => api.computeSpeakerEmbedding('/model.onnx', samples, 'live'))
     for (const samples of windows) structuredClone(samples.buffer, { transfer: [samples.buffer] })
     try {
-      await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+      await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({
+        code: 'SPEAKER_EMBEDDING_BUSY'
+      })
       expect(authority.provider).toHaveBeenCalledTimes(2)
       expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
       authority.settle(invalidRuntime)
@@ -190,7 +214,9 @@ describe('speaker embedding utility client', () => {
       authority.settle(fullRuntime)
       pending.push(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(16_000 * 30), 'live'))
       pending.push(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(16_000 * 30), 'live'))
-      await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+      await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({
+        code: 'SPEAKER_EMBEDDING_BUSY'
+      })
       await request('embed', child, 2)
       for (const [sent] of child.postMessage.mock.calls) {
         child.emit('message', { type: 'result', id: sent.id, embedding: new Float32Array(512).buffer })
@@ -203,7 +229,9 @@ describe('speaker embedding utility client', () => {
 
   it('preserves malformed-input errors and valid-input null/false refusal without host work', async () => {
     const authority = await heldRuntimeAuthority()
-    await expect(api.computeSpeakerEmbedding('/model.onnx', Float32Array.from([NaN]), 'live')).rejects.toThrow(/finite/i)
+    await expect(api.computeSpeakerEmbedding('/model.onnx', Float32Array.from([NaN]), 'live')).rejects.toThrow(
+      /finite/i
+    )
     expect(authority.provider).not.toHaveBeenCalled()
     const pending = [
       api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live'),
@@ -312,8 +340,12 @@ describe('speaker embedding utility client', () => {
   })
 
   it('validates finite and maximum PCM before spawning', async () => {
-    await expect(api.computeSpeakerEmbedding('/model.onnx', Float32Array.from([Number.NaN]), 'live')).rejects.toThrow(/finite/i)
-    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(16_000 * 30 + 1), 'live')).rejects.toThrow(/large/i)
+    await expect(api.computeSpeakerEmbedding('/model.onnx', Float32Array.from([Number.NaN]), 'live')).rejects.toThrow(
+      /finite/i
+    )
+    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(16_000 * 30 + 1), 'live')).rejects.toThrow(
+      /large/i
+    )
     expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
   })
 
@@ -323,7 +355,9 @@ describe('speaker embedding utility client', () => {
     const first = await request()
     const b = api.computeSpeakerEmbedding('/model.onnx', max, 'live')
     await request('embed', child, 2)
-    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toMatchObject({
+      code: 'SPEAKER_EMBEDDING_BUSY'
+    })
     expect(child.postMessage).toHaveBeenCalledTimes(2)
     child.emit('message', { type: 'result', id: first.id, embedding: new Float32Array(512).buffer })
     await a
@@ -341,7 +375,9 @@ describe('speaker embedding utility client', () => {
     const pending = Array.from({ length: 16 }, () => api.speakerEmbeddingAvailable('/model.onnx', 'live'))
     await request('warmup', child, 16)
     expect(child.postMessage).toHaveBeenCalledTimes(16)
-    await expect(api.speakerEmbeddingAvailable('/model.onnx', 'live')).rejects.toMatchObject({ code: 'SPEAKER_EMBEDDING_BUSY' })
+    await expect(api.speakerEmbeddingAvailable('/model.onnx', 'live')).rejects.toMatchObject({
+      code: 'SPEAKER_EMBEDDING_BUSY'
+    })
     for (const [sent] of child.postMessage.mock.calls) {
       child.emit('message', { type: 'result', id: (sent as { id: string }).id })
     }
@@ -366,7 +402,7 @@ describe('speaker embedding utility client', () => {
   it('uses immutable byte accounting when a resizable caller buffer shrinks', async () => {
     const bytes = 16_000 * 30 * Float32Array.BYTES_PER_ELEMENT
     const ResizableArrayBuffer = ArrayBuffer as unknown as {
-      new(byteLength: number, options: { maxByteLength: number }): ArrayBuffer & { resize(size: number): void }
+      new (byteLength: number, options: { maxByteLength: number }): ArrayBuffer & { resize(size: number): void }
     }
     const buffer = new ResizableArrayBuffer(bytes, { maxByteLength: bytes })
     const samples = new Float32Array(buffer)
@@ -382,7 +418,11 @@ describe('speaker embedding utility client', () => {
     await request('embed', child, 2)
     expect(child.postMessage).toHaveBeenCalledTimes(2)
     for (const [request] of child.postMessage.mock.calls) {
-      child.emit('message', { type: 'result', id: (request as { id: string }).id, embedding: new Float32Array(512).buffer })
+      child.emit('message', {
+        type: 'result',
+        id: (request as { id: string }).id,
+        embedding: new Float32Array(512).buffer
+      })
     }
     await Promise.all([a, b])
   })
@@ -418,7 +458,9 @@ describe('speaker embedding utility client', () => {
     await expect(warm).resolves.toBe(true)
 
     let settled = false
-    const release = api.releaseSpeakerEmbedding('live').then(() => { settled = true })
+    const release = api.releaseSpeakerEmbedding('live').then(() => {
+      settled = true
+    })
     await Promise.resolve()
     expect(settled).toBe(false)
     expect(child.kill).toHaveBeenCalledTimes(1)
@@ -436,7 +478,9 @@ describe('speaker embedding utility client', () => {
     await vi.advanceTimersByTimeAsync(5_001)
     await assertion
     child.emit('exit', 0)
-    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toThrow(/could not confirm/i)
+    await expect(api.computeSpeakerEmbedding('/model.onnx', new Float32Array(1), 'live')).rejects.toThrow(
+      /could not confirm/i
+    )
     expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(2)
   })
 
@@ -444,7 +488,10 @@ describe('speaker embedding utility client', () => {
     const importing = api.computeSpeakerEmbedding('/model.onnx', new Float32Array(4), 'import')
     const req = await request()
     let settled = false
-    const release = api.releaseSpeakerEmbedding('live').then((result) => { settled = true; return result })
+    const release = api.releaseSpeakerEmbedding('live').then((result) => {
+      settled = true
+      return result
+    })
     await Promise.resolve()
     expect(settled).toBe(false)
     expect(child.kill).not.toHaveBeenCalled()

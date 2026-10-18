@@ -218,11 +218,7 @@ async function admitted<T>(
 }
 
 /** Only authorized host work may delay another owner's release or supersede an older teardown. */
-async function activeHostWork<T>(
-  owner: SpeakerEmbeddingOwner,
-  epoch: number,
-  run: () => Promise<T>
-): Promise<T> {
+async function activeHostWork<T>(owner: SpeakerEmbeddingOwner, epoch: number, run: () => Promise<T>): Promise<T> {
   if (ownerEpoch[owner] !== epoch) throw new Error('Speaker embedding processing was cancelled.')
   let finishWork = (): void => {}
   const work: AdmittedWork = {

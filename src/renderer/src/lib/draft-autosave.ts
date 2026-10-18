@@ -24,7 +24,8 @@ export function startDraftAutosave(options: DraftAutosaveOptions): () => void {
     if (!lines.length) return
     const title = options.title(lines, options.mode)
     const startedAt = options.getStartedAt()
-    void options.save({ title, mode: options.mode, startedAt, lines, recap: '' })
+    void options
+      .save({ title, mode: options.mode, startedAt, lines, recap: '' })
       .then((result) => {
         if (!active || options.getStartedAt() !== startedAt) return
         // Retention-disabled snapshots neither claim a save nor count as a failed write.

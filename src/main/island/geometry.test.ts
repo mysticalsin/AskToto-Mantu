@@ -74,7 +74,8 @@ const LAPTOP_RIGHT_WORK_AREA: Rect = { x: 3840, y: 0, width: 1512, height: 944 }
 function connectedWelcome(experience: string, welcome: string): boolean {
   // This parser label is synthetic; keep real source-read paths literal below.
   const fixtureExtension = '.' + 'tsx'
-  const parse = (source: string) => ts.createSourceFile('welcome' + fixtureExtension, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const parse = (source: string) =>
+    ts.createSourceFile('welcome' + fixtureExtension, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const find = <T extends ts.Node>(node: ts.Node, predicate: (item: ts.Node) => item is T): T | undefined => {
     if (predicate(node)) return node
     return ts.forEachChild(node, (child) => find(child, predicate))
@@ -83,39 +84,58 @@ function connectedWelcome(experience: string, welcome: string): boolean {
   const component = parse(welcome)
   const importsWelcome = main.statements.some(
     (node) =>
-      ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) &&
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
       node.moduleSpecifier.text === './OnboardingWelcomeScene' &&
       !node.importClause?.isTypeOnly &&
-      node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings) &&
-      node.importClause.namedBindings.elements.some((binding) => binding.name.text === 'HeroWelcome' && !binding.propertyName && !binding.isTypeOnly)
+      node.importClause?.namedBindings &&
+      ts.isNamedImports(node.importClause.namedBindings) &&
+      node.importClause.namedBindings.elements.some(
+        (binding) => binding.name.text === 'HeroWelcome' && !binding.propertyName && !binding.isTypeOnly
+      )
   )
   const hero = component.statements.find(
     (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'HeroWelcome'
   )
   const screen = main.statements.find(
-    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'OnboardingExperience'
+    (node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'OnboardingExperience'
   )
-  if (!importsWelcome || !hero?.body || !hero.modifiers?.some((item) => item.kind === ts.SyntaxKind.ExportKeyword) || !screen?.body) return false
-  const attribute = (node: ts.JsxAttributes, name: string) => node.properties.find(
-    (item): item is ts.JsxAttribute => ts.isJsxAttribute(item) && item.name.getText() === name
-  )?.initializer
+  if (
+    !importsWelcome ||
+    !hero?.body ||
+    !hero.modifiers?.some((item) => item.kind === ts.SyntaxKind.ExportKeyword) ||
+    !screen?.body
+  )
+    return false
+  const attribute = (node: ts.JsxAttributes, name: string) =>
+    node.properties.find((item): item is ts.JsxAttribute => ts.isJsxAttribute(item) && item.name.getText() === name)
+      ?.initializer
   const literal = (node: ts.JsxAttributes, name: string) => {
     const value = attribute(node, name)
     return value && ts.isStringLiteral(value) ? value.text : undefined
   }
-  const anchor = find(hero.body, (node): node is ts.JsxElement => ts.isJsxElement(node) &&
-    node.openingElement.tagName.getText() === 'a' &&
-    literal(node.openingElement.attributes, 'href') === 'https://www.linkedin.com/in/tonywalteur/' &&
-    literal(node.openingElement.attributes, 'target') === '_blank' &&
-    literal(node.openingElement.attributes, 'rel') === 'noopener noreferrer' &&
-    node.children.some((child) => ts.isJsxText(child) && child.text.trim() === 'Metis Maintainers'))
+  const anchor = find(
+    hero.body,
+    (node): node is ts.JsxElement =>
+      ts.isJsxElement(node) &&
+      node.openingElement.tagName.getText() === 'a' &&
+      literal(node.openingElement.attributes, 'href') === 'https://www.linkedin.com/in/tonywalteur/' &&
+      literal(node.openingElement.attributes, 'target') === '_blank' &&
+      literal(node.openingElement.attributes, 'rel') === 'noopener noreferrer' &&
+      node.children.some((child) => ts.isJsxText(child) && child.text.trim() === 'Metis Maintainers')
+  )
   const next = find(hero.body, (node): node is ts.JsxElement => {
     if (!ts.isJsxElement(node) || node.openingElement.tagName.getText() !== 'button') return false
     const attrs = node.openingElement.attributes
     const click = attribute(attrs, 'onClick')
-    return literal(attrs, 'className') === 'onboard-cta no-drag focus-ring' &&
-      !!click && ts.isJsxExpression(click) && click.expression?.getText() === 'onBegin' &&
+    return (
+      literal(attrs, 'className') === 'onboard-cta no-drag focus-ring' &&
+      !!click &&
+      ts.isJsxExpression(click) &&
+      click.expression?.getText() === 'onBegin' &&
       node.children.some((child) => ts.isJsxText(child) && child.text.trim() === 'Next')
+    )
   })
   const render = find(screen.body, (node): node is ts.JsxSelfClosingElement => {
     if (!ts.isJsxSelfClosingElement(node) || node.tagName.getText() !== 'HeroWelcome') return false
@@ -124,8 +144,12 @@ function connectedWelcome(experience: string, welcome: string): boolean {
     const body = begin.expression.body
     if (!ts.isBlock(body) || body.statements[0]?.getText().replace(/\s/g, '') !== "setScene('problem')") return false
     for (let parent: ts.Node | undefined = node.parent; parent && parent !== screen; parent = parent.parent) {
-      if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-        parent.left.getText().replace(/\s/g, '') === "scene==='hero'") return true
+      if (
+        ts.isBinaryExpression(parent) &&
+        parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+        parent.left.getText().replace(/\s/g, '') === "scene==='hero'"
+      )
+        return true
     }
     return false
   })
@@ -915,8 +939,16 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   it('rejects a disconnected welcome, unsafe byline or disconnected Next action', () => {
     const mutations = [
       ['experience', "from './OnboardingWelcomeScene'", "from './UnusedWelcomeScene'"],
-      ['experience', 'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }', 'import type { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'],
-      ['experience', 'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }', 'import { type HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'],
+      [
+        'experience',
+        'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }',
+        'import type { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'
+      ],
+      [
+        'experience',
+        'import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }',
+        'import { type HeroWelcome, OnboardingHeroVideo, prefersReducedMotion }'
+      ],
       ['experience', '<HeroWelcome', '<UnusedWelcome'],
       ['experience', "scene === 'hero' && (", "scene === 'unused' && ("],
       ['experience', "setScene('problem')", "setScene('hero')"],
@@ -932,10 +964,14 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
       expect(source, before).toContain(before)
       const changed = source.replace(before, after)
       expect(changed, before).not.toBe(source)
-      expect(connectedWelcome(file === 'experience' ? changed : experience, file === 'welcome' ? changed : welcome), before).toBe(false)
+      expect(
+        connectedWelcome(file === 'experience' ? changed : experience, file === 'welcome' ? changed : welcome),
+        before
+      ).toBe(false)
     }
     // Correct markup in an unused component cannot hide a broken real HeroWelcome anchor.
-    const decoy = '\nexport function UnusedByline() { return <a href="https://www.linkedin.com/in/tonywalteur/" target="_blank" rel="noopener noreferrer">Metis Maintainers</a> }'
+    const decoy =
+      '\nexport function UnusedByline() { return <a href="https://www.linkedin.com/in/tonywalteur/" target="_blank" rel="noopener noreferrer">Metis Maintainers</a> }'
     expect(connectedWelcome(experience, welcome.replace('Metis Maintainers', 'Other') + decoy)).toBe(false)
   })
 })

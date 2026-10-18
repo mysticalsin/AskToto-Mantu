@@ -128,7 +128,10 @@ describe('CloudSttLiveSession', () => {
     { provider: 'cloudflare-nova3' as const, failedChannel: 'them' as const },
     { provider: 'soniox' as const, failedChannel: 'you' as const },
     { provider: 'soniox' as const, failedChannel: 'them' as const }
-  ])('surfaces a synchronous $provider PCM send failure on $failedChannel once and keeps the other track usable', async ({ provider, failedChannel }) => {
+  ])('surfaces a synchronous $provider PCM send failure on $failedChannel once and keeps the other track usable', async ({
+    provider,
+    failedChannel
+  }) => {
     TrackingMockWs.reset()
     const errors: string[] = []
     const finals: unknown[] = []
@@ -158,9 +161,14 @@ describe('CloudSttLiveSession', () => {
       const failed = tracks.get(failedChannel)!.ws
       const survivingChannel = failedChannel === 'you' ? 'them' : 'you'
       const surviving = tracks.get(survivingChannel)!.ws
-      const finalMessage = provider === 'soniox'
-        ? { tokens: [{ text: 'Preserved', is_final: true, start_ms: 0, end_ms: 200 }] }
-        : { type: 'Results', is_final: true, channel: { alternatives: [{ words: [{ word: 'Preserved', start: 0, end: 0.2 }] }] } }
+      const finalMessage =
+        provider === 'soniox'
+          ? { tokens: [{ text: 'Preserved', is_final: true, start_ms: 0, end_ms: 200 }] }
+          : {
+              type: 'Results',
+              is_final: true,
+              channel: { alternatives: [{ words: [{ word: 'Preserved', start: 0, end: 0.2 }] }] }
+            }
       failed.emit('message', Buffer.from(JSON.stringify(finalMessage)))
       expect(finals).toEqual([expect.objectContaining({ text: 'Preserved', speaker: failedChannel })])
       const originalSend = failed.send.bind(failed)
@@ -191,10 +199,17 @@ describe('CloudSttLiveSession', () => {
     }
   })
 
-  it.each(['explicit', 'graceful'] as const)('does not attempt PCM sends or report send failures after %s shutdown', async (kind) => {
+  it.each([
+    'explicit',
+    'graceful'
+  ] as const)('does not attempt PCM sends or report send failures after %s shutdown', async (kind) => {
     const errors: string[] = []
     const session = new CloudSttLiveSession(
-      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket },
+      {
+        provider: 'soniox',
+        sonioxApiKey: 'test-key',
+        WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket
+      },
       { onFinal: () => {}, onError: (message) => errors.push(message) }
     )
     await expect(session.start()).resolves.toEqual({ ok: true })
@@ -217,10 +232,17 @@ describe('CloudSttLiveSession', () => {
     expect(errors).toEqual([])
   })
 
-  it.each(['explicit', 'graceful'] as const)('keeps a send exception quiet when send synchronously initiates %s shutdown', async (kind) => {
+  it.each([
+    'explicit',
+    'graceful'
+  ] as const)('keeps a send exception quiet when send synchronously initiates %s shutdown', async (kind) => {
     const errors: string[] = []
     const session = new CloudSttLiveSession(
-      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket },
+      {
+        provider: 'soniox',
+        sonioxApiKey: 'test-key',
+        WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket
+      },
       { onFinal: () => {}, onError: (message) => errors.push(message) }
     )
     await expect(session.start()).resolves.toEqual({ ok: true })
@@ -239,7 +261,9 @@ describe('CloudSttLiveSession', () => {
     expect(errors).toEqual([])
   })
 
-  it.each([1000, 1006])('reports an unexpected post-open close (%s), preserves finals, and leaves the other track usable', async (code) => {
+  it.each([
+    1000, 1006
+  ])('reports an unexpected post-open close (%s), preserves finals, and leaves the other track usable', async (code) => {
     TrackingMockWs.reset()
     const errors: string[] = []
     const finals: unknown[] = []
@@ -255,10 +279,16 @@ describe('CloudSttLiveSession', () => {
     )
     await expect(session.start()).resolves.toEqual({ ok: true })
     const [you, them] = TrackingMockWs.instances
-    you.emit('message', Buffer.from(JSON.stringify({
-      type: 'Results', is_final: true,
-      channel: { alternatives: [{ words: [{ word: 'Preserved', start: 0, end: 0.2 }] }] }
-    })))
+    you.emit(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          type: 'Results',
+          is_final: true,
+          channel: { alternatives: [{ words: [{ word: 'Preserved', start: 0, end: 0.2 }] }] }
+        })
+      )
+    )
     you.readyState = MockWs.CLOSED
     you.emit('close', code, Buffer.alloc(0))
     you.emit('close', code, Buffer.alloc(0))
@@ -296,7 +326,11 @@ describe('CloudSttLiveSession', () => {
   it('does not report transport loss for an explicit close', async () => {
     const errors: string[] = []
     const session = new CloudSttLiveSession(
-      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: ErrorOnTerminateWs as unknown as typeof WebSocket },
+      {
+        provider: 'soniox',
+        sonioxApiKey: 'test-key',
+        WebSocketImpl: ErrorOnTerminateWs as unknown as typeof WebSocket
+      },
       { onFinal: () => {}, onError: (message) => errors.push(message) }
     )
     await expect(session.start()).resolves.toEqual({ ok: true })
@@ -307,7 +341,11 @@ describe('CloudSttLiveSession', () => {
   it('does not report transport loss during provider-confirmed graceful finalization', async () => {
     const errors: string[] = []
     const session = new CloudSttLiveSession(
-      { provider: 'soniox', sonioxApiKey: 'test-key', WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket },
+      {
+        provider: 'soniox',
+        sonioxApiKey: 'test-key',
+        WebSocketImpl: SynchronouslyFinishingSonioxWs as unknown as typeof WebSocket
+      },
       { onFinal: () => {}, onError: (message) => errors.push(message) }
     )
     await expect(session.start()).resolves.toEqual({ ok: true })

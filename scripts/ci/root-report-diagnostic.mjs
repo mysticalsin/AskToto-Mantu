@@ -9,8 +9,15 @@ const MAX_ASSERTIONS = 100_000
 const MAX_SKIPS = 512
 const MAX_OUTPUT_BYTES = 512 * 1024
 const COUNT_KEYS = [
-  'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites',
-  'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests'
+  'numTotalTestSuites',
+  'numPassedTestSuites',
+  'numFailedTestSuites',
+  'numPendingTestSuites',
+  'numTotalTests',
+  'numPassedTests',
+  'numFailedTests',
+  'numPendingTests',
+  'numTodoTests'
 ]
 const STATUSES = new Set(['passed', 'failed', 'pending', 'skipped', 'todo'])
 const OUTCOMES = new Set(['success', 'failure', 'cancelled', 'skipped', 'not_run'])
@@ -26,7 +33,9 @@ const digest = (value) => createHash('sha256').update(JSON.stringify(value), 'ut
 const refuse = (status) => ({ exitCode: 1, summary: { schema: SCHEMA, authority: AUTHORITY, status } })
 
 function stable(left, right) {
-  return right.isFile?.() === true && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every((key) => left[key] === right[key])
+  return (
+    right.isFile?.() === true && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every((key) => left[key] === right[key])
+  )
 }
 
 function outcome(value) {
@@ -35,17 +44,32 @@ function outcome(value) {
 
 // The fixed workflow inputs name one direct runner-temp child for this exact matrix attempt.
 function trustedContext(context, io) {
-  if (!record(context) || context.ci !== 'true' || context.githubActions !== 'true' ||
-      typeof context.runId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(context.runId) ||
-      typeof context.runAttempt !== 'string' || !/^[1-9][0-9]{0,9}$/.test(context.runAttempt) ||
-      !['ubuntu-latest', 'windows-latest'].includes(context.matrixOs) ||
-      !OUTCOMES.has(outcome(context.pipelineOutcome)) || !OUTCOMES.has(outcome(context.auditOutcome))) return null
+  if (
+    !record(context) ||
+    context.ci !== 'true' ||
+    context.githubActions !== 'true' ||
+    typeof context.runId !== 'string' ||
+    !/^[1-9][0-9]{0,19}$/.test(context.runId) ||
+    typeof context.runAttempt !== 'string' ||
+    !/^[1-9][0-9]{0,9}$/.test(context.runAttempt) ||
+    !['ubuntu-latest', 'windows-latest'].includes(context.matrixOs) ||
+    !OUTCOMES.has(outcome(context.pipelineOutcome)) ||
+    !OUTCOMES.has(outcome(context.auditOutcome))
+  )
+    return null
   for (const key of ['runnerTemp', 'workspace', 'reportPath']) {
-    if (typeof context[key] !== 'string' || context[key].length > 8192 || /[\x00-\x1f\x7f]/.test(context[key]) ||
-        !isAbsolute(context[key]) || context[key].split(/[\\/]/).some((part) => part === '.' || part === '..')) return null
+    if (
+      typeof context[key] !== 'string' ||
+      context[key].length > 8192 ||
+      /[\x00-\x1f\x7f]/.test(context[key]) ||
+      !isAbsolute(context[key]) ||
+      context[key].split(/[\\/]/).some((part) => part === '.' || part === '..')
+    )
+      return null
   }
   const expected = `metis-ci-root-report-${context.runId}-${context.runAttempt}-${context.matrixOs}.json`
-  if (basename(context.reportPath) !== expected || resolve(dirname(context.reportPath)) !== resolve(context.runnerTemp)) return false
+  if (basename(context.reportPath) !== expected || resolve(dirname(context.reportPath)) !== resolve(context.runnerTemp))
+    return false
   const runnerTemp = io.realpathSync(context.runnerTemp)
   const workspace = io.realpathSync(context.workspace)
   if (!io.lstatSync(runnerTemp).isDirectory() || !io.lstatSync(workspace).isDirectory()) return null
@@ -54,12 +78,22 @@ function trustedContext(context, io) {
 
 // Only source-bound test filenames can be displayed; assertion identity strings are hashed only.
 function sourceFile(name, workspace, io) {
-  if (typeof name !== 'string' || name.length > 8192 || /[\x00-\x1f\x7f]/.test(name) || !isAbsolute(name) ||
-      name.split(/[\\/]/).includes('..')) return null
+  if (
+    typeof name !== 'string' ||
+    name.length > 8192 ||
+    /[\x00-\x1f\x7f]/.test(name) ||
+    !isAbsolute(name) ||
+    name.split(/[\\/]/).includes('..')
+  )
+    return null
   const file = relative(workspace, resolve(name)).split(sep).join('/')
-  if (file.length > 512 || !/^(src\/|intelligence\/src\/|scripts\/|eval\/)/.test(file) ||
-      !/\.(test|spec)\.tsx?$/.test(file) ||
-      file.split('/').some((part) => !/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(part) || part === '..')) return null
+  if (
+    file.length > 512 ||
+    !/^(src\/|intelligence\/src\/|scripts\/|eval\/)/.test(file) ||
+    !/\.(test|spec)\.tsx?$/.test(file) ||
+    file.split('/').some((part) => !/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(part) || part === '..')
+  )
+    return null
   let path = workspace
   try {
     const parts = file.split('/')
@@ -69,7 +103,9 @@ function sourceFile(name, workspace, io) {
       if (stat.isSymbolicLink() || (index === parts.length - 1 ? !stat.isFile() : !stat.isDirectory())) return null
     }
     if (io.realpathSync(path) !== path) return null
-  } catch { return null }
+  } catch {
+    return null
+  }
   return file
 }
 
@@ -79,10 +115,18 @@ function summarize(report, context, workspace, io) {
     if (!Number.isSafeInteger(report[key]) || report[key] < 0) return refuse('NOT_PASS_SCHEMA')
     if (report[key] > MAX_ASSERTIONS) return refuse('NOT_PASS_LIMIT')
   }
-  if (!Array.isArray(report.testResults) || report.testResults.length === 0 || report.numTotalTests === 0 ||
-      report.numTotalTestSuites === 0) return refuse('NOT_PASS_INCOMPLETE')
+  if (
+    !Array.isArray(report.testResults) ||
+    report.testResults.length === 0 ||
+    report.numTotalTests === 0 ||
+    report.numTotalTestSuites === 0
+  )
+    return refuse('NOT_PASS_INCOMPLETE')
   if (report.testResults.length > MAX_FILES) return refuse('NOT_PASS_LIMIT')
-  if (report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites !== report.numTotalTestSuites) {
+  if (
+    report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites !==
+    report.numTotalTestSuites
+  ) {
     return refuse('NOT_PASS_SCHEMA')
   }
   const counts = { passed: 0, failed: 0, pending: 0, skipped: 0, todo: 0 }
@@ -104,18 +148,34 @@ function summarize(report, context, workspace, io) {
       counts[assertion.status] += 1
       if (assertion.status !== 'pending' && assertion.status !== 'skipped') continue
       if (skips.length === MAX_SKIPS) return refuse('NOT_PASS_LIMIT')
-      if (typeof assertion.title !== 'string' || Buffer.byteLength(assertion.title, 'utf8') > 4096 ||
-          typeof assertion.fullName !== 'string' || Buffer.byteLength(assertion.fullName, 'utf8') > 16_384 ||
-          !Array.isArray(assertion.ancestorTitles) || assertion.ancestorTitles.length > 64 ||
-          assertion.ancestorTitles.some((title) => typeof title !== 'string' || Buffer.byteLength(title, 'utf8') > 4096)) {
+      if (
+        typeof assertion.title !== 'string' ||
+        Buffer.byteLength(assertion.title, 'utf8') > 4096 ||
+        typeof assertion.fullName !== 'string' ||
+        Buffer.byteLength(assertion.fullName, 'utf8') > 16_384 ||
+        !Array.isArray(assertion.ancestorTitles) ||
+        assertion.ancestorTitles.length > 64 ||
+        assertion.ancestorTitles.some((title) => typeof title !== 'string' || Buffer.byteLength(title, 'utf8') > 4096)
+      ) {
         return refuse('NOT_PASS_IDENTITY')
       }
-      skips.push({ file: name, identitySha256: digest([name, assertion.ancestorTitles, assertion.title, assertion.fullName]), status: assertion.status, occurrence: 0 })
+      skips.push({
+        file: name,
+        identitySha256: digest([name, assertion.ancestorTitles, assertion.title, assertion.fullName]),
+        status: assertion.status,
+        occurrence: 0
+      })
     }
   }
-  if (assertions !== report.numTotalTests || counts.passed !== report.numPassedTests || counts.failed !== report.numFailedTests ||
-      counts.pending + counts.skipped !== report.numPendingTests || counts.todo !== report.numTodoTests ||
-      (report.success && (failedFile || counts.failed > 0 || report.numFailedTestSuites > 0))) return refuse('NOT_PASS_SCHEMA')
+  if (
+    assertions !== report.numTotalTests ||
+    counts.passed !== report.numPassedTests ||
+    counts.failed !== report.numFailedTests ||
+    counts.pending + counts.skipped !== report.numPendingTests ||
+    counts.todo !== report.numTodoTests ||
+    (report.success && (failedFile || counts.failed > 0 || report.numFailedTestSuites > 0))
+  )
+    return refuse('NOT_PASS_SCHEMA')
   skips.sort((left, right) => {
     const a = JSON.stringify([left.file, left.identitySha256, left.status])
     const b = JSON.stringify([right.file, right.identitySha256, right.status])
@@ -130,16 +190,22 @@ function summarize(report, context, workspace, io) {
     prior = key
   }
   const reasons = []
-  if (!report.success || failedFile || counts.failed > 0 || report.numFailedTestSuites > 0) reasons.push('NOT_PASS_ROOT_FAILED')
+  if (!report.success || failedFile || counts.failed > 0 || report.numFailedTestSuites > 0)
+    reasons.push('NOT_PASS_ROOT_FAILED')
   if (counts.pending > 0 || report.numPendingTestSuites > 0) reasons.push('NOT_PASS_INCOMPLETE')
   if (outcome(context.pipelineOutcome) !== 'success') reasons.push('NOT_PASS_PIPELINE')
   if (outcome(context.auditOutcome) !== 'success') reasons.push('NOT_PASS_AUDIT')
   const summary = {
-    schema: SCHEMA, authority: AUTHORITY, status: reasons[0] ?? 'DIAGNOSTIC_COMPLETE', reasons,
-    pipelineOutcome: outcome(context.pipelineOutcome), auditOutcome: outcome(context.auditOutcome),
+    schema: SCHEMA,
+    authority: AUTHORITY,
+    status: reasons[0] ?? 'DIAGNOSTIC_COMPLETE',
+    reasons,
+    pipelineOutcome: outcome(context.pipelineOutcome),
+    auditOutcome: outcome(context.auditOutcome),
     counts: Object.fromEntries(COUNT_KEYS.map((key) => [key, report[key]])),
     observed: { files: files.size, assertions, skipped: skips.length, todo: counts.todo },
-    skips, inventorySha256: digest(skips)
+    skips,
+    inventorySha256: digest(skips)
   }
   if (Buffer.byteLength(JSON.stringify(summary), 'utf8') > MAX_OUTPUT_BYTES) return refuse('NOT_PASS_LIMIT')
   return { exitCode: reasons.length ? 1 : 0, summary }
@@ -153,21 +219,34 @@ function summarize(report, context, workspace, io) {
  */
 export function diagnoseRootReport(context, io = fs) {
   let roots
-  try { roots = trustedContext(context, io) } catch { return refuse('NOT_PASS_CONTEXT') }
+  try {
+    roots = trustedContext(context, io)
+  } catch {
+    return refuse('NOT_PASS_CONTEXT')
+  }
   if (roots === null) return refuse('NOT_PASS_CONTEXT')
   if (roots === false) return refuse('NOT_PASS_PATH')
   const reportPath = roots.reportPath
   let before
-  try { before = io.lstatSync(reportPath) } catch { return refuse('NOT_PASS_MISSING') }
+  try {
+    before = io.lstatSync(reportPath)
+  } catch {
+    return refuse('NOT_PASS_MISSING')
+  }
   if (before.isSymbolicLink() || !before.isFile()) return refuse('NOT_PASS_PATH')
-  if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
+  if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size > MAX_REPORT_BYTES)
+    return refuse('NOT_PASS_LIMIT')
   let fd
   let bytes
   let closeFailed = false
   const read = () => {
     try {
-      if (io.realpathSync(dirname(reportPath)) !== roots.runnerTemp || io.realpathSync(reportPath) !== reportPath) return refuse('NOT_PASS_PATH')
-      fd = io.openSync(reportPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+      if (io.realpathSync(dirname(reportPath)) !== roots.runnerTemp || io.realpathSync(reportPath) !== reportPath)
+        return refuse('NOT_PASS_PATH')
+      fd = io.openSync(
+        reportPath,
+        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+      )
       const opened = io.fstatSync(fd)
       if (opened.size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
       if (!stable(before, opened)) return refuse('NOT_PASS_UNSTABLE')
@@ -175,18 +254,32 @@ export function diagnoseRootReport(context, io = fs) {
       let size = 0
       while (size < buffer.length) {
         const count = io.readSync(fd, buffer, size, buffer.length - size, null)
-        if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length - size) return refuse('NOT_PASS_UNREADABLE')
+        if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length - size)
+          return refuse('NOT_PASS_UNREADABLE')
         if (count === 0) break
         size += count
       }
       if (size > MAX_REPORT_BYTES) return refuse('NOT_PASS_LIMIT')
       const after = io.lstatSync(reportPath)
-      if (size !== before.size || after.isSymbolicLink() || !stable(before, after) || !stable(before, io.fstatSync(fd))) {
+      if (
+        size !== before.size ||
+        after.isSymbolicLink() ||
+        !stable(before, after) ||
+        !stable(before, io.fstatSync(fd))
+      ) {
         return refuse('NOT_PASS_UNSTABLE')
       }
       bytes = buffer.subarray(0, size)
-    } catch { return refuse('NOT_PASS_UNREADABLE') } finally {
-      if (fd !== undefined) { try { io.closeSync(fd) } catch { closeFailed = true } }
+    } catch {
+      return refuse('NOT_PASS_UNREADABLE')
+    } finally {
+      if (fd !== undefined) {
+        try {
+          io.closeSync(fd)
+        } catch {
+          closeFailed = true
+        }
+      }
     }
     return null
   }
@@ -194,18 +287,31 @@ export function diagnoseRootReport(context, io = fs) {
   if (closeFailed) return refuse('NOT_PASS_UNREADABLE')
   if (failure) return failure
   let report
-  try { report = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch { return refuse('NOT_PASS_SCHEMA') }
-  try { return summarize(report, context, roots.workspace, io) } catch { return refuse('NOT_PASS_SCHEMA') }
+  try {
+    report = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  } catch {
+    return refuse('NOT_PASS_SCHEMA')
+  }
+  try {
+    return summarize(report, context, roots.workspace, io)
+  } catch {
+    return refuse('NOT_PASS_SCHEMA')
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const env = process.env
   const result = diagnoseRootReport({
-    ci: env.CI, githubActions: env.GITHUB_ACTIONS,
-    runnerTemp: env.METIS_CI_RUNNER_TEMP, workspace: env.METIS_CI_WORKSPACE,
-    runId: env.METIS_CI_RUN_ID, runAttempt: env.METIS_CI_RUN_ATTEMPT, matrixOs: env.METIS_CI_MATRIX_OS,
+    ci: env.CI,
+    githubActions: env.GITHUB_ACTIONS,
+    runnerTemp: env.METIS_CI_RUNNER_TEMP,
+    workspace: env.METIS_CI_WORKSPACE,
+    runId: env.METIS_CI_RUN_ID,
+    runAttempt: env.METIS_CI_RUN_ATTEMPT,
+    matrixOs: env.METIS_CI_MATRIX_OS,
     reportPath: env.METIS_CI_ROOT_REPORT,
-    pipelineOutcome: env.METIS_CI_PIPELINE_OUTCOME, auditOutcome: env.METIS_CI_AUDIT_OUTCOME
+    pipelineOutcome: env.METIS_CI_PIPELINE_OUTCOME,
+    auditOutcome: env.METIS_CI_AUDIT_OUTCOME
   })
   console.log(JSON.stringify(result.summary))
   process.exitCode = result.exitCode

@@ -4,12 +4,8 @@ import { draftFilename, snapshotDraftWrites, trackDraftWrite } from './draft-tra
 
 describe('draft transcript write state', () => {
   it('retains the caller timestamp and millisecond filename identity', () => {
-    expect(draftFilename(1_700_000_000_007, '2026-10-18_134501')).toBe(
-      '.autosave-draft-2026-10-18_134501-007.md'
-    )
-    expect(draftFilename(1_700_000_000_507, '2026-10-18_134501')).toBe(
-      '.autosave-draft-2026-10-18_134501-507.md'
-    )
+    expect(draftFilename(1_700_000_000_007, '2026-10-18_134501')).toBe('.autosave-draft-2026-10-18_134501-007.md')
+    expect(draftFilename(1_700_000_000_507, '2026-10-18_134501')).toBe('.autosave-draft-2026-10-18_134501-507.md')
   })
 
   it('returns undefined synchronously when no write was admitted for the exact path', () => {

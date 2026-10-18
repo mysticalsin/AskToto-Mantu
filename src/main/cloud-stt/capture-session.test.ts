@@ -173,7 +173,8 @@ describe('main speech capture transition owner', () => {
       { ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 230_400_001 }] },
       { ...ack, captureGeneration: 5 },
       { ...ack, tracks: [{ ...ack.tracks[0], track: 'system' }] }
-    ]) expect(h.acknowledgeCeiling(invalid)).toBe(false)
+    ])
+      expect(h.acknowledgeCeiling(invalid)).toBe(false)
     expect(h.acknowledgeCeiling(ack)).toBe(true)
     const conflicting = { ...ack, tracks: [{ ...ack.tracks[0], finalSampleOffset: 32_002 }] }
     expect(h.acknowledgeCeiling(conflicting)).toBe(false)

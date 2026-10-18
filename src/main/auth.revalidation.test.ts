@@ -7,11 +7,12 @@ import type { AccountInfo, AuthenticationResult } from '@azure/msal-node'
 
 vi.mock('electron')
 vi.mock('./logger', () => ({
-  auditLog: vi.fn(), setAuditActor: vi.fn(),
+  auditLog: vi.fn(),
+  setAuditActor: vi.fn(),
   mainLog: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
 }))
 vi.mock('./win-security', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./win-security')>(),
+  ...(await importOriginal<typeof import('./win-security')>()),
   readTrustedAdminManaged: vi.fn(() => null)
 }))
 
@@ -23,7 +24,10 @@ const revoked = () => Object.assign(new Error('Synthetic revoked refresh token')
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (error: unknown) => void
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
   return { promise, resolve, reject }
 }
 
@@ -38,16 +42,28 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
   let teardown: ReturnType<typeof vi.fn<() => void>>
 
   const account = (username: string): AccountInfo => ({
-    username, homeAccountId: username, localAccountId: username,
-    environment: 'login.example.test', tenantId: TENANT
+    username,
+    homeAccountId: username,
+    localAccountId: username,
+    environment: 'login.example.test',
+    tenantId: TENANT
   })
 
   async function writeSession(email = 'owner-a@example.test'): Promise<void> {
     const { encryptSecret } = await import('./secrets')
     mkdirSync(profile, { recursive: true })
-    writeFileSync(join(profile, 'auth-session.bin'), encryptSecret(JSON.stringify({
-      email, name: 'Synthetic owner', domain: 'example.test', tid: TENANT, at: Date.now()
-    })))
+    writeFileSync(
+      join(profile, 'auth-session.bin'),
+      encryptSecret(
+        JSON.stringify({
+          email,
+          name: 'Synthetic owner',
+          domain: 'example.test',
+          tid: TENANT,
+          at: Date.now()
+        })
+      )
+    )
     writeFileSync(join(profile, 'msal-cache.bin'), 'SYNTHETIC_CACHE_SENTINEL')
   }
 
@@ -60,14 +76,15 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
     root = mkdtempSync(join(tmpdir(), 'asktoto-auth-revalidation-'))
     profile = join(root, 'profile-a')
     electron = await import('electron')
-    vi.mocked(electron.app.getPath).mockImplementation(name => name === 'userData' ? profile : join(profile, name))
+    vi.mocked(electron.app.getPath).mockImplementation((name) => (name === 'userData' ? profile : join(profile, name)))
     vi.stubEnv('AZURE_CLIENT_ID', 'synthetic-client')
     vi.stubEnv('AZURE_TENANT_ID', TENANT)
     vi.stubEnv('ASKTOTO_ALLOWED_DOMAIN', 'example.test')
     accounts = [account('owner-a@example.test')]
     const cache = { getAllAccounts: vi.fn(async () => accounts) }
     vi.spyOn(msal.PublicClientApplication.prototype, 'getTokenCache').mockReturnValue(
-      cache as unknown as ReturnType<typeof msal.PublicClientApplication.prototype.getTokenCache>)
+      cache as unknown as ReturnType<typeof msal.PublicClientApplication.prototype.getTokenCache>
+    )
     silent = vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenSilent')
     await writeSession()
     auth = await import('./auth')
@@ -88,9 +105,12 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
     silent.mockReturnValueOnce(probe.promise)
     expect(auth.authStatus().email).toBe('owner-a@example.test')
     await vi.advanceTimersByTimeAsync(10_000) // real authStatus-installed startup sweep
-    expect(silent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      account: expect.objectContaining({ username: 'owner-a@example.test' }), forceRefresh: true
-    }))
+    expect(silent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        account: expect.objectContaining({ username: 'owner-a@example.test' }),
+        forceRefresh: true
+      })
+    )
     return probe
   }
 
@@ -118,13 +138,18 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
     const probe = await holdSweep()
     let redirect = ''
     let state = ''
-    vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockResolvedValue({ verifier: 'verifier', challenge: 'challenge' })
-    vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async options => {
-      redirect = options.redirectUri || ''; state = options.state || ''
+    vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockResolvedValue({
+      verifier: 'verifier',
+      challenge: 'challenge'
+    })
+    vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
+      redirect = options.redirectUri || ''
+      state = options.state || ''
       return 'https://login.example.test/authorize'
     })
     vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockResolvedValue({
-      account: account('owner-b@example.test'), idTokenClaims: { tid: TENANT }
+      account: account('owner-b@example.test'),
+      idTokenClaims: { tid: TENANT }
     } as AuthenticationResult)
     vi.mocked(electron.shell.openExternal).mockImplementation(async () => {
       const response = await fetch(`${redirect}/?code=synthetic-code&state=${state}`)
@@ -179,7 +204,7 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
     expectNoStaleRevocation(calls)
   })
 
-  it.each(['valid', 'unknown'] as const)('preserves an unchanged owner for a %s probe result', async outcome => {
+  it.each(['valid', 'unknown'] as const)('preserves an unchanged owner for a %s probe result', async (outcome) => {
     const probe = await holdSweep()
     if (outcome === 'valid') probe.resolve({ accessToken: 'synthetic-token' } as AuthenticationResult)
     else probe.reject(new Error('Synthetic offline failure'))

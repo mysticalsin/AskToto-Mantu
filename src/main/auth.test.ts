@@ -974,11 +974,13 @@ describe('speech auth lease (auth module authority)', () => {
     const pkce = vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockRejectedValue(failure)
     let callbackUrl = ''
     let state = ''
-    const authorize = vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
-      callbackUrl = options.redirectUri || ''
-      state = options.state || ''
-      return 'https://login.example.test/authorize'
-    })
+    const authorize = vi
+      .spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl')
+      .mockImplementation(async (options) => {
+        callbackUrl = options.redirectUri || ''
+        state = options.state || ''
+        return 'https://login.example.test/authorize'
+      })
     const token = vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockResolvedValue({
       account: { username: 'user@example.com', name: 'Fixture' },
       idTokenClaims: { tid: TENANT_GUID }
@@ -998,12 +1000,15 @@ describe('speech auth lease (auth module authority)', () => {
         expect(auth.signInBackoffRemainingMs()).toBe(delay)
         expect(pkce).toHaveBeenCalledTimes(index + 1)
         expect(await auth.signIn()).toEqual({
-          ok: false, configured: true,
+          ok: false,
+          configured: true,
           error: `Too many failed sign-in attempts. Try again in ${Math.ceil(delay / 1_000)}s.`
         })
         now += delay - 1
         expect(await auth.signIn()).toEqual({
-          ok: false, configured: true, error: 'Too many failed sign-in attempts. Try again in 1s.'
+          ok: false,
+          configured: true,
+          error: 'Too many failed sign-in attempts. Try again in 1s.'
         })
         expect(pkce).toHaveBeenCalledTimes(index + 1)
         expect(listen).not.toHaveBeenCalled()
@@ -1033,10 +1038,15 @@ describe('speech auth lease (auth module authority)', () => {
       expect(JSON.stringify(audit.mock.calls)).not.toContain(failure.message)
     } finally {
       auth.signOut()
-      await Promise.all([...ownedServers].map((server) => new Promise<void>((resolveClose) => {
-        server.close(() => resolveClose())
-        server.closeAllConnections()
-      })))
+      await Promise.all(
+        [...ownedServers].map(
+          (server) =>
+            new Promise<void>((resolveClose) => {
+              server.close(() => resolveClose())
+              server.closeAllConnections()
+            })
+        )
+      )
       clock.mockRestore()
       listen.mockRestore()
     }

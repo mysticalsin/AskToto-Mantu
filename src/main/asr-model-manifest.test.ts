@@ -16,65 +16,134 @@ function connectedAsrProvisioning(text: AsrProvisioningSources): boolean {
   const adapter = parse(text.adapter)
   const download = parse(text.download)
   const compact = (node: ts.Node) => node.getText().replace(/\s/g, '')
-  const imported = (source: ts.SourceFile, name: string, path: string) => source.statements.some((node) =>
-    ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === path &&
-    !node.importClause?.isTypeOnly && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings) &&
-    node.importClause.namedBindings.elements.some((item) => item.name.text === name && !item.propertyName && !item.isTypeOnly))
-  const body = (source: ts.SourceFile, name: string) => source.statements.find(
-    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name
-  )?.body
-  const call = (block: ts.Block, name: string, firstArgument?: string) => block.statements.find(
-    (node): node is ts.ExpressionStatement => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) &&
-      compact(node.expression.expression) === name &&
-      (firstArgument === undefined || compact(node.expression.arguments[0]) === firstArgument)
-  )?.expression as ts.CallExpression | undefined
+  const imported = (source: ts.SourceFile, name: string, path: string) =>
+    source.statements.some(
+      (node) =>
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) &&
+        node.moduleSpecifier.text === path &&
+        !node.importClause?.isTypeOnly &&
+        node.importClause?.namedBindings &&
+        ts.isNamedImports(node.importClause.namedBindings) &&
+        node.importClause.namedBindings.elements.some(
+          (item) => item.name.text === name && !item.propertyName && !item.isTypeOnly
+        )
+    )
+  const body = (source: ts.SourceFile, name: string) =>
+    source.statements.find(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name
+    )?.body
+  const call = (block: ts.Block, name: string, firstArgument?: string) =>
+    block.statements.find(
+      (node): node is ts.ExpressionStatement =>
+        ts.isExpressionStatement(node) &&
+        ts.isCallExpression(node.expression) &&
+        compact(node.expression.expression) === name &&
+        (firstArgument === undefined || compact(node.expression.arguments[0]) === firstArgument)
+    )?.expression as ts.CallExpression | undefined
   const property = (node: ts.Node | undefined, name: string): ts.Expression | undefined => {
     if (!node || !ts.isObjectLiteralExpression(node)) return undefined
-    const item = node.properties.find((item) => (ts.isPropertyAssignment(item) || ts.isShorthandPropertyAssignment(item)) && item.name.getText() === name)
-    return item && ts.isPropertyAssignment(item) ? item.initializer : item && ts.isShorthandPropertyAssignment(item) ? item.name : undefined
+    const item = node.properties.find(
+      (item) =>
+        (ts.isPropertyAssignment(item) || ts.isShorthandPropertyAssignment(item)) && item.name.getText() === name
+    )
+    return item && ts.isPropertyAssignment(item)
+      ? item.initializer
+      : item && ts.isShorthandPropertyAssignment(item)
+        ? item.name
+        : undefined
   }
   const matches = (node: ts.Node | undefined, expected: string) => !!node && compact(node) === expected
   const registration = body(main, 'registerIpc')
   const provisioning = body(bootstrap, 'registerOptionalModelProvisioningIpc')
   const boundary = body(adapter, 'registerHighTierAsrModelFetch')
   const admission = body(download, 'ensureHighTierAsrModelExplicit')
-  if (!registration || !provisioning || !boundary || !admission ||
+  if (
+    !registration ||
+    !provisioning ||
+    !boundary ||
+    !admission ||
     !imported(main, 'registerOptionalModelProvisioningIpc', './speech-pack-bootstrap') ||
     !imported(bootstrap, 'registerHighTierAsrModelFetch', './ipc/asr-model-download') ||
-    !imported(adapter, 'ensureHighTierAsrModelExplicit', '../asr-model-download')) return false
+    !imported(adapter, 'ensureHighTierAsrModelExplicit', '../asr-model-download')
+  )
+    return false
   const mainOptions = call(registration, 'registerOptionalModelProvisioningIpc')?.arguments[0]
-  if (!['ipcMain', 'assertMainWindow', 'requireAuth'].every((name) => matches(property(mainOptions, name), name)) ||
-    !matches(property(mainOptions, 'auditAsrTransfer'), "()=>auditLog('asr.model.fetch_requested',{bytes:asrModelBytes()})")) return false
+  if (
+    !['ipcMain', 'assertMainWindow', 'requireAuth'].every((name) => matches(property(mainOptions, name), name)) ||
+    !matches(
+      property(mainOptions, 'auditAsrTransfer'),
+      "()=>auditLog('asr.model.fetch_requested',{bytes:asrModelBytes()})"
+    )
+  )
+    return false
   const asrOptions = call(provisioning, 'registerHighTierAsrModelFetch')?.arguments[0]
-  if (!matches(property(asrOptions, 'ipcMain'), 'options.ipcMain') ||
+  if (
+    !matches(property(asrOptions, 'ipcMain'), 'options.ipcMain') ||
     !matches(property(asrOptions, 'assertMainWindow'), 'options.assertMainWindow') ||
     !matches(property(asrOptions, 'authenticated'), 'options.requireAuth') ||
     !matches(property(asrOptions, 'runtimeAvailable'), 'packageRuntimeAvailable') ||
-    !matches(property(asrOptions, 'onTransfer'), 'options.auditAsrTransfer')) return false
+    !matches(property(asrOptions, 'onTransfer'), 'options.auditAsrTransfer')
+  )
+    return false
   const policy = property(asrOptions, 'authorityReadable')
-  if (!policy || !ts.isArrowFunction(policy) || !ts.isBlock(policy.body) ||
+  if (
+    !policy ||
+    !ts.isArrowFunction(policy) ||
+    !ts.isBlock(policy.body) ||
     !matches(policy.body.statements[0], 'constauthority=awaitreadSettingsAtAuthorityBoundary()') ||
-    !matches(policy.body.statements[1], "return(authority.readable&&resolveTrustedSpeechPackPolicy(authority.settings,authority.localSpeechPack)!=='blocked')")) return false
+    !matches(
+      policy.body.statements[1],
+      "return(authority.readable&&resolveTrustedSpeechPackPolicy(authority.settings,authority.localSpeechPack)!=='blocked')"
+    )
+  )
+    return false
   const handler = call(boundary, 'options.ipcMain.handle', 'IPC.asrModelFetch')?.arguments[1]
-  if (!handler || !ts.isArrowFunction(handler) || !ts.isBlock(handler.body) ||
-    !matches(handler.body.statements[0], 'options.assertMainWindow(event)')) return false
+  if (
+    !handler ||
+    !ts.isArrowFunction(handler) ||
+    !ts.isBlock(handler.body) ||
+    !matches(handler.body.statements[0], 'options.assertMainWindow(event)')
+  )
+    return false
   const admitted = handler.body.statements[1]
   if (!admitted || !ts.isVariableStatement(admitted)) return false
   const initialized = admitted.declarationList.declarations[0]?.initializer
-  if (!initialized || !ts.isAwaitExpression(initialized) || !ts.isCallExpression(initialized.expression) ||
-    compact(initialized.expression.expression) !== 'ensureHighTierAsrModelExplicit') return false
+  if (
+    !initialized ||
+    !ts.isAwaitExpression(initialized) ||
+    !ts.isCallExpression(initialized.expression) ||
+    compact(initialized.expression.expression) !== 'ensureHighTierAsrModelExplicit'
+  )
+    return false
   const guardOptions = initialized.expression.arguments[0]
-  if (!matches(property(guardOptions, 'authenticated'), 'options.authenticated()') ||
-    !['runtimeAvailable', 'authorityReadable', 'onTransfer'].every((name) => matches(property(guardOptions, name), `options.${name}`)) ||
-    !matches(handler.body.statements[2], 'return{ok}')) return false
-  if (!matches(admission.statements[0], 'if(!options.authenticated||!(awaitoptions.runtimeAvailable())||!(awaitoptions.authorityReadable()))returnfalse') ||
+  if (
+    !matches(property(guardOptions, 'authenticated'), 'options.authenticated()') ||
+    !['runtimeAvailable', 'authorityReadable', 'onTransfer'].every((name) =>
+      matches(property(guardOptions, name), `options.${name}`)
+    ) ||
+    !matches(handler.body.statements[2], 'return{ok}')
+  )
+    return false
+  if (
+    !matches(
+      admission.statements[0],
+      'if(!options.authenticated||!(awaitoptions.runtimeAvailable())||!(awaitoptions.authorityReadable()))returnfalse'
+    ) ||
     !matches(admission.statements[1], 'options.onTransfer()') ||
-    !matches(admission.statements[2], 'returnensureHighTierAsrModel()')) return false
+    !matches(admission.statements[2], 'returnensureHighTierAsrModel()')
+  )
+    return false
   const removal = call(registration, 'ipcMain.handle', 'IPC.asrModelRemove')?.arguments[1]
   if (!removal || !ts.isArrowFunction(removal) || !ts.isBlock(removal.body)) return false
   const removalStatements = removal.body.statements
-  return ['assertMainWindow(e)', 'if(!requireAuth())return{ok:false}', 'removeHighTierAsrModel()', "auditLog('asr.model.removed',{})", 'return{ok:true}']
-    .every((expected, index) => matches(removalStatements[index], expected))
+  return [
+    'assertMainWindow(e)',
+    'if(!requireAuth())return{ok:false}',
+    'removeHighTierAsrModel()',
+    "auditLog('asr.model.removed',{})",
+    'return{ok:true}'
+  ].every((expected, index) => matches(removalStatements[index], expected))
 }
 
 /**
@@ -147,8 +216,7 @@ describe('MQA-247 — the high-tier ASR manifest', () => {
 describe('MQA-247 — the fetch is reachable and explicit', () => {
   const REPO = join(__dirname, '..', '..')
   const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').replace(/\r\n/g, '\n')
-  const readSettings = (): string =>
-    read('src/renderer/src/features/settings/AiSection.tsx')
+  const readSettings = (): string => read('src/renderer/src/features/settings/AiSection.tsx')
   const sources = (): AsrProvisioningSources => ({
     main: read('src/main/index.ts'),
     bootstrap: read('src/main/speech-pack-bootstrap.ts'),
@@ -166,7 +234,9 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
     )
     const ui = readSettings()
     const click = ui.slice(ui.indexOf('onClick={async () => {', ui.indexOf('export function AsrModelRow')))
-    expect(click).toMatch(/if \(state\.ready\) await window\.toto\.asrModelRemove\(\)\s*else await window\.toto\.asrModelFetch\(\)/)
+    expect(click).toMatch(
+      /if \(state\.ready\) await window\.toto\.asrModelRemove\(\)\s*else await window\.toto\.asrModelFetch\(\)/
+    )
   })
 
   it('never starts on its own — no timer, no first-import trigger', () => {
@@ -203,7 +273,11 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
       ['download', '!(await options.runtimeAvailable())', 'false'],
       ['download', '!(await options.authorityReadable())', 'false'],
       ['main', "auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })", "auditLog('unused', {})"],
-      ['main', 'ipcMain.handle(IPC.asrModelRemove, (e) => {\n    assertMainWindow(e)\n    if (!requireAuth()) return { ok: false }', 'ipcMain.handle(IPC.asrModelRemove, (e) => {\n    assertMainWindow(e)'],
+      [
+        'main',
+        'ipcMain.handle(IPC.asrModelRemove, (e) => {\n    assertMainWindow(e)\n    if (!requireAuth()) return { ok: false }',
+        'ipcMain.handle(IPC.asrModelRemove, (e) => {\n    assertMainWindow(e)'
+      ],
       ['main', "auditLog('asr.model.removed', {})", 'void 0']
     ]
     for (const [file, before, after] of mutations) {

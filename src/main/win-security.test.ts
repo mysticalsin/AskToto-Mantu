@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -112,7 +122,9 @@ describe('ACL probe transport and parser', () => {
   })
 
   it('accepts a real SID and a single complete ACE', () => {
-    expect(parseAclOutput(JSON.stringify({ owner: SYSTEM, aces: { sid: SYSTEM, rights: FULL, type: 'Allow' } }))).toEqual({
+    expect(
+      parseAclOutput(JSON.stringify({ owner: SYSTEM, aces: { sid: SYSTEM, rights: FULL, type: 'Allow' } }))
+    ).toEqual({
       owner: SYSTEM,
       aces: [{ sid: SYSTEM, rights: FULL, type: 'Allow' }]
     })
@@ -138,7 +150,11 @@ describe('ACL probe transport and parser', () => {
     managedBytesRace.aclOutput = JSON.stringify(acl)
     expect(readAclForTest(path)).toEqual(acl)
     expect(captured).toHaveLength(1)
-    const [command, args, options] = captured[0] as [string, string[], { input: Buffer; stdio: string[]; timeout: number }]
+    const [command, args, options] = captured[0] as [
+      string,
+      string[],
+      { input: Buffer; stdio: string[]; timeout: number }
+    ]
     expect(command).toBe(WINDOWS_POWERSHELL)
     expect(args).toHaveLength(4)
     expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
@@ -151,7 +167,10 @@ describe('ACL probe transport and parser', () => {
     expect(script).not.toContain('$(1+1)')
     expect(script).toContain('Get-Acl -LiteralPath $path')
     expect(script).toContain('Microsoft.PowerShell.Security.psd1')
-    managedBytesRace.aclOutput = JSON.stringify({ owner: SYSTEM, aces: [{ sid: SYSTEM, rights: 'FullControl', type: 'Allow' }] })
+    managedBytesRace.aclOutput = JSON.stringify({
+      owner: SYSTEM,
+      aces: [{ sid: SYSTEM, rights: 'FullControl', type: 'Allow' }]
+    })
     expect(readAclForTest(path)).toBeNull()
     expect(captured).toHaveLength(2)
   })
@@ -419,9 +438,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     expect(probe).not.toBeNull()
     if (!probe) throw new Error('Live ACL fixture precondition could not be established')
     expect(probe.owner).toMatch(/^S-1-\d+(-\d+)+$/)
-    expect(probe.aces.some((ace) =>
-      ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0
-    )).toBe(true)
+    expect(probe.aces.some((ace) => ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0)).toBe(true)
   }
   afterEach(() => {
     try {

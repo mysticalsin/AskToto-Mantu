@@ -80,14 +80,21 @@ type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
 const developmentRuntime: PackageRuntimeContract = { status: 'development', profile: 'development', inventory: null }
 const fullRuntime: PackageRuntimeContract = { status: 'legacy-full', profile: 'full', inventory: null }
-const invalidRuntime: PackageRuntimeContract = { status: 'invalid', reason: 'inventory-invalid', profile: null, inventory: null }
+const invalidRuntime: PackageRuntimeContract = {
+  status: 'invalid',
+  reason: 'inventory-invalid',
+  profile: null,
+  inventory: null
+}
 let runtimeContract: Promise<PackageRuntimeContract> = Promise.resolve(developmentRuntime)
 // The configured provider is one-shot; retain its identity and reset only its per-test result.
 const runtimeContractProvider = vi.fn(() => runtimeContract)
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -106,7 +113,10 @@ async function expectRefusalBeforeSpawn(pending: Promise<void>, message: RegExp)
   try {
     const outcome = await Promise.race([
       spawned.promise,
-      pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
+      pending.then(
+        () => ({ kind: 'resolved' as const }),
+        (error: unknown) => ({ kind: 'rejected' as const, error })
+      )
     ])
     expect(outcome.kind).toBe('rejected')
     if (outcome.kind === 'rejected') expect(outcome.error).toMatchObject({ message: expect.stringMatching(message) })
@@ -126,7 +136,10 @@ beforeEach(() => {
   runtimeContract = Promise.resolve(developmentRuntime)
   configurePackageRuntimeContractProvider(runtimeContractProvider)
   fetchImpl = async () => ({ status: 200 })
-  vi.stubGlobal('fetch', vi.fn((...args: unknown[]) => fetchImpl(...args)))
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((...args: unknown[]) => fetchImpl(...args))
+  )
 })
 
 afterEach(() => {
@@ -141,7 +154,10 @@ afterEach(() => {
 
 async function emitListening(procIndex: number, port: number): Promise<void> {
   await waitUntil(() => spawnState.procs[procIndex] !== undefined)
-  spawnState.procs[procIndex].stdout.emit('data', Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`))
+  spawnState.procs[procIndex].stdout.emit(
+    'data',
+    Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`)
+  )
 }
 
 async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -600,54 +616,57 @@ describe('automatic restart failure ownership', () => {
     await yieldImmediate()
   }
 
-  it.each(['stop', 'stop-then-fresh', 'fresh-without-stop', 'current'] as const)(
-    'handles a late real automatic-restart guard failure with current ownership: %s',
-    async (scenario) => {
-      const runtime = await freshRuntime()
-      let authority: ReturnType<typeof heldRuntimeAuthority> | undefined
-      try {
-        const first = runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
-        await emitListening(0, 55931)
-        await first
-        authority = heldRuntimeAuthority()
-        spawnState.procs[0].emit('exit', 1, null)
-        expect(auditLog).toHaveBeenCalledWith('local.runtime.restart', { platform: 'mac' })
-        expect(runtimeContractProvider).toHaveBeenCalledTimes(2)
-        expect(spawnState.calls).toHaveLength(1)
-        if (scenario === 'stop' || scenario === 'stop-then-fresh') expect(runtime.stop()).toBeUndefined()
-        if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
-          runtimeContract = Promise.resolve(fullRuntime)
-          const fresh = runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
-          await emitListening(1, 55932)
-          await fresh
-          expect(runtime.isRunning()).toBe(true)
-        }
-        authority.resolve(invalidRuntime)
-        await observeRejectedAuthorityTurn()
-        expect(vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'local.runtime.restart')).toHaveLength(1)
-        if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
-          expect(runtime.getState()).toBe('running')
-          expect(runtime.baseURL()).toBe('http://127.0.0.1:55932/v1')
-          expect(spawnState.procs[1].kill).not.toHaveBeenCalled()
-          expect(spawnState.calls).toHaveLength(2)
-        } else {
-          expect(runtime.getState()).toBe(scenario === 'current' ? 'unavailable' : 'stopped')
-          expect(runtime.isRunning()).toBe(false)
-          expect(spawnState.calls).toHaveLength(1)
-          expect(() => runtime.baseURL()).toThrow(/not running/)
-          if (scenario === 'current') {
-            runtimeContract = Promise.resolve(fullRuntime)
-            await expect(runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac'))
-              .rejects.toThrow(/unavailable for this session/)
-            expect(spawnState.calls).toHaveLength(1)
-          }
-        }
-      } finally {
-        runtime.stop()
-        authority?.resolve(invalidRuntime)
+  it.each([
+    'stop',
+    'stop-then-fresh',
+    'fresh-without-stop',
+    'current'
+  ] as const)('handles a late real automatic-restart guard failure with current ownership: %s', async (scenario) => {
+    const runtime = await freshRuntime()
+    let authority: ReturnType<typeof heldRuntimeAuthority> | undefined
+    try {
+      const first = runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      await emitListening(0, 55931)
+      await first
+      authority = heldRuntimeAuthority()
+      spawnState.procs[0].emit('exit', 1, null)
+      expect(auditLog).toHaveBeenCalledWith('local.runtime.restart', { platform: 'mac' })
+      expect(runtimeContractProvider).toHaveBeenCalledTimes(2)
+      expect(spawnState.calls).toHaveLength(1)
+      if (scenario === 'stop' || scenario === 'stop-then-fresh') expect(runtime.stop()).toBeUndefined()
+      if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
+        runtimeContract = Promise.resolve(fullRuntime)
+        const fresh = runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
+        await emitListening(1, 55932)
+        await fresh
+        expect(runtime.isRunning()).toBe(true)
       }
+      authority.resolve(invalidRuntime)
+      await observeRejectedAuthorityTurn()
+      expect(vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'local.runtime.restart')).toHaveLength(1)
+      if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
+        expect(runtime.getState()).toBe('running')
+        expect(runtime.baseURL()).toBe('http://127.0.0.1:55932/v1')
+        expect(spawnState.procs[1].kill).not.toHaveBeenCalled()
+        expect(spawnState.calls).toHaveLength(2)
+      } else {
+        expect(runtime.getState()).toBe(scenario === 'current' ? 'unavailable' : 'stopped')
+        expect(runtime.isRunning()).toBe(false)
+        expect(spawnState.calls).toHaveLength(1)
+        expect(() => runtime.baseURL()).toThrow(/not running/)
+        if (scenario === 'current') {
+          runtimeContract = Promise.resolve(fullRuntime)
+          await expect(
+            runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+          ).rejects.toThrow(/unavailable for this session/)
+          expect(spawnState.calls).toHaveLength(1)
+        }
+      }
+    } finally {
+      runtime.stop()
+      authority?.resolve(invalidRuntime)
     }
-  )
+  })
 
   it('retains the one automatic restart per window limit after a successful restart', async () => {
     const runtime = await freshRuntime()
@@ -662,7 +681,8 @@ describe('automatic restart failure ownership', () => {
       expect(runtime.getState()).toBe('unavailable')
       expect(spawnState.calls).toHaveLength(2)
       expect(auditLog).toHaveBeenCalledWith('local.runtime.missing', {
-        platform: 'mac', reason: 'restart_budget_exhausted'
+        platform: 'mac',
+        reason: 'restart_budget_exhausted'
       })
       expect(vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'local.runtime.restart')).toHaveLength(1)
     } finally {

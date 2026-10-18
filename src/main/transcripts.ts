@@ -13,7 +13,14 @@ import { unlink } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
-import type { SaveDraftTranscriptResult, SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
+import type {
+  SaveDraftTranscriptResult,
+  SaveMeeting,
+  SaveNote,
+  Settings,
+  RecapExport,
+  TranscriptLine
+} from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
@@ -899,7 +906,8 @@ export async function saveDraftTranscript(
     : undefined
   // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
   // Leave previously permitted files untouched, as the normal summary-only save does.
-  if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))) return { status: 'disabled' }
+  if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings)))
+    return { status: 'disabled' }
   try {
     const folder = ensureMeetingsFolder(settings)
     const started = m.startedAt || Date.now()

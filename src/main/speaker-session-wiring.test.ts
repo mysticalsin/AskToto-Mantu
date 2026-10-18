@@ -638,8 +638,12 @@ describe('exact import attempt integration', () => {
     const api = sessionApi({ id })
     let captured: Record<string, any> | undefined
     const noop = () => undefined
-    const saveMeeting = vi.fn(() => { throw new Error('Unexpected meeting write in speaker wiring fixture') })
-    const updateMeetingRecap = vi.fn(() => { throw new Error('Unexpected recap write in speaker wiring fixture') })
+    const saveMeeting = vi.fn(() => {
+      throw new Error('Unexpected meeting write in speaker wiring fixture')
+    })
+    const updateMeetingRecap = vi.fn(() => {
+      throw new Error('Unexpected recap write in speaker wiring fixture')
+    })
     actualFunction('initializeImportJobs', {
       importJobs: null,
       wireIntelligenceIndexWork: noop,

@@ -275,11 +275,7 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
       const fixture = parseInlineTypeScript(`import ${binding} from './transcripts-recap'`)
       expect(namedBindings(fixture, './transcripts-recap', 'parseRecapMarkdown'), binding).toBe(false)
     }
-    for (const binding of [
-      'type { parseRecapMarkdown }',
-      '{ type parseRecapMarkdown }',
-      '{ unrelated }'
-    ]) {
+    for (const binding of ['type { parseRecapMarkdown }', '{ type parseRecapMarkdown }', '{ unrelated }']) {
       const fixture = parseInlineTypeScript(`export ${binding} from './transcripts-recap'`)
       expect(namedReExport(fixture, './transcripts-recap', 'parseRecapMarkdown'), binding).toBe(false)
     }
@@ -458,8 +454,8 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
         return await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
       }
     `)
-    const returnedDraft = (returnedDraftSource.statements[0] as ts.VariableStatement).declarationList
-      .declarations[0].initializer as ts.ArrowFunction
+    const returnedDraft = (returnedDraftSource.statements[0] as ts.VariableStatement).declarationList.declarations[0]
+      .initializer as ts.ArrowFunction
     expect(directDraftSaveCalls(returnedDraft)).toHaveLength(1)
 
     const disconnectedDraftSource = parseInlineTypeScript(`

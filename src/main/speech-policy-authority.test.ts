@@ -76,23 +76,38 @@ describe('strict speech policy identity', () => {
     ).toBeNull()
   })
 
-  it.each([0, 364])('accepts an issuer-generated 365-day licence issued %i days ago while it remains live', async (ageDays) => {
+  it.each([
+    0, 364
+  ])('accepts an issuer-generated 365-day licence issued %i days ago while it remains live', async (ageDays) => {
     const minted = await generateOperatorLicense('synthetic-speech-policy-issuer-secret', {
       days: 365,
       now: NOW - ageDays * 24 * 60 * 60 * 1000,
       jti: '3123456789abcdef'
     })
-    expect(resolveSpeechPolicyIdentity({
-      operatorUrl: 'https://operator.test', operatorLicenseToken: minted.token
-    }, 'durable-device', NOW)).not.toBeNull()
+    expect(
+      resolveSpeechPolicyIdentity(
+        {
+          operatorUrl: 'https://operator.test',
+          operatorLicenseToken: minted.token
+        },
+        'durable-device',
+        NOW
+      )
+    ).not.toBeNull()
   })
 
   it('refuses a live licence whose issued lifetime exceeds the issuer maximum by one second', () => {
     const issuedAt = Math.floor(NOW / 1000)
-    expect(resolveSpeechPolicyIdentity({
-      operatorUrl: 'https://operator.test',
-      operatorLicenseToken: license('4123456789abcdef', issuedAt, issuedAt + 365 * 24 * 60 * 60 + 1)
-    }, 'durable-device', NOW)).toBeNull()
+    expect(
+      resolveSpeechPolicyIdentity(
+        {
+          operatorUrl: 'https://operator.test',
+          operatorLicenseToken: license('4123456789abcdef', issuedAt, issuedAt + 365 * 24 * 60 * 60 + 1)
+        },
+        'durable-device',
+        NOW
+      )
+    ).toBeNull()
   })
 })
 
@@ -100,7 +115,11 @@ describe('speech policy scope high-water authority', () => {
   it.each([
     { version: NOW, result: 'conflict', event: { kind: 'revoked', reason: 'policy-conflict' } },
     { version: NOW + 1, result: 'accepted', event: { kind: 'changed', reason: 'policy-changed' } }
-  ])('retires a live unmanaged proof on managed $result before another authority read', ({ version, result, event }) => {
+  ])('retires a live unmanaged proof on managed $result before another authority read', ({
+    version,
+    result,
+    event
+  }) => {
     const authority = new SpeechPolicyAuthority()
     const currentIdentity = identity()
     const events: unknown[] = []

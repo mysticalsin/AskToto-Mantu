@@ -429,7 +429,11 @@ describe('verified speech policy authority', () => {
   it.each([
     { version: NOW, status: 'unverified', event: { kind: 'revoked', reason: 'policy-conflict' } },
     { version: NOW + 1, status: 'managed', event: { kind: 'changed', reason: 'policy-changed' } }
-  ])('notifies an idle unmanaged owner immediately on a signed managed $status transition', async ({ version, status, event }) => {
+  ])('notifies an idle unmanaged owner immediately on a signed managed $status transition', async ({
+    version,
+    status,
+    event
+  }) => {
     useSpeechIdentity()
     const events: unknown[] = []
     setSpeechPolicyProofRevocationListener((notification) => events.push(notification))

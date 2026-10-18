@@ -5,7 +5,9 @@ import { ImportJobManager, type ImportJob, type ImportJobStore } from './import-
 
 function deferred() {
   let resolve!: () => void
-  const promise = new Promise<void>((done) => { resolve = done })
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -29,7 +31,12 @@ function heldCommit() {
 }
 
 const meeting: SaveMeeting = {
-  title: 'Synthetic import', mode: 'meeting', startedAt: 1, durationMs: 1000, lines: [], recap: ''
+  title: 'Synthetic import',
+  mode: 'meeting',
+  startedAt: 1,
+  durationMs: 1000,
+  lines: [],
+  recap: ''
 }
 
 function fixture(sink = heldCommit()) {
@@ -49,8 +56,14 @@ function fixture(sink = heldCommit()) {
   )
   const adapters = createImportMeetingWriteAdapters({ getSettings, saveMeeting, updateMeetingRecap })
   return {
-    ...adapters, sink, getSettings, saveSink: saveMeeting, recapSink: updateMeetingRecap,
-    setSettings(next: typeof settings) { settings = next }
+    ...adapters,
+    sink,
+    getSettings,
+    saveSink: saveMeeting,
+    recapSink: updateMeetingRecap,
+    setSettings(next: typeof settings) {
+      settings = next
+    }
   }
 }
 
@@ -99,14 +112,20 @@ describe('main import meeting write adapters', () => {
     expect(f.sink.writes).toEqual(['Synthetic summary'])
   })
 
-  it.each(['save', 'recap'] as const)('prevents the held %s commit when its original guard becomes stale', async (kind) => {
+  it.each([
+    'save',
+    'recap'
+  ] as const)('prevents the held %s commit when its original guard becomes stale', async (kind) => {
     const f = fixture()
     const stale = new Error('Synthetic attempt no longer owns this write')
     let current = true
-    const guard = vi.fn(() => { if (!current) throw stale })
-    const writing = kind === 'save'
-      ? f.saveMeeting(meeting, guard)
-      : f.updateRecap('saved-import.md', 'Synthetic summary', 'complete', guard)
+    const guard = vi.fn(() => {
+      if (!current) throw stale
+    })
+    const writing =
+      kind === 'save'
+        ? f.saveMeeting(meeting, guard)
+        : f.updateRecap('saved-import.md', 'Synthetic summary', 'complete', guard)
     await f.sink.entered.promise
     expect(guard).not.toHaveBeenCalled()
     current = false
@@ -119,7 +138,10 @@ describe('main import meeting write adapters', () => {
     expect(f.recapSink).toHaveBeenCalledTimes(kind === 'recap' ? 1 : 0)
   })
 
-  it.each(['save', 'recap'] as const)('propagates a rejected %s dependency without replacing the error', async (kind) => {
+  it.each([
+    'save',
+    'recap'
+  ] as const)('propagates a rejected %s dependency without replacing the error', async (kind) => {
     const f = fixture()
     const error = new Error('Synthetic storage rejection')
     if (kind === 'save') {
@@ -144,8 +166,14 @@ describe('main import meeting write adapters', () => {
   })
 
   it.each([
-    ['save', 'current'], ['save', 'retention'], ['save', 'retention-restored'], ['save', 'cancel'],
-    ['recap', 'current'], ['recap', 'retention'], ['recap', 'retention-restored'], ['recap', 'cancel']
+    ['save', 'current'],
+    ['save', 'retention'],
+    ['save', 'retention-restored'],
+    ['save', 'cancel'],
+    ['recap', 'current'],
+    ['recap', 'retention'],
+    ['recap', 'retention-restored'],
+    ['recap', 'cancel']
   ] as const)('routes the manager-owned %s guard through the adapter with %s ownership', async (kind, ownership) => {
     const f = fixture()
     const jobs = new Map<string, ImportJob>()
@@ -155,8 +183,12 @@ describe('main import meeting write adapters', () => {
         beforeReplace?.()
         jobs.set(job.jobId, structuredClone(job))
       },
-      async list() { return [...jobs.values()].map((job) => structuredClone(job)) },
-      async remove(jobId) { jobs.delete(jobId) },
+      async list() {
+        return [...jobs.values()].map((job) => structuredClone(job))
+      },
+      async remove(jobId) {
+        jobs.delete(jobId)
+      },
       markHeld
     }
     let canRetain = true
@@ -164,7 +196,9 @@ describe('main import meeting write adapters', () => {
     const recapPort = vi.fn(f.updateRecap)
     const enqueueIngest = vi.fn()
     const savedFiles = new Set<string>()
-    const deleteMeeting = vi.fn(async (file: string) => { savedFiles.delete(file) })
+    const deleteMeeting = vi.fn(async (file: string) => {
+      savedFiles.delete(file)
+    })
     if (kind === 'recap') {
       // Reach recap through an admitted initial save; only the target replacement is held.
       f.saveSink.mockImplementationOnce(async (_settings, _meeting, beforeReplace) => {
@@ -179,7 +213,7 @@ describe('main import meeting write adapters', () => {
       transcribe: async () => 'Synthetic recognized speech',
       saveMeeting: savePort,
       updateRecap: recapPort,
-      generateRecap: async () => kind === 'recap' ? 'Synthetic summary' : undefined,
+      generateRecap: async () => (kind === 'recap' ? 'Synthetic summary' : undefined),
       enqueueIngest,
       deleteMeeting,
       canRetainTranscript: () => canRetain,
@@ -189,7 +223,10 @@ describe('main import meeting write adapters', () => {
       newId: () => 'adapter-job'
     })
     const job = await manager.start({
-      path: '/synthetic/adapter.wav', name: 'adapter.wav', sizeBytes: 42, mtimeMs: 1_700_000_000_000
+      path: '/synthetic/adapter.wav',
+      name: 'adapter.wav',
+      sizeBytes: 42,
+      mtimeMs: 1_700_000_000_000
     })
     await manager.acceptDecodedChunk(job.jobId, 0, 1, new Float32Array(1_600).fill(0.1))
     const finalizing = manager.finishDecoding(job.jobId, 1)
@@ -203,7 +240,10 @@ describe('main import meeting write adapters', () => {
     if (ownership === 'retention' || ownership === 'retention-restored') {
       canRetain = false
       expect(await manager.snapshot()).toMatchObject({
-        jobs: [], policyBlocked: true, heldJobIds: [job.jobId], policyHeldJobIds: [job.jobId]
+        jobs: [],
+        policyBlocked: true,
+        heldJobIds: [job.jobId],
+        policyHeldJobIds: [job.jobId]
       })
       expect(markHeld).toHaveBeenCalledWith(job.jobId)
       expect(jobs.has(job.jobId)).toBe(true)
@@ -216,11 +256,13 @@ describe('main import meeting write adapters', () => {
     await finalizing
 
     if (ownership === 'retention') expect(manager.get(job.jobId)).toBeUndefined()
-    else expect(manager.get(job.jobId)?.state).toBe(
-      ownership === 'current' ? 'done' : ownership === 'cancel' ? 'cancelled' : 'policy-held'
+    else
+      expect(manager.get(job.jobId)?.state).toBe(
+        ownership === 'current' ? 'done' : ownership === 'cancel' ? 'cancelled' : 'policy-held'
+      )
+    expect(f.sink.writes).toEqual(
+      ownership === 'current' ? [kind === 'save' ? 'saved-import.md' : 'Synthetic summary'] : []
     )
-    expect(f.sink.writes).toEqual(ownership === 'current'
-      ? [kind === 'save' ? 'saved-import.md' : 'Synthetic summary'] : [])
     if (ownership === 'current') expect(enqueueIngest).toHaveBeenCalledTimes(1)
     else expect(enqueueIngest).not.toHaveBeenCalled()
     if (kind === 'recap' && ownership === 'cancel') {
