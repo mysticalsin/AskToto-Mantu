@@ -1,9 +1,18 @@
 import { spawnSync } from 'node:child_process'
+import * as childProcess from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
+import * as appDriver from './lib/app-driver.mjs'
+import * as navigationRows from './golden-flows/navigation-guard-rows.mjs'
+import * as smokeSupport from './golden-flows/smoke-support.mjs'
+import * as ownedProcessDriver from './owned-processes.mjs'
+import * as packagedSmoke from './packaged-smoke.mjs'
+import { runPackagedRvRows } from './golden-flows/reveal-rows.mjs'
 import {
   hoverWatchRestRect,
   parkAfterExclusiveOnboarding,
@@ -817,6 +826,231 @@ describe('runRevealRow', () => {
       expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret)
     } finally {
       errorLog.mockRestore()
+    }
+  })
+})
+
+describe('bounded native launch diagnostics', () => {
+  const capture = { captureMacLaunchStatus: true }
+  const synthetic = (text: string, options = capture) => appDriver.runProcess(
+    process.execPath,
+    ['-e', `process.stderr.write(${JSON.stringify(text)}); process.exitCode = 1`],
+    5_000,
+    options
+  )
+
+  it.each([
+    ['NSOSStatusErrorDomain Code=-10810 "synthetic failure"\n', 'os-status', -10810],
+    ['0:42: execution error: synthetic failure (-1743)\n', 'os-status', -1743],
+    ['NSOSStatusErrorDomain Code=-2147483648\n', 'os-status', -2147483648],
+    ['NSOSStatusErrorDomain Code=2147483647\n', 'os-status', 2147483647],
+    ['NSOSStatusErrorDomain Code=2147483648\n', 'not-observed', null],
+    ['NSOSStatusErrorDomain Code=-2147483649\n', 'not-observed', null],
+    ['NSOSStatusErrorDomain Code=-1.5\n', 'not-observed', null],
+    ['NSOSStatusErrorDomain Code=-1e3\n', 'not-observed', null],
+    ['unrelated private file (1743)\n', 'not-observed', null],
+    ['NSOSStatusErrorDomain Code=-1\nNSOSStatusErrorDomain Code=-2\n', 'not-observed', null]
+  ] as const)('captures only an explicit unambiguous numeric status: %s', async (text, kind, osStatus) => {
+    await expect(synthetic(text)).resolves.toEqual({
+      code: 1, signal: null, error: false, launchDiagnostic: { kind, osStatus }
+    })
+  })
+
+  it('collects split stderr chunks without publishing their private text', async () => {
+    const secret = '/private/synthetic-profile-and-token'
+    const receipt = await appDriver.runProcess(process.execPath, ['-e',
+      `process.stderr.write(${JSON.stringify(secret + '\nNSOSStatusErrorDomain Co')}); ` +
+      `setTimeout(() => { process.stderr.write('de=-10810\\n'); process.exitCode = 1 }, 20)`
+    ], 5_000, capture)
+    expect(receipt).toEqual({
+      code: 1, signal: null, error: false, launchDiagnostic: { kind: 'os-status', osStatus: -10810 }
+    })
+    expect(JSON.stringify(receipt)).not.toContain(secret)
+  })
+
+  it.each([0, 1])('retains at most four KiB and drains the complete owned stream: extra=%s', async (extra) => {
+    const marker = '\nNSOSStatusErrorDomain Code=-10810\n'
+    const receipt = await synthetic('x'.repeat(4096 - marker.length + extra) + marker)
+    expect(receipt).toEqual({
+      code: 1, signal: null, error: false,
+      launchDiagnostic: extra ? { kind: 'truncated', osStatus: null } : { kind: 'os-status', osStatus: -10810 }
+    })
+  })
+
+  it('keeps the default driver receipt at exactly its original three fields', async () => {
+    await expect(appDriver.runProcess(process.execPath, ['-e',
+      "process.stderr.write('NSOSStatusErrorDomain Code=-10810\\n'); process.exitCode = 1"
+    ], 5_000)).resolves.toEqual({ code: 1, signal: null, error: false })
+  })
+
+  it('preserves default settlement on exit without waiting for stderr close', async () => {
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) })
+    const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => child as unknown as ReturnType<typeof childProcess.spawn>)
+    const pending = appDriver.runProcess('synthetic', [], 1_000)
+    let settled = false
+    void pending.then(() => { settled = true })
+    try {
+      child.emit('exit', 1, null)
+      await Promise.resolve()
+      expect(settled).toBe(true)
+      expect(await pending).toEqual({ code: 1, signal: null, error: false })
+    } finally {
+      child.emit('close', 1, null)
+      await pending
+      spawn.mockRestore()
+    }
+  })
+
+  it('waits for opted-in close so stderr arriving after exit is included', async () => {
+    const stderr = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stderr, kill: vi.fn(() => true) })
+    const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => child as unknown as ReturnType<typeof childProcess.spawn>)
+    const pending = appDriver.runProcess('osascript', ['-e', 'synthetic'], 1_000, capture)
+    let settled = false
+    void pending.then(() => { settled = true })
+    try {
+      child.emit('exit', 1, null)
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      stderr.write('0:42: execution error: synthetic (-1743)\n')
+      child.emit('close', 1, null)
+      expect(await pending).toEqual({
+        code: 1, signal: null, error: false, launchDiagnostic: { kind: 'os-status', osStatus: -1743 }
+      })
+      expect(stderr.listenerCount('data')).toBe(0)
+    } finally {
+      child.emit('close', 1, null)
+      await pending
+      spawn.mockRestore()
+      stderr.destroy()
+    }
+  })
+
+  it('keeps spawn errors content-free without claiming that captured stderr closed', async () => {
+    const receipt = await appDriver.runProcess(join(tmpdir(), 'metis-launch-fixture-does-not-exist'), [], 1_000, capture)
+    expect(receipt).toEqual({
+      code: null, signal: null, error: true, launchDiagnostic: { kind: 'close-unconfirmed', osStatus: null }
+    })
+    expect(JSON.stringify(receipt)).not.toContain(tmpdir())
+  })
+
+  it('releases captured stderr at the original deadline and ignores late child events', async () => {
+    vi.useFakeTimers()
+    const stderr = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stderr, kill: vi.fn(() => true) })
+    const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => child as unknown as ReturnType<typeof childProcess.spawn>)
+    try {
+      const pending = appDriver.runProcess('osascript', ['-e', 'synthetic'], 100, capture)
+      stderr.write('0:42: execution error: synthetic (-1743)\n')
+      await vi.advanceTimersByTimeAsync(100)
+      const receipt = await pending
+      expect(receipt).toEqual({
+        code: null, signal: 'timeout', error: false,
+        launchDiagnostic: { kind: 'close-unconfirmed', osStatus: null }
+      })
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL')
+      expect(stderr.destroyed).toBe(true)
+      expect(stderr.listenerCount('data')).toBe(0)
+      child.emit('exit', 0, null)
+      child.emit('close', 0, null)
+      child.emit('error', new Error('/private/synthetic-late-error'))
+      stderr.emit('data', Buffer.from('NSOSStatusErrorDomain Code=-1\n'))
+      expect(await pending).toBe(receipt)
+      expect(child.kill).toHaveBeenCalledOnce()
+    } finally {
+      spawn.mockRestore()
+      vi.useRealTimers()
+      stderr.destroy()
+    }
+  })
+
+  it.each([
+    { kind: 'os-status', osStatus: '/private/synthetic-token' },
+    { kind: 'os-status', osStatus: 2 ** 40 },
+    { kind: '/private/synthetic-token', osStatus: -1743 },
+    Object.defineProperty({}, 'kind', { get: () => { throw new Error('/private/synthetic-token') } })
+  ])('does not copy malformed optional native diagnostics into a failed reveal row: %s', async (launchDiagnostic) => {
+    const rows = initialRvRows('darwin')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await runRevealRow({
+        auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'), rows,
+        id: 'RV-1-macos-finder-spotlight-launchpad', reason: 'activate', prepare: undefined,
+        run: async () => ({ code: 1, signal: null, error: false, launchDiagnostic }),
+        waitForRevealRecord: async () => ({ parked: true, outcome: 'shown' }),
+        failure: 'native launch failed'
+      })
+      expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
+        status: 'FAIL', diagnostics: { launch: { launchDiagnostic: { kind: 'not-observed', osStatus: null } } }
+      })
+      expect(JSON.stringify(rows)).not.toContain('/private/synthetic-token')
+      expect(JSON.stringify(log.mock.calls)).not.toContain('/private/synthetic-token')
+    } finally { log.mockRestore() }
+  })
+
+  it('passes numeric-only diagnostics from the actual Finder helper into its failed row', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-native-'))
+    const auditLogPath = join(dir, 'audit.log')
+    writeFileSync(auditLogPath, '')
+    const rows = initialRvRows('darwin')
+    const park = vi.spyOn(smokeSupport, 'parkAndProve').mockResolvedValue({ code: 0, signal: null, error: false })
+    const run = vi.spyOn(appDriver, 'runProcess').mockImplementation(async (file, args) => {
+      if (file === 'osascript' && args[1].includes('"Finder"')) return {
+        code: 1, signal: null, error: false, launchDiagnostic: { kind: 'os-status', osStatus: -1743 }
+      }
+      const reason = file === 'open' ? 'activate' : file === 'osascript' ? 'hotkey' :
+        args.includes('--metis-smoke-reopen=tray-show') ? 'tray' : 'second-instance'
+      appendFileSync(auditLogPath, JSON.stringify({ event: 'reveal', reason, outcome: 'shown', parked: true, layout: 'hide' }) + '\n')
+      return { code: 0, signal: null, error: false }
+    })
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await runPackagedRvRows({
+        platform: 'darwin', target: '/owned/Metis.app', executable: '/owned/Metis.app/Contents/MacOS/Metis',
+        auditLogPath, rows, env: { ASKTOTO_USERDATA: dir }
+      })
+      const finder = run.mock.calls.find(([file, args]) => file === 'osascript' && args[1].includes('"Finder"'))
+      expect(finder).toEqual(['osascript', ['-e', 'tell application "Finder" to open POSIX file "/owned/Metis.app"'],
+        10_000, { captureMacLaunchStatus: true }])
+      expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
+        status: 'FAIL', diagnostics: { stage: 'launch', launch: { launchDiagnostic: { kind: 'os-status', osStatus: -1743 } } }
+      })
+    } finally {
+      log.mockRestore(); run.mockRestore(); park.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('records both actual cold-open attempt receipts while retaining the boot precondition', async () => {
+    const rows = initialRvRows('darwin')
+    const run = vi.spyOn(appDriver, 'runProcess').mockImplementation(async (file) => file === 'open' ? {
+      code: 1, signal: null, error: false, launchDiagnostic: { kind: 'os-status', osStatus: -10810 }
+    } : { code: 0, signal: null, error: false })
+    const attach = vi.spyOn(navigationRows, 'withOverlayPage').mockRejectedValue(new Error('Synthetic unavailable CDP'))
+    const census = vi.spyOn(ownedProcessDriver, 'listProcesses').mockReturnValue([])
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const boot = Reflect.get(packagedSmoke, 'runBootLaunchActivateRow')
+      expect(typeof boot).toBe('function')
+      await boot({ target: '/owned/Metis.app', installRoot: '/owned/Metis.app', platform: 'darwin', rows })
+      const opens = run.mock.calls.filter(([file]) => file === 'open')
+      expect(opens).toHaveLength(2)
+      for (const call of opens) {
+        expect(call[2]).toBe(20_000)
+        expect(call[3]).toEqual({ captureMacLaunchStatus: true })
+      }
+      expect(opens[0][1]).toContain('--env')
+      expect(opens[1][1]).not.toContain('--env')
+      expect(run.mock.calls.some(([file, args]) => file === 'launchctl' && args[0] === 'unsetenv')).toBe(true)
+      expect(rows.find((row) => row.id === 'RV-boot-launch-activate-stays-parked')).toMatchObject({
+        status: 'PRECONDITION',
+        evidence: { launchAttempts: {
+          openEnv: { code: 1, reason: 'nonzero-exit', launchDiagnostic: { kind: 'os-status', osStatus: -10810 } },
+          launchctlOpen: { code: 1, reason: 'nonzero-exit', launchDiagnostic: { kind: 'os-status', osStatus: -10810 } }
+        } }
+      })
+    } finally {
+      log.mockRestore(); census.mockRestore(); attach.mockRestore(); run.mockRestore()
     }
   })
 })
