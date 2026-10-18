@@ -390,7 +390,7 @@ const MULTILINGUAL_DANGLING =
 // A bare subject after these constructions is incomplete; do not treat every pronoun as dangling because
 // complete questions may naturally end with a pronoun ("Qué quieres tú") or a finite verb.
 const FRENCH_INCOMPLETE_SUBJECT =
-  /^(?:pourquoi|comment|quand|où|qui|que|quoi|quel(?:le|s|les)?)\s+est-ce que\s+(?:je|tu|il|elle|on|nous|vous|ils|elles)$/i
+  /^(?:(?:pourquoi|comment|quand|où|qui|que|quoi|quel(?:le|s|les)?)\s+est-ce que|qu['’]est-ce (?:que|qui)|est-ce que)\s+(?:je|tu|il|elle|on|nous|vous|ils|elles)$/i
 const SPANISH_INCOMPLETE_CLITIC = /^(?:por qué|qué|cómo|cuándo|dónde|quién(?:es)?|cuál(?:es)?|cuánto(?:s|a|as)?)\s+se$/i
 const PORTUGUESE_INCOMPLETE_SUBJECT = /^o que\s+(?:eu|você|vocês|ele|ela|nós|eles|elas)$/i
 // Terminal question-mark variants beyond ASCII '?' (U+003F): fullwidth '？' (U+FF1F, CJK) and Arabic '؟'

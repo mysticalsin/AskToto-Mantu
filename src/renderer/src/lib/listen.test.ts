@@ -91,6 +91,8 @@ describe('isQuestion — auto-answer turn detection', () => {
 
   it('holds language-specific subject or clitic tails without rejecting completed pronoun/verb phrases', () => {
     expect(isQuestion('Pourquoi est-ce que vous')).toBe(false)
+    expect(isQuestion('Qu’est-ce que vous')).toBe(false)
+    expect(isQuestion('Est-ce que vous')).toBe(false)
     expect(isQuestion('Por qué se')).toBe(false)
     expect(isQuestion('O que eu')).toBe(false)
     expect(isQuestion('Pourquoi vous le dites')).toBe(true)
