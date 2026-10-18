@@ -351,6 +351,38 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
 describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
   // The single-flight latch stops CONCURRENT flows; this pins the SEQUENTIAL control: escalating
   // backoff after consecutive failures, reset on success, gate checked before the latch is taken.
+  it('owns consecutive failures per controller and follows the default clock through reset', async () => {
+    const { createSignInBackoffController } = await import('./auth-session-policy')
+    const controller = createSignInBackoffController()
+    const other = createSignInBackoffController()
+    let now = 10_000
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      expect(controller.failures).toBe(0)
+      expect(controller.remainingMs()).toBe(0)
+      for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000].entries()) {
+        controller.recordSignInFailure()
+        expect(controller.failures).toBe(index + 1)
+        expect(controller.remainingMs()).toBe(delay)
+        expect(other.failures).toBe(0)
+        expect(other.remainingMs()).toBe(0)
+        clock.mockReturnValue(now + delay - 1)
+        expect(controller.remainingMs()).toBe(1)
+        now += delay
+        clock.mockReturnValue(now)
+        expect(controller.remainingMs()).toBe(0)
+      }
+      controller.recordSignInSuccess()
+      expect(controller.failures).toBe(0)
+      expect(controller.remainingMs()).toBe(0)
+      controller.recordSignInFailure()
+      expect(controller.failures).toBe(1)
+      expect(controller.remainingMs()).toBe(2_000)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it('escalates 2s -> 4s -> 8s capped at 60s and resets on success', async () => {
     const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
     const { join } = await vi.importActual<typeof import('node:path')>('node:path')
