@@ -138,7 +138,7 @@ describe('store', () => {
   it('projects the fresh lean route, persists it on the first unrelated write, and preserves it after restart', async () => {
     await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     const projected = getSettings()
-    expect(projected.brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'cloudflare-nova3' })
+    expect(projected.brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'deepgram-nova3' })
     expect(existsSync(join(userData, 'settings.json'))).toBe(false)
 
     const saved = setSettings({ temperature: 0.42 })

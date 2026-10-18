@@ -1,0 +1,47 @@
+name: Focused fresh lean speech tests
+
+on:
+  push:
+    branches: [fix/default-deepgram-managed-speech]
+    paths:
+      - 'src/main/fresh-lean-speech-defaults.ts'
+      - 'src/main/fresh-lean-speech-defaults.test.ts'
+      - 'src/main/store.ts'
+      - 'src/main/store.test.ts'
+      - 'src/main/index.ts'
+      - 'src/shared/cloud-stt-start.ts'
+      - 'src/shared/cloud-stt-start.test.ts'
+      - '.github/workflows/fresh-lean-speech-focused.yml'
+  pull_request:
+    paths:
+      - 'src/main/fresh-lean-speech-defaults.ts'
+      - 'src/main/fresh-lean-speech-defaults.test.ts'
+      - 'src/main/store.ts'
+      - 'src/main/store.test.ts'
+      - 'src/main/index.ts'
+      - 'src/shared/cloud-stt-start.ts'
+      - 'src/shared/cloud-stt-start.test.ts'
+      - '.github/workflows/fresh-lean-speech-focused.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fresh-lean-speech-focused-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fresh-lean-speech-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - run: >-
+          ./node_modules/.bin/vitest run
+          src/main/fresh-lean-speech-defaults.test.ts
+          src/main/store.test.ts

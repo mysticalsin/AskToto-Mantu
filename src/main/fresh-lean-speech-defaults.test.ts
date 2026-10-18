@@ -21,11 +21,11 @@ function input(
 }
 
 describe('fresh lean broker default projection', () => {
-  it('selects the Workers AI broker only for a verified, genuinely fresh, unmanaged lean profile', () => {
+  it('selects the Deepgram broker only for a verified, genuinely fresh, unmanaged lean profile', () => {
     const source = input()
     const result = projectFreshLeanSpeechDefaults(source)
 
-    expect(result.brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'cloudflare-nova3' })
+    expect(result.brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'deepgram-nova3' })
     expect(result).toMatchObject({
       onboardingDone: false,
       asrEngine: DEFAULT_SETTINGS.asrEngine,
