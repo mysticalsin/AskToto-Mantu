@@ -36,7 +36,7 @@ jobs:
       - name: Bind the separately checked-out harness and allocate owned inputs
         id: owned
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before retrieval"; exit 1; }
           owned_root=$(mktemp -d "$RUNNER_TEMP/metis-historical-197-XXXXXX")
           mkdir "$owned_root/assets"
           echo "root=$owned_root" >> "$GITHUB_OUTPUT"
@@ -81,7 +81,7 @@ jobs:
         env:
           OWNED_ROOT: ${{ steps.owned.outputs.root }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "Harness mismatch before verification"; exit 1; }
           node scripts/qa/historical-197-inputs.mjs --metadata "$OWNED_ROOT/context.json" --assets "$OWNED_ROOT/assets" --harness-commit "$GITHUB_SHA" > "$OWNED_ROOT/receipt.json"
           jq -e --arg harness "$GITHUB_SHA" '
             .scope == "IDENTITY_ONLY" and .outcome == "VERIFIED" and .verification == "local-bytes" and
