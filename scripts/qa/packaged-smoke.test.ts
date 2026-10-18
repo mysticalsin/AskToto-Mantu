@@ -726,6 +726,7 @@ describe('runRevealRow', () => {
       rows,
       id: 'RV-1-macos-finder-spotlight-launchpad',
       reason: 'activate',
+      prepare: undefined,
       run: async () => receipt,
       waitForRevealRecord,
       failure: 'native launch did not succeed'
@@ -767,6 +768,7 @@ describe('runRevealRow', () => {
       rows,
       id: 'RV-1-macos-finder-spotlight-launchpad',
       reason: 'activate',
+      prepare: undefined,
       run: async () => ({ code: 0, signal: null, error: false }),
       waitForRevealRecord: async (_path, _reason, _seen, timeout) => {
         window = timeout
@@ -788,6 +790,7 @@ describe('runRevealRow', () => {
         rows,
         id: 'RV-1-macos-finder-spotlight-launchpad',
         reason: 'activate',
+        prepare: undefined,
         run: async () => ({ code: secret, signal: secret, error: { message: secret }, stderr: secret }),
         waitForRevealRecord: async () => ({ outcome: 'shown', parked: true }),
         failure: 'invalid launch receipt'
