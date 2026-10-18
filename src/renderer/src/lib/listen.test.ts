@@ -47,6 +47,27 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Can you describe the naïve approach')).toBe(true) // accented Latin
   })
 
+  it('detects complete French questions from common interrogative openers', () => {
+    expect(isQuestion('Pourquoi le déploiement échoue')).toBe(true)
+    expect(isQuestion('Qu’est-ce que vous proposez')).toBe(true)
+    expect(isQuestion('Où se trouve le rapport')).toBe(true)
+    expect(isQuestion('Est-ce que vous pouvez répéter')).toBe(true)
+  })
+
+  it('detects complete Brazilian Portuguese questions from common interrogative openers', () => {
+    expect(isQuestion('O que você recomenda')).toBe(true)
+    expect(isQuestion('Por que o serviço reiniciou')).toBe(true)
+    expect(isQuestion('Como funciona a recuperação')).toBe(true)
+    expect(isQuestion('Onde está o relatório')).toBe(true)
+  })
+
+  it('detects complete Spanish questions, including an opening inverted question mark', () => {
+    expect(isQuestion('¿Qué recomienda para el despliegue')).toBe(true)
+    expect(isQuestion('Por qué se cayó el servicio')).toBe(true)
+    expect(isQuestion('Cómo funciona el respaldo')).toBe(true)
+    expect(isQuestion('Dónde está el informe')).toBe(true)
+  })
+
   it('keeps stranded-preposition questions (they DO end real questions)', () => {
     expect(isQuestion('Where are you from')).toBe(true)
     expect(isQuestion('What are you looking at')).toBe(true)
@@ -57,6 +78,14 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Can you give me your')).toBe(false)
     expect(isQuestion('How do we deal with the')).toBe(false)
     expect(isQuestion('Why is this good and')).toBe(false)
+  })
+
+  it('holds multilingual fragments that end on a function word', () => {
+    expect(isQuestion('Pourquoi est-ce que')).toBe(false)
+    expect(isQuestion('Quel est le')).toBe(false)
+    expect(isQuestion('O que você')).toBe(false)
+    expect(isQuestion('O que é a')).toBe(false)
+    expect(isQuestion('¿Qué es lo que')).toBe(false)
   })
 
   it('resolves a split question once the coalesced run completes', () => {
@@ -71,6 +100,9 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('I think we should ship it')).toBe(false)
     expect(isQuestion('best way to deploy this')).toBe(false) // no interrogative opener
     expect(isQuestion('what is')).toBe(false) // under the 3-word floor, no "?"
+    expect(isQuestion('Como gerente, eu aprovo o plano')).toBe(false)
+    expect(isQuestion('Creo que el plan funciona')).toBe(false)
+    expect(isQuestion('So we shipped the update. Pourquoi cette décision')).toBe(true)
     expect(isQuestion('')).toBe(false)
   })
 })
