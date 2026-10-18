@@ -398,11 +398,21 @@ describe('readTrustedAdminManagedBytes — bounded raw bytes from one trusted fi
   })
 })
 
-// Live end-to-end proof through the real PowerShell Get-Acl reader: a file a standard (non-elevated)
-// user can create under %ProgramData% must NOT be honored as admin policy. Windows-only; self-cleaning.
+// Live end-to-end proof through the real PowerShell Get-Acl reader: a policy file writable by
+// BUILTIN\Users must not be honored. This does not establish a standard-user attack on an admin host.
 describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real ProgramData ACL (win32)', () => {
   const dir = join(process.env.ProgramData || 'C:\\ProgramData', 'Metis__wsectest')
   const file = join(dir, 'managed-config.json')
+  function assertUsersWritableFixture(): void {
+    expect(managedBytesRace.aclOutput).toBeNull() // The fixture precondition must use the live probe.
+    const probe = readAclForTest(file)
+    expect(probe).not.toBeNull()
+    if (!probe) throw new Error('Live ACL fixture precondition could not be established')
+    expect(probe.owner).toMatch(/^S-1-\d+(-\d+)+$/)
+    expect(probe.aces.some((ace) =>
+      ace.sid === USERS && ace.type === 'Allow' && (ace.rights & WRITE) !== 0
+    )).toBe(true)
+  }
   afterEach(() => {
     try {
       if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
@@ -411,10 +421,11 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     }
   })
 
-  it('rejects a policy file planted by the current non-admin user (owner=self, Users:Write inherited)', () => {
-    mkdirSync(dir, { recursive: true }) // inherits ProgramData's Users:Write ACE, like the real attack
+  it('rejects a policy file with a live-proven BUILTIN Users write ACE', () => {
+    mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
-    // The file exists and parses, but the ACL reader sees a non-admin owner + inherited Users write.
+    assertUsersWritableFixture()
+    // A broad write ACE must prevent trust regardless of whether the runner account is an admin.
     expect(isAdminManagedTrusted(file)).toBe(false)
     // Budget must clear the code's OWN limit: the ACL read spawns System32 powershell.exe with an
     // 8s execFileSync timeout, which already exceeds vitest's 5s per-test default — so on a cold CI
@@ -463,6 +474,7 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
+    assertUsersWritableFixture()
     // Content must not leak even though the file exists and parses — the ACL is untrusted, so the
     // held-fd read is refused before ever handing the caller a string to JSON.parse.
     expect(readTrustedAdminManaged(file)).toBeNull()
