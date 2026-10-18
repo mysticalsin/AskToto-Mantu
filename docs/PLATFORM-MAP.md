@@ -1,11 +1,11 @@
 # Platform & dispatch map
 
-One repository ships three distinct products. This is the single place that answers "where do I fix X,
-and how does the fix reach users?" so a change is easy to locate and easy to dispatch.
+The current desktop target is Electron for Windows and macOS, with the required native helpers.
+This map answers "where do I fix X, and how does the fix reach users?"
 
 There is **no per-OS fork of the Electron source** — Windows and macOS share `src/**` and differ only by
-runtime checks and per-platform packaging overlays. The Swift app under `native-app/` is a separate
-product with its own distribution.
+runtime checks and per-platform packaging overlays. The legacy SwiftUI app sources under `native-app/`
+remain in the repository; a separate native app is not an active delivery target.
 
 ---
 
@@ -33,14 +33,15 @@ product with its own distribution.
 - **Dispatch / auto-update:** `release/latest-mac.yml` (`.zip` / `.dmg`) → `electron-updater`. MAS uses
   the App Store, not this feed.
 
-## 3. Métis Native for macOS — Swift / SwiftUI
+## 3. Legacy native app sources — Swift / SwiftUI
 
 - **Location:** `native-app/` — `App/` (SwiftUI shell) + `MetisKit/` (Swift package with the tested
   logic). Separate product, `appId com.mantu.metis.native`; Apple Intelligence (Foundation Models), App
-  Intents, SwiftData. **Not** an Electron conversion.
+  Intents, SwiftData. These sources are distinct from the active Electron application and its helpers.
 - **Build / test:** `xcodegen generate` (`native-app/project.yml`) → Xcode; the core builds and tests via
   `swift build` / `swift test` (runs on Linux/CI too, since Apple-only frameworks are `canImport`-guarded).
-- **Dispatch / auto-update:** App Store — deliberately **not** `latest-mac.yml` / `electron-updater`.
+- **Delivery:** no separate native-app release is part of the current desktop target. Its CI checks
+  do not establish Electron package acceptance.
 
 ## Shared across the Electron products
 
@@ -68,9 +69,9 @@ flowchart LR
   tracked `release/` directory — `release/` is gitignored build output.
 - Enterprise fleets can point at a private generic feed via managed-config `updateFeedUrl`.
 
-### Native macOS (Swift)
+### Legacy native macOS sources (Swift)
 
-Separate App Store submission from `native-app/`. Does not use the `Metis-Releases` feeds.
+There is no active separate-app submission target. These sources do not use the `Metis-Releases` feeds.
 
 ---
 
@@ -79,6 +80,8 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 - Windows-only bug → `electron-builder.win.yml`, `src/main/win-security.ts`, win branches in `src/main/**`.
 - macOS(Electron)-only bug → `electron-builder.yml` mac section, `native/mac-helper/**`, darwin branches.
 - Cross-platform Electron bug → `src/main/**`, `src/renderer/**`, `src/shared/**`.
+- Draft autosave integration coverage → `scripts/qa/draft-autosave-receipt.test.ts`, relocated from
+  `src/main/draft-autosave-receipt.test.ts` because it exercises the backend, IPC, preload and renderer.
 - Saved meetings → `src/main/transcripts.ts` owns writes/encryption and draft lifecycle;
   `src/main/features/meetings/transcript-format.ts` owns the pure display projection;
   `src/main/features/meetings/meeting-document.ts` owns frontmatter and recap-section boundaries;
@@ -129,5 +132,5 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 
 - Settings panel bug → section code in `src/renderer/src/features/settings/**`, shared primitives in
   `src/renderer/src/ui/**`, and the compatibility export at `src/renderer/src/components/Settings.tsx`.
-- Native macOS app → `native-app/App/**` (UI) or `native-app/MetisKit/**` (logic).
+- Legacy native source maintenance → `native-app/App/**` (UI) or `native-app/MetisKit/**` (logic).
 - "How does it ship" → bump version + tag; CI publishes to `Metis-Releases`; clients poll `latest*.yml`.
