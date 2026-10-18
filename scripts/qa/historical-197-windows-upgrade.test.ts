@@ -1,12 +1,18 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { Buffer } from 'node:buffer'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import {
   assessNativeFiles,
   assessHistoricalUpgradeReport,
   configureAndSeed,
   readInstalledProfile,
   runHistoricalUpgrade,
-  REQUIRED_CHECKS
+  REQUIRED_CHECKS,
+  validateOwnedStoragePath
 } from './historical-197-windows-upgrade.mjs'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -20,7 +26,7 @@ const expected = {
 }
 const settings = () => ({
   version: '1.9.6', meetingsFolder: expected.meetingsRoot, resolvedMeetingsFolder: expected.meetingsRoot,
-  allowedProviders: [], encryptTranscripts: true, temperature: 0.42, onboardingDone: true,
+  allowedProviders: [] as string[], envKeys: [], encryptTranscripts: true, temperature: 0.42, onboardingDone: true,
   hasKeys: { openai: true }, localLlm: { enabled: false }
 })
 function pageFixture() {
@@ -47,6 +53,21 @@ const encrypted = () => ({
 })
 
 describe('historical Windows native format controls (synthetic bytes, not DPAPI acceptance)', () => {
+  it('validates real owned files and refuses outside paths or junction aliases before reading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'historical-path-'))
+    try {
+      const owned = join(root, 'owned')
+      const outside = join(root, 'outside')
+      await mkdir(owned)
+      await mkdir(outside)
+      await writeFile(join(owned, 'meeting.md'), 'synthetic storage-path fixture')
+      await writeFile(join(outside, 'meeting.md'), 'synthetic outside fixture')
+      await expect(validateOwnedStoragePath(owned, join(owned, 'meeting.md'), true)).resolves.toBeTruthy()
+      await expect(validateOwnedStoragePath(owned, join(outside, 'meeting.md'), true)).rejects.toThrow()
+      await symlink(outside, join(owned, 'alias'), 'junction')
+      await expect(validateOwnedStoragePath(owned, join(owned, 'alias', 'meeting.md'), true)).rejects.toThrow()
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
   it('accepts native markers without demanding a file keystore', () => {
     expect(assessNativeFiles(encrypted(), [expected.key, expected.line, expected.title]).native).toBe(true)
   })
@@ -130,7 +151,7 @@ function driverFixture() {
     launch: vi.fn(async (version: string) => { calls.push(`launch:${version}`); return { pid: pid++, version } }),
     seed: vi.fn(async () => { calls.push('seed'); return `${expected.meetingsRoot}\\meeting.md` }),
     read: vi.fn(async (app: { version: string }) => { calls.push(`read:${app.version}`) }),
-    inspect: vi.fn(async () => { calls.push('inspect'); return { native: true, meetingSha256: 'a'.repeat(64), providerSha256: 'b'.repeat(64), fileKeyPresent: false } }),
+    inspect: vi.fn(async () => { calls.push('inspect'); return { native: true, settingsSha256: 'd'.repeat(64), meetingSha256: 'a'.repeat(64), providerSha256: 'b'.repeat(64), fileKeyPresent: false } }),
     stop: vi.fn(async () => { calls.push('stop'); return true }),
     cleanup: vi.fn(async () => { calls.push('cleanup'); return true })
   }
@@ -138,6 +159,13 @@ function driverFixture() {
 }
 const context = { harnessCommit: 'c'.repeat(40) }
 describe('historical installed orchestrator (system-boundary fixtures only)', () => {
+  it('the real CLI refuses incomplete arguments with closed output before any installer work', () => {
+    const child = spawnSync(process.execPath, [fileURLToPath(new URL('./historical-197-windows-upgrade.mjs', import.meta.url)),
+      '--baseline', 'private-input-canary'], { encoding: 'utf8', timeout: 10_000 })
+    expect(child.status).toBe(1)
+    expect(child.stdout).toBe('')
+    expect(child.stderr).toBe('historical-windows-native-upgrade:REFUSED\n')
+  })
   it('runs original196 seed, same-root197 upgrade and independent fresh197 read in order', async () => {
     const { driver, calls } = driverFixture()
     const report = await runHistoricalUpgrade(context, driver)
@@ -171,7 +199,7 @@ describe('historical installed orchestrator (system-boundary fixtures only)', ()
     second.driver.launch.mockResolvedValue({ pid: 100, version: '1.9.7' })
     expect((await runHistoricalUpgrade(context, second.driver)).accepted).toBe(false)
     const third = driverFixture()
-    third.driver.inspect.mockResolvedValueOnce({ native: true, meetingSha256: 'f'.repeat(64), providerSha256: 'b'.repeat(64), fileKeyPresent: false })
+    third.driver.inspect.mockResolvedValueOnce({ native: true, settingsSha256: 'd'.repeat(64), meetingSha256: 'f'.repeat(64), providerSha256: 'b'.repeat(64), fileKeyPresent: false })
     expect((await runHistoricalUpgrade(context, third.driver)).accepted).toBe(false)
   })
   it('missing/duplicate/non-PASS rows cannot be accepted even with accepted:true', async () => {
