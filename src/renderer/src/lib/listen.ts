@@ -386,7 +386,13 @@ const DANGLING = /\b(the|a|an|and|or|but|your|my|our|their|its)$/i
 // These common French, Portuguese, and Spanish function words indicate that an unpunctuated ASR window
 // stopped before its predicate or object. Keep this guard separate so the English list stays unchanged.
 const MULTILINGUAL_DANGLING =
-  /(?:^|\s)(?:le|la|les|un|une|des|du|et|ou|mais|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|ce|cet|cette|ces|el|la|los|las|un|una|unos|unas|lo|y|o|pero|mi|mis|tu|tus|su|sus|nuestro|nuestra|nuestros|nuestras|este|esta|estos|estas|um|uma|uns|umas|os|as|a|do|da|dos|das|no|na|nos|nas|seu|sua|seus|suas|meu|minha|meus|minhas|nosso|nossa|nossos|nossas|e|mas|que|é|está|foi|são|você|vocês)$/i
+  /(?:^|\s)(?:le|la|les|un|une|des|du|et|ou|mais|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|ce|cet|cette|ces|el|la|los|las|un|una|unos|unas|lo|y|o|pero|mi|mis|tu|tus|su|sus|nuestro|nuestra|nuestros|nuestras|este|esta|estos|estas|um|uma|uns|umas|os|as|a|do|da|dos|das|no|na|nos|nas|seu|sua|seus|suas|meu|minha|meus|minhas|nosso|nossa|nossos|nossas|e|mas|que|é|está|foi|são)$/i
+// A bare subject after these constructions is incomplete; do not treat every pronoun as dangling because
+// complete questions may naturally end with a pronoun ("Qué quieres tú") or a finite verb.
+const FRENCH_INCOMPLETE_SUBJECT =
+  /^(?:pourquoi|comment|quand|où|qui|que|quoi|quel(?:le|s|les)?)\s+est-ce que\s+(?:je|tu|il|elle|on|nous|vous|ils|elles)$/i
+const SPANISH_INCOMPLETE_CLITIC = /^(?:por qué|qué|cómo|cuándo|dónde|quién(?:es)?|cuál(?:es)?|cuánto(?:s|a|as)?)\s+se$/i
+const PORTUGUESE_INCOMPLETE_SUBJECT = /^o que\s+(?:eu|você|vocês|ele|ela|nós|eles|elas)$/i
 // Terminal question-mark variants beyond ASCII '?' (U+003F): fullwidth '？' (U+FF1F, CJK) and Arabic '؟'
 // (U+061F) — Whisper transcribes many languages with these, so relying on endsWith('?') alone silently
 // dropped every non-English question from proactive auto-suggest.
@@ -412,7 +418,14 @@ export function isQuestion(t: string): boolean {
   if (!LATIN_CLAUSE.test(lastClause) || clause.split(/\s+/).length < 3) return false
   if (QWORDS.test(lastClause)) return true
   if (!MULTILINGUAL_QWORDS.test(clause)) return false
-  if (MULTILINGUAL_DANGLING.test(completedText)) return false
+  if (
+    MULTILINGUAL_DANGLING.test(completedText) ||
+    FRENCH_INCOMPLETE_SUBJECT.test(completedText) ||
+    SPANISH_INCOMPLETE_CLITIC.test(completedText) ||
+    PORTUGUESE_INCOMPLETE_SUBJECT.test(completedText)
+  ) {
+    return false
+  }
   // In Portuguese, unaccented "como" can introduce a statement ("Como gerente, eu...").
   if (/^como\s+[^.!?？؟,]{1,50},/i.test(clause)) return false
   return true

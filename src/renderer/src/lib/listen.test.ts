@@ -39,6 +39,7 @@ describe('isQuestion — auto-answer turn detection', () => {
   it('fires on any string with terminal "?" even when short', () => {
     expect(isQuestion('Ready?')).toBe(true)
     expect(isQuestion('You sure?')).toBe(true)
+    expect(isQuestion('Por qué se?')).toBe(true) // explicit terminal punctuation keeps its existing precedence
   })
 
   it('fires on Latin questions with typographic apostrophes/accents (ASR emits curly quotes)', () => {
@@ -86,6 +87,15 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('O que você')).toBe(false)
     expect(isQuestion('O que é a')).toBe(false)
     expect(isQuestion('¿Qué es lo que')).toBe(false)
+  })
+
+  it('holds language-specific subject or clitic tails without rejecting completed pronoun/verb phrases', () => {
+    expect(isQuestion('Pourquoi est-ce que vous')).toBe(false)
+    expect(isQuestion('Por qué se')).toBe(false)
+    expect(isQuestion('O que eu')).toBe(false)
+    expect(isQuestion('Pourquoi vous le dites')).toBe(true)
+    expect(isQuestion('Qué quieres tú')).toBe(true)
+    expect(isQuestion('O que eu escolhi')).toBe(true)
   })
 
   it('resolves a split question once the coalesced run completes', () => {
