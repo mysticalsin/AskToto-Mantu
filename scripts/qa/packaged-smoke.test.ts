@@ -1038,31 +1038,34 @@ describe('bounded native launch diagnostics', () => {
           }
         })
     ]
-  ] as const)('does not copy malformed optional native diagnostics into a failed reveal row: %s', async (_label, createDiagnostic) => {
-    const launchDiagnostic = createDiagnostic()
-    const rows = initialRvRows('darwin')
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      await runRevealRow({
-        auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
-        rows,
-        id: 'RV-1-macos-finder-spotlight-launchpad',
-        reason: 'activate',
-        prepare: undefined,
-        run: async () => ({ code: 1, signal: null, error: false, launchDiagnostic }),
-        waitForRevealRecord: async () => ({ parked: true, outcome: 'shown' }),
-        failure: 'native launch failed'
-      })
-      expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
-        status: 'FAIL',
-        diagnostics: { launch: { launchDiagnostic: { kind: 'not-observed', osStatus: null } } }
-      })
-      expect(JSON.stringify(rows)).not.toContain('/private/synthetic-token')
-      expect(JSON.stringify(log.mock.calls)).not.toContain('/private/synthetic-token')
-    } finally {
-      log.mockRestore()
+  ] as const)(
+    'does not copy malformed optional native diagnostics into a failed reveal row: %s',
+    async (_label, createDiagnostic) => {
+      const launchDiagnostic = createDiagnostic()
+      const rows = initialRvRows('darwin')
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await runRevealRow({
+          auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
+          rows,
+          id: 'RV-1-macos-finder-spotlight-launchpad',
+          reason: 'activate',
+          prepare: undefined,
+          run: async () => ({ code: 1, signal: null, error: false, launchDiagnostic }),
+          waitForRevealRecord: async () => ({ parked: true, outcome: 'shown' }),
+          failure: 'native launch failed'
+        })
+        expect(rows.find((row) => row.id === 'RV-1-macos-finder-spotlight-launchpad')).toMatchObject({
+          status: 'FAIL',
+          diagnostics: { launch: { launchDiagnostic: { kind: 'not-observed', osStatus: null } } }
+        })
+        expect(JSON.stringify(rows)).not.toContain('/private/synthetic-token')
+        expect(JSON.stringify(log.mock.calls)).not.toContain('/private/synthetic-token')
+      } finally {
+        log.mockRestore()
+      }
     }
-  })
+  )
 
   it('contains a throwing optional diagnostic getter without exposing its error', async () => {
     const rows = initialRvRows('darwin')
