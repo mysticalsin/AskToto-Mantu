@@ -104,13 +104,40 @@ function changedFiles(mergeBase) {
 }
 
 function main(argv) {
-  const mode = argv[0] === 'format' ? 'format' : 'lint'
+  const mode = argv[0] === 'format-patch' ? 'format-patch' : argv[0] === 'format' ? 'format' : 'lint'
+  if (mode === 'format-patch' &&
+      (process.env.CI !== 'true' || process.env.GITHUB_ACTIONS !== 'true' ||
+       process.env.RUNNER_ENVIRONMENT !== 'github-hosted')) {
+    console.error('Format repair is restricted to GitHub-hosted CI.')
+    return 1
+  }
   const baseFlag = argv.indexOf('--base')
   const baseRef = baseFlag === -1 ? 'origin/main' : argv[baseFlag + 1]
   const mergeBase = git(['merge-base', baseRef, 'HEAD'])
   const files = changedFiles(mergeBase)
   if (files.length === 0) {
     console.log(`No changed lintable files against ${baseRef}.`)
+    return 0
+  }
+
+  if (mode === 'format-patch') {
+    // A failed format gate remains failed. Only this disposable hosted checkout is formatted;
+    // the patch is review material for the already-public source, never an automatic commit.
+    if (git(['status', '--porcelain', '--untracked-files=no']) !== '') {
+      console.error('Format repair requires an unchanged tracked checkout.')
+      return 1
+    }
+    const run = biome(['format', '--write', ...files], REPO_ROOT)
+    if (run.error || run.status !== 0) {
+      console.error('The pinned formatter could not produce a complete repair patch.')
+      return 1
+    }
+    const patch = execFileSync('git', ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--binary', '--', ...files], {
+      cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024
+    })
+    console.log('FORMAT_REPAIR_PATCH_BEGIN')
+    process.stdout.write(patch)
+    console.log('FORMAT_REPAIR_PATCH_END')
     return 0
   }
 

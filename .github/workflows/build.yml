@@ -266,6 +266,11 @@ jobs:
       # an unformatted changed file (FORMAT_BLOCKING_FROM in lint-ratchet.mjs), so this step needs no edit.
       - name: Format check (changed files)
         run: npm run format:changed
+        id: format_check
+      # Review material only: the blocking check above keeps its failure result.
+      - name: Emit formatter repair patch
+        if: ${{ failure() && steps.format_check.outcome == 'failure' }}
+        run: node scripts/ci/lint-ratchet.mjs format-patch
 
   license-server:
     # license-server is a separate npm project (own package-lock) that neither `quality` nor `operator`
