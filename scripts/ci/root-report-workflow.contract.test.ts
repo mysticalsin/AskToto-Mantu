@@ -90,7 +90,7 @@ function expectFailureAuditConnection(source: string): string {
   expect(audit).toContain('        run: npm run check:skips -- "${{ env.METIS_CI_ROOT_REPORT }}"')
   expect(audit).not.toMatch(/continue-on-error|npx\s+vitest/)
   expect(pipeline).toContain(' && npm test')
-  expect(pipeline.match(/\bnpm test\b/g)).toHaveLength(1)
+  expect(pipeline.match(/^ {10}.*\bnpm test\b/gm)).toHaveLength(1)
   expect(pipeline).not.toMatch(/continue-on-error|\|\||npx\s+vitest/)
   const retention = namedStep(job, 'Retain original root test report')
   expect(job.replace(retention, '')).not.toMatch(/upload-artifact|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|base64/)
@@ -252,7 +252,8 @@ describe('bounded root report diagnostic workflow connection', () => {
 
   it.each([
     ['success-only diagnostic', '        if: ${{ always() }}', '        if: success()'],
-    ['foreign attempt', '${{ github.run_attempt }}', '999'],
+    ['foreign attempt context', 'METIS_CI_RUN_ATTEMPT: ${{ github.run_attempt }}', 'METIS_CI_RUN_ATTEMPT: 999'],
+    ['foreign report attempt', 'metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json', 'metis-ci-root-report-${{ github.run_id }}-999-${{ matrix.os }}.json'],
     ['wrong pipeline outcome', 'steps.complete_tests.outcome', 'steps.declared_skips.outcome'],
     ['wrong audit outcome', 'steps.declared_skips.outcome', 'steps.complete_tests.outcome'],
     ['masked diagnostic', '        run: node scripts/ci/root-report-diagnostic.mjs', '        run: node scripts/ci/root-report-diagnostic.mjs || true'],
