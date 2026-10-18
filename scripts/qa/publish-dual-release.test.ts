@@ -209,6 +209,24 @@ describe('dual repository promotion', () => {
   })
 
   it.each([
+    { version: '2.0.0', publish: true },
+    { version: '2.0.0', publish: false },
+    { version: '2.0.1', publish: true },
+    { version: '2.0.1', publish: false },
+    { version: '2.0.0-rc.1', publish: true },
+    { version: '2.0.0-rc.1', publish: false }
+  ])('refuses 2.0 promotion without authenticated lifecycle evidence: $version (publish=$publish)', async ({
+    version,
+    publish
+  }) => {
+    const h = harness()
+    const result = await run(h, { version, publish })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('metis-2.0-acceptance-required')
+    expect(h.events).toEqual([])
+  })
+
+  it.each([
     { manifest: [...manifest, manifest[0]] },
     { manifest: [{ ...manifest[0], name: '../secret' }] },
     { manifest: [{ ...manifest[0], name: 'latest.yml' }] },
@@ -216,6 +234,9 @@ describe('dual repository promotion', () => {
     { manifest: [{ ...manifest[0], size: -1 }] },
     { manifest: [{ ...manifest[0], sha256: 'bad' }] },
     { manifest: [] },
+    { version: '02.0.0' },
+    { version: '2.00.0' },
+    { version: '2.0.00' },
     { version: '2.0\nspoof' },
     { candidateCommit: 'main' },
     { promotionAttempt: '0' },

@@ -9,12 +9,13 @@ import { join } from 'node:path'
 import { Transform, pipeline } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import { uploadProblems } from './provenance.mjs'
+import { METIS_2_0_ACCEPTANCE_REQUIRED, requiresMetis20Acceptance } from './metis-2.0-release-policy.mjs'
 
 const REPOSITORIES = Object.freeze(['mysticalsin/AskToto-Mantu', 'mysticalsin/Metis-Releases'])
 const SHA256 = /^[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40}$/
 const RUN_ID = /^[1-9][0-9]{0,19}$/
-const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/
+const VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/
 const MAX_JSON = 2 * 1024 * 1024
 const MAX_PAGES = 100
 
@@ -181,6 +182,13 @@ export async function publishDualRelease(input, { request, persist }) {
     Buffer.byteLength(input.notes) > MAX_JSON
   ) {
     return { ok: false, code: 'input-invalid', urls: [] }
+  }
+
+  // The legacy lane binds installer bytes to a candidate run but cannot prove Métis 2.0's
+  // installed-app lifecycle. Refuse both publication and dry-run until trusted 2.0 evidence is wired;
+  // dry-run still creates and deletes remote drafts.
+  if (requiresMetis20Acceptance(input.version)) {
+    return { ok: false, code: METIS_2_0_ACCEPTANCE_REQUIRED, urls: [] }
   }
 
   const suffix = input.publish ? '' : `.dryrun.${input.candidateRun}.${input.promotionRun}.${input.promotionAttempt}`
