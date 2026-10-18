@@ -97,6 +97,7 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('Quel est le')).toBe(false)
     expect(isQuestion('O que você')).toBe(false)
     expect(isQuestion('O que é')).toBe(false)
+    expect(isQuestion('O que está')).toBe(false)
     expect(isQuestion('O que é a')).toBe(false)
     expect(isQuestion('O que você viu no')).toBe(false)
     expect(isQuestion('¿Qué es lo que')).toBe(false)
