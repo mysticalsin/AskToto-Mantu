@@ -9,6 +9,15 @@ const LOOPBACK = '127.0.0.1'
 const MAX_RESPONSE_BYTES = 2_048
 const REQUEST_TIMEOUT_MS = 350
 const RETRY_MS = 250
+const HTTP_STAGE_RANK = Object.freeze({
+  NO_RESULT: 0,
+  REFUSED_OBSERVED: 1,
+  NETWORK_ERROR_OBSERVED: 2,
+  TIMEOUT_OBSERVED: 3,
+  NON_200_OBSERVED: 4,
+  INVALID_200_SHAPE_OBSERVED: 5,
+  VALID_200_SHAPE_OBSERVED: 6
+})
 
 const validPort = (value) => Number.isSafeInteger(value) && value > 0 && value <= 65_535
 const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -60,7 +69,7 @@ export function endpointProtocolShape(kind, body, port) {
   return false
 }
 
-function requestShape({ port, path, kind, deadline, signal, request }) {
+function requestShape({ port, path, kind, deadline, signal, request, onStage = () => {} }) {
   return new Promise((resolve) => {
     const remaining = deadline - performance.now()
     if (signal.aborted || remaining <= 0) {
@@ -73,7 +82,7 @@ function requestShape({ port, path, kind, deadline, signal, request }) {
     let settled = false
     let bytes = 0
     const chunks = []
-    const finish = (observed) => {
+    const finish = (observed, stage = null) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -90,6 +99,7 @@ function requestShape({ port, path, kind, deadline, signal, request }) {
       } catch {
         released = false
       }
+      if (stage) onStage(released ? stage : 'NETWORK_ERROR_OBSERVED')
       resolve(observed && released)
     }
     const abort = () => finish(false)
@@ -110,32 +120,41 @@ function requestShape({ port, path, kind, deadline, signal, request }) {
             return
           }
           response = received
-          if (received.statusCode !== 200 || Number(received.headers?.['content-length']) > MAX_RESPONSE_BYTES) {
-            finish(false)
+          if (received.statusCode !== 200) {
+            finish(false, 'NON_200_OBSERVED')
+            return
+          }
+          if (Number(received.headers?.['content-length']) > MAX_RESPONSE_BYTES) {
+            finish(false, 'INVALID_200_SHAPE_OBSERVED')
             return
           }
           received.on('data', (chunk) => {
             if (settled) return
             bytes += chunk.length
             if (bytes > MAX_RESPONSE_BYTES) {
-              finish(false)
+              finish(false, 'INVALID_200_SHAPE_OBSERVED')
               return
             }
             chunks.push(chunk)
           })
           received.once('end', () => {
-            if (!settled) finish(endpointProtocolShape(kind, Buffer.concat(chunks).toString('utf8'), port))
+            if (!settled) {
+              const shaped = endpointProtocolShape(kind, Buffer.concat(chunks).toString('utf8'), port)
+              finish(shaped, shaped ? 'VALID_200_SHAPE_OBSERVED' : 'INVALID_200_SHAPE_OBSERVED')
+            }
           })
-          received.on('error', () => finish(false))
+          received.on('error', () => finish(false, 'NETWORK_ERROR_OBSERVED'))
         }
       )
-      req.on('error', () => finish(false))
+      req.on('error', (error) =>
+        finish(false, error?.code === 'ECONNREFUSED' ? 'REFUSED_OBSERVED' : 'NETWORK_ERROR_OBSERVED')
+      )
       signal.addEventListener('abort', abort, { once: true })
-      timer = setTimeout(() => finish(false), Math.min(REQUEST_TIMEOUT_MS, remaining))
+      timer = setTimeout(() => finish(false, 'TIMEOUT_OBSERVED'), Math.min(REQUEST_TIMEOUT_MS, remaining))
       if (signal.aborted) finish(false)
       else req.end()
     } catch {
-      finish(false)
+      finish(false, 'NETWORK_ERROR_OBSERVED')
     }
   })
 }
@@ -148,6 +167,7 @@ function requestShape({ port, path, kind, deadline, signal, request }) {
 export function observeLoopbackProtocols({ cdpPort, inspectPort, deadline, request = httpRequest }) {
   let cdpObserved = false
   let inspectorObserved = false
+  let cdpHttpStage = 'NO_RESULT'
   let closed = false
   const controller = new AbortController()
   let deadlineTimer
@@ -166,14 +186,24 @@ export function observeLoopbackProtocols({ cdpPort, inspectPort, deadline, reque
     return diagnostic()
   }
   if (!validPort(cdpPort) || !validPort(inspectPort) || cdpPort === inspectPort || !Number.isFinite(deadline)) {
-    return { cancel, settled: Promise.resolve() }
+    return { cancel, settled: Promise.resolve(), cdpHttpStage: () => cdpHttpStage }
   }
   const remaining = deadline - performance.now()
-  if (remaining <= 0) return { cancel, settled: Promise.resolve() }
+  if (remaining <= 0) return { cancel, settled: Promise.resolve(), cdpHttpStage: () => cdpHttpStage }
   deadlineTimer = setTimeout(cancel, remaining)
   const probe = async (port, path, kind) => {
     while (!closed && performance.now() < deadline) {
-      const observed = await requestShape({ port, path, kind, deadline, signal: controller.signal, request })
+      const observed = await requestShape({
+        port,
+        path,
+        kind,
+        deadline,
+        signal: controller.signal,
+        request,
+        onStage: (stage) => {
+          if (kind === 'cdp' && HTTP_STAGE_RANK[stage] > HTTP_STAGE_RANK[cdpHttpStage]) cdpHttpStage = stage
+        }
+      })
       if (closed) return
       if (observed) {
         if (kind === 'cdp') cdpObserved = true
@@ -199,5 +229,5 @@ export function observeLoopbackProtocols({ cdpPort, inspectPort, deadline, reque
     probe(cdpPort, '/json/version', 'cdp'),
     probe(inspectPort, '/json/list', 'inspector')
   ]).then(cancel, cancel)
-  return { cancel, settled }
+  return { cancel, settled, cdpHttpStage: () => cdpHttpStage }
 }

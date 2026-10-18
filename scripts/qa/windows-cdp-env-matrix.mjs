@@ -30,12 +30,20 @@ export const PIN = Object.freeze({
   version: '1.9.7',
   installerName: 'Metis-Setup-1.9.7.exe'
 })
-export const SCHEMA = 'metis.windows-cdp-env-matrix.v1'
+export const SCHEMA = 'metis.windows-cdp-env-matrix.v2'
 const HASH40 = /^[0-9a-f]{40}$/
 const FIRST_MS = 15_000
 const FINAL_MS = 45_000
 const MAX_OUTPUT_BYTES = 4_096
-const SNAPSHOT_KEYS = ['process', 'window_post_deadline', 'audit', 'protocol_shape', 'host_loop_lag']
+const SNAPSHOT_KEYS = [
+  'process',
+  'window_post_deadline',
+  'audit',
+  'protocol_shape',
+  'cdp_http_interval',
+  'inspector_attach_stage',
+  'host_loop_lag'
+]
 const VARIANT_KEYS = [
   'environment',
   'cdp_15s',
@@ -68,13 +76,20 @@ const INSPECTOR = new Set([
   'PROCESS_EXITED'
 ])
 const PROCESS = new Set(['RUNNING', 'EXITED'])
-const WINDOW_QUERY_RESULT = new Set(['NORMAL_TITLE', 'ERROR_TITLE', 'OTHER_TITLE', 'NO_MAIN_WINDOW', 'QUERY_FAILED'])
+const WINDOW_QUERY_RESULT = new Set([
+  'NORMAL_TITLE',
+  'ERROR_TITLE',
+  'OTHER_TITLE',
+  'NO_MAIN_WINDOW',
+  'QUERY_PROCESS_LOOKUP_FAILED',
+  'QUERY_SHELL_PATH_INVALID',
+  'QUERY_SHELL_MISSING',
+  'QUERY_TIMEOUT',
+  'QUERY_SHELL_FAILED',
+  'QUERY_OUTPUT_INVALID'
+])
 const WINDOW = new Set([
-  'POST_DEADLINE_NORMAL_TITLE',
-  'POST_DEADLINE_ERROR_TITLE',
-  'POST_DEADLINE_OTHER_TITLE',
-  'POST_DEADLINE_NO_MAIN_WINDOW',
-  'POST_DEADLINE_QUERY_FAILED',
+  ...[...WINDOW_QUERY_RESULT].map((status) => `POST_DEADLINE_${status}`),
   'EXITED_BEFORE_QUERY',
   'EXITED_DURING_QUERY'
 ])
@@ -85,6 +100,31 @@ const ENDPOINT = new Set([
   'INSPECTOR_PROTOCOL_SHAPE_OBSERVED',
   'NOT_OBSERVED'
 ])
+const CDP_HTTP = new Set([
+  'NO_RESULT',
+  'REFUSED_OBSERVED',
+  'NETWORK_ERROR_OBSERVED',
+  'TIMEOUT_OBSERVED',
+  'NON_200_OBSERVED',
+  'INVALID_200_SHAPE_OBSERVED',
+  'VALID_200_SHAPE_OBSERVED'
+])
+const INSPECTOR_STAGE_RANK = Object.freeze({
+  NO_STAGE: 0,
+  DEADLINE: 1,
+  DISCOVERY_WAITING: 2,
+  INPUT_REJECTED: 3,
+  DISCOVERY_INVALID: 4,
+  DISCOVERY_READY: 5,
+  SOCKET_FAILED: 6,
+  SOCKET_UNCERTAIN: 6,
+  SOCKET_OPEN: 7,
+  OBSERVATION_RETRY: 8,
+  OBSERVATION_FAILED: 9,
+  OBSERVATION_OWNED: 10,
+  UNEXPECTED_STAGE: 11
+})
+const INSPECTOR_STAGE = new Set(Object.keys(INSPECTOR_STAGE_RANK))
 const LAG = new Set(['LT_250_MS', '250_TO_999_MS', 'GE_1000_MS', 'UNKNOWN'])
 const TEARDOWN = new Set(['ACKNOWLEDGED', 'UNACKNOWLEDGED'])
 const RELEASE = new Set(['RELEASED', 'UNCERTAIN'])
@@ -258,6 +298,8 @@ export function reportProblems(report) {
         !WINDOW.has(snap.window_post_deadline) ||
         !AUDIT.has(snap.audit) ||
         !ENDPOINT.has(snap.protocol_shape) ||
+        !CDP_HTTP.has(snap.cdp_http_interval) ||
+        !INSPECTOR_STAGE.has(snap.inspector_attach_stage) ||
         !LAG.has(snap.host_loop_lag)
       )
         problems.push('SNAPSHOT_STATUS')
@@ -308,7 +350,8 @@ function lagMonitor() {
 
 const WINDOW_QUERY = String.raw`
   $ErrorActionPreference = 'Stop'
-  $p = Get-Process -Id ([int]$env:METIS_MATRIX_PID) -ErrorAction Stop
+  try { $p = Get-Process -Id ([int]$env:METIS_MATRIX_PID) -ErrorAction Stop }
+  catch { 'QUERY_PROCESS_LOOKUP_FAILED'; return }
   if ($p.HasExited) { 'PROCESS_EXITED' }
   elseif ($p.MainWindowHandle -eq 0) { 'NO_MAIN_WINDOW' }
   elseif ($p.MainWindowTitle -eq 'Métis') { 'NORMAL_TITLE' }
@@ -316,19 +359,24 @@ const WINDOW_QUERY = String.raw`
   else { 'OTHER_TITLE' }
 `
 
-async function queryWindowStatus(childPid) {
+export async function queryWindowStatus(childPid, runShell = execFileAsync, systemRoot = process.env.SystemRoot) {
+  if (typeof systemRoot !== 'string' || !win32.isAbsolute(systemRoot) || /[\r\n\0]/.test(systemRoot)) {
+    return 'QUERY_SHELL_PATH_INVALID'
+  }
   try {
-    const powershell = join(process.env.SystemRoot ?? '', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    const { stdout } = await execFileAsync(powershell, ['-NoProfile', '-NonInteractive', '-Command', WINDOW_QUERY], {
-      env: { SystemRoot: process.env.SystemRoot, METIS_MATRIX_PID: String(childPid) },
+    const powershell = win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const { stdout } = await runShell(powershell, ['-NoProfile', '-NonInteractive', '-Command', WINDOW_QUERY], {
+      env: { SystemRoot: systemRoot, METIS_MATRIX_PID: String(childPid) },
       timeout: 2_500,
       maxBuffer: 1_024,
       windowsHide: true
     })
     const status = stdout.trim()
-    return WINDOW_QUERY_RESULT.has(status) || status === 'PROCESS_EXITED' ? status : 'QUERY_FAILED'
-  } catch {
-    return 'QUERY_FAILED'
+    return WINDOW_QUERY_RESULT.has(status) || status === 'PROCESS_EXITED' ? status : 'QUERY_OUTPUT_INVALID'
+  } catch (error) {
+    if (error?.killed === true || error?.code === 'ETIMEDOUT') return 'QUERY_TIMEOUT'
+    if (error?.code === 'ENOENT') return 'QUERY_SHELL_MISSING'
+    return 'QUERY_SHELL_FAILED'
   }
 }
 
@@ -337,7 +385,7 @@ export async function sampleWindowAfterDeadline(launch, query = queryWindowStatu
   if (childExited(launch)) return 'EXITED_BEFORE_QUERY'
   const status = await query(launch.child.pid)
   if (childExited(launch) || status === 'PROCESS_EXITED') return 'EXITED_DURING_QUERY'
-  return WINDOW_QUERY_RESULT.has(status) ? `POST_DEADLINE_${status}` : 'POST_DEADLINE_QUERY_FAILED'
+  return WINDOW_QUERY_RESULT.has(status) ? `POST_DEADLINE_${status}` : 'POST_DEADLINE_QUERY_OUTPUT_INVALID'
 }
 
 async function waitUntil(deadline) {
@@ -372,6 +420,11 @@ async function runVariant(target, provenance, environment) {
   let sample45 = null
   let result = null
   let failure = false
+  let inspectorStage = 'NO_STAGE'
+  const markInspector = (stage) => {
+    const next = INSPECTOR_STAGE.has(stage) ? stage : 'UNEXPECTED_STAGE'
+    if (INSPECTOR_STAGE_RANK[next] > INSPECTOR_STAGE_RANK[inspectorStage]) inspectorStage = next
+  }
   try {
     const env =
       environment === 'STRICT'
@@ -392,15 +445,19 @@ async function runVariant(target, provenance, environment) {
     firstObserver = observeLoopbackProtocols({ cdpPort, inspectPort, deadline: firstDeadline })
     sample15 = waitUntil(firstDeadline).then(async () => {
       const shape = firstObserver.cancel()
+      const cdpHttp = firstObserver.cdpHttpStage()
       lateObserver = observeLoopbackProtocols({ cdpPort, inspectPort, deadline: finalDeadline })
       const processStatus = childExited(launch) ? 'EXITED' : 'RUNNING'
       const readyStatus = auditStatus(audit)
       const lagStatus = lag.read()
+      const inspectorStatus = inspectorStage
       return {
         process: processStatus,
         window_post_deadline: await sampleWindowAfterDeadline(launch),
         audit: readyStatus,
         protocol_shape: shape,
+        cdp_http_interval: cdpHttp,
+        inspector_attach_stage: inspectorStatus,
         host_loop_lag: lagStatus
       }
     })
@@ -408,12 +465,16 @@ async function runVariant(target, provenance, environment) {
       const processStatus = childExited(launch) ? 'EXITED' : 'RUNNING'
       const readyStatus = auditStatus(audit)
       const shape = lateObserver?.cancel() ?? 'NOT_OBSERVED'
+      const cdpHttp = lateObserver?.cdpHttpStage() ?? 'NO_RESULT'
       const lagStatus = lag.read()
+      const inspectorStatus = inspectorStage
       return {
         process: processStatus,
         window_post_deadline: await sampleWindowAfterDeadline(launch),
         audit: readyStatus,
         protocol_shape: shape,
+        cdp_http_interval: cdpHttp,
+        inspector_attach_stage: inspectorStatus,
         host_loop_lag: lagStatus
       }
     })
@@ -432,7 +493,8 @@ async function runVariant(target, provenance, environment) {
         childPid: pid,
         expectedPaths: paths,
         expectedVersion: provenance.version,
-        timeoutMs: FIRST_MS
+        timeoutMs: FIRST_MS,
+        onStage: markInspector
       }),
       () => childExited(launch)
     )
@@ -468,7 +530,8 @@ async function runVariant(target, provenance, environment) {
               childPid: pid,
               expectedPaths: paths,
               expectedVersion: provenance.version,
-              timeoutMs: remaining
+              timeoutMs: remaining,
+              onStage: markInspector
             }),
             () => childExited(launch)
           ).then((receipt) => {

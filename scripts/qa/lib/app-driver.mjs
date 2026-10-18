@@ -743,10 +743,12 @@ function createFixedMainInspector(socket) {
 /**
  * Attach to the captured main process's loopback inspector and make only the fixed fresh-onboarding observation.
  * It never exposes a general evaluator or records endpoint, process, path, or main-process content.
+ * An optional diagnostic callback receives only fixed stage names and cannot affect attachment.
  */
 /**
  * @param {{ inspectPort: number, childPid: number, expectedPaths: Record<string, string>, expectedVersion: string,
- *   timeoutMs: number, fetchImpl?: InspectorFetch, WebSocketClass?: InspectorSocketConstructor }} options
+ *   timeoutMs: number, fetchImpl?: InspectorFetch, WebSocketClass?: InspectorSocketConstructor,
+ *   onStage?: (stage: string) => void }} options
  */
 export async function attachOwnedMainInspector({
   inspectPort,
@@ -755,8 +757,16 @@ export async function attachOwnedMainInspector({
   expectedVersion,
   timeoutMs,
   fetchImpl = globalThis.fetch,
-  WebSocketClass = globalThis.WebSocket
+  WebSocketClass = globalThis.WebSocket,
+  onStage
 }) {
+  const mark = (stage) => {
+    try {
+      onStage?.(stage)
+    } catch {
+      // Diagnostic observers must never change the owned attachment result.
+    }
+  }
   if (
     !isPositivePort(inspectPort) ||
     !Number.isSafeInteger(childPid) ||
@@ -765,25 +775,36 @@ export async function attachOwnedMainInspector({
     typeof expectedVersion !== 'string' ||
     typeof fetchImpl !== 'function'
   ) {
+    mark('INPUT_REJECTED')
     return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
   }
   const deadline = performance.now() + timeoutMs
   let inspector = null
   for (;;) {
     const remaining = Math.max(0, deadline - performance.now())
-    if (remaining <= 0) return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
+    if (remaining <= 0) {
+      mark('DEADLINE')
+      return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
+    }
     const discovery = await discoverInspectorUrl(inspectPort, deadline, fetchImpl)
     if (discovery.kind === 'invalid') {
+      mark('DISCOVERY_INVALID')
       return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
     }
     const afterDiscovery = Math.max(0, deadline - performance.now())
-    if (afterDiscovery <= 0) return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
+    if (afterDiscovery <= 0) {
+      mark('DEADLINE')
+      return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
+    }
     if (discovery.kind === 'waiting') {
+      mark('DISCOVERY_WAITING')
       await sleep(Math.min(100, afterDiscovery))
       continue
     }
+    mark('DISCOVERY_READY')
     const opened = await openInspectorSocket(discovery.endpoint, afterDiscovery, WebSocketClass)
     if (!opened.socket) {
+      mark(opened.uncertain ? 'SOCKET_UNCERTAIN' : 'SOCKET_FAILED')
       return {
         inspector: null,
         observation: null,
@@ -791,31 +812,38 @@ export async function attachOwnedMainInspector({
         lateRelease: opened.lateRelease ?? null
       }
     }
+    mark('SOCKET_OPEN')
     inspector = createFixedMainInspector(opened.socket)
     for (;;) {
       const observationRemaining = Math.max(0, deadline - performance.now())
       if (observationRemaining <= 0) {
+        mark('DEADLINE')
         const released = await inspector.close(Math.max(1, observationRemaining))
         return { inspector: null, observation: null, transportUncertain: !released, lateRelease: null }
       }
       const result = await inspector.observe({ childPid, expectedPaths, expectedVersion }, observationRemaining)
       const afterObservation = Math.max(0, deadline - performance.now())
       if (afterObservation <= 0) {
+        mark('DEADLINE')
         const released = await inspector.close(1)
         return { inspector: null, observation: null, transportUncertain: !released, lateRelease: null }
       }
       if (result.kind === 'ready') {
+        mark('OBSERVATION_OWNED')
         return { inspector, observation: result.observation, transportUncertain: false, lateRelease: null }
       }
       if (result.kind !== 'retry') {
+        mark('OBSERVATION_FAILED')
         const released = await inspector.close(afterObservation)
         return { inspector: null, observation: null, transportUncertain: !released, lateRelease: null }
       }
       const afterProbe = Math.max(0, deadline - performance.now())
       if (afterProbe <= 0) {
+        mark('DEADLINE')
         const released = await inspector.close(1)
         return { inspector: null, observation: null, transportUncertain: !released, lateRelease: null }
       }
+      mark('OBSERVATION_RETRY')
       await sleep(Math.min(100, afterProbe))
     }
   }
