@@ -198,6 +198,17 @@ function context() {
 
 const validate = (metadata = context(), provenance = ORIGINAL_PROVENANCE, sums = ORIGINAL_SUMS) =>
   validateHistorical197Metadata(metadata, Buffer.from(provenance), Buffer.from(sums))
+interface OriginalProvenance {
+  schema: number
+  version: string
+  builds: Array<{
+    version?: string
+    variant: string
+    builder_config: Array<{ sha256: string }>
+    runner: { arch: string }
+    signing: { mode: string }
+  }>
+}
 
 describe('historical 1.9.7 immutable public input identity', () => {
   it('accepts the actual schema-2 top-level version and retains all four original build declarations', () => {
@@ -214,7 +225,7 @@ describe('historical 1.9.7 immutable public input identity', () => {
       artifact_source: SOURCE, harness_commit: HARNESS, candidate_run: 38795048288,
       candidate_attempt: 1, release_id: 414278048, tag: 'metis-unsigned-v1.9.7'
     })
-    expect(receipt.assets.map((asset: { name: string }) => asset.name)).toEqual(PUBLIC_ASSETS.map(asset => asset.name))
+    expect(receipt.assets?.map((asset: { name: string }) => asset.name)).toEqual(PUBLIC_ASSETS.map(asset => asset.name))
     expect(JSON.stringify(receipt)).not.toContain('Metis-QA')
     expect(JSON.stringify(receipt)).not.toContain('Metis-Portable')
     const regularRelease = context()
@@ -235,6 +246,10 @@ describe('historical 1.9.7 immutable public input identity', () => {
     ['status', value => { value.candidateRun.status = 'in_progress' }],
     ['conclusion', value => { value.candidateRun.conclusion = 'failure' }],
     ['harness SHA', value => { value.harnessCommit = 'private-path-canary' }],
+    ['missing harness SHA', value => { Reflect.deleteProperty(value, 'harnessCommit') }],
+    ['extra context field', value => { Object.assign(value, { privateCanary: 'private-path-canary' }) }],
+    ['extra run field', value => { Object.assign(value.candidateRun, { privateCanary: 'private-path-canary' }) }],
+    ['extra asset field', value => { Object.assign(value.release.assets[0], { privateCanary: 'private-path-canary' }) }],
     ['release ID', value => { value.release.id += 1 }],
     ['release tag', value => { value.release.tag_name = 'v1.9.7' }],
     ['release source alias', value => { value.release.target_commitish = 'main' }],
@@ -253,17 +268,17 @@ describe('historical 1.9.7 immutable public input identity', () => {
     expect(JSON.stringify(validate(metadata))).not.toContain('private-path-canary')
   })
 
-  it.each([
-    ['schema', (value: any) => { value.schema = 1 }],
-    ['top-level version', (value: any) => { value.version = '1.9.8' }],
-    ['build.version added', (value: any) => { value.builds[0].version = '1.9.7' }],
-    ['missing QA declaration', (value: any) => { value.builds.splice(1, 1) }],
-    ['extra build', (value: any) => { value.builds.push(value.builds[0]) }],
-    ['configuration digest', (value: any) => { value.builds[0].builder_config[0].sha256 = '0'.repeat(64) }],
-    ['runner fact', (value: any) => { value.builds[0].runner.arch = 'X64' }],
-    ['signing fact', (value: any) => { value.builds[0].signing.mode = 'developer-id' }]
-  ] as Array<[string, (value: any) => void]>)('refuses tampered original %s', (_name, mutate) => {
-    const value = JSON.parse(ORIGINAL_PROVENANCE)
+  it.each<[string, (value: OriginalProvenance) => void]>([
+    ['schema', value => { value.schema = 1 }],
+    ['top-level version', value => { value.version = '1.9.8' }],
+    ['build.version added', value => { value.builds[0].version = '1.9.7' }],
+    ['missing QA declaration', value => { value.builds.splice(1, 1) }],
+    ['extra build', value => { value.builds.push(value.builds[0]) }],
+    ['configuration digest', value => { value.builds[0].builder_config[0].sha256 = '0'.repeat(64) }],
+    ['runner fact', value => { value.builds[0].runner.arch = 'X64' }],
+    ['signing fact', value => { value.builds[0].signing.mode = 'developer-id' }]
+  ])('refuses tampered original %s', (_name, mutate) => {
+    const value: OriginalProvenance = JSON.parse(ORIGINAL_PROVENANCE)
     mutate(value)
     expect(validate(context(), JSON.stringify(value, null, 2) + '\n')).toMatchObject({ outcome: 'REFUSED', code: 'provenance-mismatch' })
   })
@@ -320,6 +335,12 @@ describe('historical input file admission and streaming bytes', () => {
     expect(refusal).toMatchObject({ outcome: 'REFUSED', code: 'asset-set-mismatch' })
     expect(JSON.stringify(refusal)).not.toContain(dir)
     expect(JSON.stringify(refusal)).not.toContain('private-path-canary')
+  })
+
+  it('returns fixed refusals for malformed IO requests rather than leaking destructuring errors', async () => {
+    for (const input of [undefined, null, {}, { metadata: context(), assetDirectory: null }]) {
+      expect(await verifyHistorical197Inputs(input)).toMatchObject({ scope: 'IDENTITY_ONLY', outcome: 'REFUSED', code: 'invalid-input' })
+    }
   })
 
   it('uses a fixed content-free CLI refusal without running any network or installer command', () => {
