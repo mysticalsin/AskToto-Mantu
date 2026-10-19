@@ -12,6 +12,7 @@ import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, start
 import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -28,6 +29,7 @@ const userTrigger: BackfillStartOptions = { trigger: 'user' }
 describe('brain ingest resilience (T6 6a/6b)', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
@@ -49,6 +51,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   }
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-resilience-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-resilience-meetings-'))
@@ -74,14 +77,30 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   })
 
   afterEach(async () => {
-    // The queue draining is not the same as the writes landing: the last job’s index.json record is
-    // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
-    // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      // The queue draining is not the same as the writes landing: the last job’s index.json record is
+      // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
+      // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      } finally {
+        try {
+          rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        } finally {
+          try {
+            vi.unstubAllEnvs()
+          } finally {
+            try {
+              vi.restoreAllMocks()
+            } finally {
+              restoreSpeechReadPolicy()
+            }
+          }
+        }
+      }
+    }
   })
 
   it('fails over to the next eligible provider on a transport failure without needing the same-provider reminder retry', async () => {

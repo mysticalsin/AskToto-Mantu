@@ -16,6 +16,7 @@ import {
 import { listMeetingExtractions, readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -67,6 +68,7 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 describe('brain ingest — provider-degradation paths', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
@@ -109,6 +111,7 @@ describe('brain ingest — provider-degradation paths', () => {
   const okCount = (): number => Object.values(readIndex(getSettings()).ingested).filter((r) => r.ok).length
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-degradation-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-degradation-meetings-'))
@@ -146,11 +149,27 @@ describe('brain ingest — provider-degradation paths', () => {
   })
 
   afterEach(async () => {
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      } finally {
+        try {
+          rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        } finally {
+          try {
+            vi.unstubAllEnvs()
+          } finally {
+            try {
+              vi.restoreAllMocks()
+            } finally {
+              restoreSpeechReadPolicy()
+            }
+          }
+        }
+      }
+    }
   })
 
   // ── MQA-022 ────────────────────────────────────────────────────────────────
