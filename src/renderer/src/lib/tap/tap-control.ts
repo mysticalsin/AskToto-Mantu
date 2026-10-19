@@ -77,7 +77,7 @@ export async function startTapCapture(opts: {
     if (!opts.micDeviceId || opts.signal?.aborted) throw error
     capture = await acquireInteractiveMic({ audio: base }, 'conversation', 'deliberate-talk', opts.signal)
   }
-  const { stream, admission } = capture
+  const { stream, admission, stopMedia } = capture
   let ctx: AudioContext | null = null
   let src: MediaStreamAudioSourceNode | null = null
   let node: AudioWorkletNode | null = null
@@ -102,7 +102,8 @@ export async function startTapCapture(opts: {
     } catch {
       /* already disconnected */
     }
-    stream.getTracks().forEach((track) => track.stop())
+    // The admission owns the stream's one idempotent stop; stopping tracks here too double-stops them.
+    stopMedia()
     if (ctx && ctx.state !== 'closed') void ctx.close()
   }
   admission.onRevoke(teardown)
