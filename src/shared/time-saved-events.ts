@@ -21,8 +21,8 @@ export type TimeSavedConnector = (typeof TIME_SAVED_CONNECTORS)[number]
 
 /** Documented heuristics. Change here and in TIME-SAVED.md together. */
 export const NOTE_TAKING_WPM = 180
-export const SECOND_BRAIN_MIN_PER_OPPORTUNITY = 2
-export const SECOND_BRAIN_CAP_MIN = 15
+const SECOND_BRAIN_MIN_PER_OPPORTUNITY = 2
+const SECOND_BRAIN_CAP_MIN = 15
 export const EMAIL_SUMMARY_MIN = 4
 export const MCP_PUSH_MIN = 3
 

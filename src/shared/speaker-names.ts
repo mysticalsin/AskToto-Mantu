@@ -54,7 +54,7 @@ export function sessionSpeakerLabels(lines: readonly Pick<TranscriptLine, 'name'
 }
 
 /** Honest visible labels when identity is unresolved or overlapping. */
-export const UNKNOWN_SPEAKER_PREFIX = 'Unknown speaker'
+const UNKNOWN_SPEAKER_PREFIX = 'Unknown speaker'
 export const OVERLAP_SPEAKER_LABEL = 'Overlapping speakers'
 
 export function unknownSpeakerLabel(ordinal: number): string {

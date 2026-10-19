@@ -14,8 +14,6 @@ export const SETTINGS_SURFACE_BACKGROUND = '#120022'
 /** Transparent overlay rest. Hide park and Island peek stay see-through. */
 export const OVERLAY_REST_BACKGROUND = '#00000000'
 
-export const ONBOARDING_STAGE_BACKGROUND = '#05010A'
-
 /** Leftover 880×133-class slab at workArea.y (~39 on a notch Mac). Fat hover trigger. */
 export const FAT_HOVER_TRIGGER_MIN = { width: 800, height: 100 } as const
 export const FAT_HOVER_TRIGGER_MAX_HEIGHT = 699

@@ -376,14 +376,12 @@ button.onboard-cta {
 }
 
 /* Act 6 (Ready, MQA-283) — the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
-   sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before` above, so the
-   two bookend acts share a visual language) plus a handful of one-shot spark motes (positioned by
+   sweep around the Métis mark plus a handful of one-shot spark motes (positioned by
    OnboardingExperience.tsx's READY_SPARKS via plain `left`/`top`, see `.ready-spark` below). Both are
    one-shot / forwards — nothing loops, so the cost is a handful of repaints on scene mount, never an
-   ongoing one. Reduced motion needs the same explicit override `.island-capsule` does for the same
-   reason (an `@property`-typed angle is not guaranteed to land on its keyframe's end value at 0ms
-   duration); `.ready-spark` needs no override since it only ever animates opacity/transform, which the
-   blanket rule already handles correctly. */
+   ongoing one. Reduced motion needs an explicit override for `--ready-gleam-angle` (an `@property`-typed
+   angle is not guaranteed to land on its keyframe's end value at 0ms duration); `.ready-spark` needs no
+   override since it only ever animates opacity/transform, which the blanket rule already handles. */
 @property --ready-gleam-angle {
   syntax: '<angle>';
   initial-value: 0deg;

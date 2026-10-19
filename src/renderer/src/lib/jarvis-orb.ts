@@ -673,6 +673,3 @@ export function createJarvisOrb(
     }
   }
 }
-
-/** @deprecated Tony 2026-09-06: persist key may still say obsidian. Use createJarvisOrb. */
-export const createJarvisObsidianOrb = createJarvisOrb

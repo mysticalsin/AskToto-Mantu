@@ -13,7 +13,7 @@ export const CLI_PROVIDER_IDS = ['claude-cli', 'codex-cli'] as const
 export type CliProviderId = (typeof CLI_PROVIDER_IDS)[number]
 
 /** Provider IDs Operator may host. IDs only — never a raw key, CLI token, Dust, or local. */
-export const OPERATOR_HOSTED_PROVIDER_IDS = [
+const OPERATOR_HOSTED_PROVIDER_IDS = [
   'anthropic',
   'openai',
   'nvidia',

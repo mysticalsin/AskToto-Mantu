@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { CONVERSATION_MODES } from '@shared/ipc'
-import { ONBOARDING_PERSONAS, personaVibe } from './persona-vibe'
+import { ONBOARDING_PERSONAS } from './persona-vibe'
 
 describe('persona-vibe', () => {
   it('offers every built-in mode, so each role has a summary to demo', () => {
@@ -16,13 +16,12 @@ describe('persona-vibe', () => {
     }
   })
 
-  it('personaVibe resolves each real id and falls back to general for an unrecognized one', () => {
-    expect(personaVibe('general').label).toBe('General')
-    expect(personaVibe('sales').label).toBe('Sales')
-    expect(personaVibe('recruiting').label).toBe('Recruiting')
-    expect(personaVibe('meeting').id).toBe('meeting')
-    // @ts-expect-error deliberately probing the fallback path with an id outside the union
-    expect(personaVibe('not-a-mode').id).toBe('general')
+  it('lists each built-in id once, with general first as the catalog default', () => {
+    expect(ONBOARDING_PERSONAS[0]?.id).toBe('general')
+    expect(ONBOARDING_PERSONAS.find((p) => p.id === 'sales')?.label).toBe('Sales')
+    expect(ONBOARDING_PERSONAS.find((p) => p.id === 'recruiting')?.label).toBe('Recruiting')
+    expect(ONBOARDING_PERSONAS.find((p) => p.id === 'meeting')?.id).toBe('meeting')
+    expect(new Set(ONBOARDING_PERSONAS.map((p) => p.id)).size).toBe(ONBOARDING_PERSONAS.length)
   })
 
   it('MQA-280: each changes line is backed by the real mode prompt', () => {
