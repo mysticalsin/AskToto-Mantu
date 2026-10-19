@@ -506,15 +506,16 @@ export function streamDust(opts: StreamOptions): StreamHandle {
           }
         }
       } else if (event.type === 'user_message_error' || event.type === 'agent_error') {
-        return fail(isDustAgentUnavailableError(event.error) ? dustAgentUnavailableMessage(opts.model === DUST_SPOTLIGHT_REF_AGENT_ID) : (event.error?.message || 'Dust returned an error.'))
+        return fail(
+          isDustAgentUnavailableError(event.error)
+            ? dustAgentUnavailableMessage(opts.model === DUST_SPOTLIGHT_REF_AGENT_ID)
+            : event.error?.message || 'Dust returned an error.'
+        )
       } else if (event.type === 'agent_message_success') {
         if (!settled) {
           settled = true
           wd.clear()
-          opts.handlers.onDone(
-            { cacheStatus: 'n/a' },
-            { status: 'complete', reason: 'agent_message_success' }
-          )
+          opts.handlers.onDone({ cacheStatus: 'n/a' }, { status: 'complete', reason: 'agent_message_success' })
         }
         return
       }

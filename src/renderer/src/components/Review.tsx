@@ -1,6 +1,29 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { transcriptDisplayName } from '@shared/speaker-names'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
+import {
+  Copy,
+  Check,
+  FileText,
+  ListTree,
+  FolderOpen,
+  Save,
+  RotateCcw,
+  Play,
+  ChevronDown,
+  Download,
+  Clock,
+  Mail,
+  Send,
+  AlertCircle,
+  EarOff,
+  ArrowLeft,
+  Pencil,
+  X,
+  Sparkles,
+  Trash2,
+  Lock,
+  PhoneCall
+} from 'lucide-react'
 import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
 import type { AnswerState } from '../state'
@@ -60,7 +83,9 @@ function localDateKey(dateStr: string): string {
 }
 
 /** Group an array of MeetingSummary by their LOCAL calendar day. */
-function groupByDate(meetings: import('@shared/ipc').MeetingSummary[]): [string, import('@shared/ipc').MeetingSummary[]][] {
+function groupByDate(
+  meetings: import('@shared/ipc').MeetingSummary[]
+): [string, import('@shared/ipc').MeetingSummary[]][] {
   const map = new Map<string, import('@shared/ipc').MeetingSummary[]>()
   for (const m of meetings) {
     const d = localDateKey(m.date)
@@ -477,7 +502,8 @@ export const Review = memo(function Review({
     if (!recapDirty) return true
     const choice = await navigationGuard.request({
       title: 'Save recap changes?',
-      message: 'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
+      message:
+        'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
       saveLabel: 'Save',
       discardLabel: 'Discard',
       cancelLabel: 'Cancel',
@@ -491,7 +517,10 @@ export const Review = memo(function Review({
   useEffect(() => {
     // Keyed on savedPath (not just mount): the meeting's own async save lands AFTER this screen mounts,
     // so a mount-only fetch never includes the meeting you just finished. Re-fetch when the save resolves.
-    window.toto.recallList().then((list) => setRecentMeetings(list.slice(0, 20))).catch(() => {})
+    window.toto
+      .recallList()
+      .then((list) => setRecentMeetings(list.slice(0, 20)))
+      .catch(() => {})
   }, [savedPath])
 
   // Drop non-speech captions ("[BELL RINGS]", "(applause)"…) from the displayed/copied transcript. New
@@ -503,9 +532,17 @@ export const Review = memo(function Review({
     [speechLines]
   )
 
-  const durationSec = useMemo(() => reviewDurationSeconds({
-    durationMs, lines, startedAt, isPastMeeting, endedAt: endedAtRef.current
-  }), [durationMs, lines, startedAt, isPastMeeting])
+  const durationSec = useMemo(
+    () =>
+      reviewDurationSeconds({
+        durationMs,
+        lines,
+        startedAt,
+        isPastMeeting,
+        endedAt: endedAtRef.current
+      }),
+    [durationMs, lines, startedAt, isPastMeeting]
+  )
 
   const speakerCountLabel = useMemo(() => reviewSpeakerLabel(speechLines), [speechLines])
 
@@ -566,7 +603,9 @@ export const Review = memo(function Review({
   // their edits never get clobbered by a late token — a fresh draft (new id) re-arms seeding.
   const outlookDraftSubject = meetingMeta?.title ? `Follow-up: ${meetingMeta.title}` : 'Follow-up'
   // startedAt is stable when a live meeting's savedPath arrives later; a regeneration id is not identity.
-  const outlookDraftMeeting = startedAt ? `started:${startedAt}` : savedPath || followupDraft?.id || meetingMeta?.date || ''
+  const outlookDraftMeeting = startedAt
+    ? `started:${startedAt}`
+    : savedPath || followupDraft?.id || meetingMeta?.date || ''
   const outlookDraftLifecycleRef = useRef<OutlookDraftLifecycle | null>(null)
   if (!outlookDraftLifecycleRef.current) outlookDraftLifecycleRef.current = new OutlookDraftLifecycle()
   const outlookDraftLifecycle = outlookDraftLifecycleRef.current
@@ -699,9 +738,19 @@ export const Review = memo(function Review({
   const [clickupResolvedDest, setClickupResolvedDest] = useState('')
   const [clickupResolving, setClickupResolving] = useState(false)
   const clickupDiscoveringRef = useRef(false)
-  const clickupDestName = (clickupResolvedDest || clickupConn?.clickupListName || clickupConn?.clickupListId || '').trim()
+  const clickupDestName = (
+    clickupResolvedDest ||
+    clickupConn?.clickupListName ||
+    clickupConn?.clickupListId ||
+    ''
+  ).trim()
   const [clickupOpen, setClickupOpen] = useState(false)
-  const [clickupState, setClickupState] = useState<{ phase: CrmPushPhase; error: string | null; destinationName?: string; taskUrl?: string }>({
+  const [clickupState, setClickupState] = useState<{
+    phase: CrmPushPhase
+    error: string | null
+    destinationName?: string
+    taskUrl?: string
+  }>({
     phase: 'idle',
     error: null
   })
@@ -956,7 +1005,9 @@ export const Review = memo(function Review({
     if (!followupText.trim()) return
     if (!outlook?.signedIn || !outlook.canDraft) {
       setOutlookDraftLocalError(
-        outlook?.signedIn ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.' : 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
+        outlook?.signedIn
+          ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.'
+          : 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
       )
       return
     }
@@ -982,7 +1033,12 @@ export const Review = memo(function Review({
       )}
       {meetingMeta && (
         <div className="mb-0.5">
-          <div className="font-ui text-[15px] font-semibold text-[color:var(--color-ink)]" aria-label="Review meeting title">{meetingMeta.title}</div>
+          <div
+            className="font-ui text-[15px] font-semibold text-[color:var(--color-ink)]"
+            aria-label="Review meeting title"
+          >
+            {meetingMeta.title}
+          </div>
           <div className="mt-0.5 text-[12px] text-[color:var(--color-ink-3)]">{meetingMeta.date}</div>
         </div>
       )}
@@ -991,9 +1047,7 @@ export const Review = memo(function Review({
           {durationSec > 0 && (
             <span className="rounded-full bg-white/[0.06] px-2 py-0.5">Duration {formatDuration(durationSec)}</span>
           )}
-          <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
-            {speakerCountLabel}
-          </span>
+          <span className="rounded-full bg-white/[0.06] px-2 py-0.5">{speakerCountLabel}</span>
           {/* Talk ratio — word share over real speech lines. Amber past 70%: in a client meeting,
               the one selling should not be the one talking. Details on hover. */}
           {(() => {
@@ -1030,16 +1084,14 @@ export const Review = memo(function Review({
           {onSave && (
             // A missing recap must not block saving captured speech: keyless, cancelled-before-token and
             // hollow-summary sessions still have an ASR transcript worth keeping.
-            <TextButton
-              icon={Save}
-              onClick={onSave}
-              disabled={lines.length === 0 || !!savedPath || !!recap?.streaming}
-            >
+            <TextButton icon={Save} onClick={onSave} disabled={lines.length === 0 || !!savedPath || !!recap?.streaming}>
               Save
             </TextButton>
           )}
           {onDiscard && (
-            <TextButton icon={Trash2} onClick={onDiscard} title="Discard this meeting without keeping it">Disregard</TextButton>
+            <TextButton icon={Trash2} onClick={onDiscard} title="Discard this meeting without keeping it">
+              Disregard
+            </TextButton>
           )}
           {onDone && (
             <Chip
@@ -1098,13 +1150,18 @@ export const Review = memo(function Review({
               : 'border-[var(--color-hair-soft)] bg-white/[0.02] hover:bg-white/[0.05]'
           ].join(' ')}
         >
-          <Lock size={13} className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'} />
+          <Lock
+            size={13}
+            className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}
+          />
           <span className="flex-1 text-[color:var(--color-ink-2)]">
             {confidentialFlag
               ? 'Confidential: excluded from published intelligence.'
               : 'Confidential: exclude from published intelligence'}
           </span>
-          <span className={confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}>
+          <span
+            className={confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}
+          >
             {confidentialFlag ? 'On' : 'Off'}
           </span>
         </button>
@@ -1139,7 +1196,9 @@ export const Review = memo(function Review({
               />
               <div className="mt-1.5 flex items-center justify-between">
                 <span className="text-[10px] text-[color:var(--color-ink-3)]">
-                  {debriefState === 'error' ? 'Could not save. Try again.' : 'Impressions, not transcript. 90 seconds, then move on.'}
+                  {debriefState === 'error'
+                    ? 'Could not save. Try again.'
+                    : 'Impressions, not transcript. 90 seconds, then move on.'}
                 </span>
                 <TextButton onClick={() => void saveDebrief()} disabled={!debrief.trim() || debriefState === 'saving'}>
                   {debriefState === 'saving' ? <InlineOrb kind="writing" /> : <Save size={11} />}
@@ -1208,10 +1267,17 @@ export const Review = memo(function Review({
                       title="Regenerate this summary from the transcript"
                     >
                       {recap?.streaming ? <InlineOrb kind="writing" /> : <RotateCcw size={11} />}
-                      {recap?.streaming ? 'Regenerating' : recapStatus === 'incomplete' ? 'Retry summary' : 'Regenerate'}
+                      {recap?.streaming
+                        ? 'Regenerating'
+                        : recapStatus === 'incomplete'
+                          ? 'Retry summary'
+                          : 'Regenerate'}
                     </TextButton>
                   )}
-                  <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
+                  <TextButton
+                    onClick={exportJson}
+                    title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion"
+                  >
                     {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
                     {jsonCopied ? 'Copied' : 'Export JSON'}
                   </TextButton>
@@ -1257,7 +1323,8 @@ export const Review = memo(function Review({
             />
             {recapEditError && <div className="text-[11px] text-[var(--color-danger)]">{recapEditError}</div>}
             <div className="text-[11px] text-[color:var(--color-ink-3)]">
-              Markdown supported. Changes are saved to this meeting. {accelLabel('CommandOrControl+Return')} to save, Esc to cancel.
+              Markdown supported. Changes are saved to this meeting. {accelLabel('CommandOrControl+Return')} to save,
+              Esc to cancel.
             </div>
           </div>
         ) : recap?.error ? (
@@ -1297,7 +1364,9 @@ export const Review = memo(function Review({
             <div className="text-[13px] text-[color:var(--color-ink-2)]">No summary text was generated.</div>
             {onRetryRecap && (
               <div className="flex items-center gap-1.5">
-                <TextButton icon={RotateCcw} onClick={onRetryRecap}>Retry summary</TextButton>
+                <TextButton icon={RotateCcw} onClick={onRetryRecap}>
+                  Retry summary
+                </TextButton>
               </div>
             )}
           </div>
@@ -1308,9 +1377,7 @@ export const Review = memo(function Review({
             No notes saved for this meeting. Select Edit to add some.
           </div>
         ) : !recap && lines.length === 0 ? (
-          <div className="text-[13px] text-[color:var(--color-ink-2)]">
-            No speech was captured this session.
-          </div>
+          <div className="text-[13px] text-[color:var(--color-ink-2)]">No speech was captured this session.</div>
         ) : recapUnavailable ? (
           // No AI provider configured — the recap was never requested (see App.tsx maybeFireRecap), so
           // without this branch a transcript with no recap would fall through to the spinner below and
@@ -1319,9 +1386,7 @@ export const Review = memo(function Review({
             <div className="text-[13px] text-[color:var(--color-ink-2)]">{recapUnavailable.message}</div>
             {recapUnavailable.onOpenSettings && (
               <div className="flex items-center gap-1.5">
-                <TextButton onClick={recapUnavailable.onOpenSettings}>
-                  Open Settings
-                </TextButton>
+                <TextButton onClick={recapUnavailable.onOpenSettings}>Open Settings</TextButton>
               </div>
             )}
           </div>
@@ -1341,7 +1406,9 @@ export const Review = memo(function Review({
               <PhoneCall size={12} /> Cold call coaching
             </div>
             {coldCall.coaching?.error && coldCall.onRetryCoaching && (
-              <TextButton icon={RotateCcw} onClick={coldCall.onRetryCoaching}>Retry</TextButton>
+              <TextButton icon={RotateCcw} onClick={coldCall.onRetryCoaching}>
+                Retry
+              </TextButton>
             )}
           </div>
           {coldCall.coaching?.error ? (
@@ -1354,7 +1421,9 @@ export const Review = memo(function Review({
                   {coldCall.booking?.error ? (
                     <div className="flex items-center gap-1.5">
                       <div className="text-[12px] text-[var(--color-danger)]">{coldCall.booking.error}</div>
-                      <TextButton icon={RotateCcw} onClick={coldCall.onBookMeetings}>Retry</TextButton>
+                      <TextButton icon={RotateCcw} onClick={coldCall.onBookMeetings}>
+                        Retry
+                      </TextButton>
                     </div>
                   ) : coldCall.booking ? (
                     <div className="flex flex-col gap-2">
@@ -1365,7 +1434,9 @@ export const Review = memo(function Review({
                       )}
                       {!coldCall.booking.streaming && (
                         <div className="flex items-center gap-1.5">
-                          <TextButton icon={RotateCcw} onClick={coldCall.onBookMeetings}>Redo</TextButton>
+                          <TextButton icon={RotateCcw} onClick={coldCall.onBookMeetings}>
+                            Redo
+                          </TextButton>
                         </div>
                       )}
                     </div>
@@ -1427,7 +1498,9 @@ export const Review = memo(function Review({
             <div className="flex flex-col gap-2">
               <div className="text-[13px] text-[var(--color-danger)]">{followupDraft.error}</div>
               <div className="flex items-center gap-1.5">
-                <TextButton icon={RotateCcw} onClick={onGenerateFollowup}>Retry</TextButton>
+                <TextButton icon={RotateCcw} onClick={onGenerateFollowup}>
+                  Retry
+                </TextButton>
               </div>
             </div>
           ) : followupDraft?.streaming && !followupText ? (
@@ -1438,7 +1511,10 @@ export const Review = memo(function Review({
                 value={followupText}
                 onChange={(e) => {
                   const next = e.target.value
-                  const nextIntent = outlookDraftIntent(outlookDraftMeeting, { subject: outlookDraftSubject, body: next })
+                  const nextIntent = outlookDraftIntent(outlookDraftMeeting, {
+                    subject: outlookDraftSubject,
+                    body: next
+                  })
                   if (outlookDraftLifecycle.select(nextIntent)) setOutlookDraftLocalError(null)
                   setFollowupEdited(true)
                   setFollowupText(next)
@@ -1457,9 +1533,16 @@ export const Review = memo(function Review({
                 {outlook?.signedIn && outlook.canDraft ? (
                   <TextButton
                     onClick={() => void createOutlookDraft()}
-                    disabled={!followupText || outlookDraftSession.phase === 'saving' || outlookDraftSession.phase === 'saved'}
+                    disabled={
+                      !followupText || outlookDraftSession.phase === 'saving' || outlookDraftSession.phase === 'saved'
+                    }
                   >
-                    <Mail size={11} /> {outlookDraftSession.phase === 'saved' ? 'Draft created' : outlookDraftSession.phase === 'saving' ? 'Creating draft…' : 'Create Outlook draft'}
+                    <Mail size={11} />{' '}
+                    {outlookDraftSession.phase === 'saved'
+                      ? 'Draft created'
+                      : outlookDraftSession.phase === 'saving'
+                        ? 'Creating draft…'
+                        : 'Create Outlook draft'}
                   </TextButton>
                 ) : (
                   <TextButton
@@ -1476,7 +1559,9 @@ export const Review = memo(function Review({
               </div>
               {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
               {(outlookDraftLocalError || outlookDraftSession.error) && (
-                <div className="text-[11px] text-[var(--color-danger)]">{outlookDraftLocalError || outlookDraftSession.error}</div>
+                <div className="text-[11px] text-[var(--color-danger)]">
+                  {outlookDraftLocalError || outlookDraftSession.error}
+                </div>
               )}
               <div className="text-[11px] text-[color:var(--color-ink-3)]">
                 Review before sending. Outlook creates a draft only. Nothing sends itself.
@@ -1529,8 +1614,8 @@ export const Review = memo(function Review({
                 </label>
               ) : (
                 <div className="text-[11px] text-[color:var(--color-danger)]">
-                  Polo Pre-Sales has no tools in this key's scope, so there's nothing to push to. Check the key's
-                  scopes in Settings.
+                  Polo Pre-Sales has no tools in this key's scope, so there's nothing to push to. Check the key's scopes
+                  in Settings.
                 </div>
               )}
 
@@ -1569,11 +1654,7 @@ export const Review = memo(function Review({
                     `if (!pushTool)` guard — a dead click with no feedback. Gating the Chip here leaves only
                     Cancel plus the "reported no tools" note, so the button is never a silent no-op. */}
                 {pushTool && (
-                  <Chip
-                    onClick={() => void sendToCrm()}
-                    variant="accent"
-                    disabled={pushState.phase === 'sending'}
-                  >
+                  <Chip onClick={() => void sendToCrm()} variant="accent" disabled={pushState.phase === 'sending'}>
                     {pushState.phase === 'sending' ? <InlineOrb kind="connecting" /> : <Send size={13} />}
                     {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
                   </Chip>
@@ -1621,7 +1702,12 @@ export const Review = memo(function Review({
                 <Check size={13} /> Created in {clickupState.destinationName || clickupDestName || 'ClickUp'}.
               </div>
               {clickupState.taskUrl ? (
-                <a href={clickupState.taskUrl} className="text-[11px] text-[color:var(--color-ink-2)] underline" target="_blank" rel="noreferrer">
+                <a
+                  href={clickupState.taskUrl}
+                  className="text-[11px] text-[color:var(--color-ink-2)] underline"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {clickupState.taskUrl}
                 </a>
               ) : null}
@@ -1748,7 +1834,10 @@ export const Review = memo(function Review({
                       const checked = connChecked[conn.id] ?? true
                       const tool = connTool[conn.id] || conn.tools[0] || ''
                       return (
-                        <div key={conn.id} className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2.5">
+                        <div
+                          key={conn.id}
+                          className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2.5"
+                        >
                           <label className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--color-ink)]">
                             <input
                               type="checkbox"
@@ -1814,7 +1903,10 @@ export const Review = memo(function Review({
                           const status = stepStatus[key]
                           const done = nextStepPushed(status?.phase ?? 'idle', conn.id, args)
                           return (
-                            <div key={key} className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2.5 text-[12px]">
+                            <div
+                              key={key}
+                              className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2.5 text-[12px]"
+                            >
                               <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
                                 <span>{conn.label}</span>
                                 {done ? (
@@ -1829,9 +1921,13 @@ export const Review = memo(function Review({
                               </div>
                               <div className="text-[color:var(--color-ink)]">{args.title}</div>
                               {conn.kind === 'clickup' && clickupDestName ? (
-                                <div className="mt-0.5 text-[11px] text-[color:var(--color-ink-3)]">Task in {clickupDestName}</div>
+                                <div className="mt-0.5 text-[11px] text-[color:var(--color-ink-3)]">
+                                  Task in {clickupDestName}
+                                </div>
                               ) : null}
-                              <div className="mt-0.5 whitespace-pre-wrap text-[color:var(--color-ink-2)]">{args.description}</div>
+                              <div className="mt-0.5 whitespace-pre-wrap text-[color:var(--color-ink-2)]">
+                                {args.description}
+                              </div>
                               {status?.phase === 'error' && status.error && (
                                 <div className="mt-1 flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
                                   <AlertCircle size={12} className="mt-px shrink-0" />
@@ -1872,52 +1968,48 @@ export const Review = memo(function Review({
           <ChevronDown size={12} className="-rotate-90" />
         </button>
       ) : (
-      <section>
-        <div className="mb-1.5 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => setTranscriptOpen(false)}
-            className="no-drag focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-          >
-            <FileText size={12} /> Full transcript · {speechLines.length} lines <ChevronDown size={12} />
-          </button>
-          <TextButton onClick={copy}>
-            {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-            {copied ? 'Copied' : 'Copy'}
-          </TextButton>
-        </div>
-        {copyError && (
-          <div className="mb-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
-            {copyError}
+        <section>
+          <div className="mb-1.5 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setTranscriptOpen(false)}
+              className="no-drag focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+            >
+              <FileText size={12} /> Full transcript · {speechLines.length} lines <ChevronDown size={12} />
+            </button>
+            <TextButton onClick={copy}>
+              {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+              {copied ? 'Copied' : 'Copy'}
+            </TextButton>
           </div>
-        )}
-        {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
-            whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
-        <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
-          {speechLines.length === 0 ? (
-            <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
-          ) : (
-            speechLines.map((l, i) => (
-              <div key={i} className="flex gap-2 text-[13px] leading-snug">
-                <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">
-                  {clock(l.t)}
-                </span>
-                <span
-                  className={
-                    'shrink-0 text-[10px] font-semibold uppercase ' +
-                    (l.speaker === 'them'
-                      ? 'text-[color:var(--color-ink-2)]'
-                      : 'text-[color:var(--color-ink-3)]')
-                  }
-                >
-                  {speakerDisplay(l)}
-                </span>
-                <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
-              </div>
-            ))
+          {copyError && (
+            <div className="mb-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
+              {copyError}
+            </div>
           )}
-        </div>
-      </section>
+          {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
+            whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
+          <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
+            {speechLines.length === 0 ? (
+              <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
+            ) : (
+              speechLines.map((l, i) => (
+                <div key={i} className="flex gap-2 text-[13px] leading-snug">
+                  <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">{clock(l.t)}</span>
+                  <span
+                    className={
+                      'shrink-0 text-[10px] font-semibold uppercase ' +
+                      (l.speaker === 'them' ? 'text-[color:var(--color-ink-2)]' : 'text-[color:var(--color-ink-3)]')
+                    }
+                  >
+                    {speakerDisplay(l)}
+                  </span>
+                  <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
       )}
 
       {/* Recent meetings list */}

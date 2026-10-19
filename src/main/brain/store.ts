@@ -58,8 +58,24 @@ const WIN_RESERVED_NAMES = new Set([
   'prn',
   'aux',
   'nul',
-  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
-  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
+  'com1',
+  'com2',
+  'com3',
+  'com4',
+  'com5',
+  'com6',
+  'com7',
+  'com8',
+  'com9',
+  'lpt1',
+  'lpt2',
+  'lpt3',
+  'lpt4',
+  'lpt5',
+  'lpt6',
+  'lpt7',
+  'lpt8',
+  'lpt9'
 ])
 
 export function slugify(s: string): string {
@@ -71,9 +87,7 @@ export function slugify(s: string): string {
     .replace(/^-+|-+$/g, '')
   // Disambiguate long shared prefixes with a short content hash.
   const base =
-    full.length > 60
-      ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}`
-      : full
+    full.length > 60 ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}` : full
   // Bare Windows reserved names cannot be opened; suffix deterministically.
   if (base && WIN_RESERVED_NAMES.has(base)) return `${base}-x`
   if (base) return base
@@ -205,7 +219,13 @@ export const eqAmount = (a: { value: number; currency: string }, b: { value: num
 
 function ensureDirs(settings: Settings): string {
   const root = brainDir(settings)
-  for (const d of [root, join(root, 'meetings'), join(root, 'entities', 'person'), join(root, 'entities', 'account'), join(root, 'entities', 'deal')]) {
+  for (const d of [
+    root,
+    join(root, 'meetings'),
+    join(root, 'entities', 'person'),
+    join(root, 'entities', 'account'),
+    join(root, 'entities', 'deal')
+  ]) {
     if (!existsSync(d)) mkdirSync(d, { recursive: true })
   }
   return root
@@ -260,7 +280,11 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
 
 type BrainFileLoad<T> = { status: 'ok'; value: T | null } | { status: 'unavailable' }
 
-export async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<BrainFileLoad<T>> {
+export async function loadJson<T>(
+  settings: Settings,
+  rel: string,
+  parse: (v: unknown) => T
+): Promise<BrainFileLoad<T>> {
   const p = join(brainDir(settings), rel)
   const gateway = storageAt(resolveMeetingsFolder(settings))
   const path = join('.brain', rel)
@@ -272,7 +296,8 @@ export async function loadJson<T>(settings: Settings, rel: string, parse: (v: un
   if (!('version' in fileClass)) return { status: 'unavailable' }
   const { mtimeMs, ctimeMs, size } = fileClass.version
   const hit = jsonCache.get(p)
-  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size) return { status: 'ok', value: hit.value as T | null }
+  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size)
+    return { status: 'ok', value: hit.value as T | null }
   if (fileClass.status !== 'ok') return { status: 'unavailable' }
   const read = await gateway.read(path)
   if (read.status === 'missing') {
@@ -361,7 +386,10 @@ export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
 // there is nothing to attach honest provenance to.
 
 function earliestDate(meetings: Array<{ date: string }>): string {
-  const dates = meetings.map((m) => m.date).filter(Boolean).sort()
+  const dates = meetings
+    .map((m) => m.date)
+    .filter(Boolean)
+    .sort()
   return dates[0] ?? ''
 }
 
@@ -394,7 +422,12 @@ function migrateDeal(d: DealEntity, slug: string): DealEntity {
   d.aliases ??= []
   if (!d.stage_provenance && d.stage) d.stage_provenance = migrateField(d.stage, d.meetings)
   if (!d.win_likelihood_band_provenance && d.win_likelihood_band) {
-    d.win_likelihood_band_provenance = migrateField(d.win_likelihood_band, d.meetings, 'INFERRED', d.band_evidence || undefined)
+    d.win_likelihood_band_provenance = migrateField(
+      d.win_likelihood_band,
+      d.meetings,
+      'INFERRED',
+      d.band_evidence || undefined
+    )
   }
   if (!d.velocity_provenance && d.velocity.signal !== 'no-hard-date-found') {
     d.velocity_provenance = migrateField(d.velocity, d.meetings)
@@ -422,8 +455,7 @@ export interface BrainEntitySnapshot<K extends BrainEntityKind> {
 export const MAX_BRAIN_ENTITY_SNAPSHOT_BYTES = 256 * 1024
 
 function sameFileVersion(a: Stats, b: Stats): boolean {
-  return a.dev === b.dev && a.ino === b.ino && a.size === b.size &&
-    a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
 }
 
 /** Read a bounded, stable byte snapshot without consulting or populating the stat-keyed JSON cache. */
@@ -442,13 +474,21 @@ function readStableEntityBytes(rootPath: string, path: string): Buffer | null {
     if (pathBefore.isSymbolicLink() || !pathBefore.isFile()) return null
     fd = openSync(path, 'r')
     const before = fstatSync(fd)
-    if (!before.isFile() || !sameFileVersion(pathBefore, before) ||
-        before.size <= 0 || before.size > MAX_BRAIN_ENTITY_SNAPSHOT_BYTES) return null
+    if (
+      !before.isFile() ||
+      !sameFileVersion(pathBefore, before) ||
+      before.size <= 0 ||
+      before.size > MAX_BRAIN_ENTITY_SNAPSHOT_BYTES
+    )
+      return null
     const canonicalRootAfterOpen = realpathSync(rootPath)
     const canonicalPathAfterOpen = realpathSync(path)
-    if (canonicalRootAfterOpen !== canonicalRoot ||
-        !isCanonicalDescendant(canonicalRoot, canonicalPathAfterOpen) ||
-        !sameFileVersion(before, statSync(canonicalPathAfterOpen))) return null
+    if (
+      canonicalRootAfterOpen !== canonicalRoot ||
+      !isCanonicalDescendant(canonicalRoot, canonicalPathAfterOpen) ||
+      !sameFileVersion(before, statSync(canonicalPathAfterOpen))
+    )
+      return null
     const bytes = Buffer.allocUnsafe(before.size)
     let offset = 0
     while (offset < before.size) {
@@ -460,11 +500,16 @@ function readStableEntityBytes(rootPath: string, path: string): Buffer | null {
     const pathAfter = lstatSync(path)
     const canonicalRootAfterRead = realpathSync(rootPath)
     const canonicalPathAfterRead = realpathSync(path)
-    if (pathAfter.isSymbolicLink() || !pathAfter.isFile() ||
-        canonicalRootAfterRead !== canonicalRoot ||
-        !isCanonicalDescendant(canonicalRoot, canonicalPathAfterRead) ||
-        !sameFileVersion(before, after) || !sameFileVersion(after, pathAfter) ||
-        !sameFileVersion(after, statSync(canonicalPathAfterRead))) return null
+    if (
+      pathAfter.isSymbolicLink() ||
+      !pathAfter.isFile() ||
+      canonicalRootAfterRead !== canonicalRoot ||
+      !isCanonicalDescendant(canonicalRoot, canonicalPathAfterRead) ||
+      !sameFileVersion(before, after) ||
+      !sameFileVersion(after, pathAfter) ||
+      !sameFileVersion(after, statSync(canonicalPathAfterRead))
+    )
+      return null
     return bytes
   } catch {
     return null
@@ -595,7 +640,10 @@ export function ensureV1Backup(settings: Settings): void {
     } catch {
       /* best-effort cleanup of the failed partial copy */
     }
-    console.warn('[brain] could not create .brain.backup-v1 safety copy before v2 migration — will retry on the next write:', e)
+    console.warn(
+      '[brain] could not create .brain.backup-v1 safety copy before v2 migration — will retry on the next write:',
+      e
+    )
     // Deliberately NOT memoized and NOT re-thrown: a v1 safety net failing must not permanently block
     // every future correction/entity write until a human intervenes (a hard-refuse would do exactly
     // that, since OneDrive/AV holds are often transient) — the next write's own ensureV1Backup call
@@ -697,7 +745,11 @@ const indexCache = new Map<string, IndexCacheEntry>()
 const deferBrainLogWrite = setImmediate
 function enqueueBrainLogWrite(write: () => void): void {
   deferBrainLogWrite(() => {
-    try { write() } catch { /* best-effort */ }
+    try {
+      write()
+    } catch {
+      /* best-effort */
+    }
   })
 }
 
@@ -722,9 +774,11 @@ function recordUnavailable(
 ): ResolvedIndex {
   const alreadyLogged = hit?.load.kind === 'unavailable' && hit.load.cause === load.cause
   if (!alreadyLogged) {
-    enqueueBrainLogWrite(() => mainLog.warn(
-      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) - left untouched; indexing is paused until it can be read`
-    ))
+    enqueueBrainLogWrite(() =>
+      mainLog.warn(
+        `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) - left untouched; indexing is paused until it can be read`
+      )
+    )
     auditLog('brain.index.unavailable', { cause: load.cause })
   }
   indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
@@ -745,8 +799,12 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   } catch (e) {
     return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
   }
-  if (kept >= INDEX_AUTO_SNAPSHOT_CAP) return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
-  const to = join(dir, `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  if (kept >= INDEX_AUTO_SNAPSHOT_CAP)
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
+  const to = join(
+    dir,
+    `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`
+  )
   try {
     renameSync(p, to)
   } catch (e) {
@@ -873,18 +931,26 @@ export async function indexUnavailableAsync(s: Settings): Promise<IndexUnavailab
 export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
   switch (cause) {
     case 'undecryptable':
-      return "Mantu Intelligence can't read its index on this device: it was encrypted with a key this " +
-        'device doesn\'t have (another device, or a keychain that is unavailable). Nothing was changed ' +
+      return (
+        "Mantu Intelligence can't read its index on this device: it was encrypted with a key this " +
+        "device doesn't have (another device, or a keychain that is unavailable). Nothing was changed " +
         'or deleted. Indexing is paused on this device.'
+      )
     case 'io':
-      return "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
+      return (
+        "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
         'OneDrive). Nothing was changed. Indexing resumes automatically once the file can be read.'
+      )
     case 'unsupported':
-      return "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
+      return (
+        "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
         'Update Métis on this device to resume indexing.'
+      )
     case 'corrupt-kept':
-      return "Mantu Intelligence's index is damaged and the automatic repair limit for this folder has " +
+      return (
+        "Mantu Intelligence's index is damaged and the automatic repair limit for this folder has " +
         'been reached. Nothing was deleted. Indexing is paused on this device.'
+      )
   }
 }
 
@@ -934,7 +1000,9 @@ export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: Meeting
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
 export const loadPerson = async (s: Settings, slug: string): Promise<PersonEntity | null> => {
-  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) =>
+    migratePerson(PersonEntitySchema.parse(v), slug)
+  )
   return loaded.status === 'ok' ? loaded.value : null
 }
 export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
@@ -947,7 +1015,9 @@ export const writePerson = async (s: Settings, slug: string, v: PersonEntity): P
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
 export const loadAccount = async (s: Settings, slug: string): Promise<AccountEntity | null> => {
-  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) =>
+    migrateAccount(AccountEntitySchema.parse(v), slug)
+  )
   return loaded.status === 'ok' ? loaded.value : null
 }
 export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
@@ -959,7 +1029,9 @@ export const writeAccount = async (s: Settings, slug: string, v: AccountEntity):
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
 export const loadDeal = async (s: Settings, slug: string): Promise<DealEntity | null> => {
-  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) =>
+    migrateDeal(DealEntitySchema.parse(v), slug)
+  )
   return loaded.status === 'ok' ? loaded.value : null
 }
 export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
@@ -1024,7 +1096,12 @@ export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): 
 }
 
 export async function loadEntitySlugs(s: Settings, kind: 'person' | 'account' | 'deal'): Promise<string[]> {
-  return (await listBrainNames(s, join('entities', kind)))?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')).sort() ?? []
+  return (
+    (await listBrainNames(s, join('entities', kind)))
+      ?.filter((f) => f.endsWith('.json'))
+      .map((f) => basename(f, '.json'))
+      .sort() ?? []
+  )
 }
 
 export function listMeetingExtractions(s: Settings): string[] {
@@ -1134,7 +1211,10 @@ function preserveCurrentIndexBeforeRestore(settings: Settings): void {
   const current = join(brainDir(settings), INDEX_REL)
   if (!existsSync(current)) return
   const preserveDir = preservedIndexDir(settings)
-  const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  const preservePath = join(
+    preserveDir,
+    `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`
+  )
   mkdirSync(preserveDir, { recursive: true })
   copyFileSync(current, preservePath, constants.COPYFILE_EXCL)
   fsyncFilePath(preservePath)
@@ -1159,7 +1239,8 @@ export function restorePreservedBrainIndex(
     return { ok: false, error: 'not-found' }
   }
   if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
-  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
+  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings))
+    return { ok: false, error: 'current-readable' }
 
   const root = brainDir(settings)
   const target = join(root, INDEX_REL)
@@ -1184,7 +1265,10 @@ export function restorePreservedBrainIndex(
   }
 }
 
-export function deletePreservedBrainIndex(settings: Settings, id: string): { ok: boolean; error?: 'not-found' | 'failed' } {
+export function deletePreservedBrainIndex(
+  settings: Settings,
+  id: string
+): { ok: boolean; error?: 'not-found' | 'failed' } {
   let path: string
   try {
     path = preservedIndexPath(settings, id)
@@ -1251,9 +1335,11 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
   } catch {
     throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   }
-  if (hashBytes(currentBytes) !== classifiedHash) throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
+  if (hashBytes(currentBytes) !== classifiedHash)
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
   const rechecked = classifyIndexBytes(currentBytes)
-  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
+  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
   if (rechecked.kind === 'unavailable' && rechecked.cause === 'unsupported') {
     throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
   }
@@ -1278,7 +1364,10 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
  * graph" gone, corrections included. Copies the journal's raw on-disk bytes (respects encryption,
  * mirroring ensureV1Backup's cpSync convention above) rather than decrypting/re-encrypting it.
  */
-export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }): { ok: boolean } {
+export function purgeBrain(
+  settings: Settings,
+  opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }
+): { ok: boolean } {
   const root = brainDir(settings)
   if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
   const journalPath = join(root, 'corrections.json')

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskOwner, TaskRecord } from './task-contract'
-import { createTaskProgressState, forgetTaskProgress, readTaskProgress, recordTaskProgress, type TaskProgressLimits, type TaskProgressRecord, type TaskProgressUpdate } from './task-progress'
+import {
+  createTaskProgressState,
+  forgetTaskProgress,
+  readTaskProgress,
+  recordTaskProgress,
+  type TaskProgressLimits,
+  type TaskProgressRecord,
+  type TaskProgressUpdate
+} from './task-progress'
 
 const owner: TaskOwner = {
   webContentsId: 4,
@@ -17,7 +25,12 @@ const limits: TaskProgressLimits = {
   maxWorkUnits: 100
 }
 
-function task(taskId: string, revision = 1, status: TaskRecord['status'] = 'dispatching', taskOwner = owner): TaskRecord {
+function task(
+  taskId: string,
+  revision = 1,
+  status: TaskRecord['status'] = 'dispatching',
+  taskOwner = owner
+): TaskRecord {
   return {
     taskId,
     revision,
@@ -50,34 +63,60 @@ describe('WP07 bounded task progress contract', () => {
     const first = recordTaskProgress(createTaskProgressState(), task('task-a'), false, update('task-a'), limits)
     expect(first.accepted).toBe(true)
     if (!first.accepted) return
-    expect(recordTaskProgress(first.state, task('task-a'), false, update('task-a', { sequence: 1 }), limits))
-      .toMatchObject({ accepted: false, reason: 'sequence-conflict' })
-    expect(recordTaskProgress(first.state, task('task-a'), false, update('task-a', { sequence: 2, taskRevision: 2 }), limits))
-      .toMatchObject({ accepted: false, reason: 'stale-task-revision' })
-    expect(recordTaskProgress(first.state, task('task-a'), false, update('task-a', { sequence: 2, owner: { ...owner, contextRevision: 14 } }), limits))
-      .toMatchObject({ accepted: false, reason: 'wrong-owner' })
-    expect(recordTaskProgress(first.state, task('task-a', 1, 'paused'), false, update('task-a', { sequence: 2 }), limits))
-      .toMatchObject({ accepted: false, reason: 'task-not-dispatching' })
-    expect(recordTaskProgress(first.state, task('task-a'), true, update('task-a', { sequence: 2 }), limits))
-      .toMatchObject({ accepted: false, reason: 'owner-rebind-required' })
+    expect(
+      recordTaskProgress(first.state, task('task-a'), false, update('task-a', { sequence: 1 }), limits)
+    ).toMatchObject({ accepted: false, reason: 'sequence-conflict' })
+    expect(
+      recordTaskProgress(first.state, task('task-a'), false, update('task-a', { sequence: 2, taskRevision: 2 }), limits)
+    ).toMatchObject({ accepted: false, reason: 'stale-task-revision' })
+    expect(
+      recordTaskProgress(
+        first.state,
+        task('task-a'),
+        false,
+        update('task-a', { sequence: 2, owner: { ...owner, contextRevision: 14 } }),
+        limits
+      )
+    ).toMatchObject({ accepted: false, reason: 'wrong-owner' })
+    expect(
+      recordTaskProgress(first.state, task('task-a', 1, 'paused'), false, update('task-a', { sequence: 2 }), limits)
+    ).toMatchObject({ accepted: false, reason: 'task-not-dispatching' })
+    expect(
+      recordTaskProgress(first.state, task('task-a'), true, update('task-a', { sequence: 2 }), limits)
+    ).toMatchObject({ accepted: false, reason: 'owner-rebind-required' })
   })
 
   it('resets sequence only on a new task revision and snapshots the owner', () => {
     const mutableOwner = { ...owner }
-    const initial = recordTaskProgress(createTaskProgressState(), task('task-a'), false,
-      update('task-a', { owner: mutableOwner }), limits)
+    const initial = recordTaskProgress(
+      createTaskProgressState(),
+      task('task-a'),
+      false,
+      update('task-a', { owner: mutableOwner }),
+      limits
+    )
     expect(initial.accepted).toBe(true)
     if (!initial.accepted) return
     mutableOwner.contextRevision = 99
     expect(initial.record.owner.contextRevision).toBe(owner.contextRevision)
 
-    const nextRevision = recordTaskProgress(initial.state, task('task-a', 2), false,
-      update('task-a', { taskRevision: 2, sequence: 1 }), limits)
+    const nextRevision = recordTaskProgress(
+      initial.state,
+      task('task-a', 2),
+      false,
+      update('task-a', { taskRevision: 2, sequence: 1 }),
+      limits
+    )
     expect(nextRevision.accepted).toBe(true)
 
     const newOwner = { ...owner, authSessionGeneration: owner.authSessionGeneration + 1 }
-    const newOwnerUpdate = recordTaskProgress(initial.state, task('task-a', 1, 'dispatching', newOwner), false,
-      update('task-a', { owner: newOwner, sequence: 1 }), limits)
+    const newOwnerUpdate = recordTaskProgress(
+      initial.state,
+      task('task-a', 1, 'dispatching', newOwner),
+      false,
+      update('task-a', { owner: newOwner, sequence: 1 }),
+      limits
+    )
     expect(newOwnerUpdate.accepted).toBe(true)
   })
 
@@ -90,8 +129,9 @@ describe('WP07 bounded task progress contract', () => {
     expect(readTaskProgress(recorded.state, task('task-a', 1, 'paused'), false, owner)).toBeUndefined()
     expect(readTaskProgress(recorded.state, task('task-a', 1, 'cancelled'), false, owner)).toBeUndefined()
     expect(readTaskProgress(recorded.state, task('task-a', 2), false, owner)).toBeUndefined()
-    expect(readTaskProgress(recorded.state, { ...task('task-a'), owner: { ...owner, contextRevision: 14 } }, false, owner))
-      .toBeUndefined()
+    expect(
+      readTaskProgress(recorded.state, { ...task('task-a'), owner: { ...owner, contextRevision: 14 } }, false, owner)
+    ).toBeUndefined()
     expect(readTaskProgress(recorded.state, task('task-a'), true, owner)).toBeUndefined()
     expect(readTaskProgress(recorded.state, task('task-a'), false, { ...owner, webContentsId: 5 })).toBeUndefined()
 
@@ -102,22 +142,40 @@ describe('WP07 bounded task progress contract', () => {
       ...recorded.record,
       owner: { ...owner, isTopFrame: false }
     } as unknown as TaskProgressRecord
-    expect(readTaskProgress({ latestByTask: new Map([['task-a', invalidOwnerRecord]]) }, task('task-a'), false, owner))
-      .toBeUndefined()
+    expect(
+      readTaskProgress({ latestByTask: new Map([['task-a', invalidOwnerRecord]]) }, task('task-a'), false, owner)
+    ).toBeUndefined()
   })
 
   it('requires explicit work, text, and tracked-task bounds', () => {
-    expect(recordTaskProgress(createTaskProgressState(), task('task-a'), false,
-      update('task-a', { totalUnits: 101 }), limits)).toMatchObject({ accepted: false, reason: 'limit-exceeded' })
-    expect(recordTaskProgress(createTaskProgressState(), task('task-a'), false,
-      update('task-a', { label: '🍋' }), { ...limits, maxLabelBytes: 3 })).toMatchObject({ accepted: false, reason: 'limit-exceeded' })
+    expect(
+      recordTaskProgress(
+        createTaskProgressState(),
+        task('task-a'),
+        false,
+        update('task-a', { totalUnits: 101 }),
+        limits
+      )
+    ).toMatchObject({ accepted: false, reason: 'limit-exceeded' })
+    expect(
+      recordTaskProgress(createTaskProgressState(), task('task-a'), false, update('task-a', { label: '🍋' }), {
+        ...limits,
+        maxLabelBytes: 3
+      })
+    ).toMatchObject({ accepted: false, reason: 'limit-exceeded' })
 
-    const first = recordTaskProgress(createTaskProgressState(), task('task-a'), false, update('task-a'), { ...limits, maxTrackedTasks: 1 })
+    const first = recordTaskProgress(createTaskProgressState(), task('task-a'), false, update('task-a'), {
+      ...limits,
+      maxTrackedTasks: 1
+    })
     expect(first.accepted).toBe(true)
     if (!first.accepted) return
-    expect(recordTaskProgress(first.state, task('task-b'), false, update('task-b'), { ...limits, maxTrackedTasks: 1 }))
-      .toMatchObject({ accepted: false, reason: 'limit-exceeded' })
+    expect(
+      recordTaskProgress(first.state, task('task-b'), false, update('task-b'), { ...limits, maxTrackedTasks: 1 })
+    ).toMatchObject({ accepted: false, reason: 'limit-exceeded' })
     const forgotten = forgetTaskProgress(first.state, 'task-a')
-    expect(recordTaskProgress(forgotten, task('task-b'), false, update('task-b'), { ...limits, maxTrackedTasks: 1 }).accepted).toBe(true)
+    expect(
+      recordTaskProgress(forgotten, task('task-b'), false, update('task-b'), { ...limits, maxTrackedTasks: 1 }).accepted
+    ).toBe(true)
   })
 })

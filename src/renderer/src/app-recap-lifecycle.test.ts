@@ -249,10 +249,9 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     exitPromises,
     manualSave: callback<() => Promise<void>>('manualSave', context),
     newMeeting: callback<() => void>('newMeeting', context),
-    saveLiveMeetingNow: callback<(lines: TranscriptLine[], started: number, recapText: string) => Promise<string | null>>(
-      'saveLiveMeetingNow',
-      context
-    ),
+    saveLiveMeetingNow: callback<
+      (lines: TranscriptLine[], started: number, recapText: string) => Promise<string | null>
+    >('saveLiveMeetingNow', context),
     persistLiveMeetingOnExit: callback<(snapshot: AnswerState | null, maxAttempts?: number) => Promise<void>>(
       'persistLiveMeetingOnExit',
       context
@@ -496,11 +495,7 @@ describe('actual App live recap lifecycle', () => {
 
       joinedSave.resolve('a.md')
       await discard
-      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
-        100,
-        'Synthetic meeting A speech.',
-        'a.md'
-      )
+      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(100, 'Synthetic meeting A speech.', 'a.md')
       expect(h.discardDraftTranscript).toHaveBeenCalledExactlyOnceWith(100)
       expect(h.context.discardedMeetingRef.current).toBe('100')
       expect(h.context.discardPendingOwnerRef.current).toBeNull()
@@ -621,11 +616,7 @@ describe('actual App live recap lifecycle', () => {
       .mockResolvedValueOnce({ ok: true })
 
     await h.discardMeeting()
-    expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
-      100,
-      'Synthetic meeting A speech.',
-      savedPath
-    )
+    expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(100, 'Synthetic meeting A speech.', savedPath)
     expect(h.context.deletedTranscriptForDiscardRef.current).toEqual({ ownerId: '100', paths: [savedPath] })
     expect(h.context.discardedMeetingRef.current).toBeNull()
     expect(h.context.discardPendingOwnerRef.current).toBeNull()
@@ -660,30 +651,30 @@ describe('actual App live recap lifecycle', () => {
     }
   })
 
-  it.each(['resolved cancellation', 'IPC rejection'] as const)(
-    'does not paint A’s late delete %s over successor B',
-    async (failure) => {
-      const deletion = deferred<{ ok: boolean; error?: string }>()
-      const h = lifecycleHost(async () => ({ path: 'unused.md' }))
-      h.context.savedPath = '/synthetic/meetings/a.md'
-      h.discardSavedTranscript.mockImplementation(async () => deletion.promise)
-      try {
-        const discard = h.discardMeeting()
-        await Promise.resolve()
-        h.context.meetingStartRef.current = 200
-        if (failure === 'resolved cancellation') deletion.resolve({ ok: false, error: 'cancelled' })
-        else deletion.reject(new Error('Synthetic discard IPC failure'))
-        await discard
-        expect(h.ui.setSaveError).not.toHaveBeenCalled()
-        expect(h.discardDraftTranscript).not.toHaveBeenCalled()
-        expect(h.context.discardedMeetingRef.current).toBeNull()
-        expect(h.context.discardPendingOwnerRef.current).toBeNull()
-        expect(h.reset).not.toHaveBeenCalled()
-      } finally {
-        deletion.resolve({ ok: false, error: 'cleanup' })
-      }
+  it.each([
+    'resolved cancellation',
+    'IPC rejection'
+  ] as const)('does not paint A’s late delete %s over successor B', async (failure) => {
+    const deletion = deferred<{ ok: boolean; error?: string }>()
+    const h = lifecycleHost(async () => ({ path: 'unused.md' }))
+    h.context.savedPath = '/synthetic/meetings/a.md'
+    h.discardSavedTranscript.mockImplementation(async () => deletion.promise)
+    try {
+      const discard = h.discardMeeting()
+      await Promise.resolve()
+      h.context.meetingStartRef.current = 200
+      if (failure === 'resolved cancellation') deletion.resolve({ ok: false, error: 'cancelled' })
+      else deletion.reject(new Error('Synthetic discard IPC failure'))
+      await discard
+      expect(h.ui.setSaveError).not.toHaveBeenCalled()
+      expect(h.discardDraftTranscript).not.toHaveBeenCalled()
+      expect(h.context.discardedMeetingRef.current).toBeNull()
+      expect(h.context.discardPendingOwnerRef.current).toBeNull()
+      expect(h.reset).not.toHaveBeenCalled()
+    } finally {
+      deletion.resolve({ ok: false, error: 'cleanup' })
     }
-  )
+  })
 
   it('does not paint A’s late draft-retirement failure over successor B', async () => {
     const savedPath = '/synthetic/meetings/a.md'
@@ -725,11 +716,7 @@ describe('actual App live recap lifecycle', () => {
     })
     try {
       const discard = h.discardMeeting()
-      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
-        100,
-        'Synthetic meeting A speech.',
-        savedPath
-      )
+      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(100, 'Synthetic meeting A speech.', savedPath)
       h.context.meetingStartRef.current = 200
       h.context.savedPath = '/synthetic/meetings/b.md'
       h.context.savedRef.current = 'b-prior-state'

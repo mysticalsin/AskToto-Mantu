@@ -16,12 +16,22 @@ import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker }
 import type { StreamHandle, StreamHandlers, StreamOptions } from './llm/shared'
 import { pathTagForSeatProvider } from './operator-ingest'
 
-const source = ts.createSourceFile('index.ts', readFileSync(join(__dirname, 'index.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
+const source = ts.createSourceFile(
+  'index.ts',
+  readFileSync(join(__dirname, 'index.ts'), 'utf8'),
+  ts.ScriptTarget.Latest,
+  true
+)
 let attemptBody: ts.Block | undefined
 function visit(node: ts.Node): void {
-  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'attempt' &&
-      node.initializer && ts.isArrowFunction(node.initializer) && ts.isBlock(node.initializer.body) &&
-      node.initializer.body.getText(source).includes('noteQualifyingUse(req.mode')) {
+  if (
+    ts.isVariableDeclaration(node) &&
+    node.name.getText(source) === 'attempt' &&
+    node.initializer &&
+    ts.isArrowFunction(node.initializer) &&
+    ts.isBlock(node.initializer.body) &&
+    node.initializer.body.getText(source).includes('noteQualifyingUse(req.mode')
+  ) {
     if (attemptBody) throw new Error('Expected one production live attempt')
     attemptBody = node.initializer.body
   }
@@ -30,66 +40,130 @@ function visit(node: ts.Node): void {
 visit(source)
 if (!attemptBody) throw new Error('Production live attempt not found')
 const statements = attemptBody.statements
-const first = statements.findIndex((s) => ts.isVariableStatement(s) &&
-  s.declarationList.declarations.some((d) => d.name.getText(source) === 'startedAt'))
+const first = statements.findIndex(
+  (s) => ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => d.name.getText(source) === 'startedAt')
+)
 if (first < 0) throw new Error('Production attempt state boundary not found')
-const region = statements.slice(first).map((s) => s.getText(source)).join('\n')
-const js = ts.transpileModule(region, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
+const region = statements
+  .slice(first)
+  .map((s) => s.getText(source))
+  .join('\n')
+const js = ts.transpileModule(region, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+}).outputText
 const id = 'synthetic-live-completion'
 const usage = { inputTokens: 11, outputTokens: 7, cacheRead: 5 }
 
-function setup(options: {
-  mode?: string
-  provider?: string
-  race?: { gate: HedgeRace; leg: HedgeLeg }
-  streams?: Map<string, StreamHandle>
-  failoverAvailable?: boolean
-  retryCount?: number
-} = {}) {
-  const send = vi.fn(), audit = vi.fn(), record = vi.fn(), qualifying = vi.fn()
+function setup(
+  options: {
+    mode?: string
+    provider?: string
+    race?: { gate: HedgeRace; leg: HedgeLeg }
+    streams?: Map<string, StreamHandle>
+    failoverAvailable?: boolean
+    retryCount?: number
+  } = {}
+) {
+  const send = vi.fn(),
+    audit = vi.fn(),
+    record = vi.fn(),
+    qualifying = vi.fn()
   const streams = options.streams ?? new Map<string, StreamHandle>()
   const handle = { abort: vi.fn() }
   const failover = vi.fn(() => options.failoverAvailable ?? false)
   const retry = vi.fn()
   let handlers: StreamHandlers | undefined
   const refreshBrainContextForProviderAttempt = vi.fn()
-  const createStream = vi.fn((opts: StreamOptions) => { handlers = opts.handlers; return handle })
+  const createStream = vi.fn((opts: StreamOptions) => {
+    handlers = opts.handlers
+    return handle
+  })
   const provider = options.provider ?? 'openai'
   const scope = {
-    provider, model: 'synthetic-model', tier: 'base', race: options.race,
-    attempted: [], retryCount: options.retryCount ?? 0, streams,
-    req: { id, mode: options.mode ?? 'recap', prompt: 'synthetic question', transcript: 'synthetic transcript', history: [] },
+    provider,
+    model: 'synthetic-model',
+    tier: 'base',
+    race: options.race,
+    attempted: [],
+    retryCount: options.retryCount ?? 0,
+    streams,
+    req: {
+      id,
+      mode: options.mode ?? 'recap',
+      prompt: 'synthetic question',
+      transcript: 'synthetic transcript',
+      history: []
+    },
     s: { mode: 'meeting', contextDocs: {}, resilience: { preferFreeOnExhaustion: true } },
     def: { kind: provider === 'claude-cli' ? 'cli' : 'openai', label: 'Synthetic provider' },
-    key: 'synthetic-no-credential', viaOperator: false, operatorTransport: undefined,
-    baseURL: undefined, idleMs: 1000, screenGrounded: false,
-    ThinkStripper, isTransient, nextBackoff, classifyExhaustion,
-    isProxyOperatorFault, stripProxyFaultMarker,
-    setTimeout, clearTimeout, MAX_TRANSIENT_RETRIES: 3, MAX_ASK_RETRY_WAIT_MS: 12_000,
+    key: 'synthetic-no-credential',
+    viaOperator: false,
+    operatorTransport: undefined,
+    baseURL: undefined,
+    idleMs: 1000,
+    screenGrounded: false,
+    ThinkStripper,
+    isTransient,
+    nextBackoff,
+    classifyExhaustion,
+    isProxyOperatorFault,
+    stripProxyFaultMarker,
+    setTimeout,
+    clearTimeout,
+    MAX_TRANSIENT_RETRIES: 3,
+    MAX_ASK_RETRY_WAIT_MS: 12_000,
     win: { webContents: { send } },
     IPC: { streamDelta: 'delta', streamError: 'error', streamDone: 'done', streamMeta: 'meta' },
     // The refresh closure is outside this extracted completion region. Keep its transport boundary explicit.
-    createStream, refreshBrainContextForProviderAttempt,
-    auditLog: audit, recordOperatorAsk: record, pathTagForSeatProvider, noteQualifyingUse: qualifying,
-    recordSuccess: vi.fn(), recordRateLimited: vi.fn(), recordExhausted: vi.fn(), recordAuthFailure: vi.fn(),
-    isDustAuthError: () => false, isAuthFailure: () => false, retireCli: vi.fn(),
+    createStream,
+    refreshBrainContextForProviderAttempt,
+    auditLog: audit,
+    recordOperatorAsk: record,
+    pathTagForSeatProvider,
+    noteQualifyingUse: qualifying,
+    recordSuccess: vi.fn(),
+    recordRateLimited: vi.fn(),
+    recordExhausted: vi.fn(),
+    recordAuthFailure: vi.fn(),
+    isDustAuthError: () => false,
+    isAuthFailure: () => false,
+    retireCli: vi.fn(),
     mainLog: { warn: vi.fn() },
-    pickFailover: () => options.failoverAvailable ? 'anthropic' : null, failover, attempt: retry,
+    pickFailover: () => (options.failoverAvailable ? 'anthropic' : null),
+    failover,
+    attempt: retry,
     formatResetPhrase: () => 'later',
     buildSystemParts: () => ({ cachedPrefix: 'synthetic system', volatile: '' }),
-    isOpenAICloudCacheEligible: () => false, makePromptCacheKey: () => '', skillLockHashForMode: () => '',
-    makeRefreshDustAuth: () => undefined, reasoningEffortFor: () => undefined,
+    isOpenAICloudCacheEligible: () => false,
+    makePromptCacheKey: () => '',
+    skillLockHashForMode: () => '',
+    makeRefreshDustAuth: () => undefined,
+    reasoningEffortFor: () => undefined,
     loadVerifiedSkill: () => ({ id: 'synthetic', version: '1' }),
-    isBuiltinConversationMode: () => true, classifyQuestionType: () => 'other'
+    isBuiltinConversationMode: () => true,
+    classifyQuestionType: () => 'other'
   }
   new Function(...Object.keys(scope), js)(...Object.values(scope))
   if (!handlers) throw new Error('Actual attempt did not register stream handlers')
   return {
-    handlers: handlers as StreamHandlers, send, audit, record, qualifying, streams, handle, failover, retry,
-    createStream, refreshBrainContextForProviderAttempt,
+    handlers: handlers as StreamHandlers,
+    send,
+    audit,
+    record,
+    qualifying,
+    streams,
+    handle,
+    failover,
+    retry,
+    createStream,
+    refreshBrainContextForProviderAttempt,
     warnings: scope.mainLog.warn,
     events: (kind: string) => send.mock.calls.filter(([event]) => event === kind),
-    text: () => send.mock.calls.filter(([event]) => event === 'delta').map(([, data]) => data.text).join('')
+    text: () =>
+      send.mock.calls
+        .filter(([event]) => event === 'delta')
+        .map(([, data]) => data.text)
+        .join('')
   }
 }
 type Fixture = ReturnType<typeof setup>
@@ -97,14 +171,21 @@ function expectFailed(f: Fixture, text: string): void {
   expect(f.text()).toBe(text)
   expect(f.events('error')).toHaveLength(1)
   expect(f.events('done')).toHaveLength(0)
-  expect(f.audit.mock.calls.some(([event, detail]) => event === 'provider.request' && detail.phase === 'done')).toBe(false)
+  expect(f.audit.mock.calls.some(([event, detail]) => event === 'provider.request' && detail.phase === 'done')).toBe(
+    false
+  )
   expect(f.record).not.toHaveBeenCalled()
   expect(f.qualifying).not.toHaveBeenCalled()
   expect(f.streams.has(id)).toBe(false)
 }
 
-beforeEach(() => { vi.useFakeTimers() })
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers() })
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+afterEach(() => {
+  vi.clearAllTimers()
+  vi.useRealTimers()
+})
 
 describe('actual live completion outcomes', () => {
   it('passes the outer freshness callback to the transport for provider retries', () => {
@@ -115,7 +196,12 @@ describe('actual live completion outcomes', () => {
     expect(f.refreshBrainContextForProviderAttempt).toHaveBeenCalledOnce()
   })
 
-  it.each(['recap', 'summary', 'answer', 'vision'])('does not report incomplete %s as success at any visible-text threshold', (mode) => {
+  it.each([
+    'recap',
+    'summary',
+    'answer',
+    'vision'
+  ])('does not report incomplete %s as success at any visible-text threshold', (mode) => {
     for (const length of [1, 199, 200, 260]) {
       const f = setup({ mode, failoverAvailable: true })
       const partial = 'x'.repeat(length)
@@ -127,7 +213,11 @@ describe('actual live completion outcomes', () => {
       expect(f.retry).not.toHaveBeenCalled()
     }
   })
-  it.each(['max_tokens', 'unexpected_eof', 'secret-like-provider-reason-not-for-feedback'])('safely rejects incomplete reason %s', (reason) => {
+  it.each([
+    'max_tokens',
+    'unexpected_eof',
+    'secret-like-provider-reason-not-for-feedback'
+  ])('safely rejects incomplete reason %s', (reason) => {
     const f = setup()
     f.handlers.onDelta('partial answer')
     f.handlers.onDone(usage, { status: 'incomplete', reason })
@@ -148,7 +238,13 @@ describe('actual live completion outcomes', () => {
     vi.runAllTimers()
     expect(f.retry).not.toHaveBeenCalled()
   })
-  it.each(['recap', 'summary', 'suggest', 'answer', 'vision'])('records each complete %s request as metadata-only operator usage', (mode) => {
+  it.each([
+    'recap',
+    'summary',
+    'suggest',
+    'answer',
+    'vision'
+  ])('records each complete %s request as metadata-only operator usage', (mode) => {
     const f = setup({ mode })
     f.handlers.onDelta('complete answer')
     f.handlers.onDone(usage, { status: 'complete', reason: 'stop' })
@@ -157,9 +253,15 @@ describe('actual live completion outcomes', () => {
     expect(f.qualifying).toHaveBeenCalledTimes(1)
     expect(f.record).toHaveBeenCalledTimes(1)
     expect(f.record.mock.calls[0][1]).toMatchObject({
-      id, mode, provider: 'openai', model: 'synthetic-model',
-      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
-      cacheRead: usage.cacheRead, outcome: 'answered', pathTag: 'seat-local'
+      id,
+      mode,
+      provider: 'openai',
+      model: 'synthetic-model',
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheRead: usage.cacheRead,
+      outcome: 'answered',
+      pathTag: 'seat-local'
     })
     expect(f.record.mock.calls[0][1]).not.toHaveProperty('question')
     expect(f.record.mock.calls[0][1]).not.toHaveProperty('transcript')
@@ -241,7 +343,9 @@ describe('actual live completion with real hedge ownership', () => {
     const streams = new Map([[id, { abort: vi.fn() }]])
     const primary = setup({ race: { gate, leg: 'primary' }, streams })
     let backup: Fixture | undefined
-    gate.setHedgeStarter(() => { backup = setup({ race: { gate, leg: 'hedge' }, streams }) })
+    gate.setHedgeStarter(() => {
+      backup = setup({ race: { gate, leg: 'hedge' }, streams })
+    })
     primary.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
     expect(primary.events('done')).toHaveLength(0)
     expect(primary.events('error')).toHaveLength(0)

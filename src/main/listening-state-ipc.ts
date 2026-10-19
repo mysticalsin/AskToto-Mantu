@@ -23,10 +23,14 @@ export function createListeningStateHandler<Event>(
     dependencies.assertMainWindow(event)
     if (!dependencies.requireAuth()) return false
     const parsed = ListeningStatePayloadSchema.safeParse(typeof rawOn === 'boolean' ? { on: rawOn } : rawOn)
-    if (!parsed.success || !dependencies.acceptTransition(
-      parsed.data,
-      () => !parsed.data.on || dependencies.consumeMeetingStartActivation(event)
-    )) return false
+    if (
+      !parsed.success ||
+      !dependencies.acceptTransition(
+        parsed.data,
+        () => !parsed.data.on || dependencies.consumeMeetingStartActivation(event)
+      )
+    )
+      return false
     const { on } = parsed.data
     dependencies.setListeningActive(on)
     dependencies.setTrayRecording(on)
@@ -37,10 +41,7 @@ export function createListeningStateHandler<Event>(
     }
     // Both native helpers must get their teardown attempt even if one rejects. The handler stays pending
     // until both settle, then propagates the first failure so an unconfirmed exit is never reported clean.
-    const releases = await Promise.allSettled([
-      dependencies.releaseParakeet(),
-      dependencies.releaseSpeakerEmbedding()
-    ])
+    const releases = await Promise.allSettled([dependencies.releaseParakeet(), dependencies.releaseSpeakerEmbedding()])
     const failed = releases.find((result): result is PromiseRejectedResult => result.status === 'rejected')
     if (failed) throw failed.reason
     return true

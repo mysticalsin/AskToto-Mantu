@@ -9,7 +9,8 @@ function harness(
     assertMainWindow: vi.fn(),
     requireAuth: vi.fn(() => true),
     acceptTransition: vi.fn((_change: { on: boolean; startedAt?: number }, authorizeStart: () => boolean) =>
-      _change.on ? authorizeStart() : true),
+      _change.on ? authorizeStart() : true
+    ),
     consumeMeetingStartActivation: vi.fn(() => true),
     setListeningActive: vi.fn(),
     setTrayRecording: vi.fn(),
@@ -24,7 +25,7 @@ function harness(
 describe('registered listening-state native lifecycle', () => {
   it('passes validated structured state to the authoritative acceptor before any side effect', async () => {
     const { handler, deps } = harness(async () => undefined)
-    deps.acceptTransition.mockImplementation(change => {
+    deps.acceptTransition.mockImplementation((change) => {
       expect(change).toEqual({ on: false, startedAt: 123 })
       expect(deps.setListeningActive).not.toHaveBeenCalled()
       expect(deps.releaseParakeet).not.toHaveBeenCalled()
@@ -44,16 +45,32 @@ describe('registered listening-state native lifecycle', () => {
     await handler({}, { on: false, startedAt: 100 })
     await handler({}, { on: true, startedAt: 200 })
     expect(deps.acceptTransition.mock.calls).toEqual([
-      [{ on: false, startedAt: 100 }, expect.any(Function)], [{ on: true, startedAt: 200 }, expect.any(Function)]
+      [{ on: false, startedAt: 100 }, expect.any(Function)],
+      [{ on: true, startedAt: 200 }, expect.any(Function)]
     ])
-    for (const key of ['setListeningActive', 'setTrayRecording', 'setRecordingPowerSaveBlock',
-      'onMeetingStart', 'releaseParakeet', 'releaseSpeakerEmbedding'] as const) {
+    for (const key of [
+      'setListeningActive',
+      'setTrayRecording',
+      'setRecordingPowerSaveBlock',
+      'onMeetingStart',
+      'releaseParakeet',
+      'releaseSpeakerEmbedding'
+    ] as const) {
       expect(deps[key]).not.toHaveBeenCalled()
     }
   })
 
-  it.each([null, [], 1, 'false', {}, { on: 1 }, { on: false, startedAt: '123' },
-    { on: true, startedAt: NaN }, { on: false, startedAt: 0 }])('ignores malformed state %j before ownership or side effects', async payload => {
+  it.each([
+    null,
+    [],
+    1,
+    'false',
+    {},
+    { on: 1 },
+    { on: false, startedAt: '123' },
+    { on: true, startedAt: NaN },
+    { on: false, startedAt: 0 }
+  ])('ignores malformed state %j before ownership or side effects', async (payload) => {
     const { handler, deps } = harness(async () => undefined)
     await handler({}, payload)
     expect(deps.acceptTransition).not.toHaveBeenCalled()
@@ -68,7 +85,8 @@ describe('registered listening-state native lifecycle', () => {
     deps.acceptTransition.mockReturnValue(false)
     await handler({}, false)
     expect(deps.acceptTransition.mock.calls).toEqual([
-      [{ on: true }, expect.any(Function)], [{ on: false }, expect.any(Function)]
+      [{ on: true }, expect.any(Function)],
+      [{ on: false }, expect.any(Function)]
     ])
     expect(deps.setListeningActive).toHaveBeenCalledExactlyOnceWith(true)
     expect(deps.releaseParakeet).not.toHaveBeenCalled()
@@ -84,13 +102,22 @@ describe('registered listening-state native lifecycle', () => {
 
   it('keeps the stop IPC pending until both exact helper exits settle release', async () => {
     let confirmExit!: () => void
-    const exit = new Promise<void>((resolve) => { confirmExit = resolve })
+    const exit = new Promise<void>((resolve) => {
+      confirmExit = resolve
+    })
     let confirmSpeakerExit!: () => void
-    const speakerExit = new Promise<void>((resolve) => { confirmSpeakerExit = resolve })
-    const { handler, deps } = harness(() => exit, () => speakerExit)
+    const speakerExit = new Promise<void>((resolve) => {
+      confirmSpeakerExit = resolve
+    })
+    const { handler, deps } = harness(
+      () => exit,
+      () => speakerExit
+    )
 
     let settled = false
-    const stopping = handler({ sender: 'main-window' }, false).then(() => { settled = true })
+    const stopping = handler({ sender: 'main-window' }, false).then(() => {
+      settled = true
+    })
     await Promise.resolve()
 
     expect(settled).toBe(false)

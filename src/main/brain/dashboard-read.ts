@@ -55,16 +55,19 @@ export async function readBrainDashboard(s: Settings) {
   }
   const publicIndex = {
     ...index,
-    ingested: Object.fromEntries(Object.entries(index.ingested).map(([key, receipt]) => {
-      const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = receipt
-      return [key, visible]
-    }))
+    ingested: Object.fromEntries(
+      Object.entries(index.ingested).map(([key, receipt]) => {
+        const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = receipt
+        return [key, visible]
+      })
+    )
   }
   const stripEntityReceipts = <T extends { meetings: Array<{ sourceRootId?: string }> }>(entity: T) => ({
     ...entity,
     meetings: entity.meetings.map(stripMeetingReceipt)
   })
-  const publicMeetings = meetings.filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
+  const publicMeetings = meetings
+    .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
     .map((meeting) => {
       const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = meeting
       return visible

@@ -9,11 +9,15 @@ describe('draft transcript IPC live meeting identity', () => {
     const handlers = new Map<string, (...args: any[]) => Promise<unknown>>()
     const saveDraftTranscript = vi.fn(async () => ({ status: 'saved' as const }))
     registerDraftTranscriptIpc({
-      ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler as (...args: any[]) => Promise<unknown>) } } as Pick<IpcMain, 'handle'>,
+      ipcMain: {
+        handle: (channel, handler) => {
+          handlers.set(channel, handler as (...args: any[]) => Promise<unknown>)
+        }
+      } as Pick<IpcMain, 'handle'>,
       assertMainWindow: vi.fn(),
       requireAuth: () => true,
       captureAuthSessionBoundary: () => () => true,
-      getSettings: () => ({} as Settings),
+      getSettings: () => ({}) as Settings,
       captureDraftSettingsBoundary: () => () => true,
       saveDraftTranscript
     })
@@ -21,12 +25,14 @@ describe('draft transcript IPC live meeting identity', () => {
     const handler = handlers.get(IPC.saveDraftTranscript)
     expect(handler).toBeDefined()
     for (const startedAt of [0, -1, 1.5, Number.POSITIVE_INFINITY, 8.64e15 + 1]) {
-      await expect(handler?.({} as IpcMainInvokeEvent, {
-        startedAt,
-        lines: [],
-        recap: '',
-        mode: 'meeting'
-      })).resolves.toEqual({ status: 'failed' })
+      await expect(
+        handler?.({} as IpcMainInvokeEvent, {
+          startedAt,
+          lines: [],
+          recap: '',
+          mode: 'meeting'
+        })
+      ).resolves.toEqual({ status: 'failed' })
     }
     expect(saveDraftTranscript).not.toHaveBeenCalled()
   })

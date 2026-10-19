@@ -93,7 +93,9 @@ describe('app quit lifecycle', () => {
           })
         }
       }),
-      beginInputShutdown: () => { beginCalls += 1 },
+      beginInputShutdown: () => {
+        beginCalls += 1
+      },
       quitTrace,
       isQuitFlushDone: () => true,
       markQuitFlushDone: () => undefined,
@@ -102,7 +104,9 @@ describe('app quit lifecycle', () => {
       hotkeyChannel: 'hotkey',
       speechDesktop: () => null,
       invalidateCloudSttOwner: () => undefined,
-      shutdownInputSessions: () => { shutdownCalls += 1 },
+      shutdownInputSessions: () => {
+        shutdownCalls += 1
+      },
       setBootPowerSaveBlock: () => undefined,
       endBootWatch: () => undefined,
       globalShortcut: { unregisterAll: () => undefined },
@@ -145,16 +149,29 @@ describe('app quit lifecycle', () => {
     let flushDone = false
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => null,
-      beginInputShutdown: () => { beginCalls += 1 },
+      beginInputShutdown: () => {
+        beginCalls += 1
+      },
       quitTrace: createQuitTrace(false, () => undefined),
       isQuitFlushDone: () => flushDone,
-      markQuitFlushDone: () => { flushDone = true },
+      markQuitFlushDone: () => {
+        flushDone = true
+      },
       meetingFlushPending: () => !flushDone,
-      window: () => ({ isDestroyed: () => false, webContents: { send: () => { flushRequests += 1 } } }),
+      window: () => ({
+        isDestroyed: () => false,
+        webContents: {
+          send: () => {
+            flushRequests += 1
+          }
+        }
+      }),
       hotkeyChannel: 'hotkey',
       speechDesktop: () => null,
       invalidateCloudSttOwner: () => undefined,
-      shutdownInputSessions: () => { shutdownCalls += 1 },
+      shutdownInputSessions: () => {
+        shutdownCalls += 1
+      },
       setBootPowerSaveBlock: () => undefined,
       endBootWatch: () => undefined,
       globalShortcut: { unregisterAll: () => undefined },

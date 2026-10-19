@@ -1971,9 +1971,10 @@ export function useListen(
           return
         }
         meetingAdmittedRef.current = true
-        const micP: Promise<MicCapture> | null = source === 'mic' || source === 'both'
-          ? acquireMic(micDeviceIdRef.current, startedAt, micAcquisitionAbortRef.current?.signal)
-          : null
+        const micP: Promise<MicCapture> | null =
+          source === 'mic' || source === 'both'
+            ? acquireMic(micDeviceIdRef.current, startedAt, micAcquisitionAbortRef.current?.signal)
+            : null
         void (async () => {
           if (engine === 'cloud' && activeBrokerSpeechRef.current?.transport === 'broker-v1') {
             if (workerRef.current) {
@@ -2419,7 +2420,11 @@ export function useListen(
         }
         stopDrainRef.current = null
         for (const callback of brokerStopCallbacksRef.current.splice(0)) {
-          try { callback('revoked') } catch { /* finish the remaining stop observers */ }
+          try {
+            callback('revoked')
+          } catch {
+            /* finish the remaining stop observers */
+          }
         }
         workerRef.current?.terminate()
         workerRef.current = null
@@ -2570,7 +2575,8 @@ export function useListen(
 
     const openRetained = async (speaker: Speaker, track: Track): Promise<boolean> => {
       const retained = brokerRetainedStreamsRef.current[speaker]
-      if (!retained || !retained.stream.getAudioTracks().some((candidate) => candidate.readyState === 'live')) return false
+      if (!retained || !retained.stream.getAudioTracks().some((candidate) => candidate.readyState === 'live'))
+        return false
       if (!(await openChannel(speaker, retained.stream, generation, retained.micCapture))) return false
       brokerRetainedStreamsRef.current[speaker] = undefined
       return true
@@ -3027,22 +3033,26 @@ export function useListen(
     [closeChannel, disarmNetworkRetry]
   )
 
-  useEffect(() => window.toto.onMeetingMicCaptureRevoked((event) => {
-    if (event.startedAt !== sessionStartedAtRef.current) return
-    if (event.reason === 'user-stop') {
-      // The admission helper has already cleaned the exact released grant/track. Normal Stop owns the
-      // channel drain and provider finalization; a delayed grant-release notification must not turn that
-      // completed graceful stop into a forced failure or global cloud stop.
-      return
-    }
-    // Main has already invalidated this exact meeting reservation. Tear down renderer-owned tracks,
-    // worklets, recognizers, and cloud capture synchronously before returning to the event loop.
-    failAdmittedCapture('Meeting microphone admission was revoked.', {
-      force: true,
-      forceCloudStop: true,
-      cloudCaptureId: cloudCaptureIdRef.current ?? undefined
-    })
-  }), [failAdmittedCapture])
+  useEffect(
+    () =>
+      window.toto.onMeetingMicCaptureRevoked((event) => {
+        if (event.startedAt !== sessionStartedAtRef.current) return
+        if (event.reason === 'user-stop') {
+          // The admission helper has already cleaned the exact released grant/track. Normal Stop owns the
+          // channel drain and provider finalization; a delayed grant-release notification must not turn that
+          // completed graceful stop into a forced failure or global cloud stop.
+          return
+        }
+        // Main has already invalidated this exact meeting reservation. Tear down renderer-owned tracks,
+        // worklets, recognizers, and cloud capture synchronously before returning to the event loop.
+        failAdmittedCapture('Meeting microphone admission was revoked.', {
+          force: true,
+          forceCloudStop: true,
+          cloudCaptureId: cloudCaptureIdRef.current ?? undefined
+        })
+      }),
+    [failAdmittedCapture]
+  )
 
   const clear = useCallback((): void => {
     setLines([])

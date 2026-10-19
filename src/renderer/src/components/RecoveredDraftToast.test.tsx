@@ -4,9 +4,7 @@ import { RecoveredDraftToast } from './RecoveredDraftToast'
 
 describe('RecoveredDraftToast', () => {
   it('shows only the recovered count and an action to open History', () => {
-    const html = renderToStaticMarkup(
-      <RecoveredDraftToast count={2} onOpenHistory={vi.fn()} onDismiss={vi.fn()} />
-    )
+    const html = renderToStaticMarkup(<RecoveredDraftToast count={2} onOpenHistory={vi.fn()} onDismiss={vi.fn()} />)
 
     expect(html).toContain('2 interrupted meetings recovered')
     expect(html).toContain('Open History')
@@ -15,7 +13,11 @@ describe('RecoveredDraftToast', () => {
   })
 
   it('does not render for an empty or invalid count', () => {
-    expect(renderToStaticMarkup(<RecoveredDraftToast count={0} onOpenHistory={() => {}} onDismiss={() => {}} />)).toBe('')
-    expect(renderToStaticMarkup(<RecoveredDraftToast count={1.5} onOpenHistory={() => {}} onDismiss={() => {}} />)).toBe('')
+    expect(renderToStaticMarkup(<RecoveredDraftToast count={0} onOpenHistory={() => {}} onDismiss={() => {}} />)).toBe(
+      ''
+    )
+    expect(
+      renderToStaticMarkup(<RecoveredDraftToast count={1.5} onOpenHistory={() => {}} onDismiss={() => {}} />)
+    ).toBe('')
   })
 })

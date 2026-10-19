@@ -66,16 +66,30 @@ export function readTaskProgress(
 ): TaskProgressRecord | undefined {
   if (!task || ownerRebindRequired || task.status !== 'dispatching' || !validOwner(requestingOwner)) return undefined
   const record = state.latestByTask.get(task.taskId)
-  if (!record || record.taskId !== task.taskId || !validOwner(record.owner) || record.taskRevision !== task.revision || !sameOwner(record.owner, task.owner) ||
-      !sameOwner(record.owner, requestingOwner)) return undefined
+  if (
+    !record ||
+    record.taskId !== task.taskId ||
+    !validOwner(record.owner) ||
+    record.taskRevision !== task.revision ||
+    !sameOwner(record.owner, task.owner) ||
+    !sameOwner(record.owner, requestingOwner)
+  )
+    return undefined
   return record
 }
 
 function validLimits(limits: TaskProgressLimits): boolean {
-  return !!limits && Number.isSafeInteger(limits.maxTrackedTasks) && limits.maxTrackedTasks > 0 &&
-    Number.isSafeInteger(limits.maxLabelBytes) && limits.maxLabelBytes > 0 &&
-    Number.isSafeInteger(limits.maxDetailBytes) && limits.maxDetailBytes > 0 &&
-    Number.isFinite(limits.maxWorkUnits) && limits.maxWorkUnits > 0
+  return (
+    !!limits &&
+    Number.isSafeInteger(limits.maxTrackedTasks) &&
+    limits.maxTrackedTasks > 0 &&
+    Number.isSafeInteger(limits.maxLabelBytes) &&
+    limits.maxLabelBytes > 0 &&
+    Number.isSafeInteger(limits.maxDetailBytes) &&
+    limits.maxDetailBytes > 0 &&
+    Number.isFinite(limits.maxWorkUnits) &&
+    limits.maxWorkUnits > 0
+  )
 }
 
 function utf8LengthWithin(value: string, maximum: number): boolean {
@@ -84,8 +98,13 @@ function utf8LengthWithin(value: string, maximum: number): boolean {
     const code = value.charCodeAt(index)
     if (code < 0x80) bytes += 1
     else if (code < 0x800) bytes += 2
-    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length &&
-        value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) {
+    else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
       bytes += 4
       index += 1
     } else bytes += 3
@@ -95,15 +114,29 @@ function utf8LengthWithin(value: string, maximum: number): boolean {
 }
 
 function validOwner(owner: TaskOwner): boolean {
-  return !!owner && Number.isSafeInteger(owner.webContentsId) && owner.webContentsId > 0 &&
-    typeof owner.frameId === 'string' && owner.frameId.length > 0 && owner.frameId.length <= 256 &&
-    owner.isTopFrame === true && Number.isSafeInteger(owner.authSessionGeneration) && owner.authSessionGeneration >= 0 &&
-    Number.isSafeInteger(owner.contextRevision) && owner.contextRevision >= 0
+  return (
+    !!owner &&
+    Number.isSafeInteger(owner.webContentsId) &&
+    owner.webContentsId > 0 &&
+    typeof owner.frameId === 'string' &&
+    owner.frameId.length > 0 &&
+    owner.frameId.length <= 256 &&
+    owner.isTopFrame === true &&
+    Number.isSafeInteger(owner.authSessionGeneration) &&
+    owner.authSessionGeneration >= 0 &&
+    Number.isSafeInteger(owner.contextRevision) &&
+    owner.contextRevision >= 0
+  )
 }
 
 function sameOwner(left: TaskOwner, right: TaskOwner): boolean {
-  return left.webContentsId === right.webContentsId && left.frameId === right.frameId && left.isTopFrame === right.isTopFrame &&
-    left.authSessionGeneration === right.authSessionGeneration && left.contextRevision === right.contextRevision
+  return (
+    left.webContentsId === right.webContentsId &&
+    left.frameId === right.frameId &&
+    left.isTopFrame === right.isTopFrame &&
+    left.authSessionGeneration === right.authSessionGeneration &&
+    left.contextRevision === right.contextRevision
+  )
 }
 
 function reject(state: TaskProgressState, reason: TaskProgressRejection): TaskProgressResult {
@@ -121,13 +154,31 @@ export function recordTaskProgress(
   update: TaskProgressUpdate,
   limits: TaskProgressLimits
 ): TaskProgressResult {
-  if (!validLimits(limits) || !update || typeof update.taskId !== 'string' || update.taskId.length === 0 ||
-      !Number.isSafeInteger(update.taskRevision) || update.taskRevision <= 0 || !Number.isSafeInteger(update.sequence) || update.sequence <= 0 ||
-      !Number.isFinite(update.completedUnits) || update.completedUnits < 0 || !Number.isFinite(update.totalUnits) ||
-      update.totalUnits <= 0 || update.completedUnits > update.totalUnits || typeof update.label !== 'string' || !update.label ||
-      (update.detail !== undefined && typeof update.detail !== 'string')) return reject(state, 'invalid-input')
-  if (update.totalUnits > limits.maxWorkUnits || !utf8LengthWithin(update.label, limits.maxLabelBytes) ||
-      (update.detail !== undefined && !utf8LengthWithin(update.detail, limits.maxDetailBytes))) return reject(state, 'limit-exceeded')
+  if (
+    !validLimits(limits) ||
+    !update ||
+    typeof update.taskId !== 'string' ||
+    update.taskId.length === 0 ||
+    !Number.isSafeInteger(update.taskRevision) ||
+    update.taskRevision <= 0 ||
+    !Number.isSafeInteger(update.sequence) ||
+    update.sequence <= 0 ||
+    !Number.isFinite(update.completedUnits) ||
+    update.completedUnits < 0 ||
+    !Number.isFinite(update.totalUnits) ||
+    update.totalUnits <= 0 ||
+    update.completedUnits > update.totalUnits ||
+    typeof update.label !== 'string' ||
+    !update.label ||
+    (update.detail !== undefined && typeof update.detail !== 'string')
+  )
+    return reject(state, 'invalid-input')
+  if (
+    update.totalUnits > limits.maxWorkUnits ||
+    !utf8LengthWithin(update.label, limits.maxLabelBytes) ||
+    (update.detail !== undefined && !utf8LengthWithin(update.detail, limits.maxDetailBytes))
+  )
+    return reject(state, 'limit-exceeded')
   if (!task || update.taskId !== task.taskId) return reject(state, 'unknown-task')
   if (ownerRebindRequired) return reject(state, 'owner-rebind-required')
   if (update.taskRevision !== task.revision) return reject(state, 'stale-task-revision')
@@ -135,9 +186,8 @@ export function recordTaskProgress(
   if (task.status !== 'dispatching') return reject(state, 'task-not-dispatching')
 
   const previous = state.latestByTask.get(task.taskId)
-  const expectedSequence = previous?.taskRevision === task.revision && sameOwner(previous.owner, task.owner)
-    ? previous.sequence + 1
-    : 1
+  const expectedSequence =
+    previous?.taskRevision === task.revision && sameOwner(previous.owner, task.owner) ? previous.sequence + 1 : 1
   if (update.sequence !== expectedSequence) return reject(state, 'sequence-conflict')
   if (!previous && state.latestByTask.size >= limits.maxTrackedTasks) return reject(state, 'limit-exceeded')
 

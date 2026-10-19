@@ -1083,14 +1083,22 @@ const queue: Job[] = []
 
 function isJobAdmissionOpen(job: Job): boolean {
   for (const check of job.admissionChecks ?? []) {
-    try { check() } catch { return false }
+    try {
+      check()
+    } catch {
+      return false
+    }
   }
   return true
 }
 
 function settleJobCallbacks(job: Job): void {
   for (const callback of job.settledCallbacks ?? []) {
-    try { callback() } catch { /* receipt settlement cannot fail ingest cleanup */ }
+    try {
+      callback()
+    } catch {
+      /* receipt settlement cannot fail ingest cleanup */
+    }
   }
   job.settledCallbacks = []
 }
@@ -1580,8 +1588,11 @@ export async function ingestExtraction(
     date = source.version ? new Date(Number(source.version.split(':')[0])).toISOString() : ''
     mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
   }
-  const validReceipt = typeof sourceDigest === 'string' && /^[a-f0-9]{64}$/.test(sourceDigest) &&
-    typeof sourceRootId === 'string' && /^[a-f0-9]{64}$/.test(sourceRootId)
+  const validReceipt =
+    typeof sourceDigest === 'string' &&
+    /^[a-f0-9]{64}$/.test(sourceDigest) &&
+    typeof sourceRootId === 'string' &&
+    /^[a-f0-9]{64}$/.test(sourceRootId)
   const ref: MeetingRef = {
     file: key,
     date,
@@ -1659,7 +1670,16 @@ export async function ingestExtraction(
  *  Never rejects — a failure is carried as data (`ok: false`) so the caller can run up to
  *  EXTRACT_CONCURRENCY of these concurrently with Promise machinery, not try/catch across awaits. */
 type JobResult =
-  | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string; preparedText?: string; sourceDigest: string; sourceRootId: string }
+  | {
+      job: Job
+      s: Settings
+      ok: true
+      x: MeetingExtraction
+      md: string
+      preparedText?: string
+      sourceDigest: string
+      sourceRootId: string
+    }
   | { job: Job; s: Settings; ok: false; error: unknown; unreadable: boolean; aborted?: boolean }
 
 async function runExtractionStage(job: Job): Promise<JobResult> {
@@ -1669,11 +1689,25 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
   const s = getSettings()
   try {
     if (!isJobAdmissionOpen(job)) {
-      return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+      return {
+        job,
+        s,
+        ok: false,
+        error: new Error('Meeting discard closed ingest admission.'),
+        unreadable: false,
+        aborted: true
+      }
     }
     const source = await readSourceText(job.file)
     if (!isJobAdmissionOpen(job)) {
-      return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+      return {
+        job,
+        s,
+        ok: false,
+        error: new Error('Meeting discard closed ingest admission.'),
+        unreadable: false,
+        aborted: true
+      }
     }
     if (source.status === 'missing')
       return { job, s, ok: false, error: new Error('Meeting file not found.'), unreadable: true }
@@ -1683,7 +1717,12 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
     if (source.status === 'unreadable') return { job, s, ok: false, error: source.error, unreadable: true }
     const sourceDigest = source.observation.sourceDigest
     const sourceRootId = source.observation.sourceRootId
-    if (!sourceDigest || !/^[a-f0-9]{64}$/.test(sourceDigest) || !sourceRootId || !/^[a-f0-9]{64}$/.test(sourceRootId)) {
+    if (
+      !sourceDigest ||
+      !/^[a-f0-9]{64}$/.test(sourceDigest) ||
+      !sourceRootId ||
+      !/^[a-f0-9]{64}$/.test(sourceRootId)
+    ) {
       return { job, s, ok: false, error: new Error('Meeting source receipt is unavailable.'), unreadable: true }
     }
     const md = source.text
@@ -1695,15 +1734,42 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
       // safe even if a previous attempt wrote some entities before it was interrupted.
       const savedExtraction = await loadMeetingExtraction(s, extractionSlug(jobKey(job)))
       if (!isJobAdmissionOpen(job)) {
-        return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+        return {
+          job,
+          s,
+          ok: false,
+          error: new Error('Meeting discard closed ingest admission.'),
+          unreadable: false,
+          aborted: true
+        }
       }
-      if (savedExtraction && savedExtraction.sourceDigest === sourceDigest && savedExtraction.sourceRootId === sourceRootId) {
-        return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md), sourceDigest, sourceRootId }
+      if (
+        savedExtraction &&
+        savedExtraction.sourceDigest === sourceDigest &&
+        savedExtraction.sourceRootId === sourceRootId
+      ) {
+        return {
+          job,
+          s,
+          ok: true,
+          x: savedExtraction,
+          md,
+          preparedText: prepareMeetingText(s, md),
+          sourceDigest,
+          sourceRootId
+        }
       }
     }
     const { extraction, preparedText } = await extractMeeting(s, md, job.file, job.route ?? 'default')
     if (!isJobAdmissionOpen(job)) {
-      return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+      return {
+        job,
+        s,
+        ok: false,
+        error: new Error('Meeting discard closed ingest admission.'),
+        unreadable: false,
+        aborted: true
+      }
     }
     return { job, s, ok: true, x: extraction, md, preparedText, sourceDigest, sourceRootId }
   } catch (error) {
@@ -2077,7 +2143,11 @@ export async function enqueueIngest(
   onSettled?: () => void
 ): Promise<void> {
   const settle = (): void => {
-    try { onSettled?.() } catch { /* receipt settlement cannot fail ingest admission */ }
+    try {
+      onSettled?.()
+    } catch {
+      /* receipt settlement cannot fail ingest admission */
+    }
   }
   let admissionRefused = false
   const checkAdmission = () => {
@@ -2166,7 +2236,13 @@ export async function enqueueIngest(
     return
   }
   checkAdmission()
-  const job: Job = { file, source: 'meetings', origin: 'live', trigger: 'user', ...(sourceVersion ? { sourceVersion } : {}) }
+  const job: Job = {
+    file,
+    source: 'meetings',
+    origin: 'live',
+    trigger: 'user',
+    ...(sourceVersion ? { sourceVersion } : {})
+  }
   if (assertAdmission) job.admissionChecks = [assertAdmission]
   if (onSettled) job.settledCallbacks = [settle]
   queue.push(job)

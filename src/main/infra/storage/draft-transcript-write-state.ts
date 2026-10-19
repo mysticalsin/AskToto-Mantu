@@ -25,7 +25,10 @@ export function serializeDraftWrite<T>(file: string, operation: () => Promise<T>
   const key = resolve(file)
   const previous = draftWriteTails.get(key) ?? Promise.resolve()
   const current = previous.then(operation, operation)
-  const tail = current.then(() => undefined, () => undefined)
+  const tail = current.then(
+    () => undefined,
+    () => undefined
+  )
   draftWriteTails.set(key, tail)
   void tail.then(() => {
     if (draftWriteTails.get(key) === tail) draftWriteTails.delete(key)

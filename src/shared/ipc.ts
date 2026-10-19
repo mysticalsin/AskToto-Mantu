@@ -8,7 +8,20 @@ import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
-export type { InputSessionContext, InputSessionFailureReason, InputSessionLease, InputSessionResult, InputSessionRevoked, InputSessionStart, InputSessionStartRequest, InputSessionStop, InputSessionStopRequest, InputSessionStopResult, MeetingMicCaptureGrant, MeetingMicCaptureRevoked } from './input-session'
+export type {
+  InputSessionContext,
+  InputSessionFailureReason,
+  InputSessionLease,
+  InputSessionResult,
+  InputSessionRevoked,
+  InputSessionStart,
+  InputSessionStartRequest,
+  InputSessionStop,
+  InputSessionStopRequest,
+  InputSessionStopResult,
+  MeetingMicCaptureGrant,
+  MeetingMicCaptureRevoked
+} from './input-session'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
 export {
   ScreenCaptureCheckPassSchema,
@@ -25,11 +38,13 @@ export const ListeningStatePayloadSchema = z.object({
 export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
 export const MeetingMicAdmissionRequestSchema = z.object({ startedAt: LiveMeetingStartedAtSchema }).strict()
 export const DraftMeetingLifecyclePayloadSchema = z.object({ startedAt: LiveMeetingStartedAtSchema }).strict()
-export const DiscardSavedTranscriptPayloadSchema = z.object({
-  startedAt: LiveMeetingStartedAtSchema,
-  title: z.string().max(200).optional(),
-  path: z.string().max(4096).optional()
-}).strict()
+export const DiscardSavedTranscriptPayloadSchema = z
+  .object({
+    startedAt: LiveMeetingStartedAtSchema,
+    title: z.string().max(200).optional(),
+    path: z.string().max(4096).optional()
+  })
+  .strict()
 
 export type PreservedBrainIndexCopy = {
   id: string
@@ -1852,19 +1867,33 @@ export type MetisCommandConfirmation = z.infer<typeof MetisCommandConfirmationSc
 
 const CommandSpeechSessionIdSchema = z.string().regex(/^[a-f0-9]{48}$/)
 export const CommandSpeechStartSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
-export const CommandSpeechFrameSchema = z.object({
-  sessionId: CommandSpeechSessionIdSchema,
-  sequence: z.number().int().nonnegative().safe(),
-  samples: z.instanceof(Float32Array)
-}).strict()
-export const CommandSpeechFinishSchema = z.object({
-  sessionId: CommandSpeechSessionIdSchema,
-  frameCount: z.number().int().nonnegative().safe()
-}).strict()
+export const CommandSpeechFrameSchema = z
+  .object({
+    sessionId: CommandSpeechSessionIdSchema,
+    sequence: z.number().int().nonnegative().safe(),
+    samples: z.instanceof(Float32Array)
+  })
+  .strict()
+export const CommandSpeechFinishSchema = z
+  .object({
+    sessionId: CommandSpeechSessionIdSchema,
+    frameCount: z.number().int().nonnegative().safe()
+  })
+  .strict()
 export const CommandSpeechCancelSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
 export type CommandSpeechResult =
   | { ok: true }
-  | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'busy' | 'stale' | 'invalid' | 'no_speech' | 'recognition_unavailable' }
+  | {
+      ok: false
+      reason:
+        | 'policy_blocked'
+        | 'unsupported_engine'
+        | 'busy'
+        | 'stale'
+        | 'invalid'
+        | 'no_speech'
+        | 'recognition_unavailable'
+    }
 export type CommandMicAvailabilityResult =
   | { ok: true }
   | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'unauthorized' }

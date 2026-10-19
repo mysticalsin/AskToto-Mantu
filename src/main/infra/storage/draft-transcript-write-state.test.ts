@@ -71,7 +71,9 @@ describe('draft transcript write state', () => {
     const file = 'synthetic-drafts/finalized-meeting.md'
     const finish = mustTrack(file)
     let cleanupSettled = false
-    const cleanup = finalizeDraftWrites(file).then(() => { cleanupSettled = true })
+    const cleanup = finalizeDraftWrites(file).then(() => {
+      cleanupSettled = true
+    })
     expect(trackDraftWrite(file)).toBeNull()
     const finishOther = mustTrack('synthetic-drafts/next-meeting.md')
     try {
@@ -106,7 +108,9 @@ describe('draft transcript write state', () => {
       finishA()
       finishB()
       const files = await finalization
-      expect(new Set(files)).toEqual(new Set([resolve(folderAPath), resolve(folderBPath), resolve('synthetic-drafts/b/final.md')]))
+      expect(new Set(files)).toEqual(
+        new Set([resolve(folderAPath), resolve(folderBPath), resolve('synthetic-drafts/b/final.md')])
+      )
       expect(finalized).toBe(true)
       expect(snapshotDraftWrites(folderAPath)).toBeUndefined()
       expect(snapshotDraftWrites(folderBPath)).toBeUndefined()

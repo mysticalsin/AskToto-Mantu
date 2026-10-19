@@ -71,18 +71,15 @@ export function registerDraftTranscriptIpc(deps: DraftTranscriptIpcDependencies)
   }
 
   if (deps.discardDraftTranscript) {
-    deps.ipcMain.handle(
-      IPC.discardDraftTranscript,
-      async (event, raw): Promise<{ ok: boolean; error?: string }> => {
-        deps.assertMainWindow(event)
-        if (!deps.requireAuth()) return { ok: false }
-        const authCurrent = deps.captureAuthSessionBoundary()
-        const parsed = DraftMeetingLifecyclePayloadSchema.safeParse(raw)
-        if (!parsed.success || !authCurrent()) return { ok: false }
-        const result = await deps.discardDraftTranscript!(deps.getSettings(), parsed.data.startedAt, authCurrent)
-        if (!authCurrent()) return { ok: false }
-        return result
-      }
-    )
+    deps.ipcMain.handle(IPC.discardDraftTranscript, async (event, raw): Promise<{ ok: boolean; error?: string }> => {
+      deps.assertMainWindow(event)
+      if (!deps.requireAuth()) return { ok: false }
+      const authCurrent = deps.captureAuthSessionBoundary()
+      const parsed = DraftMeetingLifecyclePayloadSchema.safeParse(raw)
+      if (!parsed.success || !authCurrent()) return { ok: false }
+      const result = await deps.discardDraftTranscript!(deps.getSettings(), parsed.data.startedAt, authCurrent)
+      if (!authCurrent()) return { ok: false }
+      return result
+    })
   }
 }

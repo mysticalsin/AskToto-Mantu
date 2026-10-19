@@ -5,7 +5,9 @@ import { importDustCliSession } from './dustcli'
 // Every process boundary is intercepted before imports or test collection. Changing HOME does not
 // isolate the macOS login Keychain, so even a capability probe must never reach the host.
 const osBoundary = vi.hoisted(() => ({
-  unexpected: vi.fn(() => { throw new Error('Unexpected process invocation in Dust CLI fixture') }),
+  unexpected: vi.fn(() => {
+    throw new Error('Unexpected process invocation in Dust CLI fixture')
+  }),
   execFile: vi.fn(),
   spawn: vi.fn(),
   execFileAsync: vi.fn<(command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>>()
@@ -37,8 +39,12 @@ const ACCOUNTS = ['access_token', 'workspace_sid', 'region']
 const REAL_PLATFORM = process.platform
 const fields = new Map<string, string>()
 
-const collectionProcessCalls = [osBoundary.unexpected, osBoundary.execFileAsync, osBoundary.execFile, osBoundary.spawn]
-  .reduce((count, fn) => count + fn.mock.calls.length, 0)
+const collectionProcessCalls = [
+  osBoundary.unexpected,
+  osBoundary.execFileAsync,
+  osBoundary.execFile,
+  osBoundary.spawn
+].reduce((count, fn) => count + fn.mock.calls.length, 0)
 it('does not invoke a process while collecting the Dust CLI tests', () => {
   expect(collectionProcessCalls).toBe(0)
 })
@@ -66,7 +72,9 @@ describe('importDustCliSession (mocked macOS process boundary)', () => {
     osBoundary.execFileAsync.mockReset().mockImplementation(async (_command, args) => {
       const value = fields.get(args[4])
       if (value === undefined) {
-        throw Object.assign(new Error('Item not found'), { stderr: 'The specified item could not be found in the keychain.' })
+        throw Object.assign(new Error('Item not found'), {
+          stderr: 'The specified item could not be found in the keychain.'
+        })
       }
       return { stdout: `${value}\n`, stderr: '' }
     })
@@ -134,11 +142,16 @@ describe('importDustCliSession (mocked macOS process boundary)', () => {
   it('trims command output and uses the US host when the region is absent', async () => {
     setSession({ access_token: '  fixture-token  ', workspace_sid: '  fixture-workspace  ' })
     expect(await importDustCliSession(TEST_SERVICE)).toEqual({
-      ok: true, token: 'fixture-token', workspaceId: 'fixture-workspace', baseUrl: 'https://dust.tt'
+      ok: true,
+      token: 'fixture-token',
+      workspaceId: 'fixture-workspace',
+      baseUrl: 'https://dust.tt'
     })
   })
 
-  it.each(ACCOUNTS)('stops at a denied %s read without reporting an incomplete session or leaking a token', async (account) => {
+  it.each(
+    ACCOUNTS
+  )('stops at a denied %s read without reporting an incomplete session or leaking a token', async (account) => {
     setSession({ access_token: 'fixture-token', workspace_sid: 'fixture-workspace', region: 'europe-west1' })
     const read = osBoundary.execFileAsync.getMockImplementation()!
     osBoundary.execFileAsync.mockImplementation(async (command, args) => {
@@ -153,8 +166,9 @@ describe('importDustCliSession (mocked macOS process boundary)', () => {
     expect(r.incomplete).toBeUndefined()
     expect(r.token).toBeUndefined()
     expect(r.error).toMatch(/Keychain/)
-    expect(osBoundary.execFileAsync.mock.calls.map(([, args]) => args[4]))
-      .toEqual(ACCOUNTS.slice(0, ACCOUNTS.indexOf(account) + 1))
+    expect(osBoundary.execFileAsync.mock.calls.map(([, args]) => args[4])).toEqual(
+      ACCOUNTS.slice(0, ACCOUNTS.indexOf(account) + 1)
+    )
   })
 })
 

@@ -28,7 +28,10 @@ import { importDustCliSession } from './dustcli'
 function seed(entries: Record<string, string | null | { accessDenied: true }>): void {
   store.reads.clear()
   for (const [k, v] of Object.entries(entries)) {
-    store.reads.set(k, typeof v === 'object' && v !== null ? { value: null, accessDenied: true } : { value: v as string | null })
+    store.reads.set(
+      k,
+      typeof v === 'object' && v !== null ? { value: null, accessDenied: true } : { value: v as string | null }
+    )
   }
 }
 

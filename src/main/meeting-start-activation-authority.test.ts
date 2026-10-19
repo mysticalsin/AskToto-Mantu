@@ -26,7 +26,14 @@ describe('MeetingStartActivationAuthority', () => {
       isTopFrame: true,
       url: 'app://metis/index.html'
     }
-    return { authority, current, frame, setNow: (next: number) => { now = next } }
+    return {
+      authority,
+      current,
+      frame,
+      setNow: (next: number) => {
+        now = next
+      }
+    }
   }
 
   it('keeps the grant main-owned, readiness-only, and consumes once at the meeting start boundary', () => {
@@ -42,8 +49,18 @@ describe('MeetingStartActivationAuthority', () => {
     const { authority, current, frame, setNow } = make()
     const hidden = new MeetingStartActivationAuthority({ state: () => ({ ...current, isWindowVisible: false }) })
     expect(hidden.mint(frame, MEETING_START_ACTION)).toBe(false)
-    expect(new MeetingStartActivationAuthority({ state: () => ({ ...current, isStartAllowed: false }) }).mint(frame, MEETING_START_ACTION)).toBe(false)
-    expect(new MeetingStartActivationAuthority({ state: () => ({ ...current, isAuthenticated: false }) }).mint(frame, MEETING_START_ACTION)).toBe(false)
+    expect(
+      new MeetingStartActivationAuthority({ state: () => ({ ...current, isStartAllowed: false }) }).mint(
+        frame,
+        MEETING_START_ACTION
+      )
+    ).toBe(false)
+    expect(
+      new MeetingStartActivationAuthority({ state: () => ({ ...current, isAuthenticated: false }) }).mint(
+        frame,
+        MEETING_START_ACTION
+      )
+    ).toBe(false)
     const wrongFrame = { ...frame, frameId: '1:9' }
     expect(authority.mint(wrongFrame, MEETING_START_ACTION)).toBe(false)
     expect(authority.mint({ ...frame, isTopFrame: false }, MEETING_START_ACTION)).toBe(false)

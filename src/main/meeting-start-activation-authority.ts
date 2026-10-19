@@ -47,8 +47,15 @@ export class MeetingStartActivationAuthority {
   /** Mints from a trusted main/preload event. The grant ID never leaves this object. */
   mint(frame: MeetingStartActivationFrame, action: MeetingStartAction): boolean {
     const state = this.#state()
-    if (action !== MEETING_START_ACTION || !this.#frameIsCurrent(frame, state) ||
-        !state.isWindowVisible || !state.isAuthenticated || !state.isStartAllowed || !Number.isFinite(this.#now())) return false
+    if (
+      action !== MEETING_START_ACTION ||
+      !this.#frameIsCurrent(frame, state) ||
+      !state.isWindowVisible ||
+      !state.isAuthenticated ||
+      !state.isStartAllowed ||
+      !Number.isFinite(this.#now())
+    )
+      return false
     this.#discardInvalid()
     const existing = [...this.#grants.values()].some((grant) => this.#matches(grant, frame, action, state))
     if (existing) return true
@@ -89,16 +96,34 @@ export class MeetingStartActivationAuthority {
   }
 
   #frameIsCurrent(frame: MeetingStartActivationFrame, state: MeetingStartActivationState): boolean {
-    return frame.isTopFrame && frame.webContentsId === state.mainWebContentsId &&
-      frame.frameId === state.mainFrameId && !!state.currentUrl && frame.url === state.currentUrl
+    return (
+      frame.isTopFrame &&
+      frame.webContentsId === state.mainWebContentsId &&
+      frame.frameId === state.mainFrameId &&
+      !!state.currentUrl &&
+      frame.url === state.currentUrl
+    )
   }
 
-  #matches(grant: Grant, frame: MeetingStartActivationFrame, action: MeetingStartAction, state: MeetingStartActivationState): boolean {
-    return action === grant.action && this.#frameIsCurrent(frame, state) && state.isWindowVisible && state.isAuthenticated &&
+  #matches(
+    grant: Grant,
+    frame: MeetingStartActivationFrame,
+    action: MeetingStartAction,
+    state: MeetingStartActivationState
+  ): boolean {
+    return (
+      action === grant.action &&
+      this.#frameIsCurrent(frame, state) &&
+      state.isWindowVisible &&
+      state.isAuthenticated &&
       state.isStartAllowed &&
-      grant.webContentsId === frame.webContentsId && grant.frameId === frame.frameId && grant.url === frame.url &&
+      grant.webContentsId === frame.webContentsId &&
+      grant.frameId === frame.frameId &&
+      grant.url === frame.url &&
       grant.authSessionGeneration === state.context.authSessionGeneration &&
-      grant.contextRevision === state.context.contextRevision && this.#now() < grant.expiresAt
+      grant.contextRevision === state.context.contextRevision &&
+      this.#now() < grant.expiresAt
+    )
   }
 
   #discardInvalid(): void {

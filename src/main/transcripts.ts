@@ -975,11 +975,23 @@ export async function saveDraftTranscript(
 function draftCleanupCandidates(settings: Settings, startedAt: number, savedTranscriptPath?: string): string[] {
   const candidateFiles: string[] = []
   let filename: string | undefined
-  try { filename = draftFilename(startedAt, stamp(startedAt)) } catch { /* still seal the meeting identity */ }
+  try {
+    filename = draftFilename(startedAt, stamp(startedAt))
+  } catch {
+    /* still seal the meeting identity */
+  }
   if (filename) {
-    try { candidateFiles.push(join(resolveMeetingsFolder(settings), filename)) } catch { /* known paths still clean up */ }
+    try {
+      candidateFiles.push(join(resolveMeetingsFolder(settings), filename))
+    } catch {
+      /* known paths still clean up */
+    }
     if (savedTranscriptPath) {
-      try { candidateFiles.push(join(dirname(savedTranscriptPath), filename)) } catch { /* known paths still clean up */ }
+      try {
+        candidateFiles.push(join(dirname(savedTranscriptPath), filename))
+      } catch {
+        /* known paths still clean up */
+      }
     }
   }
   return candidateFiles
@@ -1031,7 +1043,8 @@ export async function discardDraftTranscript(
   startedAt: number,
   isCurrent: () => boolean = () => true
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!isCurrent()) return { ok: false, error: 'Sign-in changed before draft cleanup could start. Try Disregard again.' }
+  if (!isCurrent())
+    return { ok: false, error: 'Sign-in changed before draft cleanup could start. Try Disregard again.' }
   const priorFailures = failedDraftCleanupPaths.get(startedAt) ?? new Set<string>()
   const candidates = [
     ...knownDraftPathsForMeeting(startedAt),
@@ -1056,7 +1069,11 @@ export async function discardDraftTranscript(
   return { ok: true }
 }
 
-export async function clearDraftTranscript(settings: Settings, startedAt: number, savedTranscriptPath?: string): Promise<void> {
+export async function clearDraftTranscript(
+  settings: Settings,
+  startedAt: number,
+  savedTranscriptPath?: string
+): Promise<void> {
   try {
     // Include the current and durable-save folders, while finalizeDraftMeeting also includes every
     // folder this meeting used previously. It seals the startedAt identity before awaiting writes.

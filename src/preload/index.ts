@@ -116,53 +116,66 @@ type PreloadDocument = {
 }
 const preloadDocument = (globalThis as typeof globalThis & { document?: PreloadDocument }).document
 if (preloadDocument) {
-  preloadDocument.addEventListener('click', (event) => {
-    if (!event.isTrusted) return
-    const path = event.composedPath()
-    const markedStart = path.some((node) =>
-      node !== null && typeof node === 'object' && 'hasAttribute' in node &&
-      typeof node.hasAttribute === 'function' && node.hasAttribute('data-metis-meeting-start')
-    )
-    const commandControl = preloadDocument.getElementById('metis-command-mic-start') as {
-      id?: unknown
-      tagName?: unknown
-      type?: unknown
-      disabled?: unknown
-      isConnected?: unknown
-      hasAttribute?: (name: string) => boolean
-      getClientRects?: () => { readonly length: number }
-    } | null
-    const markedCommandMic = !!commandControl && preloadDocument.querySelectorAll('[data-metis-command-mic-start]').length === 1 &&
-      path.includes(commandControl) && commandControl.id === 'metis-command-mic-start' &&
-      commandControl.tagName === 'BUTTON' && commandControl.type === 'button' &&
-      commandControl.disabled === false && commandControl.isConnected === true &&
-      commandControl.hasAttribute?.('data-metis-command-mic-start') === true &&
-      (commandControl.getClientRects?.().length ?? 0) > 0
-    if (!markedStart) {
-      observedMeetingStartActivation = null
-      void ipcRenderer.invoke(IPC.meetingStartActivationCancel).catch(() => false)
-    } else {
-      observedMeetingStartActivation = ipcRenderer
-        .invoke(IPC.meetingStartActivationObserved)
-        .then((accepted) => accepted === true)
-        .catch(() => false)
-    }
-    if (!markedCommandMic) {
-      observedCommandMicActivation = null
-      void ipcRenderer.invoke(IPC.commandMicActivationCancel).catch(() => false)
-    } else {
-      observedCommandMicActivation = ipcRenderer
-        .invoke(IPC.commandMicActivationObserved)
-        .then((accepted) => accepted === true)
-        .catch(() => false)
-    }
-  }, true)
+  preloadDocument.addEventListener(
+    'click',
+    (event) => {
+      if (!event.isTrusted) return
+      const path = event.composedPath()
+      const markedStart = path.some(
+        (node) =>
+          node !== null &&
+          typeof node === 'object' &&
+          'hasAttribute' in node &&
+          typeof node.hasAttribute === 'function' &&
+          node.hasAttribute('data-metis-meeting-start')
+      )
+      const commandControl = preloadDocument.getElementById('metis-command-mic-start') as {
+        id?: unknown
+        tagName?: unknown
+        type?: unknown
+        disabled?: unknown
+        isConnected?: unknown
+        hasAttribute?: (name: string) => boolean
+        getClientRects?: () => { readonly length: number }
+      } | null
+      const markedCommandMic =
+        !!commandControl &&
+        preloadDocument.querySelectorAll('[data-metis-command-mic-start]').length === 1 &&
+        path.includes(commandControl) &&
+        commandControl.id === 'metis-command-mic-start' &&
+        commandControl.tagName === 'BUTTON' &&
+        commandControl.type === 'button' &&
+        commandControl.disabled === false &&
+        commandControl.isConnected === true &&
+        commandControl.hasAttribute?.('data-metis-command-mic-start') === true &&
+        (commandControl.getClientRects?.().length ?? 0) > 0
+      if (!markedStart) {
+        observedMeetingStartActivation = null
+        void ipcRenderer.invoke(IPC.meetingStartActivationCancel).catch(() => false)
+      } else {
+        observedMeetingStartActivation = ipcRenderer
+          .invoke(IPC.meetingStartActivationObserved)
+          .then((accepted) => accepted === true)
+          .catch(() => false)
+      }
+      if (!markedCommandMic) {
+        observedCommandMicActivation = null
+        void ipcRenderer.invoke(IPC.commandMicActivationCancel).catch(() => false)
+      } else {
+        observedCommandMicActivation = ipcRenderer
+          .invoke(IPC.commandMicActivationObserved)
+          .then((accepted) => accepted === true)
+          .catch(() => false)
+      }
+    },
+    true
+  )
 }
 
 async function meetingStartActivationReady(): Promise<boolean> {
   const observed = observedMeetingStartActivation
   observedMeetingStartActivation = null
-  if (observed && await observed) return true
+  if (observed && (await observed)) return true
   try {
     return (await ipcRenderer.invoke(IPC.meetingStartActivationReady)) === true
   } catch {
@@ -538,8 +551,7 @@ const api = {
     ipcRenderer.invoke(IPC.meetingMicCaptureConfirm, { captureId, startedAt }),
   releaseMeetingMicCapture: (captureId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.meetingMicCaptureRelease, { captureId }),
-  getInputSessionContext: (): Promise<InputSessionContext | null> =>
-    ipcRenderer.invoke(IPC.inputSessionContext),
+  getInputSessionContext: (): Promise<InputSessionContext | null> => ipcRenderer.invoke(IPC.inputSessionContext),
   startInputSession: (request: InputSessionStart, context: InputSessionContext): Promise<InputSessionResult> =>
     ipcRenderer.invoke(IPC.inputSessionStart, { input: request, context }),
   confirmInputSession: (sessionId: string, context: InputSessionContext): Promise<boolean> =>
@@ -547,10 +559,10 @@ const api = {
   stopInputSession: (request: InputSessionStop, context: InputSessionContext): Promise<InputSessionStopResult> =>
     ipcRenderer.invoke(IPC.inputSessionStop, { ...request, context }),
   onInputSessionRevoked: (cb: (event: InputSessionRevoked) => void): Unsub => sub(IPC.inputSessionRevoked, cb),
-  onMeetingMicCaptureRevoked: (cb: (event: MeetingMicCaptureRevoked) => void): Unsub => sub(IPC.meetingMicCaptureRevoked, cb),
+  onMeetingMicCaptureRevoked: (cb: (event: MeetingMicCaptureRevoked) => void): Unsub =>
+    sub(IPC.meetingMicCaptureRevoked, cb),
   commandMicActivationReady,
-  commandMicAvailability: (): Promise<CommandMicAvailabilityResult> =>
-    ipcRenderer.invoke(IPC.commandMicAvailability),
+  commandMicAvailability: (): Promise<CommandMicAvailabilityResult> => ipcRenderer.invoke(IPC.commandMicAvailability),
   commandSpeechStart: (sessionId: string): Promise<CommandSpeechResult> =>
     ipcRenderer.invoke(IPC.commandSpeechStart, { sessionId }),
   commandSpeechFrame: (sessionId: string, sequence: number, samples: Float32Array): Promise<CommandSpeechResult> =>

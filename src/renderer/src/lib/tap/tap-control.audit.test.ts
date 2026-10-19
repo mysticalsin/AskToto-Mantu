@@ -179,20 +179,25 @@ beforeEach(() => {
   vi.stubGlobal('window', {
     toto: {
       getInputSessionContext: vi.fn(async () => ({ authSessionGeneration: 7, contextRevision: 3 })),
-      startInputSession: vi.fn(async (input: { source: string; purpose: string; activation: string }, context: { authSessionGeneration: number; contextRevision: number }) => ({
-        ok: true as const,
-        lease: {
-          sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
-          source: input.source,
-          purpose: input.purpose,
-          activation: input.activation,
-          authSessionGeneration: context.authSessionGeneration,
-          contextRevision: context.contextRevision,
-          revision: 1,
-          startedAt: Date.now(),
-          actionAuthority: false
-        }
-      })),
+      startInputSession: vi.fn(
+        async (
+          input: { source: string; purpose: string; activation: string },
+          context: { authSessionGeneration: number; contextRevision: number }
+        ) => ({
+          ok: true as const,
+          lease: {
+            sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
+            source: input.source,
+            purpose: input.purpose,
+            activation: input.activation,
+            authSessionGeneration: context.authSessionGeneration,
+            contextRevision: context.contextRevision,
+            revision: 1,
+            startedAt: Date.now(),
+            actionAuthority: false
+          }
+        })
+      ),
       confirmInputSession: vi.fn(async () => true),
       stopInputSession: vi.fn(async () => ({ ok: true as const })),
       onInputSessionRevoked: vi.fn(() => () => {})
@@ -221,9 +226,9 @@ describe('MQA-084 — startTapControl releases its keydown listener when the cap
       throw new Error('NotAllowedError')
     })
 
-    await expect(
-      startTapControl({ profile: makeProfile(), sensitivity: 0.5, onEvent: () => {} })
-    ).rejects.toThrow('NotAllowedError')
+    await expect(startTapControl({ profile: makeProfile(), sensitivity: 0.5, onEvent: () => {} })).rejects.toThrow(
+      'NotAllowedError'
+    )
 
     expect(keyListeners.filter((l) => l.type === 'keydown')).toHaveLength(0)
   })
@@ -234,9 +239,7 @@ describe('MQA-084 — startTapControl releases its keydown listener when the cap
     })
 
     for (let i = 0; i < 5; i++) {
-      await startTapControl({ profile: makeProfile(), sensitivity: 0.5, onEvent: () => {} }).catch(
-        () => {}
-      )
+      await startTapControl({ profile: makeProfile(), sensitivity: 0.5, onEvent: () => {} }).catch(() => {})
     }
 
     expect(keyListeners.filter((l) => l.type === 'keydown')).toHaveLength(0)

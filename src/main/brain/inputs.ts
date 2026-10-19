@@ -126,9 +126,7 @@ export async function scanMeetingSources(s: Settings): Promise<SourceScan> {
   }
   // Legacy team IDs use only the root basename. Two authorized roots can therefore collide on one key;
   // do not let map overwrite order select a source silently. Context resolution below still uses rootId.
-  return collision
-    ? scans.map((folder) => ({ ...folder, status: 'failed' as const }))
-    : scans
+  return collision ? scans.map((folder) => ({ ...folder, status: 'failed' as const })) : scans
 }
 
 export function sourceVersions(scan: SourceScan): Map<string, string> | null {
@@ -173,7 +171,8 @@ export function countUnextracted(scan: SourceScan, idx: BrainIndex): number {
 
 export async function readSourceText(file: string): Promise<SourceText> {
   const maxBytes = getMeetingSpeechReadLimitBytes()
-  if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 1) return { status: 'unreadable', error: new Error('Meeting read limit is unavailable.'), observation: {} }
+  if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 1)
+    return { status: 'unreadable', error: new Error('Meeting read limit is unavailable.'), observation: {} }
   const root = dirname(file)
   const rootId = await canonicalSourceRootId(root)
   if (!rootId) return { status: 'unreadable', error: new Error('Meeting source root is unavailable.'), observation: {} }
@@ -185,14 +184,18 @@ export async function readSourceText(file: string): Promise<SourceText> {
     return { status: 'unreadable', error: new Error('Meeting source is not a regular file.'), observation }
   }
   const read = await gateway.read(name, { maxBytes })
-  const observation: SourceObservation = 'version' in read
-    ? { ...observationOf(read.version), sourceRootId: rootId }
-    : { sourceRootId: rootId }
+  const observation: SourceObservation =
+    'version' in read ? { ...observationOf(read.version), sourceRootId: rootId } : { sourceRootId: rootId }
   if (read.status === 'ok') {
     const version = read.version
-    if (version.mtimeMs !== classification.version.mtimeMs || version.ctimeMs !== classification.version.ctimeMs ||
-        version.size !== classification.version.size || version.size !== read.bytes.length || read.bytes.length > maxBytes ||
-        (await canonicalSourceRootId(root)) !== rootId) {
+    if (
+      version.mtimeMs !== classification.version.mtimeMs ||
+      version.ctimeMs !== classification.version.ctimeMs ||
+      version.size !== classification.version.size ||
+      version.size !== read.bytes.length ||
+      read.bytes.length > maxBytes ||
+      (await canonicalSourceRootId(root)) !== rootId
+    ) {
       return { status: 'unreadable', error: new Error('Meeting source changed while it was read.'), observation }
     }
     try {
@@ -218,20 +221,18 @@ export async function readSourceText(file: string): Promise<SourceText> {
 }
 
 /** Re-read a source by its persisted key and root receipt; ambiguous or legacy identities fail closed. */
-export async function readSourceDigest(
-  s: Settings,
-  sourceKey: string,
-  expectedRootId: string
-): Promise<string | null> {
+export async function readSourceDigest(s: Settings, sourceKey: string, expectedRootId: string): Promise<string | null> {
   if (!/^[a-f0-9]{64}$/.test(expectedRootId) || typeof sourceKey !== 'string' || sourceKey.length > 512) return null
   const personalRoot = resolveMeetingsFolder(s)
   const candidates: Array<{ root: string; label?: string; source: 'meetings' | 'team' }> = [
     { root: personalRoot, source: 'meetings' },
-    ...(s.teamTranscriptFolders ?? []).filter(Boolean).map((root) => ({ root, label: basename(root) || 'team', source: 'team' as const }))
+    ...(s.teamTranscriptFolders ?? [])
+      .filter(Boolean)
+      .map((root) => ({ root, label: basename(root) || 'team', source: 'team' as const }))
   ]
   const matches: string[] = []
   for (const candidate of candidates) {
-    if (await canonicalSourceRootId(candidate.root) !== expectedRootId) continue
+    if ((await canonicalSourceRootId(candidate.root)) !== expectedRootId) continue
     if (candidate.source === 'meetings') {
       if (basename(sourceKey) === sourceKey && !sourceKey.includes('\\')) matches.push(candidate.root)
     } else {
@@ -243,7 +244,8 @@ export async function readSourceDigest(
   }
   if (sourceKey.startsWith('team/')) {
     const label = sourceKey.split('/')[1]
-    if (candidates.filter((candidate) => candidate.source === 'team' && candidate.label === label).length !== 1) return null
+    if (candidates.filter((candidate) => candidate.source === 'team' && candidate.label === label).length !== 1)
+      return null
   }
   const roots = [...new Set(matches)]
   if (roots.length !== 1) return null
@@ -254,11 +256,19 @@ export async function readSourceDigest(
   if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 1) return null
   const gateway = storageAt(root)
   const classification = (await classifyAll(gateway, [name])).get(name)
-  if (!classification || classification.status !== 'ok' || classification.isSymlink || !classification.isRegular) return null
+  if (!classification || classification.status !== 'ok' || classification.isSymlink || !classification.isRegular)
+    return null
   const read = await gateway.read(name, { maxBytes })
-  if (read.status !== 'ok' || read.version.size !== read.bytes.length || read.bytes.length > maxBytes ||
-      read.version.mtimeMs !== classification.version.mtimeMs || read.version.ctimeMs !== classification.version.ctimeMs ||
-      read.version.size !== classification.version.size || await canonicalSourceRootId(root) !== expectedRootId) return null
+  if (
+    read.status !== 'ok' ||
+    read.version.size !== read.bytes.length ||
+    read.bytes.length > maxBytes ||
+    read.version.mtimeMs !== classification.version.mtimeMs ||
+    read.version.ctimeMs !== classification.version.ctimeMs ||
+    read.version.size !== classification.version.size ||
+    (await canonicalSourceRootId(root)) !== expectedRootId
+  )
+    return null
   return createHash('sha256').update(read.bytes).digest('hex')
 }
 
@@ -278,24 +288,34 @@ export function areBrainContextSourcesCurrent(
   const seen = new Set<string>()
   let totalBytes = 0
   for (const ref of references) {
-    if (!ref || typeof ref.source !== 'string' || ref.source.length > 512 ||
-        !/^[a-f0-9]{64}$/.test(ref.sourceRootId) || !/^[a-f0-9]{64}$/.test(ref.sourceDigest)) return false
+    if (
+      !ref ||
+      typeof ref.source !== 'string' ||
+      ref.source.length > 512 ||
+      !/^[a-f0-9]{64}$/.test(ref.sourceRootId) ||
+      !/^[a-f0-9]{64}$/.test(ref.sourceDigest)
+    )
+      return false
     const duplicateKey = `${ref.sourceRootId}\0${ref.source}`
     if (seen.has(duplicateKey)) continue
     seen.add(duplicateKey)
     const receipt = index.ingested[ref.source]
-    if (!receipt?.ok || receipt.sourceRootId !== ref.sourceRootId || receipt.sourceDigest !== ref.sourceDigest) return false
+    if (!receipt?.ok || receipt.sourceRootId !== ref.sourceRootId || receipt.sourceDigest !== ref.sourceDigest)
+      return false
     const matches = roots.filter(({ root, source }) => {
       try {
         if (createHash('sha256').update(realpathSync(root), 'utf8').digest('hex') !== ref.sourceRootId) return false
-      } catch { return false }
+      } catch {
+        return false
+      }
       if (source === 'meetings') return basename(ref.source) === ref.source && !ref.source.includes('\\')
       const key = ref.source.match(/^team\/([^/]+)\/([^/]+)$/)
       return !!key && key[2] === basename(key[2]) && !key[2].includes('\\') && key[1] === (basename(root) || 'team')
     })
     if (ref.source.startsWith('team/')) {
       const label = ref.source.split('/')[1]
-      if (roots.filter(({ root, source }) => source === 'team' && (basename(root) || 'team') === label).length !== 1) return false
+      if (roots.filter(({ root, source }) => source === 'team' && (basename(root) || 'team') === label).length !== 1)
+        return false
     }
     const uniqueRoots = [...new Set(matches.map(({ root }) => root))]
     if (uniqueRoots.length !== 1) return false
@@ -310,15 +330,24 @@ export function areBrainContextSourcesCurrent(
       const canonicalRoot = realpathSync(root)
       const canonicalFile = realpathSync(file)
       const relativePath = relative(canonicalRoot, canonicalFile)
-      if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return false
+      if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath))
+        return false
       const pathBefore = lstatSync(file)
-      if (pathBefore.isSymbolicLink() || !pathBefore.isFile() || pathBefore.size < 1 || pathBefore.size > maxBytes) return false
+      if (pathBefore.isSymbolicLink() || !pathBefore.isFile() || pathBefore.size < 1 || pathBefore.size > maxBytes)
+        return false
       // The path may be swapped after lstat. Nonblocking open prevents a regular-file-to-FIFO race from
       // hanging Main; NOFOLLOW rejects a symlink replacement at the open boundary where supported.
       fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
       const before = fstatSync(fd)
-      if (!before.isFile() || before.dev !== pathBefore.dev || before.ino !== pathBefore.ino || before.size !== pathBefore.size ||
-          before.mtimeMs !== pathBefore.mtimeMs || before.ctimeMs !== pathBefore.ctimeMs) return false
+      if (
+        !before.isFile() ||
+        before.dev !== pathBefore.dev ||
+        before.ino !== pathBefore.ino ||
+        before.size !== pathBefore.size ||
+        before.mtimeMs !== pathBefore.mtimeMs ||
+        before.ctimeMs !== pathBefore.ctimeMs
+      )
+        return false
       const bytes = Buffer.allocUnsafe(before.size)
       let offset = 0
       while (offset < bytes.length) {
@@ -328,17 +357,37 @@ export function areBrainContextSourcesCurrent(
       }
       const after = fstatSync(fd)
       const pathAfter = lstatSync(file)
-      if (pathAfter.isSymbolicLink() || !pathAfter.isFile() || after.dev !== before.dev || after.ino !== before.ino ||
-          after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs ||
-          pathAfter.dev !== after.dev || pathAfter.ino !== after.ino || pathAfter.size !== after.size ||
-          pathAfter.mtimeMs !== after.mtimeMs || pathAfter.ctimeMs !== after.ctimeMs ||
-          realpathSync(root) !== canonicalRoot || realpathSync(file) !== canonicalFile ||
-          createHash('sha256').update(realpathSync(root), 'utf8').digest('hex') !== ref.sourceRootId) return false
+      if (
+        pathAfter.isSymbolicLink() ||
+        !pathAfter.isFile() ||
+        after.dev !== before.dev ||
+        after.ino !== before.ino ||
+        after.size !== before.size ||
+        after.mtimeMs !== before.mtimeMs ||
+        after.ctimeMs !== before.ctimeMs ||
+        pathAfter.dev !== after.dev ||
+        pathAfter.ino !== after.ino ||
+        pathAfter.size !== after.size ||
+        pathAfter.mtimeMs !== after.mtimeMs ||
+        pathAfter.ctimeMs !== after.ctimeMs ||
+        realpathSync(root) !== canonicalRoot ||
+        realpathSync(file) !== canonicalFile ||
+        createHash('sha256').update(realpathSync(root), 'utf8').digest('hex') !== ref.sourceRootId
+      )
+        return false
       totalBytes += bytes.length
       if (totalBytes > MAX_BRAIN_CONTEXT_SOURCE_BYTES) return false
       if (createHash('sha256').update(bytes).digest('hex') !== ref.sourceDigest) return false
-    } catch { return false } finally {
-      if (fd !== undefined) { try { closeSync(fd) } catch { /* failed close cannot validate a source */ } }
+    } catch {
+      return false
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd)
+        } catch {
+          /* failed close cannot validate a source */
+        }
+      }
     }
   }
   return true

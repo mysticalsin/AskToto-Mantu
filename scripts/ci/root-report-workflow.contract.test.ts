@@ -784,9 +784,8 @@ describe('bounded root report diagnostic producer', () => {
           stats += 1
           return stats === mismatchAtFstat
             ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-                ino: initialReportIno === Number.MAX_SAFE_INTEGER
-                  ? Number.MAX_SAFE_INTEGER - 1
-                  : Number.MAX_SAFE_INTEGER
+                ino:
+                  initialReportIno === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER - 1 : Number.MAX_SAFE_INTEGER
               })
             : stat
         }

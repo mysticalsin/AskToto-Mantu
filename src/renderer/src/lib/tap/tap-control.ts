@@ -65,9 +65,14 @@ export async function startTapCapture(opts: {
   } as MediaTrackConstraints
   let capture
   try {
-    capture = await acquireInteractiveMic({
-      audio: opts.micDeviceId ? { ...base, deviceId: { exact: opts.micDeviceId } } : base
-    }, 'conversation', 'deliberate-talk', opts.signal)
+    capture = await acquireInteractiveMic(
+      {
+        audio: opts.micDeviceId ? { ...base, deviceId: { exact: opts.micDeviceId } } : base
+      },
+      'conversation',
+      'deliberate-talk',
+      opts.signal
+    )
   } catch (error) {
     if (!opts.micDeviceId || opts.signal?.aborted) throw error
     capture = await acquireInteractiveMic({ audio: base }, 'conversation', 'deliberate-talk', opts.signal)
@@ -82,9 +87,21 @@ export async function startTapCapture(opts: {
     if (stopped) return
     stopped = true
     if (node) node.port.onmessage = null
-    try { node?.disconnect() } catch { /* already disconnected */ }
-    try { src?.disconnect() } catch { /* already disconnected */ }
-    try { mute?.disconnect() } catch { /* already disconnected */ }
+    try {
+      node?.disconnect()
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      src?.disconnect()
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      mute?.disconnect()
+    } catch {
+      /* already disconnected */
+    }
     stream.getTracks().forEach((track) => track.stop())
     if (ctx && ctx.state !== 'closed') void ctx.close()
   }
@@ -204,8 +221,8 @@ export async function startTapControl(opts: {
   const stop = (): void => {
     if (stopped) return
     stopped = true
-      window.removeEventListener('keydown', onKey, true)
-      cap.stop()
+    window.removeEventListener('keydown', onKey, true)
+    cap.stop()
   }
   cap.onRevoke(stop)
   return {

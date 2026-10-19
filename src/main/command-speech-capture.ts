@@ -7,7 +7,9 @@ export const COMMAND_SPEECH_MAX_FRAMES = Math.ceil(COMMAND_SPEECH_MAX_SAMPLES / 
 const COMMAND_SPEECH_MAX_AGE_MS = 10_000
 const COMMAND_SPEECH_FINALIZATION_TIMEOUT_MS = 125_000
 
-export type CommandSpeechResult = { ok: true } | { ok: false; reason: 'busy' | 'stale' | 'invalid' | 'no_speech' | 'recognition_unavailable' }
+export type CommandSpeechResult =
+  | { ok: true }
+  | { ok: false; reason: 'busy' | 'stale' | 'invalid' | 'no_speech' | 'recognition_unavailable' }
 
 interface Capture {
   readonly owner: TrustedInputOwner
@@ -26,13 +28,15 @@ export class CommandSpeechCapture {
   #capture: Capture | null = null
   #generation = 0
 
-  constructor(private readonly options: {
-    isCurrent: (owner: TrustedInputOwner, sessionId: string) => boolean
-    transcribe: (samples: Float32Array) => Promise<string>
-    ingestTranscript: (text: string) => void
-    onExpired?: (sessionId: string) => void
-    now?: () => number
-  }) {}
+  constructor(
+    private readonly options: {
+      isCurrent: (owner: TrustedInputOwner, sessionId: string) => boolean
+      transcribe: (samples: Float32Array) => Promise<string>
+      ingestTranscript: (text: string) => void
+      onExpired?: (sessionId: string) => void
+      now?: () => number
+    }
+  ) {}
 
   start(owner: TrustedInputOwner, sessionId: string): CommandSpeechResult {
     if (this.#capture) return { ok: false, reason: 'busy' }
@@ -62,15 +66,24 @@ export class CommandSpeechCapture {
     if (!capture || capture.sessionId !== sessionId || !this.#sameOwner(capture.owner, owner)) {
       return { ok: false, reason: 'stale' }
     }
-    if (capture.finalizing || capture.generation !== this.#generation ||
-        (this.options.now ?? Date.now)() > capture.deadline || !this.options.isCurrent(owner, sessionId)) {
+    if (
+      capture.finalizing ||
+      capture.generation !== this.#generation ||
+      (this.options.now ?? Date.now)() > capture.deadline ||
+      !this.options.isCurrent(owner, sessionId)
+    ) {
       this.#clear(capture)
       return { ok: false, reason: 'stale' }
     }
-    if (!Number.isSafeInteger(sequence) || sequence !== capture.nextSequence || sequence >= COMMAND_SPEECH_MAX_FRAMES ||
-        !(rawSamples instanceof Float32Array) || rawSamples.length < 1 ||
-        rawSamples.length > COMMAND_SPEECH_MAX_FRAME_SAMPLES ||
-        capture.totalSamples + rawSamples.length > COMMAND_SPEECH_MAX_SAMPLES) {
+    if (
+      !Number.isSafeInteger(sequence) ||
+      sequence !== capture.nextSequence ||
+      sequence >= COMMAND_SPEECH_MAX_FRAMES ||
+      !(rawSamples instanceof Float32Array) ||
+      rawSamples.length < 1 ||
+      rawSamples.length > COMMAND_SPEECH_MAX_FRAME_SAMPLES ||
+      capture.totalSamples + rawSamples.length > COMMAND_SPEECH_MAX_SAMPLES
+    ) {
       this.#clear(capture)
       return { ok: false, reason: 'invalid' }
     }
@@ -91,11 +104,16 @@ export class CommandSpeechCapture {
 
   async finish(owner: TrustedInputOwner, sessionId: string, frameCount: number): Promise<CommandSpeechResult> {
     const capture = this.#capture
-    if (!capture || capture.sessionId !== sessionId || !this.#sameOwner(capture.owner, owner)) return { ok: false, reason: 'stale' }
-    if (capture.finalizing || capture.generation !== this.#generation ||
-        (this.options.now ?? Date.now)() > capture.deadline ||
-        !Number.isSafeInteger(frameCount) || frameCount !== capture.nextSequence ||
-        !this.options.isCurrent(owner, sessionId)) {
+    if (!capture || capture.sessionId !== sessionId || !this.#sameOwner(capture.owner, owner))
+      return { ok: false, reason: 'stale' }
+    if (
+      capture.finalizing ||
+      capture.generation !== this.#generation ||
+      (this.options.now ?? Date.now)() > capture.deadline ||
+      !Number.isSafeInteger(frameCount) ||
+      frameCount !== capture.nextSequence ||
+      !this.options.isCurrent(owner, sessionId)
+    ) {
       this.#clear(capture)
       return { ok: false, reason: 'stale' }
     }
@@ -120,8 +138,11 @@ export class CommandSpeechCapture {
     capture.pcm = pcm
     try {
       const text = await this.options.transcribe(pcm)
-      if (this.#capture !== capture || capture.generation !== this.#generation ||
-          !this.options.isCurrent(owner, sessionId)) {
+      if (
+        this.#capture !== capture ||
+        capture.generation !== this.#generation ||
+        !this.options.isCurrent(owner, sessionId)
+      ) {
         if (this.#capture === capture) this.#clear(capture)
         return { ok: false, reason: 'stale' }
       }
@@ -141,7 +162,8 @@ export class CommandSpeechCapture {
 
   cancel(owner: TrustedInputOwner, sessionId: string): CommandSpeechResult {
     const capture = this.#capture
-    if (!capture || capture.sessionId !== sessionId || !this.#sameOwner(capture.owner, owner)) return { ok: false, reason: 'stale' }
+    if (!capture || capture.sessionId !== sessionId || !this.#sameOwner(capture.owner, owner))
+      return { ok: false, reason: 'stale' }
     this.#clear(capture)
     return { ok: true }
   }
@@ -170,7 +192,12 @@ export class CommandSpeechCapture {
   }
 
   #sameOwner(a: TrustedInputOwner, b: TrustedInputOwner): boolean {
-    return a.webContentsId === b.webContentsId && a.frameId === b.frameId && a.isTopFrame === b.isTopFrame &&
-      a.authSessionGeneration === b.authSessionGeneration && a.contextRevision === b.contextRevision
+    return (
+      a.webContentsId === b.webContentsId &&
+      a.frameId === b.frameId &&
+      a.isTopFrame === b.isTopFrame &&
+      a.authSessionGeneration === b.authSessionGeneration &&
+      a.contextRevision === b.contextRevision
+    )
   }
 }

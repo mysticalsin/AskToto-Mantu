@@ -464,20 +464,25 @@ beforeEach(() => {
   vi.stubGlobal('window', {
     toto: {
       getInputSessionContext: vi.fn(async () => ({ authSessionGeneration: 1, contextRevision: 1 })),
-      startInputSession: vi.fn(async (input: { source: string; purpose: string; activation: string }, context: { authSessionGeneration: number; contextRevision: number }) => ({
-        ok: true as const,
-        lease: {
-          sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
-          source: input.source,
-          purpose: input.purpose,
-          activation: input.activation,
-          authSessionGeneration: context.authSessionGeneration,
-          contextRevision: context.contextRevision,
-          revision: 1,
-          startedAt: Date.now(),
-          actionAuthority: false
-        }
-      })),
+      startInputSession: vi.fn(
+        async (
+          input: { source: string; purpose: string; activation: string },
+          context: { authSessionGeneration: number; contextRevision: number }
+        ) => ({
+          ok: true as const,
+          lease: {
+            sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
+            source: input.source,
+            purpose: input.purpose,
+            activation: input.activation,
+            authSessionGeneration: context.authSessionGeneration,
+            contextRevision: context.contextRevision,
+            revision: 1,
+            startedAt: Date.now(),
+            actionAuthority: false
+          }
+        })
+      ),
       confirmInputSession: vi.fn(async () => true),
       stopInputSession: vi.fn(async () => ({ ok: true as const })),
       onInputSessionRevoked: vi.fn(() => () => {}),
@@ -491,7 +496,9 @@ beforeEach(() => {
         return { captureId: grant.captureId, startedAt: grant.startedAt }
       }),
       confirmMeetingMicCapture: vi.fn(async (captureId: string, startedAt: number) => {
-        const grant = meetingGrants.find((candidate) => candidate.captureId === captureId && candidate.startedAt === startedAt)
+        const grant = meetingGrants.find(
+          (candidate) => candidate.captureId === captureId && candidate.startedAt === startedAt
+        )
         if (!grant || revokedMeetingGrantIds.has(captureId)) return false
         grant.established = true
         return true
@@ -656,7 +663,11 @@ afterEach(async () => {
 })
 
 describe('meeting admission handshake', () => {
-  it.each(['mic', 'system', 'both'] as const)('waits for accepted admission before opening %s audio', async (source) => {
+  it.each([
+    'mic',
+    'system',
+    'both'
+  ] as const)('waits for accepted admission before opening %s audio', async (source) => {
     const admission = deferred<boolean>()
     vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => admission.promise)
 
@@ -720,12 +731,17 @@ describe('meeting admission handshake', () => {
     { source: 'system', outcome: 'accepted' },
     { source: 'system', outcome: 'denied' },
     { source: 'system', outcome: 'rejected' }
-  ] as const)('retires pending $source admission without releasing a replacement after $outcome', async ({ source, outcome }) => {
+  ] as const)('retires pending $source admission without releasing a replacement after $outcome', async ({
+    source,
+    outcome
+  }) => {
     const oldAdmission = deferred<boolean>()
-    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => oldAdmission.promise.then((accepted) => {
-      if (outcome === 'rejected') throw new Error('Synthetic retired admission failure')
-      return accepted
-    }))
+    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() =>
+      oldAdmission.promise.then((accepted) => {
+        if (outcome === 'rejected') throw new Error('Synthetic retired admission failure')
+        return accepted
+      })
+    )
 
     const oldApi = render()
     const oldStarting = oldApi.start(source, 'fast', 'parakeet', 'English', 123)
@@ -2276,7 +2292,9 @@ describe('useListen Stop flush ownership', () => {
     let getUserMediaStarted = false
     getUserMediaImpl = () => {
       getUserMediaStarted = true
-      return new Promise((resolve) => { resolveMic = resolve })
+      return new Promise((resolve) => {
+        resolveMic = resolve
+      })
     }
     const api = render('parakeet')
     const starting = api.start('mic', 'fast', 'parakeet', 'English', 701)
@@ -2334,7 +2352,10 @@ describe('useListen Stop flush ownership', () => {
   it('settles a local-ASR Stop observer as revoked when a hard lifecycle revoke interrupts drain', async () => {
     let resolveFeed!: (value: { text: string; name?: string }) => void
     vi.mocked(window.toto.parakeetFeed).mockImplementation(
-      () => new Promise((resolve) => { resolveFeed = resolve })
+      () =>
+        new Promise((resolve) => {
+          resolveFeed = resolve
+        })
     )
     const api = render('parakeet')
     const revokeListener = vi.mocked(window.toto.onMeetingMicCaptureRevoked).mock.calls.at(-1)?.[0]

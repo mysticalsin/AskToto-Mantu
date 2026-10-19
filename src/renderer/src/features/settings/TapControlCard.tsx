@@ -16,7 +16,12 @@ import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { isWindows } from '../../lib/keys'
 import { makeCalibration, CALIB_N, type CalibrationSession, type CalibFeedback } from '../../lib/tap/calibrate'
-import { startTapCapture, startTapControl, type TapCaptureSession, type TapControlSession } from '../../lib/tap/tap-control'
+import {
+  startTapCapture,
+  startTapControl,
+  type TapCaptureSession,
+  type TapControlSession
+} from '../../lib/tap/tap-control'
 import type { BuildResult } from '../../lib/tap/classify'
 
 /** Curated action choices per zone — friendly labels over the existing HotkeyAction router. */
@@ -260,7 +265,12 @@ export function TapControlCard({
                 <option value={2}>2 zones</option>
                 <option value={4}>4 zones (advanced)</option>
               </select>
-              <button type="button" onClick={() => void beginCalibration()} disabled={locked} className={ctl + ' no-drag'}>
+              <button
+                type="button"
+                onClick={() => void beginCalibration()}
+                disabled={locked}
+                className={ctl + ' no-drag'}
+              >
                 {tc.profile ? 'Recalibrate' : 'Calibrate'}
               </button>
               {tc.profile && (
@@ -285,13 +295,23 @@ export function TapControlCard({
                   style={{ width: `${((flow.zone * CALIB_N + flow.accepted) / (zoneCount * CALIB_N)) * 100}%` }}
                 />
               </div>
-              <button type="button" onClick={() => { stopAll(); setFlow({ step: 'idle' }) }} className={ctl + ' no-drag mt-1 w-24'}>
+              <button
+                type="button"
+                onClick={() => {
+                  stopAll()
+                  setFlow({ step: 'idle' })
+                }}
+                className={ctl + ' no-drag mt-1 w-24'}
+              >
                 Cancel
               </button>
               {flow.zone === zoneCount - 1 && flow.accepted >= CALIB_N && (
                 <button
                   type="button"
-                  onClick={() => { sessionRef.current?.startNegatives(); syncFromSession(null) }}
+                  onClick={() => {
+                    sessionRef.current?.startNegatives()
+                    syncFromSession(null)
+                  }}
                   className={ctl + ' no-drag mt-1'}
                 >
                   Continue
@@ -306,8 +326,8 @@ export function TapControlCard({
                 Teach it what to ignore · {flow.collected} captured
               </div>
               <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-                Type a sentence and click your mouse a few times. Métis learns YOUR keyboard so typing never
-                triggers actions.
+                Type a sentence and click your mouse a few times. Métis learns YOUR keyboard so typing never triggers
+                actions.
               </div>
               <button type="button" onClick={finishCalibration} className={ctl + ' no-drag mt-1 w-24'}>
                 Done
@@ -331,8 +351,8 @@ export function TapControlCard({
                   Those spots sound too similar to the mic.
                 </div>
                 <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-                  Pick spots that differ more: one close to the Mac and one at arm's length, or two different
-                  surfaces. Then recalibrate.
+                  Pick spots that differ more: one close to the Mac and one at arm's length, or two different surfaces.
+                  Then recalibrate.
                 </div>
                 <button type="button" onClick={() => void beginCalibration()} className={ctl + ' no-drag mt-1 w-32'}>
                   Recalibrate
@@ -346,9 +366,18 @@ export function TapControlCard({
                 <Radio size={13} className="text-[var(--cl-primary)]" /> Test mode: tap your zones
               </div>
               <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-                {flow.lastZone != null ? `Recognized: ${zoneNames[flow.lastZone] ?? `Zone ${flow.lastZone + 1}`}` : 'Listening…'}
+                {flow.lastZone != null
+                  ? `Recognized: ${zoneNames[flow.lastZone] ?? `Zone ${flow.lastZone + 1}`}`
+                  : 'Listening…'}
               </div>
-              <button type="button" onClick={() => { stopAll(); setFlow({ step: 'idle' }) }} className={ctl + ' no-drag mt-1 w-24'}>
+              <button
+                type="button"
+                onClick={() => {
+                  stopAll()
+                  setFlow({ step: 'idle' })
+                }}
+                className={ctl + ' no-drag mt-1 w-24'}
+              >
                 Stop
               </button>
             </div>

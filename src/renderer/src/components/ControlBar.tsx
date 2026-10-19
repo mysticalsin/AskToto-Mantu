@@ -1,12 +1,4 @@
-import {
-  Image,
-  Eye,
-  EyeOff,
-  AudioLines,
-  LayoutGrid,
-  FileText,
-  Pause
-} from 'lucide-react'
+import { Image, Eye, EyeOff, AudioLines, LayoutGrid, FileText, Pause } from 'lucide-react'
 import { InlineOrb } from './AgentStatus'
 import { accelLabel } from '../lib/keys'
 

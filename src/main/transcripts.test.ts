@@ -640,7 +640,9 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
     const savedPathB = join(folderB, 'durable-final.md')
     let clearSettled = false
-    const clearing = clearDraftTranscript(settingsB, meeting.startedAt, savedPathB).then(() => { clearSettled = true })
+    const clearing = clearDraftTranscript(settingsB, meeting.startedAt, savedPathB).then(() => {
+      clearSettled = true
+    })
 
     await expect(saveDraftTranscript(settingsC, meeting)).resolves.toEqual({ status: 'disabled' })
     const laterMeeting = { ...meeting, startedAt: meeting.startedAt + 1, lines: [] }
@@ -661,34 +663,43 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     await saveDraftTranscript(settings, meeting)
     await clearDraftTranscript(settings, meeting.startedAt)
 
-    await expect(saveDraftTranscript(settings, {
-      ...meeting,
-      lines: [{ speaker: 'you', text: 'late old meeting tick', t: meeting.startedAt }]
-    })).resolves.toEqual({ status: 'disabled' })
-    await expect(saveDraftTranscript(settings, {
-      ...meeting,
-      startedAt: meeting.startedAt + 500,
-      lines: [{ speaker: 'them', text: 'later meeting snapshot', t: meeting.startedAt + 500 }]
-    })).resolves.toEqual({ status: 'saved' })
+    await expect(
+      saveDraftTranscript(settings, {
+        ...meeting,
+        lines: [{ speaker: 'you', text: 'late old meeting tick', t: meeting.startedAt }]
+      })
+    ).resolves.toEqual({ status: 'disabled' })
+    await expect(
+      saveDraftTranscript(settings, {
+        ...meeting,
+        startedAt: meeting.startedAt + 500,
+        lines: [{ speaker: 'them', text: 'later meeting snapshot', t: meeting.startedAt + 500 }]
+      })
+    ).resolves.toEqual({ status: 'saved' })
 
     const drafts = readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))
     expect(drafts).toHaveLength(1)
     expect(readFileSync(join(folder, drafts[0]!), 'utf8')).toContain('later meeting snapshot')
   })
 
-  it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, 8.64e15 + 1])(
-    'rejects invalid live meeting identity %s without creating a draft',
-    async (startedAt) => {
-      await expect(saveDraftTranscript(settings, { ...meeting, startedAt })).resolves.toEqual({ status: 'disabled' })
-      expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(0)
-    }
-  )
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.POSITIVE_INFINITY,
+    8.64e15 + 1
+  ])('rejects invalid live meeting identity %s without creating a draft', async (startedAt) => {
+    await expect(saveDraftTranscript(settings, { ...meeting, startedAt })).resolves.toEqual({ status: 'disabled' })
+    expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(0)
+  })
 
   it('rejects late autosave under the normalized final-save identity', async () => {
     const normalizedStartedAt = 702
     await clearDraftTranscript(settings, normalizedStartedAt)
 
-    await expect(saveDraftTranscript(settings, { ...meeting, startedAt: normalizedStartedAt })).resolves.toEqual({ status: 'disabled' })
+    await expect(saveDraftTranscript(settings, { ...meeting, startedAt: normalizedStartedAt })).resolves.toEqual({
+      status: 'disabled'
+    })
     expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(0)
   })
 
@@ -715,7 +726,9 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
 
   const deferred = <T = void>(): { promise: Promise<T>; resolve(value?: T): void } => {
     let settle!: (value: T) => void
-    const promise = new Promise<T>((resolve) => { settle = resolve })
+    const promise = new Promise<T>((resolve) => {
+      settle = resolve
+    })
     return { promise, resolve: (value?: T) => settle(value as T) }
   }
 
@@ -727,14 +740,26 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     let replacements = 0
     vi.mocked(renameAsync).mockImplementation(async (src, dest) => {
       const index = replacements++
-      if (index === 0) { enteredFirst.resolve(String(dest)); await releaseFirst.promise }
-      if (index === 1) { enteredSecond.resolve(String(dest)); await releaseSecond.promise }
+      if (index === 0) {
+        enteredFirst.resolve(String(dest))
+        await releaseFirst.promise
+      }
+      if (index === 1) {
+        enteredSecond.resolve(String(dest))
+        await releaseSecond.promise
+      }
       renameSync(src, dest)
     })
 
-    const older = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'older snapshot', t: meeting.startedAt }] })
+    const older = saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [{ speaker: 'them', text: 'older snapshot', t: meeting.startedAt }]
+    })
     await enteredFirst.promise
-    const newer = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'newer snapshot', t: meeting.startedAt }] })
+    const newer = saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [{ speaker: 'them', text: 'newer snapshot', t: meeting.startedAt }]
+    })
     await Promise.resolve()
     expect(replacements).toBe(1)
     releaseFirst.resolve()
@@ -748,8 +773,14 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     vi.mocked(renameAsync)
       .mockRejectedValueOnce(Object.assign(new Error('Synthetic private path'), { code: 'EIO' }))
       .mockImplementationOnce(async (src, dest) => renameSync(src, dest))
-    const first = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'failed snapshot', t: meeting.startedAt }] })
-    const second = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'successful snapshot', t: meeting.startedAt }] })
+    const first = saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [{ speaker: 'them', text: 'failed snapshot', t: meeting.startedAt }]
+    })
+    const second = saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [{ speaker: 'them', text: 'successful snapshot', t: meeting.startedAt }]
+    })
     await expect(first).resolves.toEqual({ status: 'failed' })
     await expect(second).resolves.toEqual({ status: 'saved' })
     const draft = readdirSync(folder).find((file) => file.startsWith('.autosave-draft-'))
@@ -785,19 +816,32 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     let replacements = 0
     vi.mocked(renameAsync).mockImplementation(async (src, dest) => {
       const index = replacements++
-      if (index === 0) { enteredFirst.resolve(String(dest)); await releaseFirst.promise }
-      if (index === 1) { enteredSecond.resolve(String(dest)); await releaseSecond.promise }
+      if (index === 0) {
+        enteredFirst.resolve(String(dest))
+        await releaseFirst.promise
+      }
+      if (index === 1) {
+        enteredSecond.resolve(String(dest))
+        await releaseSecond.promise
+      }
       renameSync(src, dest)
     })
     const first = saveDraftTranscript(settings, meeting)
     const draftPath = await enteredFirst.promise
-    const second = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'you', text: 'queued latest', t: meeting.startedAt }] })
-    let clearSettled = false
-    const clearing = clearDraftTranscript(settings, meeting.startedAt).then(() => { clearSettled = true })
-    await expect(saveDraftTranscript(settings, {
+    const second = saveDraftTranscript(settings, {
       ...meeting,
-      lines: [{ speaker: 'them', text: 'late after cleanup began', t: meeting.startedAt }]
-    })).resolves.toEqual({ status: 'disabled' })
+      lines: [{ speaker: 'you', text: 'queued latest', t: meeting.startedAt }]
+    })
+    let clearSettled = false
+    const clearing = clearDraftTranscript(settings, meeting.startedAt).then(() => {
+      clearSettled = true
+    })
+    await expect(
+      saveDraftTranscript(settings, {
+        ...meeting,
+        lines: [{ speaker: 'them', text: 'late after cleanup began', t: meeting.startedAt }]
+      })
+    ).resolves.toEqual({ status: 'disabled' })
     releaseFirst.resolve()
     await enteredSecond.promise
     expect(clearSettled).toBe(false)

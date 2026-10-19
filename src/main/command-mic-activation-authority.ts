@@ -43,8 +43,14 @@ export class CommandMicActivationAuthority {
 
   mint(frame: CommandMicActivationFrame): boolean {
     const state = this.#state()
-    if (!this.#matchesFrame(frame, state) || !state.isWindowVisible || !state.isAuthenticated ||
-        !state.isParakeetSelected || !Number.isFinite(this.#now())) return false
+    if (
+      !this.#matchesFrame(frame, state) ||
+      !state.isWindowVisible ||
+      !state.isAuthenticated ||
+      !state.isParakeetSelected ||
+      !Number.isFinite(this.#now())
+    )
+      return false
     this.#discardInvalid()
     if ([...this.#grants.values()].some((grant) => this.#matches(grant, frame, state))) return true
     this.#grants.set(randomUUID(), {
@@ -75,18 +81,33 @@ export class CommandMicActivationAuthority {
     return false
   }
 
-  revokeAll(): void { this.#grants.clear() }
+  revokeAll(): void {
+    this.#grants.clear()
+  }
 
   #matchesFrame(frame: CommandMicActivationFrame, state: CommandMicActivationState): boolean {
-    return frame.isTopFrame && frame.webContentsId === state.mainWebContentsId &&
-      frame.frameId === state.mainFrameId && !!state.currentUrl && frame.url === state.currentUrl
+    return (
+      frame.isTopFrame &&
+      frame.webContentsId === state.mainWebContentsId &&
+      frame.frameId === state.mainFrameId &&
+      !!state.currentUrl &&
+      frame.url === state.currentUrl
+    )
   }
 
   #matches(grant: Grant, frame: CommandMicActivationFrame, state: CommandMicActivationState): boolean {
-    return this.#matchesFrame(frame, state) && state.isWindowVisible && state.isAuthenticated && state.isParakeetSelected &&
-      grant.webContentsId === frame.webContentsId && grant.frameId === frame.frameId && grant.url === frame.url &&
+    return (
+      this.#matchesFrame(frame, state) &&
+      state.isWindowVisible &&
+      state.isAuthenticated &&
+      state.isParakeetSelected &&
+      grant.webContentsId === frame.webContentsId &&
+      grant.frameId === frame.frameId &&
+      grant.url === frame.url &&
       grant.authSessionGeneration === state.context.authSessionGeneration &&
-      grant.contextRevision === state.context.contextRevision && this.#now() < grant.expiresAt
+      grant.contextRevision === state.context.contextRevision &&
+      this.#now() < grant.expiresAt
+    )
   }
 
   #discardInvalid(): void {
@@ -103,9 +124,18 @@ export class CommandMicActivationAuthority {
   }
 }
 
-export function commandMicOwner(frame: CommandMicActivationFrame, context: InputSessionContext): TrustedInputOwner | null {
-  if (!frame.isTopFrame || !Number.isSafeInteger(frame.webContentsId) || frame.webContentsId <= 0 ||
-      !frame.frameId || frame.frameId.length > 256) return null
+export function commandMicOwner(
+  frame: CommandMicActivationFrame,
+  context: InputSessionContext
+): TrustedInputOwner | null {
+  if (
+    !frame.isTopFrame ||
+    !Number.isSafeInteger(frame.webContentsId) ||
+    frame.webContentsId <= 0 ||
+    !frame.frameId ||
+    frame.frameId.length > 256
+  )
+    return null
   return Object.freeze({
     webContentsId: frame.webContentsId,
     frameId: frame.frameId,

@@ -7,7 +7,10 @@ const event = {
   sender: { id: 7 },
   senderFrame: { parent: null, url: 'app://metis/index.html', processId: 12, routingId: 3 }
 }
-type TestEvent = { sender: { id: number }; senderFrame?: { parent: unknown | null; url: string; processId: number; routingId: number } | null }
+type TestEvent = {
+  sender: { id: number }
+  senderFrame?: { parent: unknown | null; url: string; processId: number; routingId: number } | null
+}
 
 describe('input-session IPC owner binding', () => {
   it('derives the session owner from the authenticated top-frame event', () => {
@@ -21,12 +24,14 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => true
     })
     const started = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context
+      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+      context
     })
     expect(started.ok && started.lease.actionAuthority).toBe(false)
     if (!started.ok) throw new Error('expected test session')
     expect(handlers.stop({ ...event, sender: { id: 8 } }, { sessionId: started.lease.sessionId, context })).toEqual({
-      ok: false, reason: 'stale_session'
+      ok: false,
+      reason: 'stale_session'
     })
   })
 
@@ -42,14 +47,24 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => true
     })
     const started = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' }, context
+      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+      context
     })
     if (!started.ok) throw new Error('expected test lease')
-    expect(authority.claimPermissionRequest({
-      webContentsId: event.sender.id, frameId: '12:3', isTopFrame: true, ...context
-    })).toBe(true)
-    expect(handlers.confirm({ ...event, sender: { id: 8 } }, { sessionId: started.lease.sessionId, context })).toBe(false)
-    expect(handlers.confirm(event, { sessionId: started.lease.sessionId, context: { ...context, contextRevision: 12 } })).toBe(false)
+    expect(
+      authority.claimPermissionRequest({
+        webContentsId: event.sender.id,
+        frameId: '12:3',
+        isTopFrame: true,
+        ...context
+      })
+    ).toBe(true)
+    expect(handlers.confirm({ ...event, sender: { id: 8 } }, { sessionId: started.lease.sessionId, context })).toBe(
+      false
+    )
+    expect(
+      handlers.confirm(event, { sessionId: started.lease.sessionId, context: { ...context, contextRevision: 12 } })
+    ).toBe(false)
     expect(handlers.confirm(event, { sessionId: started.lease.sessionId, context })).toBe(true)
     expect(handlers.confirm(event, { sessionId: started.lease.sessionId, context })).toBe(false)
   })
@@ -64,9 +79,12 @@ describe('input-session IPC owner binding', () => {
       currentContext: () => context,
       captureAuthBoundary: () => () => true
     })
-    expect(handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit', webContentsId: 99 }, context
-    })).toEqual({ ok: false, reason: 'invalid_request' })
+    expect(
+      handlers.start(event, {
+        input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit', webContentsId: 99 },
+        context
+      })
+    ).toEqual({ ok: false, reason: 'invalid_request' })
   })
 
   it('rejects unauthenticated or non-top-frame requests before granting authority', () => {
@@ -80,9 +98,12 @@ describe('input-session IPC owner binding', () => {
       currentContext: () => context,
       captureAuthBoundary: () => () => true
     })
-    expect(unauthenticated.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context
-    })).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(
+      unauthenticated.start(event, {
+        input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+        context
+      })
+    ).toEqual({ ok: false, reason: 'unauthorized' })
     expect(authority.activeLease).toBeNull()
     const authenticated = createInputSessionHandlers<TestEvent>({
       authority,
@@ -93,9 +114,15 @@ describe('input-session IPC owner binding', () => {
       currentContext: () => context,
       captureAuthBoundary: () => () => true
     })
-    expect(authenticated.start({ ...event, senderFrame: { ...event.senderFrame, parent: {} } }, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context
-    })).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(
+      authenticated.start(
+        { ...event, senderFrame: { ...event.senderFrame, parent: {} } },
+        {
+          input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+          context
+        }
+      )
+    ).toEqual({ ok: false, reason: 'unauthorized' })
   })
 
   it('rejects stale auth/context snapshots and reconciles an older active lease', () => {
@@ -111,17 +138,24 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => true
     })
     const initial = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context
+      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+      context
     })
     expect(initial.ok).toBe(true)
     current = { authSessionGeneration: 6, contextRevision: 11 }
-    expect(handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context
-    })).toEqual({ ok: false, reason: 'stale_session' })
+    expect(
+      handlers.start(event, {
+        input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+        context
+      })
+    ).toEqual({ ok: false, reason: 'stale_session' })
     expect(authority.activeLease).toBeNull()
-    expect(handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context: current
-    }).ok).toBe(true)
+    expect(
+      handlers.start(event, {
+        input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+        context: current
+      }).ok
+    ).toBe(true)
   })
 
   it('rejects work captured before a main-frame context revision change', () => {
@@ -137,17 +171,24 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => true
     })
     const initial = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' }, context
+      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+      context
     })
     expect(initial.ok).toBe(true)
     current = { authSessionGeneration: 5, contextRevision: 12 }
-    expect(handlers.stop(event, {
-      sessionId: initial.ok ? initial.lease.sessionId : '0'.repeat(48), context
-    })).toEqual({ ok: false, reason: 'stale_session' })
+    expect(
+      handlers.stop(event, {
+        sessionId: initial.ok ? initial.lease.sessionId : '0'.repeat(48),
+        context
+      })
+    ).toEqual({ ok: false, reason: 'stale_session' })
     expect(authority.activeLease).toBeNull()
-    expect(handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' }, context: current
-    }).ok).toBe(true)
+    expect(
+      handlers.start(event, {
+        input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+        context: current
+      }).ok
+    ).toBe(true)
   })
 
   it('rejects a captured auth boundary that expires while the renderer context still matches', () => {
@@ -163,13 +204,17 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => authBoundaryValid
     })
     const started = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context
+      input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+      context
     })
     expect(started.ok).toBe(true)
     authBoundaryValid = false
-    expect(handlers.stop(event, {
-      sessionId: started.ok ? started.lease.sessionId : '0'.repeat(48), context
-    })).toEqual({ ok: false, reason: 'stale_session' })
+    expect(
+      handlers.stop(event, {
+        sessionId: started.ok ? started.lease.sessionId : '0'.repeat(48),
+        context
+      })
+    ).toEqual({ ok: false, reason: 'stale_session' })
     expect(authority.activeLease).toBeNull()
   })
 })

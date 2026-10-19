@@ -17,7 +17,7 @@ import {
   Terminal,
   KeyRound,
   Building2,
-  ChevronDown,
+  ChevronDown
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type {
@@ -50,7 +50,17 @@ function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
 }
 
 /** A single "here's what you can do" primer row — also used for the toolbar walkthrough slides. */
-function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label: string; hint: string; keys?: string }): JSX.Element {
+function ActionRow({
+  icon: Icon,
+  label,
+  hint,
+  keys
+}: {
+  icon: typeof Mic
+  label: string
+  hint: string
+  keys?: string
+}): JSX.Element {
   return (
     <div className="flex items-center gap-3">
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
@@ -134,7 +144,8 @@ export function providerReadyCopy(
   const label = p?.label ?? 'AI provider'
   if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up, nothing to paste' }
   if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
-  if (p?.kind === 'dust') return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
+  if (p?.kind === 'dust')
+    return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
   return { label: `${label} API key`, hint: 'add your key to get live answers' }
 }
 
@@ -217,7 +228,10 @@ function ProviderOption({
         </div>
         <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
       </div>
-      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent-text)]" />
+      <ArrowRight
+        size={15}
+        className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent-text)]"
+      />
     </button>
   )
 }
@@ -526,7 +540,11 @@ export function Onboarding({
     try {
       const result = await recoverEncryptedProfile()
       if (!result.ok) {
-        setFinishErr(result.canceled ? 'Recovery canceled. Your encrypted profile was not changed.' : result.error || 'Could not create a new local profile.')
+        setFinishErr(
+          result.canceled
+            ? 'Recovery canceled. Your encrypted profile was not changed.'
+            : result.error || 'Could not create a new local profile.'
+        )
         return
       }
       setRecoveryAvailable(false)
@@ -552,13 +570,30 @@ export function Onboarding({
           Ask + capture
         </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
-          <ActionRow icon={Sparkles} label="Ask anything" keys={accelLabel('CommandOrControl+Shift+Return')} hint="Type a question, or capture your screen for visual help." />
-          <ActionRow icon={Camera} label="Capture screen" keys={accelLabel(settings.shortcuts?.['capture'] ?? DEFAULT_SHORTCUTS.capture)} hint="Get instant help with whatever you’re looking at." />
-          <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize screen." />
+          <ActionRow
+            icon={Sparkles}
+            label="Ask anything"
+            keys={accelLabel('CommandOrControl+Shift+Return')}
+            hint="Type a question, or capture your screen for visual help."
+          />
+          <ActionRow
+            icon={Camera}
+            label="Capture screen"
+            keys={accelLabel(settings.shortcuts?.['capture'] ?? DEFAULT_SHORTCUTS.capture)}
+            hint="Get instant help with whatever you’re looking at."
+          />
+          <ActionRow
+            icon={Zap}
+            label="Quick actions"
+            hint="One-tap chips: What to say next · Fact-check · Explain · Summarize screen."
+          />
         </div>
         {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
             every slide instead of jumping only when the real caption is present. */}
-        <p className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]" aria-hidden="true">
+        <p
+          className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]"
+          aria-hidden="true"
+        >
           The Métis mark opens Settings; minimize to a pill or collapse the panel any time.
         </p>
         <WalkNav step={2} onBack={() => setStep(1)} onNext={() => setStep(3)} />
@@ -583,7 +618,10 @@ export function Onboarding({
         </div>
         {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
             every slide instead of jumping only when the real caption is present. */}
-        <p className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]" aria-hidden="true">
+        <p
+          className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]"
+          aria-hidden="true"
+        >
           The Métis mark opens Settings; minimize to a pill or collapse the panel any time.
         </p>
         <WalkNav step={3} onBack={() => setStep(2)} onNext={() => setStep(4)} />
@@ -602,9 +640,17 @@ export function Onboarding({
           Control how it answers
         </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
-          <ActionRow icon={LayoutGrid} label="Modes" hint="Pick the conversation: Interview, Meeting, Sales, and more." />
+          <ActionRow
+            icon={LayoutGrid}
+            label="Modes"
+            hint="Pick the conversation: Interview, Meeting, Sales, and more."
+          />
           <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Rainbow ring shows when on." />
-          <ActionRow icon={Eye} label="Show / hide" hint="Toggle whether the Métis window appears on a screen you share or record. Hidden by default." />
+          <ActionRow
+            icon={Eye}
+            label="Show / hide"
+            hint="Toggle whether the Métis window appears on a screen you share or record. Hidden by default."
+          />
         </div>
         <p className="max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
           The Métis mark opens Settings; minimize to a pill or collapse the panel any time.
@@ -704,14 +750,14 @@ export function Onboarding({
           <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
             {alreadyConnected ? (
               <>
-                This build ships connected to {PROVIDERS[settings.provider]?.label ?? 'an AI provider'}, so
-                there is no key to paste and nothing to sign up for. Transcription still runs free on your
-                device. Prefer your own provider? Pick one below, or change it any time in Settings.
+                This build ships connected to {PROVIDERS[settings.provider]?.label ?? 'an AI provider'}, so there is no
+                key to paste and nothing to sign up for. Transcription still runs free on your device. Prefer your own
+                provider? Pick one below, or change it any time in Settings.
               </>
             ) : (
               <>
-                Transcription is always free and runs on your device. To get live answers, pick one way to
-                connect the AI. You can change this any time in Settings.
+                Transcription is always free and runs on your device. To get live answers, pick one way to connect the
+                AI. You can change this any time in Settings.
               </>
             )}
           </p>
@@ -846,7 +892,14 @@ export function Onboarding({
             // !onboardingDone), so complete onboarding first — otherwise this link is a silent no-op,
             // a dead end on the one remediation the readiness checklist offers. finish() persists
             // consent + onboardingDone; on its failure the error banner shows and we stay here.
-            onFix={onOpenAiSettings ? async (): Promise<void> => { await finish(); onOpenAiSettings() } : undefined}
+            onFix={
+              onOpenAiSettings
+                ? async (): Promise<void> => {
+                    await finish()
+                    onOpenAiSettings()
+                  }
+                : undefined
+            }
             fixLabel="Open Settings → AI"
           />
           <CheckRow
@@ -922,13 +975,13 @@ export function Onboarding({
           Métis. Your on-device AI copilot.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
-          Transcription runs locally, never leaving your device. Answers are grounded in
-          your meeting context and cited so you can verify them. Everyone on the call knows it&apos;s there.
+          Transcription runs locally, never leaving your device. Answers are grounded in your meeting context and cited
+          so you can verify them. Everyone on the call knows it&apos;s there.
         </p>
         <p className="mx-auto max-w-[480px] text-[12px] italic leading-relaxed text-[color:var(--color-ink-3)]">
-          Named for the Greek goddess of cunning wisdom and prudence, the intelligence that doesn&apos;t
-          just know but sees what&apos;s coming, adapts, and picks the right moment. That&apos;s what
-          Métis does for you, in every conversation.
+          Named for the Greek goddess of cunning wisdom and prudence, the intelligence that doesn&apos;t just know but
+          sees what&apos;s coming, adapts, and picks the right moment. That&apos;s what Métis does for you, in every
+          conversation.
         </p>
       </div>
 
@@ -997,9 +1050,7 @@ export function Onboarding({
           : 'Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.'}
       </div>
 
-      <div className="text-[10px] text-[color:var(--color-ink-3)]">
-        Mantu · Métis
-      </div>
+      <div className="text-[10px] text-[color:var(--color-ink-3)]">Mantu · Métis</div>
     </div>
   )
 }

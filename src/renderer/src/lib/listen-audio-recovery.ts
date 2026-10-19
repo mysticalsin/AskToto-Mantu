@@ -72,7 +72,11 @@ export function themTracksLookDead(tracks: { readyState: string; muted: boolean 
  */
 type MicCapture = ListenMicCapture
 
-export async function acquireMic(deviceId: string, meetingStartedAt?: number, signal?: AbortSignal): Promise<MicCapture> {
+export async function acquireMic(
+  deviceId: string,
+  meetingStartedAt?: number,
+  signal?: AbortSignal
+): Promise<MicCapture> {
   if (!meetingStartedAt) throw new Error('Meeting microphone admission requires an accepted meeting identity.')
   const base: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true }
   let admitted: Awaited<ReturnType<typeof acquireMeetingMic>>
@@ -81,7 +85,11 @@ export async function acquireMic(deviceId: string, meetingStartedAt?: number, si
     admitted = await acquireMeetingMic({ audio: base }, meetingStartedAt, signal)
   } else {
     try {
-      admitted = await acquireMeetingMic({ audio: { ...base, deviceId: { exact: deviceId } } }, meetingStartedAt, signal)
+      admitted = await acquireMeetingMic(
+        { audio: { ...base, deviceId: { exact: deviceId } } },
+        meetingStartedAt,
+        signal
+      )
     } catch {
       admitted = await acquireMeetingMic({ audio: base }, meetingStartedAt, signal)
       usedFallback = true
@@ -315,10 +323,13 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
         const latest = host()
         if (!latest.admissionOpen(originEpoch)) return
         if (latest.hasChannel('you')) {
-          void latest.retireMicForRecovery(originEpoch).then((retired) => {
-            const current = host()
-            if (retired && current.admissionOpen(originEpoch)) current.recoverMicNow()
-          }).catch(() => {})
+          void latest
+            .retireMicForRecovery(originEpoch)
+            .then((retired) => {
+              const current = host()
+              if (retired && current.admissionOpen(originEpoch)) current.recoverMicNow()
+            })
+            .catch(() => {})
         }
         const action = latest.themDeviceChangeAction(latest.wantsSystemAudio(), latest.hasChannel('them'), null)
         if (action === 'watch') armThemProbation()

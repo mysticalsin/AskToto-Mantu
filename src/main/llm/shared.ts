@@ -152,7 +152,10 @@ export function userText(req: AskStart): string {
 function clippedTranscript(transcript: string | undefined, cap: number): string {
   const t = transcript || ''
   if (t.length <= cap) return t
-  return `[NOTE: transcript truncated — this is only the final ${cap} of ${t.length} characters; earlier discussion is missing]\n` + t.slice(-cap)
+  return (
+    `[NOTE: transcript truncated — this is only the final ${cap} of ${t.length} characters; earlier discussion is missing]\n` +
+    t.slice(-cap)
+  )
 }
 
 // ~60k tokens ≈ 4-5 hours of speech: effectively never truncates a real meeting.

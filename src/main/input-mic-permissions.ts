@@ -40,13 +40,23 @@ export function installInputMicPermissionHandlers(deps: InputMicPermissionDepend
     requestAdmission = false
   ): { allowed: boolean; interactive: boolean } => {
     const win = deps.getWindow()
-    if (!deps.isCaptureLifecycleReady() || !webContents || !win || win.isDestroyed() || webContents !== win.webContents || !isMainFrame || !win.isVisible()) {
+    if (
+      !deps.isCaptureLifecycleReady() ||
+      !webContents ||
+      !win ||
+      win.isDestroyed() ||
+      webContents !== win.webContents ||
+      !isMainFrame ||
+      !win.isVisible()
+    ) {
       return { allowed: false, interactive: false }
     }
     const currentUrl = webContents.getURL()
-    if (!currentUrl || requestingUrl !== currentUrl || !deps.isAuthenticated()) return { allowed: false, interactive: false }
+    if (!currentUrl || requestingUrl !== currentUrl || !deps.isAuthenticated())
+      return { allowed: false, interactive: false }
     const mainFrame = webContents.mainFrame
-    if (!mainFrame || mainFrame.parent !== null || mainFrame.url !== currentUrl) return { allowed: false, interactive: false }
+    if (!mainFrame || mainFrame.parent !== null || mainFrame.url !== currentUrl)
+      return { allowed: false, interactive: false }
     const context = deps.currentContext()
     deps.authority.reconcileContext(context)
     const frameId = `${mainFrame.processId}:${mainFrame.routingId}`
@@ -60,9 +70,11 @@ export function installInputMicPermissionHandlers(deps: InputMicPermissionDepend
     const interactiveOwner = requestAdmission
       ? deps.authority.hasPermissionRequestOwner(owner)
       : deps.authority.hasPermissionCheckOwner(owner)
-    const meetingCaptureOwner = deps.authority.hasMeetingReservation && (requestAdmission
-      ? deps.hasMeetingCaptureRequestOwner(webContents.id, deps.authority.meetingStartedAt, context, currentUrl)
-      : deps.hasMeetingCaptureCheckOwner(webContents.id, deps.authority.meetingStartedAt, context, currentUrl))
+    const meetingCaptureOwner =
+      deps.authority.hasMeetingReservation &&
+      (requestAdmission
+        ? deps.hasMeetingCaptureRequestOwner(webContents.id, deps.authority.meetingStartedAt, context, currentUrl)
+        : deps.hasMeetingCaptureCheckOwner(webContents.id, deps.authority.meetingStartedAt, context, currentUrl))
     return { allowed: interactiveOwner || meetingCaptureOwner, interactive: interactiveOwner }
   }
 
@@ -75,7 +87,7 @@ export function installInputMicPermissionHandlers(deps: InputMicPermissionDepend
     // mediaTypes/securityOrigin proof; absent or unknown shapes cannot authorize microphone access.
     const mediaDetails: Electron.MediaAccessPermissionRequest | null =
       details && typeof details === 'object' && 'mediaTypes' in details
-        ? details as Electron.MediaAccessPermissionRequest
+        ? (details as Electron.MediaAccessPermissionRequest)
         : null
     const mediaTypes = mediaDetails?.mediaTypes
     const audioRequested = Array.isArray(mediaTypes) && mediaTypes.includes('audio')
@@ -83,32 +95,46 @@ export function installInputMicPermissionHandlers(deps: InputMicPermissionDepend
     let originMatches = false
     try {
       const currentUrl = webContents?.getURL()
-      originMatches = !!mediaDetails?.securityOrigin && !!currentUrl &&
+      originMatches =
+        !!mediaDetails?.securityOrigin &&
+        !!currentUrl &&
         new URL(mediaDetails.securityOrigin).origin === new URL(currentUrl).origin
-    } catch { /* deny below */ }
+    } catch {
+      /* deny below */
+    }
     const currentUrl = webContents?.getURL()
     const mainFrame = webContents?.mainFrame
     const currentTopFrame = !!currentUrl && !!mainFrame && mainFrame.parent === null && mainFrame.url === currentUrl
-    const access = audioRequested && mediaDetails
-      ? microphoneAccess(webContents, mediaDetails.requestingUrl, mediaDetails.isMainFrame, true)
-      : { allowed: true, interactive: false }
-    const permissionAllowed = knownMediaTypes && (!audioRequested || (
-      mediaDetails !== null && mediaDetails.isMainFrame === true && mediaDetails.requestingUrl === currentUrl &&
-      originMatches && currentTopFrame && access.allowed
-    )) && deps.allowExistingPermission(webContents, permission)
-    const captureClaimed = !audioRequested || !permissionAllowed || (access.interactive
-      ? deps.claimInteractiveCapturePermission({
-          webContentsId: webContents?.id ?? -1,
-          frameId: mainFrame ? `${mainFrame.processId}:${mainFrame.routingId}` : '',
-          isTopFrame: mediaDetails?.isMainFrame === true,
-          authSessionGeneration: deps.currentContext().authSessionGeneration,
-          contextRevision: deps.currentContext().contextRevision
-        })
-      : deps.claimMeetingCapturePermission({
-          webContentsId: webContents?.id ?? -1,
-          isTopFrame: mediaDetails?.isMainFrame === true,
-          url: mediaDetails?.requestingUrl ?? ''
-        }))
+    const access =
+      audioRequested && mediaDetails
+        ? microphoneAccess(webContents, mediaDetails.requestingUrl, mediaDetails.isMainFrame, true)
+        : { allowed: true, interactive: false }
+    const permissionAllowed =
+      knownMediaTypes &&
+      (!audioRequested ||
+        (mediaDetails !== null &&
+          mediaDetails.isMainFrame === true &&
+          mediaDetails.requestingUrl === currentUrl &&
+          originMatches &&
+          currentTopFrame &&
+          access.allowed)) &&
+      deps.allowExistingPermission(webContents, permission)
+    const captureClaimed =
+      !audioRequested ||
+      !permissionAllowed ||
+      (access.interactive
+        ? deps.claimInteractiveCapturePermission({
+            webContentsId: webContents?.id ?? -1,
+            frameId: mainFrame ? `${mainFrame.processId}:${mainFrame.routingId}` : '',
+            isTopFrame: mediaDetails?.isMainFrame === true,
+            authSessionGeneration: deps.currentContext().authSessionGeneration,
+            contextRevision: deps.currentContext().contextRevision
+          })
+        : deps.claimMeetingCapturePermission({
+            webContentsId: webContents?.id ?? -1,
+            isTopFrame: mediaDetails?.isMainFrame === true,
+            url: mediaDetails?.requestingUrl ?? ''
+          }))
     callback(permissionAllowed && captureClaimed)
   }
 
@@ -119,9 +145,11 @@ export function installInputMicPermissionHandlers(deps: InputMicPermissionDepend
       const currentUrl = webContents?.getURL()
       let sameOrigin = false
       try {
-        sameOrigin = !!requestingOrigin && !!currentUrl &&
-          new URL(requestingOrigin).origin === new URL(currentUrl).origin
-      } catch { /* deny below */ }
+        sameOrigin =
+          !!requestingOrigin && !!currentUrl && new URL(requestingOrigin).origin === new URL(currentUrl).origin
+      } catch {
+        /* deny below */
+      }
       return sameOrigin && microphoneAccess(webContents, requestingUrl, details.isMainFrame).allowed
     }
     if (details?.mediaType === 'video') return deps.allowExistingPermission(webContents, permission)

@@ -307,11 +307,17 @@ export function buildGraph(incremental = false): Promise<GraphStatus> {
 /** Hold graph publication out of a source-file deletion window and join any build already in flight. */
 export async function acquireGraphBuildFence(): Promise<() => void> {
   if (buildFenceCount === 0) {
-    buildFenceWait = new Promise<void>((resolve) => { releaseBuildFenceWait = resolve })
+    buildFenceWait = new Promise<void>((resolve) => {
+      releaseBuildFenceWait = resolve
+    })
   }
   buildFenceCount += 1
   const currentBuild = activeGraphBuild
-  if (currentBuild) await currentBuild.then(() => undefined, () => undefined)
+  if (currentBuild)
+    await currentBuild.then(
+      () => undefined,
+      () => undefined
+    )
   let released = false
   return () => {
     if (released) return

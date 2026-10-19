@@ -25,13 +25,19 @@ describe('input-session lifecycle revocation wiring', () => {
 
   it('hard-stops before opaque overlay destruction or replacement', () => {
     const recreation = declaration('recreateOverlayWindow')
-    expect(recreation.indexOf("hardStopInputSession('owner-replaced')")).toBeLessThan(recreation.indexOf('dying.destroy()'))
+    expect(recreation.indexOf("hardStopInputSession('owner-replaced')")).toBeLessThan(
+      recreation.indexOf('dying.destroy()')
+    )
     const opaque = declaration('replaceTransparentOverlayWithExclusiveOnboarding')
-    expect(opaque.indexOf("hardStopInputSession('owner-replaced')")).toBeLessThan(opaque.indexOf('createWindow(replacementDisplay)'))
+    expect(opaque.indexOf("hardStopInputSession('owner-replaced')")).toBeLessThan(
+      opaque.indexOf('createWindow(replacementDisplay)')
+    )
   })
 
   it('hard-stops only on a replacing main-frame navigation, not an in-place hash change', () => {
-    expect(source).toMatch(/did-start-navigation',\s*\(_event,\s*_url,\s*isInPlace,\s*isMainFrame\)\s*=>\s*\{\s*if\s*\(win === self && isMainFrame && !isInPlace\) hardStopInputSession\('owner-replaced'\)/)
+    expect(source).toMatch(
+      /did-start-navigation',\s*\(_event,\s*_url,\s*isInPlace,\s*isMainFrame\)\s*=>\s*\{\s*if\s*\(win === self && isMainFrame && !isInPlace\) hardStopInputSession\('owner-replaced'\)/
+    )
   })
 
   it('hard-stops when auth clears through expiry or tenant revocation', () => {
@@ -69,35 +75,56 @@ describe('input-session lifecycle revocation wiring', () => {
     expect(showSubscription).toBeLessThan(revealRequest)
     expect(revealRequest).toBeLessThan(grantMint)
     expect(grantMint).toBeLessThan(routeSend)
-    expect(shortcut.slice(shortcut.indexOf('const routeAfterShow'), showSubscription)).toContain('if (w.isDestroyed() || !w.isVisible()) return')
+    expect(shortcut.slice(shortcut.indexOf('const routeAfterShow'), showSubscription)).toContain(
+      'if (w.isDestroyed() || !w.isVisible()) return'
+    )
   })
 
   it('revokes unused meeting-start grants on each accepted Listen stop path', () => {
     const transition = declaration('acceptLiveSpeakerTransition')
-    expect(transition).toMatch(/if \(change\.on === legacyListeningActive\) return false[\s\S]*?\} else \{\s*meetingStartActivationAuthority\.revokeAll\(\)/)
-    expect(transition).toMatch(/if \(activeLiveSpeakerStartedAt !== startedAt\) return false\s*meetingStartActivationAuthority\.revokeAll\(\)/)
+    expect(transition).toMatch(
+      /if \(change\.on === legacyListeningActive\) return false[\s\S]*?\} else \{\s*meetingStartActivationAuthority\.revokeAll\(\)/
+    )
+    expect(transition).toMatch(
+      /if \(activeLiveSpeakerStartedAt !== startedAt\) return false\s*meetingStartActivationAuthority\.revokeAll\(\)/
+    )
   })
 
   it('permanently shuts admission only at final will-quit after before-quit flush gates', () => {
     const quitLifecycle = readFileSync(join(__dirname, 'lifecycle/app-quit-lifecycle.ts'), 'utf8')
     expect(quitLifecycle.indexOf("app.on('will-quit'")).toBeGreaterThanOrEqual(0)
-    expect(quitLifecycle.indexOf('deps.shutdownInputSessions()')).toBeGreaterThan(quitLifecycle.indexOf("app.on('will-quit'"))
-    expect(quitLifecycle.indexOf('deps.shutdownInputSessions()')).toBeGreaterThan(quitLifecycle.indexOf('setTimeout(() => app.quit(), 2000)'))
-    expect(source).toMatch(/shutdownInputSessions:\s*\(\)\s*=>\s*\{[\s\S]*?hardStopInputSession\('shutdown'\)[\s\S]*?inputSessionAuthority\.shutdown\(\)/)
-    expect(quitLifecycle.indexOf('deps.beginInputShutdown()')).toBeGreaterThan(quitLifecycle.indexOf("app.on('before-quit'"))
+    expect(quitLifecycle.indexOf('deps.shutdownInputSessions()')).toBeGreaterThan(
+      quitLifecycle.indexOf("app.on('will-quit'")
+    )
+    expect(quitLifecycle.indexOf('deps.shutdownInputSessions()')).toBeGreaterThan(
+      quitLifecycle.indexOf('setTimeout(() => app.quit(), 2000)')
+    )
+    expect(source).toMatch(
+      /shutdownInputSessions:\s*\(\)\s*=>\s*\{[\s\S]*?hardStopInputSession\('shutdown'\)[\s\S]*?inputSessionAuthority\.shutdown\(\)/
+    )
+    expect(quitLifecycle.indexOf('deps.beginInputShutdown()')).toBeGreaterThan(
+      quitLifecycle.indexOf("app.on('before-quit'")
+    )
     expect(source).toContain('inputSessionAuthority.beginShutdown()')
     const transition = declaration('acceptLiveSpeakerTransition')
-    expect(transition.indexOf('if (change.on && inputSessionAuthority.isClosing) return false')).toBeGreaterThanOrEqual(0)
-    expect(transition.indexOf('if (change.on && inputSessionAuthority.isClosing) return false')).toBeLessThan(transition.indexOf("hardStopMeetingCapture('owner-replaced')"))
+    expect(transition.indexOf('if (change.on && inputSessionAuthority.isClosing) return false')).toBeGreaterThanOrEqual(
+      0
+    )
+    expect(transition.indexOf('if (change.on && inputSessionAuthority.isClosing) return false')).toBeLessThan(
+      transition.indexOf("hardStopMeetingCapture('owner-replaced')")
+    )
     expect(source).toContain('inputSessionAuthority.isClosing || !requireAuth()')
   })
 
   it('forces full renderer teardown when meeting revocation arrives during Stop drain', () => {
     expect(listenSource).toMatch(/onMeetingMicCaptureRevoked\([\s\S]*?failAdmittedCapture\([^;]+force:\s*true/)
-    const forcedFailure = listenSource.slice(listenSource.indexOf('const failAdmittedCapture = useCallback'), listenSource.indexOf('failAdmittedCaptureRef.current'))
+    const forcedFailure = listenSource.slice(
+      listenSource.indexOf('const failAdmittedCapture = useCallback'),
+      listenSource.indexOf('failAdmittedCaptureRef.current')
+    )
     expect(forcedFailure).toContain('sessionEpochRef.current += 1')
     expect(forcedFailure).toContain('workerRef.current?.terminate()')
-    expect(forcedFailure).toContain("closeChannel(speaker)")
+    expect(forcedFailure).toContain('closeChannel(speaker)')
     expect(forcedFailure).toContain('queue.current = []')
   })
 
@@ -109,7 +136,10 @@ describe('input-session lifecycle revocation wiring', () => {
     expect(pendingRevocation).toContain('this.#revoke(captureId, owner, reason)')
     expect(meetingCaptureAuthoritySource).toContain("'pending' | 'permission-authorized' | 'established'")
 
-    const hideHandler = source.slice(source.indexOf("win.on('hide'"), source.indexOf("const revalidateInputSessionAfterShow"))
+    const hideHandler = source.slice(
+      source.indexOf("win.on('hide'"),
+      source.indexOf('const revalidateInputSessionAfterShow')
+    )
     expect(hideHandler).toContain("revokePendingMeetingMicCaptureGrants('window-hidden')")
 
     const showStart = source.indexOf('const revalidateInputSessionAfterShow')
@@ -136,7 +166,9 @@ describe('input-session lifecycle revocation wiring', () => {
     const admissionStart = source.indexOf('ipcMain.handle(IPC.meetingMicAdmission')
     const confirmStart = source.indexOf('ipcMain.handle(IPC.meetingMicCaptureConfirm', admissionStart)
     const admission = source.slice(admissionStart, confirmStart)
-    expect(admission.indexOf('assertMainWindow(event)')).toBeLessThan(admission.indexOf('meetingMicCaptureAuthority.admit('))
+    expect(admission.indexOf('assertMainWindow(event)')).toBeLessThan(
+      admission.indexOf('meetingMicCaptureAuthority.admit(')
+    )
     expect(admission).toContain('meetingMicCaptureAuthority.admit(')
     const admitStart = meetingCaptureAuthoritySource.indexOf('admit(frame:')
     const confirmMethodStart = meetingCaptureAuthoritySource.indexOf('confirm(frame:', admitStart)
@@ -146,13 +178,19 @@ describe('input-session lifecycle revocation wiring', () => {
     expect(admit).toContain('authSessionGeneration: current.context.authSessionGeneration')
     expect(admit).toContain('contextRevision: current.context.contextRevision')
     expect(admit).toContain('requestingUrl: current.currentUrl')
-    expect(source).toContain('meetingMicCaptureAuthority.hasPermissionRequestOwner(webContentsId, startedAt, context, requestingUrl)')
-    expect(source).toContain('meetingMicCaptureAuthority.hasPermissionCheckOwner(webContentsId, startedAt, context, requestingUrl)')
+    expect(source).toContain(
+      'meetingMicCaptureAuthority.hasPermissionRequestOwner(webContentsId, startedAt, context, requestingUrl)'
+    )
+    expect(source).toContain(
+      'meetingMicCaptureAuthority.hasPermissionCheckOwner(webContentsId, startedAt, context, requestingUrl)'
+    )
 
     const releaseStart = source.indexOf('ipcMain.handle(IPC.meetingMicCaptureRelease', confirmStart)
     const releaseEnd = source.indexOf('ipcMain.handle(', releaseStart + 1)
     const release = source.slice(releaseStart, releaseEnd)
-    expect(release.indexOf('assertMainWindow(event)')).toBeLessThan(release.indexOf('meetingMicCaptureAuthority.release('))
+    expect(release.indexOf('assertMainWindow(event)')).toBeLessThan(
+      release.indexOf('meetingMicCaptureAuthority.release(')
+    )
     expect(release).toContain('meetingMicCaptureAuthority.release(event.sender.id, parsed.data.captureId)')
     const releaseMethodStart = meetingCaptureAuthoritySource.indexOf('release(webContentsId:')
     const pendingMethodStart = meetingCaptureAuthoritySource.indexOf('hasPermissionCheckOwner(', releaseMethodStart)
@@ -174,8 +212,8 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('makes pending interactive capture abortable and releases on devicechange', () => {
-    expect(admissionSource).toContain('signal?.addEventListener(\'abort\', onAbort')
-    expect(admissionSource).toContain("const onDeviceChange = (): void => { void admission.release() }")
+    expect(admissionSource).toContain("signal?.addEventListener('abort', onAbort")
+    expect(admissionSource).toContain('const onDeviceChange = (): void => { void admission.release() }')
     expect(admissionSource.match(/record\.cleanups\.add\(detachListeners\)/g)).toHaveLength(2)
     expect(admissionSource).toContain('if (released || record.revoked)')
     expect(listenSource).toContain('micAcquisitionAbortRef.current?.abort()')

@@ -33,10 +33,21 @@ interface Dependencies<Event extends EventLike> {
   authorizeCommandStart?(event: Event, owner: TrustedInputOwner): boolean
 }
 
-function ownerFromEvent(event: EventLike, currentMainUrl: string, context: InputSessionContext): TrustedInputOwner | null {
+function ownerFromEvent(
+  event: EventLike,
+  currentMainUrl: string,
+  context: InputSessionContext
+): TrustedInputOwner | null {
   const frame = event.senderFrame
-  if (!frame || frame.parent !== null || !currentMainUrl || frame.url !== currentMainUrl ||
-      !Number.isSafeInteger(frame.processId) || !Number.isSafeInteger(frame.routingId)) return null
+  if (
+    !frame ||
+    frame.parent !== null ||
+    !currentMainUrl ||
+    frame.url !== currentMainUrl ||
+    !Number.isSafeInteger(frame.processId) ||
+    !Number.isSafeInteger(frame.routingId)
+  )
+    return null
   return Object.freeze({
     webContentsId: event.sender.id,
     frameId: `${frame.processId}:${frame.routingId}`,
@@ -83,9 +94,11 @@ export function createInputSessionHandlers<Event extends EventLike>(dependencies
       }
       const parsed = InputSessionStartRequestSchema.safeParse(raw)
       if (!parsed.success) return { ok: false, reason: 'invalid_request' }
-      if (!InputSessionContextSchema.safeParse(parsed.data.context).success ||
-          parsed.data.context.authSessionGeneration !== current.authSessionGeneration ||
-          parsed.data.context.contextRevision !== current.contextRevision) {
+      if (
+        !InputSessionContextSchema.safeParse(parsed.data.context).success ||
+        parsed.data.context.authSessionGeneration !== current.authSessionGeneration ||
+        parsed.data.context.contextRevision !== current.contextRevision
+      ) {
         return { ok: false, reason: 'stale_session' }
       }
       if (!dependencies.captureAuthBoundary()()) {
@@ -110,8 +123,10 @@ export function createInputSessionHandlers<Event extends EventLike>(dependencies
       }
       const parsed = InputSessionStopRequestSchema.safeParse(raw)
       if (!parsed.success) return { ok: false, reason: 'invalid_request' }
-      if (parsed.data.context.authSessionGeneration !== current.authSessionGeneration ||
-          parsed.data.context.contextRevision !== current.contextRevision) {
+      if (
+        parsed.data.context.authSessionGeneration !== current.authSessionGeneration ||
+        parsed.data.context.contextRevision !== current.contextRevision
+      ) {
         return { ok: false, reason: 'stale_session' }
       }
       if (!dependencies.captureAuthBoundary()()) {
@@ -133,8 +148,12 @@ export function createInputSessionHandlers<Event extends EventLike>(dependencies
         return false
       }
       const parsed = InputSessionConfirmRequestSchema.safeParse(raw)
-      if (!parsed.success || parsed.data.context.authSessionGeneration !== current.authSessionGeneration ||
-          parsed.data.context.contextRevision !== current.contextRevision) return false
+      if (
+        !parsed.success ||
+        parsed.data.context.authSessionGeneration !== current.authSessionGeneration ||
+        parsed.data.context.contextRevision !== current.contextRevision
+      )
+        return false
       if (!dependencies.captureAuthBoundary()()) {
         dependencies.authority.hardStop('sign-out')
         return false

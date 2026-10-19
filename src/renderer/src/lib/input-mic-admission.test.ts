@@ -4,7 +4,10 @@ import type { InputSessionRevoked, MeetingMicCaptureRevoked } from '@shared/ipc'
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
   return { promise, resolve, reject }
 }
 
@@ -52,7 +55,10 @@ function setup() {
         inputRevoked = listener
         return vi.fn()
       }),
-      meetingMicAdmission: vi.fn(async (startedAt: number) => ({ captureId: '00000000-0000-4000-8000-000000000001', startedAt })),
+      meetingMicAdmission: vi.fn(async (startedAt: number) => ({
+        captureId: '00000000-0000-4000-8000-000000000001',
+        startedAt
+      })),
       confirmMeetingMicCapture: vi.fn(async () => true),
       releaseMeetingMicCapture,
       onMeetingMicCaptureRevoked: vi.fn((listener: (event: MeetingMicCaptureRevoked) => void) => {
@@ -68,14 +74,24 @@ function setup() {
     stopInputSession,
     releaseMeetingMicCapture,
     mediaDevices,
-    revokeInput(event: InputSessionRevoked) { inputRevoked?.(event) },
-    revokeMeeting(event: MeetingMicCaptureRevoked) { meetingRevoked?.(event) },
-    changeDevice() { deviceChange?.() }
+    revokeInput(event: InputSessionRevoked) {
+      inputRevoked?.(event)
+    },
+    revokeMeeting(event: MeetingMicCaptureRevoked) {
+      meetingRevoked?.(event)
+    },
+    changeDevice() {
+      deviceChange?.()
+    }
   }
 }
 
-beforeEach(() => { vi.resetModules() })
-afterEach(() => { vi.unstubAllGlobals() })
+beforeEach(() => {
+  vi.resetModules()
+})
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('interactive microphone admission lifecycle', () => {
   it('does not start a lease when cancellation arrives while context lookup is pending', async () => {
@@ -113,8 +129,9 @@ describe('interactive microphone admission lifecycle', () => {
     vi.mocked(env.mediaDevices.addEventListener).mockImplementationOnce(() => controller.abort())
     const { acquireInteractiveMic } = await import('./input-mic-admission')
 
-    await expect(acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal))
-      .rejects.toThrow('cancelled')
+    await expect(
+      acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
+    ).rejects.toThrow('cancelled')
 
     expect(env.getUserMedia).not.toHaveBeenCalled()
     expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)

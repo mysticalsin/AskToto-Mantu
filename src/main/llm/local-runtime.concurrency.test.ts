@@ -54,7 +54,12 @@ vi.mock('../infra/process/registry', () => ({
     return registryState.spawnedReceipt ?? Promise.resolve()
   }),
   recordSidecarSupervisedSpawned: vi.fn(
-    (name: string, _wrapper: unknown, wrapperLaunch: { executable: string; args: readonly string[] }, sidecarLaunch: { executable: string; args: readonly string[] }) => {
+    (
+      name: string,
+      _wrapper: unknown,
+      wrapperLaunch: { executable: string; args: readonly string[] },
+      sidecarLaunch: { executable: string; args: readonly string[] }
+    ) => {
       registryState.calls.push({
         kind: 'supervised-spawned',
         name,
@@ -135,7 +140,10 @@ const runtimeContractProvider = vi.fn(() => runtimeContract)
 
 type RuntimeModule = typeof staticRuntime
 const runtimeModules = new Set<RuntimeModule>([staticRuntime])
-type RequestOutcome = { settled: false } | { settled: true; status: 'resolved' } | { settled: true; status: 'rejected'; error: unknown }
+type RequestOutcome =
+  | { settled: false }
+  | { settled: true; status: 'resolved' }
+  | { settled: true; status: 'rejected'; error: unknown }
 const requestOutcomes = new Map<Promise<unknown>, RequestOutcome>()
 let requestObservers: Promise<void>[] = []
 let cleanupReleases: Array<() => void> = []
@@ -151,7 +159,10 @@ function observeRequest<T>(request: Promise<T>): Promise<T> {
   return request
 }
 
-function start(modelPaths: Parameters<typeof staticRuntime.start>[0], platform: Parameters<typeof staticRuntime.start>[1] = 'mac') {
+function start(
+  modelPaths: Parameters<typeof staticRuntime.start>[0],
+  platform: Parameters<typeof staticRuntime.start>[1] = 'mac'
+) {
   return observeRequest(staticRuntime.start(modelPaths, platform))
 }
 
@@ -342,8 +353,14 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     // Track the derived promises too: observing p1/p2 alone does not handle a rejection from either
     // success callback's derived promise.
     requestObservers.push(
-      p1Assertion.then(() => undefined, () => undefined),
-      p2Assertion.then(() => undefined, () => undefined)
+      p1Assertion.then(
+        () => undefined,
+        () => undefined
+      ),
+      p2Assertion.then(
+        () => undefined,
+        () => undefined
+      )
     )
 
     await Promise.all([p1, p2, p1Assertion, p2Assertion])
@@ -872,7 +889,9 @@ describe('automatic restart failure ownership', () => {
       if (scenario === 'stop' || scenario === 'stop-then-fresh') expect(runtime.stop()).toBeUndefined()
       if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
         runtimeContract = Promise.resolve(fullRuntime)
-        const fresh = observeRequest(runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac'))
+        const fresh = observeRequest(
+          runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
+        )
         await emitListening(1, 55932)
         await fresh
         expect(runtime.isRunning()).toBe(true)

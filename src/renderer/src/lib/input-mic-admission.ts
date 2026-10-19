@@ -1,7 +1,5 @@
 import type { InputPurpose } from '@shared/input-session'
-import type {
-  InputSessionContext, InputSessionLease, InputSessionRevoked, MeetingMicCaptureRevoked
-} from '@shared/ipc'
+import type { InputSessionContext, InputSessionLease, InputSessionRevoked, MeetingMicCaptureRevoked } from '@shared/ipc'
 
 type Cleanup = () => void
 type SessionRecord = {
@@ -22,7 +20,11 @@ function receiveRevocation(event: InputSessionRevoked): void {
   if (!record || record.lease.revision !== event.revision) return
   record.revoked = true
   for (const cleanup of [...record.cleanups]) {
-    try { cleanup() } catch { /* continue releasing the rest of this exact session */ }
+    try {
+      cleanup()
+    } catch {
+      /* continue releasing the rest of this exact session */
+    }
   }
   sessions.delete(event.sessionId)
 }
@@ -37,7 +39,11 @@ function receiveMeetingRevocation(event: MeetingMicCaptureRevoked): void {
   if (!record || record.startedAt !== event.startedAt) return
   record.revoked = true
   for (const cleanup of [...record.cleanups]) {
-    try { cleanup() } catch { /* release remaining resources for this exact meeting capture */ }
+    try {
+      cleanup()
+    } catch {
+      /* release remaining resources for this exact meeting capture */
+    }
   }
   meetingCaptures.delete(event.captureId)
 }
@@ -78,15 +84,21 @@ export async function acquireInteractiveMic(
   const record: SessionRecord = { lease: result.lease, context, cleanups: new Set(), revoked: false }
   sessions.set(result.lease.sessionId, record)
   let released = false
-  const onAbort = (): void => { void admission.release() }
-  const onDeviceChange = (): void => { void admission.release() }
+  const onAbort = (): void => {
+    void admission.release()
+  }
+  const onDeviceChange = (): void => {
+    void admission.release()
+  }
   const detachListeners = (): void => {
     signal?.removeEventListener('abort', onAbort)
     navigator.mediaDevices.removeEventListener?.('devicechange', onDeviceChange)
   }
   const admission: InputMicAdmission = {
     sessionId: result.lease.sessionId,
-    get revoked() { return record.revoked },
+    get revoked() {
+      return record.revoked
+    },
     onRevoke(cleanup) {
       if (record.revoked) {
         cleanup()
@@ -99,7 +111,11 @@ export async function acquireInteractiveMic(
       if (released) return
       released = true
       for (const cleanup of [...record.cleanups]) {
-        try { cleanup() } catch { /* best-effort teardown of associated renderer resources */ }
+        try {
+          cleanup()
+        } catch {
+          /* best-effort teardown of associated renderer resources */
+        }
       }
       record.cleanups.clear()
       sessions.delete(record.lease.sessionId)
@@ -123,9 +139,15 @@ export async function acquireInteractiveMic(
       mediaStopped = true
       try {
         for (const track of stream.getTracks()) {
-          try { track.stop() } catch { /* continue stopping the rest of this owned stream */ }
+          try {
+            track.stop()
+          } catch {
+            /* continue stopping the rest of this owned stream */
+          }
         }
-      } catch { /* best-effort cleanup if stream track discovery itself fails */ }
+      } catch {
+        /* best-effort cleanup if stream track discovery itself fails */
+      }
     }
     record.cleanups.add(stopMedia)
     if (released || record.revoked) {
@@ -169,11 +191,15 @@ export async function acquireMeetingMic(
   meetingCaptures.set(grant.captureId, record)
   let stream: MediaStream | null = null
   let released = false
-  const onAbort = (): void => { void admission.release() }
+  const onAbort = (): void => {
+    void admission.release()
+  }
   const detachListeners = (): void => signal?.removeEventListener('abort', onAbort)
   const admission = {
     captureId: grant.captureId,
-    get revoked() { return record.revoked },
+    get revoked() {
+      return record.revoked
+    },
     onRevoke(cleanup: Cleanup) {
       if (record.revoked) {
         cleanup()
@@ -186,7 +212,11 @@ export async function acquireMeetingMic(
       if (released) return
       released = true
       for (const cleanup of [...record.cleanups]) {
-        try { cleanup() } catch { /* best-effort renderer teardown */ }
+        try {
+          cleanup()
+        } catch {
+          /* best-effort renderer teardown */
+        }
       }
       record.cleanups.clear()
       meetingCaptures.delete(grant.captureId)
@@ -194,7 +224,9 @@ export async function acquireMeetingMic(
     }
   }
   record.cleanups.add(detachListeners)
-  const onDeviceChange = (): void => { void admission.release() }
+  const onDeviceChange = (): void => {
+    void admission.release()
+  }
   const detachDeviceChange = (): void => navigator.mediaDevices.removeEventListener?.('devicechange', onDeviceChange)
   record.cleanups.add(detachDeviceChange)
   try {
@@ -224,7 +256,9 @@ export async function acquireMeetingMic(
     return {
       stream,
       captureId: grant.captureId,
-      get revoked() { return record.revoked },
+      get revoked() {
+        return record.revoked
+      },
       onRevoke: admission.onRevoke,
       release: admission.release
     }

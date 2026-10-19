@@ -120,4 +120,3 @@ export interface DispatchDecision {
   readonly reason?: TaskTransitionDenial
   readonly task?: TaskRecord
 }
-

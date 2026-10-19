@@ -363,9 +363,14 @@ function MicLevelMeter({
 
     void (async (): Promise<void> => {
       try {
-        const capture = await acquireInteractiveMic({
-          audio: deviceId ? { deviceId: { exact: deviceId } } : true
-        }, 'conversation', 'application-probe', admissionAbort.signal)
+        const capture = await acquireInteractiveMic(
+          {
+            audio: deviceId ? { deviceId: { exact: deviceId } } : true
+          },
+          'conversation',
+          'application-probe',
+          admissionAbort.signal
+        )
         stream = capture.stream
         admission = capture.admission
         admission.onRevoke(teardown)
@@ -492,7 +497,12 @@ function MicPicker({
     unlockAbortRef.current?.abort()
     unlockAbortRef.current = controller
     try {
-      const { stream: s, admission } = await acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
+      const { stream: s, admission } = await acquireInteractiveMic(
+        { audio: true },
+        'conversation',
+        'deliberate-talk',
+        controller.signal
+      )
       s.getTracks().forEach((t) => t.stop()) // just needed the grant so labels populate
       await admission.release()
       await refresh()

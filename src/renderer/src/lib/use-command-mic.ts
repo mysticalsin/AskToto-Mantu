@@ -63,11 +63,16 @@ export class CommandMicController {
   private readonly finalizationMs: number
 
   constructor(private readonly options: ControllerOptions = {}) {
-    this.maxDurationMs = Math.min(DEFAULT_MAX_DURATION_MS, Math.max(1, Math.floor(options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS)))
+    this.maxDurationMs = Math.min(
+      DEFAULT_MAX_DURATION_MS,
+      Math.max(1, Math.floor(options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS))
+    )
     this.finalizationMs = Math.max(0, Math.floor(options.finalizationMs ?? DEFAULT_FINALIZATION_MS))
   }
 
-  getSnapshot(): CommandMicSnapshot { return this.snapshot }
+  getSnapshot(): CommandMicSnapshot {
+    return this.snapshot
+  }
 
   async start(): Promise<void> {
     if (this.disposed || this.active || this.snapshot.status === 'starting') return
@@ -109,7 +114,10 @@ export class CommandMicController {
       })
       mute = context.createGain()
       mute.gain.value = 0
-      const audioTracks = typeof capture.stream.getAudioTracks === 'function' ? capture.stream.getAudioTracks() : capture.stream.getTracks()
+      const audioTracks =
+        typeof capture.stream.getAudioTracks === 'function'
+          ? capture.stream.getAudioTracks()
+          : capture.stream.getTracks()
       const track = audioTracks[0]
       if (!track || track.readyState === 'ended') throw new Error('microphone_unavailable')
       // Build the full audio graph before starting Main's bounded capture deadline. Keep it
@@ -119,7 +127,9 @@ export class CommandMicController {
       startedInMain = true
       if (this.disposed || generation !== this.generation || capture.admission.revoked) throw new Error('cancelled')
       let resolveSealed: (() => void) | null = null
-      const sealed = new Promise<void>((resolve) => { resolveSealed = resolve })
+      const sealed = new Promise<void>((resolve) => {
+        resolveSealed = resolve
+      })
       const active: ActiveCapture = {
         admission: capture.admission,
         stopMedia: capture.stopMedia,
@@ -130,7 +140,9 @@ export class CommandMicController {
         source,
         node,
         mute,
-        timeout: setTimeout(() => { void this.finish(generation) }, this.maxDurationMs),
+        timeout: setTimeout(() => {
+          void this.finish(generation)
+        }, this.maxDurationMs),
         generation,
         frameCount: 0,
         frameQueue: Promise.resolve(),
@@ -146,8 +158,8 @@ export class CommandMicController {
       node.port.onmessage = (event: MessageEvent) => this.onWorkletMessage(active, event.data)
       capture.admission.onRevoke(() => this.cancelForGeneration(generation, 'microphone_unavailable'))
       track.addEventListener?.('ended', active.onTrackEnded, { once: true })
-      const stillOwned = (): boolean => this.active === active && !this.disposed &&
-        generation === this.generation && !active.admission.revoked
+      const stillOwned = (): boolean =>
+        this.active === active && !this.disposed && generation === this.generation && !active.admission.revoked
       const requireLiveTrack = (): void => {
         if (track.readyState === 'ended') throw new Error('microphone_unavailable')
       }
@@ -171,9 +183,21 @@ export class CommandMicController {
       const active = this.active
       if (active?.generation === generation) this.release(active)
       else {
-        try { node && (node.port.onmessage = null, node.disconnect()) } catch { /* continue cleanup */ }
-        try { source?.disconnect() } catch { /* continue cleanup */ }
-        try { mute?.disconnect() } catch { /* continue cleanup */ }
+        try {
+          node && ((node.port.onmessage = null), node.disconnect())
+        } catch {
+          /* continue cleanup */
+        }
+        try {
+          source?.disconnect()
+        } catch {
+          /* continue cleanup */
+        }
+        try {
+          mute?.disconnect()
+        } catch {
+          /* continue cleanup */
+        }
         if (context && context.state !== 'closed') void context.close().catch(() => {})
         if (capture) {
           capture.stopMedia()
@@ -181,24 +205,29 @@ export class CommandMicController {
         }
       }
       if (this.disposed || generation !== this.generation) return
-      const latestAvailability = reason === 'unauthorized'
-        ? await window.toto.commandMicAvailability().catch(() => null)
-        : null
+      const latestAvailability =
+        reason === 'unauthorized' ? await window.toto.commandMicAvailability().catch(() => null) : null
       if (this.disposed || generation !== this.generation) return
-      const mapped: CommandMicStopReason = reason === 'unsupported_engine' ||
-        latestAvailability?.ok === false && latestAvailability.reason === 'unsupported_engine'
-        ? 'unsupported_engine'
-        : reason === 'policy_blocked' || latestAvailability?.ok === false && latestAvailability.reason === 'policy_blocked'
-          ? 'policy_blocked'
-          : reason === 'activation_required' || reason === 'unauthorized' ? 'activation_required'
-            : reason === 'recognition_unavailable' ? 'recognition_unavailable' : 'microphone_unavailable'
+      const mapped: CommandMicStopReason =
+        reason === 'unsupported_engine' ||
+        (latestAvailability?.ok === false && latestAvailability.reason === 'unsupported_engine')
+          ? 'unsupported_engine'
+          : reason === 'policy_blocked' ||
+              (latestAvailability?.ok === false && latestAvailability.reason === 'policy_blocked')
+            ? 'policy_blocked'
+            : reason === 'activation_required' || reason === 'unauthorized'
+              ? 'activation_required'
+              : reason === 'recognition_unavailable'
+                ? 'recognition_unavailable'
+                : 'microphone_unavailable'
       this.publish({ status: 'error', reason: mapped })
     }
   }
 
   async finish(expectedGeneration?: number): Promise<void> {
     const active = this.active
-    if (!active || active.finalizing || (expectedGeneration !== undefined && active.generation !== expectedGeneration)) return
+    if (!active || active.finalizing || (expectedGeneration !== undefined && active.generation !== expectedGeneration))
+      return
     active.finalizing = true
     clearTimeout(active.timeout)
     this.publish({ status: 'finalizing' })
@@ -215,14 +244,20 @@ export class CommandMicController {
     await this.teardownMedia(active)
     if (this.active !== active || active.admission.revoked) return
     const result = await window.toto.commandSpeechFinish(active.sessionId, active.frameCount).catch(() => ({
-      ok: false as const, reason: 'recognition_unavailable' as const
+      ok: false as const,
+      reason: 'recognition_unavailable' as const
     }))
     if (this.active !== active) return
     this.release(active)
     if (!result.ok) {
-      const reason: CommandMicStopReason = result.reason === 'unsupported_engine' ? 'unsupported_engine'
-        : result.reason === 'policy_blocked' ? 'policy_blocked'
-          : result.reason === 'no_speech' ? 'no_speech' : 'recognition_unavailable'
+      const reason: CommandMicStopReason =
+        result.reason === 'unsupported_engine'
+          ? 'unsupported_engine'
+          : result.reason === 'policy_blocked'
+            ? 'policy_blocked'
+            : result.reason === 'no_speech'
+              ? 'no_speech'
+              : 'recognition_unavailable'
       this.publish({ status: 'error', reason })
       return
     }
@@ -273,14 +308,16 @@ export class CommandMicController {
     if (data.type !== 'frame' || !(data.samples instanceof Float32Array) || !Number.isSafeInteger(data.sequence)) return
     const sequence = data.sequence as number
     active.frameCount++
-    active.frameQueue = active.frameQueue.then(async () => {
-      if (this.active !== active || active.failed) return
-      const result = await window.toto.commandSpeechFrame(active.sessionId, sequence, data.samples as Float32Array)
-      if (!result.ok) throw new Error(result.reason)
-    }).catch(() => {
-      active.failed = true
-      void window.toto.commandSpeechCancel(active.sessionId).catch(() => {})
-    })
+    active.frameQueue = active.frameQueue
+      .then(async () => {
+        if (this.active !== active || active.failed) return
+        const result = await window.toto.commandSpeechFrame(active.sessionId, sequence, data.samples as Float32Array)
+        if (!result.ok) throw new Error(result.reason)
+      })
+      .catch(() => {
+        active.failed = true
+        void window.toto.commandSpeechCancel(active.sessionId).catch(() => {})
+      })
   }
 
   private async cancelForGeneration(generation: number, reason: CommandMicStopReason): Promise<void> {
@@ -305,14 +342,29 @@ export class CommandMicController {
     if (active.mediaReleased) return Promise.resolve()
     active.mediaReleased = true
     active.node.port.onmessage = null
-    try { active.track.removeEventListener?.('ended', active.onTrackEnded) } catch { /* continue teardown */ }
-    try { active.node.disconnect() } catch { /* already disconnected */ }
-    try { active.source.disconnect() } catch { /* already disconnected */ }
-    try { active.mute.disconnect() } catch { /* already disconnected */ }
+    try {
+      active.track.removeEventListener?.('ended', active.onTrackEnded)
+    } catch {
+      /* continue teardown */
+    }
+    try {
+      active.node.disconnect()
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      active.source.disconnect()
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      active.mute.disconnect()
+    } catch {
+      /* already disconnected */
+    }
     active.stopMedia()
-    active.mediaTeardown = active.context.state !== 'closed'
-      ? active.context.close().catch(() => {})
-      : Promise.resolve()
+    active.mediaTeardown =
+      active.context.state !== 'closed' ? active.context.close().catch(() => {}) : Promise.resolve()
     return active.mediaTeardown
   }
 

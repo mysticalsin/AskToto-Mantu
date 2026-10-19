@@ -734,15 +734,20 @@ export function App(): JSX.Element {
     const acceptCount = ({ count, revision }: { count: number; revision: number }): void => {
       if (
         active &&
-        Number.isSafeInteger(count) && count >= 0 &&
-        Number.isSafeInteger(revision) && revision >= recoveredDraftRevisionRef.current
+        Number.isSafeInteger(count) &&
+        count >= 0 &&
+        Number.isSafeInteger(revision) &&
+        revision >= recoveredDraftRevisionRef.current
       ) {
         recoveredDraftRevisionRef.current = revision
         setRecoveredDraftCount(count)
       }
     }
     const unsubscribe = window.toto.onTranscriptsRecovered(acceptCount)
-    void window.toto.recoveredDraftCount().then(acceptCount).catch(() => {})
+    void window.toto
+      .recoveredDraftCount()
+      .then(acceptCount)
+      .catch(() => {})
     return () => {
       active = false
       unsubscribe()
@@ -1360,7 +1365,8 @@ export function App(): JSX.Element {
         String(meetingStartRef.current) !== id ||
         discardPendingOwnerRef.current === id ||
         discardedMeetingRef.current === id
-      ) return null
+      )
+        return null
       const outcome = await meetingSaveGateRef.current.run(
         id,
         () => String(meetingStartRef.current),

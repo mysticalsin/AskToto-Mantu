@@ -44,9 +44,13 @@ export class MeetingMicCaptureAuthority {
 
   admit(frame: MeetingMicCaptureFrame, startedAt: number): MeetingMicCaptureGrant | null {
     const current = this.#deps.currentState()
-    if (!this.#frameMatchesCurrentMain(frame, current) ||
-        !current.isWindowVisible || !current.isAuthenticated ||
-        current.meetingStartedAt !== startedAt) return null
+    if (
+      !this.#frameMatchesCurrentMain(frame, current) ||
+      !current.isWindowVisible ||
+      !current.isAuthenticated ||
+      current.meetingStartedAt !== startedAt
+    )
+      return null
 
     const samePhysicalOwner = (owner: MeetingMicCaptureOwner): boolean =>
       owner.webContentsId === frame.webContentsId && owner.startedAt === startedAt
@@ -73,13 +77,23 @@ export class MeetingMicCaptureAuthority {
   /** Atomically consume the sole pending admission matching this current top-frame request. */
   claimPermissionRequest(frame: MeetingMicCaptureFrame): boolean {
     const current = this.#deps.currentState()
-    if (!this.#frameMatchesCurrentMain(frame, current) || !current.isWindowVisible || !current.isAuthenticated ||
-        current.meetingStartedAt === null) return false
-    const matches = (owner: MeetingMicCaptureOwner): boolean => owner.webContentsId === frame.webContentsId &&
-      owner.startedAt === current.meetingStartedAt && owner.authSessionGeneration === current.context.authSessionGeneration &&
-      owner.contextRevision === current.context.contextRevision && owner.requestingUrl === current.currentUrl
+    if (
+      !this.#frameMatchesCurrentMain(frame, current) ||
+      !current.isWindowVisible ||
+      !current.isAuthenticated ||
+      current.meetingStartedAt === null
+    )
+      return false
+    const matches = (owner: MeetingMicCaptureOwner): boolean =>
+      owner.webContentsId === frame.webContentsId &&
+      owner.startedAt === current.meetingStartedAt &&
+      owner.authSessionGeneration === current.context.authSessionGeneration &&
+      owner.contextRevision === current.context.contextRevision &&
+      owner.requestingUrl === current.currentUrl
     const pending = [...this.#owners.values()].filter((owner) => owner.state === 'pending' && matches(owner))
-    const otherUnresolved = [...this.#owners.values()].some((owner) => owner.state === 'permission-authorized' && matches(owner))
+    const otherUnresolved = [...this.#owners.values()].some(
+      (owner) => owner.state === 'permission-authorized' && matches(owner)
+    )
     if (pending.length !== 1 || otherUnresolved) return false
     pending[0]!.state = 'permission-authorized'
     return true
@@ -89,11 +103,17 @@ export class MeetingMicCaptureAuthority {
     const owner = this.#owners.get(captureId)
     if (!owner || owner.state !== 'permission-authorized' || owner.startedAt !== startedAt) return false
     const current = this.#deps.currentState()
-    if (!this.#frameMatchesCurrentMain(frame, current) ||
-        !current.isWindowVisible || !current.isAuthenticated ||
-        current.meetingStartedAt !== startedAt || owner.webContentsId !== frame.webContentsId ||
-        owner.authSessionGeneration !== current.context.authSessionGeneration ||
-        owner.contextRevision !== current.context.contextRevision || owner.requestingUrl !== current.currentUrl) return false
+    if (
+      !this.#frameMatchesCurrentMain(frame, current) ||
+      !current.isWindowVisible ||
+      !current.isAuthenticated ||
+      current.meetingStartedAt !== startedAt ||
+      owner.webContentsId !== frame.webContentsId ||
+      owner.authSessionGeneration !== current.context.authSessionGeneration ||
+      owner.contextRevision !== current.context.contextRevision ||
+      owner.requestingUrl !== current.currentUrl
+    )
+      return false
     owner.state = 'established'
     return true
   }
@@ -112,11 +132,14 @@ export class MeetingMicCaptureAuthority {
     requestingUrl: string
   ): boolean {
     if (startedAt === null) return false
-    return [...this.#owners.values()].some((owner) =>
-      owner.state === 'permission-authorized' &&
-      owner.webContentsId === webContentsId && owner.startedAt === startedAt &&
-      owner.authSessionGeneration === context.authSessionGeneration &&
-      owner.contextRevision === context.contextRevision && owner.requestingUrl === requestingUrl
+    return [...this.#owners.values()].some(
+      (owner) =>
+        owner.state === 'permission-authorized' &&
+        owner.webContentsId === webContentsId &&
+        owner.startedAt === startedAt &&
+        owner.authSessionGeneration === context.authSessionGeneration &&
+        owner.contextRevision === context.contextRevision &&
+        owner.requestingUrl === requestingUrl
     )
   }
 
@@ -127,10 +150,15 @@ export class MeetingMicCaptureAuthority {
     requestingUrl: string
   ): boolean {
     if (startedAt === null) return false
-    return [...this.#owners.values()].some((owner) => owner.state === 'pending' &&
-      owner.webContentsId === webContentsId && owner.startedAt === startedAt &&
-      owner.authSessionGeneration === context.authSessionGeneration &&
-      owner.contextRevision === context.contextRevision && owner.requestingUrl === requestingUrl)
+    return [...this.#owners.values()].some(
+      (owner) =>
+        owner.state === 'pending' &&
+        owner.webContentsId === webContentsId &&
+        owner.startedAt === startedAt &&
+        owner.authSessionGeneration === context.authSessionGeneration &&
+        owner.contextRevision === context.contextRevision &&
+        owner.requestingUrl === requestingUrl
+    )
   }
 
   revokeMeeting(startedAt: number | null, reason: InputSessionStopReason): void {
@@ -148,8 +176,12 @@ export class MeetingMicCaptureAuthority {
   }
 
   #frameMatchesCurrentMain(frame: MeetingMicCaptureFrame, current: MeetingMicCaptureCurrentState): boolean {
-    return frame.webContentsId === current.mainWebContentsId && frame.isTopFrame &&
-      !!current.currentUrl && frame.url === current.currentUrl
+    return (
+      frame.webContentsId === current.mainWebContentsId &&
+      frame.isTopFrame &&
+      !!current.currentUrl &&
+      frame.url === current.currentUrl
+    )
   }
 
   #revoke(captureId: string, owner: MeetingMicCaptureOwner, reason: InputSessionStopReason): void {

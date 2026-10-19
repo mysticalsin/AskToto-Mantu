@@ -13,7 +13,7 @@ type Slot = { current: unknown }
 const host = vi.hoisted(() => {
   let slots: Slot[] = []
   let cursor = 0
-  const slot = <T,>(initial: T): { current: T } => {
+  const slot = <T>(initial: T): { current: T } => {
     const i = cursor++
     if (!slots[i]) slots[i] = { current: initial }
     return slots[i] as { current: T }
@@ -40,11 +40,11 @@ const host = vi.hoisted(() => {
 })
 
 vi.mock('react', () => ({
-  useRef: <T,>(initial: T) => host.useRef(initial),
-  useState: <T,>(initial: T) => host.useState(initial),
+  useRef: <T>(initial: T) => host.useRef(initial),
+  useState: <T>(initial: T) => host.useState(initial),
   useEffect: () => {},
-  useCallback: <T,>(fn: T) => fn,
-  useMemo: <T,>(fn: () => T) => fn()
+  useCallback: <T>(fn: T) => fn,
+  useMemo: <T>(fn: () => T) => fn()
 }))
 
 type WorkletMessage = { audio: Float32Array; sampleRate?: number; partial?: boolean }
@@ -254,42 +254,39 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe.each(['parakeet', 'apple', 'whisper'] as const)(
-  '%s live caption behavior',
-  (engine) => {
-    it('replaces an overlapping partial with the named final, defers its question, and keeps later speech', async () => {
-      const onQuestion = vi.fn()
-      await startSession(engine, onQuestion)
+describe.each(['parakeet', 'apple', 'whisper'] as const)('%s live caption behavior', (engine) => {
+  it('replaces an overlapping partial with the named final, defers its question, and keeps later speech', async () => {
+    const onQuestion = vi.fn()
+    await startSession(engine, onQuestion)
 
-      await emitCaption(engine, partialText, true)
-      let api = render(onQuestion, engine)
+    await emitCaption(engine, partialText, true)
+    let api = render(onQuestion, engine)
 
-      // Date.now is fixed: cleanup must remove the exact "…" placeholder, not this same-timestamp caption.
-      expect(api.lines).toHaveLength(1)
-      expect(api.lines[0]).toMatchObject({ speaker: 'them', text: partialText, t: fixedNow, provisional: true })
-      expect(api.lines[0]?.text).not.toBe('…')
-      expect(api.text()).toBe('')
-      expect(onQuestion).not.toHaveBeenCalled()
+    // Date.now is fixed: cleanup must remove the exact "…" placeholder, not this same-timestamp caption.
+    expect(api.lines).toHaveLength(1)
+    expect(api.lines[0]).toMatchObject({ speaker: 'them', text: partialText, t: fixedNow, provisional: true })
+    expect(api.lines[0]?.text).not.toBe('…')
+    expect(api.text()).toBe('')
+    expect(onQuestion).not.toHaveBeenCalled()
 
-      await emitCaption(engine, fullText, false)
-      api = render(onQuestion, engine)
+    await emitCaption(engine, fullText, false)
+    api = render(onQuestion, engine)
 
-      expect(api.lines).toHaveLength(1)
-      expect(api.lines[0]).toMatchObject({ speaker: 'them', text: fullText, name: 'Alice' })
-      expect(api.lines[0]?.provisional).toBeUndefined()
-      expect(api.text()).toBe(`THEM (Alice): ${fullText}`)
-      expect(onQuestion).toHaveBeenCalledTimes(1)
-      expect(onQuestion).toHaveBeenLastCalledWith(expect.objectContaining({ text: fullText }))
+    expect(api.lines).toHaveLength(1)
+    expect(api.lines[0]).toMatchObject({ speaker: 'them', text: fullText, name: 'Alice' })
+    expect(api.lines[0]?.provisional).toBeUndefined()
+    expect(api.text()).toBe(`THEM (Alice): ${fullText}`)
+    expect(onQuestion).toHaveBeenCalledTimes(1)
+    expect(onQuestion).toHaveBeenLastCalledWith(expect.objectContaining({ text: fullText }))
 
-      await emitCaption(engine, laterText, false)
-      api = render(onQuestion, engine)
+    await emitCaption(engine, laterText, false)
+    api = render(onQuestion, engine)
 
-      expect(api.lines.map((line) => line.text)).toEqual([fullText, laterText])
-      expect(api.text()).toBe(`THEM (Alice): ${fullText}\nTHEM (Alice): ${laterText}`)
-      expect(onQuestion).toHaveBeenCalledTimes(1)
-    })
-  }
-)
+    expect(api.lines.map((line) => line.text)).toEqual([fullText, laterText])
+    expect(api.text()).toBe(`THEM (Alice): ${fullText}\nTHEM (Alice): ${laterText}`)
+    expect(onQuestion).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe.each(['parakeet', 'apple', 'whisper'] as const)('%s restart ownership', (engine) => {
   it('ignores an old-session settle while the new session owns the placeholder, busy slot, and queue', async () => {
@@ -401,9 +398,7 @@ describe('whisper restart error ownership', () => {
     api = render(onQuestion, 'whisper')
     expect(api.listening).toBe(true)
     expect(api.error).toBeNull()
-    expect(api.lines).toEqual([
-      expect.objectContaining({ text: '…', t: fixedNow + 40, provisional: true })
-    ])
+    expect(api.lines).toEqual([expect.objectContaining({ text: '…', t: fixedNow + 40, provisional: true })])
 
     currentWorker.emit({ type: 'text', text: laterText, speaker: 'them' })
     await settlePromises()

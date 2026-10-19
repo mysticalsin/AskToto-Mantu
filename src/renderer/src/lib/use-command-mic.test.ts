@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InputSessionContext, InputSessionLease, InputSessionRevoked } from '@shared/ipc'
 
-type SpeechResult = { ok: true } | {
-  ok: false
-  reason: 'policy_blocked' | 'unsupported_engine' | 'busy' | 'stale' | 'invalid' | 'no_speech' | 'recognition_unavailable'
-}
+type SpeechResult =
+  | { ok: true }
+  | {
+      ok: false
+      reason:
+        | 'policy_blocked'
+        | 'unsupported_engine'
+        | 'busy'
+        | 'stale'
+        | 'invalid'
+        | 'no_speech'
+        | 'recognition_unavailable'
+    }
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void; reject(reason?: unknown): void }
 type TrackFixture = MediaStreamTrack & {
   emitEnded(): void
@@ -47,14 +56,24 @@ function deferred<T>(fallback: T): Deferred<T> {
   let rejectPromise!: (reason?: unknown) => void
   let settled = false
   const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = (value) => { settled = true; resolve(value) }
-    rejectPromise = (reason) => { settled = true; reject(reason) }
+    resolvePromise = (value) => {
+      settled = true
+      resolve(value)
+    }
+    rejectPromise = (reason) => {
+      settled = true
+      reject(reason)
+    }
   })
   settleDeferreds.push(() => resolvePromise(fallback))
   return {
     promise,
-    resolve(value) { if (!settled) resolvePromise(value) },
-    reject(reason) { if (!settled) rejectPromise(reason) }
+    resolve(value) {
+      if (!settled) resolvePromise(value)
+    },
+    reject(reason) {
+      if (!settled) rejectPromise(reason)
+    }
   }
 }
 
@@ -75,11 +94,18 @@ function createHarness(options: HarnessOptions = {}) {
   const sources: Array<{ connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = []
   const gains: Array<{ connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = []
   const contexts: Array<{ close: ReturnType<typeof vi.fn>; state: string }> = []
-  const nodes: Array<{ port: { onmessage: ((event: MessageEvent) => void) | null; postMessage: ReturnType<typeof vi.fn> }; connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit(data: unknown): void }> = []
+  const nodes: Array<{
+    port: { onmessage: ((event: MessageEvent) => void) | null; postMessage: ReturnType<typeof vi.fn> }
+    connect: ReturnType<typeof vi.fn>
+    disconnect: ReturnType<typeof vi.fn>
+    emit(data: unknown): void
+  }> = []
   const revocationListeners = new Set<(event: InputSessionRevoked) => void>()
   const deviceListeners = new Set<EventListenerOrEventListenerObject>()
   const ids: string[] = []
-  let availability: { ok: true } | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'unauthorized' } = { ok: true }
+  let availability: { ok: true } | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'unauthorized' } = {
+    ok: true
+  }
   let activationReady = true
   let finishResult: SpeechResult = { ok: true }
   let nextInputSession = 0
@@ -94,8 +120,12 @@ function createHarness(options: HarnessOptions = {}) {
     const fixture = {
       readyState: 'live' as MediaStreamTrackState,
       listeners: new Map<string, Set<EventListenerOrEventListenerObject>>(),
-      stop: vi.fn(() => { order.push('track.stop') }),
-      setReadyState(value: MediaStreamTrackState) { fixture.readyState = value },
+      stop: vi.fn(() => {
+        order.push('track.stop')
+      }),
+      setReadyState(value: MediaStreamTrackState) {
+        fixture.readyState = value
+      },
       addEventListener: vi.fn((type: string, listener: EventListenerOrEventListenerObject) => {
         if (options.throwEndedListener && type === 'ended') throw new Error('track listener setup failed')
         const listeners = fixture.listeners.get(type) ?? new Set<EventListenerOrEventListenerObject>()
@@ -118,65 +148,103 @@ function createHarness(options: HarnessOptions = {}) {
     tracks.add(fixture)
     return fixture
   }
-  const makeStream = (streamTrack: TrackFixture): MediaStream => ({
-    getTracks: () => [streamTrack],
-    getAudioTracks: () => {
-      if (options.throwAudioTrackDiscovery) throw new Error('audio track discovery failed')
-      return options.noAudioTrack ? [] : [streamTrack]
-    }
-  } as unknown as MediaStream)
+  const makeStream = (streamTrack: TrackFixture): MediaStream =>
+    ({
+      getTracks: () => [streamTrack],
+      getAudioTracks: () => {
+        if (options.throwAudioTrackDiscovery) throw new Error('audio track discovery failed')
+        return options.noAudioTrack ? [] : [streamTrack]
+      }
+    }) as unknown as MediaStream
   const track = makeTrack()
   mediaStream = makeStream(track)
   let mediaRequestCount = 0
-  const getUserMedia = vi.fn((_constraints?: MediaStreamConstraints) => trackBoundaryTask((async () => {
-    if (mediaRequestCount++ === 0) return mediaStream
-    mediaStream = makeStream(makeTrack())
-    return mediaStream
-  })()))
-  const commandSpeechStart = vi.fn((sessionId: string): Promise<SpeechResult> => trackBoundaryTask((async () => {
-    order.push(`speech.start:${sessionId}`)
-    return { ok: true }
-  })()))
-  const commandSpeechFrame = vi.fn((sessionId: string, sequence: number, _samples: Float32Array): Promise<SpeechResult> => trackBoundaryTask((async () => {
-    order.push(`speech.frame:${sessionId}:${sequence}`)
-    return { ok: true }
-  })()))
-  const commandSpeechFinish = vi.fn((sessionId: string, frameCount: number): Promise<SpeechResult> => trackBoundaryTask((async () => {
-    order.push(`speech.finish:${sessionId}:${frameCount}`)
-    return finishResult
-  })()))
-  const commandSpeechCancel = vi.fn((sessionId: string): Promise<SpeechResult> => trackBoundaryTask((async () => {
-    order.push(`speech.cancel:${sessionId}`)
-    return { ok: true }
-  })()))
-  const stopInputSession = vi.fn(({ sessionId }: { sessionId: string }, _owner: InputSessionContext) => trackBoundaryTask((async () => {
-    order.push(`session.stop:${sessionId}`)
-    return { ok: true as const }
-  })()))
-  const startInputSession = vi.fn((
-    input: { source: string; purpose: string; activation: string }, owner: InputSessionContext
-  ) => trackBoundaryTask((async () => {
-    const sessionId = (++nextInputSession).toString(16).padStart(48, '0')
-    ids.push(sessionId)
-    const lease: InputSessionLease = {
-      sessionId,
-      source: input.source as InputSessionLease['source'],
-      purpose: input.purpose as InputSessionLease['purpose'],
-      activation: input.activation as InputSessionLease['activation'],
-      authSessionGeneration: owner.authSessionGeneration,
-      contextRevision: owner.contextRevision,
-      revision: 1,
-      startedAt: 1234,
-      actionAuthority: false
-    }
-    return { ok: true as const, lease }
-  })()))
-  const confirmInputSession = vi.fn((_sessionId: string, _owner: InputSessionContext) => trackBoundaryTask((async () => true)()))
-  const commandMicAvailability = vi.fn(() => trackBoundaryTask((async () => {
-    const call = availabilityCallCount++
-    if (call === 1 && availabilityRefreshGate) return availabilityRefreshGate.promise
-    return availability
-  })()))
+  const getUserMedia = vi.fn((_constraints?: MediaStreamConstraints) =>
+    trackBoundaryTask(
+      (async () => {
+        if (mediaRequestCount++ === 0) return mediaStream
+        mediaStream = makeStream(makeTrack())
+        return mediaStream
+      })()
+    )
+  )
+  const commandSpeechStart = vi.fn(
+    (sessionId: string): Promise<SpeechResult> =>
+      trackBoundaryTask(
+        (async () => {
+          order.push(`speech.start:${sessionId}`)
+          return { ok: true }
+        })()
+      )
+  )
+  const commandSpeechFrame = vi.fn(
+    (sessionId: string, sequence: number, _samples: Float32Array): Promise<SpeechResult> =>
+      trackBoundaryTask(
+        (async () => {
+          order.push(`speech.frame:${sessionId}:${sequence}`)
+          return { ok: true }
+        })()
+      )
+  )
+  const commandSpeechFinish = vi.fn(
+    (sessionId: string, frameCount: number): Promise<SpeechResult> =>
+      trackBoundaryTask(
+        (async () => {
+          order.push(`speech.finish:${sessionId}:${frameCount}`)
+          return finishResult
+        })()
+      )
+  )
+  const commandSpeechCancel = vi.fn(
+    (sessionId: string): Promise<SpeechResult> =>
+      trackBoundaryTask(
+        (async () => {
+          order.push(`speech.cancel:${sessionId}`)
+          return { ok: true }
+        })()
+      )
+  )
+  const stopInputSession = vi.fn(({ sessionId }: { sessionId: string }, _owner: InputSessionContext) =>
+    trackBoundaryTask(
+      (async () => {
+        order.push(`session.stop:${sessionId}`)
+        return { ok: true as const }
+      })()
+    )
+  )
+  const startInputSession = vi.fn(
+    (input: { source: string; purpose: string; activation: string }, owner: InputSessionContext) =>
+      trackBoundaryTask(
+        (async () => {
+          const sessionId = (++nextInputSession).toString(16).padStart(48, '0')
+          ids.push(sessionId)
+          const lease: InputSessionLease = {
+            sessionId,
+            source: input.source as InputSessionLease['source'],
+            purpose: input.purpose as InputSessionLease['purpose'],
+            activation: input.activation as InputSessionLease['activation'],
+            authSessionGeneration: owner.authSessionGeneration,
+            contextRevision: owner.contextRevision,
+            revision: 1,
+            startedAt: 1234,
+            actionAuthority: false
+          }
+          return { ok: true as const, lease }
+        })()
+      )
+  )
+  const confirmInputSession = vi.fn((_sessionId: string, _owner: InputSessionContext) =>
+    trackBoundaryTask((async () => true)())
+  )
+  const commandMicAvailability = vi.fn(() =>
+    trackBoundaryTask(
+      (async () => {
+        const call = availabilityCallCount++
+        if (call === 1 && availabilityRefreshGate) return availabilityRefreshGate.promise
+        return availability
+      })()
+    )
+  )
   const onInputSessionRevoked = vi.fn((listener: (event: InputSessionRevoked) => void) => {
     revocationListeners.add(listener)
     return () => revocationListeners.delete(listener)
@@ -192,24 +260,44 @@ function createHarness(options: HarnessOptions = {}) {
   }
 
   class FakeAudioContext {
-    constructor() { contexts.push(this) }
+    constructor() {
+      contexts.push(this)
+    }
     state = 'suspended'
     destination = { kind: 'destination' }
     audioWorklet = {
-      addModule: vi.fn((_url: string) => trackBoundaryTask((async () => {
-        order.push(`worklet.module:${++audioContextNumber}`)
-        if (moduleGate) await moduleGate.promise
-      })()))
+      addModule: vi.fn((_url: string) =>
+        trackBoundaryTask(
+          (async () => {
+            order.push(`worklet.module:${++audioContextNumber}`)
+            if (moduleGate) await moduleGate.promise
+          })()
+        )
+      )
     }
-    close = vi.fn(() => trackBoundaryTask((async () => {
-      order.push('context.close')
-      this.state = 'closed'
-    })()))
-    resume = vi.fn(() => trackBoundaryTask((async () => { this.state = 'running' })()))
+    close = vi.fn(() =>
+      trackBoundaryTask(
+        (async () => {
+          order.push('context.close')
+          this.state = 'closed'
+        })()
+      )
+    )
+    resume = vi.fn(() =>
+      trackBoundaryTask(
+        (async () => {
+          this.state = 'running'
+        })()
+      )
+    )
     createMediaStreamSource = vi.fn((_stream: MediaStream) => {
       const source = {
-        connect: vi.fn(() => { order.push('source.connect') }),
-        disconnect: vi.fn(() => { order.push('source.disconnect') })
+        connect: vi.fn(() => {
+          order.push('source.connect')
+        }),
+        disconnect: vi.fn(() => {
+          order.push('source.disconnect')
+        })
       }
       sources.push(source)
       return source as unknown as MediaStreamAudioSourceNode
@@ -217,8 +305,12 @@ function createHarness(options: HarnessOptions = {}) {
     createGain = vi.fn(() => {
       const gain = {
         gain: { value: 1 },
-        connect: vi.fn(() => { order.push('gain.connect') }),
-        disconnect: vi.fn(() => { order.push('gain.disconnect') })
+        connect: vi.fn(() => {
+          order.push('gain.connect')
+        }),
+        disconnect: vi.fn(() => {
+          order.push('gain.disconnect')
+        })
       }
       gains.push(gain)
       return gain as unknown as GainNode
@@ -227,8 +319,12 @@ function createHarness(options: HarnessOptions = {}) {
 
   class FakeAudioWorkletNode {
     readonly port: { onmessage: ((event: MessageEvent) => void) | null; postMessage: ReturnType<typeof vi.fn> }
-    readonly connect = vi.fn(() => { order.push('node.connect') })
-    readonly disconnect = vi.fn(() => { order.push('node.disconnect') })
+    readonly connect = vi.fn(() => {
+      order.push('node.connect')
+    })
+    readonly disconnect = vi.fn(() => {
+      order.push('node.disconnect')
+    })
     constructor(_context: AudioContext, _name: string, _options: AudioWorkletNodeOptions) {
       this.port = {
         onmessage: null,
@@ -241,7 +337,9 @@ function createHarness(options: HarnessOptions = {}) {
       }
       nodes.push(this)
     }
-    emit(data: unknown): void { this.port.onmessage?.({ data } as MessageEvent) }
+    emit(data: unknown): void {
+      this.port.onmessage?.({ data } as MessageEvent)
+    }
   }
 
   vi.stubGlobal('navigator', { mediaDevices })
@@ -283,27 +381,49 @@ function createHarness(options: HarnessOptions = {}) {
     commandSpeechFinish,
     commandSpeechCancel,
     commandMicAvailability,
-    get availability() { return availability },
-    set availability(value: typeof availability) { availability = value },
-    get activationReady() { return activationReady },
-    set activationReady(value: boolean) { activationReady = value },
-    get stoppedTrackCount() { return [...tracks].reduce((count, item) => count + item.stop.mock.calls.length, 0) },
-    set finishResult(value: SpeechResult) { finishResult = value },
-    set sealFrames(value: Float32Array[]) { sealFrames = value },
+    get availability() {
+      return availability
+    },
+    set availability(value: typeof availability) {
+      availability = value
+    },
+    get activationReady() {
+      return activationReady
+    },
+    set activationReady(value: boolean) {
+      activationReady = value
+    },
+    get stoppedTrackCount() {
+      return [...tracks].reduce((count, item) => count + item.stop.mock.calls.length, 0)
+    },
+    set finishResult(value: SpeechResult) {
+      finishResult = value
+    },
+    set sealFrames(value: Float32Array[]) {
+      sealFrames = value
+    },
     deferFinish() {
       const gate = deferred<SpeechResult>({ ok: true })
-      commandSpeechFinish.mockImplementation((sessionId, frameCount) => trackBoundaryTask((async () => {
-        order.push(`speech.finish:${sessionId}:${frameCount}`)
-        return gate.promise
-      })()))
+      commandSpeechFinish.mockImplementation((sessionId, frameCount) =>
+        trackBoundaryTask(
+          (async () => {
+            order.push(`speech.finish:${sessionId}:${frameCount}`)
+            return gate.promise
+          })()
+        )
+      )
       return gate
     },
     deferFrames() {
       const gate = deferred<SpeechResult>({ ok: true })
-      commandSpeechFrame.mockImplementation((sessionId, sequence, _samples) => trackBoundaryTask((async () => {
-        order.push(`speech.frame:${sessionId}:${sequence}`)
-        return gate.promise
-      })()))
+      commandSpeechFrame.mockImplementation((sessionId, sequence, _samples) =>
+        trackBoundaryTask(
+          (async () => {
+            order.push(`speech.frame:${sessionId}:${sequence}`)
+            return gate.promise
+          })()
+        )
+      )
       return gate
     },
     deferModule() {
@@ -349,7 +469,9 @@ function createHarness(options: HarnessOptions = {}) {
     async makeContext() {
       return this.createController()
     },
-    getMediaStream() { return mediaStream }
+    getMediaStream() {
+      return mediaStream
+    }
   }
   return env
 }
@@ -398,7 +520,9 @@ describe('bounded command microphone capture', () => {
     expect(controller.getSnapshot()).toEqual({ status: 'finalizing' })
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.stopInputSession).not.toHaveBeenCalled()
-    expect(env.order.indexOf('track.stop')).toBeLessThan(env.order.findIndex((entry) => entry.startsWith(`speech.finish:${env.ids[0]}:`)))
+    expect(env.order.indexOf('track.stop')).toBeLessThan(
+      env.order.findIndex((entry) => entry.startsWith(`speech.finish:${env.ids[0]}:`))
+    )
 
     finish.resolve({ ok: true })
     await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'done' }))
@@ -670,7 +794,9 @@ describe('bounded command microphone capture', () => {
     const finishing = controller.finish()
     await vi.waitFor(() => expect(env.commandSpeechFinish).toHaveBeenCalledOnce())
     env.revokeInput(env.ids[0])
-    await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' }))
+    await vi.waitFor(() =>
+      expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' })
+    )
 
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.stopInputSession).not.toHaveBeenCalled()

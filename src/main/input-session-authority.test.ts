@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { InputSessionAuthority } from './input-session-authority'
 
-const owner = { webContentsId: 7, frameId: '12:3', isTopFrame: true, authSessionGeneration: 3, contextRevision: 9 } as const
-const otherOwner = { webContentsId: 8, frameId: '12:3', isTopFrame: true, authSessionGeneration: 3, contextRevision: 9 } as const
+const owner = {
+  webContentsId: 7,
+  frameId: '12:3',
+  isTopFrame: true,
+  authSessionGeneration: 3,
+  contextRevision: 9
+} as const
+const otherOwner = {
+  webContentsId: 8,
+  frameId: '12:3',
+  isTopFrame: true,
+  authSessionGeneration: 3,
+  contextRevision: 9
+} as const
 
 function authority() {
   let now = 100
@@ -22,7 +34,10 @@ describe('InputSessionAuthority', () => {
 
   it('treats renderer source and activation as metadata, never trusted action authority', () => {
     const sessions = authority()
-    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'ambient' })).toEqual({ ok: false, reason: 'invalid_request' })
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'ambient' })).toEqual({
+      ok: false,
+      reason: 'invalid_request'
+    })
     const wake = sessions.start(owner, { source: 'wake', purpose: 'conversation', activation: 'ambient' })
     expect(wake.ok && wake.lease.actionAuthority).toBe(false)
     sessions.hardStop('cancelled')
@@ -39,7 +54,10 @@ describe('InputSessionAuthority', () => {
     expect(interactive.ok).toBe(true)
     expect(sessions.reserveMeeting(500)).toBe(true)
     expect(sessions.activeLease).toBeNull()
-    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })).toEqual({ ok: false, reason: 'meeting_reserved' })
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'meeting_reserved'
+    })
     expect(sessions.reserveMeeting(501)).toBe(true)
     expect(sessions.meetingStartedAt).toBe(501)
     expect(sessions.releaseMeeting(500)).toBe(false)
@@ -55,7 +73,8 @@ describe('InputSessionAuthority', () => {
     sessions.hardStop('window-hidden')
     expect(sessions.meetingStartedAt).toBe(500)
     expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })).toEqual({
-      ok: false, reason: 'meeting_reserved'
+      ok: false,
+      reason: 'meeting_reserved'
     })
   })
 
@@ -66,18 +85,33 @@ describe('InputSessionAuthority', () => {
     sessions.reconcileContext({ authSessionGeneration: 4, contextRevision: 9 })
     expect(sessions.activeLease).toBeNull()
     expect(sessions.stop(owner, { sessionId: started.ok ? started.lease.sessionId : '0'.repeat(48) })).toEqual({
-      ok: false, reason: 'stale_session'
+      ok: false,
+      reason: 'stale_session'
     })
-    expect(sessions.start({ ...owner, authSessionGeneration: 4 }, {
-      source: 'push-to-talk', purpose: 'command', activation: 'explicit'
-    }).ok).toBe(true)
+    expect(
+      sessions.start(
+        { ...owner, authSessionGeneration: 4 },
+        {
+          source: 'push-to-talk',
+          purpose: 'command',
+          activation: 'explicit'
+        }
+      ).ok
+    ).toBe(true)
   })
 
   it('binds stop to both the trusted owner and current session id', () => {
     const sessions = authority()
-    const started = sessions.start(owner, { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' })
+    const started = sessions.start(owner, {
+      source: 'deliberate-talk',
+      purpose: 'conversation',
+      activation: 'explicit'
+    })
     if (!started.ok) throw new Error('expected test session')
-    expect(sessions.stop(otherOwner, { sessionId: started.lease.sessionId })).toEqual({ ok: false, reason: 'stale_session' })
+    expect(sessions.stop(otherOwner, { sessionId: started.lease.sessionId })).toEqual({
+      ok: false,
+      reason: 'stale_session'
+    })
     expect(sessions.stop(owner, { sessionId: 'f'.repeat(48) })).toEqual({ ok: false, reason: 'stale_session' })
     expect(sessions.stop(owner, { sessionId: started.lease.sessionId })).toEqual({ ok: true })
     expect(sessions.activeLease).toBeNull()
@@ -106,12 +140,19 @@ describe('InputSessionAuthority', () => {
     sessions.hardStop('device-change')
     expect(sessions.activeLease).toBeNull()
     sessions.shutdown()
-    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })).toEqual({ ok: false, reason: 'shutdown' })
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'shutdown'
+    })
   })
 
   it('closes interactive admission on first quit request while preserving meeting reservation for flush', () => {
     const sessions = authority()
-    const interactive = sessions.start(owner, { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' })
+    const interactive = sessions.start(owner, {
+      source: 'deliberate-talk',
+      purpose: 'conversation',
+      activation: 'explicit'
+    })
     expect(interactive.ok).toBe(true)
     expect(sessions.reserveMeeting(700)).toBe(true)
     sessions.beginShutdown()
@@ -119,7 +160,10 @@ describe('InputSessionAuthority', () => {
     expect(sessions.meetingStartedAt).toBe(700)
     expect(sessions.reserveMeeting(701)).toBe(false)
     expect(sessions.meetingStartedAt).toBe(700)
-    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })).toEqual({ ok: false, reason: 'shutdown' })
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'shutdown'
+    })
     sessions.shutdown()
     expect(sessions.meetingStartedAt).toBeNull()
   })

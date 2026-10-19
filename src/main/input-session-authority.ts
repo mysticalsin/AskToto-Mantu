@@ -15,11 +15,17 @@ interface ActiveSession {
   captureState: 'pending' | 'permission-authorized' | 'established'
 }
 
-const validOwner = (owner: TrustedInputOwner): boolean => owner.isTopFrame === true &&
-  Number.isSafeInteger(owner.webContentsId) && owner.webContentsId > 0 &&
-  typeof owner.frameId === 'string' && owner.frameId.length > 0 && owner.frameId.length <= 256 &&
-  Number.isSafeInteger(owner.authSessionGeneration) && owner.authSessionGeneration >= 0 &&
-  Number.isSafeInteger(owner.contextRevision) && owner.contextRevision >= 0
+const validOwner = (owner: TrustedInputOwner): boolean =>
+  owner.isTopFrame === true &&
+  Number.isSafeInteger(owner.webContentsId) &&
+  owner.webContentsId > 0 &&
+  typeof owner.frameId === 'string' &&
+  owner.frameId.length > 0 &&
+  owner.frameId.length <= 256 &&
+  Number.isSafeInteger(owner.authSessionGeneration) &&
+  owner.authSessionGeneration >= 0 &&
+  Number.isSafeInteger(owner.contextRevision) &&
+  owner.contextRevision >= 0
 
 /** Main-process authority for admission to renderer-owned microphone capture. Renderer-supplied
  * activation is not a trusted capability, so leases never grant action authority. */
@@ -34,11 +40,13 @@ export class InputSessionAuthority {
   #now: () => number
   #onRevoked?: (owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason) => void
 
-  constructor(options: {
-    token?: () => string
-    now?: () => number
-    onRevoked?: (owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason) => void
-  } = {}) {
+  constructor(
+    options: {
+      token?: () => string
+      now?: () => number
+      onRevoked?: (owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason) => void
+    } = {}
+  ) {
     this.#token = options.token ?? (() => randomBytes(24).toString('hex'))
     this.#now = options.now ?? Date.now
     this.#onRevoked = options.onRevoked
@@ -93,8 +101,13 @@ export class InputSessionAuthority {
   /** Confirm the exact permission-authorized lease after renderer getUserMedia resolves. */
   confirmCapture(owner: TrustedInputOwner, sessionId: string): boolean {
     const current = this.#active
-    if (!current || current.captureState !== 'permission-authorized' || current.lease.sessionId !== sessionId ||
-        !this.#owns(current.owner, owner)) return false
+    if (
+      !current ||
+      current.captureState !== 'permission-authorized' ||
+      current.lease.sessionId !== sessionId ||
+      !this.#owns(current.owner, owner)
+    )
+      return false
     current.captureState = 'established'
     return true
   }
@@ -113,7 +126,8 @@ export class InputSessionAuthority {
 
   /** An accepted meeting transition preempts interactive authority and atomically replaces the reservation. */
   reserveMeeting(startedAt: number | null): boolean {
-    if (this.#closing || this.#shutdown || (startedAt !== null && (!Number.isSafeInteger(startedAt) || startedAt <= 0))) return false
+    if (this.#closing || this.#shutdown || (startedAt !== null && (!Number.isSafeInteger(startedAt) || startedAt <= 0)))
+      return false
     // This is called only after the main meeting identity acceptor admits a transition. Revoke interactive
     // lease authority synchronously, then atomically replace any previous metadata reservation.
     this.hardStop('owner-replaced')
@@ -131,8 +145,12 @@ export class InputSessionAuthority {
 
   /** Drop an old lease when main observes a new account generation or renderer context revision. */
   reconcileContext(context: Pick<TrustedInputOwner, 'authSessionGeneration' | 'contextRevision'>): void {
-    if (this.#active && (this.#active.owner.authSessionGeneration !== context.authSessionGeneration ||
-        this.#active.owner.contextRevision !== context.contextRevision)) this.hardStop('auth-revoked')
+    if (
+      this.#active &&
+      (this.#active.owner.authSessionGeneration !== context.authSessionGeneration ||
+        this.#active.owner.contextRevision !== context.contextRevision)
+    )
+      this.hardStop('auth-revoked')
   }
 
   /** Hard stop invalidates admission synchronously and notifies the exact renderer lease owner. */
@@ -140,7 +158,11 @@ export class InputSessionAuthority {
     const active = this.#active
     this.#active = undefined
     if (active) {
-      try { this.#onRevoked?.(active.owner, active.lease, reason) } catch { /* authority stays revoked even if the renderer is gone */ }
+      try {
+        this.#onRevoked?.(active.owner, active.lease, reason)
+      } catch {
+        /* authority stays revoked even if the renderer is gone */
+      }
     }
   }
 
@@ -158,25 +180,45 @@ export class InputSessionAuthority {
     this.#meetingStartedAt = null
   }
 
-  get activeLease(): InputSessionLease | null { return this.#active?.lease ?? null }
-  get isClosing(): boolean { return this.#closing }
-  get meetingStartedAt(): number | null { return this.#meetingStartedAt }
-  get hasMeetingReservation(): boolean { return this.#meetingReserved }
+  get activeLease(): InputSessionLease | null {
+    return this.#active?.lease ?? null
+  }
+  get isClosing(): boolean {
+    return this.#closing
+  }
+  get meetingStartedAt(): number | null {
+    return this.#meetingStartedAt
+  }
+  get hasMeetingReservation(): boolean {
+    return this.#meetingReserved
+  }
   ownsInteractiveOwner(webContentsId: number): boolean {
     return this.#active?.owner.webContentsId === webContentsId
   }
   isEstablishedLease(owner: TrustedInputOwner, sessionId: string, purpose: 'command'): boolean {
     const current = this.#active
-    return !!current && current.captureState === 'established' && current.lease.sessionId === sessionId &&
-      current.lease.purpose === purpose && this.#owns(current.owner, owner)
+    return (
+      !!current &&
+      current.captureState === 'established' &&
+      current.lease.sessionId === sessionId &&
+      current.lease.purpose === purpose &&
+      this.#owns(current.owner, owner)
+    )
   }
 
   #owns(expected: TrustedInputOwner, actual: TrustedInputOwner): boolean {
-    return actual.isTopFrame === true && expected.webContentsId === actual.webContentsId && expected.frameId === actual.frameId &&
+    return (
+      actual.isTopFrame === true &&
+      expected.webContentsId === actual.webContentsId &&
+      expected.frameId === actual.frameId &&
       this.#sameContext(expected, actual)
+    )
   }
 
   #sameContext(expected: TrustedInputOwner, actual: TrustedInputOwner): boolean {
-    return expected.authSessionGeneration === actual.authSessionGeneration && expected.contextRevision === actual.contextRevision
+    return (
+      expected.authSessionGeneration === actual.authSessionGeneration &&
+      expected.contextRevision === actual.contextRevision
+    )
   }
 }

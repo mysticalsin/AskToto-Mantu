@@ -14,7 +14,13 @@ import type {
 } from './task-contract'
 
 export function createTaskRuntimeState(): TaskRuntimeState {
-  return { tasks: new Map(), attempts: new Map(), grants: new Map(), consumedGrantIds: new Set(), ownerRebindRequired: false }
+  return {
+    tasks: new Map(),
+    attempts: new Map(),
+    grants: new Map(),
+    consumedGrantIds: new Set(),
+    ownerRebindRequired: false
+  }
 }
 
 const deny = (state: TaskRuntimeState, reason: TaskTransitionDenial): TransitionResult => ({ ok: false, state, reason })
@@ -25,7 +31,10 @@ function snapshotOwner(owner: TaskOwner): TaskOwner {
 }
 
 function snapshotScope(scope: TaskScope): TaskScope {
-  return Object.freeze({ capabilities: Object.freeze([...scope.capabilities]), resources: Object.freeze({ ...scope.resources }) })
+  return Object.freeze({
+    capabilities: Object.freeze([...scope.capabilities]),
+    resources: Object.freeze({ ...scope.resources })
+  })
 }
 
 function snapshotGrantScope(scope: DispatchGrantScope): DispatchGrantScope {
@@ -45,43 +54,79 @@ function snapshotGrant(grant: DispatchGrant): DispatchGrant {
 }
 
 function validOwner(owner: TaskOwner): boolean {
-  return !!owner && owner.isTopFrame === true && Number.isSafeInteger(owner.webContentsId) && owner.webContentsId > 0 &&
-    typeof owner.frameId === 'string' && owner.frameId.length > 0 && owner.frameId.length <= 256 &&
-    Number.isSafeInteger(owner.authSessionGeneration) && owner.authSessionGeneration >= 0 &&
-    Number.isSafeInteger(owner.contextRevision) && owner.contextRevision >= 0
+  return (
+    !!owner &&
+    owner.isTopFrame === true &&
+    Number.isSafeInteger(owner.webContentsId) &&
+    owner.webContentsId > 0 &&
+    typeof owner.frameId === 'string' &&
+    owner.frameId.length > 0 &&
+    owner.frameId.length <= 256 &&
+    Number.isSafeInteger(owner.authSessionGeneration) &&
+    owner.authSessionGeneration >= 0 &&
+    Number.isSafeInteger(owner.contextRevision) &&
+    owner.contextRevision >= 0
+  )
 }
 
 function sameOwner(a: TrustedInputOwner, b: TrustedInputOwner): boolean {
-  return a.webContentsId === b.webContentsId && a.frameId === b.frameId && a.isTopFrame === b.isTopFrame &&
-    a.authSessionGeneration === b.authSessionGeneration && a.contextRevision === b.contextRevision
+  return (
+    a.webContentsId === b.webContentsId &&
+    a.frameId === b.frameId &&
+    a.isTopFrame === b.isTopFrame &&
+    a.authSessionGeneration === b.authSessionGeneration &&
+    a.contextRevision === b.contextRevision
+  )
 }
 
 function validPolicy(policy: TaskPolicy): boolean {
-  return !!policy && Array.isArray(policy.allowedTaskTypes) && Array.isArray(policy.allowedCapabilities) &&
-    !!policy.resourceBudgets && typeof policy.resourceBudgets === 'object' &&
-    Number.isFinite(policy.maxRetentionMs) && policy.maxRetentionMs >= 0 &&
-    Number.isFinite(policy.maxGrantTtlMs) && policy.maxGrantTtlMs > 0 &&
+  return (
+    !!policy &&
+    Array.isArray(policy.allowedTaskTypes) &&
+    Array.isArray(policy.allowedCapabilities) &&
+    !!policy.resourceBudgets &&
+    typeof policy.resourceBudgets === 'object' &&
+    Number.isFinite(policy.maxRetentionMs) &&
+    policy.maxRetentionMs >= 0 &&
+    Number.isFinite(policy.maxGrantTtlMs) &&
+    policy.maxGrantTtlMs > 0 &&
     policy.allowedTaskTypes.every((v) => typeof v === 'string' && v.length > 0) &&
     policy.allowedCapabilities.every((v) => typeof v === 'string' && v.length > 0) &&
-    Object.entries(policy.resourceBudgets).every(([key, value]) => key.length > 0 && Number.isFinite(value) && value >= 0)
+    Object.entries(policy.resourceBudgets).every(
+      ([key, value]) => key.length > 0 && Number.isFinite(value) && value >= 0
+    )
+  )
 }
 
 function validScope(scope: TaskScope): boolean {
-  return !!scope && Array.isArray(scope.capabilities) && !!scope.resources && typeof scope.resources === 'object' &&
+  return (
+    !!scope &&
+    Array.isArray(scope.capabilities) &&
+    !!scope.resources &&
+    typeof scope.resources === 'object' &&
     scope.capabilities.every((v) => typeof v === 'string' && v.length > 0) &&
     new Set(scope.capabilities).size === scope.capabilities.length &&
     Object.entries(scope.resources).every(([key, value]) => key.length > 0 && Number.isFinite(value) && value >= 0)
+  )
 }
 
 function budgetFits(requested: Readonly<Record<string, number>>, ceiling: Readonly<Record<string, number>>): boolean {
-  return Object.entries(requested).every(([key, value]) =>
-    Object.prototype.hasOwnProperty.call(ceiling, key) && Number.isFinite(value) && value >= 0 && value <= ceiling[key]!
+  return Object.entries(requested).every(
+    ([key, value]) =>
+      Object.prototype.hasOwnProperty.call(ceiling, key) &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      value <= ceiling[key]!
   )
 }
 
 function grantScopeFits(scope: DispatchGrantScope, taskScope: TaskScope, policy: TaskPolicy): boolean {
-  return taskScope.capabilities.includes(scope.capability) && policy.allowedCapabilities.includes(scope.capability) &&
-    budgetFits(scope.resources, taskScope.resources) && budgetFits(scope.resources, policy.resourceBudgets)
+  return (
+    taskScope.capabilities.includes(scope.capability) &&
+    policy.allowedCapabilities.includes(scope.capability) &&
+    budgetFits(scope.resources, taskScope.resources) &&
+    budgetFits(scope.resources, policy.resourceBudgets)
+  )
 }
 
 function sameRecord<T>(a: T, b: T): boolean {
@@ -90,7 +135,9 @@ function sameRecord<T>(a: T, b: T): boolean {
   const right = b as Record<string, unknown>
   const leftKeys = Object.keys(left).sort()
   const rightKeys = Object.keys(right).sort()
-  return leftKeys.length === rightKeys.length && leftKeys.every((key, i) => key === rightKeys[i] && left[key] === right[key])
+  return (
+    leftKeys.length === rightKeys.length && leftKeys.every((key, i) => key === rightKeys[i] && left[key] === right[key])
+  )
 }
 
 function sameGrantScope(a: DispatchGrantScope, b: DispatchGrantScope): boolean {
@@ -102,11 +149,17 @@ function sameCapabilitySet(a: readonly string[], b: readonly string[]): boolean 
 }
 
 function childScopeStrictlyNarrower(child: TaskScope, parent: TaskScope): boolean {
-  if (!validScope(child) || !validScope(parent) || !child.capabilities.every((cap) => parent.capabilities.includes(cap))) return false
+  if (
+    !validScope(child) ||
+    !validScope(parent) ||
+    !child.capabilities.every((cap) => parent.capabilities.includes(cap))
+  )
+    return false
   if (!budgetFits(child.resources, parent.resources)) return false
   const resourceKeys = Object.keys(child.resources)
   const parentKeys = Object.keys(parent.resources)
-  const strict = !sameCapabilitySet(child.capabilities, parent.capabilities) ||
+  const strict =
+    !sameCapabilitySet(child.capabilities, parent.capabilities) ||
     resourceKeys.length < parentKeys.length ||
     Object.entries(child.resources).some(([key, value]) => value < parent.resources[key]!)
   return strict
@@ -144,18 +197,26 @@ function cancelDescendants(state: TaskRuntimeState, rootTaskId: string): TaskRun
     if (!child || child.status === 'completed' || child.status === 'cancelled') continue
     if (child.status === 'dispatching' && child.activeAttemptId) {
       const attempt = attempts.get(child.activeAttemptId)
-      if (attempt?.status === 'authorized') attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
+      if (attempt?.status === 'authorized')
+        attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
     }
-    tasks.set(id, snapshotTask({
-      ...child,
-      status: 'cancelled',
-      ...(child.status === 'dispatching' ? { effectOutcome: 'uncertain' as const, activeAttemptId: undefined } : {})
-    }))
+    tasks.set(
+      id,
+      snapshotTask({
+        ...child,
+        status: 'cancelled',
+        ...(child.status === 'dispatching' ? { effectOutcome: 'uncertain' as const, activeAttemptId: undefined } : {})
+      })
+    )
   }
   return { ...next, tasks, attempts }
 }
 
-function invalidateSubtree(state: TaskRuntimeState, rootTaskId: string, status: 'paused' | 'cancelled'): TaskRuntimeState {
+function invalidateSubtree(
+  state: TaskRuntimeState,
+  rootTaskId: string,
+  status: 'paused' | 'cancelled'
+): TaskRuntimeState {
   const ids = descendants(state.tasks, rootTaskId)
   const next = revokeGrants(state, ids)
   const tasks = new Map(next.tasks)
@@ -165,30 +226,41 @@ function invalidateSubtree(state: TaskRuntimeState, rootTaskId: string, status: 
     if (!task || task.status === 'completed' || task.status === 'cancelled') continue
     if (task.status === 'dispatching' && task.activeAttemptId) {
       const attempt = attempts.get(task.activeAttemptId)
-      if (attempt?.status === 'authorized') attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
+      if (attempt?.status === 'authorized')
+        attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
     }
-    tasks.set(id, snapshotTask({
-      ...task,
-      status,
-      // A dispatched effect may already have happened. Pause/cancel never claims to roll it back.
-      ...(task.status === 'dispatching' ? { effectOutcome: 'uncertain' as const, activeAttemptId: undefined } : {})
-    }))
+    tasks.set(
+      id,
+      snapshotTask({
+        ...task,
+        status,
+        // A dispatched effect may already have happened. Pause/cancel never claims to roll it back.
+        ...(task.status === 'dispatching' ? { effectOutcome: 'uncertain' as const, activeAttemptId: undefined } : {})
+      })
+    )
   }
   return { ...next, tasks, attempts }
 }
 
-export function createTask(
-  state: TaskRuntimeState,
-  definition: TaskDefinition,
-  policy: TaskPolicy
-): TransitionResult {
+export function createTask(state: TaskRuntimeState, definition: TaskDefinition, policy: TaskPolicy): TransitionResult {
   if (state.ownerRebindRequired) return deny(state, 'owner_rebind_required')
-  if (!validPolicy(policy) || !definition || typeof definition.taskId !== 'string' || !definition.taskId ||
-      !Number.isSafeInteger(definition.revision) || definition.revision < 1 ||
-      typeof definition.taskType !== 'string' || !definition.taskType || !validOwner(definition.owner) ||
-      typeof definition.argumentsDigest !== 'string' || !definition.argumentsDigest ||
-      !validScope(definition.scope) || !Number.isFinite(definition.createdAt) ||
-      !Number.isFinite(definition.retentionMs) || definition.retentionMs < 0) {
+  if (
+    !validPolicy(policy) ||
+    !definition ||
+    typeof definition.taskId !== 'string' ||
+    !definition.taskId ||
+    !Number.isSafeInteger(definition.revision) ||
+    definition.revision < 1 ||
+    typeof definition.taskType !== 'string' ||
+    !definition.taskType ||
+    !validOwner(definition.owner) ||
+    typeof definition.argumentsDigest !== 'string' ||
+    !definition.argumentsDigest ||
+    !validScope(definition.scope) ||
+    !Number.isFinite(definition.createdAt) ||
+    !Number.isFinite(definition.retentionMs) ||
+    definition.retentionMs < 0
+  ) {
     return deny(state, 'invalid_input')
   }
   if (state.tasks.has(definition.taskId)) return deny(state, 'duplicate_task')
@@ -203,7 +275,11 @@ export function createTask(
 
   if (definition.parentTaskId) {
     const parent = state.tasks.get(definition.parentTaskId)
-    if (!parent || !sameOwner(parent.owner, definition.owner) || (parent.status !== 'ready' && parent.status !== 'dispatching')) {
+    if (
+      !parent ||
+      !sameOwner(parent.owner, definition.owner) ||
+      (parent.status !== 'ready' && parent.status !== 'dispatching')
+    ) {
       return deny(state, 'parent_inactive')
     }
     if (!Number.isSafeInteger(definition.parentTaskRevision) || definition.parentTaskRevision !== parent.revision) {
@@ -227,8 +303,14 @@ export function reviseTask(
   const task = state.tasks.get(input.taskId)
   if (!task) return deny(state, 'unknown_task')
   if (task.status !== 'ready') return deny(state, 'task_not_ready')
-  if (!Number.isSafeInteger(input.revision) || input.revision <= task.revision || !input.argumentsDigest ||
-      !validScope(input.scope) || !validPolicy(input.policy)) return deny(state, 'invalid_input')
+  if (
+    !Number.isSafeInteger(input.revision) ||
+    input.revision <= task.revision ||
+    !input.argumentsDigest ||
+    !validScope(input.scope) ||
+    !validPolicy(input.policy)
+  )
+    return deny(state, 'invalid_input')
   if (!input.scope.capabilities.every((capability) => input.policy.allowedCapabilities.includes(capability))) {
     return deny(state, 'capability_not_allowed')
   }
@@ -244,7 +326,17 @@ export function reviseTask(
   const attempts = new Map(next.attempts)
   for (const id of ids) {
     if (id === task.taskId) {
-      tasks.set(id, snapshotTask({ ...task, revision: input.revision, argumentsDigest: input.argumentsDigest, scope: input.scope, status: 'ready', effectOutcome: undefined }))
+      tasks.set(
+        id,
+        snapshotTask({
+          ...task,
+          revision: input.revision,
+          argumentsDigest: input.argumentsDigest,
+          scope: input.scope,
+          status: 'ready',
+          effectOutcome: undefined
+        })
+      )
     } else {
       const child = tasks.get(id)
       if (child && child.status !== 'completed' && child.status !== 'cancelled') {
@@ -253,7 +345,10 @@ export function reviseTask(
           if (attempt?.status === 'authorized') {
             attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
           }
-          tasks.set(id, snapshotTask({ ...child, status: 'cancelled', effectOutcome: 'uncertain', activeAttemptId: undefined }))
+          tasks.set(
+            id,
+            snapshotTask({ ...child, status: 'cancelled', effectOutcome: 'uncertain', activeAttemptId: undefined })
+          )
         } else {
           tasks.set(id, snapshotTask({ ...child, status: 'cancelled' }))
         }
@@ -271,13 +366,25 @@ export function issueDispatchGrant(
   const task = state.tasks.get(input.taskId)
   if (!task) return deny(state, 'unknown_task')
   if (task.status !== 'ready') return deny(state, 'task_not_ready')
-  if (!validPolicy(input.policy) || typeof input.grantId !== 'string' || !input.grantId ||
-      !Number.isFinite(input.now) || !Number.isFinite(input.ttlMs) || input.ttlMs <= 0 ||
-      input.ttlMs > input.policy.maxGrantTtlMs || !input.scope || typeof input.scope.capability !== 'string' ||
-      !validScope({ capabilities: [input.scope.capability], resources: input.scope.resources })) return deny(state, 'invalid_input')
+  if (
+    !validPolicy(input.policy) ||
+    typeof input.grantId !== 'string' ||
+    !input.grantId ||
+    !Number.isFinite(input.now) ||
+    !Number.isFinite(input.ttlMs) ||
+    input.ttlMs <= 0 ||
+    input.ttlMs > input.policy.maxGrantTtlMs ||
+    !input.scope ||
+    typeof input.scope.capability !== 'string' ||
+    !validScope({ capabilities: [input.scope.capability], resources: input.scope.resources })
+  )
+    return deny(state, 'invalid_input')
   if (input.now >= task.expiresAt) return deny(state, 'task_expired')
-  if (state.grants.has(input.grantId) || state.consumedGrantIds.has(input.grantId)) return deny(state, 'grant_id_reused')
-  if ([...state.grants.values()].some((grant) => grant.taskId === task.taskId && grant.taskRevision === task.revision)) {
+  if (state.grants.has(input.grantId) || state.consumedGrantIds.has(input.grantId))
+    return deny(state, 'grant_id_reused')
+  if (
+    [...state.grants.values()].some((grant) => grant.taskId === task.taskId && grant.taskRevision === task.revision)
+  ) {
     return deny(state, 'grant_already_exists')
   }
   if (!grantScopeFits(input.scope, task.scope, input.policy)) return deny(state, 'scope_not_subset')
@@ -286,7 +393,8 @@ export function issueDispatchGrant(
     if (!parent || (parent.status !== 'ready' && parent.status !== 'dispatching') || input.now >= parent.expiresAt) {
       return deny(state, 'parent_inactive')
     }
-    if (parent.revision !== task.parentTaskRevision || !sameOwner(parent.owner, task.owner)) return deny(state, 'stale_task_revision')
+    if (parent.revision !== task.parentTaskRevision || !sameOwner(parent.owner, task.owner))
+      return deny(state, 'stale_task_revision')
   }
   const expiresAt = input.now + input.ttlMs
   if (!Number.isFinite(expiresAt) || expiresAt <= input.now) return deny(state, 'invalid_input')
@@ -318,10 +426,19 @@ export function authorizeDispatch(
     scope: DispatchGrantScope
     now: number
   }
-): { readonly state: TaskRuntimeState; readonly decision: { allowed: true; task: TaskRecord } | { allowed: false; reason: TaskTransitionDenial } } {
+): {
+  readonly state: TaskRuntimeState
+  readonly decision: { allowed: true; task: TaskRecord } | { allowed: false; reason: TaskTransitionDenial }
+} {
   const grant = state.grants.get(input.grantId)
   if (!grant) {
-    return { state, decision: { allowed: false, reason: state.consumedGrantIds.has(input.grantId) ? 'grant_replayed' : 'grant_missing' } }
+    return {
+      state,
+      decision: {
+        allowed: false,
+        reason: state.consumedGrantIds.has(input.grantId) ? 'grant_replayed' : 'grant_missing'
+      }
+    }
   }
   // Any presented grant is single-use. Even a mismatch consumes it, preventing altered-scope retries.
   const grants = new Map(state.grants)
@@ -336,11 +453,16 @@ export function authorizeDispatch(
   if (state.ownerRebindRequired) {
     return { state: consumedState, decision: { allowed: false, reason: 'owner_rebind_required' } }
   }
-  if (state.attempts.has(input.attemptId)) return { state: consumedState, decision: { allowed: false, reason: 'attempt_id_reused' } }
-  if (!Number.isFinite(input.now)) return { state: consumedState, decision: { allowed: false, reason: 'invalid_input' } }
-  if (input.now < grant.issuedAt) return { state: consumedState, decision: { allowed: false, reason: 'grant_not_yet_valid' } }
-  if (input.now >= grant.expiresAt) return { state: consumedState, decision: { allowed: false, reason: 'grant_expired' } }
-  if (grant.taskId !== input.taskId || !task) return { state: consumedState, decision: { allowed: false, reason: 'unknown_task' } }
+  if (state.attempts.has(input.attemptId))
+    return { state: consumedState, decision: { allowed: false, reason: 'attempt_id_reused' } }
+  if (!Number.isFinite(input.now))
+    return { state: consumedState, decision: { allowed: false, reason: 'invalid_input' } }
+  if (input.now < grant.issuedAt)
+    return { state: consumedState, decision: { allowed: false, reason: 'grant_not_yet_valid' } }
+  if (input.now >= grant.expiresAt)
+    return { state: consumedState, decision: { allowed: false, reason: 'grant_expired' } }
+  if (grant.taskId !== input.taskId || !task)
+    return { state: consumedState, decision: { allowed: false, reason: 'unknown_task' } }
   if (input.now >= task.expiresAt) return { state: consumedState, decision: { allowed: false, reason: 'task_expired' } }
   if (task.parentTaskId) {
     const parent = state.tasks.get(task.parentTaskId)
@@ -363,7 +485,8 @@ export function authorizeDispatch(
   if (!input.scope || !sameGrantScope(grant.scope, input.scope)) {
     return { state: consumedState, decision: { allowed: false, reason: 'wrong_scope' } }
   }
-  if (task.status === 'uncertain') return { state: consumedState, decision: { allowed: false, reason: 'uncertain_requires_reconciliation' } }
+  if (task.status === 'uncertain')
+    return { state: consumedState, decision: { allowed: false, reason: 'uncertain_requires_reconciliation' } }
   if (task.status !== 'ready') return { state: consumedState, decision: { allowed: false, reason: 'task_not_ready' } }
   const dispatching = snapshotTask({
     ...task,
@@ -424,15 +547,42 @@ export function recordEffectOutcome(
   const task = state.tasks.get(taskId)
   const attempt = state.attempts.get(attemptId)
   if (!task) return deny(state, 'unknown_task')
-  if (!attempt || attempt.taskId !== taskId || attempt.status !== 'authorized' ||
-      task.status !== 'dispatching' || task.activeAttemptId !== attemptId) return deny(state, 'invalid_transition')
+  if (
+    !attempt ||
+    attempt.taskId !== taskId ||
+    attempt.status !== 'authorized' ||
+    task.status !== 'dispatching' ||
+    task.activeAttemptId !== attemptId
+  )
+    return deny(state, 'invalid_transition')
   const tasks = new Map(state.tasks)
   if (outcome === 'not-applied' && !Number.isSafeInteger(task.revision + 1)) return deny(state, 'invalid_input')
   const attempts = new Map(state.attempts)
-  attempts.set(attemptId, snapshotAttempt({ ...attempt, status: outcome === 'uncertain' ? 'uncertain' : 'settled', outcome }))
-  if (outcome === 'applied') tasks.set(taskId, snapshotTask({ ...task, status: 'completed', effectOutcome: outcome, activeAttemptId: undefined }))
-  else if (outcome === 'uncertain') tasks.set(taskId, snapshotTask({ ...task, status: 'uncertain', effectOutcome: outcome, activeAttemptId: undefined }))
-  else tasks.set(taskId, snapshotTask({ ...task, status: 'ready', revision: task.revision + 1, effectOutcome: outcome, activeAttemptId: undefined }))
+  attempts.set(
+    attemptId,
+    snapshotAttempt({ ...attempt, status: outcome === 'uncertain' ? 'uncertain' : 'settled', outcome })
+  )
+  if (outcome === 'applied')
+    tasks.set(
+      taskId,
+      snapshotTask({ ...task, status: 'completed', effectOutcome: outcome, activeAttemptId: undefined })
+    )
+  else if (outcome === 'uncertain')
+    tasks.set(
+      taskId,
+      snapshotTask({ ...task, status: 'uncertain', effectOutcome: outcome, activeAttemptId: undefined })
+    )
+  else
+    tasks.set(
+      taskId,
+      snapshotTask({
+        ...task,
+        status: 'ready',
+        revision: task.revision + 1,
+        effectOutcome: outcome,
+        activeAttemptId: undefined
+      })
+    )
   return allow(cancelDescendants({ ...state, tasks, attempts }, taskId))
 }
 
@@ -446,7 +596,8 @@ export function reconcileUncertainEffect(
   if (!task) return deny(state, 'unknown_task')
   const cancelled = task.status === 'cancelled'
   const paused = task.status === 'paused'
-  if ((task.status !== 'uncertain' && !cancelled && !paused) || task.effectOutcome !== 'uncertain') return deny(state, 'invalid_transition')
+  if ((task.status !== 'uncertain' && !cancelled && !paused) || task.effectOutcome !== 'uncertain')
+    return deny(state, 'invalid_transition')
   const attempt = task.lastAttemptId ? state.attempts.get(task.lastAttemptId) : undefined
   if (!attempt || attempt.taskId !== taskId || attempt.status !== 'uncertain' || attempt.outcome !== 'uncertain') {
     return deny(state, 'invalid_transition')
@@ -455,17 +606,22 @@ export function reconcileUncertainEffect(
   attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'reconciled', outcome }))
   if (outcome === 'applied') {
     const tasks = new Map(state.tasks)
-    tasks.set(taskId, snapshotTask({ ...task, status: cancelled ? 'cancelled' : 'completed', effectOutcome: 'applied' }))
+    tasks.set(
+      taskId,
+      snapshotTask({ ...task, status: cancelled ? 'cancelled' : 'completed', effectOutcome: 'applied' })
+    )
     return allow(cancelDescendants({ ...state, tasks, attempts }, taskId))
   }
   if (!cancelled && !Number.isSafeInteger(task.revision + 1)) return deny(state, 'invalid_input')
   const tasks = new Map(state.tasks)
-  tasks.set(taskId, snapshotTask({
-    ...task,
-    status: cancelled ? 'cancelled' : paused ? 'paused' : 'ready',
-    ...(!cancelled ? { revision: task.revision + 1 } : {}),
-    effectOutcome: 'not-applied'
-  }))
+  tasks.set(
+    taskId,
+    snapshotTask({
+      ...task,
+      status: cancelled ? 'cancelled' : paused ? 'paused' : 'ready',
+      ...(!cancelled ? { revision: task.revision + 1 } : {}),
+      effectOutcome: 'not-applied'
+    })
+  )
   return allow(cancelDescendants({ ...state, tasks, attempts }, taskId))
 }
-

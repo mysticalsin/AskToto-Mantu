@@ -36,9 +36,23 @@ export const VelocitySchema = z.object({
 })
 
 const SECTORS = [
-  'retail', 'banking', 'insurance', 'pharma', 'healthcare', 'automotive', 'energy',
-  'telecom', 'technology', 'public-sector', 'manufacturing', 'logistics', 'media',
-  'aerospace-defense', 'consumer-goods', 'professional-services', 'other'
+  'retail',
+  'banking',
+  'insurance',
+  'pharma',
+  'healthcare',
+  'automotive',
+  'energy',
+  'telecom',
+  'technology',
+  'public-sector',
+  'manufacturing',
+  'logistics',
+  'media',
+  'aerospace-defense',
+  'consumer-goods',
+  'professional-services',
+  'other'
 ] as const
 export const SectorSchema = z.enum(SECTORS)
 
@@ -111,7 +125,10 @@ const OptionalDealAmountSchema = z.preprocess(
     }
     return value
   },
-  z.object({ value: z.number(), currency: z.string(), quote: z.string().min(1) }).nullable().optional()
+  z
+    .object({ value: z.number(), currency: z.string(), quote: z.string().min(1) })
+    .nullable()
+    .optional()
 )
 
 const OptionalDealCloseDateSchema = z.preprocess(
@@ -122,7 +139,10 @@ const OptionalDealCloseDateSchema = z.preprocess(
     }
     return value
   },
-  z.object({ value: z.string(), quote: z.string().min(1) }).nullable().optional()
+  z
+    .object({ value: z.string(), quote: z.string().min(1) })
+    .nullable()
+    .optional()
 )
 
 /** One meeting's structured extraction — the unit the ingest LLM call must return as pure JSON. */
@@ -161,8 +181,14 @@ function normalizeDealNulls(v: unknown): unknown {
 export const MeetingExtractionSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
   /** Ingestion receipt for exact bounded source bytes; Main-only and stripped from renderer read payloads. */
-  sourceDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  sourceRootId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  sourceDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+  sourceRootId: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   title24: z.string().default(''),
   topics: z.array(z.string()).default([]),
   sentiment: BandSchema.default('mixed'),
@@ -252,7 +278,10 @@ export const MeetingRefSchema = z.object({
   date: z.string().default(''),
   title: z.string().default(''),
   /** Main-only SHA-256 identity of the canonical source root; stripped from renderer read payloads. */
-  sourceRootId: z.string().regex(/^[a-f0-9]{64}$/).optional()
+  sourceRootId: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional()
 })
 export type MeetingRef = z.infer<typeof MeetingRefSchema>
 
@@ -295,7 +324,14 @@ export function provenantFieldSchema<V extends z.ZodTypeAny>(valueSchema: V) {
     // parses unchanged (read-time INFERRED-tier fallback in store.ts's `confOf`, not a migration) — see
     // store.ts's SupersededEntry doc comment for why the ordering key now needs it.
     superseded: z
-      .array(z.object({ value: valueSchema, date: z.string(), source_file: z.string(), confidence: ConfidenceSchema.optional() }))
+      .array(
+        z.object({
+          value: valueSchema,
+          date: z.string(),
+          source_file: z.string(),
+          confidence: ConfidenceSchema.optional()
+        })
+      )
       .max(10)
       .default([])
   })
@@ -416,8 +452,12 @@ export const AccountEntitySchema = z.object({
   people: z.array(z.string()).default([]),
   deals: z.array(z.string()).default([]),
   meetings: z.array(MeetingRefSchema).default([]),
-  win_reasons: z.array(z.object({ statement: z.string(), quote: z.string().default(''), meeting: z.string() })).default([]),
-  loss_reasons: z.array(z.object({ statement: z.string(), quote: z.string().default(''), meeting: z.string() })).default([])
+  win_reasons: z
+    .array(z.object({ statement: z.string(), quote: z.string().default(''), meeting: z.string() }))
+    .default([]),
+  loss_reasons: z
+    .array(z.object({ statement: z.string(), quote: z.string().default(''), meeting: z.string() }))
+    .default([])
 })
 export type AccountEntity = z.infer<typeof AccountEntitySchema>
 
@@ -491,27 +531,38 @@ export type BrainGraph = z.infer<typeof BrainGraphSchema>
 export const BrainIndexSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
   // Ingest log keyed by source file basename — makes rebuilds/backfills resumable and idempotent.
-  ingested: z.record(z.string(), z.object({
-    at: z.number(),
-    ok: z.boolean(),
-    error: z.string().optional(),
-    /** mtime/size snapshot of the source consumed by this record. Missing means a legacy record. */
-    sourceVersion: z.string().optional(),
-    /** Ingestion-bound SHA-256 of exact source bytes and canonical root identity; absent on legacy rows. */
-    sourceDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    sourceRootId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    /** Consecutive failed extraction attempts for persisted retry pacing. */
-    attempts: z.number().int().nonnegative().optional(),
-    /** Earliest time an automatic background scan may retry this unchanged failed source. */
-    retryAfter: z.number().optional(),
-    /** True once `attempts` reaches MAX_INGEST_ATTEMPTS (infra/scheduler/policy.ts). Automatic triggers
-     *  never requeue it; only an explicit user Retry revives it. */
-    exhausted: z.boolean().optional(),
-    /** Set when this device could not read the source (a cloud-only placeholder, a lock, a vanished or
-     *  undecryptable file). Such a failure spends no attempt; automatic scans retry once the file's ctime
-     *  differs from `changedAtMs`. Replaced by the next outcome. */
-    unreadable: z.object({ changedAtMs: z.number().optional() }).optional()
-  })).default({}),
+  ingested: z
+    .record(
+      z.string(),
+      z.object({
+        at: z.number(),
+        ok: z.boolean(),
+        error: z.string().optional(),
+        /** mtime/size snapshot of the source consumed by this record. Missing means a legacy record. */
+        sourceVersion: z.string().optional(),
+        /** Ingestion-bound SHA-256 of exact source bytes and canonical root identity; absent on legacy rows. */
+        sourceDigest: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        sourceRootId: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        /** Consecutive failed extraction attempts for persisted retry pacing. */
+        attempts: z.number().int().nonnegative().optional(),
+        /** Earliest time an automatic background scan may retry this unchanged failed source. */
+        retryAfter: z.number().optional(),
+        /** True once `attempts` reaches MAX_INGEST_ATTEMPTS (infra/scheduler/policy.ts). Automatic triggers
+         *  never requeue it; only an explicit user Retry revives it. */
+        exhausted: z.boolean().optional(),
+        /** Set when this device could not read the source (a cloud-only placeholder, a lock, a vanished or
+         *  undecryptable file). Such a failure spends no attempt; automatic scans retry once the file's ctime
+         *  differs from `changedAtMs`. Replaced by the next outcome. */
+        unreadable: z.object({ changedAtMs: z.number().optional() }).optional()
+      })
+    )
+    .default({}),
   // Lint findings (contradictions/staleness). Surfaced in the dashboard; never auto-resolved.
   warnings: z.array(z.string()).default([]),
   // True from "user asked for a backfill" until the queue fully drains — lets a quit/relaunch resume

@@ -8,14 +8,16 @@ type CheckHandler = NonNullable<Parameters<Electron.Session['setPermissionCheckH
 const CURRENT_URL = 'https://metis.example/app/index.html'
 const CURRENT_ORIGIN = 'https://metis.example'
 
-function fixture(options: {
-  lease?: boolean
-  meeting?: boolean
-  meetingGrant?: boolean
-  meetingGrantState?: 'pending' | 'permission-authorized' | 'established'
-  existingPermission?: boolean
-  lifecycleReady?: boolean
-} = {}): {
+function fixture(
+  options: {
+    lease?: boolean
+    meeting?: boolean
+    meetingGrant?: boolean
+    meetingGrantState?: 'pending' | 'permission-authorized' | 'established'
+    existingPermission?: boolean
+    lifecycleReady?: boolean
+  } = {}
+): {
   authority: InputSessionAuthority
   request: RequestHandler
   check: CheckHandler
@@ -34,7 +36,9 @@ function fixture(options: {
   const webContents = {
     id: 41,
     getURL: () => url,
-    get mainFrame() { return frame }
+    get mainFrame() {
+      return frame
+    }
   } as unknown as Electron.WebContents
   const browserWindow = {
     webContents,
@@ -45,15 +49,18 @@ function fixture(options: {
   let context = { authSessionGeneration: 4, contextRevision: 9 }
   const meetingGrantContext = { ...context }
   const meetingGrantUrl = CURRENT_URL
-  let meetingGrantState = options.meetingGrant === true ? options.meetingGrantState ?? 'pending' : null
+  let meetingGrantState = options.meetingGrant === true ? (options.meetingGrantState ?? 'pending') : null
   let meetingClaimCalls = 0
   if (options.lease !== false) {
-    const result = authority.start({
-      webContentsId: webContents.id,
-      frameId: 'main-frame-41',
-      isTopFrame: true,
-      ...context
-    }, { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' })
+    const result = authority.start(
+      {
+        webContentsId: webContents.id,
+        frameId: 'main-frame-41',
+        isTopFrame: true,
+        ...context
+      },
+      { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' }
+    )
     if (!result.ok) throw new Error('test input lease did not start')
   }
   if (options.meeting && !authority.reserveMeeting(654)) throw new Error('test meeting reservation did not start')
@@ -76,25 +83,38 @@ function fixture(options: {
     authority,
     hasMeetingCaptureRequestOwner: (webContentsId, startedAt, current, requestingUrl) =>
       meetingGrantState === 'pending' &&
-      webContentsId === webContents.id && startedAt === 654 &&
+      webContentsId === webContents.id &&
+      startedAt === 654 &&
       current.authSessionGeneration === meetingGrantContext.authSessionGeneration &&
-      current.contextRevision === meetingGrantContext.contextRevision && requestingUrl === meetingGrantUrl,
+      current.contextRevision === meetingGrantContext.contextRevision &&
+      requestingUrl === meetingGrantUrl,
     hasMeetingCaptureCheckOwner: (webContentsId, startedAt, current, requestingUrl) =>
       meetingGrantState === 'permission-authorized' &&
-      webContentsId === webContents.id && startedAt === 654 &&
+      webContentsId === webContents.id &&
+      startedAt === 654 &&
       current.authSessionGeneration === meetingGrantContext.authSessionGeneration &&
-      current.contextRevision === meetingGrantContext.contextRevision && requestingUrl === meetingGrantUrl,
+      current.contextRevision === meetingGrantContext.contextRevision &&
+      requestingUrl === meetingGrantUrl,
     claimMeetingCapturePermission: (requestFrame) => {
-      if (meetingGrantState !== 'pending' || requestFrame.webContentsId !== webContents.id || !requestFrame.isTopFrame || requestFrame.url !== meetingGrantUrl ||
-          authority.meetingStartedAt !== 654 || context.authSessionGeneration !== meetingGrantContext.authSessionGeneration ||
-          context.contextRevision !== meetingGrantContext.contextRevision) return false
+      if (
+        meetingGrantState !== 'pending' ||
+        requestFrame.webContentsId !== webContents.id ||
+        !requestFrame.isTopFrame ||
+        requestFrame.url !== meetingGrantUrl ||
+        authority.meetingStartedAt !== 654 ||
+        context.authSessionGeneration !== meetingGrantContext.authSessionGeneration ||
+        context.contextRevision !== meetingGrantContext.contextRevision
+      )
+        return false
       meetingGrantState = 'permission-authorized'
       meetingClaimCalls += 1
       return true
     },
     claimInteractiveCapturePermission: (owner) => authority.claimPermissionRequest(owner),
     allowExistingPermission: (wc, permission) =>
-      options.existingPermission !== false && wc === webContents && (permission === 'media' || permission === 'clipboard-sanitized-write')
+      options.existingPermission !== false &&
+      wc === webContents &&
+      (permission === 'media' || permission === 'clipboard-sanitized-write')
   })
   const requestHandler = registeredRequestHandlers.at(-1)
   const checkHandler = registeredCheckHandlers.at(-1)
@@ -105,16 +125,30 @@ function fixture(options: {
     request: requestHandler,
     check: checkHandler,
     webContents,
-    setVisible(value) { visible = value },
-    setAuthenticated(value) { authenticated = value },
-    setUrl(value) { url = value },
-    setFrame(value) { frame = value },
-    setContext(value) { context = value },
-    meetingClaimCalls() { return meetingClaimCalls }
+    setVisible(value) {
+      visible = value
+    },
+    setAuthenticated(value) {
+      authenticated = value
+    },
+    setUrl(value) {
+      url = value
+    },
+    setFrame(value) {
+      frame = value
+    },
+    setContext(value) {
+      context = value
+    },
+    meetingClaimCalls() {
+      return meetingClaimCalls
+    }
   }
 }
 
-function audioRequest(overrides: Partial<Electron.MediaAccessPermissionRequest> = {}): Electron.MediaAccessPermissionRequest {
+function audioRequest(
+  overrides: Partial<Electron.MediaAccessPermissionRequest> = {}
+): Electron.MediaAccessPermissionRequest {
   return {
     mediaTypes: ['audio'],
     securityOrigin: CURRENT_ORIGIN,
@@ -130,7 +164,14 @@ function permissionRequest(
   details: Parameters<RequestHandler>[3]
 ): boolean | undefined {
   let allowed: boolean | undefined
-  env.request(env.webContents, permission, (value) => { allowed = value }, details)
+  env.request(
+    env.webContents,
+    permission,
+    (value) => {
+      allowed = value
+    },
+    details
+  )
   return allowed
 }
 
@@ -139,44 +180,79 @@ describe('main microphone permission request gate', () => {
     const env = fixture()
     expect(permissionRequest(env, 'media', audioRequest())).toBe(true)
     expect(permissionRequest(env, 'media', audioRequest({ mediaTypes: ['video'] }))).toBe(true)
-    expect(permissionRequest(env, 'clipboard-sanitized-write', {
-      requestingUrl: CURRENT_URL,
-      isMainFrame: true
-    })).toBe(true)
+    expect(
+      permissionRequest(env, 'clipboard-sanitized-write', {
+        requestingUrl: CURRENT_URL,
+        isMainFrame: true
+      })
+    ).toBe(true)
   })
 
   it('atomically claims one interactive request and denies another until exact capture confirmation', () => {
     const env = fixture()
-    expect(env.check(env.webContents, 'media', CURRENT_ORIGIN, {
-      mediaType: 'audio', requestingUrl: CURRENT_URL, isMainFrame: true
-    })).toBe(false)
+    expect(
+      env.check(env.webContents, 'media', CURRENT_ORIGIN, {
+        mediaType: 'audio',
+        requestingUrl: CURRENT_URL,
+        isMainFrame: true
+      })
+    ).toBe(false)
     expect(permissionRequest(env, 'media', audioRequest())).toBe(true)
     // The permission-check callback is read-only and remains usable while getUserMedia resolves.
-    expect(env.check(env.webContents, 'media', CURRENT_ORIGIN, {
-      mediaType: 'audio', requestingUrl: CURRENT_URL, isMainFrame: true
-    })).toBe(true)
+    expect(
+      env.check(env.webContents, 'media', CURRENT_ORIGIN, {
+        mediaType: 'audio',
+        requestingUrl: CURRENT_URL,
+        isMainFrame: true
+      })
+    ).toBe(true)
     expect(permissionRequest(env, 'media', audioRequest())).toBe(false)
-    expect(env.authority.confirmCapture({
-      webContentsId: env.webContents.id,
-      frameId: 'main-frame-41',
-      isTopFrame: true,
-      authSessionGeneration: 4,
-      contextRevision: 9
-    }, env.authority.activeLease!.sessionId)).toBe(true)
-    expect(env.check(env.webContents, 'media', CURRENT_ORIGIN, {
-      mediaType: 'audio', requestingUrl: CURRENT_URL, isMainFrame: true
-    })).toBe(false)
+    expect(
+      env.authority.confirmCapture(
+        {
+          webContentsId: env.webContents.id,
+          frameId: 'main-frame-41',
+          isTopFrame: true,
+          authSessionGeneration: 4,
+          contextRevision: 9
+        },
+        env.authority.activeLease!.sessionId
+      )
+    ).toBe(true)
+    expect(
+      env.check(env.webContents, 'media', CURRENT_ORIGIN, {
+        mediaType: 'audio',
+        requestingUrl: CURRENT_URL,
+        isMainFrame: true
+      })
+    ).toBe(false)
     expect(permissionRequest(env, 'media', audioRequest())).toBe(false)
   })
 
   it('allows an accepted meeting only when its exact renderer has an active capture grant', () => {
-    expect(permissionRequest(fixture({ lease: false, meeting: true, meetingGrant: true }), 'media', audioRequest())).toBe(true)
-    expect(permissionRequest(fixture({ lease: false, meeting: true, meetingGrant: false }), 'media', audioRequest())).toBe(false)
+    expect(
+      permissionRequest(fixture({ lease: false, meeting: true, meetingGrant: true }), 'media', audioRequest())
+    ).toBe(true)
+    expect(
+      permissionRequest(fixture({ lease: false, meeting: true, meetingGrant: false }), 'media', audioRequest())
+    ).toBe(false)
   })
 
   it('accepts only a pending meeting grant with the current main-frame context', () => {
-    expect(permissionRequest(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'pending' }), 'media', audioRequest())).toBe(true)
-    expect(permissionRequest(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'established' }), 'media', audioRequest())).toBe(false)
+    expect(
+      permissionRequest(
+        fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'pending' }),
+        'media',
+        audioRequest()
+      )
+    ).toBe(true)
+    expect(
+      permissionRequest(
+        fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'established' }),
+        'media',
+        audioRequest()
+      )
+    ).toBe(false)
     const staleContext = fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'pending' })
     staleContext.setContext({ authSessionGeneration: 5, contextRevision: 9 })
     expect(permissionRequest(staleContext, 'media', audioRequest())).toBe(false)
@@ -205,7 +281,9 @@ describe('main microphone permission request gate', () => {
     expect(permissionRequest(revoked, 'media', audioRequest())).toBe(false)
 
     expect(permissionRequest(fixture(), 'media', audioRequest({ isMainFrame: false }))).toBe(false)
-    expect(permissionRequest(fixture(), 'media', audioRequest({ requestingUrl: 'https://metis.example/other' }))).toBe(false)
+    expect(permissionRequest(fixture(), 'media', audioRequest({ requestingUrl: 'https://metis.example/other' }))).toBe(
+      false
+    )
     expect(permissionRequest(fixture(), 'media', audioRequest({ securityOrigin: 'https://other.example' }))).toBe(false)
     const childFrame = fixture()
     childFrame.setFrame({ parent: {} as Electron.WebFrameMain, url: CURRENT_URL })
@@ -225,7 +303,9 @@ describe('main microphone permission request gate', () => {
     expect(child.meetingClaimCalls()).toBe(0)
 
     const crossOrigin = fixture({ lease: false, meeting: true, meetingGrant: true })
-    expect(permissionRequest(crossOrigin, 'media', audioRequest({ securityOrigin: 'https://other.example' }))).toBe(false)
+    expect(permissionRequest(crossOrigin, 'media', audioRequest({ securityOrigin: 'https://other.example' }))).toBe(
+      false
+    )
     expect(crossOrigin.meetingClaimCalls()).toBe(0)
 
     const deniedByExistingGate = fixture({ lease: false, meeting: true, meetingGrant: true, existingPermission: false })
@@ -239,12 +319,13 @@ describe('main microphone permission check gate', () => {
     env: ReturnType<typeof fixture>,
     details: Partial<Electron.PermissionCheckHandlerHandlerDetails> = {},
     requestingOrigin = CURRENT_ORIGIN
-  ): boolean => env.check(env.webContents, 'media', requestingOrigin, {
-    mediaType: 'audio',
-    requestingUrl: CURRENT_URL,
-    isMainFrame: true,
-    ...details
-  })
+  ): boolean =>
+    env.check(env.webContents, 'media', requestingOrigin, {
+      mediaType: 'audio',
+      requestingUrl: CURRENT_URL,
+      isMainFrame: true,
+      ...details
+    })
 
   it('denies a pending capture check until the request handler claims it, then preserves the video gate', () => {
     const env = fixture()
@@ -257,7 +338,11 @@ describe('main microphone permission check gate', () => {
 
   it('allows an accepted meeting check only with its exact renderer capture grant', () => {
     expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true }))).toBe(false)
-    expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'permission-authorized' }))).toBe(true)
+    expect(
+      checkAudio(
+        fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'permission-authorized' })
+      )
+    ).toBe(true)
     expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: false }))).toBe(false)
   })
 
@@ -274,9 +359,17 @@ describe('main microphone permission check gate', () => {
   })
 
   it('allows only permission-authorized meeting grants in read-only checks', () => {
-    expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'pending' }))).toBe(false)
-    expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'permission-authorized' }))).toBe(true)
-    expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'established' }))).toBe(false)
+    expect(checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'pending' }))).toBe(
+      false
+    )
+    expect(
+      checkAudio(
+        fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'permission-authorized' })
+      )
+    ).toBe(true)
+    expect(
+      checkAudio(fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'established' }))
+    ).toBe(false)
     const staleContext = fixture({ lease: false, meeting: true, meetingGrant: true, meetingGrantState: 'pending' })
     staleContext.setContext({ authSessionGeneration: 5, contextRevision: 9 })
     expect(checkAudio(staleContext)).toBe(false)
@@ -307,6 +400,8 @@ describe('main microphone permission check gate', () => {
     staleContext.setContext({ authSessionGeneration: 5, contextRevision: 9 })
     expect(checkAudio(staleContext)).toBe(false)
     const unknown = fixture()
-    expect(unknown.check(unknown.webContents, 'media', CURRENT_ORIGIN, { mediaType: 'unknown', isMainFrame: true })).toBe(false)
+    expect(
+      unknown.check(unknown.webContents, 'media', CURRENT_ORIGIN, { mediaType: 'unknown', isMainFrame: true })
+    ).toBe(false)
   })
 })

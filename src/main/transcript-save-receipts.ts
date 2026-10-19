@@ -106,7 +106,8 @@ export class TranscriptSaveReceiptStore {
         receipt.discarded ||
         !receipt.durablePath ||
         !receipt.settings
-      ) continue
+      )
+        continue
       paths.set(receipt.durablePath, { path: receipt.durablePath, settings: receipt.settings })
     }
     return [...paths.values()]
@@ -121,13 +122,30 @@ export class TranscriptSaveReceiptStore {
     }
     while (true) {
       const entries = [...this.#entries.values()].filter((entry) => entry.ownerKey === ownerKey)
-      const pending = entries.flatMap((entry) => entry.pending ? [entry.pending] : [])
+      const pending = entries.flatMap((entry) => (entry.pending ? [entry.pending] : []))
       if (pending.length) {
-        await Promise.all(pending.map((operation) => operation.then(() => undefined, () => undefined)))
+        await Promise.all(
+          pending.map((operation) =>
+            operation.then(
+              () => undefined,
+              () => undefined
+            )
+          )
+        )
         continue
       }
-      const background = entries.flatMap((entry) => entry.receipt.backgroundWork ? [entry.receipt.backgroundWork] : [])
-      if (background.length) await Promise.all(background.map((operation) => operation.then(() => undefined, () => undefined)))
+      const background = entries.flatMap((entry) =>
+        entry.receipt.backgroundWork ? [entry.receipt.backgroundWork] : []
+      )
+      if (background.length)
+        await Promise.all(
+          background.map((operation) =>
+            operation.then(
+              () => undefined,
+              () => undefined
+            )
+          )
+        )
       // The seal prevents a new matching receipt from appearing after the final snapshot.
       return
     }

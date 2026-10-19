@@ -31,8 +31,12 @@ function setup() {
   return {
     authority,
     onRevoked,
-    setCurrent(update: Partial<ReturnType<typeof currentState>>) { current = { ...current, ...update } },
-    setNextCaptureId(id: string) { nextCaptureId = id }
+    setCurrent(update: Partial<ReturnType<typeof currentState>>) {
+      current = { ...current, ...update }
+    },
+    setNextCaptureId(id: string) {
+      nextCaptureId = id
+    }
   }
 }
 
@@ -112,7 +116,9 @@ describe('MeetingMicCaptureAuthority', () => {
     wrongFrame.authority.admit(topFrame(), 654)
     expect(wrongFrame.authority.claimPermissionRequest({ ...topFrame(), isTopFrame: false })).toBe(false)
     expect(wrongFrame.authority.claimPermissionRequest({ ...topFrame(), webContentsId: 42 })).toBe(false)
-    expect(wrongFrame.authority.claimPermissionRequest({ ...topFrame(), url: 'https://metis.example/other' })).toBe(false)
+    expect(wrongFrame.authority.claimPermissionRequest({ ...topFrame(), url: 'https://metis.example/other' })).toBe(
+      false
+    )
     expect(wrongFrame.authority.claimPermissionRequest(topFrame())).toBe(true)
 
     const hidden = setup()
@@ -160,7 +166,10 @@ describe('MeetingMicCaptureAuthority', () => {
     env.authority.revokePending('window-hidden')
 
     expect(env.onRevoked).toHaveBeenCalledTimes(1)
-    expect(env.onRevoked).toHaveBeenCalledWith(expect.objectContaining({ captureId: captureB, startedAt: 654, state: 'permission-authorized' }), 'window-hidden')
+    expect(env.onRevoked).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: captureB, startedAt: 654, state: 'permission-authorized' }),
+      'window-hidden'
+    )
     expect(env.authority.release(41, captureA)).toBe(true)
     expect(env.onRevoked).toHaveBeenCalledTimes(1)
   })
@@ -200,7 +209,10 @@ describe('MeetingMicCaptureAuthority', () => {
     env.authority.revokeMeeting(654, 'owner-replaced')
 
     expect(env.onRevoked).toHaveBeenCalledTimes(1)
-    expect(env.onRevoked).toHaveBeenCalledWith(expect.objectContaining({ captureId: captureA, startedAt: 654 }), 'owner-replaced')
+    expect(env.onRevoked).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: captureA, startedAt: 654 }),
+      'owner-replaced'
+    )
     expect(env.authority.release(41, captureB)).toBe(true)
   })
 })

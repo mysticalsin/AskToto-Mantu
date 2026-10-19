@@ -15,7 +15,11 @@ vi.mock('./logger', () => ({
 import { LiveMeetingStartedAtSchema, SaveMeetingSchema } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { InputSessionAuthority } from './input-session-authority'
-import { MEETING_START_ACTION, MeetingStartActivationAuthority, type MeetingStartActivationFrame } from './meeting-start-activation-authority'
+import {
+  MEETING_START_ACTION,
+  MeetingStartActivationAuthority,
+  type MeetingStartActivationFrame
+} from './meeting-start-activation-authority'
 import { TranscriptSaveReceiptStore } from './transcript-save-receipts'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
@@ -123,7 +127,9 @@ function actualRendererGoneHarness(globals: Record<string, unknown>): {
   const context = runSourceContext(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
   return {
     handler: (context as any).result,
-    setCurrentWindow: (currentWindow) => { (context as any).win = currentWindow }
+    setCurrentWindow: (currentWindow) => {
+      ;(context as any).win = currentWindow
+    }
   }
 }
 
@@ -264,7 +270,8 @@ function sessionApi(options: {
   return Object.assign((context as any).result, {
     meetingStartActivationAuthority,
     inputSessionAuthority,
-    releaseMeetingCalls: (startedAt: number) => releaseMeetingSpy.mock.calls.filter(([owner]) => owner === startedAt).length,
+    releaseMeetingCalls: (startedAt: number) =>
+      releaseMeetingSpy.mock.calls.filter(([owner]) => owner === startedAt).length,
     successfulMeetingReleases: () => releaseMeetingSpy.mock.results.filter((result) => result.value === true).length,
     hasMeetingReservation: () => inputSessionAuthority.hasMeetingReservation,
     meetingStartedAt: () => inputSessionAuthority.meetingStartedAt,
@@ -461,12 +468,7 @@ function saveHandler(
       scheduleRebuild(assertAdmission, settled)
       settled()
     },
-    enqueueIngest: async (
-    _path: string,
-    _options: unknown,
-    _assertAdmission: () => void,
-    settled: () => void
-    ) => {
+    enqueueIngest: async (_path: string, _options: unknown, _assertAdmission: () => void, settled: () => void) => {
       await enqueueIngest(_path, _options, _assertAdmission, settled)
       settled()
     },
@@ -489,13 +491,22 @@ describe('authoritative live speaker identity', () => {
     await expect(handler(event, { on: true, startedAt: 200 })).resolves.toBe(true)
     await expect(handler(event, { on: false, startedAt: 100 })).resolves.toBe(false)
     expect(api.lifecycle.setTrayRecording.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true])
-    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true])
+    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([
+      true,
+      false,
+      true
+    ])
     expect(api.lifecycle.parakeetRelease).toHaveBeenCalledTimes(1)
     expect(api.lifecycle.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
 
     await expect(handler(event, { on: false, startedAt: 200 })).resolves.toBe(true)
     expect(api.lifecycle.setTrayRecording.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true, false])
-    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true, false])
+    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([
+      true,
+      false,
+      true,
+      false
+    ])
     expect(api.lifecycle.parakeetRelease).toHaveBeenCalledTimes(2)
     expect(api.lifecycle.releaseSpeakerEmbedding).toHaveBeenCalledTimes(2)
   })
@@ -703,7 +714,9 @@ describe('bounded close and successful-save receipt join', () => {
     const file = '/meetings/finalized.md'
     let transcriptDurable = false
     let releaseCleanup!: () => void
-    const cleanupWait = new Promise<void>((resolve) => { releaseCleanup = resolve })
+    const cleanupWait = new Promise<void>((resolve) => {
+      releaseCleanup = resolve
+    })
     const saveMeeting = vi.fn(async () => {
       transcriptDurable = true
       return file
@@ -716,7 +729,9 @@ describe('bounded close and successful-save receipt join', () => {
     const response = handler({}, { startedAt: 600, lines: [], recap: '', mode: 'meeting' })
     await vi.waitFor(() => expect(clearDraftTranscript).toHaveBeenCalledOnce())
     let acknowledged = false
-    void response.then(() => { acknowledged = true })
+    void response.then(() => {
+      acknowledged = true
+    })
     await Promise.resolve()
     expect(acknowledged).toBe(false)
     releaseCleanup()
@@ -725,11 +740,15 @@ describe('bounded close and successful-save receipt join', () => {
 
   it('cleans the saved transcript folder snapshot if settings change while the final save is pending', async () => {
     const api = sessionApi({ id: realSpeakerId() })
-    const oldSettings = { brainConsolidation: { enabled: false }, encryptTranscripts: false, meetingsFolder: '/old-meetings' }
+    const oldSettings = {
+      brainConsolidation: { enabled: false },
+      encryptTranscripts: false,
+      meetingsFolder: '/old-meetings'
+    }
     const newSettings = { ...oldSettings, meetingsFolder: '/new-meetings' }
     const savedPath = '/old-meetings/finalized.md'
     let settingsReads = 0
-    const getSettings = vi.fn(() => settingsReads++ === 0 ? oldSettings : newSettings)
+    const getSettings = vi.fn(() => (settingsReads++ === 0 ? oldSettings : newSettings))
     const saveMeeting = vi.fn(async () => savedPath)
     const clearDraftTranscript = vi.fn(async () => undefined)
     const handler = saveHandler(api, savedPath, { getSettings, saveMeeting, clearDraftTranscript })
@@ -774,7 +793,9 @@ describe('bounded close and successful-save receipt join', () => {
     expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 602 })).toBe(true)
     const file = '/meetings/concurrent.md'
     let resolveWrite!: (path: string) => void
-    const writeWait = new Promise<string>((resolve) => { resolveWrite = resolve })
+    const writeWait = new Promise<string>((resolve) => {
+      resolveWrite = resolve
+    })
     const saveMeeting = vi.fn(() => writeWait)
     const recordMeetingSummarized = vi.fn()
     const clearDraftTranscript = vi.fn(async () => undefined)
@@ -896,8 +917,9 @@ describe('bounded close and successful-save receipt join', () => {
     expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 902 })).toBe(true)
     for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:902')
     const save = saveHandler(api, '/meetings/saved-before-crash.md')
-    await expect(save({}, { startedAt: 902, lines: [], recap: '', mode: 'meeting' }))
-      .resolves.toEqual({ path: '/meetings/saved-before-crash.md' })
+    await expect(save({}, { startedAt: 902, lines: [], recap: '', mode: 'meeting' })).resolves.toEqual({
+      path: '/meetings/saved-before-crash.md'
+    })
     expect(backfill).not.toHaveBeenCalled()
 
     const { hardStopMeetingCapture } = triggerRendererGone(api)

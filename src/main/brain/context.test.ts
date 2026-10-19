@@ -39,7 +39,7 @@ import { buildBrainContext, buildBrainContextWithSources, formatDeal, resetMatch
 import { writePerson, writeAccount, writeDeal } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
-const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder } as Settings)
+const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder }) as Settings
 
 const MEETING = { file: 'm1.md', date: '2026-06-01', title: 'Renewal call' }
 
@@ -119,12 +119,18 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       account: 'Legacy Organization',
       meetings: [MEETING],
       role_provenance: {
-        value: 'Verified Role', source_file: 'person-role.md', date: '2026-05-20',
-        confidence: 'EXTRACTED', state: 'verified'
+        value: 'Verified Role',
+        source_file: 'person-role.md',
+        date: '2026-05-20',
+        confidence: 'EXTRACTED',
+        state: 'verified'
       },
       org_provenance: {
-        value: 'Pinned Organization', source_file: '', date: '',
-        confidence: 'INFERRED', state: 'pinned'
+        value: 'Pinned Organization',
+        source_file: '',
+        date: '',
+        confidence: 'INFERRED',
+        state: 'pinned'
       }
     })
     await writePerson(s, person.id, person)
@@ -136,8 +142,11 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       strategic: true,
       meetings: [MEETING],
       sector_provenance: {
-        value: 'banking', source_file: 'account-sector.md', date: '2026-05-21',
-        confidence: 'EXTRACTED', state: 'verified'
+        value: 'banking',
+        source_file: 'account-sector.md',
+        date: '2026-05-21',
+        confidence: 'EXTRACTED',
+        state: 'verified'
       }
     })
     await writeAccount(s, account.id, account)
@@ -150,11 +159,18 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       win_likelihood_band: 'good',
       meetings: [MEETING],
       stage_provenance: {
-        value: 'contract', source_file: '', date: '', confidence: 'INFERRED', state: 'edited'
+        value: 'contract',
+        source_file: '',
+        date: '',
+        confidence: 'INFERRED',
+        state: 'edited'
       },
       win_likelihood_band_provenance: {
-        value: 'concerning', source_file: 'deal-outlook.md', date: '2026-05-22',
-        confidence: 'EXTRACTED', state: 'verified'
+        value: 'concerning',
+        source_file: 'deal-outlook.md',
+        date: '2026-05-22',
+        confidence: 'EXTRACTED',
+        state: 'verified'
       }
     })
     await writeDeal(s, deal.id, deal)
@@ -173,25 +189,45 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     expect(result.block).not.toContain('legacy stage')
     expect(result.block).not.toContain('good likelihood')
     expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'person-role.md', date: '2026-05-20' })
-    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'account-sector.md', date: '2026-05-21' })
-    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'deal-outlook.md', date: '2026-05-22' })
+    expect(result.sourceReferences).toContainEqual({
+      kind: 'provenance',
+      source: 'account-sector.md',
+      date: '2026-05-21'
+    })
+    expect(result.sourceReferences).toContainEqual({
+      kind: 'provenance',
+      source: 'deal-outlook.md',
+      date: '2026-05-22'
+    })
     expect(result.sourceReferencesComplete).toBe(true)
   })
 
   it('omits plain role, organization, sector, stage, and band values without renderable provenance', async () => {
     const person = PersonEntitySchema.parse({
-      id: 'unproven-person', name: 'Unproven Person', role: 'Unverified Role', account: 'Unverified Org', meetings: [MEETING],
+      id: 'unproven-person',
+      name: 'Unproven Person',
+      role: 'Unverified Role',
+      account: 'Unverified Org',
+      meetings: [MEETING],
       role_provenance: { value: 'Unverified Role', source_file: 'm1.md', date: MEETING.date, state: 'extracted' },
       org_provenance: { value: 'Unverified Org', source_file: 'm1.md', date: MEETING.date, state: 'extracted' }
     })
     await writePerson(s, person.id, person)
     const account = AccountEntitySchema.parse({
-      id: 'unproven-account', name: 'Unproven Account', sector: 'retail', strategic: true, meetings: [MEETING],
+      id: 'unproven-account',
+      name: 'Unproven Account',
+      sector: 'retail',
+      strategic: true,
+      meetings: [MEETING],
       sector_provenance: { value: 'retail', source_file: 'm1.md', date: MEETING.date, state: 'extracted' }
     })
     await writeAccount(s, account.id, account)
     const deal = DealEntitySchema.parse({
-      id: 'unproven-deal', name: 'Unproven Deal', stage: 'unverified stage', win_likelihood_band: 'good', meetings: [MEETING],
+      id: 'unproven-deal',
+      name: 'Unproven Deal',
+      stage: 'unverified stage',
+      win_likelihood_band: 'good',
+      meetings: [MEETING],
       stage_provenance: { value: 'unverified stage', source_file: 'm1.md', date: MEETING.date, state: 'extracted' },
       win_likelihood_band_provenance: { value: 'good', source_file: 'm1.md', date: MEETING.date, state: 'extracted' }
     })
@@ -212,12 +248,18 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       name: 'Missing Source Deal',
       meetings: [],
       amount: {
-        value: { value: 125000, currency: 'USD' }, source_file: '', date: '2026-05-23',
-        confidence: 'EXTRACTED', state: 'verified'
+        value: { value: 125000, currency: 'USD' },
+        source_file: '',
+        date: '2026-05-23',
+        confidence: 'EXTRACTED',
+        state: 'verified'
       },
       close_date: {
-        value: '2026-06-30', source_file: '', date: '2026-05-24',
-        confidence: 'EXTRACTED', state: 'verified'
+        value: '2026-06-30',
+        source_file: '',
+        date: '2026-05-24',
+        confidence: 'EXTRACTED',
+        state: 'verified'
       }
     })
     await writeDeal(s, deal.id, deal)

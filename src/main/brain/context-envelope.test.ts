@@ -16,7 +16,15 @@ const owner = {
 const readyResult: BrainContextBuildResult = {
   block: 'historical facts [meeting.md]',
   matched: true,
-  sourceReferences: [{ kind: 'meeting', source: 'meeting.md', date: '2026-10-01', sourceRootId: 'b'.repeat(64), sourceDigest: 'c'.repeat(64) }],
+  sourceReferences: [
+    {
+      kind: 'meeting',
+      source: 'meeting.md',
+      date: '2026-10-01',
+      sourceRootId: 'b'.repeat(64),
+      sourceDigest: 'c'.repeat(64)
+    }
+  ],
   sourceReferencesComplete: true
 }
 
@@ -31,7 +39,12 @@ describe('main-only brain context envelope', () => {
   })
 
   it('omits empty, unavailable, and stale-owner context from provider prompts', () => {
-    const empty = createBrainContextEnvelope(owner, { block: '', matched: false, sourceReferences: [], sourceReferencesComplete: true })
+    const empty = createBrainContextEnvelope(owner, {
+      block: '',
+      matched: false,
+      sourceReferences: [],
+      sourceReferencesComplete: true
+    })
     expect(empty.status).toBe('empty')
     expect(brainContextForProvider(empty, owner)).toBeUndefined()
 
@@ -41,18 +54,46 @@ describe('main-only brain context envelope', () => {
 
     const staleOwner = { ...owner, authSessionGeneration: owner.authSessionGeneration + 1 }
     expect(brainContextForProvider(createBrainContextEnvelope(owner, readyResult), staleOwner)).toBeUndefined()
-    expect(brainContextForProvider(createBrainContextEnvelope(owner, readyResult), { ...owner, brainRevision: owner.brainRevision + 1 })).toBeUndefined()
-    expect(brainContextForProvider(createBrainContextEnvelope(owner, readyResult), { ...owner, profileKey: 'b'.repeat(64) })).toBeUndefined()
+    expect(
+      brainContextForProvider(createBrainContextEnvelope(owner, readyResult), {
+        ...owner,
+        brainRevision: owner.brainRevision + 1
+      })
+    ).toBeUndefined()
+    expect(
+      brainContextForProvider(createBrainContextEnvelope(owner, readyResult), { ...owner, profileKey: 'b'.repeat(64) })
+    ).toBeUndefined()
   })
 
   it('omits malformed or over-budget envelopes', () => {
     const envelope = createBrainContextEnvelope(owner, readyResult)
-    expect(brainContextForProvider({ ...envelope, budget: { ...envelope.budget, usedChars: 0 } }, owner)).toBeUndefined()
-    expect(brainContextForProvider({ ...envelope, sourceReferences: Array.from({ length: 65 }, () => ({ kind: 'meeting' as const, source: 'm.md', sourceRootId: 'b'.repeat(64), sourceDigest: 'c'.repeat(64) })) }, owner)).toBeUndefined()
-    expect(createBrainContextEnvelope(owner, { ...readyResult, sourceReferencesComplete: false }).status).toBe('unavailable')
-    expect(createBrainContextEnvelope(owner, {
-      ...readyResult,
-      sourceReferences: [{ kind: 'meeting', source: 'm'.repeat(513), sourceRootId: 'b'.repeat(64), sourceDigest: 'c'.repeat(64) }]
-    }).status).toBe('unavailable')
+    expect(
+      brainContextForProvider({ ...envelope, budget: { ...envelope.budget, usedChars: 0 } }, owner)
+    ).toBeUndefined()
+    expect(
+      brainContextForProvider(
+        {
+          ...envelope,
+          sourceReferences: Array.from({ length: 65 }, () => ({
+            kind: 'meeting' as const,
+            source: 'm.md',
+            sourceRootId: 'b'.repeat(64),
+            sourceDigest: 'c'.repeat(64)
+          }))
+        },
+        owner
+      )
+    ).toBeUndefined()
+    expect(createBrainContextEnvelope(owner, { ...readyResult, sourceReferencesComplete: false }).status).toBe(
+      'unavailable'
+    )
+    expect(
+      createBrainContextEnvelope(owner, {
+        ...readyResult,
+        sourceReferences: [
+          { kind: 'meeting', source: 'm'.repeat(513), sourceRootId: 'b'.repeat(64), sourceDigest: 'c'.repeat(64) }
+        ]
+      }).status
+    ).toBe('unavailable')
   })
 })

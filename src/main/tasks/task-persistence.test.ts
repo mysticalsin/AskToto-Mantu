@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { DispatchGrantScope, TaskDefinition, TaskOwner, TaskPolicy, TaskScope } from './task-contract'
-import { createTask, createTaskRuntimeState, issueDispatchGrant, recordEffectOutcome, authorizeDispatch, resumeTask, reconcileUncertainEffect, cancelTask, pauseTask, reviseTask } from './task-state'
+import {
+  createTask,
+  createTaskRuntimeState,
+  issueDispatchGrant,
+  recordEffectOutcome,
+  authorizeDispatch,
+  resumeTask,
+  reconcileUncertainEffect,
+  cancelTask,
+  pauseTask,
+  reviseTask
+} from './task-state'
 import { decodeTaskRuntimeState, encodeTaskRuntimeState, type TaskStateCodecLimits } from './task-persistence'
 
 const owner: TaskOwner = {
@@ -63,7 +74,12 @@ function addTask(state: ReturnType<typeof createTaskRuntimeState>, taskId: strin
   return createTask(state, definition, policy)
 }
 
-function authorize(state: ReturnType<typeof createTaskRuntimeState>, taskId: string, grantId: string, attemptId: string) {
+function authorize(
+  state: ReturnType<typeof createTaskRuntimeState>,
+  taskId: string,
+  grantId: string,
+  attemptId: string
+) {
   const issued = issueDispatchGrant(state, { taskId, grantId, scope: grantScope, now: 200, ttlMs: 500, policy })
   expect(issued.ok).toBe(true)
   return authorizeDispatch(issued.state, {
@@ -83,7 +99,12 @@ describe('WP07 task state persistence codec and recovery projection', () => {
     const created = addTask(createTaskRuntimeState(), 'task-a')
     expect(created.ok).toBe(true)
     const issued = issueDispatchGrant(created.state, {
-      taskId: 'task-a', grantId: 'grant-a', scope: grantScope, now: 200, ttlMs: 500, policy
+      taskId: 'task-a',
+      grantId: 'grant-a',
+      scope: grantScope,
+      now: 200,
+      ttlMs: 500,
+      policy
     })
     expect(issued.ok).toBe(true)
 
@@ -97,15 +118,30 @@ describe('WP07 task state persistence codec and recovery projection', () => {
     expect(loaded.state.grants.size).toBe(0)
     expect(loaded.state.ownerRebindRequired).toBe(true)
     expect(resumeTask(loaded.state, 'task-a')).toMatchObject({ ok: false, reason: 'owner_rebind_required' })
-    expect(issueDispatchGrant(loaded.state, {
-      taskId: 'task-a', grantId: 'new-grant', scope: grantScope, now: 202, ttlMs: 100, policy
-    })).toMatchObject({ ok: false, reason: 'owner_rebind_required' })
+    expect(
+      issueDispatchGrant(loaded.state, {
+        taskId: 'task-a',
+        grantId: 'new-grant',
+        scope: grantScope,
+        now: 202,
+        ttlMs: 100,
+        policy
+      })
+    ).toMatchObject({ ok: false, reason: 'owner_rebind_required' })
     const staleGrant = issued.state.grants.get('grant-a')!
     const withStaleGrant = { ...loaded.state, grants: new Map([[staleGrant.grantId, staleGrant]]) }
-    expect(authorizeDispatch(withStaleGrant, {
-      grantId: 'grant-a', attemptId: 'stale-attempt', taskId: 'task-a', taskRevision: 1,
-      owner, argumentsDigest: 'sha256:task-a', scope: grantScope, now: 201
-    }).decision).toEqual({ allowed: false, reason: 'owner_rebind_required' })
+    expect(
+      authorizeDispatch(withStaleGrant, {
+        grantId: 'grant-a',
+        attemptId: 'stale-attempt',
+        taskId: 'task-a',
+        taskRevision: 1,
+        owner,
+        argumentsDigest: 'sha256:task-a',
+        scope: grantScope,
+        now: 201
+      }).decision
+    ).toEqual({ allowed: false, reason: 'owner_rebind_required' })
   })
 
   it('recovers interrupted dispatch as uncertain, preserves reconciliation, and keeps the owner fence', () => {
@@ -125,9 +161,16 @@ describe('WP07 task state persistence codec and recovery projection', () => {
     const reconciled = reconcileUncertainEffect(loaded.state, 'task-a', 'not-applied')
     expect(reconciled.state.tasks.get('task-a')).toMatchObject({ status: 'ready', effectOutcome: 'not-applied' })
     expect(reconciled.state.ownerRebindRequired).toBe(true)
-    expect(issueDispatchGrant(reconciled.state, {
-      taskId: 'task-a', grantId: 'grant-after-recovery', scope: grantScope, now: 202, ttlMs: 100, policy
-    })).toMatchObject({ ok: false, reason: 'owner_rebind_required' })
+    expect(
+      issueDispatchGrant(reconciled.state, {
+        taskId: 'task-a',
+        grantId: 'grant-after-recovery',
+        scope: grantScope,
+        now: 202,
+        ttlMs: 100,
+        policy
+      })
+    ).toMatchObject({ ok: false, reason: 'owner_rebind_required' })
   })
 
   it('preserves canceled and completed terminal tasks without requiring owner rebind', () => {
@@ -153,14 +196,29 @@ describe('WP07 task state persistence codec and recovery projection', () => {
 
   it('distinguishes not-found, unavailable, and corrupt reads', () => {
     expect(decodeTaskRuntimeState({ kind: 'not-found' }, limits)).toEqual({ kind: 'not-found' })
-    expect(decodeTaskRuntimeState({ kind: 'unavailable', reason: 'storage-locked' }, limits))
-      .toEqual({ kind: 'unavailable', reason: 'storage-locked' })
-    expect(decodeTaskRuntimeState({ kind: 'found', serialized: '{' }, limits))
-      .toEqual({ kind: 'corrupt', reason: 'invalid-json' })
-    expect(decodeTaskRuntimeState({ kind: 'found', serialized: JSON.stringify({ version: 99, tasks: [], attempts: [], consumedGrantIds: [] }) }, limits))
-      .toEqual({ kind: 'corrupt', reason: 'unsupported-version' })
-    expect(decodeTaskRuntimeState({ kind: 'found', serialized: JSON.stringify({ version: 1, tasks: [], attempts: [], consumedGrantIds: [], grants: [] }) }, limits))
-      .toEqual({ kind: 'corrupt', reason: 'invalid-shape' })
+    expect(decodeTaskRuntimeState({ kind: 'unavailable', reason: 'storage-locked' }, limits)).toEqual({
+      kind: 'unavailable',
+      reason: 'storage-locked'
+    })
+    expect(decodeTaskRuntimeState({ kind: 'found', serialized: '{' }, limits)).toEqual({
+      kind: 'corrupt',
+      reason: 'invalid-json'
+    })
+    expect(
+      decodeTaskRuntimeState(
+        { kind: 'found', serialized: JSON.stringify({ version: 99, tasks: [], attempts: [], consumedGrantIds: [] }) },
+        limits
+      )
+    ).toEqual({ kind: 'corrupt', reason: 'unsupported-version' })
+    expect(
+      decodeTaskRuntimeState(
+        {
+          kind: 'found',
+          serialized: JSON.stringify({ version: 1, tasks: [], attempts: [], consumedGrantIds: [], grants: [] })
+        },
+        limits
+      )
+    ).toEqual({ kind: 'corrupt', reason: 'invalid-shape' })
   })
 
   it('rejects cross-task or missing uncertain last-attempt links and duplicate single-use grant IDs', () => {
@@ -190,8 +248,10 @@ describe('WP07 task state persistence codec and recovery projection', () => {
       ...bothUncertain.state,
       tasks: new Map(bothUncertain.state.tasks).set('task-a', wronglyLinkedTaskA)
     }
-    expect(reconcileUncertainEffect(forgedState, 'task-a', 'applied'))
-      .toMatchObject({ ok: false, reason: 'invalid_transition' })
+    expect(reconcileUncertainEffect(forgedState, 'task-a', 'applied')).toMatchObject({
+      ok: false,
+      reason: 'invalid_transition'
+    })
     expect(forgedState.attempts.get('attempt-b')).toMatchObject({ taskId: 'task-b', status: 'uncertain' })
 
     const crossTask = parseArchive(encode(bothUncertain.state))
@@ -210,11 +270,24 @@ describe('WP07 task state persistence codec and recovery projection', () => {
   it('validates dispatch snapshots and preserves consumed rejected-grant tombstones', () => {
     const created = addTask(createTaskRuntimeState(), 'task-a')
     expect(created.ok).toBe(true)
-    const issued = issueDispatchGrant(created.state, { taskId: 'task-a', grantId: 'grant-a', scope: grantScope, now: 200, ttlMs: 500, policy })
+    const issued = issueDispatchGrant(created.state, {
+      taskId: 'task-a',
+      grantId: 'grant-a',
+      scope: grantScope,
+      now: 200,
+      ttlMs: 500,
+      policy
+    })
     expect(issued.ok).toBe(true)
     const rejected = authorizeDispatch(issued.state, {
-      grantId: 'grant-a', attemptId: 'attempt-a', taskId: 'task-a', taskRevision: 1,
-      owner, argumentsDigest: 'sha256:task-a', scope: { capability: 'read', resources: { calls: 2 } }, now: 201
+      grantId: 'grant-a',
+      attemptId: 'attempt-a',
+      taskId: 'task-a',
+      taskRevision: 1,
+      owner,
+      argumentsDigest: 'sha256:task-a',
+      scope: { capability: 'read', resources: { calls: 2 } },
+      now: 201
     })
     expect(rejected.decision).toMatchObject({ allowed: false, reason: 'wrong_scope' })
     expect(rejected.state.consumedGrantIds.has('grant-a')).toBe(true)
@@ -222,11 +295,24 @@ describe('WP07 task state persistence codec and recovery projection', () => {
     expect(loaded.kind).toBe('loaded')
     if (loaded.kind === 'loaded') expect(loaded.state.consumedGrantIds.has('grant-a')).toBe(true)
 
-    const activeGrant = issueDispatchGrant(created.state, { taskId: 'task-a', grantId: 'grant-b', scope: grantScope, now: 200, ttlMs: 500, policy })
+    const activeGrant = issueDispatchGrant(created.state, {
+      taskId: 'task-a',
+      grantId: 'grant-b',
+      scope: grantScope,
+      now: 200,
+      ttlMs: 500,
+      policy
+    })
     expect(activeGrant.ok).toBe(true)
     const active = authorizeDispatch(activeGrant.state, {
-      grantId: 'grant-b', attemptId: 'attempt-b', taskId: 'task-a', taskRevision: 1,
-      owner, argumentsDigest: 'sha256:task-a', scope: grantScope, now: 201
+      grantId: 'grant-b',
+      attemptId: 'attempt-b',
+      taskId: 'task-a',
+      taskRevision: 1,
+      owner,
+      argumentsDigest: 'sha256:task-a',
+      scope: grantScope,
+      now: 201
     })
     expect(active.decision.allowed).toBe(true)
     const mismatched = parseArchive(encode(active.state))
@@ -266,19 +352,36 @@ describe('WP07 task state persistence codec and recovery projection', () => {
 
     const mismatchedNotAppliedOutcome = parseArchive(encode(notApplied.state))
     mismatchedNotAppliedOutcome.attempts[0]!.outcome = 'applied'
-    expect(decode(JSON.stringify(mismatchedNotAppliedOutcome))).toEqual({ kind: 'corrupt', reason: 'inconsistent-history' })
+    expect(decode(JSON.stringify(mismatchedNotAppliedOutcome))).toEqual({
+      kind: 'corrupt',
+      reason: 'inconsistent-history'
+    })
 
     const invalidNotAppliedRevision = parseArchive(encode(notApplied.state))
     invalidNotAppliedRevision.tasks.find((task) => task.taskId === 'task-a')!.revision = 9
-    expect(decode(JSON.stringify(invalidNotAppliedRevision))).toEqual({ kind: 'corrupt', reason: 'inconsistent-history' })
+    expect(decode(JSON.stringify(invalidNotAppliedRevision))).toEqual({
+      kind: 'corrupt',
+      reason: 'inconsistent-history'
+    })
 
     const retryGrant = issueDispatchGrant(notApplied.state, {
-      taskId: 'task-a', grantId: 'grant-retry', scope: grantScope, now: 202, ttlMs: 500, policy
+      taskId: 'task-a',
+      grantId: 'grant-retry',
+      scope: grantScope,
+      now: 202,
+      ttlMs: 500,
+      policy
     })
     expect(retryGrant.ok).toBe(true)
     const retry = authorizeDispatch(retryGrant.state, {
-      grantId: 'grant-retry', attemptId: 'attempt-retry', taskId: 'task-a', taskRevision: 2,
-      owner, argumentsDigest: 'sha256:task-a', scope: grantScope, now: 203
+      grantId: 'grant-retry',
+      attemptId: 'attempt-retry',
+      taskId: 'task-a',
+      taskRevision: 2,
+      owner,
+      argumentsDigest: 'sha256:task-a',
+      scope: grantScope,
+      now: 203
     })
     expect(retry.decision.allowed).toBe(true)
     if (!retry.decision.allowed) return
@@ -310,15 +413,37 @@ describe('WP07 task state persistence codec and recovery projection', () => {
     }
     const parentScope: TaskScope = { capabilities: ['read', 'write'], resources: { calls: 4, items: 2 } }
     const childScope: TaskScope = { capabilities: ['read'], resources: { calls: 1 } }
-    const parent = createTask(createTaskRuntimeState(), {
-      taskId: 'parent', revision: 1, taskType: 'connector-read', owner, argumentsDigest: 'sha256:parent',
-      scope: parentScope, createdAt: 100, retentionMs: 10_000
-    }, expandedPolicy)
+    const parent = createTask(
+      createTaskRuntimeState(),
+      {
+        taskId: 'parent',
+        revision: 1,
+        taskType: 'connector-read',
+        owner,
+        argumentsDigest: 'sha256:parent',
+        scope: parentScope,
+        createdAt: 100,
+        retentionMs: 10_000
+      },
+      expandedPolicy
+    )
     expect(parent.ok).toBe(true)
-    const child = createTask(parent.state, {
-      taskId: 'child', revision: 1, taskType: 'connector-read', owner, argumentsDigest: 'sha256:child',
-      scope: childScope, createdAt: 100, retentionMs: 5_000, parentTaskId: 'parent', parentTaskRevision: 1
-    }, expandedPolicy)
+    const child = createTask(
+      parent.state,
+      {
+        taskId: 'child',
+        revision: 1,
+        taskType: 'connector-read',
+        owner,
+        argumentsDigest: 'sha256:child',
+        scope: childScope,
+        createdAt: 100,
+        retentionMs: 5_000,
+        parentTaskId: 'parent',
+        parentTaskRevision: 1
+      },
+      expandedPolicy
+    )
     expect(child.ok).toBe(true)
     const badParentSnapshot = parseArchive(encode(child.state))
     badParentSnapshot.tasks.find((task) => task.taskId === 'child')!.parentTaskRevision = 2
@@ -326,11 +451,17 @@ describe('WP07 task state persistence codec and recovery projection', () => {
 
     const childNotPausedWithParent = parseArchive(encode(child.state))
     childNotPausedWithParent.tasks.find((task) => task.taskId === 'parent')!.status = 'paused'
-    expect(decode(JSON.stringify(childNotPausedWithParent))).toEqual({ kind: 'corrupt', reason: 'inconsistent-history' })
+    expect(decode(JSON.stringify(childNotPausedWithParent))).toEqual({
+      kind: 'corrupt',
+      reason: 'inconsistent-history'
+    })
 
     const revised = reviseTask(child.state, {
-      taskId: 'parent', revision: 2, argumentsDigest: 'sha256:parent-revised',
-      scope: { capabilities: ['read'], resources: { calls: 2 } }, policy: expandedPolicy
+      taskId: 'parent',
+      revision: 2,
+      argumentsDigest: 'sha256:parent-revised',
+      scope: { capabilities: ['read'], resources: { calls: 2 } },
+      policy: expandedPolicy
     })
     expect(revised.ok).toBe(true)
     expect(revised.state.tasks.get('child')?.status).toBe('cancelled')
@@ -338,21 +469,25 @@ describe('WP07 task state persistence codec and recovery projection', () => {
   })
 
   it('rejects archives beyond explicit byte, record, or nested-scope limits before recovery', () => {
-    expect(decodeTaskRuntimeState({ kind: 'found', serialized: ' '.repeat(limits.maxBytes + 1) }, limits))
-      .toEqual({ kind: 'corrupt', reason: 'limit-exceeded' })
+    expect(decodeTaskRuntimeState({ kind: 'found', serialized: ' '.repeat(limits.maxBytes + 1) }, limits)).toEqual({
+      kind: 'corrupt',
+      reason: 'limit-exceeded'
+    })
     const created = addTask(createTaskRuntimeState(), 'task-a')
     expect(created.ok).toBe(true)
-    expect(() => encodeTaskRuntimeState(created.state, { ...limits, maxTasks: 1 }))
-      .not.toThrow()
+    expect(() => encodeTaskRuntimeState(created.state, { ...limits, maxTasks: 1 })).not.toThrow()
     const second = addTask(created.state, 'task-b')
     expect(second.ok).toBe(true)
     expect(() => encodeTaskRuntimeState(second.state, { ...limits, maxTasks: 1 })).toThrow(RangeError)
-    expect(decodeTaskRuntimeState({ kind: 'found', serialized: encode(second.state) }, { ...limits, maxTasks: 1 }))
-      .toEqual({ kind: 'corrupt', reason: 'limit-exceeded' })
-    expect(() => encodeTaskRuntimeState(created.state, { ...limits, maxTasks: 1, maxBytes: 8 }))
-      .toThrow(RangeError)
+    expect(
+      decodeTaskRuntimeState({ kind: 'found', serialized: encode(second.state) }, { ...limits, maxTasks: 1 })
+    ).toEqual({ kind: 'corrupt', reason: 'limit-exceeded' })
+    expect(() => encodeTaskRuntimeState(created.state, { ...limits, maxTasks: 1, maxBytes: 8 })).toThrow(RangeError)
     const oversized = parseArchive(encode(created.state))
-    oversized.tasks[0]!.scope = { capabilities: Array.from({ length: limits.maxCapabilitiesPerScope + 1 }, (_, i) => `cap-${i}`), resources: {} }
+    oversized.tasks[0]!.scope = {
+      capabilities: Array.from({ length: limits.maxCapabilitiesPerScope + 1 }, (_, i) => `cap-${i}`),
+      resources: {}
+    }
     expect(decode(JSON.stringify(oversized))).toEqual({ kind: 'corrupt', reason: 'limit-exceeded' })
   })
 })
