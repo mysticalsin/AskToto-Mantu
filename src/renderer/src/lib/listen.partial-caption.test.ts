@@ -222,7 +222,7 @@ beforeEach(() => {
 
   vi.stubGlobal('window', {
     toto: {
-      setListeningState: async () => {},
+      setListeningState: async (_listening: boolean, _startedAt?: number) => true,
       armAudio: async () => {},
       parakeetStatus: async () => ({ ready: true, addonError: null }),
       parakeetEnsure: async () => ({ ok: true }),

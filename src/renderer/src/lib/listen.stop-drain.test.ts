@@ -146,6 +146,16 @@ let meetingGrants: Array<{ captureId: string; startedAt: number; established: bo
 let revokedMeetingGrantIds = new Set<string>()
 let meetingRevocationListeners = new Set<(event: MeetingMicCaptureRevoked) => void>()
 
+type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void }
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function cloudSpeechStreamKey(stream: { generation: number; track: Track; epoch: number }): string {
   return `${stream.generation}:${stream.track}:${stream.epoch}`
 }
@@ -445,7 +455,7 @@ beforeEach(() => {
           for (const listener of meetingRevocationListeners) listener(event)
         }
       }),
-      setListeningState: vi.fn(async () => {}),
+      setListeningState: vi.fn(async (_listening: boolean, _startedAt?: number) => true),
       armAudio: async () => {},
       parakeetStatus: vi.fn(async () => ({ ready: true, addonError: null })),
       parakeetEnsure: vi.fn(async () => ({ ok: true })),
@@ -574,6 +584,100 @@ afterEach(() => {
   host.unmount()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+describe('meeting admission handshake', () => {
+  it.each(['mic', 'system'] as const)('waits for accepted admission before opening %s audio', async (source) => {
+    const admission = deferred<boolean>()
+    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => admission.promise)
+
+    const api = render()
+    const starting = api.start(source, 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    expect(window.toto.setListeningState).toHaveBeenCalledWith(true, 123)
+    expect(streams).toHaveLength(0)
+    expect(worklets).toHaveLength(0)
+    expect(window.toto.parakeetFeed).not.toHaveBeenCalled()
+    expect(window.toto.appleSpeechFeed).not.toHaveBeenCalled()
+    expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
+    expect(window.toto.cloudSpeechStart).not.toHaveBeenCalled()
+
+    admission.resolve(true)
+    await starting
+    await settle()
+
+    expect(streams.filter((stream) => stream.kind === source)).toHaveLength(1)
+    expect(worklets.length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    { source: 'mic', outcome: 'denied' },
+    { source: 'mic', outcome: 'rejected' },
+    { source: 'system', outcome: 'denied' },
+    { source: 'system', outcome: 'rejected' }
+  ] as const)('fails closed for %s audio when admission is %s', async ({ source, outcome }) => {
+    if (outcome === 'denied') {
+      vi.mocked(window.toto.setListeningState).mockImplementationOnce(async () => false)
+    } else {
+      vi.mocked(window.toto.setListeningState).mockImplementationOnce(async () => {
+        throw new Error('Synthetic admission IPC failure')
+      })
+    }
+
+    const starting = render().start(source, 'fast', 'parakeet', 'English', 123)
+    await starting
+    await settle()
+
+    const api = render()
+    expect(api).toMatchObject({ listening: false, capturing: false })
+    expect(api.error).toContain('Meeting microphone admission was denied.')
+    expect(streams).toHaveLength(0)
+    expect(worklets).toHaveLength(0)
+    expect(window.toto.parakeetFeed).not.toHaveBeenCalled()
+    expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
+    expect(window.toto.cloudSpeechStart).not.toHaveBeenCalled()
+  })
+
+  it('lets Stop retire a pending reservation without releasing a replacement session', async () => {
+    const oldAdmission = deferred<boolean>()
+    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => oldAdmission.promise)
+
+    const oldApi = render()
+    const oldStarting = oldApi.start('system', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    expect(streams).toHaveLength(0)
+    expect(worklets).toHaveLength(0)
+
+    oldApi.stop()
+    await settle()
+    expect(window.toto.setListeningState).toHaveBeenNthCalledWith(2, false, 123)
+
+    const replacement = render()
+    const replacementStarting = replacement.start('system', 'fast', 'parakeet', 'English', 456)
+    await replacementStarting
+    await settle()
+    const replacementTrack = streams.find((stream) => stream.kind === 'system')?.track
+    if (!replacementTrack) throw new Error('replacement system-audio stream did not open')
+
+    oldAdmission.resolve(true)
+    await oldStarting
+    await settle()
+
+    expect(window.toto.setListeningState.mock.calls).toEqual([
+      [true, 123],
+      [false, 123],
+      [true, 456],
+      [false, 123]
+    ])
+    expect(window.toto.setListeningState).not.toHaveBeenCalledWith(false, 456)
+    expect(replacementTrack.stop).not.toHaveBeenCalled()
+    expect(render().capturing).toBe(true)
+
+    replacement.stop()
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+  })
 })
 
 describe('live audio transport identity', () => {
