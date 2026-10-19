@@ -16,6 +16,18 @@ function declaration(name: string): string {
   return source.slice(start, next < 0 ? source.length : next)
 }
 
+function boundedBody(source: string, startPattern: RegExp, endPattern: RegExp): string {
+  const start = startPattern.exec(source)
+  if (!start) throw new Error(`Missing source start boundary: ${startPattern}`)
+  const bodyStart = start.index + start[0].length
+  const remainder = source.slice(bodyStart)
+  const end = endPattern.exec(remainder)
+  if (!end) throw new Error(`Missing source end boundary after start: ${endPattern}`)
+  const body = remainder.slice(0, end.index)
+  if (!body.trim()) throw new Error('Expected a nonempty source body between boundaries')
+  return body
+}
+
 describe('input-session lifecycle revocation wiring', () => {
   it('hard-stops before same-WebContents renderer reload', () => {
     const body = declaration('reloadOverlay')
@@ -203,17 +215,24 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('ignores delayed user-stop grant revocation after graceful Listen stop', () => {
-    const start = listenSource.indexOf('useEffect(() => window.toto.onMeetingMicCaptureRevoked')
-    const end = listenSource.indexOf('}), [failAdmittedCapture])', start)
-    const listener = listenSource.slice(start, end)
-    expect(listener.indexOf("if (event.reason === 'user-stop')")).toBeGreaterThanOrEqual(0)
-    expect(listener.indexOf("if (event.reason === 'user-stop')")).toBeLessThan(listener.indexOf('failAdmittedCapture('))
-    expect(listener.indexOf('forceCloudStop: true')).toBeGreaterThan(listener.indexOf('failAdmittedCapture('))
+    const listener = boundedBody(
+      listenSource,
+      /useEffect\s*\(\s*\(\)\s*=>\s*window\.toto\.onMeetingMicCaptureRevoked\s*\(\s*\(\s*event\s*\)\s*=>\s*\{\s*/,
+      /\}\s*\)\s*,\s*\[\s*failAdmittedCapture\s*\]\s*\)/
+    )
+    const userStopGuard = listener.indexOf("if (event.reason === 'user-stop')")
+    const failAdmittedCapture = listener.indexOf('failAdmittedCapture(')
+    const forcedCloudStop = listener.indexOf('forceCloudStop: true')
+    expect(userStopGuard).toBeGreaterThanOrEqual(0)
+    expect(failAdmittedCapture).toBeGreaterThanOrEqual(0)
+    expect(forcedCloudStop).toBeGreaterThanOrEqual(0)
+    expect(userStopGuard).toBeLessThan(failAdmittedCapture)
+    expect(forcedCloudStop).toBeGreaterThan(failAdmittedCapture)
   })
 
   it('makes pending interactive capture abortable and releases on devicechange', () => {
     expect(admissionSource).toContain("signal?.addEventListener('abort', onAbort")
-    expect(admissionSource).toContain('const onDeviceChange = (): void => { void admission.release() }')
+    expect(admissionSource).toMatch(/const onDeviceChange = \(\): void => \{\s*void admission\.release\(\)\s*\}/)
     expect(admissionSource.match(/record\.cleanups\.add\(detachListeners\)/g)).toHaveLength(2)
     expect(admissionSource).toContain('if (released || record.revoked)')
     expect(listenSource).toContain('micAcquisitionAbortRef.current?.abort()')

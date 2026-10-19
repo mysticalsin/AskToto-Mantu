@@ -26,13 +26,13 @@ describe('MQA-263 — onboarding must not ask for setup that already happened', 
   it('leads with "ready", not "pick one way to connect", when it is', () => {
     expect(SRC).toMatch(/alreadyConnected \? 'Métis is ready to answer' : 'How should Métis answer you\?'/)
     // The demand copy must survive for the case where it is TRUE — an unconfigured install still needs it.
-    expect(SRC).toMatch(/To get live answers, pick one way to\s*\n?\s*connect the AI/)
+    expect(SRC).toMatch(/To\s+get\s+live\s+answers,\s+pick\s+one\s+way\s+to\s+connect\s+the\s+AI\./)
   })
 
   it('names the provider that is actually configured, rather than a generic one', () => {
     // The whole defect was naming providers the user does not have while ignoring the one they do.
     expect(SRC).toMatch(/PROVIDERS\[settings\.provider\]\?\.label/)
-    expect(SRC).toMatch(/there is no key to paste and nothing to sign up for/)
+    expect(SRC).toMatch(/there\s+is\s+no\s+key\s+to\s+paste\s+and\s+nothing\s+to\s+sign\s+up\s+for\./)
   })
 
   it('does not tell a connected user to "decide later"', () => {
