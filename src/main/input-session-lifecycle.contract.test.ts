@@ -9,11 +9,15 @@ const tapSource = readFileSync(join(__dirname, '../renderer/src/lib/tap/tap-cont
 const tapCardSource = readFileSync(join(__dirname, '../renderer/src/features/settings/TapControlCard.tsx'), 'utf8')
 const meetingCaptureAuthoritySource = readFileSync(join(__dirname, 'meeting-mic-capture-authority.ts'), 'utf8')
 
-function declaration(name: string): string {
-  const start = source.indexOf(`function ${name}(`)
+function declarationIn(sourceText: string, name: string): string {
+  const start = sourceText.indexOf('function ' + name + '(')
   if (start < 0) throw new Error(`Missing ${name} declaration`)
-  const next = source.indexOf('\nfunction ', start + 1)
-  return source.slice(start, next < 0 ? source.length : next)
+  const next = sourceText.indexOf('\nfunction ', start + 1)
+  return sourceText.slice(start, next < 0 ? sourceText.length : next)
+}
+
+function declaration(name: string): string {
+  return declarationIn(source, name)
 }
 
 function boundedBody(source: string, startPattern: RegExp, endPattern: RegExp): string {
@@ -26,6 +30,257 @@ function boundedBody(source: string, startPattern: RegExp, endPattern: RegExp): 
   const body = remainder.slice(0, end.index)
   if (!body.trim()) throw new Error('Expected a nonempty source body between boundaries')
   return body
+}
+
+type CallbackScope = { body: string; scope: string; start: number; end: number }
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function boundedCallbackScopes(sourceText: string, startPattern: RegExp, callbackEndPattern?: RegExp): CallbackScope[] {
+  const flags = startPattern.flags.includes('g') ? startPattern.flags : startPattern.flags + 'g'
+  const matcher = new RegExp(startPattern.source, flags)
+  const scopes: CallbackScope[] = []
+  let start: RegExpExecArray | null
+  while ((start = matcher.exec(sourceText)) !== null) {
+    const bodyStart = start.index + start[0].length
+    const indent = /^[\t ]*/.exec(start[0])?.[0] ?? ''
+    const endPattern = callbackEndPattern ?? new RegExp('^' + escapeRegExp(indent) + '\\}[\\t ]*\\)', 'm')
+    const remainder = sourceText.slice(bodyStart)
+    const end = endPattern.exec(remainder)
+    if (!end) throw new Error(`Missing callback end boundary after: ${startPattern}`)
+    const body = remainder.slice(0, end.index)
+    if (!body.trim()) throw new Error('Expected a nonempty callback body between boundaries')
+    const endIndex = bodyStart + end.index + end[0].length
+    scopes.push({ body, scope: sourceText.slice(start.index, endIndex), start: start.index, end: endIndex })
+    matcher.lastIndex = endIndex
+  }
+  if (scopes.length === 0) throw new Error(`Missing callback registration: ${startPattern}`)
+  return scopes
+}
+
+function requiredIndex(sourceText: string, token: string): number {
+  const index = sourceText.indexOf(token)
+  if (index < 0) throw new Error(`Missing source contract token: ${token}`)
+  return index
+}
+
+function expectOrdered(sourceText: string, tokens: string[]): void {
+  const positions = tokens.map((token) => requiredIndex(sourceText, token))
+  for (let index = 1; index < positions.length; index += 1) {
+    const previous = positions[index - 1] ?? -1
+    const current = positions[index] ?? -1
+    expect(previous).toBeLessThan(current)
+  }
+}
+
+function replaceOnce(sourceText: string, needle: string, replacement: string): string {
+  const start = sourceText.indexOf(needle)
+  if (start < 0 || sourceText.indexOf(needle, start + needle.length) >= 0) {
+    throw new Error('Expected one in-memory mutation boundary: ' + needle)
+  }
+  return sourceText.slice(0, start) + replacement + sourceText.slice(start + needle.length)
+}
+
+function hasDirectStatement(scope: string, statement: string): boolean {
+  const code = scope.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g, (comment) => comment.replace(/[^\r\n]/g, ' '))
+  const indent = /^[\t ]*(?=\S)/m.exec(code)?.[0] ?? ''
+  return new RegExp('^' + escapeRegExp(indent) + escapeRegExp(statement) + '[\\t ]*;?[\\t ]*$', 'm').test(code)
+}
+
+function replaceInFailAdmittedCapture(sourceText: string, needle: string): string {
+  const start = sourceText.indexOf('const failAdmittedCapture = useCallback(')
+  if (start < 0) throw new Error('Missing failAdmittedCapture callback for in-memory mutation')
+  const end = sourceText.indexOf('failAdmittedCaptureRef.current = failAdmittedCapture', start)
+  if (end < 0) throw new Error('Missing forward failAdmittedCapture ref boundary for in-memory mutation')
+  const callback = sourceText.slice(start, end)
+  return sourceText.slice(0, start) + replaceOnce(callback, needle, '') + sourceText.slice(end)
+}
+
+function assertHiddenToggleShortcutContract(sourceText: string): void {
+  const shortcut = declarationIn(sourceText, 'sendHotkey')
+  const hiddenToggle = boundedBody(
+    shortcut,
+    /if \(action === 'toggle-listen' && !listeningActive && !w\.isVisible\(\)\) \{\s*/,
+    /\n[\t ]*\}[\t ]*\n[\t ]*if \(!w\.isVisible\(\) \|\| islandResting\)/
+  )
+  const routeAfterShow = boundedBody(
+    hiddenToggle,
+    /const routeAfterShow = \(\): void => \{\s*/,
+    /\n[\t ]*\}[\t ]*\n[\t ]*w\.once\(\s*['"]show['"]/
+  )
+  const timeoutCleanup = boundedBody(hiddenToggle, /timeout = setTimeout\(\(\) => \{\s*/, /\n[\t ]*\},\s*1_000\)/)
+
+  expect(sourceText).toMatch(/win\.on\(\s*['"]show['"]\s*,\s*revalidateInputSessionAfterShow\s*\)/)
+  expect(sourceText).toMatch(/win\.on\(\s*['"]restore['"]\s*,\s*revalidateInputSessionAfterShow\s*\)/)
+  expectOrdered(sourceText, [
+    "win.on('show', revalidateInputSessionAfterShow)",
+    "win.on('restore', revalidateInputSessionAfterShow)",
+    'function sendHotkey('
+  ])
+
+  const showOnce = "w.once('show', routeAfterShow)"
+  const restoreOnce = "w.once('restore', routeAfterShow)"
+  const revealRequest = "reveal('hotkey', { focus: false })"
+  const showOnceIndex = requiredIndex(hiddenToggle, showOnce)
+  const restoreOnceIndex = requiredIndex(hiddenToggle, restoreOnce)
+  const revealIndex = requiredIndex(hiddenToggle, revealRequest)
+  expect(showOnceIndex).toBeLessThan(revealIndex)
+  expect(restoreOnceIndex).toBeLessThan(revealIndex)
+  expect(hiddenToggle).toMatch(/if \(!routed\)\s*\{[\s\S]*\}\s*return\s*$/)
+  expectOrdered(hiddenToggle, [revealRequest, 'if (!routed)', 'timeout = setTimeout'])
+  expect(hiddenToggle.lastIndexOf('return')).toBeGreaterThan(requiredIndex(hiddenToggle, 'timeout = setTimeout'))
+  expectOrdered(timeoutCleanup, [
+    'if (routed) return',
+    "w.removeListener('show', routeAfterShow)",
+    "w.removeListener('restore', routeAfterShow)"
+  ])
+
+  expectOrdered(routeAfterShow, [
+    'if (routed) return',
+    'if (w.isDestroyed() || !w.isVisible()) return',
+    'routed = true',
+    'if (timeout) clearTimeout(timeout)',
+    "w.removeListener('show', routeAfterShow)",
+    "w.removeListener('restore', routeAfterShow)",
+    'if (listeningActive) return',
+    'const frame = currentMainActivationFrame()',
+    'if (!frame || !meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)) return',
+    'w.webContents.send(IPC.hotkey, action)'
+  ])
+  expect(routeAfterShow.match(/meetingStartActivationAuthority\.mint\(frame, MEETING_START_ACTION\)/g)).toHaveLength(1)
+}
+
+function assertQuitLifecycleContract(quitLifecycle: string, mainSource: string): void {
+  const beforeQuitHandlers = boundedCallbackScopes(
+    quitLifecycle,
+    /^[\t ]*app\.on\(\s*['"]before-quit['"]\s*,\s*\(event\)\s*=>\s*\{/gm
+  )
+  for (const handler of beforeQuitHandlers) {
+    expect(handler.body).not.toContain('deps.shutdownInputSessions()')
+    expect(handler.body).not.toContain('inputSessionAuthority.shutdown()')
+  }
+
+  const beginShutdownHandler = beforeQuitHandlers.find((handler) => handler.body.includes('deps.beginInputShutdown()'))
+  if (!beginShutdownHandler) throw new Error('Missing before-quit beginInputShutdown callback')
+  expectOrdered(beginShutdownHandler.body, ['deps.beginInputShutdown()', 'deps.speechPackDesktop()?.beforeQuit'])
+
+  const flushHandler = beforeQuitHandlers.find((handler) => handler.body.includes('setTimeout(() => app.quit(), 2000)'))
+  if (!flushHandler) throw new Error('Missing before-quit live-meeting flush/resume handler')
+  expectOrdered(flushHandler.body, [
+    'deps.isQuitFlushDone()',
+    'deps.meetingFlushPending()',
+    'event.preventDefault()',
+    'deps.markQuitFlushDone()',
+    "window.webContents.send(deps.hotkeyChannel, 'reset')",
+    'setTimeout(() => app.quit(), 2000)'
+  ])
+
+  const willQuitHandlers = boundedCallbackScopes(
+    quitLifecycle,
+    /^[\t ]*app\.on\(\s*['"]will-quit['"]\s*,\s*deps\.wrapLifecycleListener\(\s*['"]app_quit['"]\s*,\s*\(\)\s*=>\s*\{/gm,
+    /^[\t ]*\}[\t ]*\)\r?\n[\t ]*\)/m
+  )
+  expect(willQuitHandlers).toHaveLength(1)
+  const willQuitHandler = willQuitHandlers[0]
+  if (!willQuitHandler) throw new Error('Missing bounded will-quit callback')
+  expect(willQuitHandler.scope).toMatch(/app\.on\(\s*['"]will-quit['"]\s*,\s*deps\.wrapLifecycleListener\s*\(/s)
+  expect(hasDirectStatement(willQuitHandler.body, 'deps.shutdownInputSessions()')).toBe(true)
+  expect(willQuitHandler.start).toBeGreaterThan(Math.max(...beforeQuitHandlers.map((handler) => handler.end)))
+
+  const beginBinding = boundedBody(
+    mainSource,
+    /beginInputShutdown:\s*\(\)\s*=>\s*\{\s*/,
+    /\n[\t ]*\},\s*\n[\t ]*quitTrace/
+  )
+  expect(beginBinding).toContain('inputSessionAuthority.beginShutdown()')
+  const shutdownBinding = boundedBody(
+    mainSource,
+    /shutdownInputSessions:\s*\(\)\s*=>\s*\{\s*/,
+    /\n[\t ]*\},\s*\n[\t ]*setBootPowerSaveBlock/
+  )
+  expectOrdered(shutdownBinding, ["hardStopInputSession('shutdown')", 'inputSessionAuthority.shutdown()'])
+
+  const transition = declarationIn(mainSource, 'acceptLiveSpeakerTransition')
+  expectOrdered(transition, [
+    'if (change.on && (inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady)) return false',
+    "hardStopMeetingCapture('owner-replaced')"
+  ])
+  const activationObserved = boundedBody(
+    mainSource,
+    /ipcMain\.handle\(IPC\.meetingStartActivationObserved,\s*\(event\)\s*=>\s*\{\s*/,
+    /\n[\t ]*\}\)\s*\n[\t ]*ipcMain\.handle\(IPC\.meetingStartActivationReady/
+  )
+  expect(activationObserved).toContain('assertMainWindow(event)')
+  expect(activationObserved).toContain('if (!requireAuth() || inputSessionAuthority.isClosing')
+  expect(activationObserved).toContain('meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)')
+}
+
+function failAdmittedCaptureBody(listenSourceText: string): string {
+  return boundedBody(
+    listenSourceText,
+    /const failAdmittedCapture = useCallback\(/,
+    /failAdmittedCaptureRef\.current\s*=\s*failAdmittedCapture/
+  )
+}
+
+function meetingRevocationBody(listenSourceText: string): string {
+  return boundedBody(
+    listenSourceText,
+    /window\.toto\.onMeetingMicCaptureRevoked\(\s*\(event\)\s*=>\s*\{\s*/,
+    /\}\s*\)\s*,\s*\[\s*failAdmittedCapture\s*\]\s*\)/
+  )
+}
+
+function assertForcedRendererTeardownContract(listenSourceText: string): void {
+  const failure = failAdmittedCaptureBody(listenSourceText)
+  expect(failure).toContain('if (!options.force && !captureSessionIsOpen(sessionEpochRef.current)) return')
+  const forcedTeardown = boundedBody(failure, /if \(options\.force\)\s*\{\s*/, /\n[\t ]*\}\n[\t ]*const brokerCapture/)
+  expectOrdered(forcedTeardown, [
+    'sessionEpochRef.current += 1',
+    'if (drainTimerRef.current) clearTimeout(drainTimerRef.current)',
+    'drainTimerRef.current = null',
+    'const activeStop = stopDrainRef.current',
+    "activeStop.phase = 'finished'",
+    "settleStopCallbacks(activeStop, 'revoked')",
+    'stopDrainRef.current = null',
+    'workerRef.current?.terminate()'
+  ])
+  expect(failure).toContain('queue.current = []')
+  expect(failure).toContain("for (const speaker of ['you', 'them'] as const) closeChannel(speaker)")
+  expectOrdered(failure, [
+    'queue.current = []',
+    "for (const speaker of ['you', 'them'] as const) closeChannel(speaker)",
+    'releaseBrokerRetainedCapture(capture)',
+    'brokerRetainedStreamsRef.current = {}'
+  ])
+
+  const brokerCleanup = boundedBody(failure, /if \(brokerCapture\)\s*\{\s*/, /\n[\t ]*\}\n[\t ]*activeMicTrackRef/)
+  expect(brokerCleanup).toContain('brokerController.cancel()')
+  expect(brokerCleanup).toContain('brokerController.dispose()')
+  expect(brokerCleanup).toContain('activeBrokerSpeechRef.current = null')
+
+  const revocation = meetingRevocationBody(listenSourceText)
+  expectOrdered(revocation, [
+    'if (event.startedAt !== sessionStartedAtRef.current) return',
+    "if (event.reason === 'user-stop')"
+  ])
+  const userStopBranch = boundedBody(
+    revocation,
+    /if \(event\.reason === 'user-stop'\) \{/,
+    /\n[\t ]*\}[\t ]*\n[\t ]*\/\/ Main has already invalidated this exact meeting reservation/
+  )
+  expect(hasDirectStatement(userStopBranch, 'return')).toBe(true)
+  const revokeCallIndex = requiredIndex(revocation, "failAdmittedCapture('Meeting microphone admission was revoked.'")
+  expect(requiredIndex(revocation, "if (event.reason === 'user-stop')")).toBeLessThan(revokeCallIndex)
+  const revokeCall = boundedBody(
+    revocation,
+    /failAdmittedCapture\(\s*'Meeting microphone admission was revoked\.'\s*,\s*\{\s*/,
+    /\}\s*\)/
+  )
+  expect(revokeCall).toContain('force: true')
+  expect(revokeCall).toContain('forceCloudStop: true')
 }
 
 describe('input-session lifecycle revocation wiring', () => {
@@ -74,22 +329,30 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('routes hidden-window shortcut starts only after show/restore revalidation', () => {
-    const persistentShowRevalidation = source.indexOf("win.on('show', revalidateInputSessionAfterShow)")
-    const shortcut = declaration('sendHotkey')
-    const showSubscription = shortcut.indexOf("w.once('show', routeAfterShow)")
-    const revealRequest = shortcut.indexOf("reveal('hotkey', { focus: false })")
-    const grantMint = shortcut.indexOf('meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)')
-    const routeSend = shortcut.indexOf('w.webContents.send(IPC.hotkey, action)')
+    assertHiddenToggleShortcutContract(source)
 
-    expect(persistentShowRevalidation).toBeGreaterThanOrEqual(0)
-    expect(showSubscription).toBeGreaterThanOrEqual(0)
-    expect(persistentShowRevalidation).toBeLessThan(source.indexOf('function sendHotkey('))
-    expect(showSubscription).toBeLessThan(revealRequest)
-    expect(revealRequest).toBeLessThan(grantMint)
-    expect(grantMint).toBeLessThan(routeSend)
-    expect(shortcut.slice(shortcut.indexOf('const routeAfterShow'), showSubscription)).toContain(
-      'if (w.isDestroyed() || !w.isVisible()) return'
-    )
+    const restoreRegistration = "    w.once('restore', routeAfterShow)\n"
+    expect(() => assertHiddenToggleShortcutContract(replaceOnce(source, restoreRegistration, ''))).toThrow()
+
+    const registrations =
+      "    w.once('show', routeAfterShow)\n" +
+      "    w.once('restore', routeAfterShow)\n" +
+      "    reveal('hotkey', { focus: false })"
+    const reorderedRegistrations =
+      "    reveal('hotkey', { focus: false })\n" +
+      "    w.once('show', routeAfterShow)\n" +
+      "    w.once('restore', routeAfterShow)"
+    expect(() =>
+      assertHiddenToggleShortcutContract(replaceOnce(source, registrations, reorderedRegistrations))
+    ).toThrow()
+
+    const mintThenSend =
+      '      if (!frame || !meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)) return\n' +
+      '      w.webContents.send(IPC.hotkey, action)'
+    const sendThenMint =
+      '      w.webContents.send(IPC.hotkey, action)\n' +
+      '      if (!frame || !meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)) return'
+    expect(() => assertHiddenToggleShortcutContract(replaceOnce(source, mintThenSend, sendThenMint))).toThrow()
   })
 
   it('revokes unused meeting-start grants on each accepted Listen stop path', () => {
@@ -104,40 +367,93 @@ describe('input-session lifecycle revocation wiring', () => {
 
   it('permanently shuts admission only at final will-quit after before-quit flush gates', () => {
     const quitLifecycle = readFileSync(join(__dirname, 'lifecycle/app-quit-lifecycle.ts'), 'utf8')
-    expect(quitLifecycle.indexOf("app.on('will-quit'")).toBeGreaterThanOrEqual(0)
-    expect(quitLifecycle.indexOf('deps.shutdownInputSessions()')).toBeGreaterThan(
-      quitLifecycle.indexOf("app.on('will-quit'")
-    )
-    expect(quitLifecycle.indexOf('deps.shutdownInputSessions()')).toBeGreaterThan(
-      quitLifecycle.indexOf('setTimeout(() => app.quit(), 2000)')
-    )
-    expect(source).toMatch(
-      /shutdownInputSessions:\s*\(\)\s*=>\s*\{[\s\S]*?hardStopInputSession\('shutdown'\)[\s\S]*?inputSessionAuthority\.shutdown\(\)/
-    )
-    expect(quitLifecycle.indexOf('deps.beginInputShutdown()')).toBeGreaterThan(
-      quitLifecycle.indexOf("app.on('before-quit'")
-    )
-    expect(source).toContain('inputSessionAuthority.beginShutdown()')
-    const transition = declaration('acceptLiveSpeakerTransition')
-    expect(transition.indexOf('if (change.on && inputSessionAuthority.isClosing) return false')).toBeGreaterThanOrEqual(
-      0
-    )
-    expect(transition.indexOf('if (change.on && inputSessionAuthority.isClosing) return false')).toBeLessThan(
-      transition.indexOf("hardStopMeetingCapture('owner-replaced')")
-    )
-    expect(source).toContain('inputSessionAuthority.isClosing || !requireAuth()')
+    assertQuitLifecycleContract(quitLifecycle, source)
+
+    const beginBeforeQuit = '    deps.beginInputShutdown()\n    }\n    deps.speechPackDesktop()?.beforeQuit'
+    const shutdownBeforeFinalQuit =
+      '    deps.beginInputShutdown()\n' +
+      '      deps.shutdownInputSessions()\n' +
+      '    }\n' +
+      '    deps.speechPackDesktop()?.beforeQuit'
+    expect(() =>
+      assertQuitLifecycleContract(replaceOnce(quitLifecycle, beginBeforeQuit, shutdownBeforeFinalQuit), source)
+    ).toThrow()
+
+    expect(() =>
+      assertQuitLifecycleContract(
+        replaceOnce(quitLifecycle, '      deps.shutdownInputSessions()\n', '      // deps.shutdownInputSessions()\n'),
+        source
+      )
+    ).toThrow()
+
+    expect(() =>
+      assertQuitLifecycleContract(
+        replaceOnce(
+          quitLifecycle,
+          '      deps.shutdownInputSessions()\n',
+          '      setTimeout(() => deps.shutdownInputSessions(), 0)\n'
+        ),
+        source
+      )
+    ).toThrow()
+
+    expect(() =>
+      assertQuitLifecycleContract(
+        replaceOnce(
+          quitLifecycle,
+          '      deps.shutdownInputSessions()\n',
+          '      /*\n      deps.shutdownInputSessions()\n      */\n'
+        ),
+        source
+      )
+    ).toThrow()
   })
 
   it('forces full renderer teardown when meeting revocation arrives during Stop drain', () => {
-    expect(listenSource).toMatch(/onMeetingMicCaptureRevoked\([\s\S]*?failAdmittedCapture\([^;]+force:\s*true/)
-    const forcedFailure = listenSource.slice(
-      listenSource.indexOf('const failAdmittedCapture = useCallback'),
-      listenSource.indexOf('failAdmittedCaptureRef.current')
+    assertForcedRendererTeardownContract(listenSource)
+
+    const withoutForwardBoundary = replaceOnce(
+      listenSource,
+      '  failAdmittedCaptureRef.current = failAdmittedCapture\n',
+      ''
     )
-    expect(forcedFailure).toContain('sessionEpochRef.current += 1')
-    expect(forcedFailure).toContain('workerRef.current?.terminate()')
-    expect(forcedFailure).toContain('closeChannel(speaker)')
-    expect(forcedFailure).toContain('queue.current = []')
+    expect(() => assertForcedRendererTeardownContract(withoutForwardBoundary)).toThrow()
+
+    const forceAndCloudStop = '          force: true,\n          forceCloudStop: true,'
+    const noForcedRevocation = '          force: false,\n          forceCloudStop: true,'
+    expect(() =>
+      assertForcedRendererTeardownContract(replaceOnce(listenSource, forceAndCloudStop, noForcedRevocation))
+    ).toThrow()
+
+    for (const token of [
+      'sessionEpochRef.current += 1',
+      'workerRef.current?.terminate()',
+      "for (const speaker of ['you', 'them'] as const) closeChannel(speaker)",
+      'queue.current = []'
+    ]) {
+      expect(() => assertForcedRendererTeardownContract(replaceInFailAdmittedCapture(listenSource, token))).toThrow()
+    }
+
+    expect(() =>
+      assertForcedRendererTeardownContract(
+        replaceOnce(
+          listenSource,
+          '          return\n        }\n        // Main has already invalidated this exact meeting reservation.',
+          '          // return\n        }\n        // Main has already invalidated this exact meeting reservation.'
+        )
+      )
+    ).toThrow()
+
+    expect(() =>
+      assertForcedRendererTeardownContract(
+        replaceOnce(
+          listenSource,
+          '          return\n        }\n        // Main has already invalidated this exact meeting reservation.',
+          '          /*\n          return\n          */\n        }\n' +
+            '        // Main has already invalidated this exact meeting reservation.'
+        )
+      )
+    ).toThrow()
   })
 
   it('revokes pending and permission-authorized meeting grants while retaining established streams', () => {
