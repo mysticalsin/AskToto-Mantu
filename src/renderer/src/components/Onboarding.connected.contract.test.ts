@@ -47,9 +47,7 @@ describe('MQA-263 — onboarding must not ask for setup that already happened', 
   })
 
   it('passes readiness into the step 6 row so it stops asking for a shipped key', () => {
-    expect(SRC).toMatch(
-      /providerReadyCopy\(settings\.provider, \{ alreadyConnected: settings\.providerReady \}\)/
-    )
+    expect(SRC).toMatch(/providerReadyCopy\(settings\.provider, \{ alreadyConnected: settings\.providerReady \}\)/)
   })
 
   it('respects a managed provider lock — a locked install is not "choose your own"', () => {
