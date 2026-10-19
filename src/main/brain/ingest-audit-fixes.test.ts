@@ -23,6 +23,7 @@ import {
 } from './ingest'
 import { readDeal, readIndex, setDealOutcome, withEntityLock, writeDeal } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -84,6 +85,7 @@ vi.mock('./store', async (importOriginal) => {
 describe('brain ingest — audited fixes', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(
@@ -130,6 +132,7 @@ describe('brain ingest — audited fixes', () => {
   const settle = (ms = 30): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-meetings-'))
@@ -168,11 +171,27 @@ describe('brain ingest — audited fixes', () => {
   })
 
   afterEach(async () => {
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      } finally {
+        try {
+          rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        } finally {
+          try {
+            vi.unstubAllEnvs()
+          } finally {
+            try {
+              vi.restoreAllMocks()
+            } finally {
+              restoreSpeechReadPolicy()
+            }
+          }
+        }
+      }
+    }
   })
 
   // ── MQA-049 ────────────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import { MeetingExtractionSchema } from '@shared/brain'
 import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -46,6 +47,7 @@ vi.mock('../llm', () => ({
 describe('backfill progress bookkeeping across runs', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
@@ -55,6 +57,7 @@ describe('backfill progress bookkeeping across runs', () => {
   }
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-progress-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-progress-meetings-'))
@@ -75,14 +78,30 @@ describe('backfill progress bookkeeping across runs', () => {
   })
 
   afterEach(async () => {
-    // The queue draining is not the same as the writes landing: the last job’s index.json record is
-    // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
-    // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      // The queue draining is not the same as the writes landing: the last job’s index.json record is
+      // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
+      // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      } finally {
+        try {
+          rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        } finally {
+          try {
+            vi.unstubAllEnvs()
+          } finally {
+            try {
+              vi.restoreAllMocks()
+            } finally {
+              restoreSpeechReadPolicy()
+            }
+          }
+        }
+      }
+    }
   })
 
   it('resets total/done for a fresh run instead of accumulating stale counts from a finished one', async () => {
