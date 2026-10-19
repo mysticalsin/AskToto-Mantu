@@ -137,7 +137,8 @@ let getDisplayMediaImpl: () => Promise<MediaStream>
 let getPermissionsImpl: () => Promise<{ screenRecording?: string; screenDiagnosis?: ScreenDiagnosis }>
 let failWorkletConstructor = false
 let failWorkletConnect = false
-let mediaDeviceListeners: Partial<Record<string, () => void>> = {}
+type MediaDeviceListener = () => void
+let mediaDeviceListeners = new Map<string, Set<MediaDeviceListener>>()
 let cloudSpeechListeners = new Set<(event: CloudSpeechEvent) => void>()
 let cloudSpeechStreams = new Map<Track, { generation: number; track: Track; epoch: number }>()
 let cloudSpeechLastSequences = new Map<string, number>()
@@ -145,15 +146,53 @@ let inputSessionCounter = 0
 let meetingGrants: Array<{ captureId: string; startedAt: number; established: boolean }> = []
 let revokedMeetingGrantIds = new Set<string>()
 let meetingRevocationListeners = new Set<(event: MeetingMicCaptureRevoked) => void>()
+let deferredCleanupReleases = new Set<() => void>()
+let deferredSettlements = new Set<Promise<void>>()
+let startedTasks = new Set<Promise<void>>()
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void }
 
-function deferred<T>(): Deferred<T> {
+function deferred<T>(cleanupValue?: () => T): Deferred<T> {
   let resolve!: (value: T) => void
+  let settled = false
   const promise = new Promise<T>((done) => {
-    resolve = done
+    resolve = (value) => {
+      settled = true
+      done(value)
+    }
+  })
+  const cleanupRelease = (): void => {
+    if (!settled) resolve(cleanupValue ? cleanupValue() : (undefined as T))
+  }
+  const settledPromise = promise.then(
+    () => undefined,
+    () => undefined
+  )
+  deferredCleanupReleases.add(cleanupRelease)
+  deferredSettlements.add(settledPromise)
+  void settledPromise.then(() => {
+    deferredCleanupReleases.delete(cleanupRelease)
+    deferredSettlements.delete(settledPromise)
   })
   return { promise, resolve }
+}
+
+function trackStarted<T>(task: Promise<T>): Promise<T> {
+  let settledTask!: Promise<void>
+  settledTask = task
+    .then(
+      () => undefined,
+      () => undefined
+    )
+    .then(() => {
+      startedTasks.delete(settledTask)
+    })
+  startedTasks.add(settledTask)
+  return task
+}
+
+function emitMediaDeviceEvent(type: string): void {
+  for (const listener of [...(mediaDeviceListeners.get(type) ?? [])]) listener()
 }
 
 function cloudSpeechStreamKey(stream: { generation: number; track: Track; epoch: number }): string {
@@ -313,7 +352,7 @@ const cloudOnlyProfile: NonNullable<EnterpriseLive> = {
 
 function renderWithEnterprise(engine: Engine, enterpriseLive?: EnterpriseLive): ListenApi {
   host.beginRender()
-  return useListen(
+  const api = useListen(
     undefined,
     undefined,
     undefined,
@@ -324,6 +363,10 @@ function renderWithEnterprise(engine: Engine, enterpriseLive?: EnterpriseLive): 
     enterpriseLive,
     engine === 'cloud' ? 'cloudflare-nova3' : undefined
   )
+  return {
+    ...api,
+    start: (...args: Parameters<ListenApi['start']>) => trackStarted(api.start(...args))
+  }
 }
 
 function render(engine: Engine = 'parakeet'): ListenApi {
@@ -338,7 +381,7 @@ const brokerConsent = {
 }
 function renderBroker(): ListenApi {
   host.beginRender()
-  return useListen(
+  const api = useListen(
     undefined,
     undefined,
     undefined,
@@ -351,16 +394,28 @@ function renderBroker(): ListenApi {
     undefined,
     brokerSpeech
   )
+  return {
+    ...api,
+    start: (...args: Parameters<ListenApi['start']>) => trackStarted(api.start(...args))
+  }
 }
 
 function renderWithMicDevice(deviceId: string, engine: Engine = 'parakeet'): ListenApi {
   host.beginRender()
-  return useListen(undefined, undefined, undefined, deviceId, undefined, engine, 'fast')
+  const api = useListen(undefined, undefined, undefined, deviceId, undefined, engine, 'fast')
+  return {
+    ...api,
+    start: (...args: Parameters<ListenApi['start']>) => trackStarted(api.start(...args))
+  }
 }
 
 function renderBeforeSettingsResolve(): ListenApi {
   host.beginRender()
-  return useListen(undefined, undefined, undefined, '', undefined, undefined, 'fast')
+  const api = useListen(undefined, undefined, undefined, '', undefined, undefined, 'fast')
+  return {
+    ...api,
+    start: (...args: Parameters<ListenApi['start']>) => trackStarted(api.start(...args))
+  }
 }
 
 async function settle(): Promise<void> {
@@ -397,7 +452,10 @@ beforeEach(() => {
   getUserMediaImpl = async () => makeStream('mic')
   getDisplayMediaImpl = async () => makeStream('system')
   getPermissionsImpl = async () => ({ screenRecording: 'denied' })
-  mediaDeviceListeners = {}
+  mediaDeviceListeners = new Map()
+  deferredCleanupReleases = new Set()
+  deferredSettlements = new Set()
+  startedTasks = new Set()
   failWorkletConstructor = false
   failWorkletConnect = false
   vi.useFakeTimers()
@@ -571,8 +629,16 @@ beforeEach(() => {
     mediaDevices: {
       getUserMedia: () => getUserMediaImpl(),
       getDisplayMedia: () => getDisplayMediaImpl(),
-      addEventListener: (type: string, listener: () => void) => void (mediaDeviceListeners[type] = listener),
-      removeEventListener: (type: string) => void delete mediaDeviceListeners[type]
+      addEventListener: (type: string, listener: MediaDeviceListener) => {
+        const listeners = mediaDeviceListeners.get(type) ?? new Set<MediaDeviceListener>()
+        listeners.add(listener)
+        mediaDeviceListeners.set(type, listeners)
+      },
+      removeEventListener: (type: string, listener: MediaDeviceListener) => {
+        const listeners = mediaDeviceListeners.get(type)
+        listeners?.delete(listener)
+        if (listeners?.size === 0) mediaDeviceListeners.delete(type)
+      }
     }
   })
   vi.stubGlobal('AudioContext', FakeAudioContext)
@@ -580,8 +646,11 @@ beforeEach(() => {
   vi.stubGlobal('Worker', FakeWorker)
 })
 
-afterEach(() => {
+afterEach(async () => {
   host.unmount()
+  for (const release of [...deferredCleanupReleases]) release()
+  await Promise.all([...startedTasks])
+  await Promise.all([...deferredSettlements])
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -726,7 +795,7 @@ describe('meeting admission handshake', () => {
     const admission = deferred<boolean>()
     vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => admission.promise)
     const starting = render().start('system', 'fast', 'parakeet', 'English', 123)
-    mediaDeviceListeners.devicechange?.()
+    emitMediaDeviceEvent('devicechange')
     await vi.advanceTimersByTimeAsync(800)
     expect(window.toto.armAudio).not.toHaveBeenCalledWith(true)
     expect(streams).toHaveLength(0)
@@ -738,51 +807,60 @@ describe('meeting admission handshake', () => {
 
 describe('live audio transport identity', () => {
   it.each(['Stop', 'unmount'] as const)('releases an in-flight channel setup synchronously on %s', async (cleanup) => {
-    let releaseModule!: () => void
-    addModuleImpl = () => new Promise((resolve) => void (releaseModule = resolve))
+    const moduleLoad = deferred<void>()
+    let moduleEntered = false
+    addModuleImpl = () => {
+      moduleEntered = true
+      return moduleLoad.promise
+    }
     const api = render('parakeet')
     const starting = api.start('mic', 'fast', 'parakeet', 'English', 123)
-    await settle()
-    const pending = streams[0]?.track
-    if (!pending || !releaseModule) throw new Error('channel setup did not reach the held module load')
+    try {
+      await vi.waitFor(() => expect(moduleEntered).toBe(true))
+      const pending = streams[0]?.track
+      if (!pending) throw new Error('channel setup did not acquire its microphone before module load')
 
-    if (cleanup === 'Stop') {
-      api.stop()
-      await settle()
-    } else {
-      host.unmount()
+      if (cleanup === 'Stop') {
+        api.stop()
+      } else {
+        host.unmount()
+      }
+      expect(pending.stop).toHaveBeenCalledOnce()
+      expect(contexts[0]?.state).toBe('closed')
+
+      moduleLoad.resolve()
+      await starting
+      expect(worklets).toHaveLength(0)
+      expect(pending.stop).toHaveBeenCalledOnce()
+      if (cleanup === 'Stop') expect(render('parakeet').capturing).toBe(false)
+    } finally {
+      if (cleanup === 'Stop') api.stop()
+      else host.unmount()
+      moduleLoad.resolve()
+      await starting.catch(() => undefined)
     }
-    expect(pending.stop).toHaveBeenCalledOnce()
-    expect(contexts[0]?.state).toBe('closed')
-
-    releaseModule()
-    await starting
-    await settle()
-    expect(worklets).toHaveLength(0)
-    expect(pending.stop).toHaveBeenCalledOnce()
-    if (cleanup === 'Stop') expect(render('parakeet').capturing).toBe(false)
   })
 
   it('releases both the running and queued same-speaker acquisitions before module load settles', async () => {
     let releaseModule!: () => void
     let moduleLoads = 0
-    const moduleReached = deferred<void>()
+    let moduleEntered = false
+    const moduleLoad = deferred<void>()
     addModuleImpl = () => {
       moduleLoads++
-      return new Promise((resolve) => {
-        releaseModule = resolve
-        moduleReached.resolve()
-      })
+      moduleEntered = true
+      releaseModule = () => moduleLoad.resolve()
+      return moduleLoad.promise
     }
     getPermissionsImpl = async () => ({ screenRecording: 'granted' })
     const api = render('parakeet')
     const starting = api.start('system', 'fast', 'parakeet', 'English', 123)
-    await moduleReached.promise
+    await vi.waitFor(() => expect(moduleEntered).toBe(true))
     expect(moduleLoads).toBe(1)
     expect(streams.map(({ kind }) => kind)).toEqual(['system'])
 
     render('parakeet')
-    mediaDeviceListeners.devicechange?.()
+    emitMediaDeviceEvent('devicechange')
     await vi.advanceTimersByTimeAsync(800)
     await settle()
     expect(streams.map(({ kind }) => kind)).toEqual(['system', 'system'])
@@ -1111,7 +1189,8 @@ describe('live audio transport identity', () => {
     }
     active.track.readyState = 'ended'
     active.track.onended?.()
-    await settle()
+    await vi.waitFor(() => expect(attempts).toBe(2))
+    await vi.waitFor(() => expect(renderWithMicDevice('chosen-device').captureHealth?.trackState).toBe('unavailable'))
     api = renderWithMicDevice('chosen-device')
 
     expect(attempts).toBe(2)
@@ -1130,7 +1209,8 @@ describe('live audio transport identity', () => {
     if (!original) throw new Error('expected an active microphone track')
     original.track.readyState = 'ended'
     original.track.onended?.()
-    await settle()
+    await vi.waitFor(() => expect(streams.filter((entry) => entry.kind === 'mic')).toHaveLength(2))
+    await vi.waitFor(() => expect(render().captureHealth?.trackState).toBe('connected'))
 
     expect(streams.filter((entry) => entry.kind === 'mic')).toHaveLength(2)
     expect(original.track.stop).toHaveBeenCalledOnce()
@@ -1588,7 +1668,7 @@ describe('ASR idle prewarm ownership', () => {
     expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
 
     render('parakeet')
-    host.rerunEffect(3)
+    host.rerunEffect(4)
     await settle()
     expect(workers).toHaveLength(0)
     expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
@@ -1624,7 +1704,7 @@ describe('ASR idle prewarm ownership', () => {
     expect(workers).toHaveLength(0)
 
     render('parakeet')
-    host.rerunEffect(3)
+    host.rerunEffect(4)
     resolveBundled(true)
     await settle()
 
@@ -1776,6 +1856,8 @@ describe('microphone recovery on devicechange', () => {
     await settle()
     const original = streams[0]
     if (!original) throw new Error('test microphone did not open')
+    const originalGrant = meetingGrants[0]
+    if (!originalGrant) throw new Error('meeting admission did not create its first grant')
     original.track.readyState = state
 
     let replacementRequestedAfterRelease = false
@@ -1786,13 +1868,18 @@ describe('microphone recovery on devicechange', () => {
       return makeStream('mic')
     }
 
-    mediaDeviceListeners.devicechange?.()
+    emitMediaDeviceEvent('devicechange')
     await vi.advanceTimersByTimeAsync(800)
-    await settle()
+    await vi.waitFor(() => expect(window.toto.meetingMicAdmission).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(streams).toHaveLength(2))
 
     expect(replacementRequestedAfterRelease).toBe(true)
     expect(streams).toHaveLength(2)
     expect(window.toto.meetingMicAdmission).toHaveBeenCalledTimes(2)
+    expect(window.toto.releaseMeetingMicCapture).toHaveBeenCalledExactlyOnceWith(originalGrant.captureId)
+    expect(window.toto.releaseMeetingMicCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      window.toto.meetingMicAdmission.mock.invocationCallOrder[1]
+    )
     expect(window.toto.setListeningState).toHaveBeenCalledTimes(1)
     expect(render('parakeet')).toMatchObject({ listening: true, capturing: true })
   })
@@ -1811,7 +1898,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     const initialStreams = streams.length
     const initialWorklets = worklets.length
 
-    mediaDeviceListeners.devicechange?.()
+    emitMediaDeviceEvent('devicechange')
     await vi.advanceTimersByTimeAsync(800)
     if (side === 'system') await vi.advanceTimersByTimeAsync(20_001)
     await settle()
@@ -2510,12 +2597,12 @@ describe('useListen Stop flush ownership', () => {
   })
 
   it('rejects an acquisition that resolves after Stop sealed the existing capture frontier', async () => {
-    let resolveDisplay!: (stream: MediaStream) => void
-    getDisplayMediaImpl = () => new Promise((resolve) => void (resolveDisplay = resolve))
+    const displayResult = deferred<MediaStream>(() => makeStream('system'))
+    getDisplayMediaImpl = () => displayResult.promise
     vi.mocked(window.toto.parakeetFeed).mockImplementation(() => new Promise(() => {}))
     let api = render()
-    const startPromise = api.start('both', 'fast', 'parakeet', 'English')
-    await settle()
+    const startPromise = api.start('both', 'fast', 'parakeet', 'English', 801)
+    await vi.waitFor(() => expect(worklets).toHaveLength(1))
     const micWorklet = worklets.at(-1)
     if (!micWorklet) throw new Error('test microphone channel did not open')
     micWorklet.emit({ audio: new Float32Array([0.2]), partial: false })
@@ -2525,7 +2612,7 @@ describe('useListen Stop flush ownership', () => {
     await vi.advanceTimersByTimeAsync(1)
     const lateSystem = makeStream('system')
     const lateTrack = streams.at(-1)?.track
-    resolveDisplay(lateSystem)
+    displayResult.resolve(lateSystem)
     await startPromise
     await settle()
     api = render()
@@ -2594,12 +2681,12 @@ describe('useListen Stop flush ownership', () => {
 
   it('ignores a device-change debounce that originated before a mic-only replacement session', async () => {
     const firstApi = await start('parakeet')
-    mediaDeviceListeners.devicechange?.()
+    emitMediaDeviceEvent('devicechange')
     firstApi.stop()
     await vi.advanceTimersByTimeAsync(1)
 
     const replacementApi = render()
-    await replacementApi.start('mic', 'fast', 'parakeet', 'English')
+    await replacementApi.start('mic', 'fast', 'parakeet', 'English', 802)
     const streamsBeforeOldDebounce = streams.length
     const workletsBeforeOldDebounce = worklets.length
     await vi.advanceTimersByTimeAsync(800)
@@ -2618,7 +2705,7 @@ describe('useListen Stop flush ownership', () => {
     getPermissionsImpl = () => new Promise((resolve) => void (resolvePermission = resolve))
 
     let firstApi = render()
-    await firstApi.start('both', 'fast', 'parakeet', 'English')
+    await firstApi.start('both', 'fast', 'parakeet', 'English', 803)
     firstApi = render() // refresh the registered permission effect with listening=true
     host.rerunEffect(1)
     getDisplayMediaImpl = async () => makeStream('system')
@@ -2629,7 +2716,7 @@ describe('useListen Stop flush ownership', () => {
     firstApi.stop()
     await vi.advanceTimersByTimeAsync(1)
     const replacementApi = render()
-    await replacementApi.start('mic', 'fast', 'parakeet', 'English')
+    await replacementApi.start('mic', 'fast', 'parakeet', 'English', 804)
     const streamsBeforePermission = streams.length
     const workletsBeforePermission = worklets.length
     resolvePermission({ screenRecording: 'granted' })
@@ -2657,7 +2744,7 @@ describe('useListen Stop flush ownership', () => {
     })
 
     let api = render()
-    await api.start('both', 'fast', 'parakeet', 'English')
+    await api.start('both', 'fast', 'parakeet', 'English', 805)
     api = render() // refresh the registered permission effect with listening=true
     expect(api.captureDegraded).toMatchObject({ side: 'them', permission: true })
     expect(api.captureDegraded?.repair).toBeFalsy()
@@ -2682,7 +2769,7 @@ describe('useListen Stop flush ownership', () => {
       throw Object.assign(new Error('synthetic loopback unavailable'), { name: 'NotAllowedError' })
     }
     let api = render()
-    await api.start('both', 'fast', 'parakeet', 'English')
+    await api.start('both', 'fast', 'parakeet', 'English', 806)
     expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
     expect(worklets).toHaveLength(1) // mic remains live while loopback is unavailable
 

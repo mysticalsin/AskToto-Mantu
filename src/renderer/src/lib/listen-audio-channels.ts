@@ -62,6 +62,7 @@ export interface ListenAudioChannels {
 interface PendingAudioOpen {
   admissionEpoch: number
   stream: MediaStream
+  micCapture?: ListenMicCapture
   ctx?: AudioContext
   src?: MediaStreamAudioSourceNode
   worklet?: AudioWorkletNode
@@ -100,10 +101,10 @@ export function createListenAudioChannels(
     forgetPending(speaker, pending)
     if (pending.released) return
     pending.released = true
-    pending.stream.getTracks().forEach((track) => {
-      track.onended = null
-      track.stop()
-    })
+    const tracks = pending.stream.getTracks()
+    tracks.forEach((track) => (track.onended = null))
+    if (pending.micCapture?.release) void pending.micCapture.release()
+    else tracks.forEach((track) => track.stop())
     try {
       pending.worklet?.port.close()
       pending.worklet?.disconnect()
@@ -184,8 +185,10 @@ export function createListenAudioChannels(
     } catch {
       /* continue releasing stream and context */
     }
-    if (!options.retainStream) channel.stream.getTracks().forEach((track) => track.stop())
-    if (!options.retainStream) channel.micCapture?.release?.()
+    if (!options.retainStream) {
+      if (channel.micCapture?.release) void channel.micCapture.release()
+      else channel.stream.getTracks().forEach((track) => track.stop())
+    }
     void channel.ctx.close().catch(() => {})
     if (!options.retainCaptureState) {
       try {
@@ -356,6 +359,7 @@ export function createListenAudioChannels(
     const pending: PendingAudioOpen = {
       admissionEpoch: epoch,
       stream,
+      micCapture,
       cancelled: false,
       released: false,
       cancelledWait,

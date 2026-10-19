@@ -95,7 +95,6 @@ export async function acquireMic(deviceId: string, meetingStartedAt?: number, si
   }
   const track = stream.getAudioTracks()[0]
   if (!track) {
-    stream.getTracks().forEach((candidate) => candidate.stop())
     await release()
     throw new Error('no microphone audio track')
   }
@@ -234,12 +233,13 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
       if (!meetingStartedAt) return
       const mic = await host().acquireMic(host().micDeviceId(), meetingStartedAt, host().captureSignal?.())
       if (!host().admissionOpen(epoch)) {
-        host().stopStream(mic.stream)
-        mic.release?.()
+        if (mic.release) await mic.release()
+        else host().stopStream(mic.stream)
         return
       }
-      if (!(await host().openChannel('you', mic.stream, epoch, mic)) || !host().admissionOpen(epoch)) {
-        mic.release?.()
+      const opened = await host().openChannel('you', mic.stream, epoch, mic)
+      if (!opened || !host().admissionOpen(epoch)) {
+        await mic.release?.()
         return
       }
       host().micRecoverySucceeded()

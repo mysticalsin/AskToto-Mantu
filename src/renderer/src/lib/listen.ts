@@ -362,6 +362,13 @@ export function isQuestion(t: string): boolean {
 
 type Channel = ListenAudioChannel
 type MicCapture = ListenMicCapture
+type BrokerRetainedCapture = { stream: MediaStream; micCapture?: MicCapture }
+
+function releaseBrokerRetainedCapture(capture: BrokerRetainedCapture | undefined): void {
+  if (!capture) return
+  if (capture.micCapture?.release) void capture.micCapture.release()
+  else capture.stream.getTracks().forEach((track) => track.stop())
+}
 
 interface BrokerStartInput {
   epoch: number
@@ -574,7 +581,7 @@ export function useListen(
   const cloudSttFinalizingRef = useRef(false)
   const activeBrokerSpeechRef = useRef<BrokerSpeechSettingsLoaded | null>(null)
   const brokerConsentRef = useRef<CloudSpeechConsentAcknowledgement | null>(null)
-  const brokerRetainedStreamsRef = useRef<Partial<Record<Speaker, MediaStream>>>({})
+  const brokerRetainedStreamsRef = useRef<Partial<Record<Speaker, BrokerRetainedCapture>>>({})
   const brokerPausedCompleteRef = useRef(false)
   const brokerPausePromiseRef = useRef<Promise<void> | null>(null)
   const brokerResumeAfterPauseRef = useRef(false)
@@ -1335,8 +1342,7 @@ export function useListen(
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
-      for (const stream of Object.values(brokerRetainedStreamsRef.current))
-        stream?.getTracks().forEach((track) => track.stop())
+      for (const capture of Object.values(brokerRetainedStreamsRef.current)) releaseBrokerRetainedCapture(capture)
       brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
       if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
@@ -1567,7 +1573,10 @@ export function useListen(
                 error: MIC_LOST_MSG,
                 captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
               }))
-              void recoverMicRef.current?.()
+              void (async () => {
+                await channel.micCapture?.release?.()
+                if (captureAdmissionIsOpen(channel.admissionEpoch)) await recoverMicRef.current?.()
+              })()
             } else {
               themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
               setState((current) => ({ ...current, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
@@ -1904,9 +1913,7 @@ export function useListen(
         activeBrokerSpeechRef.current = brokerMode ? configuredBroker : null
         brokerConsentRef.current = brokerMode ? (cloudConsent ?? null) : null
         brokerPausedCompleteRef.current = false
-        for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
-          stream?.getTracks().forEach((track) => track.stop())
-        }
+        for (const capture of Object.values(brokerRetainedStreamsRef.current)) releaseBrokerRetainedCapture(capture)
         brokerRetainedStreamsRef.current = {}
         cloudSpeechControllerRef.current?.dispose()
         cloudSpeechControllerRef.current = null
@@ -2202,8 +2209,8 @@ export function useListen(
             const admittedMic = await micP
             mic = admittedMic
             if (!captureAdmissionIsOpen(myEpoch)) {
-              admittedMic.stream.getTracks().forEach((t) => t.stop())
-              admittedMic.release?.()
+              if (admittedMic.release) await admittedMic.release()
+              else admittedMic.stream.getTracks().forEach((track) => track.stop())
               return
             }
             micOk = await openChannel('you', admittedMic.stream, myEpoch, admittedMic)
@@ -2441,9 +2448,7 @@ export function useListen(
       themRunRef.current = ''
       disarmNetworkRetry()
       for (const speaker of ['you', 'them'] as const) closeChannel(speaker)
-      Object.values(brokerRetainedStreamsRef.current).forEach((stream) =>
-        stream?.getTracks().forEach((track) => track.stop())
-      )
+      for (const capture of Object.values(brokerRetainedStreamsRef.current)) releaseBrokerRetainedCapture(capture)
       brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(epoch)
       if (options.forceCloudStop && !brokerCapture) {
@@ -2564,9 +2569,9 @@ export function useListen(
     setState((s) => ({ ...s, paused: false, capturing: false, ready: false, loading: true, loadingPct: null }))
 
     const openRetained = async (speaker: Speaker, track: Track): Promise<boolean> => {
-      const stream = brokerRetainedStreamsRef.current[speaker]
-      if (!stream || !stream.getAudioTracks().some((candidate) => candidate.readyState === 'live')) return false
-      if (!(await openChannel(speaker, stream, generation))) return false
+      const retained = brokerRetainedStreamsRef.current[speaker]
+      if (!retained || !retained.stream.getAudioTracks().some((candidate) => candidate.readyState === 'live')) return false
+      if (!(await openChannel(speaker, retained.stream, generation, retained.micCapture))) return false
       brokerRetainedStreamsRef.current[speaker] = undefined
       return true
     }
@@ -2647,7 +2652,7 @@ export function useListen(
             failAdmittedCapture('An audio source ended while cloud speech was paused.')
             return
           }
-          brokerRetainedStreamsRef.current[speaker] = channel.stream
+          brokerRetainedStreamsRef.current[speaker] = { stream: channel.stream, micCapture: channel.micCapture }
           closeChannel(speaker, channel, { retainStream: true, retainCaptureState: true })
         }
         if (controller) controller.dispose()
@@ -2788,9 +2793,7 @@ export function useListen(
           clearNoSpeechWarning()
           closeChannel('you')
           closeChannel('them')
-          for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
-            stream?.getTracks().forEach((track) => track.stop())
-          }
+          for (const capture of Object.values(brokerRetainedStreamsRef.current)) releaseBrokerRetainedCapture(capture)
           brokerRetainedStreamsRef.current = {}
           brokerPausedCompleteRef.current = false
           captureStateRef.current.clear(myEpoch)
@@ -3085,9 +3088,7 @@ export function useListen(
       disarmNetworkRetry()
       closeChannel('you')
       closeChannel('them')
-      for (const stream of Object.values(brokerRetainedStreamsRef.current)) {
-        stream?.getTracks().forEach((track) => track.stop())
-      }
+      for (const capture of Object.values(brokerRetainedStreamsRef.current)) releaseBrokerRetainedCapture(capture)
       brokerRetainedStreamsRef.current = {}
       captureStateRef.current.clear(sessionEpochRef.current)
       cloudSttUnsubRef.current?.()

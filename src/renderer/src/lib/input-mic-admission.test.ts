@@ -103,7 +103,7 @@ describe('interactive microphone admission lifecycle', () => {
     controller.abort()
     startResult.resolve({ ok: true, lease })
     await expect(pending).rejects.toThrow('cancelled')
-    expect(env.stopInputSession).toHaveBeenCalledOnceWith({ sessionId: lease.sessionId }, context)
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)
     expect(env.getUserMedia).not.toHaveBeenCalled()
   })
 
@@ -117,7 +117,7 @@ describe('interactive microphone admission lifecycle', () => {
       .rejects.toThrow('cancelled')
 
     expect(env.getUserMedia).not.toHaveBeenCalled()
-    expect(env.stopInputSession).toHaveBeenCalledOnceWith({ sessionId: lease.sessionId }, context)
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)
   })
 
   it('stops a late stream and releases its exact lease after abort during getUserMedia', async () => {
@@ -168,7 +168,7 @@ describe('interactive microphone admission lifecycle', () => {
     await Promise.all([admitted.admission.release(), admitted.admission.release()])
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.stopInputSession).toHaveBeenCalledOnce()
-    expect(window.toto.confirmInputSession).toHaveBeenCalledOnceWith(lease.sessionId, context)
+    expect(window.toto.confirmInputSession).toHaveBeenCalledExactlyOnceWith(lease.sessionId, context)
   })
 
   it('stops and releases the stream when main refuses post-capture confirmation', async () => {
@@ -179,7 +179,7 @@ describe('interactive microphone admission lifecycle', () => {
     await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
     env.capture.resolve(mediaStream(env.track))
     await expect(pending).rejects.toThrow('confirmed by main')
-    expect(window.toto.confirmInputSession).toHaveBeenCalledOnceWith(lease.sessionId, context)
+    expect(window.toto.confirmInputSession).toHaveBeenCalledExactlyOnceWith(lease.sessionId, context)
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.stopInputSession).toHaveBeenCalledOnce()
   })
@@ -201,7 +201,7 @@ describe('meeting microphone admission lifecycle', () => {
     env.capture.resolve(mediaStream(env.track))
     await expect(pending).rejects.toThrow()
     expect(env.track.stop).toHaveBeenCalledOnce()
-    expect(env.releaseMeetingMicCapture).toHaveBeenCalledOnceWith('00000000-0000-4000-8000-000000000001')
+    expect(env.releaseMeetingMicCapture).toHaveBeenCalledExactlyOnceWith('00000000-0000-4000-8000-000000000001')
   })
 
   it('does not open the microphone if cancellation lands while the meeting capture listeners are installed', async () => {
@@ -213,7 +213,7 @@ describe('meeting microphone admission lifecycle', () => {
     await expect(acquireMeetingMic({ audio: true }, 654, controller.signal)).rejects.toThrow('cancelled')
 
     expect(env.getUserMedia).not.toHaveBeenCalled()
-    expect(env.releaseMeetingMicCapture).toHaveBeenCalledOnceWith('00000000-0000-4000-8000-000000000001')
+    expect(env.releaseMeetingMicCapture).toHaveBeenCalledExactlyOnceWith('00000000-0000-4000-8000-000000000001')
   })
 
   it('releases a pending meeting grant and stops its late stream on device change', async () => {
@@ -225,7 +225,7 @@ describe('meeting microphone admission lifecycle', () => {
     env.capture.resolve(mediaStream(env.track))
     await expect(pending).rejects.toThrow()
     expect(env.track.stop).toHaveBeenCalledOnce()
-    expect(env.releaseMeetingMicCapture).toHaveBeenCalledOnceWith('00000000-0000-4000-8000-000000000001')
+    expect(env.releaseMeetingMicCapture).toHaveBeenCalledExactlyOnceWith('00000000-0000-4000-8000-000000000001')
   })
 
   it('stops a late meeting stream after revocation during getUserMedia', async () => {
@@ -249,6 +249,6 @@ describe('meeting microphone admission lifecycle', () => {
     const admitted = await pending
     await Promise.all([admitted.release(), admitted.release()])
     expect(env.track.stop).toHaveBeenCalledOnce()
-    expect(env.releaseMeetingMicCapture).toHaveBeenCalledOnceWith('00000000-0000-4000-8000-000000000001')
+    expect(env.releaseMeetingMicCapture).toHaveBeenCalledExactlyOnceWith('00000000-0000-4000-8000-000000000001')
   })
 })
