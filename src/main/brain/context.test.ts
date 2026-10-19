@@ -31,7 +31,13 @@ vi.mock('./store', async (importOriginal) => {
     readDeal: (s: Settings, slug: string) => {
       opened.push(`deal/${slug}`)
       return actual.readDeal(s, slug)
-    }
+    },
+    // WP04A: matched records are read once through the stable snapshot reader (bytes + digest), so
+    // that read is the one that counts as opening the entity file for MQA-010.
+    readBrainEntitySnapshot: ((s: Settings, kind: 'person' | 'account' | 'deal', slug: string) => {
+      opened.push(`${kind}/${slug}`)
+      return actual.readBrainEntitySnapshot(s, kind, slug)
+    }) as typeof actual.readBrainEntitySnapshot
   }
 })
 
