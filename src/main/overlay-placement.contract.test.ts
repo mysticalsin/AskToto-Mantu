@@ -96,7 +96,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       )
     )
     const preamble = [
-      'const { mainLog, auditLog, crashDetail, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, before } = stubs',
+      'const { mainLog, auditLog, crashDetail, hardStopInputSession, hardStopMeetingCapture, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
       'const setListeningActive = (on) => { listeningActive = on }',
@@ -122,10 +122,14 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
     ].join('\n')
     const run = new Function('stubs', preamble + body + driver) as (stubs: unknown) => OverlayState
     const revokeForLifecycleEvent = vi.fn()
+    const hardStopInputSession = vi.fn()
+    const hardStopMeetingCapture = vi.fn()
     const after = run({
       mainLog: { error: () => {} },
       auditLog: () => {},
       crashDetail,
+      hardStopInputSession,
+      hardStopMeetingCapture,
       resetDustConversation: () => {},
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
@@ -136,6 +140,8 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       before
     })
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
+    expect(hardStopInputSession).toHaveBeenCalledExactlyOnceWith('cancelled')
+    expect(hardStopMeetingCapture).toHaveBeenCalledExactlyOnceWith('owner-replaced')
     return after
   }
 

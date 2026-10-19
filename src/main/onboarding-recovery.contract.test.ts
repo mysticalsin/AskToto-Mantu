@@ -110,10 +110,14 @@ describe('exclusive onboarding renderer recovery', () => {
     const selfOwner = { window: win, webContents: win.webContents, webContentsId: win.webContents.id }
     const showForExclusiveOnboarding = vi.fn()
     const applyExclusiveOnboardingStage = vi.fn(() => true)
+    const hardStopInputSession = vi.fn()
+    const hardStopMeetingCapture = vi.fn()
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
       crashDetail,
+      hardStopInputSession,
+      hardStopMeetingCapture,
       resetDustConversation: vi.fn(),
       discardActiveLiveSpeakerSession: vi.fn(),
       invalidateCloudSttOwner: vi.fn(),
@@ -145,6 +149,9 @@ describe('exclusive onboarding renderer recovery', () => {
 
     gone({}, { reason: 'crashed', exitCode: 1 })
 
+    // The crash cancels capture, then the lifted reloadOverlay revokes the outgoing renderer owner.
+    expect(hardStopInputSession.mock.calls).toEqual([['cancelled'], ['owner-replaced']])
+    expect(hardStopMeetingCapture).toHaveBeenCalledExactlyOnceWith('owner-replaced')
     expect(applyExclusiveOnboardingStage).toHaveBeenCalledExactlyOnceWith(win)
     expect(showForExclusiveOnboarding).toHaveBeenCalledExactlyOnceWith(win)
     expect(loadURL).toHaveBeenCalledExactlyOnceWith(recoveryUrl)
@@ -163,6 +170,8 @@ describe('render-process-gone reload budget wiring', () => {
       mainLog,
       auditLog,
       crashDetail,
+      hardStopInputSession: vi.fn(),
+      hardStopMeetingCapture: vi.fn(),
       resetDustConversation: vi.fn(),
       discardActiveLiveSpeakerSession: vi.fn(),
       invalidateCloudSttOwner: vi.fn(),
@@ -255,6 +264,14 @@ describe('render-process-gone reload budget wiring', () => {
 
     expect(loadURL).not.toHaveBeenCalled()
     expect(showRenderLoopHaltedDialog).not.toHaveBeenCalled()
+  })
+
+  it('ignores a retired renderer without stopping the replacement capture or reloading', () => {
+    const { globals, loadURL } = baseGlobals({ self: {} })
+    actualRendererGoneHandler(globals)({}, { reason: 'crashed', exitCode: 1 })
+    expect(globals.hardStopInputSession).not.toHaveBeenCalled()
+    expect(globals.hardStopMeetingCapture).not.toHaveBeenCalled()
+    expect(loadURL).not.toHaveBeenCalled()
   })
 
   it('a rejected reload is caught, redacted and audited as app.error.reload_failed — never an unhandled rejection', async () => {

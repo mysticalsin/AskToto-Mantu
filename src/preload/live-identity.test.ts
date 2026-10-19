@@ -14,10 +14,14 @@ function boundary(name: string, invoke: (...args: unknown[]) => Promise<unknown>
   }
   visit(source)
   if (found.length !== 1) throw new Error(`Missing unique actual preload boundary ${name}`)
-  const code = ts.transpileModule(`globalThis.result = (${found[0]!.getText(source)});`, {
+  const activationReady = source.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'meetingStartActivationReady'
+  )
+  if (!activationReady) throw new Error('Missing actual preload meeting-start activation helper')
+  const code = ts.transpileModule(`${activationReady.getText(source)}\nglobalThis.result = (${found[0]!.getText(source)});`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
   }).outputText
-  const context = vm.createContext({ ipcRenderer: { invoke }, IPC })
+  const context = vm.createContext({ ipcRenderer: { invoke }, IPC, observedMeetingStartActivation: null })
   vm.runInContext(code, context, { timeout: 1_000 })
   return context.result
 }
@@ -35,16 +39,29 @@ describe('actual preload live-identity transport', () => {
     expect(invoke).toHaveBeenLastCalledWith(IPC[name], { samples, speaker: 'you', startedAt: undefined })
   })
 
-  it('sends a structured exact identity for both start and stop without breaking optional legacy calls', async () => {
-    const invoke = vi.fn(async (..._args: unknown[]) => undefined)
+  it('sends exact start identity after activation and stops without requiring activation, including legacy stops', async () => {
+    const invoke = vi.fn(async (..._args: unknown[]) => true)
     const state = boundary('setListeningState', invoke)
     await state(true, 123)
     await state(false, 123)
     await state(false)
     expect(invoke.mock.calls).toEqual([
+      [IPC.meetingStartActivationReady],
       [IPC.listeningState, { on: true, startedAt: 123 }],
       [IPC.listeningState, { on: false, startedAt: 123 }],
       [IPC.listeningState, { on: false, startedAt: undefined }]
     ])
+  })
+
+  it.each([false, undefined, 'true'])('does not dispatch a start when main activation readiness is %s', async (ready) => {
+    const invoke = vi.fn(async (..._args: unknown[]) => ready)
+    expect(await boundary('setListeningState', invoke)(true, 123)).toBe(false)
+    expect(invoke.mock.calls).toEqual([[IPC.meetingStartActivationReady]])
+  })
+
+  it('does not dispatch a start when the activation readiness IPC rejects', async () => {
+    const invoke = vi.fn(async (..._args: unknown[]) => { throw new Error('unavailable') })
+    expect(await boundary('setListeningState', invoke)(true, 123)).toBe(false)
+    expect(invoke.mock.calls).toEqual([[IPC.meetingStartActivationReady]])
   })
 })

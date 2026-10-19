@@ -52,6 +52,8 @@ function setup(options: {
   const failover = vi.fn(() => options.failoverAvailable ?? false)
   const retry = vi.fn()
   let handlers: StreamHandlers | undefined
+  const refreshBrainContextForProviderAttempt = vi.fn()
+  const createStream = vi.fn((opts: StreamOptions) => { handlers = opts.handlers; return handle })
   const provider = options.provider ?? 'openai'
   const scope = {
     provider, model: 'synthetic-model', tier: 'base', race: options.race,
@@ -66,7 +68,8 @@ function setup(options: {
     setTimeout, clearTimeout, MAX_TRANSIENT_RETRIES: 3, MAX_ASK_RETRY_WAIT_MS: 12_000,
     win: { webContents: { send } },
     IPC: { streamDelta: 'delta', streamError: 'error', streamDone: 'done', streamMeta: 'meta' },
-    createStream: (opts: StreamOptions) => { handlers = opts.handlers; return handle },
+    // The refresh closure is outside this extracted completion region. Keep its transport boundary explicit.
+    createStream, refreshBrainContextForProviderAttempt,
     auditLog: audit, recordOperatorAsk: record, pathTagForSeatProvider, noteQualifyingUse: qualifying,
     recordSuccess: vi.fn(), recordRateLimited: vi.fn(), recordExhausted: vi.fn(), recordAuthFailure: vi.fn(),
     isDustAuthError: () => false, isAuthFailure: () => false, retireCli: vi.fn(),
@@ -83,6 +86,7 @@ function setup(options: {
   if (!handlers) throw new Error('Actual attempt did not register stream handlers')
   return {
     handlers: handlers as StreamHandlers, send, audit, record, qualifying, streams, handle, failover, retry,
+    createStream, refreshBrainContextForProviderAttempt,
     warnings: scope.mainLog.warn,
     events: (kind: string) => send.mock.calls.filter(([event]) => event === kind),
     text: () => send.mock.calls.filter(([event]) => event === 'delta').map(([, data]) => data.text).join('')
@@ -103,6 +107,14 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers() })
 
 describe('actual live completion outcomes', () => {
+  it('passes the outer freshness callback to the transport for provider retries', () => {
+    const f = setup({ provider: 'dust' })
+    expect(f.createStream).toHaveBeenCalledOnce()
+    expect(f.createStream.mock.calls[0]![0].beforeProviderAttempt).toBe(f.refreshBrainContextForProviderAttempt)
+    f.createStream.mock.calls[0]![0].beforeProviderAttempt!()
+    expect(f.refreshBrainContextForProviderAttempt).toHaveBeenCalledOnce()
+  })
+
   it.each(['recap', 'summary', 'answer', 'vision'])('does not report incomplete %s as success at any visible-text threshold', (mode) => {
     for (const length of [1, 199, 200, 260]) {
       const f = setup({ mode, failoverAvailable: true })
