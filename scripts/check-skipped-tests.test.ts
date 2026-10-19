@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 const REPO = join(__dirname, '..')
 const CHECKER = join(REPO, 'scripts', 'check-skipped-tests.mjs')
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE: Record<string, number> = { win32: 37, darwin: 6, linux: hostedCi ? 28 : 32 }
+const BASELINE: Record<string, number> = { win32: 31, darwin: 6, linux: hostedCi ? 22 : 26 }
 const allowed = BASELINE[process.platform]
 if (allowed === undefined) throw new Error(`No synthetic skip baseline for ${process.platform}`)
 
@@ -95,7 +95,7 @@ function successfulReport(): VitestReport {
     numFailedTests: 0,
     numPendingTests: allowed,
     numTodoTests: 1,
-    testResults: [{ name: '/synthetic/__fixtures__/dustcli.test.ts', status: 'passed', assertionResults }]
+    testResults: [{ name: '/synthetic/__fixtures__/mac-helper.test.ts', status: 'passed', assertionResults }]
   }
 }
 
@@ -159,6 +159,19 @@ function expectExplicitFailure(fixture: Fixture, result: RunResult, label: strin
 }
 
 describe('MQA-252 explicit root-report handoff', () => {
+  it('rejects a skipped Dust CLI contract now that it has no host credential-store dependency', () => {
+    const fixture = createFixture()
+    try {
+      const report = successfulReport()
+      report.testResults[0].name = '/synthetic/__fixtures__/dustcli.test.ts'
+      const reportPath = join(fixture.root, 'dustcli-skip.json')
+      writeFileSync(reportPath, JSON.stringify(report))
+      expectExplicitFailure(fixture, run(fixture, [reportPath]), 'no declared reason for:')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
   it.each(nativeCanarySkipCases)('requires the exact native canary skip title: %s', (title, accepted) => {
     const fixture = createFixture()
     try {

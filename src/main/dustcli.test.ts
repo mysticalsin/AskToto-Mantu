@@ -1,86 +1,115 @@
-import { describe, it, expect, afterAll, afterEach, vi } from 'vitest'
-import { execFile, execFileSync } from 'node:child_process'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { promisify } from 'node:util'
 import { importDustCliSession } from './dustcli'
 
-const exec = promisify(execFile)
+// Every process boundary is intercepted before imports or test collection. Changing HOME does not
+// isolate the macOS login Keychain, so even a capability probe must never reach the host.
+const osBoundary = vi.hoisted(() => ({
+  unexpected: vi.fn(() => { throw new Error('Unexpected process invocation in Dust CLI fixture') }),
+  execFile: vi.fn(),
+  spawn: vi.fn(),
+  execFileAsync: vi.fn<(command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>>()
+}))
 
-// Real keychain round-trip — exercises the exact `security find-generic-password` path the app uses,
-// but against a THROWAWAY service so the user's real `dust login` session is never touched.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  const { promisify } = await import('node:util')
+  return {
+    ...actual,
+    exec: osBoundary.unexpected,
+    execSync: osBoundary.unexpected,
+    execFile: Object.assign(osBoundary.execFile, { [promisify.custom]: osBoundary.execFileAsync }),
+    execFileSync: osBoundary.unexpected,
+    spawn: osBoundary.spawn,
+    spawnSync: osBoundary.unexpected,
+    fork: osBoundary.unexpected
+  }
+})
+vi.mock('electron', () => ({
+  app: { getPath: (): string => process.env.ASKTOTO_USERDATA! },
+  shell: { openPath: vi.fn() }
+}))
+
+// Exercise importDustCliSession AND the real readDustSecret adapter, stopping at execFile.
+// These are command/decoding contracts, not installed Keychain acceptance.
 const TEST_SERVICE = 'asktoto-dustcli-test'
 const ACCOUNTS = ['access_token', 'workspace_sid', 'region']
+const REAL_PLATFORM = process.platform
+const fields = new Map<string, string>()
 
-// Probe once whether this environment can actually write the login keychain. Sandboxes and headless CI
-// deny `security add-generic-password`, where this real-keychain suite would FAIL rather than prove
-// anything — so skip cleanly there instead of reporting a false failure.
-function keychainWritable(): boolean {
-  if (process.platform !== 'darwin') return false
-  const probe = 'asktoto-dustcli-probe'
-  try {
-    execFileSync('security', ['add-generic-password', '-s', probe, '-a', 'probe', '-w', 'x'], { stdio: 'ignore' })
-    try {
-      execFileSync('security', ['delete-generic-password', '-s', probe, '-a', 'probe'], { stdio: 'ignore' })
-    } catch {
-      /* best-effort cleanup */
+const collectionProcessCalls = [osBoundary.unexpected, osBoundary.execFileAsync, osBoundary.execFile, osBoundary.spawn]
+  .reduce((count, fn) => count + fn.mock.calls.length, 0)
+it('does not invoke a process while collecting the Dust CLI tests', () => {
+  expect(collectionProcessCalls).toBe(0)
+})
+
+function setSession(values: Record<string, string>): void {
+  fields.clear()
+  for (const [account, value] of Object.entries(values)) fields.set(account, value)
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+  setPlatform(REAL_PLATFORM)
+  vi.doUnmock('./dust-secret-store')
+  vi.doUnmock('./cli')
+  vi.resetModules()
+  expect(osBoundary.unexpected).not.toHaveBeenCalled()
+})
+
+describe('importDustCliSession (mocked macOS process boundary)', () => {
+  beforeEach(() => {
+    setPlatform('darwin')
+    fields.clear()
+    osBoundary.execFile.mockReset()
+    osBoundary.spawn.mockReset()
+    osBoundary.execFileAsync.mockReset().mockImplementation(async (_command, args) => {
+      const value = fields.get(args[4])
+      if (value === undefined) {
+        throw Object.assign(new Error('Item not found'), { stderr: 'The specified item could not be found in the keychain.' })
+      }
+      return { stdout: `${value}\n`, stderr: '' }
+    })
+  })
+
+  afterEach(() => {
+    expect(osBoundary.execFile).not.toHaveBeenCalled()
+    expect(osBoundary.spawn).not.toHaveBeenCalled()
+    // Assert outside the mock: production deliberately catches a failed OS read, so an assertion
+    // thrown inside execFile would otherwise be swallowed as a missing credential.
+    for (const [command, args] of osBoundary.execFileAsync.mock.calls) {
+      expect(command).toBe('security')
+      expect(ACCOUNTS).toContain(args[4])
+      expect(args).toEqual(['find-generic-password', '-s', TEST_SERVICE, '-a', args[4], '-w'])
     }
-    return true
-  } catch {
-    return false
-  }
-}
-const canKeychain = keychainWritable()
-
-async function delItem(account: string): Promise<void> {
-  // Delete every duplicate (security keeps only one per service+account, but loop to be safe).
-  for (let i = 0; i < 5; i++) {
-    try {
-      await exec('security', ['delete-generic-password', '-s', TEST_SERVICE, '-a', account])
-    } catch {
-      return // none left
-    }
-  }
-}
-async function delAll(): Promise<void> {
-  for (const a of ACCOUNTS) await delItem(a)
-}
-async function setSession(fields: Record<string, string>): Promise<void> {
-  await delAll()
-  for (const [account, value] of Object.entries(fields)) {
-    await exec('security', ['add-generic-password', '-s', TEST_SERVICE, '-a', account, '-w', value])
-  }
-}
-
-describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
-  afterAll(async () => {
-    await delAll()
   })
 
   it('reports no session when the keychain is empty', async () => {
-    await delAll()
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/No Dust CLI session found/i)
+    expect(osBoundary.execFileAsync).toHaveBeenCalledTimes(1)
   })
 
   it('imports token + workspace and maps EU region to eu.dust.tt', async () => {
-    await setSession({ access_token: 'tok_eu_123', workspace_sid: 'ws_eu', region: 'europe-west1' })
+    setSession({ access_token: 'tok_eu_123', workspace_sid: 'ws_eu', region: 'europe-west1' })
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(true)
     expect(r.token).toBe('tok_eu_123')
     expect(r.workspaceId).toBe('ws_eu')
     expect(r.baseUrl).toBe('https://eu.dust.tt')
+    expect(osBoundary.execFileAsync.mock.calls.map(([, args]) => args[4])).toEqual(ACCOUNTS)
   })
 
   it('maps US region to dust.tt', async () => {
-    await setSession({ access_token: 'tok_us_123', workspace_sid: 'ws_us', region: 'us-central1' })
+    setSession({ access_token: 'tok_us_123', workspace_sid: 'ws_us', region: 'us-central1' })
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(true)
     expect(r.baseUrl).toBe('https://dust.tt')
   })
 
   it('fails when only a partial session exists (token but no workspace)', async () => {
-    await setSession({ access_token: 'tok_only' })
+    setSession({ access_token: 'tok_only' })
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
   })
@@ -90,25 +119,47 @@ describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
   // the browser step leaves exactly this state — access_token present, workspace_sid missing — which
   // must be distinguishable from "no session at all" so the UI doesn't relaunch the whole setup.
   it('flags a token-but-no-workspace session as incomplete, not a bare failure', async () => {
-    await setSession({ access_token: 'tok_only' })
+    setSession({ access_token: 'tok_only' })
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
     expect(r.incomplete).toBe(true)
   })
 
   it('does not flag a genuinely empty keychain as incomplete', async () => {
-    await delAll()
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
     expect(r.incomplete).toBeFalsy()
   })
+
+  it('trims command output and uses the US host when the region is absent', async () => {
+    setSession({ access_token: '  fixture-token  ', workspace_sid: '  fixture-workspace  ' })
+    expect(await importDustCliSession(TEST_SERVICE)).toEqual({
+      ok: true, token: 'fixture-token', workspaceId: 'fixture-workspace', baseUrl: 'https://dust.tt'
+    })
+  })
+
+  it.each(ACCOUNTS)('stops at a denied %s read without reporting an incomplete session or leaking a token', async (account) => {
+    setSession({ access_token: 'fixture-token', workspace_sid: 'fixture-workspace', region: 'europe-west1' })
+    const read = osBoundary.execFileAsync.getMockImplementation()!
+    osBoundary.execFileAsync.mockImplementation(async (command, args) => {
+      if (args[4] === account) {
+        throw Object.assign(new Error('Read denied'), { stderr: 'User interaction is not allowed.' })
+      }
+      return read(command, args)
+    })
+    const r = await importDustCliSession(TEST_SERVICE)
+    expect(r.ok).toBe(false)
+    expect(r.accessDenied).toBe(true)
+    expect(r.incomplete).toBeUndefined()
+    expect(r.token).toBeUndefined()
+    expect(r.error).toMatch(/Keychain/)
+    expect(osBoundary.execFileAsync.mock.calls.map(([, args]) => args[4]))
+      .toEqual(ACCOUNTS.slice(0, ACCOUNTS.indexOf(account) + 1))
+  })
 })
 
 // ─── MQA-019 — `dust status` timeout must reap the whole process tree ──────────────────────────
-// Deliberately doMock (not the hoisted vi.mock) so the real-keychain suite above — which resolved its
-// `./dustcli` and `node:child_process` bindings at file load — keeps shelling out for real.
-
-const REAL_PLATFORM = process.platform
+// Fresh module state and mocked secret reads keep the timeout cases independent of the import cases.
 
 /** process.platform is configurable in Node — flip it for the duration of a Windows-path test. */
 function setPlatform(p: NodeJS.Platform): void {
@@ -129,11 +180,8 @@ async function loadDustCli(bin: string): Promise<{
   execFileImpl: ReturnType<typeof vi.fn>
 }> {
   vi.resetModules()
-  const spawnImpl = vi.fn()
-  const execFileImpl = vi.fn()
-  const actualCp = await vi.importActual<typeof import('node:child_process')>('node:child_process')
-  vi.doMock('node:child_process', () => ({ ...actualCp, spawn: spawnImpl, execFile: execFileImpl }))
-  vi.doMock('electron', () => ({ app: { getPath: (): string => '/tmp' }, shell: { openPath: vi.fn() } }))
+  const spawnImpl = osBoundary.spawn.mockReset()
+  const execFileImpl = osBoundary.execFile.mockReset()
   vi.doMock('./dust-secret-store', () => ({
     DUST_KEYCHAIN_SERVICE: 'dust-cli',
     readDustSecret: async (): Promise<{ value: null; accessDenied: boolean }> => ({ value: null, accessDenied: false })
@@ -150,16 +198,6 @@ async function loadDustCli(bin: string): Promise<{
 const STATUS_TIMEOUT_MS = 25_000
 
 describe('MQA-019 — refreshDustCliSession timeout kills the whole `dust status` tree', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-    setPlatform(REAL_PLATFORM)
-    vi.doUnmock('node:child_process')
-    vi.doUnmock('electron')
-    vi.doUnmock('./dust-secret-store')
-    vi.doUnmock('./cli')
-    vi.resetModules()
-  })
-
   // MQA-019: on Windows `dust` resolves to `dust.cmd`, so the child is cmd.exe and the real
   // `node …dust-cli status` — the process actually holding the single-use OAuth refresh token — is a
   // grandchild. Killing only cmd.exe (execFile's built-in `timeout`, or a bare child.kill) leaves that

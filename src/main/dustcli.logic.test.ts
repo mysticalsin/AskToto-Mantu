@@ -3,16 +3,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 /**
  * MQA-252 — the Dust session logic, tested on every platform.
  *
- * dustcli.test.ts drives the REAL macOS login keychain, which is the right way to prove Métis reads the
- * session `dust login` actually wrote — and which means all six of its tests skip on Windows and Linux.
- * Six skips is six untested paths reporting as green, and the branch decisions in importDustCliSession
- * (which error the user sees, whether a half-finished login is distinguishable from no login at all,
- * which API host an EU workspace gets) have nothing to do with macOS. They were simply unreachable
- * because they sat behind a real keychain call.
- *
- * readDustSecret lives in its own module, so mocking it makes every one of those decisions testable
- * everywhere. This does NOT replace the keychain suite — that one proves the real read works, this one
- * proves the logic around it is right. Neither is sufficient alone, and only one of them can run here.
+ * Mocking readDustSecret isolates the session decisions from OS command/decoding behavior.
+ * dustcli.test.ts separately exercises the real adapter with a mocked child-process boundary.
+ * Both suites run on every platform without accessing the host's credential store; neither
+ * constitutes installed acceptance against a real Dust CLI session.
  */
 const store = vi.hoisted(() => ({
   reads: new Map<string, { value: string | null; accessDenied?: boolean }>()

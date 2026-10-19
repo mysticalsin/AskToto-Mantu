@@ -10,7 +10,7 @@
  * was `it.skip`ped off-platform, and every report of that run said zero failures and was telling the
  * truth. A skip is an untested path wearing a green tick.
  *
- * The skips themselves are legitimate — they drive the real macOS keychain, real signed binaries, and a
+ * The skips themselves are legitimate — they drive real platform helpers, real signed binaries, and a
  * real llama-server. They cannot run on Windows and faking them would test the fake. So the fix is not to
  * unskip them; it is to make them impossible to forget:
  *
@@ -38,10 +38,6 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * this platform, so the next person can judge whether it still holds rather than inheriting a silent gap.
  */
 const REASONS = [
-  {
-    match: 'dustcli.test.ts',
-    why: 'Drives the REAL macOS login keychain through `security add-generic-password`. Faking it would test the fake — the whole point is that Metis reads the session `dust login` actually wrote. The region-mapping and partial-session LOGIC is covered cross-platform in dustcli.logic.test.ts.'
-  },
   {
     match: 'mac-helper.test.ts',
     why: 'Pipes an image through the real compiled Swift helper. The binary only exists and only runs on macOS.'
@@ -142,7 +138,8 @@ const REASONS = [
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE = { win32: 37, darwin: 6, linux: hostedCi ? 28 : 32 }
+// The six Dust CLI import cases now run against a mocked process boundary on every platform.
+const BASELINE = { win32: 31, darwin: 6, linux: hostedCi ? 22 : 26 }
 const reasonFor = (id) => REASONS.find((reason) => (reason.exact ? id === reason.match : id.includes(reason.match)))
 
 const platform = process.platform
