@@ -30,21 +30,55 @@ const electron = vi.hoisted(() => ({ app: { isPackaged: false, getPath: () => '/
 vi.mock('electron', () => electron)
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
-// The fake binary must "exist" so start() never short-circuits on the missing-binary path — only the
-// spawn/health timing matters for these tests.
+// Only synthetic package markers, candidates and the fake helper exist. In particular, the broad
+// existsSync=true mock used to make the supervisor helper appear present for every case by accident.
+const fsState = vi.hoisted(() => ({ allowedPaths: new Set<string>() }))
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
-  return { ...actual, existsSync: () => true }
+  return { ...actual, existsSync: (path: string) => fsState.allowedPaths.has(String(path)) }
 })
 
+// Registry I/O is isolated at its typed boundary. Receipts resolve immediately by default; the
+// supervision regression can hold the exact record promise and prove start() waits for it.
+const registryState = vi.hoisted(() => ({
+  calls: [] as Array<Record<string, unknown>>,
+  spawnedReceipt: null as Promise<void> | null,
+  supervisedReceipt: null as Promise<void> | null
+}))
+vi.mock('../infra/process/registry', () => ({
+  recordSidecarIntent: vi.fn((name: string, args: readonly string[]) => {
+    registryState.calls.push({ kind: 'intent', name, args: [...args] })
+  }),
+  recordSidecarSpawned: vi.fn((name: string, _child: unknown, executable: string, args: readonly string[]) => {
+    registryState.calls.push({ kind: 'spawned', name, executable, args: [...args] })
+    return registryState.spawnedReceipt ?? Promise.resolve()
+  }),
+  recordSidecarSupervisedSpawned: vi.fn(
+    (name: string, _wrapper: unknown, wrapperLaunch: { executable: string; args: readonly string[] }, sidecarLaunch: { executable: string; args: readonly string[] }) => {
+      registryState.calls.push({
+        kind: 'supervised-spawned',
+        name,
+        wrapperExecutable: wrapperLaunch.executable,
+        wrapperArgs: [...wrapperLaunch.args],
+        sidecarExecutable: sidecarLaunch.executable,
+        sidecarArgs: [...sidecarLaunch.args]
+      })
+      return registryState.supervisedReceipt ?? Promise.resolve()
+    }
+  )
+}))
+
 interface FakeProc {
-  stdout: import('node:events').EventEmitter
-  stderr: import('node:events').EventEmitter
+  stdout: import('node:stream').PassThrough
+  stderr: import('node:stream').PassThrough
+  /** Intentionally absent so synthetic children can never be passed to process.kill(). */
+  pid?: number
   killed: boolean
   kill: ReturnType<typeof vi.fn>
   emit: (event: string, ...args: unknown[]) => boolean
   once: (event: string, listener: (...args: unknown[]) => void) => unknown
   on: (event: string, listener: (...args: unknown[]) => void) => unknown
+  exitEmitted: boolean
 }
 
 const spawnState = vi.hoisted(() => ({
@@ -55,15 +89,21 @@ const spawnState = vi.hoisted(() => ({
 
 vi.mock('node:child_process', async () => {
   const { EventEmitter } = await import('node:events')
+  const { PassThrough } = await import('node:stream')
   const spawn = vi.fn((path: string, args: string[]) => {
     const proc = new EventEmitter() as unknown as FakeProc
-    proc.stdout = new EventEmitter()
-    proc.stderr = new EventEmitter()
+    proc.stdout = new PassThrough()
+    proc.stderr = new PassThrough()
     proc.killed = false
+    proc.exitEmitted = false
     proc.kill = vi.fn(() => {
       if (proc.killed) return
       proc.killed = true
-      queueMicrotask(() => proc.emit('exit', null, 'SIGKILL'))
+      queueMicrotask(() => {
+        if (proc.exitEmitted) return
+        proc.exitEmitted = true
+        proc.emit('exit', null, 'SIGKILL')
+      })
     })
     spawnState.procs.push(proc)
     spawnState.calls.push({ path, args })
@@ -73,7 +113,10 @@ vi.mock('node:child_process', async () => {
   return { spawn }
 })
 
-import { start, stop, isRunning, baseURL, beginStream, endStream, getState } from './local-runtime'
+import * as staticRuntime from './local-runtime'
+import { stop, isRunning, baseURL, getState } from './local-runtime'
+import { buildSpawnArgs, resolveBinaryPath } from './local-runtime'
+import { macSupervisorHelperPath } from '../infra/process/supervisor'
 import { auditLog, mainLog } from '../logger'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
@@ -90,6 +133,42 @@ let runtimeContract: Promise<PackageRuntimeContract> = Promise.resolve(developme
 // The configured provider is one-shot; retain its identity and reset only its per-test result.
 const runtimeContractProvider = vi.fn(() => runtimeContract)
 
+type RuntimeModule = typeof staticRuntime
+const runtimeModules = new Set<RuntimeModule>([staticRuntime])
+type RequestOutcome = { settled: false } | { settled: true; status: 'resolved' } | { settled: true; status: 'rejected'; error: unknown }
+const requestOutcomes = new Map<Promise<unknown>, RequestOutcome>()
+let requestObservers: Promise<void>[] = []
+let cleanupReleases: Array<() => void> = []
+const activeStreamCounts = new Map<RuntimeModule, number>()
+
+function observeRequest<T>(request: Promise<T>): Promise<T> {
+  requestOutcomes.set(request, { settled: false })
+  const observer = request.then(
+    () => requestOutcomes.set(request, { settled: true, status: 'resolved' }),
+    (error: unknown) => requestOutcomes.set(request, { settled: true, status: 'rejected', error })
+  )
+  requestObservers.push(observer.then(() => undefined))
+  return request
+}
+
+function start(modelPaths: Parameters<typeof staticRuntime.start>[0], platform: Parameters<typeof staticRuntime.start>[1] = 'mac') {
+  return observeRequest(staticRuntime.start(modelPaths, platform))
+}
+
+function isSettled(request: Promise<unknown>): boolean {
+  return requestOutcomes.get(request)?.settled ?? false
+}
+
+function beginStream(): void {
+  staticRuntime.beginStream()
+  activeStreamCounts.set(staticRuntime, (activeStreamCounts.get(staticRuntime) ?? 0) + 1)
+}
+
+function endStream(): void {
+  staticRuntime.endStream()
+  activeStreamCounts.set(staticRuntime, Math.max(0, (activeStreamCounts.get(staticRuntime) ?? 0) - 1))
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => {
@@ -100,9 +179,24 @@ function deferred<T>() {
 
 function heldRuntimeAuthority() {
   const authority = deferred<PackageRuntimeContract>()
+  cleanupReleases.push(() => authority.resolve(invalidRuntime))
   runtimeContract = authority.promise
   electron.app.isPackaged = true
   return authority
+}
+
+function heldHealth() {
+  const health = deferred<{ status: number }>()
+  cleanupReleases.push(() => health.resolve({ status: 200 }))
+  fetchImpl = () => health.promise
+  return health
+}
+
+function heldSupervisedRegistryReceipt() {
+  const receipt = deferred<void>()
+  cleanupReleases.push(() => receipt.resolve())
+  registryState.supervisedReceipt = receipt.promise
+  return receipt
 }
 
 /** A regression that spawns instead of rejecting fails on that actual spawn, without waiting for health timeout. */
@@ -129,6 +223,15 @@ beforeEach(() => {
   originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
   Object.defineProperty(process, 'resourcesPath', { configurable: true, value: PACKAGED_RESOURCES })
   vi.clearAllMocks()
+  registryState.calls = []
+  registryState.spawnedReceipt = null
+  registryState.supervisedReceipt = null
+  runtimeModules.clear()
+  runtimeModules.add(staticRuntime)
+  requestObservers = []
+  cleanupReleases = []
+  requestOutcomes.clear()
+  activeStreamCounts.clear()
   spawnState.procs = []
   spawnState.calls = []
   spawnState.observers = []
@@ -136,28 +239,60 @@ beforeEach(() => {
   runtimeContract = Promise.resolve(developmentRuntime)
   configurePackageRuntimeContractProvider(runtimeContractProvider)
   fetchImpl = async () => ({ status: 200 })
+  // Original scenarios exercise the supported direct-launch contract. The supervision cases below
+  // opt back in explicitly; this stub is restored after each test by afterEach.
+  vi.stubEnv('METIS_SUPERVISION', 'off')
+  const allowedPaths = new Set<string>([
+    join(process.cwd(), 'package.json'),
+    join(PACKAGED_RESOURCES, 'mac-helper', 'metis-mac-helper')
+  ])
+  fsState.allowedPaths.clear()
+  fsState.allowedPaths.add(join(process.cwd(), 'package.json'))
+  for (const packaged of [false, true]) {
+    electron.app.isPackaged = packaged
+    for (const platform of ['mac', 'win'] as const) {
+      for (const candidate of resolveBinaryPath(platform)) allowedPaths.add(candidate.path)
+    }
+  }
+  electron.app.isPackaged = false
+  fsState.allowedPaths.clear()
+  for (const path of allowedPaths) fsState.allowedPaths.add(path)
   vi.stubGlobal(
     'fetch',
     vi.fn((...args: unknown[]) => fetchImpl(...args))
   )
 })
 
-afterEach(() => {
+afterEach(async () => {
   try {
-    stop()
+    for (const runtime of runtimeModules) runtime.stop()
+    for (const releasePending of cleanupReleases) releasePending()
+    for (const runtime of runtimeModules) runtime.stop()
+    for (const [runtime, count] of activeStreamCounts) {
+      for (let i = 0; i < count; i++) runtime.endStream()
+    }
+    for (const proc of spawnState.procs) {
+      if (!proc.exitEmitted) {
+        proc.exitEmitted = true
+        proc.emit('exit', null, 'SIGKILL')
+      }
+      if (!proc.stdout.destroyed) proc.stdout.end()
+      if (!proc.stderr.destroyed) proc.stderr.end()
+    }
+    await Promise.all(requestObservers)
+    for (const runtime of runtimeModules) runtime.stop()
   } finally {
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
     else Reflect.deleteProperty(process, 'resourcesPath')
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
   }
 })
 
 async function emitListening(procIndex: number, port: number): Promise<void> {
   await waitUntil(() => spawnState.procs[procIndex] !== undefined)
-  spawnState.procs[procIndex].stdout.emit(
-    'data',
-    Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`)
-  )
+  spawnState.procs[procIndex].stdout.write(Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`))
+  await yieldImmediate()
 }
 
 async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -192,10 +327,10 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     let p1ResolvedAfterHealth = false
     let p2ResolvedAfterHealth = false
     let p2BaseURLReachable = false
-    p1.then(() => {
+    const p1Assertion = p1.then(() => {
       p1ResolvedAfterHealth = healthSettled
     })
-    p2.then(() => {
+    const p2Assertion = p2.then(() => {
       p2ResolvedAfterHealth = healthSettled
       try {
         baseURL()
@@ -204,8 +339,14 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
         p2BaseURLReachable = false
       }
     })
+    // Track the derived promises too: observing p1/p2 alone does not handle a rejection from either
+    // success callback's derived promise.
+    requestObservers.push(
+      p1Assertion.then(() => undefined, () => undefined),
+      p2Assertion.then(() => undefined, () => undefined)
+    )
 
-    await Promise.all([p1, p2])
+    await Promise.all([p1, p2, p1Assertion, p2Assertion])
 
     // FAILS on the old code: the old start() returned immediately for a caller that saw state==='starting',
     // so the second caller's promise would resolve on the next microtask — long before this 15ms health
@@ -215,6 +356,104 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     expect(p2BaseURLReachable).toBe(true)
     expect(isRunning()).toBe(true)
     expect(spawnState.calls.length).toBe(1) // still only one spawn
+  })
+})
+
+describe.skipIf(process.platform !== 'darwin')('macOS local-runtime supervision', () => {
+  it('uses one real supervisor wrapper and waits for forwarded health and registry receipt', async () => {
+    vi.stubEnv('METIS_SUPERVISION', 'on')
+    const health = heldHealth()
+    const registryReceipt = heldSupervisedRegistryReceipt()
+    const paths = { gguf: '/m/supervised.gguf', mmproj: '/m/supervised.mmproj', ...SPAWN_PROFILE }
+    const first = start(paths, 'mac')
+    const second = start(paths, 'mac')
+
+    expect(isSettled(first)).toBe(false)
+    expect(isSettled(second)).toBe(false)
+    await waitUntil(() => spawnState.procs.length === 1)
+
+    const candidate = resolveBinaryPath('mac')[0]
+    expect(spawnState.calls).toHaveLength(1)
+    expect(spawnState.calls[0]).toEqual({
+      path: macSupervisorHelperPath(),
+      args: ['supervise', '--parent', String(process.pid), '--', candidate.path, ...buildSpawnArgs(paths)]
+    })
+    expect(registryState.calls.map(({ kind }) => kind)).toEqual(['intent', 'supervised-spawned'])
+    expect(registryState.supervisedReceipt).toBe(registryReceipt.promise)
+
+    await emitListening(0, 55951)
+    await waitUntil(() => vi.mocked(fetch).mock.calls.length > 0)
+    expect(isSettled(first)).toBe(false)
+    expect(isSettled(second)).toBe(false)
+
+    health.resolve({ status: 200 })
+    await waitUntil(() => registryState.calls.some(({ kind }) => kind === 'supervised-spawned'))
+    expect(registryState.calls.map(({ kind }) => kind)).toEqual(['intent', 'supervised-spawned'])
+    expect(isSettled(first)).toBe(false)
+    expect(isSettled(second)).toBe(false)
+
+    registryReceipt.resolve()
+    await Promise.all([first, second])
+    expect(isSettled(first)).toBe(true)
+    expect(isSettled(second)).toBe(true)
+    expect(spawnState.calls).toHaveLength(1)
+    expect(auditLog).not.toHaveBeenCalledWith('sidecar.unsupervised', expect.anything())
+    expect(baseURL()).toBe('http://127.0.0.1:55951/v1')
+  })
+
+  it('does not launch a direct fallback when stop precedes a supervised helper setup failure', async () => {
+    vi.stubEnv('METIS_SUPERVISION', 'on')
+    const pending = start({ gguf: '/m/stopped.gguf', mmproj: '/m/stopped.mmproj', ...SPAWN_PROFILE }, 'mac')
+    await waitUntil(() => spawnState.procs.length === 1)
+    const wrapper = spawnState.procs[0]
+    wrapper.kill = vi.fn(() => {
+      wrapper.killed = true
+      return true
+    })
+
+    stop()
+    expect(wrapper.kill).toHaveBeenCalledWith('SIGKILL')
+    wrapper.exitEmitted = true
+    wrapper.emit('exit', 125, null)
+    await expect(pending).rejects.toThrow(/start cancelled/)
+
+    expect(spawnState.calls).toHaveLength(1)
+    expect(spawnState.calls[0].args[0]).toBe('supervise')
+    expect(auditLog).not.toHaveBeenCalledWith('sidecar.unsupervised', expect.anything())
+    expect(getState()).toBe('stopped')
+  })
+
+  it('keeps a healthy successor when the old supervised generation emits delayed output and exit', async () => {
+    vi.stubEnv('METIS_SUPERVISION', 'on')
+    const pathsA = { gguf: '/m/supervised-old.gguf', mmproj: '/m/supervised-old.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/supervised-new.gguf', mmproj: '/m/supervised-new.mmproj', ...SPAWN_PROFILE }
+    const first = start(pathsA, 'mac')
+    await emitListening(0, 55961)
+    await first
+    const wrapperA = spawnState.procs[0]
+    wrapperA.kill = vi.fn(() => {
+      wrapperA.killed = true
+      return true
+    })
+
+    const second = start(pathsB, 'mac')
+    await waitUntil(() => spawnState.procs.length === 2)
+    await emitListening(1, 55962)
+    await second
+    expect(baseURL()).toBe('http://127.0.0.1:55962/v1')
+
+    wrapperA.stdout.write(Buffer.from('late output: listening on http://127.0.0.1:55999\n'))
+    wrapperA.exitEmitted = true
+    wrapperA.emit('exit', 1, null)
+    await yieldImmediate()
+
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55962/v1')
+    expect(spawnState.calls).toHaveLength(2)
+    expect(auditLog).not.toHaveBeenCalledWith('local.runtime.crash', expect.anything())
+    expect(auditLog).not.toHaveBeenCalledWith('sidecar.unsupervised', expect.anything())
+    stop()
+    expect(spawnState.procs[1].kill).toHaveBeenCalledWith('SIGKILL')
   })
 })
 
@@ -397,11 +636,7 @@ describe('F2 — model switch', () => {
   })
 
   it('a switch requested while the FIRST model is still starting awaits it, then restarts with the new model', async () => {
-    let releaseHealthA: (() => void) | undefined
-    fetchImpl = () =>
-      new Promise((resolve) => {
-        releaseHealthA = () => resolve({ status: 200 })
-      })
+    const healthA = heldHealth()
 
     const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
@@ -411,12 +646,12 @@ describe('F2 — model switch', () => {
 
     const p2 = start(pathsB, 'mac') // wants a DIFFERENT model while the first is still starting
 
-    await waitUntil(() => releaseHealthA !== undefined)
+    await waitUntil(() => vi.mocked(fetch).mock.calls.length > 0)
     // p2 must not have spawned B yet — it's awaiting A's in-flight start first.
     expect(spawnState.calls.length).toBe(1)
 
     fetchImpl = async () => ({ status: 200 }) // B's own health check, once it spawns, should resolve fast
-    releaseHealthA!() // let A's health complete
+    healthA.resolve({ status: 200 }) // let A's health complete
     await p1
     // NOTE: by the time p1 settles, p2's queued continuation (awaiting the SAME in-flight promise) may
     // already have run too and kicked off the switch to B — so state here can be 'running' (A) or already
@@ -603,6 +838,7 @@ describe('automatic restart failure ownership', () => {
     // and its provider must be configured on that same module graph, never on the static graph above.
     vi.resetModules()
     const runtime = await import('./local-runtime')
+    runtimeModules.add(runtime)
     const authority = await import('../features/components/speech-pack/package-runtime-state')
     authority.configurePackageRuntimeContractProvider(runtimeContractProvider)
     runtimeContract = Promise.resolve(fullRuntime)
@@ -625,7 +861,7 @@ describe('automatic restart failure ownership', () => {
     const runtime = await freshRuntime()
     let authority: ReturnType<typeof heldRuntimeAuthority> | undefined
     try {
-      const first = runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      const first = observeRequest(runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac'))
       await emitListening(0, 55931)
       await first
       authority = heldRuntimeAuthority()
@@ -636,7 +872,7 @@ describe('automatic restart failure ownership', () => {
       if (scenario === 'stop' || scenario === 'stop-then-fresh') expect(runtime.stop()).toBeUndefined()
       if (scenario === 'stop-then-fresh' || scenario === 'fresh-without-stop') {
         runtimeContract = Promise.resolve(fullRuntime)
-        const fresh = runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac')
+        const fresh = observeRequest(runtime.start({ gguf: '/m/fresh.gguf', mmproj: '/m/fresh.mmproj', ...SPAWN_PROFILE }, 'mac'))
         await emitListening(1, 55932)
         await fresh
         expect(runtime.isRunning()).toBe(true)
@@ -657,7 +893,7 @@ describe('automatic restart failure ownership', () => {
         if (scenario === 'current') {
           runtimeContract = Promise.resolve(fullRuntime)
           await expect(
-            runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+            observeRequest(runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac'))
           ).rejects.toThrow(/unavailable for this session/)
           expect(spawnState.calls).toHaveLength(1)
         }
@@ -671,7 +907,7 @@ describe('automatic restart failure ownership', () => {
   it('retains the one automatic restart per window limit after a successful restart', async () => {
     const runtime = await freshRuntime()
     try {
-      const first = runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac')
+      const first = observeRequest(runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac'))
       await emitListening(0, 55941)
       await first
       spawnState.procs[0].emit('exit', 1, null)
