@@ -141,7 +141,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
     })
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
     expect(hardStopInputSession).toHaveBeenCalledExactlyOnceWith('cancelled')
-    expect(hardStopMeetingCapture).toHaveBeenCalledExactlyOnceWith('owner-replaced')
+    expect(hardStopMeetingCapture).toHaveBeenCalledExactlyOnceWith('owner-replaced', 'discard')
     return after
   }
 

@@ -151,7 +151,7 @@ describe('exclusive onboarding renderer recovery', () => {
 
     // The crash cancels capture, then the lifted reloadOverlay revokes the outgoing renderer owner.
     expect(hardStopInputSession.mock.calls).toEqual([['cancelled'], ['owner-replaced']])
-    expect(hardStopMeetingCapture).toHaveBeenCalledExactlyOnceWith('owner-replaced')
+    expect(hardStopMeetingCapture).toHaveBeenCalledExactlyOnceWith('owner-replaced', 'discard')
     expect(applyExclusiveOnboardingStage).toHaveBeenCalledExactlyOnceWith(win)
     expect(showForExclusiveOnboarding).toHaveBeenCalledExactlyOnceWith(win)
     expect(loadURL).toHaveBeenCalledExactlyOnceWith(recoveryUrl)

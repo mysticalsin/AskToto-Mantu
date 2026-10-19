@@ -94,7 +94,10 @@ function actualIpcHandler(channel: string, globals: Record<string, unknown>): (.
   return runSource(`globalThis.result = (${callback.getText(indexSource)});`, globals)
 }
 
-function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: any[]) => any {
+function actualRendererGoneHarness(globals: Record<string, unknown>): {
+  handler: (...args: any[]) => any
+  setCurrentWindow: (currentWindow: unknown) => void
+} {
   let callback: ts.Expression | undefined
   const visit = (node: ts.Node): void => {
     if (
@@ -109,7 +112,7 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
   }
   visit(indexSource)
   expect(callback, 'Actual overlay render-process-gone handler was not found').toBeDefined()
-  if (!callback) return () => undefined
+  if (!callback) return { handler: () => undefined, setCurrentWindow: () => {} }
   // The handler's automatic-reload branch calls the real reloadOverlay(...) helper — lift it too, so a
   // reload exercises the shipped loadURL + redact + audit wiring instead of a hand-copied stand-in.
   const reloadOverlayDecl = indexSource.statements.find(
@@ -117,7 +120,11 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
   )
   expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
   const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
-  return runSource(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
+  const context = runSourceContext(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
+  return {
+    handler: (context as any).result,
+    setCurrentWindow: (currentWindow) => { (context as any).win = currentWindow }
+  }
 }
 
 interface SessionApi {
@@ -126,7 +133,7 @@ interface SessionApi {
   recordLiveSpeakerSave(startedAt: number, file: string): boolean
   discardActiveLiveSpeakerSession(): void
   hardStopInputSession(reason: string): void
-  hardStopMeetingCapture(reason: string): void
+  hardStopMeetingCapture(reason: string, speakerDisposition?: 'close' | 'discard'): void
   labelThemAudio(samples: Float32Array, key: string | null, owner: 'live' | 'import'): Promise<any>
   observeOperatorAudio(samples: Float32Array, key: string | null): Promise<void>
   applySpeakerIdPolicy(enabled: boolean): boolean
@@ -136,6 +143,9 @@ interface SessionApi {
   disposeImportSpeakers(attempt: { readonly jobId: string; readonly attemptId: number }): void
   activationFrameFromEvent(event: any): MeetingStartActivationFrame | null
   meetingStartActivationAuthority: MeetingStartActivationAuthority
+  inputSessionAuthority: InputSessionAuthority
+  releaseMeetingCalls(startedAt: number): number
+  successfulMeetingReleases(): number
   getContextRevision(): number
   getSpeakerId(): SpeakerId
   hasMeetingReservation(): boolean
@@ -178,6 +188,7 @@ function sessionApi(options: {
     webContents: { id: 1, send: vi.fn() }
   }
   const inputSessionAuthority = new InputSessionAuthority()
+  const releaseMeetingSpy = vi.spyOn(inputSessionAuthority, 'releaseMeeting')
   let context: any
   const meetingStartActivationAuthority = new MeetingStartActivationAuthority({
     state: () => ({
@@ -252,6 +263,9 @@ function sessionApi(options: {
   })
   return Object.assign((context as any).result, {
     meetingStartActivationAuthority,
+    inputSessionAuthority,
+    releaseMeetingCalls: (startedAt: number) => releaseMeetingSpy.mock.calls.filter(([owner]) => owner === startedAt).length,
+    successfulMeetingReleases: () => releaseMeetingSpy.mock.results.filter((result) => result.value === true).length,
     hasMeetingReservation: () => inputSessionAuthority.hasMeetingReservation,
     meetingStartedAt: () => inputSessionAuthority.meetingStartedAt,
     lifecycle,
@@ -294,10 +308,16 @@ function actualListeningStateHandler(api: SessionApi): (...args: any[]) => Promi
   })
 }
 
-function triggerRendererGone(api: SessionApi): { revokeForLifecycleEvent: ReturnType<typeof vi.fn> } {
+function rendererGoneHarness(api: SessionApi): {
+  revokeForLifecycleEvent: ReturnType<typeof vi.fn>
+  hardStopMeetingCapture: ReturnType<typeof vi.spyOn>
+  fire: () => void
+  setCurrentWindow: (currentWindow: unknown) => void
+} {
   const win = api.win
   const revokeForLifecycleEvent = vi.fn()
-  const gone = actualRendererGoneHandler({
+  const hardStopMeetingCapture = vi.spyOn(api, 'hardStopMeetingCapture')
+  const gone = actualRendererGoneHarness({
     mainLog: { error: vi.fn() },
     auditLog: vi.fn(),
     crashDetail,
@@ -328,8 +348,31 @@ function triggerRendererGone(api: SessionApi): { revokeForLifecycleEvent: Return
     process: { env: {} },
     join
   })
-  gone({}, { reason: 'crashed', exitCode: 1 })
-  return { revokeForLifecycleEvent }
+  return {
+    revokeForLifecycleEvent,
+    hardStopMeetingCapture,
+    fire: () => gone.handler({}, { reason: 'crashed', exitCode: 1 }),
+    setCurrentWindow: gone.setCurrentWindow
+  }
+}
+
+function triggerRendererGone(api: SessionApi) {
+  const harness = rendererGoneHarness(api)
+  harness.fire()
+  return harness
+}
+
+function expectCrashCaptureTeardown(api: SessionApi, startedAt: number): void {
+  expect(api.lifecycle.revokeMeetingMicCaptureGrants).toHaveBeenCalledExactlyOnceWith(startedAt, 'owner-replaced')
+  expect(api.releaseMeetingCalls(startedAt)).toBe(1)
+  expect(api.successfulMeetingReleases()).toBe(1)
+  expect(api.hasMeetingReservation()).toBe(false)
+  expect(api.meetingStartedAt()).toBeNull()
+  expect(api.lifecycle.parakeetRelease).toHaveBeenCalledTimes(1)
+  expect(api.lifecycle.releaseSpeakerEmbedding).toHaveBeenCalledExactlyOnceWith('live')
+  expect(api.lifecycle.setListeningActive).toHaveBeenCalledWith(false)
+  expect(api.lifecycle.setTrayRecording).toHaveBeenCalledWith(false)
+  expect(api.lifecycle.setRecordingPowerSaveBlock).toHaveBeenCalledWith(false)
 }
 
 function embeddingFor(axis: number): Float32Array {
@@ -822,9 +865,15 @@ describe('bounded close and successful-save receipt join', () => {
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 900 })
     for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:900')
 
-    const { revokeForLifecycleEvent } = triggerRendererGone(api)
+    const { revokeForLifecycleEvent, hardStopMeetingCapture } = triggerRendererGone(api)
 
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
+    expect(hardStopMeetingCapture.mock.calls).toEqual([['owner-replaced', 'discard']])
+    expectCrashCaptureTeardown(api, 900)
+    expect(api.win.webContents.send).toHaveBeenCalledExactlyOnceWith('meeting:mic-capture-revoked', {
+      startedAt: 900,
+      reason: 'owner-replaced'
+    })
     expect(api.win.loadURL).toHaveBeenCalledExactlyOnceWith('file:///renderer/index.html')
 
     expect(api.captureLiveSpeakerKey(900)).toBeNull()
@@ -851,7 +900,9 @@ describe('bounded close and successful-save receipt join', () => {
       .resolves.toEqual({ path: '/meetings/saved-before-crash.md' })
     expect(backfill).not.toHaveBeenCalled()
 
-    triggerRendererGone(api)
+    const { hardStopMeetingCapture } = triggerRendererGone(api)
+    expect(hardStopMeetingCapture.mock.calls).toEqual([['owner-replaced', 'discard']])
+    expectCrashCaptureTeardown(api, 902)
     const crashSaveEvidence = {
       snapshots: snapshotSession.mock.calls.length,
       backfills: backfill.mock.calls.map(([file]) => file),
@@ -862,6 +913,83 @@ describe('bounded close and successful-save receipt join', () => {
       backfills: [],
       disposals: ['live:902']
     })
+  })
+
+  it('renderer crash still releases capture when speaker processing is disabled', () => {
+    const id = realSpeakerId()
+    const disposeSession = vi.spyOn(id, 'disposeSession')
+    const api = sessionApi({ id, enabled: () => false })
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 903 })).toBe(true)
+
+    const { hardStopMeetingCapture } = triggerRendererGone(api)
+
+    expect(hardStopMeetingCapture.mock.calls).toEqual([['owner-replaced', 'discard']])
+    expectCrashCaptureTeardown(api, 903)
+    expect(api.captureLiveSpeakerKey(903)).toBeNull()
+    expect(disposeSession).not.toHaveBeenCalled()
+  })
+
+  it('renderer crash still releases capture when speaker receipt admission failed', () => {
+    const id = realSpeakerId()
+    const createSession = vi.spyOn(id, 'createSession').mockReturnValue(false)
+    const disposeSession = vi.spyOn(id, 'disposeSession')
+    const api = sessionApi({ id })
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 904 })).toBe(true)
+    expect(createSession).toHaveBeenCalledExactlyOnceWith('live:904')
+
+    const { hardStopMeetingCapture } = triggerRendererGone(api)
+
+    expect(hardStopMeetingCapture.mock.calls).toEqual([['owner-replaced', 'discard']])
+    expectCrashCaptureTeardown(api, 904)
+    expect(api.captureLiveSpeakerKey(904)).toBeNull()
+    expect(disposeSession).not.toHaveBeenCalled()
+  })
+
+  it('repeated renderer crash cleanup does not release native state or dispose a speaker receipt twice', () => {
+    const id = realSpeakerId()
+    const disposeSession = vi.spyOn(id, 'disposeSession')
+    const api = sessionApi({ id })
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 905 })).toBe(true)
+
+    const firstCrash = triggerRendererGone(api)
+    triggerRendererGone(api)
+
+    expect(firstCrash.hardStopMeetingCapture.mock.calls).toEqual([
+      ['owner-replaced', 'discard'],
+      ['owner-replaced', 'discard']
+    ])
+    expectCrashCaptureTeardown(api, 905)
+    expect(disposeSession).toHaveBeenCalledExactlyOnceWith('live:905')
+  })
+
+  it('a retired window crash leaves the successor meeting and capture untouched', () => {
+    const id = realSpeakerId()
+    const disposeSession = vi.spyOn(id, 'disposeSession')
+    const api = sessionApi({ id })
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 906 })).toBe(true)
+    const retiredCrash = rendererGoneHarness(api)
+
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 907 })).toBe(true)
+    const successor = { isDestroyed: () => false, webContents: { id: 2 } }
+    const teardownBeforeDelayedCrash = {
+      grants: api.lifecycle.revokeMeetingMicCaptureGrants.mock.calls.length,
+      native: api.lifecycle.parakeetRelease.mock.calls.length,
+      embedding: api.lifecycle.releaseSpeakerEmbedding.mock.calls.length,
+      releases: api.successfulMeetingReleases()
+    }
+
+    retiredCrash.setCurrentWindow(successor)
+    retiredCrash.fire()
+
+    expect(api.captureLiveSpeakerKey(907)).toBe('live:907')
+    expect(api.meetingStartedAt()).toBe(907)
+    expect(api.hasMeetingReservation()).toBe(true)
+    expect(api.lifecycle.revokeMeetingMicCaptureGrants).toHaveBeenCalledTimes(teardownBeforeDelayedCrash.grants)
+    expect(api.lifecycle.parakeetRelease).toHaveBeenCalledTimes(teardownBeforeDelayedCrash.native)
+    expect(api.lifecycle.releaseSpeakerEmbedding).toHaveBeenCalledTimes(teardownBeforeDelayedCrash.embedding)
+    expect(api.successfulMeetingReleases()).toBe(teardownBeforeDelayedCrash.releases)
+    expect(disposeSession).not.toHaveBeenCalled()
+    expect(retiredCrash.revokeForLifecycleEvent).not.toHaveBeenCalled()
   })
 
   it('deletes a joined receipt before a snapshot failure and disposes the exact state', async () => {

@@ -1627,22 +1627,32 @@ function revokePendingMeetingMicCaptureGrants(reason: import('@shared/input-sess
   meetingMicCaptureAuthority.revokePending(reason)
 }
 
-function hardStopMeetingCapture(reason: import('@shared/input-session').InputSessionStopReason): void {
+function hardStopMeetingCapture(
+  reason: import('@shared/input-session').InputSessionStopReason,
+  speakerDisposition: 'close' | 'discard' = 'close'
+): void {
   if (!inputSessionAuthority.hasMeetingReservation) return
   const startedAt = inputSessionAuthority.meetingStartedAt
-  if (startedAt !== null && meetingCaptureOwnerWebContentsId !== null && win && !win.isDestroyed() &&
-      win.webContents.id === meetingCaptureOwnerWebContentsId) {
+  const ownerWebContentsId = meetingCaptureOwnerWebContentsId
+  if (startedAt !== null && ownerWebContentsId !== null && win && !win.isDestroyed() &&
+      win.webContents.id === ownerWebContentsId) {
     try { win.webContents.send(IPC.meetingMicCaptureRevoked, { startedAt, reason }) }
     catch { /* the owning renderer may already be gone */ }
   }
   revokeMeetingMicCaptureGrants(startedAt, reason)
-  inputSessionAuthority.releaseMeeting(startedAt)
+  if (speakerDisposition === 'discard' && startedAt !== null && activeLiveSpeakerStartedAt === startedAt) {
+    // Discard releases this exact reservation itself. Continue all teardown below; an early return here
+    // would leave native capture and the tray/power indicators running after the renderer died.
+    discardActiveLiveSpeakerSession()
+  } else {
+    inputSessionAuthority.releaseMeeting(startedAt)
+    if (startedAt !== null && activeLiveSpeakerStartedAt === startedAt) {
+      closeLiveSpeakerReceipt(startedAt)
+      activeLiveSpeakerStartedAt = null
+    }
+  }
   inputSessionContextRevision += 1
   meetingCaptureOwnerWebContentsId = null
-  if (startedAt !== null && activeLiveSpeakerStartedAt === startedAt) {
-    closeLiveSpeakerReceipt(startedAt)
-    activeLiveSpeakerStartedAt = null
-  }
   setLegacyListeningActive(false)
   setListeningActive(false)
   setTrayRecording(false)
@@ -3366,7 +3376,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   win.webContents.on('render-process-gone', (_e, details) => {
     if (win !== self) return
     hardStopInputSession('cancelled')
-    hardStopMeetingCapture('owner-replaced')
+    hardStopMeetingCapture('owner-replaced', 'discard')
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
