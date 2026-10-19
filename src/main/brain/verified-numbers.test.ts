@@ -14,11 +14,14 @@ import {
   verifyExtraction,
   mergeExtraction,
   parseExtractionPayload,
-  enqueueIngest, SELF_PERSON_SLUG } from './ingest'
+  enqueueIngest,
+  SELF_PERSON_SLUG
+} from './ingest'
 import { readDeal, readMeetingExtraction, readPerson, slugify } from './store'
 import { formatDeal } from './context'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 /**
  * Task MI-4 — the verified numbers lane. Three surfaces under test:
@@ -115,15 +118,24 @@ describe('combineWindowExtractions', () => {
   })
 
   it('anchors title/topics/sentiment/account on the first window with an EXTRACTED account, else the first non-null', () => {
-    const w1 = win({ title24: 'w1', account: { name: 'Acme', sector: 'banking', sector_confidence: 'INFERRED', confidence: 'INFERRED' } })
-    const w2 = win({ title24: 'w2', account: { name: 'Acme Corp', sector: 'banking', sector_confidence: 'EXTRACTED', confidence: 'EXTRACTED' } })
+    const w1 = win({
+      title24: 'w1',
+      account: { name: 'Acme', sector: 'banking', sector_confidence: 'INFERRED', confidence: 'INFERRED' }
+    })
+    const w2 = win({
+      title24: 'w2',
+      account: { name: 'Acme Corp', sector: 'banking', sector_confidence: 'EXTRACTED', confidence: 'EXTRACTED' }
+    })
     const w3 = win({ title24: 'w3' })
     const combined = combineWindowExtractions([w1, w2, w3])
     expect(combined.title24).toBe('w2') // w2 is the first (and only) EXTRACTED account
     expect(combined.account?.name).toBe('Acme Corp')
 
     // No window has an EXTRACTED account: fall back to the first non-null account.
-    const w1b = win({ title24: 'a', account: { name: 'Weak Co', sector: 'other', sector_confidence: 'INFERRED', confidence: 'INFERRED' } })
+    const w1b = win({
+      title24: 'a',
+      account: { name: 'Weak Co', sector: 'other', sector_confidence: 'INFERRED', confidence: 'INFERRED' }
+    })
     const w2b = win({ title24: 'b' })
     const combined2 = combineWindowExtractions([w1b, w2b])
     expect(combined2.title24).toBe('a')
@@ -132,8 +144,12 @@ describe('combineWindowExtractions', () => {
   it('unions people/commitments/numeric_facts across windows, deduping repeats from the overlap region', () => {
     const w1 = win({
       people: [{ name: 'Sarah Chen', role: 'CFO', org: null, confidence: 'EXTRACTED' }],
-      commitments: [{ text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED', due_hint: '' }],
-      numeric_facts: [{ kind: 'amount', value: 100, unit: 'EUR', quote: 'we agreed on 100 EUR', confidence: 'EXTRACTED' }]
+      commitments: [
+        { text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED', due_hint: '' }
+      ],
+      numeric_facts: [
+        { kind: 'amount', value: 100, unit: 'EUR', quote: 'we agreed on 100 EUR', confidence: 'EXTRACTED' }
+      ]
     })
     // w2 restates the SAME commitment/fact (they fell inside the window overlap) plus one genuinely new person.
     const w2 = win({
@@ -141,8 +157,12 @@ describe('combineWindowExtractions', () => {
         { name: 'Sarah Chen', role: 'CFO', org: null, confidence: 'EXTRACTED' },
         { name: 'James Walsh', role: 'IT', org: null, confidence: 'EXTRACTED' }
       ],
-      commitments: [{ text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED', due_hint: '' }],
-      numeric_facts: [{ kind: 'amount', value: 100, unit: 'EUR', quote: 'we agreed on 100 EUR', confidence: 'EXTRACTED' }]
+      commitments: [
+        { text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED', due_hint: '' }
+      ],
+      numeric_facts: [
+        { kind: 'amount', value: 100, unit: 'EUR', quote: 'we agreed on 100 EUR', confidence: 'EXTRACTED' }
+      ]
     })
     const combined = combineWindowExtractions([w1, w2])
     expect(combined.people.map((p) => p.name)).toEqual(['Sarah Chen', 'James Walsh'])
@@ -151,9 +171,33 @@ describe('combineWindowExtractions', () => {
   })
 
   it('deal stage/band/velocity: the LAST window with a non-null value wins (meeting-final state)', () => {
-    const w1 = win({ deal: { name: 'Big Deal', stage: 'discovery', win_likelihood_band: 'mixed', band_evidence: 'early signal', velocity: { signal: 'no-hard-date-found', evidence: '' } } })
-    const w2 = win({ deal: { name: '', stage: '', win_likelihood_band: null, band_evidence: '', velocity: { signal: 'no-hard-date-found', evidence: '' } } })
-    const w3 = win({ deal: { name: '', stage: 'negotiation', win_likelihood_band: 'good', band_evidence: 'final signal', velocity: { signal: 'hard-calendar-gate', evidence: 'closes Friday' } } })
+    const w1 = win({
+      deal: {
+        name: 'Big Deal',
+        stage: 'discovery',
+        win_likelihood_band: 'mixed',
+        band_evidence: 'early signal',
+        velocity: { signal: 'no-hard-date-found', evidence: '' }
+      }
+    })
+    const w2 = win({
+      deal: {
+        name: '',
+        stage: '',
+        win_likelihood_band: null,
+        band_evidence: '',
+        velocity: { signal: 'no-hard-date-found', evidence: '' }
+      }
+    })
+    const w3 = win({
+      deal: {
+        name: '',
+        stage: 'negotiation',
+        win_likelihood_band: 'good',
+        band_evidence: 'final signal',
+        velocity: { signal: 'hard-calendar-gate', evidence: 'closes Friday' }
+      }
+    })
     const combined = combineWindowExtractions([w1, w2, w3])
     expect(combined.deal?.name).toBe('Big Deal') // identity from the first window that names it
     expect(combined.deal?.stage).toBe('negotiation') // w3's non-null value is the LAST one — wins
@@ -173,7 +217,15 @@ describe('verifyExtraction — fabricated-quote demotion (TDD: red against pre-v
 
   it('a numeric_fact whose quote is genuinely in the transcript keeps its confidence', () => {
     const x = MeetingExtractionSchema.parse({
-      numeric_facts: [{ kind: 'amount', value: 2_400_000, unit: 'EUR', quote: 'the total contract value comes in at 2.4M EUR', confidence: 'EXTRACTED' }]
+      numeric_facts: [
+        {
+          kind: 'amount',
+          value: 2_400_000,
+          unit: 'EUR',
+          quote: 'the total contract value comes in at 2.4M EUR',
+          confidence: 'EXTRACTED'
+        }
+      ]
     })
     const verified = verifyExtraction(x, transcript)
     expect(verified.numeric_facts[0].confidence).toBe('EXTRACTED')
@@ -181,7 +233,15 @@ describe('verifyExtraction — fabricated-quote demotion (TDD: red against pre-v
 
   it('a FABRICATED numeric_fact quote (never said in the prepared text) is demoted to AMBIGUOUS, not stripped', () => {
     const x = MeetingExtractionSchema.parse({
-      numeric_facts: [{ kind: 'amount', value: 9_999_999, unit: 'EUR', quote: 'we agreed on nine point nine nine nine million', confidence: 'EXTRACTED' }]
+      numeric_facts: [
+        {
+          kind: 'amount',
+          value: 9_999_999,
+          unit: 'EUR',
+          quote: 'we agreed on nine point nine nine nine million',
+          confidence: 'EXTRACTED'
+        }
+      ]
     })
     const verified = verifyExtraction(x, transcript)
     expect(verified.numeric_facts).toHaveLength(1) // quarantined, never dropped
@@ -192,7 +252,15 @@ describe('verifyExtraction — fabricated-quote demotion (TDD: red against pre-v
 
   it('a real quote but a value that drifted from what was actually said is demoted', () => {
     const x = MeetingExtractionSchema.parse({
-      numeric_facts: [{ kind: 'amount', value: 3_000_000, unit: 'EUR', quote: 'the total contract value comes in at 2.4M EUR', confidence: 'EXTRACTED' }]
+      numeric_facts: [
+        {
+          kind: 'amount',
+          value: 3_000_000,
+          unit: 'EUR',
+          quote: 'the total contract value comes in at 2.4M EUR',
+          confidence: 'EXTRACTED'
+        }
+      ]
     })
     expect(verifyExtraction(x, transcript).numeric_facts[0].confidence).toBe('AMBIGUOUS')
   })
@@ -265,7 +333,13 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
       deal: null,
       people: [],
       commitments: [
-        { text: 'Send the pricing deck', by: 'you', due_hint: 'by Tuesday', quote: "I'll send the pricing deck by Tuesday", confidence: 'EXTRACTED' },
+        {
+          text: 'Send the pricing deck',
+          by: 'you',
+          due_hint: 'by Tuesday',
+          quote: "I'll send the pricing deck by Tuesday",
+          confidence: 'EXTRACTED'
+        },
         { text: 'Come back with the headcount numbers', by: 'them', due_hint: '', quote: '', confidence: 'EXTRACTED' }
       ]
     })
@@ -295,14 +369,18 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
     })
     await mergeExtraction(s, x, { file: 'named.md', date: '2026-02-03', title: 'With Alice' }, undefined, '')
 
-    expect(readPerson(s, slugify('Alice Adams'))!.commitments?.map((c) => c.text)).toEqual(['Share the architecture doc'])
+    expect(readPerson(s, slugify('Alice Adams'))!.commitments?.map((c) => c.text)).toEqual([
+      'Share the architecture doc'
+    ])
     const self = readPerson(s, SELF_PERSON_SLUG)
     expect(self?.commitments?.some((c) => c.text === 'Share the architecture doc') ?? false).toBe(false)
   })
 
   it('a verified amount lands in state "verified" with EXTRACTED confidence', async () => {
     const transcript = 'Them: the total contract value comes in at 2.4M EUR for the first phase.'
-    const x = dealExtraction({ amount: { value: 2_400_000, currency: 'EUR', quote: 'the total contract value comes in at 2.4M EUR' } })
+    const x = dealExtraction({
+      amount: { value: 2_400_000, currency: 'EUR', quote: 'the total contract value comes in at 2.4M EUR' }
+    })
     await mergeExtraction(s, x, { file: 'm1.md', date: '2026-01-01', title: 't' }, undefined, transcript)
     const deal = readDeal(s, slugify('Acme Core Banking'))!
     expect(deal.amount?.state).toBe('verified')
@@ -312,7 +390,9 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
 
   it('an amount whose quote never appears in the prepared text lands in state "extracted" with AMBIGUOUS confidence — never stripped', async () => {
     const transcript = 'Them: we are still finalizing scope, nothing about money yet.'
-    const x = dealExtraction({ amount: { value: 2_400_000, currency: 'EUR', quote: 'the total contract value comes in at 2.4M EUR' } })
+    const x = dealExtraction({
+      amount: { value: 2_400_000, currency: 'EUR', quote: 'the total contract value comes in at 2.4M EUR' }
+    })
     await mergeExtraction(s, x, { file: 'm1.md', date: '2026-01-01', title: 't' }, undefined, transcript)
     const deal = readDeal(s, slugify('Acme Core Banking'))!
     expect(deal.amount?.state).toBe('extracted')
@@ -332,7 +412,13 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
     try {
       const s2 = { meetingsFolder: folder2 } as Settings
       const bad = dealExtraction({ close_date: { value: '2026-09-30', quote: 'a close date of 2026-09-30' } })
-      await mergeExtraction(s2, bad, { file: 'm1.md', date: '2026-01-01', title: 't' }, undefined, 'Them: nothing about dates was discussed today.')
+      await mergeExtraction(
+        s2,
+        bad,
+        { file: 'm1.md', date: '2026-01-01', title: 't' },
+        undefined,
+        'Them: nothing about dates was discussed today.'
+      )
       const dealBad = readDeal(s2, slugify('Acme Core Banking'))!
       expect(dealBad.close_date?.state).toBe('extracted')
       expect(dealBad.close_date?.confidence).toBe('AMBIGUOUS')
@@ -359,15 +445,27 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
   })
 
   it('band_evidence confidence is computed from alignment when preparedText is supplied, and stays the old hardcoded EXTRACTED when omitted (backward compat)', async () => {
-    const x = dealExtraction({ win_likelihood_band: 'concerning', band_evidence: 'a fabricated evidence string never actually said' })
-    await mergeExtraction(s, x, { file: 'm1.md', date: '2026-01-01', title: 't' }, undefined, 'Them: totally unrelated content about scheduling.')
+    const x = dealExtraction({
+      win_likelihood_band: 'concerning',
+      band_evidence: 'a fabricated evidence string never actually said'
+    })
+    await mergeExtraction(
+      s,
+      x,
+      { file: 'm1.md', date: '2026-01-01', title: 't' },
+      undefined,
+      'Them: totally unrelated content about scheduling.'
+    )
     const deal = readDeal(s, slugify('Acme Core Banking'))!
     expect(deal.win_likelihood_band_provenance?.confidence).toBe('AMBIGUOUS')
 
     const folder2 = mkdtempSync(join(tmpdir(), 'asktoto-verified-numbers-band-'))
     try {
       const s2 = { meetingsFolder: folder2 } as Settings
-      const x2 = dealExtraction({ win_likelihood_band: 'concerning', band_evidence: 'a fabricated evidence string never actually said' })
+      const x2 = dealExtraction({
+        win_likelihood_band: 'concerning',
+        band_evidence: 'a fabricated evidence string never actually said'
+      })
       await mergeExtraction(s2, x2, { file: 'm1.md', date: '2026-01-01', title: 't' }) // preparedText omitted — legacy behavior
       const deal2 = readDeal(s2, slugify('Acme Core Banking'))!
       expect(deal2.win_likelihood_band_provenance?.confidence).toBe('EXTRACTED')
@@ -380,14 +478,19 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
 describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createStream, real queue/pump/merge)', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy = (): void => {}
 
   const waitForStoredExtraction = async (file: string): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(readMeetingExtraction({ meetingsFolder } as Settings, slugify(basename(file)))).not.toBeNull()
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readMeetingExtraction({ meetingsFolder } as Settings, slugify(basename(file)))).not.toBeNull()
+      },
+      { timeout: 10_000 }
+    )
   }
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-d2-userdata-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-d2-meetings-'))
@@ -402,17 +505,27 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   // MQA-007: settle the index-write lane before removing either profile dir — see the note on the
   // sibling teardown above.
   afterEach(async () => {
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.restoreAllMocks()
+    try {
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.restoreAllMocks()
+      } finally {
+        restoreSpeechReadPolicy()
+      }
+    }
   })
 
   const FINAL_COMMITMENT_QUOTE = 'Sarah: I will send you the updated security pack by Friday, as promised.'
 
   function buildOversizedTranscript(): string {
     const filler = (label: string, n: number): string =>
-      Array.from({ length: n }, (_, i) => `${label}-${i}: We discussed routine agenda item number ${i} in today's call.`).join('\n')
+      Array.from(
+        { length: n },
+        (_, i) => `${label}-${i}: We discussed routine agenda item number ${i} in today's call.`
+      ).join('\n')
     const part1 = filler('P1', 420) // comfortably over 24000 chars on its own
     const part2 = filler('P2', 420) // pushes well past a second window's worth
     const part3tail = filler('P3', 30)
@@ -431,7 +544,12 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
       const payload = hasCommitment
         ? {
             commitments: [
-              { text: 'send the updated security pack', by: 'Sarah Chen', quote: FINAL_COMMITMENT_QUOTE, confidence: 'EXTRACTED' }
+              {
+                text: 'send the updated security pack',
+                by: 'Sarah Chen',
+                quote: FINAL_COMMITMENT_QUOTE,
+                confidence: 'EXTRACTED'
+              }
             ]
           }
         : {}

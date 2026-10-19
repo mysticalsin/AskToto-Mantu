@@ -6,14 +6,11 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setSettings } from '../store'
-import {
-  brainBackfillProgress,
-  startBackfill,
-  startRebuild
-} from './ingest'
+import { brainBackfillProgress, startBackfill, startRebuild } from './ingest'
 import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -51,8 +48,10 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, MQA-018 parity)', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy = (): void => {}
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-local-lockout-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-local-lockout-meetings-'))
@@ -90,11 +89,18 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
   })
 
   afterEach(async () => {
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.unstubAllEnvs()
+        vi.restoreAllMocks()
+      } finally {
+        restoreSpeechReadPolicy()
+      }
+    }
   })
 
   it('refuses to rebuild (never purges) when the exclusive local runtime is in the unavailable lockout', async () => {

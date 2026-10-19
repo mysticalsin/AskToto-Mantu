@@ -12,6 +12,7 @@ import { INTELLIGENCE_PASS_NO_PROVIDER } from './intelligence-pass-route'
 import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -33,27 +34,36 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 describe('Update Intelligence pass — local first, API once', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
-  const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => opts.handlers.onError(message))
-    return { abort: () => {} }
-  }
-  const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => {
-      opts.handlers.onDelta(json)
-      opts.handlers.onDone({})
-    })
-    return { abort: () => {} }
-  }
+  const respondError =
+    (message: string) =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => opts.handlers.onError(message))
+      return { abort: () => {} }
+    }
+  const respondJson =
+    (json = '{}') =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta(json)
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    }
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-intel-pass-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-intel-pass-meetings-'))
@@ -83,11 +93,18 @@ describe('Update Intelligence pass — local first, API once', () => {
   })
 
   afterEach(async () => {
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.unstubAllEnvs()
+        vi.restoreAllMocks()
+      } finally {
+        restoreSpeechReadPolicy()
+      }
+    }
   })
 
   it('uses Local first when Local is ready, even if an API is configured', async () => {

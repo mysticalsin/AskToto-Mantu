@@ -10,6 +10,7 @@ import { brainBackfillProgress, enqueueIngest, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -33,8 +34,10 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 describe('automatic brain ingest with Métis Local', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy = (): void => {}
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-local-brain-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-local-brain-meetings-'))
@@ -78,20 +81,30 @@ describe('automatic brain ingest with Métis Local', () => {
     // serialized write lane. Removing the profile under that in-flight tmp+rename both raises an
     // unhandled rejection and lets the stale write land during the NEXT test, where startBackfill()
     // then reports queued:0 because the index it reads is not the one this test just seeded.
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.unstubAllEnvs()
+        vi.restoreAllMocks()
+      } finally {
+        restoreSpeechReadPolicy()
+      }
+    }
   })
 
   it('uses the bundled local model to process a saved meeting when no cloud provider is configured', async () => {
     const result = await startBackfill()
 
     expect(result).toEqual({ queued: 1 })
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress()).toEqual({ total: 1, done: 1, running: false })
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress()).toEqual({ total: 1, done: 1, running: false })
+      },
+      { timeout: 10_000 }
+    )
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     expect(createStreamMock).toHaveBeenCalled()
@@ -106,22 +119,27 @@ describe('automatic brain ingest with Métis Local', () => {
   it('keeps a meeting when the local model emits a null optional numeric fact', async () => {
     createStreamMock.mockImplementationOnce((opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
       queueMicrotask(() => {
-        opts.handlers.onDelta(JSON.stringify({
-          title24: 'Offline follow-up',
-          numeric_facts: [
-            { kind: 'date', value: null, unit: null, quote: 'next Tuesday' },
-            { kind: 'headcount', value: 1, unit: null, quote: 'one follow-up' }
-          ]
-        }))
+        opts.handlers.onDelta(
+          JSON.stringify({
+            title24: 'Offline follow-up',
+            numeric_facts: [
+              { kind: 'date', value: null, unit: null, quote: 'next Tuesday' },
+              { kind: 'headcount', value: 1, unit: null, quote: 'one follow-up' }
+            ]
+          })
+        )
         opts.handlers.onDone({})
       })
       return { abort: () => {} }
     })
 
     expect(await startBackfill()).toEqual({ queued: 1 })
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
 
     expect(readMeetingExtraction(getSettings(), 'local-only-md')?.numeric_facts).toEqual([
       expect.objectContaining({ kind: 'headcount', value: 1 })
@@ -136,9 +154,12 @@ describe('automatic brain ingest with Métis Local', () => {
     setApiKey('dust', 'test-dust-key')
 
     expect(await startBackfill()).toEqual({ queued: 1 })
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
@@ -151,9 +172,12 @@ describe('automatic brain ingest with Métis Local', () => {
     const result = await startBackfill()
 
     expect(result).toEqual({ queued: 1 })
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     expect(readIndex(getSettings()).ingested['README.md']).toBeUndefined()
   })
 
@@ -163,9 +187,12 @@ describe('automatic brain ingest with Métis Local', () => {
 
     enqueueIngest(file)
 
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['saved-after-listen.md']?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['saved-after-listen.md']?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     expect(createStreamMock.mock.calls.at(-1)?.[0].providerId).toBe('local')
   })
 })
