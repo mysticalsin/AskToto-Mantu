@@ -13,6 +13,29 @@ type TestEvent = {
 }
 
 describe('input-session IPC owner binding', () => {
+  it('refuses a command lease when main has not authorized the command start', () => {
+    const authorize = vi.fn(() => false)
+    const base = {
+      authority: new InputSessionAuthority({ token: () => 'd'.repeat(48), now: () => 1 }),
+      assertMainWindow: vi.fn(),
+      isWindowVisible: () => true,
+      requireAuth: () => true,
+      currentMainUrl: () => 'app://metis/index.html',
+      currentContext: () => context,
+      captureAuthBoundary: () => () => true
+    }
+    const request = { input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context }
+    expect(createInputSessionHandlers<TestEvent>(base).start(event, request)).toEqual({
+      ok: false,
+      reason: 'unauthorized'
+    })
+    expect(createInputSessionHandlers<TestEvent>({ ...base, authorizeCommandStart: authorize }).start(event, request)).toEqual({
+      ok: false,
+      reason: 'unauthorized'
+    })
+    expect(authorize).toHaveBeenCalledTimes(1)
+  })
+
   it('derives the session owner from the authenticated top-frame event', () => {
     const handlers = createInputSessionHandlers<TestEvent>({
       authority: new InputSessionAuthority({ token: () => 'a'.repeat(48), now: () => 1 }),
@@ -21,7 +44,8 @@ describe('input-session IPC owner binding', () => {
       requireAuth: () => true,
       currentMainUrl: () => 'app://metis/index.html',
       currentContext: () => context,
-      captureAuthBoundary: () => () => true
+      captureAuthBoundary: () => () => true,
+      authorizeCommandStart: () => true
     })
     const started = handlers.start(event, {
       input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
@@ -77,7 +101,8 @@ describe('input-session IPC owner binding', () => {
       requireAuth: () => true,
       currentMainUrl: () => 'app://metis/index.html',
       currentContext: () => context,
-      captureAuthBoundary: () => () => true
+      captureAuthBoundary: () => () => true,
+      authorizeCommandStart: () => true
     })
     expect(
       handlers.start(event, {
@@ -96,7 +121,8 @@ describe('input-session IPC owner binding', () => {
       requireAuth: () => false,
       currentMainUrl: () => 'app://metis/index.html',
       currentContext: () => context,
-      captureAuthBoundary: () => () => true
+      captureAuthBoundary: () => () => true,
+      authorizeCommandStart: () => true
     })
     expect(
       unauthenticated.start(event, {
@@ -135,7 +161,8 @@ describe('input-session IPC owner binding', () => {
       requireAuth: () => true,
       currentMainUrl: () => 'app://metis/index.html',
       currentContext: () => current,
-      captureAuthBoundary: () => () => true
+      captureAuthBoundary: () => () => true,
+      authorizeCommandStart: () => true
     })
     const initial = handlers.start(event, {
       input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
@@ -201,7 +228,8 @@ describe('input-session IPC owner binding', () => {
       requireAuth: () => true,
       currentMainUrl: () => 'app://metis/index.html',
       currentContext: () => context,
-      captureAuthBoundary: () => () => authBoundaryValid
+      captureAuthBoundary: () => () => authBoundaryValid,
+      authorizeCommandStart: () => true
     })
     const started = handlers.start(event, {
       input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
