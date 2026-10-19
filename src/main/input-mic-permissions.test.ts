@@ -36,8 +36,9 @@ function fixture(
   const webContents = {
     id: 41,
     getURL: () => url,
+    // Main derives the frame owner as `${processId}:${routingId}`; this is the top frame's identity.
     get mainFrame() {
-      return frame
+      return { processId: 41, routingId: 1, ...frame }
     }
   } as unknown as Electron.WebContents
   const browserWindow = {
@@ -55,7 +56,7 @@ function fixture(
     const result = authority.start(
       {
         webContentsId: webContents.id,
-        frameId: 'main-frame-41',
+        frameId: '41:1',
         isTopFrame: true,
         ...context
       },
@@ -211,7 +212,7 @@ describe('main microphone permission request gate', () => {
       env.authority.confirmCapture(
         {
           webContentsId: env.webContents.id,
-          frameId: 'main-frame-41',
+          frameId: '41:1',
           isTopFrame: true,
           authSessionGeneration: 4,
           contextRevision: 9
