@@ -7,7 +7,7 @@
 import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from '../features/meetings/meeting-speech'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { realpath } from 'node:fs/promises'
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import type { BrainIndex } from '@shared/brain'
@@ -313,7 +313,9 @@ export function areBrainContextSourcesCurrent(
       if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return false
       const pathBefore = lstatSync(file)
       if (pathBefore.isSymbolicLink() || !pathBefore.isFile() || pathBefore.size < 1 || pathBefore.size > maxBytes) return false
-      fd = openSync(file, 'r')
+      // The path may be swapped after lstat. Nonblocking open prevents a regular-file-to-FIFO race from
+      // hanging Main; NOFOLLOW rejects a symlink replacement at the open boundary where supported.
+      fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
       const before = fstatSync(fd)
       if (!before.isFile() || before.dev !== pathBefore.dev || before.ino !== pathBefore.ino || before.size !== pathBefore.size ||
           before.mtimeMs !== pathBefore.mtimeMs || before.ctimeMs !== pathBefore.ctimeMs) return false

@@ -45,6 +45,8 @@ export interface StreamOptions {
    * Enables one transparent retry so an expired Dust token self-heals instead of surfacing a 401.
    */
   refreshDustAuth?: () => Promise<{ apiKey: string; workspaceId?: string; baseURL?: string } | null>
+  /** Revalidate main-owned request context before provider transports perform an internal retry/replay. */
+  beforeProviderAttempt?: () => void
   model: string
   temperature: number
   /** Per-tier/mode idle-timeout budget in ms (abort if no token arrives within it). Defaults to 120s. */

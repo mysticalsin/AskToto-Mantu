@@ -8425,9 +8425,7 @@ function registerIpc(): void {
       // entire retry/failover cascade stays gated behind the SAME race the whole way down: once the other
       // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
       // silently returns, so a losing leg's own cascading retries can never reach the renderer.
-      const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
-        // Retries, failovers and hedged legs may start after an account/profile/context boundary changed.
-        // Revalidate at every provider dispatch and fail closed by omitting anything no longer current.
+      const refreshBrainContextForProviderAttempt = (): void => {
         if (brainContextEnvelope) {
           try {
             const currentSettings = getSettings()
@@ -8447,6 +8445,12 @@ function registerIpc(): void {
         } else {
           req.brainContext = undefined
         }
+      }
+
+      const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
+        // Retries, failovers and hedged legs may start after an account/profile/context boundary changed.
+        // Revalidate at every provider dispatch and fail closed by omitting anything no longer current.
+        refreshBrainContextForProviderAttempt()
         // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
         // one the hedge must not duplicate.
         if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
@@ -8861,6 +8865,7 @@ function registerIpc(): void {
           // stream asks for fresh creds: re-mint via the CLI, persist them, and replay once — so an
           // expired token self-heals invisibly instead of surfacing an error.
           refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
+          beforeProviderAttempt: refreshBrainContextForProviderAttempt,
           model,
           temperature: s.temperature,
           // Reasoning-by-default models (Kimi, DeepSeek V4) burn hidden tokens and stall a 15s live-suggest

@@ -370,6 +370,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       await pending.catch(() => {})
     }
 
+    // Dust may replay this request internally after auth refresh without re-entering main's attempt().
+    // Refresh main-owned context immediately before building any outbound message.
+    opts.beforeProviderAttempt?.()
     const messageBody = {
       content: preamble + userText(opts.req),
       mentions: [{ configurationId: opts.model }],
@@ -472,6 +475,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       if (allowRetry && !gotToken && opts.refreshDustAuth && isAuthErr(streamed.error)) {
         const fresh = await opts.refreshDustAuth().catch(() => null)
         if (fresh) {
+          // This retry reattaches to a message already posted; still recheck the caller's owner boundary
+          // before the provider retry, matching the main dispatch contract.
+          opts.beforeProviderAttempt?.()
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const freshApi: any = new DustAPI(
             { url: fresh.baseURL || 'https://dust.tt' },
