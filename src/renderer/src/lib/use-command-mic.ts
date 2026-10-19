@@ -19,6 +19,7 @@ type ControllerOptions = CommandMicOptions & { onSnapshot?: (snapshot: CommandMi
 
 type ActiveCapture = {
   admission: InputMicAdmission
+  stopMedia: () => void
   sessionId: string
   stream: MediaStream
   track: MediaStreamTrack
@@ -52,10 +53,6 @@ function workletUrl(): string {
   return commandSpeechWorkletUrl
 }
 
-function stopTracks(stream: MediaStream): void {
-  try { for (const track of stream.getTracks()) track.stop() } catch { /* best-effort terminal cleanup */ }
-}
-
 export class CommandMicController {
   private active: ActiveCapture | null = null
   private generation = 0
@@ -79,6 +76,7 @@ export class CommandMicController {
     this.admissionAbort?.abort()
     this.admissionAbort = abort
     this.publish({ status: 'starting' })
+    if (this.disposed || generation !== this.generation) return
     let capture: Awaited<ReturnType<typeof acquireInteractiveMic>> | null = null
     let sessionId: string | null = null
     let startedInMain = false
@@ -124,6 +122,7 @@ export class CommandMicController {
       const sealed = new Promise<void>((resolve) => { resolveSealed = resolve })
       const active: ActiveCapture = {
         admission: capture.admission,
+        stopMedia: capture.stopMedia,
         sessionId,
         stream: capture.stream,
         track,
@@ -147,10 +146,22 @@ export class CommandMicController {
       node.port.onmessage = (event: MessageEvent) => this.onWorkletMessage(active, event.data)
       capture.admission.onRevoke(() => this.cancelForGeneration(generation, 'microphone_unavailable'))
       track.addEventListener?.('ended', active.onTrackEnded, { once: true })
+      const stillOwned = (): boolean => this.active === active && !this.disposed &&
+        generation === this.generation && !active.admission.revoked
+      const requireLiveTrack = (): void => {
+        if (track.readyState === 'ended') throw new Error('microphone_unavailable')
+      }
+      if (!stillOwned()) return
+      requireLiveTrack()
       source.connect(node)
+      if (!stillOwned()) return
+      requireLiveTrack()
       node.connect(mute)
+      if (!stillOwned()) return
+      requireLiveTrack()
       mute.connect(context.destination)
-      if (capture.admission.revoked || (track.readyState as string) === 'ended') throw new Error('microphone_unavailable')
+      if (!stillOwned()) return
+      requireLiveTrack()
       if (this.admissionAbort === abort) this.admissionAbort = null
       this.publish({ status: 'listening' })
     } catch (error) {
@@ -165,7 +176,7 @@ export class CommandMicController {
         try { mute?.disconnect() } catch { /* continue cleanup */ }
         if (context && context.state !== 'closed') void context.close().catch(() => {})
         if (capture) {
-          stopTracks(capture.stream)
+          capture.stopMedia()
           await capture.admission.release().catch(() => {})
         }
       }
@@ -173,6 +184,7 @@ export class CommandMicController {
       const latestAvailability = reason === 'unauthorized'
         ? await window.toto.commandMicAvailability().catch(() => null)
         : null
+      if (this.disposed || generation !== this.generation) return
       const mapped: CommandMicStopReason = reason === 'unsupported_engine' ||
         latestAvailability?.ok === false && latestAvailability.reason === 'unsupported_engine'
         ? 'unsupported_engine'
@@ -297,7 +309,7 @@ export class CommandMicController {
     try { active.node.disconnect() } catch { /* already disconnected */ }
     try { active.source.disconnect() } catch { /* already disconnected */ }
     try { active.mute.disconnect() } catch { /* already disconnected */ }
-    stopTracks(active.stream)
+    active.stopMedia()
     active.mediaTeardown = active.context.state !== 'closed'
       ? active.context.close().catch(() => {})
       : Promise.resolve()

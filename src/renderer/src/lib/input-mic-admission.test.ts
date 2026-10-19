@@ -183,6 +183,95 @@ describe('interactive microphone admission lifecycle', () => {
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.stopInputSession).toHaveBeenCalledOnce()
   })
+
+  it('stops only physical media twice without ending the exact lease', async () => {
+    const env = setup()
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation')
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+
+    admitted.stopMedia()
+    admitted.stopMedia()
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).not.toHaveBeenCalled()
+
+    await admitted.admission.release()
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)
+  })
+
+  it('keeps physical stop idempotent while exact session and revision revocation ends the lease', async () => {
+    const env = setup()
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation')
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+
+    admitted.stopMedia()
+    env.revokeInput({ sessionId: lease.sessionId, revision: lease.revision + 1, reason: 'auth-revoked' })
+    expect(admitted.admission.revoked).toBe(false)
+    expect(env.stopInputSession).not.toHaveBeenCalled()
+    env.revokeInput({ sessionId: lease.sessionId, revision: lease.revision, reason: 'auth-revoked' })
+
+    expect(admitted.admission.revoked).toBe(true)
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).not.toHaveBeenCalled()
+    await admitted.admission.release()
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).not.toHaveBeenCalled()
+  })
+
+  it('does not stop an already physically stopped stream again on abort release', async () => {
+    const env = setup()
+    const controller = new AbortController()
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+
+    admitted.stopMedia()
+    controller.abort()
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)
+  })
+
+  it('does not stop an already physically stopped stream again on device change', async () => {
+    const env = setup()
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation')
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+
+    admitted.stopMedia()
+    env.changeDevice()
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)
+  })
+
+  it('keeps late confirmation from reviving media after abort', async () => {
+    const env = setup()
+    const controller = new AbortController()
+    const confirmation = deferred<boolean>()
+    vi.mocked(window.toto.confirmInputSession).mockReturnValue(confirmation.promise)
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    await vi.waitFor(() => expect(window.toto.confirmInputSession).toHaveBeenCalledOnce())
+
+    controller.abort()
+    confirmation.resolve(true)
+    await expect(pending).rejects.toThrow('confirmed by main')
+
+    expect(env.track.stop).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: lease.sessionId }, context)
+    expect(window.toto.confirmInputSession).toHaveBeenCalledExactlyOnceWith(lease.sessionId, context)
+  })
 })
 
 describe('meeting microphone admission lifecycle', () => {

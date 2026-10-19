@@ -52,6 +52,8 @@ export interface InputMicAdmission {
 export interface AdmittedMicrophone {
   readonly stream: MediaStream
   readonly admission: InputMicAdmission
+  /** Stop only this stream's physical tracks; the Main lease remains active. */
+  stopMedia(): void
 }
 
 /** Obtain main-process authority before opening the renderer microphone. */
@@ -115,18 +117,28 @@ export async function acquireInteractiveMic(
       throw new DOMException('Microphone admission was cancelled.', 'AbortError')
     }
     const stream = await navigator.mediaDevices.getUserMedia(constraints)
+    let mediaStopped = false
+    const stopMedia = (): void => {
+      if (mediaStopped) return
+      mediaStopped = true
+      try {
+        for (const track of stream.getTracks()) {
+          try { track.stop() } catch { /* continue stopping the rest of this owned stream */ }
+        }
+      } catch { /* best-effort cleanup if stream track discovery itself fails */ }
+    }
+    record.cleanups.add(stopMedia)
     if (released || record.revoked) {
-      stream.getTracks().forEach((track) => track.stop())
+      stopMedia()
       await admission.release()
       throw new Error('Microphone admission ended during capture startup.')
     }
-    record.cleanups.add(() => stream.getTracks().forEach((track) => track.stop()))
     const confirmed = await window.toto.confirmInputSession(record.lease.sessionId, context).catch(() => false)
     if (released || record.revoked || !confirmed) {
       await admission.release()
       throw new Error('Microphone capture could not be confirmed by main.')
     }
-    return { stream, admission }
+    return { stream, admission, stopMedia }
   } catch (error) {
     await admission.release()
     throw error
