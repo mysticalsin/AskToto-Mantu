@@ -42,6 +42,15 @@ but the owner has decided that no repository test, script or app runs on any Mac
 branch and read the run with `gh run view`. `npx tsc --noEmit -p <tsconfig>` is allowed locally because it executes no
 repository code. The commands below are subject to this rule.
 
+**Scoped exception (Métis 2.12): D-28 lifted for Métis 2.12 by Tony 2026-10-19 07:52 BRT, local tests/builds/apps
+allowed under isolation.** The original rationale above stands: a test run once resolved the owner's real OneDrive
+meetings folder and quarantined the real brain index. So on Tony's Mac every repository test, script, build or app run
+for 2.12 goes through `_relay/goal-loop/isolate.sh`. That gives it a throwaway HOME, userData (`ASKTOTO_USERDATA`)
+and TMPDIR, empty OneDrive variables, stripped credentials, QA identity only (`com.mantu.asktoto.qa`), and one heavy
+job at a time at nice 15. It aborts if any resolved path points at `~/Documents/brain`, `~/Library/Application Support`,
+`~/Library/CloudStorage`, the Keychains or the installed Métis. A per-round tripwire fingerprints the real brain index
+and stops the loop on any unexplained change. Outside the 2.12 goal loop, D-28 still applies as written.
+
 | Purpose | Command |
 |---|---|
 | Type-check everything | `npm run typecheck` |
