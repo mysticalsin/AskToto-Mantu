@@ -456,7 +456,7 @@ beforeEach(() => {
         }
       }),
       setListeningState: vi.fn(async (_listening: boolean, _startedAt?: number) => true),
-      armAudio: async () => {},
+      armAudio: vi.fn(async () => {}),
       parakeetStatus: vi.fn(async () => ({ ready: true, addonError: null })),
       parakeetEnsure: vi.fn(async () => ({ ok: true })),
       onParakeetProgress: () => () => {},
@@ -587,7 +587,7 @@ afterEach(() => {
 })
 
 describe('meeting admission handshake', () => {
-  it.each(['mic', 'system'] as const)('waits for accepted admission before opening %s audio', async (source) => {
+  it.each(['mic', 'system', 'both'] as const)('waits for accepted admission before opening %s audio', async (source) => {
     const admission = deferred<boolean>()
     vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => admission.promise)
 
@@ -598,6 +598,7 @@ describe('meeting admission handshake', () => {
     expect(window.toto.setListeningState).toHaveBeenCalledWith(true, 123)
     expect(streams).toHaveLength(0)
     expect(worklets).toHaveLength(0)
+    expect(window.toto.armAudio).not.toHaveBeenCalledWith(true)
     expect(window.toto.parakeetFeed).not.toHaveBeenCalled()
     expect(window.toto.appleSpeechFeed).not.toHaveBeenCalled()
     expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
@@ -607,7 +608,8 @@ describe('meeting admission handshake', () => {
     await starting
     await settle()
 
-    expect(streams.filter((stream) => stream.kind === source)).toHaveLength(1)
+    expect(streams).toHaveLength(source === 'both' ? 2 : 1)
+    if (source !== 'both') expect(streams[0].kind).toBe(source)
     expect(worklets.length).toBeGreaterThan(0)
   })
 
@@ -615,8 +617,10 @@ describe('meeting admission handshake', () => {
     { source: 'mic', outcome: 'denied' },
     { source: 'mic', outcome: 'rejected' },
     { source: 'system', outcome: 'denied' },
-    { source: 'system', outcome: 'rejected' }
-  ] as const)('fails closed for %s audio when admission is %s', async ({ source, outcome }) => {
+    { source: 'system', outcome: 'rejected' },
+    { source: 'both', outcome: 'denied' },
+    { source: 'both', outcome: 'rejected' }
+  ] as const)('fails closed for $source audio when admission is $outcome', async ({ source, outcome }) => {
     if (outcome === 'denied') {
       vi.mocked(window.toto.setListeningState).mockImplementationOnce(async () => false)
     } else {
@@ -634,17 +638,28 @@ describe('meeting admission handshake', () => {
     expect(api.error).toContain('Meeting microphone admission was denied.')
     expect(streams).toHaveLength(0)
     expect(worklets).toHaveLength(0)
+    expect(window.toto.armAudio).not.toHaveBeenCalledWith(true)
     expect(window.toto.parakeetFeed).not.toHaveBeenCalled()
     expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
     expect(window.toto.cloudSpeechStart).not.toHaveBeenCalled()
   })
 
-  it('lets Stop retire a pending reservation without releasing a replacement session', async () => {
+  it.each([
+    { source: 'mic', outcome: 'accepted' },
+    { source: 'mic', outcome: 'denied' },
+    { source: 'mic', outcome: 'rejected' },
+    { source: 'system', outcome: 'accepted' },
+    { source: 'system', outcome: 'denied' },
+    { source: 'system', outcome: 'rejected' }
+  ] as const)('retires pending $source admission without releasing a replacement after $outcome', async ({ source, outcome }) => {
     const oldAdmission = deferred<boolean>()
-    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => oldAdmission.promise)
+    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => oldAdmission.promise.then((accepted) => {
+      if (outcome === 'rejected') throw new Error('Synthetic retired admission failure')
+      return accepted
+    }))
 
     const oldApi = render()
-    const oldStarting = oldApi.start('system', 'fast', 'parakeet', 'English', 123)
+    const oldStarting = oldApi.start(source, 'fast', 'parakeet', 'English', 123)
     await settle()
     expect(streams).toHaveLength(0)
     expect(worklets).toHaveLength(0)
@@ -660,7 +675,7 @@ describe('meeting admission handshake', () => {
     const replacementTrack = streams.find((stream) => stream.kind === 'system')?.track
     if (!replacementTrack) throw new Error('replacement system-audio stream did not open')
 
-    oldAdmission.resolve(true)
+    oldAdmission.resolve(outcome === 'accepted')
     await oldStarting
     await settle()
 
@@ -673,10 +688,51 @@ describe('meeting admission handshake', () => {
     expect(window.toto.setListeningState).not.toHaveBeenCalledWith(false, 456)
     expect(replacementTrack.stop).not.toHaveBeenCalled()
     expect(render().capturing).toBe(true)
+    expect(render().error).toBeNull()
 
     replacement.stop()
     await vi.advanceTimersByTimeAsync(1)
     await settle()
+  })
+
+  it('keeps the replacement start guarded when a retired admission settles', async () => {
+    const oldAdmission = deferred<boolean>()
+    const replacementAdmission = deferred<boolean>()
+    vi.mocked(window.toto.setListeningState).mockImplementation(async (active, startedAt) => {
+      if (!active) return true
+      return startedAt === 123 ? oldAdmission.promise : replacementAdmission.promise
+    })
+    const api = render()
+    const oldStarting = api.start('system', 'fast', 'parakeet', 'English', 123)
+    api.stop()
+    await settle()
+    const replacementStarting = render().start('system', 'fast', 'parakeet', 'English', 456)
+    await settle()
+    expect(window.toto.setListeningState).toHaveBeenCalledWith(true, 456)
+
+    oldAdmission.resolve(false)
+    await oldStarting
+    await render().start('system', 'fast', 'parakeet', 'English', 789)
+    expect(window.toto.setListeningState).not.toHaveBeenCalledWith(true, 789)
+    expect(streams).toHaveLength(0)
+
+    replacementAdmission.resolve(true)
+    await replacementStarting
+    expect(streams).toHaveLength(1)
+    expect(render()).toMatchObject({ listening: true, capturing: true, error: null })
+  })
+
+  it('does not let device recovery open system audio during pending admission', async () => {
+    const admission = deferred<boolean>()
+    vi.mocked(window.toto.setListeningState).mockImplementationOnce(() => admission.promise)
+    const starting = render().start('system', 'fast', 'parakeet', 'English', 123)
+    mediaDeviceListeners.devicechange?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(window.toto.armAudio).not.toHaveBeenCalledWith(true)
+    expect(streams).toHaveLength(0)
+    admission.resolve(true)
+    await starting
+    expect(streams).toHaveLength(1)
   })
 })
 
@@ -710,14 +766,18 @@ describe('live audio transport identity', () => {
   it('releases both the running and queued same-speaker acquisitions before module load settles', async () => {
     let releaseModule!: () => void
     let moduleLoads = 0
+    const moduleReached = deferred<void>()
     addModuleImpl = () => {
       moduleLoads++
-      return new Promise((resolve) => void (releaseModule = resolve))
+      return new Promise((resolve) => {
+        releaseModule = resolve
+        moduleReached.resolve()
+      })
     }
     getPermissionsImpl = async () => ({ screenRecording: 'granted' })
     const api = render('parakeet')
     const starting = api.start('system', 'fast', 'parakeet', 'English', 123)
-    await settle()
+    await moduleReached.promise
     expect(moduleLoads).toBe(1)
     expect(streams.map(({ kind }) => kind)).toEqual(['system'])
 
@@ -1626,7 +1686,7 @@ describe('ASR idle prewarm ownership', () => {
     await settle()
 
     const started = api.start('system', 'fast', 'parakeet', 'English')
-    await settle()
+    await started // Capture completes independently of the held Parakeet readiness reply.
     const worklet = worklets.at(-1)
     expect(worklet).toBeDefined()
     worklet?.emit({ audio: new Float32Array([0.2]), partial: false })

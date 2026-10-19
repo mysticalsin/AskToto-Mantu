@@ -1,14 +1,11 @@
 /**
  * MQA-285 — Listen click-to-transcript must be immediate.
  *
- * Diagnosis (locked): start() awaited ASR/IPC (setListeningState, parakeetEnsure, getAsrBundled)
- * BEFORE acquireMic(), so the click gesture and the first second of audio were spent behind a
- * model/IPC round trip. Prewarm was delayed 4s and then idle-unloaded the hot engine after 3 min,
- * so the next Listen (or a click before the delay finished) paid a cold start. Recap waited on
- * that same drain/cold-start path.
+ * Capture waits for Main's meeting admission, then proceeds independently of model readiness.
+ * Concrete Whisper choices prewarm at app-ready and stay hot; recap does not await Stop drain.
  *
- * There is no jsdom harness for useListen, so this pins the source-observable contract:
- * same-turn mic capture, concrete-Whisper app-ready prewarm, no idle-unload of that hot engine.
+ * These source checks complement the pending/denied/stale-admission behavior cases in
+ * listen.stop-drain.test.ts, which run the real hook against fake browser/audio boundaries.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -43,20 +40,22 @@ const finishTeardown = codeOnly(
 )
 const endReview = codeOnly(blockBetween(APP, 'const endReview = useCallback(', 'const toggleListen = useCallback('))
 
-describe('MQA-285 — same-turn capture: acquireMic before any await in start()', () => {
-  it('kicks acquireMic() before the first await so the click gesture covers getUserMedia', () => {
+describe('MQA-285 — admitted capture proceeds without waiting for ASR readiness', () => {
+  it('awaits Main admission before either microphone acquisition or loopback arming', () => {
+    const admission = startBody.search(/await window\.toto\.setListeningState\(true, startedAt\)/)
     const micKick = startBody.search(/acquireMic\(/)
-    const firstAwait = startBody.search(/\bawait\s/)
+    const systemArm = startBody.search(/await window\.toto\.armAudio\(true\)/)
+    expect(admission).toBeGreaterThan(-1)
     expect(micKick).toBeGreaterThan(-1)
-    expect(firstAwait).toBeGreaterThan(-1)
-    expect(micKick).toBeLessThan(firstAwait)
+    expect(systemArm).toBeGreaterThan(-1)
+    expect(admission).toBeLessThan(micKick)
+    expect(admission).toBeLessThan(systemArm)
   })
 
-  it('does not await setListeningState, parakeetStatus, parakeetEnsure, or getAsrBundled before kicking the mic', () => {
+  it('does not await parakeetStatus, parakeetEnsure, or getAsrBundled before kicking the admitted mic', () => {
     const micKick = startBody.search(/acquireMic\(/)
     expect(micKick).toBeGreaterThan(-1)
     const beforeMic = startBody.slice(0, micKick)
-    expect(beforeMic).not.toMatch(/await window\.toto\.setListeningState/)
     expect(beforeMic).not.toMatch(/await window\.toto\.parakeetStatus/)
     expect(beforeMic).not.toMatch(/await window\.toto\.parakeetEnsure/)
     expect(beforeMic).not.toMatch(/await getAsrBundled/)

@@ -627,8 +627,12 @@ export function useListen(
   // retract THAT note and nothing else (see noteAfterDecodedWindow). Null whenever nothing is outstanding.
   const decodeNoteRef = useRef<string | null>(null)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
-  function captureAdmissionIsOpen(epoch: number): boolean {
+  const meetingAdmittedRef = useRef(false)
+  function captureSessionIsOpen(epoch: number): boolean {
     return liveRef.current && !stoppingRef.current && sessionEpochRef.current === epoch
+  }
+  function captureAdmissionIsOpen(epoch: number): boolean {
+    return meetingAdmittedRef.current && captureSessionIsOpen(epoch)
   }
   function publishCaptureState(epoch: number): boolean {
     const result = captureStateRef.current.snapshot(epoch)
@@ -695,12 +699,11 @@ export function useListen(
     }, NO_SPEECH_WARNING_MS)
   }
   // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
-  // twice before React re-renders listen.listening to true (that state update is async), so a boolean
+  // twice before React re-renders listen.listening to true (that state update is async), so an owner
   // ref — set synchronously at the very top of start(), before any `await` — is required; guarding on
   // component state or disabling the button is not enough to stop the second call from ever entering.
-  // Cleared in start()'s own `finally` on every exit path (success, failure, or early return), so it
-  // can never wedge a later, legitimate session.
-  const startingRef = useRef(false)
+  // Stop/failure releases the owner immediately. A retired start's finally cannot clear its successor.
+  const startingRef = useRef<symbol | null>(null)
   const pausedRef = useRef(false) // true only between pause() and resume() — belt-and-suspenders on pushAudio;
   // suspending each channel's AudioContext already stops the worklet from emitting in the first place.
   const crashedRef = useRef(false) // set in worker onerror (it already tore down) → stop() must not redo it
@@ -1739,7 +1742,8 @@ export function useListen(
       // the second call open a full second set of mic/system-audio channels (leaked AudioContext + stream).
       // Cleared in the `finally` below so it never wedges a future session.
       if (startingRef.current) return
-      startingRef.current = true
+      const startOwner = Symbol('listen-start')
+      startingRef.current = startOwner
       try {
         const configuredBroker = brokerSpeechRef.current
         const brokerMode = configuredBroker?.transport === 'broker-v1'
@@ -1871,6 +1875,7 @@ export function useListen(
           readyRef.current = false
         }
         const myEpoch = ++sessionEpochRef.current
+        meetingAdmittedRef.current = false
         micAcquisitionAbortRef.current?.abort()
         micAcquisitionAbortRef.current = new AbortController()
         const captureStart = captureStateRef.current.begin({
@@ -1946,35 +1951,23 @@ export function useListen(
           capturing: false,
           paused: false
         }))
-        // Keep the one main-owned meeting reservation promise visible to both setup and the
-        // independent channel acquisition flow. Mic capture is chained from the exact accepted
-        // reservation, including the broker-cloud path; neither path can prompt before main accepts.
-        const meetingAdmissionP = window.toto.setListeningState(true, startedAt).catch(() => false)
+        // Both input paths and recovery must wait for Main's exact reservation. A live local
+        // epoch alone is not permission to arm loopback, acquire media, or start speech transport.
+        const meetingAdmitted = await window.toto.setListeningState(true, startedAt).catch(() => false)
+        if (!captureSessionIsOpen(myEpoch)) {
+          // Check ownership before handling denial: a late reply must not fail a successor.
+          void window.toto.setListeningState(false, startedAt).catch(() => {})
+          return
+        }
+        if (!meetingAdmitted) {
+          failAdmittedCapture('Meeting microphone admission was denied.')
+          return
+        }
+        meetingAdmittedRef.current = true
         const micP: Promise<MicCapture> | null = source === 'mic' || source === 'both'
-          ? meetingAdmissionP.then((meetingAdmitted) => {
-              if (!meetingAdmitted) throw new Error('Meeting microphone admission was denied.')
-              if (!captureAdmissionIsOpen(myEpoch)) {
-                void window.toto.setListeningState(false, startedAt).catch(() => {})
-                throw new Error('Meeting microphone admission ended before capture startup.')
-              }
-              return acquireMic(micDeviceIdRef.current, startedAt, micAcquisitionAbortRef.current?.signal)
-            })
+          ? acquireMic(micDeviceIdRef.current, startedAt, micAcquisitionAbortRef.current?.signal)
           : null
         void (async () => {
-          // Main must accept the exact meeting reservation before the browser may open its mic.
-          // This IPC round trip can add startup latency before the OS prompt and first captured audio.
-          const meetingAdmitted = await meetingAdmissionP
-          if (!meetingAdmitted) {
-            failAdmittedCapture('Meeting microphone admission was denied.')
-            return
-          }
-          if (!captureAdmissionIsOpen(myEpoch)) {
-            // Stop or a successor session may have retired this epoch while main admitted the
-            // reservation. Release only this exact startedAt before any mic/grant startup; main
-            // rejects this cleanup if a newer meeting now owns the reservation.
-            void window.toto.setListeningState(false, startedAt).catch(() => {})
-            return
-          }
           if (engine === 'cloud' && activeBrokerSpeechRef.current?.transport === 'broker-v1') {
             if (workerRef.current) {
               workerRef.current.terminate()
@@ -2373,7 +2366,7 @@ export function useListen(
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
-        startingRef.current = false
+        if (startingRef.current === startOwner) startingRef.current = null
       }
     },
     // closeChannel referenced in body (defined below); stable useCallback, omitted to avoid TDZ in deps
@@ -2396,7 +2389,8 @@ export function useListen(
     (error: string, options: { forceCloudStop?: boolean; cloudCaptureId?: string; force?: boolean } = {}): void => {
       // A normal Stop owns its seal and drain once stoppingRef is true. A decoder rejection that lands
       // after that boundary belongs to the retiring session and must not bypass the final-audio path.
-      if (!options.force && !captureAdmissionIsOpen(sessionEpochRef.current)) return
+      if (!options.force && !captureSessionIsOpen(sessionEpochRef.current)) return
+      startingRef.current = null
       micAcquisitionAbortRef.current?.abort()
       micAcquisitionAbortRef.current = null
       const startedAt = sessionStartedAtRef.current
@@ -2766,6 +2760,7 @@ export function useListen(
         return
       }
       stoppingRef.current = true
+      startingRef.current = null
       micAcquisitionAbortRef.current?.abort()
       micAcquisitionAbortRef.current = null
       const myEpoch = sessionEpochRef.current
@@ -3081,6 +3076,7 @@ export function useListen(
       if (activeStop?.ackTimer) clearTimeout(activeStop.ackTimer)
       stopDrainRef.current = null
       liveRef.current = false
+      startingRef.current = null
       cloudSttFinalizingRef.current = false
       cloudSttPushesRef.current.clear()
       pendingWhisperEmbedRef.current = null
