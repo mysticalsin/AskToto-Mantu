@@ -12,7 +12,8 @@ import {
   brainLiveIngestProgress,
   enqueueIngest,
   reconcileMeetingsInBackground,
-  ingestExtraction } from './ingest'
+  ingestExtraction
+} from './ingest'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
@@ -50,9 +51,12 @@ describe('backfill progress bookkeeping across runs', () => {
   let restoreSpeechReadPolicy: () => void = () => {}
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
@@ -117,9 +121,12 @@ describe('backfill progress bookkeeping across runs', () => {
     // backfillDone again just because backfillTotal was still > 0 from the completed run.
     writeFileSync(join(meetingsFolder, 'live-1.md'), '---\ndate: 2026-01-03\n---\nlive', 'utf8')
     enqueueIngest(join(meetingsFolder, 'live-1.md'))
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['live-1.md']?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['live-1.md']?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     expect(brainBackfillProgress()).toEqual({ total: 2, done: 2, running: false }) // untouched by the live job
 
     // A second, later backfill run over new transcripts must start its OWN fresh total/done, not
@@ -153,9 +160,12 @@ describe('backfill progress bookkeeping across runs', () => {
     const first = await startBackfill()
     expect(first.queued).toBe(1)
     // Give pump() a tick to splice the job out of `queue` and start processing it.
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
 
     // Re-click "Index meetings" while the only candidate file is still mid-extraction.
     const second = await startBackfill()
@@ -188,9 +198,12 @@ describe('backfill progress bookkeeping across runs', () => {
     })
 
     await enqueueIngest(liveFile)
-    await vi.waitFor(() => {
-      expect(liveExtractionStarted).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(liveExtractionStarted).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
 
     // A live-only job must not be painted as a user-requested batch.
     expect(brainBackfillProgress().running).toBe(false)
@@ -200,9 +213,12 @@ describe('backfill progress bookkeeping across runs', () => {
     expect(readIndex(getSettings()).backfillRequested).toBe(true)
 
     releaseLive()
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['live-only.md']?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['live-only.md']?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
   })
 
   it('persists a live meeting as pending background work, then clears that state only after it is indexed', async () => {
@@ -223,17 +239,23 @@ describe('backfill progress bookkeeping across runs', () => {
     })
 
     await enqueueIngest(liveFile)
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).backfillRequested).toBe(true)
-      expect(brainLiveIngestProgress()).toEqual({ pending: 1, running: true })
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).backfillRequested).toBe(true)
+        expect(brainLiveIngestProgress()).toEqual({ pending: 1, running: true })
+      },
+      { timeout: 10_000 }
+    )
 
     releaseLive()
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['durable-live.md']?.ok).toBe(true)
-      expect(brainLiveIngestProgress()).toEqual({ pending: 0, running: false })
-      expect(readIndex(getSettings()).backfillRequested).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['durable-live.md']?.ok).toBe(true)
+        expect(brainLiveIngestProgress()).toEqual({ pending: 0, running: false })
+        expect(readIndex(getSettings()).backfillRequested).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
   })
 
   it('reconciles a saved extraction with no successful ingest record instead of making Index meetings a no-op', async () => {
@@ -259,28 +281,42 @@ describe('backfill progress bookkeeping across runs', () => {
 
   it('reconciles the meeting folder in the background without waiting for someone to open Intelligence', async () => {
     const file = 'background-scan.md'
-    writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-01-06\n---\nA synced meeting should be indexed automatically.', 'utf8')
+    writeFileSync(
+      join(meetingsFolder, file),
+      '---\ndate: 2026-01-06\n---\nA synced meeting should be indexed automatically.',
+      'utf8'
+    )
 
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     // The index write lands before the queue drains — leaving the pump running would let this test's
     // backfill spill into the NEXT test's temp profile and eat its mockImplementationOnce responses.
     await waitForIdle()
   })
 
   it('returns a preparing state before scanning a historical meeting folder', async () => {
-    writeFileSync(join(meetingsFolder, 'queued-from-ui.md'), '---\ndate: 2026-01-04\n---\nprepare the folder before mapping', 'utf8')
+    writeFileSync(
+      join(meetingsFolder, 'queued-from-ui.md'),
+      '---\ndate: 2026-01-04\n---\nprepare the folder before mapping',
+      'utf8'
+    )
 
     // The UI must get a state to animate before the synchronous folder scan starts on the next turn.
     expect(await requestBackfill()).toEqual({ queued: 0, preparing: true })
     expect(brainBackfillProgress()).toMatchObject({ preparing: true, running: true })
 
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested['queued-from-ui.md']?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested['queued-from-ui.md']?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
@@ -330,13 +366,16 @@ describe('backfill progress bookkeeping across runs', () => {
     writeFileSync(path, '---\ndate: 2026-01-07\n---\nA different topic replaced the original scope entirely.', 'utf8')
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => {
-      const idx = readIndex(getSettings())
-      expect(idx.sourceRefreshRequested).toBe(false)
-      expect(idx.ingested[file]?.ok).toBe(true)
-      expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
-      expect(idx.revision).toBeGreaterThan(1)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        const idx = readIndex(getSettings())
+        expect(idx.sourceRefreshRequested).toBe(false)
+        expect(idx.ingested[file]?.ok).toBe(true)
+        expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
+        expect(idx.revision).toBeGreaterThan(1)
+      },
+      { timeout: 10_000 }
+    )
     await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
@@ -357,11 +396,14 @@ describe('backfill progress bookkeeping across runs', () => {
     unlinkSync(path)
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => {
-      const idx = readIndex(getSettings())
-      expect(idx.sourceRefreshRequested).toBe(false)
-      expect(idx.ingested[file]).toBeUndefined()
-      expect(readAccount(getSettings(), slugify('Globex'))).toBeNull()
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        const idx = readIndex(getSettings())
+        expect(idx.sourceRefreshRequested).toBe(false)
+        expect(idx.ingested[file]).toBeUndefined()
+        expect(readAccount(getSettings(), slugify('Globex'))).toBeNull()
+      },
+      { timeout: 10_000 }
+    )
   })
 })
