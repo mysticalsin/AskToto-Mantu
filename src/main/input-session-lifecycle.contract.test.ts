@@ -8,6 +8,7 @@ const admissionSource = readFileSync(join(__dirname, '../renderer/src/lib/input-
 const tapSource = readFileSync(join(__dirname, '../renderer/src/lib/tap/tap-control.ts'), 'utf8')
 const tapCardSource = readFileSync(join(__dirname, '../renderer/src/features/settings/TapControlCard.tsx'), 'utf8')
 const meetingCaptureAuthoritySource = readFileSync(join(__dirname, 'meeting-mic-capture-authority.ts'), 'utf8')
+const quitLifecycleSource = readFileSync(join(__dirname, 'lifecycle/app-quit-lifecycle.ts'), 'utf8')
 
 function declarationIn(sourceText: string, name: string): string {
   const start = sourceText.indexOf('function ' + name + '(')
@@ -76,11 +77,20 @@ function expectOrdered(sourceText: string, tokens: string[]): void {
 }
 
 function replaceOnce(sourceText: string, needle: string, replacement: string): string {
+  sourceText = sourceText.replace(/\r\n/g, '\n')
   const start = sourceText.indexOf(needle)
   if (start < 0 || sourceText.indexOf(needle, start + needle.length) >= 0) {
     throw new Error('Expected one in-memory mutation boundary: ' + needle)
   }
   return sourceText.slice(0, start) + replacement + sourceText.slice(start + needle.length)
+}
+
+function expectRejectedSource(sourceText: string, assertContract: (text: string) => void): void {
+  // Mutation construction happens before this assertion. A missing mutation boundary must fail the
+  // test itself, rather than masquerading as a contract rejecting the intended broken production code.
+  for (const lineEnding of ['\n', '\r\n']) {
+    expect(() => assertContract(sourceText.replace(/\r?\n/g, lineEnding))).toThrow()
+  }
 }
 
 function hasDirectStatement(scope: string, statement: string): boolean {
@@ -99,6 +109,7 @@ function replaceInFailAdmittedCapture(sourceText: string, needle: string): strin
 }
 
 function assertHiddenToggleShortcutContract(sourceText: string): void {
+  sourceText = sourceText.replace(/\r\n/g, '\n')
   const shortcut = declarationIn(sourceText, 'sendHotkey')
   const hiddenToggle = boundedBody(
     shortcut,
@@ -153,6 +164,8 @@ function assertHiddenToggleShortcutContract(sourceText: string): void {
 }
 
 function assertQuitLifecycleContract(quitLifecycle: string, mainSource: string): void {
+  quitLifecycle = quitLifecycle.replace(/\r\n/g, '\n')
+  mainSource = mainSource.replace(/\r\n/g, '\n')
   const beforeQuitHandlers = boundedCallbackScopes(
     quitLifecycle,
     /^[\t ]*app\.on\(\s*['"]before-quit['"]\s*,\s*\(event\)\s*=>\s*\{/gm
@@ -234,6 +247,7 @@ function meetingRevocationBody(listenSourceText: string): string {
 }
 
 function assertForcedRendererTeardownContract(listenSourceText: string): void {
+  listenSourceText = listenSourceText.replace(/\r\n/g, '\n')
   const failure = failAdmittedCaptureBody(listenSourceText)
   expect(failure).toContain('if (!options.force && !captureSessionIsOpen(sessionEpochRef.current)) return')
   const forcedTeardown = boundedBody(failure, /if \(options\.force\)\s*\{\s*/, /\n[\t ]*\}\n[\t ]*const brokerCapture/)
@@ -282,6 +296,13 @@ function assertForcedRendererTeardownContract(listenSourceText: string): void {
   expect(revokeCall).toContain('force: true')
   expect(revokeCall).toContain('forceCloudStop: true')
 }
+
+it.each(['\n', '\r\n'])('accepts lifecycle source contracts with %j line endings', (lineEnding) => {
+  const checkoutText = (text: string): string => text.replace(/\r?\n/g, lineEnding)
+  assertHiddenToggleShortcutContract(checkoutText(source))
+  assertQuitLifecycleContract(checkoutText(quitLifecycleSource), checkoutText(source))
+  assertForcedRendererTeardownContract(checkoutText(listenSource))
+})
 
 describe('input-session lifecycle revocation wiring', () => {
   it('hard-stops before same-WebContents renderer reload', () => {
@@ -332,7 +353,7 @@ describe('input-session lifecycle revocation wiring', () => {
     assertHiddenToggleShortcutContract(source)
 
     const restoreRegistration = "    w.once('restore', routeAfterShow)\n"
-    expect(() => assertHiddenToggleShortcutContract(replaceOnce(source, restoreRegistration, ''))).toThrow()
+    expectRejectedSource(replaceOnce(source, restoreRegistration, ''), assertHiddenToggleShortcutContract)
 
     const registrations =
       "    w.once('show', routeAfterShow)\n" +
@@ -342,9 +363,7 @@ describe('input-session lifecycle revocation wiring', () => {
       "    reveal('hotkey', { focus: false })\n" +
       "    w.once('show', routeAfterShow)\n" +
       "    w.once('restore', routeAfterShow)"
-    expect(() =>
-      assertHiddenToggleShortcutContract(replaceOnce(source, registrations, reorderedRegistrations))
-    ).toThrow()
+    expectRejectedSource(replaceOnce(source, registrations, reorderedRegistrations), assertHiddenToggleShortcutContract)
 
     const mintThenSend =
       '      if (!frame || !meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)) return\n' +
@@ -352,7 +371,7 @@ describe('input-session lifecycle revocation wiring', () => {
     const sendThenMint =
       '      w.webContents.send(IPC.hotkey, action)\n' +
       '      if (!frame || !meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)) return'
-    expect(() => assertHiddenToggleShortcutContract(replaceOnce(source, mintThenSend, sendThenMint))).toThrow()
+    expectRejectedSource(replaceOnce(source, mintThenSend, sendThenMint), assertHiddenToggleShortcutContract)
   })
 
   it('revokes unused meeting-start grants on each accepted Listen stop path', () => {
@@ -366,7 +385,7 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('permanently shuts admission only at final will-quit after before-quit flush gates', () => {
-    const quitLifecycle = readFileSync(join(__dirname, 'lifecycle/app-quit-lifecycle.ts'), 'utf8')
+    const quitLifecycle = quitLifecycleSource
     assertQuitLifecycleContract(quitLifecycle, source)
 
     const beginBeforeQuit = '    deps.beginInputShutdown()\n    }\n    deps.speechPackDesktop()?.beforeQuit'
@@ -375,38 +394,31 @@ describe('input-session lifecycle revocation wiring', () => {
       '      deps.shutdownInputSessions()\n' +
       '    }\n' +
       '    deps.speechPackDesktop()?.beforeQuit'
-    expect(() =>
-      assertQuitLifecycleContract(replaceOnce(quitLifecycle, beginBeforeQuit, shutdownBeforeFinalQuit), source)
-    ).toThrow()
+    const assertQuit = (text: string): void => assertQuitLifecycleContract(text, source)
+    expectRejectedSource(replaceOnce(quitLifecycle, beginBeforeQuit, shutdownBeforeFinalQuit), assertQuit)
 
-    expect(() =>
-      assertQuitLifecycleContract(
-        replaceOnce(quitLifecycle, '      deps.shutdownInputSessions()\n', '      // deps.shutdownInputSessions()\n'),
-        source
-      )
-    ).toThrow()
+    expectRejectedSource(
+      replaceOnce(quitLifecycle, '      deps.shutdownInputSessions()\n', '      // deps.shutdownInputSessions()\n'),
+      assertQuit
+    )
 
-    expect(() =>
-      assertQuitLifecycleContract(
-        replaceOnce(
-          quitLifecycle,
-          '      deps.shutdownInputSessions()\n',
-          '      setTimeout(() => deps.shutdownInputSessions(), 0)\n'
-        ),
-        source
-      )
-    ).toThrow()
+    expectRejectedSource(
+      replaceOnce(
+        quitLifecycle,
+        '      deps.shutdownInputSessions()\n',
+        '      setTimeout(() => deps.shutdownInputSessions(), 0)\n'
+      ),
+      assertQuit
+    )
 
-    expect(() =>
-      assertQuitLifecycleContract(
-        replaceOnce(
-          quitLifecycle,
-          '      deps.shutdownInputSessions()\n',
-          '      /*\n      deps.shutdownInputSessions()\n      */\n'
-        ),
-        source
-      )
-    ).toThrow()
+    expectRejectedSource(
+      replaceOnce(
+        quitLifecycle,
+        '      deps.shutdownInputSessions()\n',
+        '      /*\n      deps.shutdownInputSessions()\n      */\n'
+      ),
+      assertQuit
+    )
   })
 
   it('forces full renderer teardown when meeting revocation arrives during Stop drain', () => {
@@ -417,13 +429,14 @@ describe('input-session lifecycle revocation wiring', () => {
       '  failAdmittedCaptureRef.current = failAdmittedCapture\n',
       ''
     )
-    expect(() => assertForcedRendererTeardownContract(withoutForwardBoundary)).toThrow()
+    expectRejectedSource(withoutForwardBoundary, assertForcedRendererTeardownContract)
 
     const forceAndCloudStop = '          force: true,\n          forceCloudStop: true,'
     const noForcedRevocation = '          force: false,\n          forceCloudStop: true,'
-    expect(() =>
-      assertForcedRendererTeardownContract(replaceOnce(listenSource, forceAndCloudStop, noForcedRevocation))
-    ).toThrow()
+    expectRejectedSource(
+      replaceOnce(listenSource, forceAndCloudStop, noForcedRevocation),
+      assertForcedRendererTeardownContract
+    )
 
     for (const token of [
       'sessionEpochRef.current += 1',
@@ -431,29 +444,27 @@ describe('input-session lifecycle revocation wiring', () => {
       "for (const speaker of ['you', 'them'] as const) closeChannel(speaker)",
       'queue.current = []'
     ]) {
-      expect(() => assertForcedRendererTeardownContract(replaceInFailAdmittedCapture(listenSource, token))).toThrow()
+      expectRejectedSource(replaceInFailAdmittedCapture(listenSource, token), assertForcedRendererTeardownContract)
     }
 
-    expect(() =>
-      assertForcedRendererTeardownContract(
-        replaceOnce(
-          listenSource,
-          '          return\n        }\n        // Main has already invalidated this exact meeting reservation.',
-          '          // return\n        }\n        // Main has already invalidated this exact meeting reservation.'
-        )
-      )
-    ).toThrow()
+    expectRejectedSource(
+      replaceOnce(
+        listenSource,
+        '          return\n        }\n        // Main has already invalidated this exact meeting reservation.',
+        '          // return\n        }\n        // Main has already invalidated this exact meeting reservation.'
+      ),
+      assertForcedRendererTeardownContract
+    )
 
-    expect(() =>
-      assertForcedRendererTeardownContract(
-        replaceOnce(
-          listenSource,
-          '          return\n        }\n        // Main has already invalidated this exact meeting reservation.',
-          '          /*\n          return\n          */\n        }\n' +
-            '        // Main has already invalidated this exact meeting reservation.'
-        )
-      )
-    ).toThrow()
+    expectRejectedSource(
+      replaceOnce(
+        listenSource,
+        '          return\n        }\n        // Main has already invalidated this exact meeting reservation.',
+        '          /*\n          return\n          */\n        }\n' +
+          '        // Main has already invalidated this exact meeting reservation.'
+      ),
+      assertForcedRendererTeardownContract
+    )
   })
 
   it('revokes pending and permission-authorized meeting grants while retaining established streams', () => {
