@@ -571,6 +571,21 @@ function requireRecoveryConsumerBinding(): void {
       descendants(admission).filter((node): node is ts.ReturnStatement => ts.isReturnStatement(node)),
       'admission result'
     ).expression?.getText(source)
+  ).toBe('meetingAdmittedRef.current && captureSessionIsOpen(epoch)')
+  // Meeting admission (14ccce62) narrows the recovery gate; the session half keeps the exact prior check.
+  const session = only(
+    nodes.filter(
+      (node): node is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(node) && node.name?.text === 'captureSessionIsOpen'
+    ),
+    'capture session function'
+  )
+  if (session.parent !== admission.parent) throw new Error('Session and admission gates must share a scope')
+  expect(
+    only(
+      descendants(session).filter((node): node is ts.ReturnStatement => ts.isReturnStatement(node)),
+      'session result'
+    ).expression?.getText(source)
   ).toBe('liveRef.current && !stoppingRef.current && sessionEpochRef.current === epoch')
 }
 
