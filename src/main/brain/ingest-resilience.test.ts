@@ -8,7 +8,13 @@ import { BrainIndexSchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, type BackfillStartOptions } from './ingest'
+import {
+  brainBackfillProgress,
+  ingestFailureCounts,
+  ingestFailureDetails,
+  startBackfill,
+  type BackfillStartOptions
+} from './ingest'
 import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
@@ -32,23 +38,30 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
-  const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => opts.handlers.onError(message))
-    return { abort: () => {} }
-  }
-  const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => {
-      opts.handlers.onDelta(json)
-      opts.handlers.onDone({})
-    })
-    return { abort: () => {} }
-  }
+  const respondError =
+    (message: string) =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => opts.handlers.onError(message))
+      return { abort: () => {} }
+    }
+  const respondJson =
+    (json = '{}') =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta(json)
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    }
 
   beforeEach(() => {
     restoreSpeechReadPolicy = installSpeechReadPolicy()
@@ -108,7 +121,9 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     setApiKey('openai', 'fake-openai-key')
 
-    createStreamMock.mockImplementationOnce(respondError('503 Service Unavailable')).mockImplementationOnce(respondJson())
+    createStreamMock
+      .mockImplementationOnce(respondError('503 Service Unavailable'))
+      .mockImplementationOnce(respondJson())
 
     expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()

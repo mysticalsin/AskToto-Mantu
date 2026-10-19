@@ -47,23 +47,30 @@ describe('brain ingest — local last-resort index fallback', () => {
   let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
-  const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => opts.handlers.onError(message))
-    return { abort: () => {} }
-  }
-  const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => {
-      opts.handlers.onDelta(json)
-      opts.handlers.onDone({})
-    })
-    return { abort: () => {} }
-  }
+  const respondError =
+    (message: string) =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => opts.handlers.onError(message))
+      return { abort: () => {} }
+    }
+  const respondJson =
+    (json = '{}') =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta(json)
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    }
 
   beforeEach(() => {
     restoreSpeechReadPolicy = installSpeechReadPolicy()
@@ -196,7 +203,11 @@ describe('brain ingest — local last-resort index fallback', () => {
     writeFileSync(join(meetingsFolder, 'exclusive-local.md'), '---\ndate: 2026-01-05\n---\nAcme call.', 'utf8')
     setApiKey('anthropic', 'fake-anthropic-key') // a healthy cloud provider IS configured...
     setSettings({
-      localLlm: { ...getSettings().localLlm, useFor: { ...getSettings().localLlm.useFor, summary: true }, fallback: false }
+      localLlm: {
+        ...getSettings().localLlm,
+        useFor: { ...getSettings().localLlm.useFor, summary: true },
+        fallback: false
+      }
     })
     createStreamMock.mockImplementation(respondJson())
 
@@ -306,7 +317,11 @@ describe('brain ingest — local last-resort index fallback', () => {
     writeFileSync(join(meetingsFolder, 'everything-down.md'), '---\ndate: 2026-01-09\n---\nAcme call.', 'utf8')
     // Pin eligibility to exactly [anthropic, local] regardless of any key leaked from an earlier test —
     // see the zero-cloud test's comment on _apiKeyCache.
-    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['anthropic', 'local'] }), 'utf8')
+    writeFileSync(
+      join(userData, 'managed-config.json'),
+      JSON.stringify({ allowedProviders: ['anthropic', 'local'] }),
+      'utf8'
+    )
     setApiKey('anthropic', 'fake-anthropic-key')
     // Every call transport-fails (a real 5xx-shaped message, so isIngestTransportFailure keeps engaging
     // the failover walk each time — an unrecognizable message like "crashed" would read as PERMANENT and
@@ -322,6 +337,11 @@ describe('brain ingest — local last-resort index fallback', () => {
     // 2 candidates x (first pass + same-provider-pinned reminder retry, which with no servedBy re-walks
     // the full unpinned pool) = 4 calls, alternating [anthropic, local, anthropic, local] — matching
     // ingest-resilience.test.ts's "propagates the last error..." shape for a 2-candidate pool.
-    expect(createStreamMock.mock.calls.map((c) => c[0].providerId)).toEqual(['anthropic', 'local', 'anthropic', 'local'])
+    expect(createStreamMock.mock.calls.map((c) => c[0].providerId)).toEqual([
+      'anthropic',
+      'local',
+      'anthropic',
+      'local'
+    ])
   })
 })

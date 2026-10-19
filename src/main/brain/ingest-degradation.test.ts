@@ -39,7 +39,9 @@ vi.mock('../llm/local-routing', () => ({
 // The sidecar's live lifecycle state. Real llama-server latches 'unavailable' for the rest of the session
 // once its restart budget is exhausted (local-runtime.ts) — the condition MQA-018 is about. Only getState
 // is replaced; everything else stays real so nothing else in the graph changes shape.
-const localRuntimeStateMock = vi.hoisted(() => vi.fn<() => 'stopped' | 'starting' | 'running' | 'unavailable'>(() => 'stopped'))
+const localRuntimeStateMock = vi.hoisted(() =>
+  vi.fn<() => 'stopped' | 'starting' | 'running' | 'unavailable'>(() => 'stopped')
+)
 vi.mock('../llm/local-runtime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../llm/local-runtime')>()),
   getState: localRuntimeStateMock
@@ -71,26 +73,33 @@ describe('brain ingest — provider-degradation paths', () => {
   let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     // MQA-007: `running` going false is NOT "every write has landed" — the last job's own index record
     // is still queued on the serialized lane at that moment (see settleBrainWritesForTests's own note).
     // Every assertion after this reads index.json, so settling here is what makes them deterministic.
     await settleBrainWritesForTests()
   }
 
-  const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => opts.handlers.onError(message))
-    return { abort: () => {} }
-  }
-  const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
-    queueMicrotask(() => {
-      opts.handlers.onDelta(json)
-      opts.handlers.onDone({})
-    })
-    return { abort: () => {} }
-  }
+  const respondError =
+    (message: string) =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => opts.handlers.onError(message))
+      return { abort: () => {} }
+    }
+  const respondJson =
+    (json = '{}') =>
+    (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta(json)
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    }
 
   // Streams that stay open until the test decides — the only way to hold jobs in flight while the
   // provider is taken away underneath them (the MQA-023 stall).
@@ -280,7 +289,10 @@ describe('brain ingest — provider-degradation paths', () => {
    *  manifest's size but not its sha256 (a half-synced or corrupted download). Both throw on EVERY cold
    *  start, so a purge authorized on "local is configured" deletes a brain that nothing can then recreate. */
   for (const variant of [
-    { label: 'the machine is under the model RAM floor', error: 'Local model "qwen3.5-0.8b" needs 8 GB of RAM; this machine has 4 GB.' },
+    {
+      label: 'the machine is under the model RAM floor',
+      error: 'Local model "qwen3.5-0.8b" needs 8 GB of RAM; this machine has 4 GB.'
+    },
     { label: 'the model file is corrupt', error: 'Local model "qwen3.5-0.8b" (gguf) failed its checksum check.' }
   ]) {
     it(`MQA-018: refuses to purge when local is the only candidate and ${variant.label}`, async () => {
@@ -419,5 +431,4 @@ describe('brain ingest — provider-degradation paths', () => {
       expect(cloudCall![0].responseFormat).toBeUndefined()
     })
   })
-
 })
