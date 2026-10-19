@@ -325,9 +325,13 @@ describe('MQA-161: the hedge backup is picked against every provider the primary
     const attemptAt = indexSrc.indexOf('const attempt = (provider: ProviderId')
     expect(attemptAt).toBeGreaterThan(-1)
     // Recorded on ENTRY, before any eligibility work, so a provider the primary bounced off still counts.
-    expect(indexSrc.slice(attemptAt, attemptAt + 400)).toMatch(
-      /race\?\.leg === 'primary' &&[\s\S]*primaryChain\.push\(provider\)/
-    )
+    // WP04A puts a non-returning brain-context refresh first, so bound the entry by the first
+    // eligibility read instead of a fixed character window, and forbid any early return before it.
+    const eligibilityAt = indexSrc.indexOf('const def = PROVIDERS[provider]', attemptAt)
+    expect(eligibilityAt).toBeGreaterThan(attemptAt)
+    const entry = indexSrc.slice(attemptAt, eligibilityAt)
+    expect(entry).toMatch(/race\?\.leg === 'primary' &&[\s\S]*primaryChain\.push\(provider\)/)
+    expect(entry.replace(/\/\/[^\n]*/g, '')).not.toMatch(/\breturn\b/)
   })
 
   it('MQA-161 — startHedgeLeg excludes the whole chain, not just the original primary id', () => {

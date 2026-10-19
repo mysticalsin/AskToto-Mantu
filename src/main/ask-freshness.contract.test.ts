@@ -199,6 +199,11 @@ describe('onboarding fires the real OS permission flow proactively (max legitima
   })
 
   it('Windows: mic consent resolves via a renderer getUserMedia probe (main has no ask API off darwin)', () => {
-    expect(onboardingSrc).toMatch(/getUserMedia\(\{ audio: true \}\)/)
+    // The one-shot probe now goes through the main-admitted interactive mic lease, which performs the
+    // renderer getUserMedia with these constraints (covered behaviorally by the input-mic-admission suites).
+    const src = onboardingSrc.replace(/\r\n/g, '\n')
+    expect(src).toMatch(
+      /if \(isWindows && perms\?\.microphone !== 'granted'\) \{\s*void acquireInteractiveMic\(\{ audio: true \}, 'conversation', 'application-probe',/
+    )
   })
 })

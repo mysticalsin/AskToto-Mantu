@@ -16,6 +16,18 @@ function between(source: string, start: string, end: string): string {
   return source.slice(from, to)
 }
 
+/**
+ * The ownership guard must lead straight to the revoke. Only comments and owner-replacement teardown of
+ * the meeting capture and input session (plain hardStop*('literal'[, 'literal']) calls) may sit between
+ * them: no other statement, branch, or return.
+ */
+function guardedRevoke(event: string): RegExp {
+  const teardown = String.raw`(?:\/\/[^\n]*\s*|hardStop(?:MeetingCapture|InputSession)\('[a-z-]+'(?:, '[a-z-]+')?\)\s*)*`
+  return new RegExp(
+    String.raw`if \(win !== self\) return\s*` + teardown + String.raw`commandControl\.revokeForLifecycleEvent\('` + event + String.raw`'\)`
+  )
+}
+
 describe('Cap2 command authority boundary', () => {
   it('exposes only sanitized command state plus id-and-nonce confirmation controls', () => {
     expect(preload).not.toContain('metisCommandIngest')
@@ -63,15 +75,13 @@ describe('Cap2 command authority boundary', () => {
   it('revokes command authority when the owning window or renderer is replaced', () => {
     expect(main).toContain('const self = win')
     const closed = between(main, "win.on('closed', () =>", 'win.webContents.setWindowOpenHandler(')
-    expect(closed).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
+    expect(closed).toMatch(guardedRevoke('window_closed'))
     const rendererGone = between(
       main,
       "win.webContents.on('render-process-gone', (_e, details) => {",
       'const rendererUrl = overlayRendererUrl()'
     )
-    expect(rendererGone).toMatch(
-      /if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/
-    )
+    expect(rendererGone).toMatch(guardedRevoke('renderer_replaced'))
     // M2-0037: the destroyed-check guard now leads into the reload-budget decision (reload / halt / ignore)
     // rather than reloading unconditionally — assert order, not exact adjacency, so that branch can grow.
     const destroyedGuard = rendererGone.indexOf('if (win !== self || self.isDestroyed()) return')
@@ -106,7 +116,7 @@ describe('Cap2 command authority boundary', () => {
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
     expect(app).toMatch(
-      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'metis-command'\s*\}\)\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{\s*type:\s*'reveal-now'\s*\}\)\s*setCollapsed\(false\)\s*\}/
+      /else if \(a === 'metis-command'\) \{\s*(?:setCommandMicPanelOpen\(true\)\s*)?rightEdgeDismissalLockRef\.current = reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'metis-command'\s*\}\)\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{\s*type:\s*'reveal-now'\s*\}\)\s*setCollapsed\(false\)\s*\}/
     )
   })
 

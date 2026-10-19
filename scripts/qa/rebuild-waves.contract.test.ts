@@ -155,7 +155,9 @@ function draftRegistrationConnected(source: ts.SourceFile): boolean {
     ['./auth', 'captureAuthSessionBoundary'],
     ['./store', 'getSettings'],
     ['./settings-observation', 'captureDraftSettingsBoundary'],
-    ['./transcripts', 'saveDraftTranscript']
+    ['./transcripts', 'saveDraftTranscript'],
+    ['./transcripts', 'preserveDraftTranscript'],
+    ['./transcripts', 'discardDraftTranscript']
   ]
   if (!imports.every(([moduleName, name]) => namedBindings(source, moduleName, name))) return false
   const registration = source.statements.find(
@@ -177,7 +179,9 @@ function draftRegistrationConnected(source: ts.SourceFile): boolean {
     'captureAuthSessionBoundary',
     'getSettings',
     'captureDraftSettingsBoundary',
-    'saveDraftTranscript'
+    'saveDraftTranscript',
+    'preserveDraftTranscript',
+    'discardDraftTranscript'
   ]
   return (
     dependencies.properties.length === expected.length &&
@@ -297,7 +301,9 @@ describe('QA rebuild contracts — Wave 2 routing + failover notice', () => {
 describe('QA rebuild contracts — Wave 3 consolidation', () => {
   it('saveTranscript defers ingest when brainConsolidation.enabled', () => {
     const main = read('src/main/index.ts')
-    expect(main).toMatch(/deferred:\s*getSettings\(\)\.brainConsolidation\.enabled/)
+    // The deferral is now decided once per save receipt from the settings captured for that save.
+    expect(main).toMatch(/receipt\.deferredIngest \?\?= saveSettings\.brainConsolidation\.enabled/)
+    expect(main).toMatch(/\{ deferred: receipt\.deferredIngest \}/)
     expect(main).toMatch(/scheduleIntelligenceIndex|runIntelligenceIndex|runConsolidationIfDue/)
   })
 })
@@ -414,7 +420,8 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
         '    captureDraftSettingsBoundary,\n    saveDraftTranscript',
         '    captureDraftSettingsBoundary: () => () => true,\n    saveDraftTranscript'
       ],
-      ['    saveDraftTranscript\n  })', '    saveDraftTranscript: saveMeeting\n  })'],
+      ['    saveDraftTranscript,\n', '    saveDraftTranscript: saveMeeting,\n'],
+      ['    discardDraftTranscript\n  })', '    discardDraftTranscript: preserveDraftTranscript\n  })'],
       ['  registerDraftTranscriptIpc({', '  const getSettings = () => ({})\n  registerDraftTranscriptIpc({']
     ]
     for (const [before, after] of mutations) {
