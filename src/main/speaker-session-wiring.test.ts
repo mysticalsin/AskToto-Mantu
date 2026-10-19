@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,8 +12,11 @@ vi.mock('./logger', () => ({
   auditLog: vi.fn()
 }))
 
-import { LiveMeetingStartedAtSchema } from '@shared/ipc'
+import { LiveMeetingStartedAtSchema, SaveMeetingSchema } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
+import { InputSessionAuthority } from './input-session-authority'
+import { MEETING_START_ACTION, MeetingStartActivationAuthority, type MeetingStartActivationFrame } from './meeting-start-activation-authority'
+import { TranscriptSaveReceiptStore } from './transcript-save-receipts'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
 import { crashDetail } from './infra/observability/crash-taxonomy'
@@ -38,6 +41,31 @@ function runSource(sourceText: string, globals: Record<string, unknown>): any {
   })
   vm.runInContext(compiled, context, { timeout: 2_000 })
   return context.result
+}
+
+function runSourceContext(sourceText: string, globals: Record<string, unknown>): vm.Context {
+  const compiled = ts.transpileModule(sourceText, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+  }).outputText
+  const context = vm.createContext({
+    Map,
+    Set,
+    Date,
+    Promise,
+    Float32Array,
+    Object,
+    console,
+    ...globals
+  })
+  vm.runInContext(compiled, context, { timeout: 2_000 })
+  return context
+}
+
+function actualFunctionSource(name: string): string {
+  const declaration = indexSource.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)
+  expect(declaration, 'Actual source function ' + name + ' was not found').toBeDefined()
+  if (!declaration) return ''
+  return declaration.getText(indexSource)
 }
 
 function actualFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
@@ -97,6 +125,8 @@ interface SessionApi {
   captureLiveSpeakerKey(startedAt: unknown): string | null
   recordLiveSpeakerSave(startedAt: number, file: string): boolean
   discardActiveLiveSpeakerSession(): void
+  hardStopInputSession(reason: string): void
+  hardStopMeetingCapture(reason: string): void
   labelThemAudio(samples: Float32Array, key: string | null, owner: 'live' | 'import'): Promise<any>
   observeOperatorAudio(samples: Float32Array, key: string | null): Promise<void>
   applySpeakerIdPolicy(enabled: boolean): boolean
@@ -104,6 +134,14 @@ interface SessionApi {
   captureImportSpeakerKey(attempt: { readonly jobId: string; readonly attemptId: number }): string | null
   finalizeImportSpeakers(attempt: { readonly jobId: string; readonly attemptId: number }): Map<string, string> | null
   disposeImportSpeakers(attempt: { readonly jobId: string; readonly attemptId: number }): void
+  activationFrameFromEvent(event: any): MeetingStartActivationFrame | null
+  meetingStartActivationAuthority: MeetingStartActivationAuthority
+  getContextRevision(): number
+  getSpeakerId(): SpeakerId
+  hasMeetingReservation(): boolean
+  meetingStartedAt(): number | null
+  lifecycle: Record<string, any>
+  win: any
 }
 
 function sessionApi(options: {
@@ -112,6 +150,8 @@ function sessionApi(options: {
   now?: () => number
   onPackRefresh?: () => void
   backfill?: (file: string, snapshot?: SpeakerEnrollmentSnapshot) => Promise<unknown>
+  powerHooksReady?: boolean
+  authSessionGeneration?: number
 }): SessionApi {
   const start = indexText.indexOf('// --- Speaker session ownership (Task 7-P2b) ---')
   const end = indexText.indexOf('// --- End speaker session ownership ---')
@@ -119,35 +159,177 @@ function sessionApi(options: {
   expect(end, 'Speaker session ownership region end was not found').toBeGreaterThan(start)
   if (start < 0 || end <= start) throw new Error('Speaker session ownership implementation is absent')
   const region = indexText.slice(start, end)
-  return runSource(
-    `${region}\nglobalThis.result = {
-    acceptLiveSpeakerTransition,
-    captureLiveSpeakerKey,
-    recordLiveSpeakerSave,
-    discardActiveLiveSpeakerSession,
-    labelThemAudio,
-    observeOperatorAudio,
-    applySpeakerIdPolicy,
-    beginImportSpeakers,
-    captureImportSpeakerKey,
-    finalizeImportSpeakers,
-    disposeImportSpeakers
-  };`,
-    {
-      createSpeakerId: () => options.id,
-      getSettings: () => ({ speakerId: { enabled: options.enabled?.() ?? true } }),
-      LiveMeetingStartedAtSchema,
-      Date: class extends Date {
-        static now(): number {
-          return options.now?.() ?? Date.now()
-        }
-      },
-      backfillSpeakerNames: options.backfill ?? (async () => ({ ok: true, named: 0 })),
-      mainLog: { warn: vi.fn(), error: vi.fn() },
-      rebuildTrayMenu: vi.fn(),
-      speechPackDesktop: { refresh: options.onPackRefresh ?? vi.fn() }
-    }
-  )
+  const powerHooksReady = options.powerHooksReady ?? true
+  const authSessionGeneration = options.authSessionGeneration ?? 7
+  const frameUrl = 'file:///renderer/index.html'
+  const lifecycle = {
+    setListeningActive: vi.fn(),
+    setTrayRecording: vi.fn(),
+    setRecordingPowerSaveBlock: vi.fn(),
+    parakeetRelease: vi.fn(async () => undefined),
+    releaseSpeakerEmbedding: vi.fn(async () => undefined),
+    revokeMeetingMicCaptureGrants: vi.fn(),
+    rebuildTrayMenu: vi.fn(),
+    refreshSpeechPack: options.onPackRefresh ?? vi.fn()
+  }
+  const win = {
+    isDestroyed: () => false,
+    loadURL: vi.fn(() => Promise.resolve()),
+    webContents: { id: 1, send: vi.fn() }
+  }
+  const inputSessionAuthority = new InputSessionAuthority()
+  let context: any
+  const meetingStartActivationAuthority = new MeetingStartActivationAuthority({
+    state: () => ({
+      mainWebContentsId: 1,
+      mainFrameId: '11:22',
+      isWindowVisible: true,
+      isAuthenticated: true,
+      isStartAllowed: powerHooksReady,
+      currentUrl: frameUrl,
+      context: {
+        authSessionGeneration,
+        contextRevision: context?.result?.getContextRevision() ?? 0
+      }
+    }),
+    now: options.now
+  })
+  const exports = [
+    'acceptLiveSpeakerTransition,',
+    'captureLiveSpeakerKey,',
+    'recordLiveSpeakerSave,',
+    'discardActiveLiveSpeakerSession,',
+    'hardStopInputSession,',
+    'hardStopMeetingCapture,',
+    'labelThemAudio,',
+    'observeOperatorAudio,',
+    'applySpeakerIdPolicy,',
+    'beginImportSpeakers,',
+    'captureImportSpeakerKey,',
+    'finalizeImportSpeakers,',
+    'disposeImportSpeakers,',
+    'activationFrameFromEvent,',
+    'getSpeakerId,',
+    'getContextRevision: () => inputSessionContextRevision,',
+    'hasMeetingReservation: () => inputSessionAuthority.hasMeetingReservation,',
+    'meetingStartedAt: () => inputSessionAuthority.meetingStartedAt'
+  ].join('\n')
+  const source = [
+    'let inputSessionContextRevision = 0;',
+    'let inputPowerLifecycleHooksReady = ' + String(powerHooksReady) + ';',
+    'let meetingCaptureOwnerWebContentsId = null;',
+    actualFunctionSource('activationFrameFromEvent'),
+    actualFunctionSource('hardStopInputSession'),
+    actualFunctionSource('hardStopMeetingCapture'),
+    region,
+    'globalThis.result = {',
+    exports,
+    '};'
+  ].join('\n')
+  context = runSourceContext(source, {
+    createSpeakerId: () => options.id,
+    getSettings: () => ({ speakerId: { enabled: options.enabled?.() ?? true } }),
+    LiveMeetingStartedAtSchema,
+    Date: class extends Date {
+      static now(): number {
+        return options.now?.() ?? Date.now()
+      }
+    },
+    backfillSpeakerNames: options.backfill ?? (async () => ({ ok: true, named: 0 })),
+    mainLog: { warn: vi.fn(), error: vi.fn() },
+    rebuildTrayMenu: lifecycle.rebuildTrayMenu,
+    speechPackDesktop: { refresh: lifecycle.refreshSpeechPack },
+    inputSessionAuthority,
+    meetingStartActivationAuthority,
+    revokeMeetingMicCaptureGrants: lifecycle.revokeMeetingMicCaptureGrants,
+    setListeningActive: lifecycle.setListeningActive,
+    setTrayRecording: lifecycle.setTrayRecording,
+    setRecordingPowerSaveBlock: lifecycle.setRecordingPowerSaveBlock,
+    parakeetRelease: lifecycle.parakeetRelease,
+    releaseSpeakerEmbedding: lifecycle.releaseSpeakerEmbedding,
+    win,
+    IPC: { meetingMicCaptureRevoked: 'meeting:mic-capture-revoked' }
+  })
+  return Object.assign((context as any).result, {
+    meetingStartActivationAuthority,
+    hasMeetingReservation: () => inputSessionAuthority.hasMeetingReservation,
+    meetingStartedAt: () => inputSessionAuthority.meetingStartedAt,
+    lifecycle,
+    win
+  })
+}
+
+function activationEvent(parent: unknown = null): any {
+  return {
+    sender: { id: 1 },
+    senderFrame: { processId: 11, routingId: 22, parent, url: 'file:///renderer/index.html' }
+  }
+}
+
+function mintMeetingStartActivation(api: SessionApi, event: any): boolean {
+  const frame = api.activationFrameFromEvent(event)
+  return !!frame && api.meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)
+}
+
+function actualListeningStateHandler(api: SessionApi): (...args: any[]) => Promise<any> {
+  return actualIpcHandler('listeningState', {
+    createListeningStateHandler,
+    assertMainWindow: vi.fn(),
+    requireAuth: () => true,
+    acceptLiveSpeakerTransition: api.acceptLiveSpeakerTransition,
+    activationFrameFromEvent: api.activationFrameFromEvent,
+    meetingStartActivationAuthority: api.meetingStartActivationAuthority,
+    MEETING_START_ACTION,
+    setListeningActive: api.lifecycle.setListeningActive,
+    setTrayRecording: api.lifecycle.setTrayRecording,
+    setRecordingPowerSaveBlock: api.lifecycle.setRecordingPowerSaveBlock,
+    parakeetRelease: api.lifecycle.parakeetRelease,
+    releaseSpeakerEmbedding: api.lifecycle.releaseSpeakerEmbedding,
+    resetDustConversation: vi.fn(),
+    getSettings: () => ({ providerModels: {}, dustWorkspaceId: '', dustBaseUrl: '' }),
+    getApiKey: () => '',
+    prewarmDustConversation: vi.fn(),
+    speakerIdProcessingEnabled: () => true,
+    speakerIdInstance: api.getSpeakerId()
+  })
+}
+
+function triggerRendererGone(api: SessionApi): { revokeForLifecycleEvent: ReturnType<typeof vi.fn> } {
+  const win = api.win
+  const revokeForLifecycleEvent = vi.fn()
+  const gone = actualRendererGoneHandler({
+    mainLog: { error: vi.fn() },
+    auditLog: vi.fn(),
+    crashDetail,
+    resetDustConversation: vi.fn(),
+    listeningActive: true,
+    lastPlainAskAt: 1,
+    audioArmed: true,
+    setListeningActive: vi.fn(),
+    setAudioArmed: vi.fn(),
+    setTrayRecording: vi.fn(),
+    setRecordingPowerSaveBlock: vi.fn(),
+    hardStopInputSession: api.hardStopInputSession,
+    hardStopMeetingCapture: api.hardStopMeetingCapture,
+    discardActiveLiveSpeakerSession: api.discardActiveLiveSpeakerSession,
+    invalidateCloudSttOwner: vi.fn(),
+    isMinimized: true,
+    onboardingExclusiveLive: () => false,
+    currentWidth: 1,
+    BAR_WIDTH: 600,
+    win,
+    self: win,
+    selfOwner: { window: win, webContents: win.webContents, webContentsId: win.webContents.id },
+    commandControl: { revokeForLifecycleEvent },
+    responsiveness: { markGone: vi.fn() },
+    reloadBudget: { onRenderProcessGone: () => 'reload' },
+    overlayRendererUrl: () => 'file:///renderer/index.html',
+    redactSecrets,
+    process: { env: {} },
+    join
+  })
+  gone({}, { reason: 'crashed', exitCode: 1 })
+  return { revokeForLifecycleEvent }
 }
 
 function embeddingFor(axis: number): Float32Array {
@@ -204,71 +386,115 @@ function saveHandler(
     saveMeeting?: () => Promise<string>
     clearDraftTranscript?: (settings: unknown, startedAt: number, savedTranscriptPath?: string) => Promise<void>
     getSettings?: () => unknown
+    recordMeetingSummarized?: (...args: any[]) => void
+    scheduleRebuild?: (...args: any[]) => unknown
+    enqueueIngest?: (...args: any[]) => unknown
+    backfillSpeakerNames?: (file: string) => Promise<unknown>
   } = {}
 ): (...args: any[]) => Promise<any> {
-  return actualIpcHandler('saveTranscript', {
+  const transcriptSaveReceipts = new TranscriptSaveReceiptStore()
+  const scheduleRebuild = options.scheduleRebuild ?? vi.fn()
+  const enqueueIngest = options.enqueueIngest ?? vi.fn()
+  const handler = actualIpcHandler('saveTranscript', {
     assertMainWindow: vi.fn(),
     requireAuth: () => true,
     takeHotPath: () => true,
-    SaveMeetingSchema: { parse: (value: unknown) => value },
+    SaveMeetingSchema,
+    LiveMeetingStartedAtSchema,
+    createHash,
+    authSessionGeneration: () => 7,
+    transcriptSaveReceipts,
     stripProvisionalLines: (lines: unknown) => lines,
     saveMeeting: options.saveMeeting ?? (async () => file),
     getSettings: options.getSettings ?? (() => ({ brainConsolidation: { enabled: false }, encryptTranscripts: false })),
-    recordMeetingSummarized: vi.fn(),
+    recordMeetingSummarized: options.recordMeetingSummarized ?? vi.fn(),
     meetingDurationMin: () => 1,
     wordsFromTexts: () => [],
     estimateNoteTakingMinutes: () => 0,
     appendTimeSavedEvent: vi.fn(),
     clearDraftTranscript: options.clearDraftTranscript ?? (async () => undefined),
     auditLog: vi.fn(),
-    scheduleRebuild: vi.fn(),
-    enqueueIngest: async () => undefined,
+    scheduleRebuild: (assertAdmission: () => void, settled: () => void) => {
+      scheduleRebuild(assertAdmission, settled)
+      settled()
+    },
+    enqueueIngest: async (
+    _path: string,
+    _options: unknown,
+    _assertAdmission: () => void,
+    settled: () => void
+    ) => {
+      await enqueueIngest(_path, _options, _assertAdmission, settled)
+      settled()
+    },
     recordLiveSpeakerSave: api.recordLiveSpeakerSave,
-    backfillSpeakerNames: vi.fn(async () => ({ ok: true, named: 0 }))
+    backfillSpeakerNames: options.backfillSpeakerNames ?? vi.fn(async () => ({ ok: true, named: 0 })),
+    warnSpeakerFailure: vi.fn()
   })
+  return handler
 }
 
 describe('authoritative live speaker identity', () => {
-  it('wires the actual listening registration to the single index transition authority', async () => {
+  it('wires the listening registration to the single transition and activation authorities', async () => {
     const api = sessionApi({ id: realSpeakerId() })
-    const tray = vi.fn()
-    const power = vi.fn()
-    const releaseParakeet = vi.fn(async () => undefined)
-    const releaseSpeakerEmbedding = vi.fn(async () => undefined)
-    const speakerIdProcessingEnabled = vi.fn(() => false)
-    const handler = actualIpcHandler('listeningState', {
-      createListeningStateHandler,
-      assertMainWindow: vi.fn(),
-      requireAuth: () => true,
-      acceptLiveSpeakerTransition: api.acceptLiveSpeakerTransition,
-      listeningActive: false,
-      setListeningActive: vi.fn(),
-      setTrayRecording: tray,
-      setRecordingPowerSaveBlock: power,
-      parakeetRelease: releaseParakeet,
-      releaseSpeakerEmbedding,
-      resetDustConversation: vi.fn(),
-      getSettings: () => ({ providerModels: {}, dustWorkspaceId: '', dustBaseUrl: '' }),
-      getApiKey: () => '',
-      prewarmDustConversation: vi.fn(),
-      speakerIdProcessingEnabled,
-      speakerIdInstance: {}
-    })
+    const event = activationEvent()
+    const handler = actualListeningStateHandler(api)
 
-    await handler({}, { on: true, startedAt: 100 })
-    await handler({}, { on: true, startedAt: 200 })
-    await handler({}, { on: false, startedAt: 100 })
-    expect(tray.mock.calls.map(([on]) => on)).toEqual([true, true])
-    expect(power.mock.calls.map(([on]) => on)).toEqual([true, true])
-    expect(releaseParakeet).not.toHaveBeenCalled()
+    expect(mintMeetingStartActivation(api, event)).toBe(true)
+    await expect(handler(event, { on: true, startedAt: 100 })).resolves.toBe(true)
+    expect(mintMeetingStartActivation(api, event)).toBe(true)
+    await expect(handler(event, { on: true, startedAt: 200 })).resolves.toBe(true)
+    await expect(handler(event, { on: false, startedAt: 100 })).resolves.toBe(false)
+    expect(api.lifecycle.setTrayRecording.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true])
+    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true])
+    expect(api.lifecycle.parakeetRelease).toHaveBeenCalledTimes(1)
+    expect(api.lifecycle.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
 
-    await handler({}, { on: false, startedAt: 200 })
-    expect(tray.mock.calls.map(([on]) => on)).toEqual([true, true, false])
-    expect(releaseParakeet).toHaveBeenCalledTimes(1)
-    expect(releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+    await expect(handler(event, { on: false, startedAt: 200 })).resolves.toBe(true)
+    expect(api.lifecycle.setTrayRecording.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true, false])
+    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([true, false, true, false])
+    expect(api.lifecycle.parakeetRelease).toHaveBeenCalledTimes(2)
+    expect(api.lifecycle.releaseSpeakerEmbedding).toHaveBeenCalledTimes(2)
   })
 
-  it('rejects a delayed older start and stale stop while the newer keyed owner stays active', async () => {
+  it('rejects unminted and replayed starts before tray, power, or native effects', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    const event = activationEvent()
+    const handler = actualListeningStateHandler(api)
+
+    await expect(handler(event, { on: true, startedAt: 101 })).resolves.toBe(false)
+    expect(api.hasMeetingReservation()).toBe(false)
+    expect(api.lifecycle.setTrayRecording).not.toHaveBeenCalled()
+    expect(api.lifecycle.setRecordingPowerSaveBlock).not.toHaveBeenCalled()
+    expect(api.lifecycle.parakeetRelease).not.toHaveBeenCalled()
+    expect(api.lifecycle.releaseSpeakerEmbedding).not.toHaveBeenCalled()
+
+    expect(mintMeetingStartActivation(api, event)).toBe(true)
+    await expect(handler(event, { on: true, startedAt: 101 })).resolves.toBe(true)
+    await expect(handler(event, { on: true, startedAt: 102 })).resolves.toBe(false)
+    expect(api.hasMeetingReservation()).toBe(true)
+    expect(api.meetingStartedAt()).toBe(101)
+    expect(api.lifecycle.setTrayRecording.mock.calls.map((call: any[]) => call[0])).toEqual([true])
+    expect(api.lifecycle.setRecordingPowerSaveBlock.mock.calls.map((call: any[]) => call[0])).toEqual([true])
+    expect(api.lifecycle.parakeetRelease).not.toHaveBeenCalled()
+    expect(api.lifecycle.releaseSpeakerEmbedding).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when lifecycle power hooks are unavailable', async () => {
+    const api = sessionApi({ id: realSpeakerId(), powerHooksReady: false })
+    const event = activationEvent()
+    const handler = actualListeningStateHandler(api)
+
+    expect(mintMeetingStartActivation(api, event)).toBe(false)
+    await expect(handler(event, { on: true, startedAt: 103 })).resolves.toBe(false)
+    expect(api.hasMeetingReservation()).toBe(false)
+    expect(api.lifecycle.setTrayRecording).not.toHaveBeenCalled()
+    expect(api.lifecycle.setRecordingPowerSaveBlock).not.toHaveBeenCalled()
+    expect(api.lifecycle.parakeetRelease).not.toHaveBeenCalled()
+    expect(api.lifecycle.releaseSpeakerEmbedding).not.toHaveBeenCalled()
+  })
+
+  it('transition-only handler rejects a delayed older start and stale stop while the newer owner stays active', async () => {
     const id = realSpeakerId()
     const api = sessionApi({ id })
     const setListeningActive = vi.fn()
@@ -464,31 +690,77 @@ describe('bounded close and successful-save receipt join', () => {
     const saveMeeting = vi.fn(async () => savedPath)
     const clearDraftTranscript = vi.fn(async () => undefined)
     const handler = saveHandler(api, savedPath, { getSettings, saveMeeting, clearDraftTranscript })
+    const meeting = { startedAt: 601, lines: [], recap: '', mode: 'meeting' }
 
-    await expect(handler({}, { startedAt: 601, lines: [], recap: '', mode: 'meeting' })).resolves.toEqual({ path: savedPath })
+    await expect(handler({}, meeting)).resolves.toEqual({ path: savedPath })
+    await expect(handler({}, meeting)).resolves.toEqual({ path: savedPath })
 
-    expect(getSettings).toHaveBeenCalled()
+    expect(getSettings).toHaveBeenCalledOnce()
     expect(saveMeeting).toHaveBeenCalledWith(oldSettings, expect.objectContaining({ startedAt: 601 }))
+    expect(saveMeeting).toHaveBeenCalledOnce()
     expect(clearDraftTranscript).toHaveBeenCalledWith(oldSettings, 601, savedPath)
-    expect(getSettings.mock.results.length).toBeGreaterThan(1)
+    expect(clearDraftTranscript).toHaveBeenCalledOnce()
+    expect(meeting.startedAt).toBe(601)
   })
 
-  it('normalizes a zero final-save identity once for both durable save and draft cleanup', async () => {
+  it('replays a zero timestamp with the first normalized identity without mutating its payload', async () => {
     const api = sessionApi({ id: realSpeakerId() })
     const file = '/meetings/finalized.md'
     const saveMeeting = vi.fn(async () => file)
     const clearDraftTranscript = vi.fn(async () => undefined)
     const handler = saveHandler(api, file, { saveMeeting, clearDraftTranscript })
+    const meeting = { startedAt: 0, lines: [], recap: '', mode: 'meeting' }
     const now = vi.spyOn(Date, 'now').mockReturnValue(702)
 
     try {
-      await expect(handler({}, { startedAt: 0, lines: [], recap: '', mode: 'meeting' })).resolves.toEqual({ path: file })
+      await expect(handler({}, meeting)).resolves.toEqual({ path: file })
+      await expect(handler({}, meeting)).resolves.toEqual({ path: file })
     } finally {
       now.mockRestore()
     }
 
+    expect(meeting.startedAt).toBe(0)
     expect(saveMeeting).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ startedAt: 702 }))
+    expect(saveMeeting).toHaveBeenCalledOnce()
     expect(clearDraftTranscript).toHaveBeenCalledWith(expect.anything(), 702, file)
+    expect(clearDraftTranscript).toHaveBeenCalledOnce()
+  })
+
+  it('deduplicates concurrent and completed transcript saves through the actual receipt store', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 602 })).toBe(true)
+    const file = '/meetings/concurrent.md'
+    let resolveWrite!: (path: string) => void
+    const writeWait = new Promise<string>((resolve) => { resolveWrite = resolve })
+    const saveMeeting = vi.fn(() => writeWait)
+    const recordMeetingSummarized = vi.fn()
+    const clearDraftTranscript = vi.fn(async () => undefined)
+    const scheduleRebuild = vi.fn()
+    const enqueueIngest = vi.fn()
+    const backfillSpeakerNames = vi.fn(async () => ({ ok: true, named: 0 }))
+    const handler = saveHandler(api, file, {
+      saveMeeting,
+      recordMeetingSummarized,
+      clearDraftTranscript,
+      scheduleRebuild,
+      enqueueIngest,
+      backfillSpeakerNames
+    })
+    const meeting = { startedAt: 602, lines: [], recap: '', mode: 'meeting' }
+    const first = handler({}, meeting)
+    const concurrent = handler({}, meeting)
+    await vi.waitFor(() => expect(saveMeeting).toHaveBeenCalledOnce())
+    resolveWrite(file)
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([{ path: file }, { path: file }])
+    await expect(handler({}, meeting)).resolves.toEqual({ path: file })
+
+    expect(saveMeeting).toHaveBeenCalledOnce()
+    expect(recordMeetingSummarized).toHaveBeenCalledOnce()
+    expect(clearDraftTranscript).toHaveBeenCalledOnce()
+    expect(scheduleRebuild).toHaveBeenCalledOnce()
+    expect(enqueueIngest).toHaveBeenCalledOnce()
+    expect(backfillSpeakerNames).not.toHaveBeenCalled()
+    expect(meeting.startedAt).toBe(602)
   })
 
   it('defers active and duplicate saves, then snapshots and backfills the exact file once on Stop', async () => {
@@ -512,7 +784,7 @@ describe('bounded close and successful-save receipt join', () => {
   })
 
   it('joins Stop-before-save once and leaves a late save for B unable to snapshot B', async () => {
-    const backfill = vi.fn(async () => ({ ok: true, named: 0 }))
+    const backfill = vi.fn(async (_file: string, _snapshot?: SpeakerEnrollmentSnapshot) => ({ ok: true, named: 0 }))
     const id = realSpeakerId()
     const api = sessionApi({ id, backfill })
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 700 })
@@ -544,54 +816,52 @@ describe('bounded close and successful-save receipt join', () => {
 
   it('renderer crash discards the exact live state without snapshotting or flushing operator audio', async () => {
     const id = realSpeakerId()
-    const api = sessionApi({ id })
+    const backfill = vi.fn(async () => ({ ok: true, named: 0 }))
+    const snapshotSession = vi.spyOn(id, 'snapshotSession')
+    const api = sessionApi({ id, backfill })
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 900 })
     for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:900')
 
-    const revokeForLifecycleEvent = vi.fn()
-    // Real BrowserWindow#loadURL returns a Promise; M2-0037 now observes it (`.catch(...)` on the result).
-    const loadURL = vi.fn(() => Promise.resolve())
-    const win = { isDestroyed: () => false, loadURL, webContents: { id: 1 } }
-    const gone = actualRendererGoneHandler({
-      mainLog: { error: vi.fn() },
-      auditLog: vi.fn(),
-      crashDetail,
-      resetDustConversation: vi.fn(),
-      listeningActive: true,
-      lastPlainAskAt: 1,
-      audioArmed: true,
-      setListeningActive: vi.fn(),
-      setAudioArmed: vi.fn(),
-      setTrayRecording: vi.fn(),
-      setRecordingPowerSaveBlock: vi.fn(),
-      discardActiveLiveSpeakerSession: api.discardActiveLiveSpeakerSession,
-      invalidateCloudSttOwner: vi.fn(),
-      isMinimized: true,
-      onboardingExclusiveLive: () => false,
-      currentWidth: 1,
-      BAR_WIDTH: 600,
-      win,
-      self: win,
-      // Captured beside `const self = win`, outside this handler: the real callback runs after the
-      // WebContents is torn down (MQA-340).
-      selfOwner: { window: win, webContents: win.webContents, webContentsId: win.webContents.id },
-      commandControl: { revokeForLifecycleEvent },
-      responsiveness: { markGone: vi.fn() },
-      // M2-0037: within budget — the handler must still reload exactly as before.
-      reloadBudget: { onRenderProcessGone: () => 'reload' },
-      overlayRendererUrl: () => 'file:///renderer/index.html',
-      redactSecrets,
-      process: { env: {} },
-      join
-    })
-    gone({}, { reason: 'crashed', exitCode: 1 })
+    const { revokeForLifecycleEvent } = triggerRendererGone(api)
 
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
-    expect(loadURL).toHaveBeenCalledExactlyOnceWith('file:///renderer/index.html')
+    expect(api.win.loadURL).toHaveBeenCalledExactlyOnceWith('file:///renderer/index.html')
 
     expect(api.captureLiveSpeakerKey(900)).toBeNull()
+    const lateSaveEvidence = {
+      accepted: api.recordLiveSpeakerSave(900, '/meetings/late-after-crash.md'),
+      snapshots: snapshotSession.mock.calls.length,
+      backfills: backfill.mock.calls.length
+    }
+    expect(lateSaveEvidence).toEqual({ accepted: false, snapshots: 0, backfills: 0 })
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 901 })
     await expect(api.labelThemAudio(windowFor(5), 'live:901', 'live')).resolves.toMatchObject({ name: 'Speaker 1' })
+  })
+
+  it('renderer crash discards a durable receipt without snapshotting or backfilling it', async () => {
+    const id = realSpeakerId()
+    const snapshotSession = vi.spyOn(id, 'snapshotSession')
+    const disposeSession = vi.spyOn(id, 'disposeSession')
+    const backfill = vi.fn(async (_file: string, _snapshot?: SpeakerEnrollmentSnapshot) => ({ ok: true, named: 0 }))
+    const api = sessionApi({ id, backfill })
+    expect(api.acceptLiveSpeakerTransition({ on: true, startedAt: 902 })).toBe(true)
+    for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:902')
+    const save = saveHandler(api, '/meetings/saved-before-crash.md')
+    await expect(save({}, { startedAt: 902, lines: [], recap: '', mode: 'meeting' }))
+      .resolves.toEqual({ path: '/meetings/saved-before-crash.md' })
+    expect(backfill).not.toHaveBeenCalled()
+
+    triggerRendererGone(api)
+    const crashSaveEvidence = {
+      snapshots: snapshotSession.mock.calls.length,
+      backfills: backfill.mock.calls.map(([file]) => file),
+      disposals: disposeSession.mock.calls.map(([key]) => key)
+    }
+    expect(crashSaveEvidence).toEqual({
+      snapshots: 0,
+      backfills: [],
+      disposals: ['live:902']
+    })
   })
 
   it('deletes a joined receipt before a snapshot failure and disposes the exact state', async () => {
@@ -648,6 +918,7 @@ function backfillWith(id: SpeakerId, overrides: Record<string, unknown> = {}) {
     resolveMeetingsFolder: () => '/meetings',
     join,
     mainLog: { warn: vi.fn() },
+    warnSpeakerFailure: vi.fn(),
     ...overrides
   })
 }
