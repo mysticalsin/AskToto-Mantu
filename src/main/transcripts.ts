@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type {
   SaveDraftTranscriptResult,
@@ -21,6 +21,7 @@ import type {
   RecapExport,
   TranscriptLine
 } from '@shared/ipc'
+import { LiveMeetingStartedAtSchema } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
@@ -33,7 +34,14 @@ import { recapStatusValidationError } from '@shared/recap-status'
 import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
-import { draftFilename, snapshotDraftWrites, trackDraftWrite } from './infra/storage/draft-transcript-write-state'
+import {
+  draftFilename,
+  finalizeDraftMeeting,
+  isDraftMeetingFinalized,
+  serializeDraftWrite,
+  knownDraftPathsForMeeting,
+  trackDraftWrite
+} from './infra/storage/draft-transcript-write-state'
 import { createWriteAdmissionGuard } from './infra/storage/write-with-admission'
 import type { FileClass } from './infra/storage/gateway'
 import { speakerLabel } from './features/meetings/transcript-format'
@@ -885,12 +893,16 @@ export async function appendDebrief(
  * it once the meeting ends normally and its real saveMeeting() has already succeeded. A crashed meeting's
  * draft is left on disk (dot-prefixed, so it doesn't clutter the meetings list) rather than auto-recovered
  * — that's a real, disclosed limitation: this closes the data-loss gap, it doesn't build recovery UX.
+ * Finalized meeting identities are process-local; after a crash/restart the old renderer and its late
+ * callbacks are gone, while an interrupted meeting's on-disk draft remains eligible for recovery.
  */
 export async function saveDraftTranscript(
   settings: Settings,
   m: SaveMeeting,
   beforeReplace?: () => void
 ): Promise<SaveDraftTranscriptResult> {
+  const liveStartedAt = LiveMeetingStartedAtSchema.safeParse(m.startedAt)
+  if (!liveStartedAt.success) return { status: 'disabled' }
   let finishWrite: (() => void) | undefined
   const admission = createWriteAdmissionGuard(beforeReplace)
   // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
@@ -898,41 +910,47 @@ export async function saveDraftTranscript(
   if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings)))
     return { status: 'disabled' }
   try {
+    const started = liveStartedAt.data
+    // Meeting identity is sealed across folder changes, so a late tick cannot recreate a finalized
+    // draft under a newly selected meetings folder.
+    if (isDraftMeetingFinalized(started)) return { status: 'disabled' }
     const folder = ensureMeetingsFolder(settings)
-    const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started, stamp(started)))
     // Register synchronously before the first await so completed-save cleanup sees this operation.
-    finishWrite = trackDraftWrite(file)
-    const title = cleanTitle(m.title) || `${m.mode} meeting`
-    refuseReservedSpeechProse(title, m.mode)
-    const transcript = await renderMeetingTranscriptAsync(m.lines)
-    // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
-    // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
-    // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
-    const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
-    const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
-    const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
-    const frontmatter = [
-      '---',
-      'type: meeting-transcript-draft',
-      'source: Métis',
-      `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
-      `date: ${new Date(started).toISOString()}`,
-      `title: "${yamlSafeTitle(title)}"`,
-      `participants: [${participants.join(', ')}]`,
-      `duration_min: ${durMin}`,
-      'status: interrupted',
-      '---',
-      ''
-    ].join('\n')
-    const body =
-      `# ${title} (in progress — autosaved draft)\n\n` +
-      'This is an automatic snapshot of a meeting still in progress, or one that ended without a normal ' +
-      'save (crash / force quit). If Métis is still running this meeting, ignore this file — the real ' +
-      'save replaces it when the meeting ends.\n\n' +
-      `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
-    await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admission.guard)
-    return { status: 'saved' }
+    finishWrite = trackDraftWrite(file, started) ?? undefined
+    if (!finishWrite) return { status: 'disabled' }
+    return await serializeDraftWrite(file, async () => {
+      const title = cleanTitle(m.title) || `${m.mode} meeting`
+      refuseReservedSpeechProse(title, m.mode)
+      const transcript = await renderMeetingTranscriptAsync(m.lines)
+      // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
+      // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
+      // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
+      const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
+      const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
+      const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
+      const frontmatter = [
+        '---',
+        'type: meeting-transcript-draft',
+        'source: Métis',
+        `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
+        `date: ${new Date(started).toISOString()}`,
+        `title: "${yamlSafeTitle(title)}"`,
+        `participants: [${participants.join(', ')}]`,
+        `duration_min: ${durMin}`,
+        'status: interrupted',
+        '---',
+        ''
+      ].join('\n')
+      const body =
+        `# ${title} (in progress — autosaved draft)\n\n` +
+        'This is an automatic snapshot of a meeting still in progress, or one that ended without a normal ' +
+        'save (crash / force quit). If Métis is still running this meeting, ignore this file — the real ' +
+        'save replaces it when the meeting ends.\n\n' +
+        `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
+      await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admission.guard)
+      return { status: 'saved' }
+    })
   } catch {
     const refusal = admission.refusal
     if (refusal) throw refusal.error
@@ -954,23 +972,99 @@ export async function saveDraftTranscript(
  * "(recovered)". Retrying rides out the transient lock; a genuinely stuck file still degrades to the
  * old behaviour rather than failing the meeting end.
  */
-export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
-  try {
-    const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt, stamp(startedAt)))
-    const writes = snapshotDraftWrites(file)
-    if (writes) await Promise.all(writes)
-    if (!existsSync(file)) return
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await unlink(file)
-        return
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code
-        if (code === 'ENOENT') return
-        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
-        await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
-      }
+function draftCleanupCandidates(settings: Settings, startedAt: number, savedTranscriptPath?: string): string[] {
+  const candidateFiles: string[] = []
+  let filename: string | undefined
+  try { filename = draftFilename(startedAt, stamp(startedAt)) } catch { /* still seal the meeting identity */ }
+  if (filename) {
+    try { candidateFiles.push(join(resolveMeetingsFolder(settings), filename)) } catch { /* known paths still clean up */ }
+    if (savedTranscriptPath) {
+      try { candidateFiles.push(join(dirname(savedTranscriptPath), filename)) } catch { /* known paths still clean up */ }
     }
+  }
+  return candidateFiles
+}
+
+async function unlinkDraftFiles(
+  files: readonly string[],
+  isCurrent: () => boolean = () => true
+): Promise<{ failed: string[]; pending: string[] }> {
+  const failed: string[] = []
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index]
+    if (!isCurrent()) return { failed, pending: files.slice(index) }
+    try {
+      if (!existsSync(file)) continue
+      for (let attempt = 0; ; attempt++) {
+        // Auth may change during an unlink retry delay; check immediately before every filesystem mutation.
+        if (!isCurrent()) return { failed, pending: files.slice(index) }
+        try {
+          await unlink(file)
+          break
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code
+          if (code === 'ENOENT') break
+          if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
+          await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
+        }
+      }
+    } catch {
+      failed.push(file)
+    }
+  }
+  return { failed, pending: [] }
+}
+
+// Keep exact failed paths even after finalizeDraftMeeting drops its per-meeting registry. A normal
+// final-save cleanup is best-effort, but Review's later explicit Disregard must still be able to
+// retry every draft copy that cleanup could not unlink.
+const failedDraftCleanupPaths = new Map<number, Set<string>>()
+
+/** Seal and join a retired meeting while retaining its on-disk drafts for crash recovery. */
+export async function preserveDraftTranscript(startedAt: number): Promise<void> {
+  await finalizeDraftMeeting(startedAt)
+}
+
+/** Explicit user discard: seal the meeting, join its writes, and remove every known draft copy. */
+export async function discardDraftTranscript(
+  settings: Settings,
+  startedAt: number,
+  isCurrent: () => boolean = () => true
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isCurrent()) return { ok: false, error: 'Sign-in changed before draft cleanup could start. Try Disregard again.' }
+  const priorFailures = failedDraftCleanupPaths.get(startedAt) ?? new Set<string>()
+  const candidates = [
+    ...knownDraftPathsForMeeting(startedAt),
+    ...priorFailures,
+    ...draftCleanupCandidates(settings, startedAt)
+  ]
+  const files = await finalizeDraftMeeting(startedAt, candidates)
+  if (!isCurrent()) {
+    failedDraftCleanupPaths.set(startedAt, new Set(files))
+    return { ok: false, error: 'Sign-in changed before draft cleanup could finish. Try Disregard again.' }
+  }
+  const { failed, pending } = await unlinkDraftFiles(files, isCurrent)
+  if (pending.length || !isCurrent()) {
+    failedDraftCleanupPaths.set(startedAt, new Set([...failed, ...pending]))
+    return { ok: false, error: 'Sign-in changed before draft cleanup could finish. Try Disregard again.' }
+  }
+  if (failed.length) {
+    failedDraftCleanupPaths.set(startedAt, new Set(failed))
+    return { ok: false, error: 'Some autosaved draft files could not be removed. Try Disregard again.' }
+  }
+  failedDraftCleanupPaths.delete(startedAt)
+  return { ok: true }
+}
+
+export async function clearDraftTranscript(settings: Settings, startedAt: number, savedTranscriptPath?: string): Promise<void> {
+  try {
+    // Include the current and durable-save folders, while finalizeDraftMeeting also includes every
+    // folder this meeting used previously. It seals the startedAt identity before awaiting writes.
+    const candidateFiles = draftCleanupCandidates(settings, startedAt, savedTranscriptPath)
+    const files = await finalizeDraftMeeting(startedAt, candidateFiles)
+    const { failed } = await unlinkDraftFiles(files)
+    if (failed.length) failedDraftCleanupPaths.set(startedAt, new Set(failed))
+    else failedDraftCleanupPaths.delete(startedAt)
   } catch {
     /* best-effort — a stuck draft is recovered on next launch, it must never fail the meeting end */
   }

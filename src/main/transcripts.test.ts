@@ -508,11 +508,22 @@ describe('appendDebrief (90-second off-record layer)', () => {
 describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)', () => {
   let folder: string
   let settings: Settings
+  let meeting: SaveMeeting
+  let nextMeetingStartedAt = 1_700_000_000_000
 
   beforeEach(() => {
     useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-draft-test-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
+    const startedAt = nextMeetingStartedAt
+    nextMeetingStartedAt += 1_000
+    meeting = {
+      title: 'Standup',
+      mode: 'meeting',
+      startedAt,
+      lines: [{ speaker: 'them', text: 'Where are we on the migration?', t: startedAt }],
+      recap: ''
+    }
     vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
     vi.mocked(unlinkAsync).mockClear()
   })
@@ -521,14 +532,6 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     rmSync(folder, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
-
-  const meeting: SaveMeeting = {
-    title: 'Standup',
-    mode: 'meeting',
-    startedAt: 1_700_000_000_000,
-    lines: [{ speaker: 'them', text: 'Where are we on the migration?', t: 1_700_000_000_000 }],
-    recap: ''
-  }
 
   it('writes a draft marked as a draft (not a real meeting-transcript), invisible to saveMeeting', async () => {
     await expect(saveDraftTranscript(settings, meeting)).resolves.toEqual({ status: 'saved' })
@@ -607,6 +610,88 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(drafts.length).toBe(1) // only `other`'s draft remains
   })
 
+  it('removes drafts from every folder used before the final save folder changed', async () => {
+    const savedFolder = join(folder, 'profile-meetings')
+    mkdirSync(savedFolder)
+    const savedFolderSettings = { ...settings, meetingsFolder: savedFolder }
+    await saveDraftTranscript(settings, meeting)
+    await saveDraftTranscript(savedFolderSettings, meeting)
+
+    await clearDraftTranscript(settings, meeting.startedAt, join(savedFolder, 'finalized.md'))
+
+    expect(readdirSync(folder).some((file) => file.startsWith('.autosave-draft-'))).toBe(false)
+    expect(readdirSync(savedFolder).some((file) => file.startsWith('.autosave-draft-'))).toBe(false)
+  })
+
+  it('seals all observed folders and rejects a late folder-C tick while joining old writes', async () => {
+    const folderB = join(folder, 'meetings-b')
+    const folderC = join(folder, 'meetings-c')
+    mkdirSync(folderB)
+    mkdirSync(folderC)
+    const settingsB = { ...settings, meetingsFolder: folderB }
+    const settingsC = { ...settings, meetingsFolder: folderC }
+    await saveDraftTranscript(settings, meeting)
+    await saveDraftTranscript(settingsB, meeting)
+
+    const held = holdDraftRename()
+    const pendingA = saveDraftTranscript(settings, meeting)
+    const draftA = await held.entered
+    // Only the already-entered A write is held; another meeting in C remains independent.
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
+    const savedPathB = join(folderB, 'durable-final.md')
+    let clearSettled = false
+    const clearing = clearDraftTranscript(settingsB, meeting.startedAt, savedPathB).then(() => { clearSettled = true })
+
+    await expect(saveDraftTranscript(settingsC, meeting)).resolves.toEqual({ status: 'disabled' })
+    const laterMeeting = { ...meeting, startedAt: meeting.startedAt + 1, lines: [] }
+    await expect(saveDraftTranscript(settingsC, laterMeeting)).resolves.toEqual({ status: 'saved' })
+    expect(clearSettled).toBe(false)
+    expect(existsSync(draftA)).toBe(true)
+
+    held.release()
+    await Promise.all([pendingA, clearing])
+    expect(readdirSync(folder).some((file) => file.startsWith('.autosave-draft-'))).toBe(false)
+    expect(readdirSync(folderB).some((file) => file.startsWith('.autosave-draft-'))).toBe(false)
+    const folderCDrafts = readdirSync(folderC).filter((file) => file.startsWith('.autosave-draft-'))
+    expect(folderCDrafts).toHaveLength(1)
+    expect(readFileSync(join(folderC, folderCDrafts[0]!), 'utf8')).toContain('in progress — autosaved draft')
+  })
+
+  it('disables a late autosave to a finalized path while allowing a later meeting path', async () => {
+    await saveDraftTranscript(settings, meeting)
+    await clearDraftTranscript(settings, meeting.startedAt)
+
+    await expect(saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [{ speaker: 'you', text: 'late old meeting tick', t: meeting.startedAt }]
+    })).resolves.toEqual({ status: 'disabled' })
+    await expect(saveDraftTranscript(settings, {
+      ...meeting,
+      startedAt: meeting.startedAt + 500,
+      lines: [{ speaker: 'them', text: 'later meeting snapshot', t: meeting.startedAt + 500 }]
+    })).resolves.toEqual({ status: 'saved' })
+
+    const drafts = readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))
+    expect(drafts).toHaveLength(1)
+    expect(readFileSync(join(folder, drafts[0]!), 'utf8')).toContain('later meeting snapshot')
+  })
+
+  it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, 8.64e15 + 1])(
+    'rejects invalid live meeting identity %s without creating a draft',
+    async (startedAt) => {
+      await expect(saveDraftTranscript(settings, { ...meeting, startedAt })).resolves.toEqual({ status: 'disabled' })
+      expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(0)
+    }
+  )
+
+  it('rejects late autosave under the normalized final-save identity', async () => {
+    const normalizedStartedAt = 702
+    await clearDraftTranscript(settings, normalizedStartedAt)
+
+    await expect(saveDraftTranscript(settings, { ...meeting, startedAt: normalizedStartedAt })).resolves.toEqual({ status: 'disabled' })
+    expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(0)
+  })
+
   const holdDraftRename = (fail = false): { entered: Promise<string>; release: () => void } => {
     let enter!: (file: string) => void
     let release!: () => void
@@ -627,6 +712,100 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     })
     return { entered, release }
   }
+
+  const deferred = <T = void>(): { promise: Promise<T>; resolve(value?: T): void } => {
+    let settle!: (value: T) => void
+    const promise = new Promise<T>((resolve) => { settle = resolve })
+    return { promise, resolve: (value?: T) => settle(value as T) }
+  }
+
+  it('serializes delayed snapshots so the newest admitted content wins', async () => {
+    const enteredFirst = deferred<string>()
+    const enteredSecond = deferred<string>()
+    const releaseFirst = deferred()
+    const releaseSecond = deferred()
+    let replacements = 0
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => {
+      const index = replacements++
+      if (index === 0) { enteredFirst.resolve(String(dest)); await releaseFirst.promise }
+      if (index === 1) { enteredSecond.resolve(String(dest)); await releaseSecond.promise }
+      renameSync(src, dest)
+    })
+
+    const older = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'older snapshot', t: meeting.startedAt }] })
+    await enteredFirst.promise
+    const newer = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'newer snapshot', t: meeting.startedAt }] })
+    await Promise.resolve()
+    expect(replacements).toBe(1)
+    releaseFirst.resolve()
+    const draftPath = await enteredSecond.promise
+    releaseSecond.resolve()
+    await Promise.all([older, newer])
+    expect(readFileSync(draftPath, 'utf8')).toContain('newer snapshot')
+  })
+
+  it('continues with a later queued snapshot after an earlier replacement fails', async () => {
+    vi.mocked(renameAsync)
+      .mockRejectedValueOnce(Object.assign(new Error('Synthetic private path'), { code: 'EIO' }))
+      .mockImplementationOnce(async (src, dest) => renameSync(src, dest))
+    const first = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'failed snapshot', t: meeting.startedAt }] })
+    const second = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'them', text: 'successful snapshot', t: meeting.startedAt }] })
+    await expect(first).resolves.toEqual({ status: 'failed' })
+    await expect(second).resolves.toEqual({ status: 'saved' })
+    const draft = readdirSync(folder).find((file) => file.startsWith('.autosave-draft-'))
+    expect(draft).toBeDefined()
+    expect(readFileSync(join(folder, draft!), 'utf8')).toContain('successful snapshot')
+  })
+
+  it('allows different draft paths to replace independently', async () => {
+    const entered = [deferred<string>(), deferred<string>()]
+    const releases = [deferred(), deferred()]
+    let replacements = 0
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => {
+      const index = replacements++
+      entered[index].resolve(String(dest))
+      await releases[index].promise
+      renameSync(src, dest)
+    })
+    const first = saveDraftTranscript(settings, meeting)
+    const otherMeeting = { ...meeting, startedAt: meeting.startedAt + 500 }
+    const second = saveDraftTranscript(settings, otherMeeting)
+    const [firstPath, secondPath] = await Promise.all([entered[0].promise, entered[1].promise])
+    expect(firstPath).not.toBe(secondPath)
+    releases[0].resolve()
+    releases[1].resolve()
+    await Promise.all([first, second])
+  })
+
+  it('cleanup waits for all same-path writes admitted before its snapshot, including queued writes', async () => {
+    const enteredFirst = deferred<string>()
+    const enteredSecond = deferred<string>()
+    const releaseFirst = deferred()
+    const releaseSecond = deferred()
+    let replacements = 0
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => {
+      const index = replacements++
+      if (index === 0) { enteredFirst.resolve(String(dest)); await releaseFirst.promise }
+      if (index === 1) { enteredSecond.resolve(String(dest)); await releaseSecond.promise }
+      renameSync(src, dest)
+    })
+    const first = saveDraftTranscript(settings, meeting)
+    const draftPath = await enteredFirst.promise
+    const second = saveDraftTranscript(settings, { ...meeting, lines: [{ speaker: 'you', text: 'queued latest', t: meeting.startedAt }] })
+    let clearSettled = false
+    const clearing = clearDraftTranscript(settings, meeting.startedAt).then(() => { clearSettled = true })
+    await expect(saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [{ speaker: 'them', text: 'late after cleanup began', t: meeting.startedAt }]
+    })).resolves.toEqual({ status: 'disabled' })
+    releaseFirst.resolve()
+    await enteredSecond.promise
+    expect(clearSettled).toBe(false)
+    expect(vi.mocked(unlinkAsync).mock.calls.some(([file]) => String(file) === draftPath)).toBe(false)
+    releaseSecond.resolve()
+    await Promise.all([first, second, clearing])
+    expect(existsSync(draftPath)).toBe(false)
+  })
 
   it.each([
     false,
@@ -669,6 +848,14 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(readdirSync(folder).some((file) => file.endsWith('.tmp'))).toBe(false)
   })
 
+  it('keeps a path finalized and cleanup nonfatal when draft unlink fails', async () => {
+    await saveDraftTranscript(settings, meeting)
+    vi.mocked(unlinkAsync).mockRejectedValueOnce(Object.assign(new Error('Synthetic unlink failure'), { code: 'EIO' }))
+    await expect(clearDraftTranscript(settings, meeting.startedAt)).resolves.toBeUndefined()
+    await expect(saveDraftTranscript(settings, meeting)).resolves.toEqual({ status: 'disabled' })
+    expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(1)
+  })
+
   it.each(['meeting', 'folder'] as const)('does not wait for another %s draft', async (different) => {
     const otherSettings = different === 'folder' ? { ...settings, meetingsFolder: join(folder, 'other') } : settings
     const other = different === 'meeting' ? { ...meeting, startedAt: meeting.startedAt + 500 } : meeting
@@ -693,11 +880,11 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     await clearDraftTranscript(settings, meeting.startedAt)
   })
 
-  it('allows a later draft write after cleanup without retaining completed-meeting tombstones', async () => {
+  it('keeps a finalized meeting path sealed after cleanup', async () => {
     await saveDraftTranscript(settings, meeting)
     await clearDraftTranscript(settings, meeting.startedAt)
-    await saveDraftTranscript(settings, meeting)
-    expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(1)
+    await expect(saveDraftTranscript(settings, meeting)).resolves.toEqual({ status: 'disabled' })
+    expect(readdirSync(folder).filter((file) => file.startsWith('.autosave-draft-'))).toHaveLength(0)
   })
 
   it('never throws, even against an unwritable folder', async () => {

@@ -8,7 +8,9 @@ function harness(
   const deps = {
     assertMainWindow: vi.fn(),
     requireAuth: vi.fn(() => true),
-    acceptTransition: vi.fn((_change: { on: boolean; startedAt?: number }) => true),
+    acceptTransition: vi.fn((_change: { on: boolean; startedAt?: number }, authorizeStart: () => boolean) =>
+      _change.on ? authorizeStart() : true),
+    consumeMeetingStartActivation: vi.fn(() => true),
     setListeningActive: vi.fn(),
     setTrayRecording: vi.fn(),
     setRecordingPowerSaveBlock: vi.fn(),
@@ -33,6 +35,7 @@ describe('registered listening-state native lifecycle', () => {
     expect(deps.setListeningActive).toHaveBeenCalledExactlyOnceWith(false)
     expect(deps.releaseParakeet).toHaveBeenCalledTimes(1)
     expect(deps.onMeetingStart).not.toHaveBeenCalled()
+    expect(deps.consumeMeetingStartActivation).not.toHaveBeenCalled()
   })
 
   it('does nothing when the owner rejects a stale stop or duplicate start', async () => {
@@ -41,7 +44,7 @@ describe('registered listening-state native lifecycle', () => {
     await handler({}, { on: false, startedAt: 100 })
     await handler({}, { on: true, startedAt: 200 })
     expect(deps.acceptTransition.mock.calls).toEqual([
-      [{ on: false, startedAt: 100 }], [{ on: true, startedAt: 200 }]
+      [{ on: false, startedAt: 100 }, expect.any(Function)], [{ on: true, startedAt: 200 }, expect.any(Function)]
     ])
     for (const key of ['setListeningActive', 'setTrayRecording', 'setRecordingPowerSaveBlock',
       'onMeetingStart', 'releaseParakeet', 'releaseSpeakerEmbedding'] as const) {
@@ -64,7 +67,9 @@ describe('registered listening-state native lifecycle', () => {
     await handler({}, true)
     deps.acceptTransition.mockReturnValue(false)
     await handler({}, false)
-    expect(deps.acceptTransition.mock.calls).toEqual([[{ on: true }], [{ on: false }]])
+    expect(deps.acceptTransition.mock.calls).toEqual([
+      [{ on: true }, expect.any(Function)], [{ on: false }, expect.any(Function)]
+    ])
     expect(deps.setListeningActive).toHaveBeenCalledExactlyOnceWith(true)
     expect(deps.releaseParakeet).not.toHaveBeenCalled()
   })
@@ -121,5 +126,20 @@ describe('registered listening-state native lifecycle', () => {
     expect(deps.onMeetingStart).toHaveBeenCalledTimes(1)
     expect(deps.releaseParakeet).not.toHaveBeenCalled()
     expect(deps.releaseSpeakerEmbedding).not.toHaveBeenCalled()
+  })
+
+  it('consumes a main-owned start grant inside the accepted on-transition before side effects', async () => {
+    const { handler, deps } = harness(async () => undefined)
+    deps.consumeMeetingStartActivation.mockReturnValue(false)
+    const rejected = await handler({ sender: 'main-window' }, { on: true, startedAt: 300 })
+    expect(rejected).toBe(false)
+    expect(deps.consumeMeetingStartActivation).toHaveBeenCalledTimes(1)
+    expect(deps.setListeningActive).not.toHaveBeenCalled()
+
+    deps.consumeMeetingStartActivation.mockReturnValue(true)
+    const accepted = await handler({ sender: 'main-window' }, { on: true, startedAt: 301 })
+    expect(accepted).toBe(true)
+    expect(deps.consumeMeetingStartActivation).toHaveBeenCalledTimes(2)
+    expect(deps.setListeningActive).toHaveBeenCalledExactlyOnceWith(true)
   })
 })

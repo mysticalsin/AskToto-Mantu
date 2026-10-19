@@ -20,6 +20,7 @@ import {
   type CloudSpeechStartRequest
 } from '@shared/cloud-speech'
 import type { ScreenDiagnosis } from '@shared/screen-permission'
+import type { MeetingMicCaptureRevoked } from '@shared/ipc'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
 // keys.ts freezes navigator.platform at import time, before beforeEach can stub the browser. Keep
@@ -140,6 +141,10 @@ let mediaDeviceListeners: Partial<Record<string, () => void>> = {}
 let cloudSpeechListeners = new Set<(event: CloudSpeechEvent) => void>()
 let cloudSpeechStreams = new Map<Track, { generation: number; track: Track; epoch: number }>()
 let cloudSpeechLastSequences = new Map<string, number>()
+let inputSessionCounter = 0
+let meetingGrants: Array<{ captureId: string; startedAt: number; established: boolean }> = []
+let revokedMeetingGrantIds = new Set<string>()
+let meetingRevocationListeners = new Set<(event: MeetingMicCaptureRevoked) => void>()
 
 function cloudSpeechStreamKey(stream: { generation: number; track: Track; epoch: number }): string {
   return `${stream.generation}:${stream.track}:${stream.epoch}`
@@ -373,6 +378,10 @@ beforeEach(() => {
   cloudSpeechListeners = new Set()
   cloudSpeechStreams = new Map()
   cloudSpeechLastSequences = new Map()
+  inputSessionCounter = 0
+  meetingGrants = []
+  revokedMeetingGrantIds = new Set()
+  meetingRevocationListeners = new Set()
   sealMode = { delayMs: 0, acknowledge: true, throwOnPost: false }
   addModuleImpl = async () => {}
   getUserMediaImpl = async () => makeStream('mic')
@@ -386,6 +395,56 @@ beforeEach(() => {
 
   vi.stubGlobal('window', {
     toto: {
+      getInputSessionContext: vi.fn(async () => ({ authSessionGeneration: 1, contextRevision: 1 })),
+      startInputSession: vi.fn(async (input: { source: string; purpose: string; activation: string }, context: { authSessionGeneration: number; contextRevision: number }) => ({
+        ok: true as const,
+        lease: {
+          sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
+          source: input.source,
+          purpose: input.purpose,
+          activation: input.activation,
+          authSessionGeneration: context.authSessionGeneration,
+          contextRevision: context.contextRevision,
+          revision: 1,
+          startedAt: Date.now(),
+          actionAuthority: false
+        }
+      })),
+      confirmInputSession: vi.fn(async () => true),
+      stopInputSession: vi.fn(async () => ({ ok: true as const })),
+      onInputSessionRevoked: vi.fn(() => () => {}),
+      meetingMicAdmission: vi.fn(async (startedAt: number) => {
+        const grant = {
+          captureId: `00000000-0000-4000-8000-${(++inputSessionCounter).toString(16).padStart(12, '0')}`,
+          startedAt,
+          established: false
+        }
+        meetingGrants.push(grant)
+        return { captureId: grant.captureId, startedAt: grant.startedAt }
+      }),
+      confirmMeetingMicCapture: vi.fn(async (captureId: string, startedAt: number) => {
+        const grant = meetingGrants.find((candidate) => candidate.captureId === captureId && candidate.startedAt === startedAt)
+        if (!grant || revokedMeetingGrantIds.has(captureId)) return false
+        grant.established = true
+        return true
+      }),
+      releaseMeetingMicCapture: vi.fn(async () => true),
+      onMeetingMicCaptureRevoked: vi.fn((listener: (event: MeetingMicCaptureRevoked) => void) => {
+        meetingRevocationListeners.add(listener)
+        return () => meetingRevocationListeners.delete(listener)
+      }),
+      hide: vi.fn(async () => {
+        for (const grant of meetingGrants) {
+          if (grant.established || revokedMeetingGrantIds.has(grant.captureId)) continue
+          revokedMeetingGrantIds.add(grant.captureId)
+          const event: MeetingMicCaptureRevoked = {
+            captureId: grant.captureId,
+            startedAt: grant.startedAt,
+            reason: 'window-hidden'
+          }
+          for (const listener of meetingRevocationListeners) listener(event)
+        }
+      }),
       setListeningState: vi.fn(async () => {}),
       armAudio: async () => {},
       parakeetStatus: vi.fn(async () => ({ ready: true, addonError: null })),
@@ -1543,6 +1602,38 @@ describe('worklet seal-and-flush protocol', () => {
   })
 })
 
+describe('microphone recovery on devicechange', () => {
+  it.each([
+    ['a device is added while the current mic track is still live', 'live'],
+    ['the connected mic was disconnected or replaced', 'ended']
+  ] as const)('releases the existing meeting capture before replacement acquisition when %s', async (_scenario, state) => {
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const original = streams[0]
+    if (!original) throw new Error('test microphone did not open')
+    original.track.readyState = state
+
+    let replacementRequestedAfterRelease = false
+    getUserMediaImpl = async () => {
+      if (streams.length > 0) {
+        replacementRequestedAfterRelease = original.track.stop.mock.calls.length === 1
+      }
+      return makeStream('mic')
+    }
+
+    mediaDeviceListeners.devicechange?.()
+    await vi.advanceTimersByTimeAsync(800)
+    await settle()
+
+    expect(replacementRequestedAfterRelease).toBe(true)
+    expect(streams).toHaveLength(2)
+    expect(window.toto.meetingMicAdmission).toHaveBeenCalledTimes(2)
+    expect(window.toto.setListeningState).toHaveBeenCalledTimes(1)
+    expect(render('parakeet')).toMatchObject({ listening: true, capturing: true })
+  })
+})
+
 describe('broker cloud speech Listen lifecycle', () => {
   it.each([
     'mic',
@@ -1929,6 +2020,127 @@ describe('broker cloud speech Listen lifecycle', () => {
 })
 
 describe('useListen Stop flush ownership', () => {
+  it('stops a late meeting stream when the overlay hides before getUserMedia resolves', async () => {
+    let resolveMic!: (stream: MediaStream) => void
+    let getUserMediaStarted = false
+    getUserMediaImpl = () => {
+      getUserMediaStarted = true
+      return new Promise((resolve) => { resolveMic = resolve })
+    }
+    const api = render('parakeet')
+    const starting = api.start('mic', 'fast', 'parakeet', 'English', 701)
+    await settle()
+    const grant = meetingGrants.at(-1)
+    const revokeListener = vi.mocked(window.toto.onMeetingMicCaptureRevoked).mock.calls.at(-1)?.[0]
+    if (!grant || !revokeListener || !getUserMediaStarted || !resolveMic) {
+      throw new Error('meeting microphone did not reach its pending getUserMedia request')
+    }
+
+    await window.toto.hide()
+    const lateStream = makeStream('mic')
+    const lateTrack = streams.at(-1)?.track
+    if (!lateTrack) throw new Error('late stream test track was not created')
+    resolveMic(lateStream)
+    await starting
+    await settle()
+
+    expect(window.toto.confirmMeetingMicCapture).not.toHaveBeenCalled()
+    expect(lateTrack.stop).toHaveBeenCalledOnce()
+    expect(worklets).toHaveLength(0)
+    expect(render('parakeet').capturing).toBe(false)
+  })
+
+  it('stops a meeting stream when main denies post-getUserMedia confirmation', async () => {
+    vi.mocked(window.toto.confirmMeetingMicCapture).mockResolvedValue(false)
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 703)
+    await settle()
+    const track = streams.find((entry) => entry.kind === 'mic')?.track
+    if (!track) throw new Error('meeting microphone stream did not resolve')
+
+    expect(window.toto.confirmMeetingMicCapture).toHaveBeenCalledOnce()
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(worklets).toHaveLength(0)
+    expect(render('parakeet').capturing).toBe(false)
+  })
+
+  it('keeps an established meeting stream alive when the overlay hides', async () => {
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 702)
+    await settle()
+    const grant = meetingGrants.at(-1)
+    const activeTrack = streams.find((entry) => entry.kind === 'mic')?.track
+    if (!grant || !activeTrack) throw new Error('meeting microphone did not establish a stream')
+
+    expect(window.toto.confirmMeetingMicCapture).toHaveBeenCalledWith(grant.captureId, grant.startedAt)
+    expect(grant.established).toBe(true)
+    await window.toto.hide()
+
+    expect(activeTrack.stop).not.toHaveBeenCalled()
+    expect(render('parakeet').capturing).toBe(true)
+  })
+
+  it('settles a local-ASR Stop observer as revoked when a hard lifecycle revoke interrupts drain', async () => {
+    let resolveFeed!: (value: { text: string; name?: string }) => void
+    vi.mocked(window.toto.parakeetFeed).mockImplementation(
+      () => new Promise((resolve) => { resolveFeed = resolve })
+    )
+    const api = render('parakeet')
+    const revokeListener = vi.mocked(window.toto.onMeetingMicCaptureRevoked).mock.calls.at(-1)?.[0]
+    if (!revokeListener) throw new Error('test Listen hook did not register its meeting revocation listener')
+    await api.start('mic', 'fast', 'parakeet', 'English', 654)
+    await settle()
+    const grant = meetingGrants.at(-1)
+    const worklet = worklets.at(-1)
+    if (!grant || !worklet) throw new Error('test microphone capture did not open')
+
+    worklet.emit({ audio: new Float32Array([0.2]), partial: false })
+    await settle()
+    expect(window.toto.parakeetFeed).toHaveBeenCalledOnce()
+    const stopObserver = vi.fn()
+    api.stop(stopObserver)
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(stopObserver).not.toHaveBeenCalled()
+
+    revokeListener({ ...grant, reason: 'sign-out' })
+    await settle()
+    expect(stopObserver).toHaveBeenCalledOnce()
+    expect(stopObserver).toHaveBeenCalledWith('revoked')
+    expect(window.toto.cloudSpeechCancel).not.toHaveBeenCalled()
+    expect(render('parakeet').capturing).toBe(false)
+
+    // Keep the deliberately unresolved decoder from leaking into teardown if a future assertion changes.
+    resolveFeed({ text: 'Late local result.', name: 'Alice' })
+    await settle()
+  })
+
+  it('keeps a completed graceful Stop after its delayed user-stop grant notice', async () => {
+    const api = renderBroker()
+    const revokeListener = vi.mocked(window.toto.onMeetingMicCaptureRevoked).mock.calls.at(-1)?.[0]
+    if (!revokeListener) throw new Error('test Listen hook did not register its meeting revocation listener')
+    await api.start('mic', 'fast', 'cloud', 'English', 321, brokerConsent)
+    await settle()
+    const grant = meetingGrants.at(-1)
+    if (!grant) throw new Error('test meeting microphone grant was not created')
+    const drained = vi.fn()
+
+    api.stop(drained)
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(drained).toHaveBeenCalledOnce()
+    expect(window.toto.releaseMeetingMicCapture).toHaveBeenCalledWith(grant.captureId)
+
+    revokeListener({ ...grant, reason: 'user-stop' })
+    await settle()
+
+    expect(drained).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSpeechCancel).not.toHaveBeenCalled()
+    expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSttStop).not.toHaveBeenCalledWith({ force: true, captureId: expect.any(String) })
+    expect(renderBroker().capturing).toBe(false)
+  })
+
   it('waits for a delayed paused-session flush ACK and commits its preceding final audio', async () => {
     sealMode = { delayMs: 200, audio: new Float32Array([0.2]), acknowledge: true, throwOnPost: false }
     vi.mocked(window.toto.parakeetFeed).mockResolvedValue({ text: 'The final paused sentence.', name: 'Alice' })

@@ -213,6 +213,10 @@ export async function pickBackend(): Promise<{ backend: string; apiKey?: string 
 // --- Status / build -------------------------------------------------------------------------------
 
 let building = false
+let activeGraphBuild: Promise<GraphStatus> | null = null
+let buildFenceCount = 0
+let buildFenceWait: Promise<void> | null = null
+let releaseBuildFenceWait: (() => void) | null = null
 let lastError: string | null = null
 
 export async function graphifyStatus(): Promise<GraphStatus> {
@@ -286,7 +290,43 @@ async function confidentialGraphRefusal(s: Settings): Promise<string | null> {
 }
 
 /** Build (or incrementally update) the notes graph. Returns the final status. */
-export async function buildGraph(incremental = false): Promise<GraphStatus> {
+export function buildGraph(incremental = false): Promise<GraphStatus> {
+  if (buildFenceCount > 0) return (buildFenceWait || Promise.resolve()).then(() => buildGraph(incremental))
+  // Preserve the explicit Rebuild command's existing behavior while another build is active: return
+  // the current status immediately. The active promise remains available to deletion fences below.
+  if (activeGraphBuild) return graphifyStatus()
+  const operation = runGraphBuild(incremental)
+  activeGraphBuild = operation
+  const clear = (): void => {
+    if (activeGraphBuild === operation) activeGraphBuild = null
+  }
+  void operation.then(clear, clear)
+  return operation
+}
+
+/** Hold graph publication out of a source-file deletion window and join any build already in flight. */
+export async function acquireGraphBuildFence(): Promise<() => void> {
+  if (buildFenceCount === 0) {
+    buildFenceWait = new Promise<void>((resolve) => { releaseBuildFenceWait = resolve })
+  }
+  buildFenceCount += 1
+  const currentBuild = activeGraphBuild
+  if (currentBuild) await currentBuild.then(() => undefined, () => undefined)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    buildFenceCount -= 1
+    if (buildFenceCount === 0) {
+      const release = releaseBuildFenceWait
+      releaseBuildFenceWait = null
+      buildFenceWait = null
+      release?.()
+    }
+  }
+}
+
+async function runGraphBuild(incremental: boolean): Promise<GraphStatus> {
   if (building) return graphifyStatus()
   // When at-rest encryption is on with no plaintext substitute available, the saved notes are ciphertext
   // that graphify can't read — a manual Rebuild would produce a garbage graph. scheduleRebuild() already
@@ -296,54 +336,56 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
     lastError = refusal
     return graphifyStatus()
   }
-  // Confidentiality fail-closed: never feed a confidential meeting into the graph (QA #10).
-  const confidentialRefusal = await confidentialGraphRefusal(getSettings())
-  if (confidentialRefusal) {
-    lastError = confidentialRefusal
-    return graphifyStatus()
-  }
   // Set the lock SYNCHRONOUSLY before any await — detectPython()/pickBackend() do child-process I/O
   // that yields to the event loop, so a second caller (rebuild double-click + the debounced timer)
   // could otherwise pass the `if (building)` check and spawn a concurrent build into the same outDir.
+  // This must precede the asynchronous confidentiality check too: a transcript discard joins a build
+  // already admitted by the debounce timer before it removes that build's source file.
   building = true
   lastError = null
   try {
-    const python = await detectPython()
-    const picked = python ? await pickBackend() : null
-    if (!python) {
-      lastError = 'graphify is not installed. Run: pip install graphifyy (or: uv tool install graphifyy).'
-    } else if (!picked) {
-      lastError = 'No extraction backend. Install Claude Code, or add a Claude/OpenAI key in Settings → AI.'
+    // Confidentiality fail-closed: never feed a confidential meeting into the graph (QA #10).
+    const confidentialRefusal = await confidentialGraphRefusal(getSettings())
+    if (confidentialRefusal) {
+      lastError = confidentialRefusal
     } else {
-      const notes = graphifySourceDir(getSettings())
-      // Graph extraction is explicitly exempt from the CLI/Anthropic interactive guardrail (see
-      // shared/providers.ts applyInteractiveGuardrail) — it's a bounded, infrequent background job where
-      // extraction quality matters more than per-call cost, so it's allowed to reach for Opus. 'openai'
-      // gets no override (no Anthropic Opus equivalent) — unchanged, whatever graphifyy's own default is.
-      const modelArg =
-        picked.backend === 'claude-cli' ? 'opus' : picked.backend === 'claude' ? 'claude-opus-4-8' : undefined
-      const args = [
-        'build',
-        '--input',
-        notes,
-        '--out',
-        outDir(),
-        '--backend',
-        picked.backend,
-        ...(modelArg ? ['--model', modelArg] : [])
-      ]
-      if (incremental) args.push('--incremental')
-      const { stdout } = await exec(
-        python,
-        [runnerPath(), ...args],
-        execOpts(
-          { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 },
-          picked.apiKey ? { GRAPHIFY_API_KEY: picked.apiKey } : {}
+      const python = await detectPython()
+      const picked = python ? await pickBackend() : null
+      if (!python) {
+        lastError = 'graphify is not installed. Run: pip install graphifyy (or: uv tool install graphifyy).'
+      } else if (!picked) {
+        lastError = 'No extraction backend. Install Claude Code, or add a Claude/OpenAI key in Settings → AI.'
+      } else {
+        const notes = graphifySourceDir(getSettings())
+        // Graph extraction is explicitly exempt from the CLI/Anthropic interactive guardrail (see
+        // shared/providers.ts applyInteractiveGuardrail) — it's a bounded, infrequent background job where
+        // extraction quality matters more than per-call cost, so it's allowed to reach for Opus. 'openai'
+        // gets no override (no Anthropic Opus equivalent) — unchanged, whatever graphifyy's own default is.
+        const modelArg =
+          picked.backend === 'claude-cli' ? 'opus' : picked.backend === 'claude' ? 'claude-opus-4-8' : undefined
+        const args = [
+          'build',
+          '--input',
+          notes,
+          '--out',
+          outDir(),
+          '--backend',
+          picked.backend,
+          ...(modelArg ? ['--model', modelArg] : [])
+        ]
+        if (incremental) args.push('--incremental')
+        const { stdout } = await exec(
+          python,
+          [runnerPath(), ...args],
+          execOpts(
+            { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+            picked.apiKey ? { GRAPHIFY_API_KEY: picked.apiKey } : {}
+          )
         )
-      )
-      const line = stdout.trim().split('\n').filter(Boolean).pop() || '{}'
-      const res = JSON.parse(line) as { ok: boolean; error?: string }
-      if (!res.ok) lastError = res.error || 'Graph build failed.'
+        const line = stdout.trim().split('\n').filter(Boolean).pop() || '{}'
+        const res = JSON.parse(line) as { ok: boolean; error?: string }
+        if (!res.ok) lastError = res.error || 'Graph build failed.'
+      }
     }
   } catch (e) {
     lastError = e instanceof Error ? e.message : String(e)
@@ -357,26 +399,85 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
 
 let rebuildTimer: NodeJS.Timeout | null = null
 const REBUILD_DEBOUNCE_MS = 20_000
+interface ScheduledRebuild {
+  assertAdmission?: () => void
+  settle: () => void
+}
+const scheduledRebuilds: ScheduledRebuild[] = []
 
-/** Called after a note/meeting is saved. Coalesces a burst of saves into one incremental rebuild. */
-export async function scheduleRebuild(): Promise<void> {
-  const s = getSettings()
-  if (!s.graphifyEnabled || !s.graphifyAutoRebuild) return
-  // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
-  // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
-  if (graphifyRefusalReason(s)) return
-  if (await confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
-  if (rebuildTimer) clearTimeout(rebuildTimer)
-  const fire = (): void => {
-    rebuildTimer = null
-    // A build is already running — retry shortly instead of dropping this note's update.
-    if (building) {
-      rebuildTimer = setTimeout(fire, 5_000)
+function settleScheduledRebuilds(rebuilds: ScheduledRebuild[]): void {
+  for (const rebuild of rebuilds) rebuild.settle()
+}
+
+function fireScheduledRebuild(): void {
+  rebuildTimer = null
+  const rebuilds = scheduledRebuilds.splice(0)
+  if (!rebuilds.length) return
+  // A build is already running — keep every receipt joined to the next build or a closed admission
+  // check, rather than reporting settlement while an earlier build can still publish its graph.
+  if (building || buildFenceCount > 0) {
+    scheduledRebuilds.unshift(...rebuilds)
+    rebuildTimer = setTimeout(fireScheduledRebuild, 5_000)
+    return
+  }
+
+  let hasAdmittedRequest = false
+  for (const rebuild of rebuilds) {
+    try {
+      rebuild.assertAdmission?.()
+      hasAdmittedRequest = true
+    } catch {
+      // A sealed/discarded receipt cannot start a new build. If another request remains admitted,
+      // however, join the shared build too because it still scans the same source folder.
+    }
+  }
+  if (!hasAdmittedRequest) {
+    settleScheduledRebuilds(rebuilds)
+    return
+  }
+  // buildGraph takes its lock synchronously before its first await, and this promise covers its full
+  // runner lifecycle. Disregard waits for this callback before deleting the source transcript.
+  void buildGraph(true).then(
+    () => settleScheduledRebuilds(rebuilds),
+    () => settleScheduledRebuilds(rebuilds)
+  )
+}
+
+/** Called after a note/meeting is saved. Coalesces a burst of saves into one incremental rebuild.
+ *  onSettled is receipt ownership: it fires after the shared build finishes or the request is safely
+ *  refused, so Disregard can join all graph publication that could include its source transcript. */
+export async function scheduleRebuild(assertAdmission?: () => void, onSettled?: () => void): Promise<void> {
+  let settled = false
+  const settle = (): void => {
+    if (settled) return
+    settled = true
+    onSettled?.()
+  }
+  try {
+    assertAdmission?.()
+    const s = getSettings()
+    if (!s.graphifyEnabled || !s.graphifyAutoRebuild) {
+      settle()
       return
     }
-    void buildGraph(true)
+    // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
+    // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
+    if (graphifyRefusalReason(s)) {
+      settle()
+      return
+    }
+    if (await confidentialGraphRefusal(s)) {
+      settle()
+      return // don't auto-build a graph that would include a confidential meeting (QA #10)
+    }
+    assertAdmission?.()
+    scheduledRebuilds.push({ assertAdmission, settle })
+    if (rebuildTimer) clearTimeout(rebuildTimer)
+    rebuildTimer = setTimeout(fireScheduledRebuild, REBUILD_DEBOUNCE_MS)
+  } catch (error) {
+    settle()
+    throw error
   }
-  rebuildTimer = setTimeout(fire, REBUILD_DEBOUNCE_MS)
 }
 
 // --- Related notes (read graph.json neighbours) --------------------------------------------------

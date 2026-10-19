@@ -35,7 +35,7 @@ vi.mock('./store', async (importOriginal) => {
   }
 })
 
-import { buildBrainContext, resetMatchKeyCacheForTests } from './context'
+import { buildBrainContext, buildBrainContextWithSources, formatDeal, resetMatchKeyCacheForTests } from './context'
 import { writePerson, writeAccount, writeDeal } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
@@ -100,6 +100,163 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     expect(matched).toBe(true)
     expect(block).toContain('Maria Silva')
     expect(opened).toEqual(['person/maria-silva'])
+  })
+
+  it('returns bounded local source references alongside the existing cited context', () => {
+    buildBrainContext(s, 'what is the weather in Paris today')
+    const result = buildBrainContextWithSources(s, 'what did Maria Silva promise?')
+    expect(result.block).toContain('Renewal call')
+    expect(result.sourceReferences).toContainEqual({ kind: 'meeting', source: MEETING.file, date: MEETING.date })
+    expect(result.sourceReferencesComplete).toBe(true)
+    expect(result.sourceReferences.length).toBeLessThanOrEqual(64)
+  })
+
+  it('gates person, account, and deal fields by provenance and records verified field sources', async () => {
+    const person = PersonEntitySchema.parse({
+      id: 'provenance-person',
+      name: 'Provenance Person',
+      role: 'Legacy Role',
+      account: 'Legacy Organization',
+      meetings: [MEETING],
+      role_provenance: {
+        value: 'Verified Role', source_file: 'person-role.md', date: '2026-05-20',
+        confidence: 'EXTRACTED', state: 'verified'
+      },
+      org_provenance: {
+        value: 'Pinned Organization', source_file: '', date: '',
+        confidence: 'INFERRED', state: 'pinned'
+      }
+    })
+    await writePerson(s, person.id, person)
+
+    const account = AccountEntitySchema.parse({
+      id: 'provenance-account',
+      name: 'Provenance Account',
+      sector: 'retail',
+      strategic: true,
+      meetings: [MEETING],
+      sector_provenance: {
+        value: 'banking', source_file: 'account-sector.md', date: '2026-05-21',
+        confidence: 'EXTRACTED', state: 'verified'
+      }
+    })
+    await writeAccount(s, account.id, account)
+
+    const deal = DealEntitySchema.parse({
+      id: 'provenance-deal',
+      name: 'Provenance Deal',
+      account: 'Unproven Deal Account',
+      stage: 'legacy stage',
+      win_likelihood_band: 'good',
+      meetings: [MEETING],
+      stage_provenance: {
+        value: 'contract', source_file: '', date: '', confidence: 'INFERRED', state: 'edited'
+      },
+      win_likelihood_band_provenance: {
+        value: 'concerning', source_file: 'deal-outlook.md', date: '2026-05-22',
+        confidence: 'EXTRACTED', state: 'verified'
+      }
+    })
+    await writeDeal(s, deal.id, deal)
+
+    const result = buildBrainContextWithSources(s, 'Summarize Provenance Person Provenance Account Provenance Deal.')
+    expect(result.block).toContain('Verified Role [person-role.md, 2026-05-20]')
+    expect(result.block).toContain('Pinned Organization (edited by you)')
+    expect(result.block).not.toContain('Legacy Role')
+    expect(result.block).not.toContain('Legacy Organization')
+    expect(result.block).toContain('banking [account-sector.md, 2026-05-21]')
+    expect(result.block).not.toContain('retail')
+    expect(result.block).not.toContain('strategic')
+    expect(result.block).toContain('contract (edited by you)')
+    expect(result.block).toContain('concerning likelihood [deal-outlook.md, 2026-05-22]')
+    expect(result.block).not.toContain('Unproven Deal Account')
+    expect(result.block).not.toContain('legacy stage')
+    expect(result.block).not.toContain('good likelihood')
+    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'person-role.md', date: '2026-05-20' })
+    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'account-sector.md', date: '2026-05-21' })
+    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'deal-outlook.md', date: '2026-05-22' })
+    expect(result.sourceReferencesComplete).toBe(true)
+  })
+
+  it('omits plain role, organization, sector, stage, and band values without renderable provenance', async () => {
+    const person = PersonEntitySchema.parse({
+      id: 'unproven-person', name: 'Unproven Person', role: 'Unverified Role', account: 'Unverified Org', meetings: [MEETING],
+      role_provenance: { value: 'Unverified Role', source_file: 'm1.md', date: MEETING.date, state: 'extracted' },
+      org_provenance: { value: 'Unverified Org', source_file: 'm1.md', date: MEETING.date, state: 'extracted' }
+    })
+    await writePerson(s, person.id, person)
+    const account = AccountEntitySchema.parse({
+      id: 'unproven-account', name: 'Unproven Account', sector: 'retail', strategic: true, meetings: [MEETING],
+      sector_provenance: { value: 'retail', source_file: 'm1.md', date: MEETING.date, state: 'extracted' }
+    })
+    await writeAccount(s, account.id, account)
+    const deal = DealEntitySchema.parse({
+      id: 'unproven-deal', name: 'Unproven Deal', stage: 'unverified stage', win_likelihood_band: 'good', meetings: [MEETING],
+      stage_provenance: { value: 'unverified stage', source_file: 'm1.md', date: MEETING.date, state: 'extracted' },
+      win_likelihood_band_provenance: { value: 'good', source_file: 'm1.md', date: MEETING.date, state: 'extracted' }
+    })
+    await writeDeal(s, deal.id, deal)
+
+    const result = buildBrainContextWithSources(s, 'Summarize Unproven Person Unproven Account Unproven Deal.')
+    expect(result.block).not.toContain('Unverified Role')
+    expect(result.block).not.toContain('Unverified Org')
+    expect(result.block).not.toContain('(retail)')
+    expect(result.block).not.toContain('strategic')
+    expect(result.block).not.toContain('unverified stage')
+    expect(result.block).not.toContain('good likelihood')
+  })
+
+  it('does not report provenance sources for amount or close-date fields that are omitted for missing files', async () => {
+    const deal = DealEntitySchema.parse({
+      id: 'missing-source-deal',
+      name: 'Missing Source Deal',
+      meetings: [],
+      amount: {
+        value: { value: 125000, currency: 'USD' }, source_file: '', date: '2026-05-23',
+        confidence: 'EXTRACTED', state: 'verified'
+      },
+      close_date: {
+        value: '2026-06-30', source_file: '', date: '2026-05-24',
+        confidence: 'EXTRACTED', state: 'verified'
+      }
+    })
+    await writeDeal(s, deal.id, deal)
+
+    const result = buildBrainContextWithSources(s, 'Summarize Missing Source Deal.')
+    expect(result.block).not.toContain('Amount:')
+    expect(result.block).not.toContain('Close date:')
+    expect(result.sourceReferences).toEqual([])
+    expect(result.sourceReferencesComplete).toBe(true)
+  })
+
+  it('includes velocity only when a renderable provenance record grounds the displayed evidence', async () => {
+    const value = { signal: 'soft-organizational-gate' as const, evidence: 'sponsor wants a decision next month' }
+    const grounded = DealEntitySchema.parse({
+      id: 'velocity-deal',
+      name: 'Velocity Deal',
+      meetings: [MEETING],
+      velocity: value,
+      velocity_provenance: {
+        value,
+        source_file: MEETING.file,
+        date: MEETING.date,
+        confidence: 'EXTRACTED',
+        state: 'verified'
+      }
+    })
+    await writeDeal(s, grounded.id, grounded)
+
+    const result = buildBrainContextWithSources(s, 'What is happening with the Velocity Deal?')
+    expect(result.block).toContain(`Velocity ${value.signal}: ${value.evidence} [${MEETING.file}, ${MEETING.date}].`)
+    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: MEETING.file, date: MEETING.date })
+    expect(result.sourceReferencesComplete).toBe(true)
+
+    const ungrounded = DealEntitySchema.parse({
+      id: 'ungrounded-deal',
+      name: 'Ungrounded Deal',
+      velocity: value
+    })
+    expect(formatDeal(ungrounded)).not.toContain('Velocity ')
   })
 
   it('MQA-010 — an alias-only match still hits the canonical record without reopening the corpus', async () => {

@@ -6,6 +6,7 @@ export interface ListenMicCapture {
   stream: MediaStream
   track: MediaStreamTrack
   health: CaptureHealth
+  release?: () => void | Promise<void>
 }
 
 export interface ListenAudioChannel {
@@ -184,6 +185,7 @@ export function createListenAudioChannels(
       /* continue releasing stream and context */
     }
     if (!options.retainStream) channel.stream.getTracks().forEach((track) => track.stop())
+    if (!options.retainStream) channel.micCapture?.release?.()
     void channel.ctx.close().catch(() => {})
     if (!options.retainCaptureState) {
       try {

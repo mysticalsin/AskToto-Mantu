@@ -8,6 +8,7 @@ import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
+export type { InputSessionContext, InputSessionFailureReason, InputSessionLease, InputSessionResult, InputSessionRevoked, InputSessionStart, InputSessionStartRequest, InputSessionStop, InputSessionStopRequest, InputSessionStopResult, MeetingMicCaptureGrant, MeetingMicCaptureRevoked } from './input-session'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
 export {
   ScreenCaptureCheckPassSchema,
@@ -22,6 +23,13 @@ export const ListeningStatePayloadSchema = z.object({
   startedAt: LiveMeetingStartedAtSchema.optional()
 })
 export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
+export const MeetingMicAdmissionRequestSchema = z.object({ startedAt: LiveMeetingStartedAtSchema }).strict()
+export const DraftMeetingLifecyclePayloadSchema = z.object({ startedAt: LiveMeetingStartedAtSchema }).strict()
+export const DiscardSavedTranscriptPayloadSchema = z.object({
+  startedAt: LiveMeetingStartedAtSchema,
+  title: z.string().max(200).optional(),
+  path: z.string().max(4096).optional()
+}).strict()
 
 export type PreservedBrainIndexCopy = {
   id: string
@@ -155,6 +163,11 @@ export const IPC = {
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
   saveDraftTranscript: 'transcript:saveDraft',
+  preserveDraftTranscript: 'transcript:preserveDraft',
+  discardDraftTranscript: 'transcript:discardDraft',
+  discardSavedTranscript: 'transcript:discardSaved',
+  recoveredDraftCount: 'transcript:recoveredDraftCount',
+  transcriptsRecovered: 'transcript:recovered',
   saveNote: 'note:save',
   importAudioPick: 'import-audio:pick',
   importAudioOffer: 'import-audio:offer',
@@ -259,6 +272,26 @@ export const IPC = {
   // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
   screenCaptureCheck: 'permissions:screenCaptureCheck',
   listeningState: 'listening:state',
+  inputSessionStart: 'input-session:start',
+  inputSessionStop: 'input-session:stop',
+  inputSessionConfirm: 'input-session:confirm',
+  inputSessionContext: 'input-session:context',
+  inputSessionRevoked: 'input-session:revoked',
+  meetingMicAdmission: 'meeting:mic-admission',
+  meetingMicCaptureConfirm: 'meeting:mic-capture-confirm',
+  meetingMicCaptureRelease: 'meeting:mic-capture-release',
+  meetingMicCaptureRevoked: 'meeting:mic-capture-revoked',
+  meetingStartActivationObserved: 'meeting:start-activation-observed',
+  meetingStartActivationReady: 'meeting:start-activation-ready',
+  meetingStartActivationCancel: 'meeting:start-activation-cancel',
+  commandMicActivationObserved: 'command-mic:activation-observed',
+  commandMicActivationReady: 'command-mic:activation-ready',
+  commandMicActivationCancel: 'command-mic:activation-cancel',
+  commandMicAvailability: 'command-mic:availability',
+  commandSpeechStart: 'command-speech:start',
+  commandSpeechFrame: 'command-speech:frame',
+  commandSpeechFinish: 'command-speech:finish',
+  commandSpeechCancel: 'command-speech:cancel',
   asrBundled: 'asr:bundled',
   // Onboarding + Settings: live Parakeet/Whisper-floor readiness (bundled or userData). Distinct from
   // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
@@ -1817,6 +1850,25 @@ export const MetisCommandConfirmationSchema = z
   .strict()
 export type MetisCommandConfirmation = z.infer<typeof MetisCommandConfirmationSchema>
 
+const CommandSpeechSessionIdSchema = z.string().regex(/^[a-f0-9]{48}$/)
+export const CommandSpeechStartSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
+export const CommandSpeechFrameSchema = z.object({
+  sessionId: CommandSpeechSessionIdSchema,
+  sequence: z.number().int().nonnegative().safe(),
+  samples: z.instanceof(Float32Array)
+}).strict()
+export const CommandSpeechFinishSchema = z.object({
+  sessionId: CommandSpeechSessionIdSchema,
+  frameCount: z.number().int().nonnegative().safe()
+}).strict()
+export const CommandSpeechCancelSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
+export type CommandSpeechResult =
+  | { ok: true }
+  | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'busy' | 'stale' | 'invalid' | 'no_speech' | 'recognition_unavailable' }
+export type CommandMicAvailabilityResult =
+  | { ok: true }
+  | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'unauthorized' }
+
 /** A hotkey main failed to bind (combo already held by another app, or OS-reserved) — IPC.shortcutFailures. */
 export interface ShortcutFailure {
   action: string
@@ -1834,6 +1886,8 @@ export interface MeetingSummary {
   /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
    *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
   confidential?: boolean
+  /** Frontmatter `status: recovered` — this meeting was promoted from an interrupted autosave draft. */
+  recovered?: boolean
   /** True for a real encrypted meeting this device can't decrypt: a locked stub (no preview), never silently dropped. */
   locked?: boolean
   notDownloaded?: boolean // bytes not on this device: listed by name, never read; an explicit open downloads it
@@ -1983,6 +2037,8 @@ export interface RecallReadResult {
   /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
    *  actual saved state instead of always starting unflagged. */
   confidential?: boolean
+  /** True only when the saved meeting's frontmatter status is exactly `recovered`. */
+  recovered?: boolean
   /** MQA-092 — frontmatter `crm_pushed: <payload fingerprint>`. Seeds Review's push state on mount so a
    *  meeting pushed before the last relaunch does not offer to push itself again. Absent = never pushed;
    *  a DIFFERENT fingerprint means the recap was edited since, which correctly re-arms the chip. */

@@ -4,6 +4,14 @@ import { createCloudSpeechPreloadApi } from './cloud-speech'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import {
   IPC,
+  type InputSessionStart,
+  type InputSessionContext,
+  type InputSessionStop,
+  type InputSessionResult,
+  type InputSessionStopResult,
+  type InputSessionRevoked,
+  type MeetingMicCaptureGrant,
+  type MeetingMicCaptureRevoked,
   type AskStart,
   type PublicSettings,
   type Settings,
@@ -79,6 +87,8 @@ import {
   type ScreenCaptureCheckResult,
   type MetisCommandState,
   type MetisCommandConfirmation,
+  type CommandSpeechResult,
+  type CommandMicAvailabilityResult,
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
 import type { ScreenRepairResult } from '@shared/screen-permission'
@@ -92,6 +102,83 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
   const listener = (_e: unknown, payload: T): void => cb(payload)
   ipcRenderer.on(channel, listener)
   return () => ipcRenderer.removeListener(channel, listener)
+}
+
+// A private, trusted DOM gesture observation. The page receives only readiness booleans; the opaque
+// single-use meeting-start grant is created, retained, validated, and consumed in main.
+let observedMeetingStartActivation: Promise<boolean> | null = null
+let observedCommandMicActivation: Promise<boolean> | null = null
+type TrustedDomClick = { isTrusted: boolean; composedPath(): unknown[] }
+type PreloadDocument = {
+  addEventListener(type: 'click', listener: (event: TrustedDomClick) => void, capture: boolean): void
+  getElementById(id: string): unknown
+  querySelectorAll(selector: string): { readonly length: number }
+}
+const preloadDocument = (globalThis as typeof globalThis & { document?: PreloadDocument }).document
+if (preloadDocument) {
+  preloadDocument.addEventListener('click', (event) => {
+    if (!event.isTrusted) return
+    const path = event.composedPath()
+    const markedStart = path.some((node) =>
+      node !== null && typeof node === 'object' && 'hasAttribute' in node &&
+      typeof node.hasAttribute === 'function' && node.hasAttribute('data-metis-meeting-start')
+    )
+    const commandControl = preloadDocument.getElementById('metis-command-mic-start') as {
+      id?: unknown
+      tagName?: unknown
+      type?: unknown
+      disabled?: unknown
+      isConnected?: unknown
+      hasAttribute?: (name: string) => boolean
+      getClientRects?: () => { readonly length: number }
+    } | null
+    const markedCommandMic = !!commandControl && preloadDocument.querySelectorAll('[data-metis-command-mic-start]').length === 1 &&
+      path.includes(commandControl) && commandControl.id === 'metis-command-mic-start' &&
+      commandControl.tagName === 'BUTTON' && commandControl.type === 'button' &&
+      commandControl.disabled === false && commandControl.isConnected === true &&
+      commandControl.hasAttribute?.('data-metis-command-mic-start') === true &&
+      (commandControl.getClientRects?.().length ?? 0) > 0
+    if (!markedStart) {
+      observedMeetingStartActivation = null
+      void ipcRenderer.invoke(IPC.meetingStartActivationCancel).catch(() => false)
+    } else {
+      observedMeetingStartActivation = ipcRenderer
+        .invoke(IPC.meetingStartActivationObserved)
+        .then((accepted) => accepted === true)
+        .catch(() => false)
+    }
+    if (!markedCommandMic) {
+      observedCommandMicActivation = null
+      void ipcRenderer.invoke(IPC.commandMicActivationCancel).catch(() => false)
+    } else {
+      observedCommandMicActivation = ipcRenderer
+        .invoke(IPC.commandMicActivationObserved)
+        .then((accepted) => accepted === true)
+        .catch(() => false)
+    }
+  }, true)
+}
+
+async function meetingStartActivationReady(): Promise<boolean> {
+  const observed = observedMeetingStartActivation
+  observedMeetingStartActivation = null
+  if (observed && await observed) return true
+  try {
+    return (await ipcRenderer.invoke(IPC.meetingStartActivationReady)) === true
+  } catch {
+    return false
+  }
+}
+
+async function commandMicActivationReady(): Promise<boolean> {
+  const observed = observedCommandMicActivation
+  observedCommandMicActivation = null
+  if (!observed || !(await observed)) return false
+  try {
+    return (await ipcRenderer.invoke(IPC.commandMicActivationReady)) === true
+  } catch {
+    return false
+  }
 }
 
 const api = {
@@ -289,6 +376,19 @@ const api = {
   // Periodic crash-recovery snapshot of an in-progress meeting — fire-and-forget, best-effort.
   saveDraftTranscript: (m: SaveMeeting): Promise<SaveDraftTranscriptResult> =>
     ipcRenderer.invoke(IPC.saveDraftTranscript, m),
+  preserveDraftTranscript: (startedAt: number): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(IPC.preserveDraftTranscript, { startedAt }),
+  discardDraftTranscript: (startedAt: number): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.discardDraftTranscript, { startedAt }),
+  discardSavedTranscript: (
+    startedAt: number,
+    title: string,
+    path?: string
+  ): Promise<{ ok: boolean; error?: string; deletedPaths?: string[] }> =>
+    ipcRenderer.invoke(IPC.discardSavedTranscript, { startedAt, title, ...(path ? { path } : {}) }),
+  recoveredDraftCount: (): Promise<{ count: number; revision: number }> => ipcRenderer.invoke(IPC.recoveredDraftCount),
+  onTranscriptsRecovered: (cb: (payload: { count: number; revision: number }) => void): Unsub =>
+    sub(IPC.transcriptsRecovered, cb),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
   // Import audio file: pick → hand off to the main-owned background job. The overlay never receives raw audio bytes.
   importAudioPick: (): Promise<ImportAudioPickResult> => ipcRenderer.invoke(IPC.importAudioPick),
@@ -428,8 +528,37 @@ const api = {
     ipcRenderer.invoke(IPC.brainMeetingExtraction, { file }),
   // Task MI-3: aggregated needs-attention queue (lint contradictions, AMBIGUOUS fields, contradicted pins).
   brainAttention: (): Promise<import('@shared/ipc').BrainAttentionResult> => ipcRenderer.invoke(IPC.brainAttention),
-  setListeningState: (on: boolean, startedAt?: number): Promise<void> =>
-    ipcRenderer.invoke(IPC.listeningState, { on, startedAt }),
+  setListeningState: async (on: boolean, startedAt?: number): Promise<boolean> => {
+    if (on && !(await meetingStartActivationReady())) return false
+    return ipcRenderer.invoke(IPC.listeningState, { on, startedAt })
+  },
+  meetingMicAdmission: (startedAt: number): Promise<MeetingMicCaptureGrant | null> =>
+    ipcRenderer.invoke(IPC.meetingMicAdmission, { startedAt }),
+  confirmMeetingMicCapture: (captureId: string, startedAt: number): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.meetingMicCaptureConfirm, { captureId, startedAt }),
+  releaseMeetingMicCapture: (captureId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.meetingMicCaptureRelease, { captureId }),
+  getInputSessionContext: (): Promise<InputSessionContext | null> =>
+    ipcRenderer.invoke(IPC.inputSessionContext),
+  startInputSession: (request: InputSessionStart, context: InputSessionContext): Promise<InputSessionResult> =>
+    ipcRenderer.invoke(IPC.inputSessionStart, { input: request, context }),
+  confirmInputSession: (sessionId: string, context: InputSessionContext): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.inputSessionConfirm, { sessionId, context }),
+  stopInputSession: (request: InputSessionStop, context: InputSessionContext): Promise<InputSessionStopResult> =>
+    ipcRenderer.invoke(IPC.inputSessionStop, { ...request, context }),
+  onInputSessionRevoked: (cb: (event: InputSessionRevoked) => void): Unsub => sub(IPC.inputSessionRevoked, cb),
+  onMeetingMicCaptureRevoked: (cb: (event: MeetingMicCaptureRevoked) => void): Unsub => sub(IPC.meetingMicCaptureRevoked, cb),
+  commandMicActivationReady,
+  commandMicAvailability: (): Promise<CommandMicAvailabilityResult> =>
+    ipcRenderer.invoke(IPC.commandMicAvailability),
+  commandSpeechStart: (sessionId: string): Promise<CommandSpeechResult> =>
+    ipcRenderer.invoke(IPC.commandSpeechStart, { sessionId }),
+  commandSpeechFrame: (sessionId: string, sequence: number, samples: Float32Array): Promise<CommandSpeechResult> =>
+    ipcRenderer.invoke(IPC.commandSpeechFrame, { sessionId, sequence, samples }),
+  commandSpeechFinish: (sessionId: string, frameCount: number): Promise<CommandSpeechResult> =>
+    ipcRenderer.invoke(IPC.commandSpeechFinish, { sessionId, frameCount }),
+  commandSpeechCancel: (sessionId: string): Promise<CommandSpeechResult> =>
+    ipcRenderer.invoke(IPC.commandSpeechCancel, { sessionId }),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
   asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
   asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),

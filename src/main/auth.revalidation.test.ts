@@ -158,13 +158,14 @@ describe('actual auth revalidation keeps revocation bound to its session owner',
     // Only timers are fake; the existing loopback callback and real saveSession remain production code.
     expect((await auth.signIn()).ok).toBe(true)
     expect(auth.authStatus().email).toBe('owner-b@example.test')
+    expect(teardown).toHaveBeenCalledTimes(1)
     const saved = readFileSync(join(profile, 'auth-session.bin'))
     const cache = readFileSync(join(profile, 'msal-cache.bin'))
     await finishRevoked(probe)
     expect(auth.authStatus().email).toBe('owner-b@example.test')
     expect(readFileSync(join(profile, 'auth-session.bin'))).toEqual(saved)
     expect(readFileSync(join(profile, 'msal-cache.bin'))).toEqual(cache)
-    expectNoStaleRevocation(0)
+    expectNoStaleRevocation(1)
   })
 
   it('does not repeat teardown or revocation audit after actual sign-out', async () => {

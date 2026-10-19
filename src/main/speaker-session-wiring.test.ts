@@ -197,21 +197,29 @@ function feedHandler(
   })
 }
 
-function saveHandler(api: SessionApi, file = '/meetings/meeting-a.md'): (...args: any[]) => Promise<any> {
+function saveHandler(
+  api: SessionApi,
+  file = '/meetings/meeting-a.md',
+  options: {
+    saveMeeting?: () => Promise<string>
+    clearDraftTranscript?: (settings: unknown, startedAt: number, savedTranscriptPath?: string) => Promise<void>
+    getSettings?: () => unknown
+  } = {}
+): (...args: any[]) => Promise<any> {
   return actualIpcHandler('saveTranscript', {
     assertMainWindow: vi.fn(),
     requireAuth: () => true,
     takeHotPath: () => true,
     SaveMeetingSchema: { parse: (value: unknown) => value },
     stripProvisionalLines: (lines: unknown) => lines,
-    saveMeeting: async () => file,
-    getSettings: () => ({ brainConsolidation: { enabled: false }, encryptTranscripts: false }),
+    saveMeeting: options.saveMeeting ?? (async () => file),
+    getSettings: options.getSettings ?? (() => ({ brainConsolidation: { enabled: false }, encryptTranscripts: false })),
     recordMeetingSummarized: vi.fn(),
     meetingDurationMin: () => 1,
     wordsFromTexts: () => [],
     estimateNoteTakingMinutes: () => 0,
     appendTimeSavedEvent: vi.fn(),
-    clearDraftTranscript: async () => undefined,
+    clearDraftTranscript: options.clearDraftTranscript ?? (async () => undefined),
     auditLog: vi.fn(),
     scheduleRebuild: vi.fn(),
     enqueueIngest: async () => undefined,
@@ -270,6 +278,7 @@ describe('authoritative live speaker identity', () => {
       assertMainWindow: vi.fn(),
       requireAuth: () => true,
       acceptTransition: api.acceptLiveSpeakerTransition,
+      consumeMeetingStartActivation: () => true,
       setListeningActive,
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
@@ -420,6 +429,68 @@ describe('live feed identity routing', () => {
 })
 
 describe('bounded close and successful-save receipt join', () => {
+  it('awaits finalized draft cleanup after the final transcript is durable and before IPC success', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    const file = '/meetings/finalized.md'
+    let transcriptDurable = false
+    let releaseCleanup!: () => void
+    const cleanupWait = new Promise<void>((resolve) => { releaseCleanup = resolve })
+    const saveMeeting = vi.fn(async () => {
+      transcriptDurable = true
+      return file
+    })
+    const clearDraftTranscript = vi.fn(async () => {
+      expect(transcriptDurable).toBe(true)
+      await cleanupWait
+    })
+    const handler = saveHandler(api, file, { saveMeeting, clearDraftTranscript })
+    const response = handler({}, { startedAt: 600, lines: [], recap: '', mode: 'meeting' })
+    await vi.waitFor(() => expect(clearDraftTranscript).toHaveBeenCalledOnce())
+    let acknowledged = false
+    void response.then(() => { acknowledged = true })
+    await Promise.resolve()
+    expect(acknowledged).toBe(false)
+    releaseCleanup()
+    await expect(response).resolves.toEqual({ path: file })
+  })
+
+  it('cleans the saved transcript folder snapshot if settings change while the final save is pending', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    const oldSettings = { brainConsolidation: { enabled: false }, encryptTranscripts: false, meetingsFolder: '/old-meetings' }
+    const newSettings = { ...oldSettings, meetingsFolder: '/new-meetings' }
+    const savedPath = '/old-meetings/finalized.md'
+    let settingsReads = 0
+    const getSettings = vi.fn(() => settingsReads++ === 0 ? oldSettings : newSettings)
+    const saveMeeting = vi.fn(async () => savedPath)
+    const clearDraftTranscript = vi.fn(async () => undefined)
+    const handler = saveHandler(api, savedPath, { getSettings, saveMeeting, clearDraftTranscript })
+
+    await expect(handler({}, { startedAt: 601, lines: [], recap: '', mode: 'meeting' })).resolves.toEqual({ path: savedPath })
+
+    expect(getSettings).toHaveBeenCalled()
+    expect(saveMeeting).toHaveBeenCalledWith(oldSettings, expect.objectContaining({ startedAt: 601 }))
+    expect(clearDraftTranscript).toHaveBeenCalledWith(oldSettings, 601, savedPath)
+    expect(getSettings.mock.results.length).toBeGreaterThan(1)
+  })
+
+  it('normalizes a zero final-save identity once for both durable save and draft cleanup', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    const file = '/meetings/finalized.md'
+    const saveMeeting = vi.fn(async () => file)
+    const clearDraftTranscript = vi.fn(async () => undefined)
+    const handler = saveHandler(api, file, { saveMeeting, clearDraftTranscript })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(702)
+
+    try {
+      await expect(handler({}, { startedAt: 0, lines: [], recap: '', mode: 'meeting' })).resolves.toEqual({ path: file })
+    } finally {
+      now.mockRestore()
+    }
+
+    expect(saveMeeting).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ startedAt: 702 }))
+    expect(clearDraftTranscript).toHaveBeenCalledWith(expect.anything(), 702, file)
+  })
+
   it('defers active and duplicate saves, then snapshots and backfills the exact file once on Stop', async () => {
     const backfill = vi.fn(async (_file: string, _snapshot?: SpeakerEnrollmentSnapshot) => ({ ok: true, named: 1 }))
     const id = realSpeakerId()

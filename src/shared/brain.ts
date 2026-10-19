@@ -160,6 +160,9 @@ function normalizeDealNulls(v: unknown): unknown {
 
 export const MeetingExtractionSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
+  /** Ingestion receipt for exact bounded source bytes; Main-only and stripped from renderer read payloads. */
+  sourceDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  sourceRootId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   title24: z.string().default(''),
   topics: z.array(z.string()).default([]),
   sentiment: BandSchema.default('mixed'),
@@ -247,7 +250,9 @@ export type MeetingExtraction = z.infer<typeof MeetingExtractionSchema>
 export const MeetingRefSchema = z.object({
   file: z.string(),
   date: z.string().default(''),
-  title: z.string().default('')
+  title: z.string().default(''),
+  /** Main-only SHA-256 identity of the canonical source root; stripped from renderer read payloads. */
+  sourceRootId: z.string().regex(/^[a-f0-9]{64}$/).optional()
 })
 export type MeetingRef = z.infer<typeof MeetingRefSchema>
 
@@ -492,6 +497,9 @@ export const BrainIndexSchema = z.object({
     error: z.string().optional(),
     /** mtime/size snapshot of the source consumed by this record. Missing means a legacy record. */
     sourceVersion: z.string().optional(),
+    /** Ingestion-bound SHA-256 of exact source bytes and canonical root identity; absent on legacy rows. */
+    sourceDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    sourceRootId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     /** Consecutive failed extraction attempts for persisted retry pacing. */
     attempts: z.number().int().nonnegative().optional(),
     /** Earliest time an automatic background scan may retry this unchanged failed source. */

@@ -33,6 +33,7 @@ import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
+import { acquireInteractiveMic } from '../lib/input-mic-admission'
 import { isEncryptedProfileRecoveryError } from '../lib/onboarding-completion'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
@@ -423,6 +424,7 @@ export function Onboarding({
   useEffect(() => {
     if (step !== 6) return
     let alive = true
+    const micProbeAbort = new AbortController()
     // Windows never surfaces an OS consent dialog, so getPlatformPermissions() stays 'unknown' forever
     // unless something actually calls getUserMedia. Do that once here, then let the existing poll below
     // pick up whatever the OS ends up reporting. A rejection just means blocked — the status/fix-button
@@ -430,9 +432,11 @@ export function Onboarding({
     const probeWindowsMicIfNeeded = (p: PlatformPermissions): void => {
       if (!isWindows || micProbeFiredRef.current || p.microphone !== 'unknown') return
       micProbeFiredRef.current = true
-      navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+      void acquireInteractiveMic({ audio: true }, 'conversation', 'application-probe', micProbeAbort.signal)
+        .then(async ({ stream, admission }) => {
+          stream.getTracks().forEach((track) => track.stop())
+          await admission.release()
+        })
         .catch(() => {})
     }
     const load = (): void => {
@@ -453,6 +457,7 @@ export function Onboarding({
     const id = setInterval(load, 2500)
     return () => {
       alive = false
+      micProbeAbort.abort()
       clearInterval(id)
     }
   }, [step])

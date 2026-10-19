@@ -123,6 +123,7 @@ function DockAction({
   onClick,
   disabled,
   active,
+  meetingStart,
   children
 }: {
   label: string
@@ -130,6 +131,7 @@ function DockAction({
   onClick: () => void
   disabled?: boolean
   active?: boolean
+  meetingStart?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -137,6 +139,7 @@ function DockAction({
       type="button"
       aria-label={label}
       aria-pressed={active || undefined}
+      data-metis-meeting-start={meetingStart ? '' : undefined}
       className={[
         'right-edge-sidecar__action',
         'right-edge-sidecar__action--icon',
@@ -542,7 +545,7 @@ export function RightEdgeSidecar({
                 <span className="right-edge-sidecar__action-divider" aria-hidden="true" />
               ) : null}
               {!listening && onToggleListen ? (
-                <DockAction label="Start listening" onClick={onToggleListen}>
+                <DockAction label="Start listening" onClick={onToggleListen} meetingStart>
                   <AudioLines size={17} strokeWidth={1.9} />
                 </DockAction>
               ) : null}

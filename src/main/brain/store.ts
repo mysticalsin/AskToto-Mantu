@@ -5,17 +5,22 @@ import {
   cpSync,
   existsSync,
   fsyncSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  readSync,
   rmSync,
   renameSync,
   statSync,
   writeFileSync
 } from 'node:fs'
-import { join, basename, dirname } from 'node:path'
+import { join, basename, dirname, relative, isAbsolute, sep } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
+import type { Stats } from 'node:fs'
 import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
@@ -395,6 +400,136 @@ function migrateDeal(d: DealEntity, slug: string): DealEntity {
     d.velocity_provenance = migrateField(d.velocity, d.meetings)
   }
   return d
+}
+
+export type BrainEntityKind = 'person' | 'account' | 'deal'
+
+export type BrainEntityByKind = {
+  person: PersonEntity
+  account: AccountEntity
+  deal: DealEntity
+}
+
+export interface BrainEntitySnapshot<K extends BrainEntityKind> {
+  kind: K
+  slug: string
+  value: BrainEntityByKind[K]
+  /** Digest and size of the exact on-disk bytes decoded and parsed into `value`. */
+  digest: string
+  size: number
+}
+
+export const MAX_BRAIN_ENTITY_SNAPSHOT_BYTES = 256 * 1024
+
+function sameFileVersion(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size &&
+    a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
+}
+
+/** Read a bounded, stable byte snapshot without consulting or populating the stat-keyed JSON cache. */
+function isCanonicalDescendant(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+}
+
+function readStableEntityBytes(rootPath: string, path: string): Buffer | null {
+  let fd: number | undefined
+  try {
+    const canonicalRoot = realpathSync(rootPath)
+    const canonicalPathBefore = realpathSync(path)
+    if (!isCanonicalDescendant(canonicalRoot, canonicalPathBefore)) return null
+    const pathBefore = lstatSync(path)
+    if (pathBefore.isSymbolicLink() || !pathBefore.isFile()) return null
+    fd = openSync(path, 'r')
+    const before = fstatSync(fd)
+    if (!before.isFile() || !sameFileVersion(pathBefore, before) ||
+        before.size <= 0 || before.size > MAX_BRAIN_ENTITY_SNAPSHOT_BYTES) return null
+    const canonicalRootAfterOpen = realpathSync(rootPath)
+    const canonicalPathAfterOpen = realpathSync(path)
+    if (canonicalRootAfterOpen !== canonicalRoot ||
+        !isCanonicalDescendant(canonicalRoot, canonicalPathAfterOpen) ||
+        !sameFileVersion(before, statSync(canonicalPathAfterOpen))) return null
+    const bytes = Buffer.allocUnsafe(before.size)
+    let offset = 0
+    while (offset < before.size) {
+      const count = readSync(fd, bytes, offset, before.size - offset, offset)
+      if (count <= 0) return null
+      offset += count
+    }
+    const after = fstatSync(fd)
+    const pathAfter = lstatSync(path)
+    const canonicalRootAfterRead = realpathSync(rootPath)
+    const canonicalPathAfterRead = realpathSync(path)
+    if (pathAfter.isSymbolicLink() || !pathAfter.isFile() ||
+        canonicalRootAfterRead !== canonicalRoot ||
+        !isCanonicalDescendant(canonicalRoot, canonicalPathAfterRead) ||
+        !sameFileVersion(before, after) || !sameFileVersion(after, pathAfter) ||
+        !sameFileVersion(after, statSync(canonicalPathAfterRead))) return null
+    return bytes
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* A close failure cannot make an incomplete snapshot usable. */
+      }
+    }
+  }
+}
+
+/**
+ * Uncached entity read for answer-context assembly. Decoding, parsing, migration, and digesting all use
+ * the same bounded byte buffer, so a stale JSON cache entry can never be paired with a newer digest.
+ */
+export function readBrainEntitySnapshot<K extends BrainEntityKind>(
+  settings: Settings,
+  kind: K,
+  slug: string
+): BrainEntitySnapshot<K> | null {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
+  const rootPath = brainDir(settings)
+  const bytes = readStableEntityBytes(rootPath, join(rootPath, 'entities', kind, `${slug}.json`))
+  if (!bytes) return null
+  const decoded = decodeSavedResult(bytes)
+  if (!decoded.ok) return null
+  try {
+    const raw: unknown = JSON.parse(decoded.text)
+    let value: PersonEntity | AccountEntity | DealEntity
+    switch (kind) {
+      case 'person':
+        value = migratePerson(PersonEntitySchema.parse(raw), slug)
+        break
+      case 'account':
+        value = migrateAccount(AccountEntitySchema.parse(raw), slug)
+        break
+      case 'deal':
+        value = migrateDeal(DealEntitySchema.parse(raw), slug)
+        break
+    }
+    return {
+      kind,
+      slug,
+      value: value as BrainEntityByKind[K],
+      digest: createHash('sha256').update(bytes).digest('hex'),
+      size: bytes.length
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Stable raw-byte digest for dispatch-time revalidation; no JSON cache or parse is involved. */
+export function readBrainEntityFingerprint(
+  settings: Settings,
+  kind: BrainEntityKind,
+  slug: string
+): { digest: string; size: number } | null {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
+  const rootPath = brainDir(settings)
+  const bytes = readStableEntityBytes(rootPath, join(rootPath, 'entities', kind, `${slug}.json`))
+  return bytes ? { digest: createHash('sha256').update(bytes).digest('hex'), size: bytes.length } : null
 }
 
 // ── One-time backup before the first v2 write into a brain that still has v1 files ──────────────────

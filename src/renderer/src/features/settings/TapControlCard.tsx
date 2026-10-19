@@ -72,9 +72,15 @@ export function TapControlCard({
   const [zoneCount, setZoneCount] = useState(2)
   const sessionRef = useRef<CalibrationSession | null>(null)
   const captureRef = useRef<TapCaptureSession | null>(null)
+  const captureAbortRef = useRef<AbortController | null>(null)
+  const testAbortRef = useRef<AbortController | null>(null)
   const testRef = useRef<TapControlSession | null>(null)
 
   const stopAll = (): void => {
+    captureAbortRef.current?.abort()
+    captureAbortRef.current = null
+    testAbortRef.current?.abort()
+    testAbortRef.current = null
     captureRef.current?.stop()
     captureRef.current = null
     testRef.current?.stop()
@@ -94,10 +100,13 @@ export function TapControlCard({
 
   const beginCalibration = async (): Promise<void> => {
     stopAll()
+    const captureAbort = new AbortController()
+    captureAbortRef.current = captureAbort
     try {
       const cap = await startTapCapture({
         micDeviceId: settings.micDeviceId || undefined,
         sensitivity: tc.sensitivity,
+        signal: captureAbort.signal,
         onCandidate(c) {
           const s = sessionRef.current
           if (!s) return
@@ -111,10 +120,16 @@ export function TapControlCard({
           }
         }
       })
+      if (captureAbort.signal.aborted) {
+        cap.stop()
+        return
+      }
+      if (captureAbortRef.current === captureAbort) captureAbortRef.current = null
       captureRef.current = cap
       sessionRef.current = makeCalibration(zoneCount, cap.sampleRate)
       setFlow({ step: 'calibrating', zone: 0, accepted: 0, hint: null })
     } catch {
+      if (captureAbortRef.current === captureAbort) captureAbortRef.current = null
       setFlow({ step: 'idle' }) // mic denied — the card simply stays idle
     }
   }
@@ -140,18 +155,29 @@ export function TapControlCard({
   const beginTest = async (): Promise<void> => {
     if (!tc.profile) return
     stopAll()
+    const testAbort = new AbortController()
+    testAbortRef.current = testAbort
     setFlow({ step: 'testing', lastZone: null })
     try {
-      testRef.current = await startTapControl({
+      const test = await startTapControl({
         profile: tc.profile,
         micDeviceId: settings.micDeviceId || undefined,
         sensitivity: tc.sensitivity,
+        signal: testAbort.signal,
         onEvent(e) {
           if (e.kind === 'tap') setFlow({ step: 'testing', lastZone: e.zone })
         }
       })
+      if (testAbort.signal.aborted) {
+        test.stop()
+        return
+      }
+      if (testAbortRef.current === testAbort) testAbortRef.current = null
+      testRef.current = test
     } catch {
-      setFlow({ step: 'idle' })
+      if (!testAbort.signal.aborted) setFlow({ step: 'idle' })
+    } finally {
+      if (testAbortRef.current === testAbort) testAbortRef.current = null
     }
   }
 

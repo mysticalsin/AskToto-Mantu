@@ -88,6 +88,7 @@ import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
+import { acquireInteractiveMic } from '../lib/input-mic-admission'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import {
   canMarkOnboardingDone,
@@ -809,6 +810,8 @@ export function OnboardingExperience({
   authReady
 }: OnboardingExperienceProps): JSX.Element {
   const settingsRef = useRef(settings)
+  const manualMicRequestRef = useRef<AbortController | null>(null)
+  useEffect(() => () => manualMicRequestRef.current?.abort(), [])
   settingsRef.current = settings
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
@@ -1117,6 +1120,7 @@ export function OnboardingExperience({
   useEffect(() => {
     if (scene !== 'setup') return
     let live = true
+    const micProbeAbort = new AbortController()
     const base = setupRowsForSpeechPackPolicy(productPackageMode === 'lean' ? 'offered' : speechPackPolicy).map(
       (row) => (row.key === 'asr' && productPackageMode === 'lean' ? { ...row, label: 'Cloud speech' } : row)
     )
@@ -1194,9 +1198,11 @@ export function OnboardingExperience({
       // the live poll below reflects the outcome, and macOS never re-prompts after an explicit Deny, so
       // repeats are safe.
       if (isWindows && perms?.microphone !== 'granted') {
-        void navigator.mediaDevices
-          .getUserMedia({ audio: true })
-          .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+        void acquireInteractiveMic({ audio: true }, 'conversation', 'application-probe', micProbeAbort.signal)
+          .then(async ({ stream, admission }) => {
+            stream.getTracks().forEach((track) => track.stop())
+            await admission.release()
+          })
           .catch(() => {})
       }
       if (!isWindows && perms && (perms.microphone !== 'granted' || perms.screenRecording !== 'granted')) {
@@ -1224,6 +1230,7 @@ export function OnboardingExperience({
     })()
     return () => {
       live = false
+      micProbeAbort.abort()
     }
   }, [scene, autoAsrSetup, productPackageMode, cloudCapability, speechPackManaged])
 
@@ -1314,10 +1321,18 @@ export function OnboardingExperience({
     // consent there is an actual getUserMedia call from the renderer (same probe the legacy onboarding
     // used). A rejection just means blocked; the status poll + fix link handle that.
     if (isWindows) {
-      await navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+      const controller = new AbortController()
+      manualMicRequestRef.current?.abort()
+      manualMicRequestRef.current = controller
+      await acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
+        .then(async ({ stream, admission }) => {
+          stream.getTracks().forEach((track) => track.stop())
+          await admission.release()
+        })
         .catch(() => {})
+        .finally(() => {
+          if (manualMicRequestRef.current === controller) manualMicRequestRef.current = null
+        })
     }
     const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
     const mic = micRowStatus(perms?.microphone)

@@ -473,6 +473,17 @@ export const MeetingRow = memo(function MeetingRow({
                 {m.title}
               </span>
 
+              {m.recovered && (
+                <span
+                  role="img"
+                  aria-label="Recovered after interruption"
+                  title="Recovered after interruption"
+                  className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-accent-text)]"
+                >
+                  Recovered
+                </span>
+              )}
+
               <RowStatusChip meeting={m} hydration={hydration} />
 
               {/* Analyzing badge */}

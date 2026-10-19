@@ -764,22 +764,29 @@ describe('bounded root report diagnostic producer', () => {
       expect(closeCalls).toBe(1)
     }))
 
-  it('rejects a swapped descriptor snapshot and post-read file identity', () =>
+  it.each([
+    ['opened descriptor', 1],
+    ['post-read descriptor', 2]
+  ] as const)('rejects a swapped %s identity snapshot', (_checkpoint, mismatchAtFstat) =>
     withReport((fixture) => {
       writeFileSync(fixture.context.reportPath, JSON.stringify(fixture.report))
       let stats = 0
+      let initialReportIno: number | null = null
       const io = {
         ...fs,
+        lstatSync: (path: Parameters<typeof fs.lstatSync>[0]) => {
+          const stat = fs.lstatSync(path)
+          if (path === fixture.context.reportPath && initialReportIno === null) initialReportIno = stat.ino
+          return stat
+        },
         fstatSync: (fd: number) => {
           const stat = fs.fstatSync(fd)
           stats += 1
-          return stats > 1
-            ? new Proxy(stat, {
-                get(target, key) {
-                  if (key === 'ino') return target.ino + 1
-                  const value = Reflect.get(target, key)
-                  return typeof value === 'function' ? value.bind(target) : value
-                }
+          return stats === mismatchAtFstat
+            ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+                ino: initialReportIno === Number.MAX_SAFE_INTEGER
+                  ? Number.MAX_SAFE_INTEGER - 1
+                  : Number.MAX_SAFE_INTEGER
               })
             : stat
         }

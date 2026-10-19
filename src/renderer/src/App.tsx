@@ -16,6 +16,7 @@ import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { RightEdgeAnswerSummary, RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
+import { CommandSpeechPanel } from './components/CommandSpeechPanel'
 import {
   RightEdgeReader,
   RightEdgeReaderDetails,
@@ -45,6 +46,7 @@ import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
+import { RecoveredDraftToast } from './components/RecoveredDraftToast'
 import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
@@ -334,6 +336,7 @@ export function App(): JSX.Element {
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
   // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
+  const [commandMicPanelOpen, setCommandMicPanelOpen] = useState(false)
   useEffect(() => window.toto.onMetisCommandState(setCommandState), [])
   // The live, user-rebindable Capture accelerator — Bar/Answer's tooltip must reflect an override or a
   // clear, not the shipped default, so this resolves it the same way Settings' Shortcuts panel does
@@ -575,6 +578,7 @@ export function App(): JSX.Element {
     startedAt: number
     durationMs?: number
     confidential: boolean
+    recovered?: boolean
     /** MQA-092 — the meeting's saved `crm_pushed` fingerprint, so Review knows a recap that already
      *  reached the CRM in an earlier session and does not re-arm the push. */
     crmPushedKey?: string
@@ -666,8 +670,16 @@ export function App(): JSX.Element {
     ((snapshot: AnswerState | null, maxAttempts?: number) => Promise<void>) | null
   >(null)
   const savedRef = useRef('')
+  // Explicit Disregard owns this meeting until reset completes; exit effects must not recreate its save.
+  const discardedMeetingRef = useRef<string | null>(null)
+  const deletedTranscriptForDiscardRef = useRef<{ ownerId: string; paths: string[] } | null>(null)
+  // Claimed synchronously when Disregard starts so an already-scheduled save retry/effect cannot
+  // recreate the transcript while native confirmation and durable draft cleanup are in flight.
+  const discardPendingOwnerRef = useRef<string | null>(null)
+  const [discardPendingOwner, setDiscardPendingOwner] = useState<string | null>(null)
   const meetingSaveGateRef = useRef(new OwnedOperationGate())
   const savingPromiseRef = useRef<Promise<string | null> | null>(null)
+  const saveRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Meeting start ids that saveMeetingNow has already claimed. savedRef is pinned only AFTER a save's IPC
   // round trip resolves (and never at all by the leave-path saver, which must not touch live-session
   // state), so two rescues firing inside that window — Stop → Escape out of Review → start the next
@@ -706,7 +718,36 @@ export function App(): JSX.Element {
     { open: false }
   )
   const [newMeetingToast, setNewMeetingToast] = useState(false)
+  const [recoveredDraftCount, setRecoveredDraftCount] = useState(0)
+  const recoveredDraftRevisionRef = useRef(-1)
+  const recoveredDraftOwnerRef = useRef<string | null>(null)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
+
+  useEffect(() => {
+    let active = true
+    const owner = `${auth.status?.signedIn === true ? 'signed-in' : 'signed-out'}:${settings?.profile?.name ?? ''}`
+    if (recoveredDraftOwnerRef.current !== null && recoveredDraftOwnerRef.current !== owner) {
+      setRecoveredDraftCount(0)
+      recoveredDraftRevisionRef.current = -1
+    }
+    recoveredDraftOwnerRef.current = owner
+    const acceptCount = ({ count, revision }: { count: number; revision: number }): void => {
+      if (
+        active &&
+        Number.isSafeInteger(count) && count >= 0 &&
+        Number.isSafeInteger(revision) && revision >= recoveredDraftRevisionRef.current
+      ) {
+        recoveredDraftRevisionRef.current = revision
+        setRecoveredDraftCount(count)
+      }
+    }
+    const unsubscribe = window.toto.onTranscriptsRecovered(acceptCount)
+    void window.toto.recoveredDraftCount().then(acceptCount).catch(() => {})
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [auth.status?.signedIn, settings?.profile?.name])
 
   // ── Vibe-Island-style auto-hide overlay (MQA-274) ──────────────────────────────────────────────
   // The overlay collapses to a slim top-center peek strip whenever it's idle and the pointer isn't over
@@ -1188,6 +1229,7 @@ export function App(): JSX.Element {
     if (a?.streaming || !listen.lines.length) return
     const startedAt = meetingStartRef.current
     const id = String(startedAt)
+    if (discardPendingOwnerRef.current === id || discardedMeetingRef.current === id) return
     const lines = [...listen.lines]
     const action = recapPersistAction(a, liveRecapTargetRef.current, id)
     // Same redundancy + in-flight guards as the auto-save effect — without them a double-click (or a
@@ -1257,6 +1299,7 @@ export function App(): JSX.Element {
     if (view !== 'review') return
     if (!listen.lines.length) return
     const id = String(meetingStartRef.current)
+    if (discardPendingOwnerRef.current === id || discardedMeetingRef.current === id) return
     const action = recapPersistAction(
       answerId
         ? {
@@ -1313,7 +1356,11 @@ export function App(): JSX.Element {
       // retry branch the real save is deferred behind a backoff timer; if that timer is cancelled
       // (view change / reset) before it fires, a lock taken early would never release and would wedge
       // auto-save dead for the rest of the session.
-      if (String(meetingStartRef.current) !== id) return null
+      if (
+        String(meetingStartRef.current) !== id ||
+        discardPendingOwnerRef.current === id ||
+        discardedMeetingRef.current === id
+      ) return null
       const outcome = await meetingSaveGateRef.current.run(
         id,
         () => String(meetingStartRef.current),
@@ -1360,9 +1407,14 @@ export function App(): JSX.Element {
     } else {
       const delay = Math.min(1000 * 2 ** (saveAttempts - 1), 30000)
       const t = setTimeout(() => {
+        if (saveRetryTimerRef.current === t) saveRetryTimerRef.current = null
         savingPromiseRef.current = doSave()
       }, delay)
-      return () => clearTimeout(t)
+      saveRetryTimerRef.current = t
+      return () => {
+        clearTimeout(t)
+        if (saveRetryTimerRef.current === t) saveRetryTimerRef.current = null
+      }
     }
   }, [
     view,
@@ -1374,7 +1426,8 @@ export function App(): JSX.Element {
     savedPath,
     listen.lines,
     mode,
-    saveAttempts
+    saveAttempts,
+    discardPendingOwner
   ])
 
   // M2-0430: the live recap's first token and its terminal state, as spans from the Stop click. Only the
@@ -2652,6 +2705,7 @@ export function App(): JSX.Element {
       // it wrote (null when it skipped or gave up) so a caller that IS still on the live session can pin
       // that state itself — see saveLiveMeetingNow below.
       const id = String(started)
+      if (discardPendingOwnerRef.current === id || discardedMeetingRef.current === id) return null
       if (meetingSaveIsRedundant(lines.length, id, savedRef.current, claimedSavesRef.current)) return null
       claimedSavesRef.current.add(id) // synchronous — see claimedSavesRef's declaration
       const title = defaultMeetingTitle(lines, mode)
@@ -2717,24 +2771,44 @@ export function App(): JSX.Element {
     async (snapshot: AnswerState | null, maxAttempts = MAX_SAVE_RETRIES): Promise<void> => {
       const started = meetingStartRef.current
       const ownerId = String(started)
+      if (discardPendingOwnerRef.current === ownerId) return
+      const preserveDraft = async (): Promise<void> => {
+        if (started > 0) await window.toto.preserveDraftTranscript(started).catch(() => ({ ok: false }))
+      }
+      if (discardedMeetingRef.current === ownerId) return
       const lines = [...listen.lines]
-      if (!lines.length) return
+      if (!lines.length) {
+        const pendingPath = savingPromiseRef.current ? await savingPromiseRef.current : null
+        if (!pendingPath) await preserveDraft()
+        return
+      }
       const target = liveRecapTargetRef.current
       const action = recapPersistAction(snapshot, target, ownerId)
       const actionKey = action ? recapWriteKey(action.ownerId, action.runId) : ''
       const pendingSave = savingPromiseRef.current
       const knownPath = savedRef.current === ownerId ? savedPath : null
-      const result = await persistRecapOnExit({
-        action,
-        path: pendingSave ? pendingSave.then((path) => path ?? knownPath) : Promise.resolve(knownPath),
-        isPersisted: () => !!actionKey && liveRecapWritesRef.current.has(actionKey),
-        markPersisted: () => {
-          if (actionKey) liveRecapWritesRef.current.add(actionKey)
-        },
-        create: (text, recapStatus) => saveMeetingNow(lines, started, text, maxAttempts, recapStatus),
-        update: (path, text, recapStatus) => window.toto.recallUpdateRecap(path, text, recapStatus),
-        coordinator: recapWriteCoordinatorRef.current
-      })
+      let result: Awaited<ReturnType<typeof persistRecapOnExit<string | null, { ok: boolean; error?: string }>>>
+      try {
+        result = await persistRecapOnExit({
+          action,
+          path: pendingSave ? pendingSave.then((path) => path ?? knownPath) : Promise.resolve(knownPath),
+          isPersisted: () => !!actionKey && liveRecapWritesRef.current.has(actionKey),
+          markPersisted: () => {
+            if (actionKey) liveRecapWritesRef.current.add(actionKey)
+          },
+          create: (text, recapStatus) => saveMeetingNow(lines, started, text, maxAttempts, recapStatus),
+          update: (path, text, recapStatus) => window.toto.recallUpdateRecap(path, text, recapStatus),
+          coordinator: recapWriteCoordinatorRef.current
+        })
+      } catch {
+        await preserveDraft()
+        return
+      }
+      const hasDurableTranscript =
+        (result.kind === 'created' && !!result.value) ||
+        (result.kind === 'updated' && !!result.path) ||
+        (result.kind === 'unchanged' && !!result.path)
+      if (!hasDurableTranscript) await preserveDraft()
       if (result.kind !== 'updated' || !action) return
       if (result.outcome.status === 'current' && ('error' in result.outcome || !result.outcome.value.ok))
         liveRecapWritesRef.current.delete(actionKey)
@@ -2786,10 +2860,10 @@ export function App(): JSX.Element {
   // (maxAttempts=0) so app teardown is never blocked on the retry loop. Covers the "every started meeting
   // is saved" rule for the exit paths the user actually clicks. (Reset / New meeting use the durable path.)
   const flushLiveMeeting = useCallback(async (): Promise<void> => {
-    if (!listen.lines.length) return
+    if (meetingStartRef.current <= 0) return
     const snapshot = ask.cancel()
     await persistAndRetireLiveMeeting(snapshot, 0)
-  }, [listen.lines, ask.cancel, persistAndRetireLiveMeeting])
+  }, [ask.cancel, persistAndRetireLiveMeeting])
 
   const quitApp = useCallback(async (): Promise<void> => {
     await flushLiveMeeting()
@@ -2860,7 +2934,7 @@ export function App(): JSX.Element {
     cancelledRef.current = true // resetting mid-stream is a cancel, not a completion → no chime
     const recapSnapshot = ask.cancel()
     suggest.cancel()
-    if ((wasListening || view === 'review') && listen.lines.length) {
+    if (discardedMeetingRef.current !== String(meetingStartRef.current) && (wasListening || view === 'review')) {
       void persistAndRetireLiveMeeting(recapSnapshot)
     }
     liveRecapTargetRef.current = null
@@ -2910,18 +2984,62 @@ export function App(): JSX.Element {
   // file (main pops its own native confirm) then leave. A session that never saved (no savedPath) has
   // nothing on disk — just leave. Either way, mark this meeting handled so no exit-path re-persists it.
   const discardMeeting = useCallback(async (): Promise<void> => {
+    const started = meetingStartRef.current
+    const ownerId = String(started)
+    if (discardPendingOwnerRef.current === ownerId || discardedMeetingRef.current === ownerId) return
+    // Record intent before the first await. Clear a delayed save retry synchronously; the ref guards
+    // callbacks that have already entered the event queue while the state update cleans up the effect.
+    discardPendingOwnerRef.current = ownerId
+    setDiscardPendingOwner(ownerId)
+    if (saveRetryTimerRef.current) {
+      clearTimeout(saveRetryTimerRef.current)
+      saveRetryTimerRef.current = null
+    }
+    const clearDiscardIntent = (): void => {
+      if (discardPendingOwnerRef.current !== ownerId) return
+      discardPendingOwnerRef.current = null
+      setDiscardPendingOwner(null)
+    }
     // An autosave triggered by the recap settling (the effect above) can still be in flight here — there's
     // no "saving" indicator on screen, so a click landing in that window used to read savedPath as still
     // null, skip the delete branch entirely, and let the save land moments later anyway. Await it so the
     // decision below always reads the FINAL outcome instead of a stale null.
-    const inFlightPath = savingPromiseRef.current ? await savingPromiseRef.current : null
-    const path = inFlightPath ?? savedPath
-    if (path) {
-      const r = await window.toto.recallDelete(path, defaultMeetingTitle(listen.lines, mode))
-      if (!r.ok) return // user cancelled the confirm dialog, or the delete failed → stay on the summary
+    try {
+      const inFlightPath = savingPromiseRef.current ? await savingPromiseRef.current : null
+      if (discardPendingOwnerRef.current !== ownerId || String(meetingStartRef.current) !== ownerId) {
+        clearDiscardIntent()
+        return
+      }
+      const path = inFlightPath ?? savedPath
+      const deleted = deletedTranscriptForDiscardRef.current
+      const priorDeletedPaths = deleted?.ownerId === ownerId ? deleted.paths : []
+      const result = await window.toto.discardSavedTranscript(
+        started,
+        defaultMeetingTitle(listen.lines, mode),
+        path && !priorDeletedPaths.includes(path) ? path : undefined
+      )
+      const confirmedDeletedPaths = [...new Set([...priorDeletedPaths, ...(result.deletedPaths ?? [])])]
+      if (confirmedDeletedPaths.length || result.ok) {
+        deletedTranscriptForDiscardRef.current = { ownerId, paths: confirmedDeletedPaths }
+      }
+      if (!result.ok) {
+        setSaveError(result.error === 'cancelled' ? null : result.error || 'Could not delete the saved transcript.')
+        clearDiscardIntent() // native confirmation was cancelled or exact durable deletion failed
+        return
+      }
+      const discarded = await window.toto.discardDraftTranscript(started)
+      if (!discarded.ok) {
+        setSaveError(discarded.error || 'Could not remove the autosaved draft. Try Disregard again.')
+        clearDiscardIntent()
+        return
+      }
+      discardedMeetingRef.current = ownerId
+      savedRef.current = String(meetingStartRef.current)
+      reset()
+    } catch {
+      setSaveError('Could not remove the autosaved draft. Try Disregard again.')
+      clearDiscardIntent()
     }
-    savedRef.current = String(meetingStartRef.current)
-    reset()
   }, [savedPath, listen.lines, mode, reset])
 
   // Cluely "← back": dismiss the open answer/suggestion without tearing down a live session.
@@ -3229,6 +3347,7 @@ export function App(): JSX.Element {
         startedAt: r.startedAt || 0,
         durationMs: r.durationMs,
         confidential: !!r.confidential,
+        recovered: r.recovered === true,
         crmPushedKey: r.crmPushedKey
       })
       setView('review')
@@ -3309,6 +3428,7 @@ export function App(): JSX.Element {
     // `reveal-now` is intentionally immediate: a parked right-edge sidecar must open for a keyboard
     // summon instead of waiting for hover dwell.
     else if (a === 'metis-command') {
+      setCommandMicPanelOpen(true)
       rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
         type: 'metis-command'
       })
@@ -3820,6 +3940,7 @@ export function App(): JSX.Element {
         durationMs={pm?.durationMs}
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
+        recovered={pm?.recovered === true}
         confidential={pm ? pm.confidential : false}
         crmPushedKey={pm ? pm.crmPushedKey : undefined}
         followupDraft={followup.answer}
@@ -4332,6 +4453,14 @@ export function App(): JSX.Element {
               onDismiss={() => setUpdateReady({ open: false })}
             />
             <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
+            <RecoveredDraftToast
+              count={recoveredDraftCount}
+              onOpenHistory={() => {
+                setRecoveredDraftCount(0)
+                setView('history')
+              }}
+              onDismiss={() => setRecoveredDraftCount(0)}
+            />
             <VisibilityToast state={visibilityToast} onDismiss={() => setVisibilityToast(null)} />
             <MeetingOpenErrorToast message={openMeetingError} onDismiss={() => setOpenMeetingError(null)} />
             <OperatorGateToast message={operatorGateNotice} onDismiss={() => setOperatorGateNotice(null)} />
@@ -4362,6 +4491,7 @@ export function App(): JSX.Element {
           minimized &&
           (updateReady.open ||
             newMeetingToast ||
+            recoveredDraftCount > 0 ||
             consentReminderOpen ||
             !!visibilityToast ||
             !!openMeetingError ||
@@ -4525,6 +4655,12 @@ export function App(): JSX.Element {
               />
             )}
           </div>
+          {!overlayPeeked && commandMicPanelOpen && (
+            <CommandSpeechPanel
+              engineSelected={settings?.asrEngine === 'parakeet'}
+              onClose={() => setCommandMicPanelOpen(false)}
+            />
+          )}
           {/* Main sized the window to readerRect before reporting the 'reader' surface; the Reader fades in. */}
           {rightEdgeReaderShown && rightEdgeReaderKind !== null ? (
             <RightEdgeReader

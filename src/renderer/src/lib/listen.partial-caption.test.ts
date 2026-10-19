@@ -230,7 +230,8 @@ beforeEach(() => {
       parakeetFeed: nextEngineResponse,
       appleSpeechFeed: nextEngineResponse,
       asrBundled: async () => true,
-      speakerEmbed: async () => ({ name: 'Alice' })
+      speakerEmbed: async () => ({ name: 'Alice' }),
+      onMeetingMicCaptureRevoked: () => () => {}
     },
     addEventListener: () => {},
     removeEventListener: () => {}

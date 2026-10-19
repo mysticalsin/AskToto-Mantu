@@ -3,15 +3,39 @@ import { createCommandMicController } from './use-command-mic'
 
 let stopTracks: ReturnType<typeof vi.fn>
 let getUserMedia: ReturnType<typeof vi.fn>
+let inputSessionCounter: number
 
 beforeEach(() => {
   vi.useFakeTimers()
+  inputSessionCounter = 0
   stopTracks = vi.fn()
   getUserMedia = vi.fn(async () => ({
     getTracks: () => [{ stop: stopTracks }]
   }))
   vi.stubGlobal('navigator', {
     mediaDevices: { getUserMedia: (constraints: unknown) => getUserMedia(constraints) }
+  })
+  vi.stubGlobal('window', {
+    toto: {
+      getInputSessionContext: vi.fn(async () => ({ authSessionGeneration: 7, contextRevision: 3 })),
+      startInputSession: vi.fn(async (input: { source: string; purpose: string; activation: string }, context: { authSessionGeneration: number; contextRevision: number }) => ({
+        ok: true as const,
+        lease: {
+          sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
+          source: input.source,
+          purpose: input.purpose,
+          activation: input.activation,
+          authSessionGeneration: context.authSessionGeneration,
+          contextRevision: context.contextRevision,
+          revision: 1,
+          startedAt: Date.now(),
+          actionAuthority: false
+        }
+      })),
+      confirmInputSession: vi.fn(async () => true),
+      stopInputSession: vi.fn(async () => ({ ok: true as const })),
+      onInputSessionRevoked: vi.fn(() => () => {})
+    }
   })
 })
 

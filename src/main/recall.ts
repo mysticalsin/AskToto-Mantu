@@ -1,5 +1,5 @@
 import { exciseDeletedMeeting } from './brain/ingest'
-import { join, basename } from 'node:path'
+import { join, basename, resolve } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import {
   parse,
@@ -255,6 +255,7 @@ export async function recallRead(
     lines: fm.type === 'meeting-summary' ? [] : lines,
     speechProvenance: speech.status,
     confidential: fm.confidential === 'true',
+    ...(fm.status === 'recovered' ? { recovered: true } : {}),
     // MQA-092 — the CRM payload fingerprint of the last push that this meeting's CRM connection
     // accepted, so re-opening it after a relaunch does not re-arm "Push to CRM" and file a duplicate.
     crmPushedKey: fm.crm_pushed || undefined
@@ -271,6 +272,20 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
+  return deleteMeetingInFolder(folder, safeName)
+}
+
+/** Delete a receipt-verified absolute path in the folder captured when it was saved. */
+export async function deleteMeetingAtPath(settings: Settings, path: string): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const safeName = safeMeetingBasename(path)
+  if (!safeName || resolve(path) !== resolve(join(folder, safeName))) {
+    return { ok: false, error: 'Meeting path does not match its saved folder.' }
+  }
+  return deleteMeetingInFolder(folder, safeName)
+}
+
+async function deleteMeetingInFolder(folder: string, safeName: string): Promise<{ ok: boolean; error?: string }> {
   try {
     await removeMeetingFile(folder, safeName)
   } catch (err) {

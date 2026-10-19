@@ -266,6 +266,7 @@ async function readMeetingUncached(
           .map((s) => s.trim())
           .filter(Boolean),
         ...(topics.length ? { topics } : {}),
+        ...(fm.status === 'recovered' ? { recovered: true } : {}),
         ...(fm.confidential === 'true' ? { confidential: true } : {})
       }
     }

@@ -234,6 +234,7 @@ export const Review = memo(function Review({
   durationMs,
   showTranscript,
   meetingMeta,
+  recovered,
   confidential,
   crmPushedKey,
   followupDraft,
@@ -273,6 +274,8 @@ export const Review = memo(function Review({
   durationMs?: number
   showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
   meetingMeta?: { title: string; date: string }
+  /** True only for a saved meeting marked `status: recovered` in its frontmatter. */
+  recovered?: boolean
   /** Task MI-5 — this meeting's saved `confidential` frontmatter flag, so the toggle below reflects the
    *  actual persisted state (a reopened past meeting) instead of always starting unflagged. */
   confidential?: boolean
@@ -968,6 +971,15 @@ export const Review = memo(function Review({
 
   return (
     <div className="flex flex-col gap-3">
+      {isPastMeeting && recovered === true && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[12px] text-[color:var(--color-ink-2)]"
+        >
+          This meeting was recovered after an interruption. Review the transcript and notes.
+        </div>
+      )}
       {meetingMeta && (
         <div className="mb-0.5">
           <div className="font-ui text-[15px] font-semibold text-[color:var(--color-ink)]" aria-label="Review meeting title">{meetingMeta.title}</div>
@@ -1001,17 +1013,19 @@ export const Review = memo(function Review({
         </div>
         <div className="flex items-center gap-1.5">
           {onResume && (
-            <Chip
-              icon={Play}
-              onClick={() => {
-                void (async () => {
-                  if (await guardRecapEditNavigation()) onResume()
-                })()
-              }}
-              variant="accent"
-            >
-              Resume session
-            </Chip>
+            <span data-metis-meeting-start>
+              <Chip
+                icon={Play}
+                onClick={() => {
+                  void (async () => {
+                    if (await guardRecapEditNavigation()) onResume()
+                  })()
+                }}
+                variant="accent"
+              >
+                Resume session
+              </Chip>
+            </span>
           )}
           {onSave && (
             // A missing recap must not block saving captured speech: keyless, cancelled-before-token and

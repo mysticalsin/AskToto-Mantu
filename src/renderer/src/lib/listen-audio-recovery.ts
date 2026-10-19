@@ -3,6 +3,7 @@ import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { sysRetryDelayMs } from './loopback-retry'
 import { captureHealthForTrack, micSelectionOutcome } from './listen-capture-state'
 import { isWindows } from './keys'
+import { acquireMeetingMic } from './input-mic-admission'
 
 /** What the 'them' (system-loopback) side must do when the OS reports an audio-device change. */
 export type ThemDeviceAction = 'ignore' | 'watch' | 'recover' | 'recycle'
@@ -71,28 +72,37 @@ export function themTracksLookDead(tracks: { readyState: string; muted: boolean 
  */
 type MicCapture = ListenMicCapture
 
-export async function acquireMic(deviceId: string): Promise<MicCapture> {
+export async function acquireMic(deviceId: string, meetingStartedAt?: number, signal?: AbortSignal): Promise<MicCapture> {
+  if (!meetingStartedAt) throw new Error('Meeting microphone admission requires an accepted meeting identity.')
   const base: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-  let stream: MediaStream
+  let admitted: Awaited<ReturnType<typeof acquireMeetingMic>>
   let usedFallback = false
   if (!deviceId) {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: base })
+    admitted = await acquireMeetingMic({ audio: base }, meetingStartedAt, signal)
   } else {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } })
+      admitted = await acquireMeetingMic({ audio: { ...base, deviceId: { exact: deviceId } } }, meetingStartedAt, signal)
     } catch {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: base })
+      admitted = await acquireMeetingMic({ audio: base }, meetingStartedAt, signal)
       usedFallback = true
     }
+  }
+  const { stream } = admitted
+  let releasePromise: Promise<void> | null = null
+  const release = (): Promise<void> => {
+    releasePromise ??= admitted.release()
+    return releasePromise
   }
   const track = stream.getAudioTracks()[0]
   if (!track) {
     stream.getTracks().forEach((candidate) => candidate.stop())
+    await release()
     throw new Error('no microphone audio track')
   }
   return {
     stream,
     track,
+    release,
     health: captureHealthForTrack(track, Boolean(deviceId), micSelectionOutcome(Boolean(deviceId), usedFallback))
   }
 }
@@ -155,7 +165,9 @@ export interface ListenAudioRecoveryHost {
   admissionOpen(epoch: number): boolean
   wantsSystemAudio(): boolean
   micDeviceId(): string
-  acquireMic(deviceId: string): Promise<ListenMicCapture>
+  meetingStartedAt(): number | undefined
+  acquireMic(deviceId: string, meetingStartedAt: number, signal?: AbortSignal): Promise<ListenMicCapture>
+  captureSignal?(): AbortSignal | undefined
   acquireLoopback(): Promise<MediaStream>
   armAudio(armed: boolean): Promise<void>
   openChannel(speaker: ListenSpeaker, stream: MediaStream, epoch: number, mic?: ListenMicCapture): Promise<boolean>
@@ -183,6 +195,7 @@ export interface ListenAudioRecoveryHost {
     sawWindow?: boolean | null,
     hasDeathEvidence?: boolean
   ): 'ignore' | 'watch' | 'recover' | 'recycle'
+  retireMicForRecovery(epoch: number): Promise<boolean>
   recoverMicNow(): void
   recoverSystemNow(): void
   setSystemPermissionNote(diagnosis?: ScreenDiagnosis | null): void
@@ -217,12 +230,18 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
     if (!current.admissionOpen(epoch) || micRecovering) return
     micRecovering = true
     try {
-      const mic = await host().acquireMic(host().micDeviceId())
+      const meetingStartedAt = host().meetingStartedAt()
+      if (!meetingStartedAt) return
+      const mic = await host().acquireMic(host().micDeviceId(), meetingStartedAt, host().captureSignal?.())
       if (!host().admissionOpen(epoch)) {
         host().stopStream(mic.stream)
+        mic.release?.()
         return
       }
-      if (!(await host().openChannel('you', mic.stream, epoch, mic)) || !host().admissionOpen(epoch)) return
+      if (!(await host().openChannel('you', mic.stream, epoch, mic)) || !host().admissionOpen(epoch)) {
+        mic.release?.()
+        return
+      }
       host().micRecoverySucceeded()
     } catch {
       if (!host().admissionOpen(epoch)) return
@@ -295,7 +314,12 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
         deviceChangeTimer = null
         const latest = host()
         if (!latest.admissionOpen(originEpoch)) return
-        if (latest.hasChannel('you')) latest.recoverMicNow()
+        if (latest.hasChannel('you')) {
+          void latest.retireMicForRecovery(originEpoch).then((retired) => {
+            const current = host()
+            if (retired && current.admissionOpen(originEpoch)) current.recoverMicNow()
+          }).catch(() => {})
+        }
         const action = latest.themDeviceChangeAction(latest.wantsSystemAudio(), latest.hasChannel('them'), null)
         if (action === 'watch') armThemProbation()
         else if (action === 'recover') {

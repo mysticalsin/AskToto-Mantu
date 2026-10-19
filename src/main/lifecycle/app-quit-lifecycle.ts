@@ -18,6 +18,7 @@ export function installAppQuitLifecycle(
   app: QuitLifecycleApp,
   deps: {
     speechPackDesktop: () => SpeechPackQuit
+    beginInputShutdown(): void
     quitTrace: QuitTrace
     isQuitFlushDone: () => boolean
     markQuitFlushDone: () => void
@@ -26,6 +27,8 @@ export function installAppQuitLifecycle(
     hotkeyChannel: string
     speechDesktop: () => { dispose(): Promise<void> } | null
     invalidateCloudSttOwner(): void
+    /** Permanently revoke microphone authority only after before-quit gates allow final shutdown. */
+    shutdownInputSessions(): void
     setBootPowerSaveBlock(active: boolean): void
     endBootWatch(userData: string): void
     globalShortcut: { unregisterAll(): void }
@@ -37,6 +40,7 @@ export function installAppQuitLifecycle(
     warn(message: string, error: unknown): void
   }
 ): void {
+  let inputShutdownBegun = false
   app.on('window-all-closed', () => {
     deps.quitTrace.mark('WINDOW_ALL_CLOSED')
     // Overlay app: stay alive in tray; quit only via tray/menu.
@@ -45,6 +49,10 @@ export function installAppQuitLifecycle(
   app.on('before-quit', (event) => {
     deps.quitTrace.requestQuit()
     deps.quitTrace.mark('BEFORE_QUIT_ENTER')
+    if (!inputShutdownBegun) {
+      inputShutdownBegun = true
+      deps.beginInputShutdown()
+    }
     deps.speechPackDesktop()?.beforeQuit(event, () => app.quit(), deps.meetingFlushPending())
   })
 
@@ -94,6 +102,9 @@ export function installAppQuitLifecycle(
     deps.wrapLifecycleListener('app_quit', () => {
       deps.quitTrace.mark('WILL_QUIT_CLEANUP_ENTER')
       deps.invalidateCloudSttOwner()
+      // before-quit may be prevented while the live meeting flushes. Keep capture authority available
+      // through that graceful Stop/drain window; will-quit is the final, non-preventable teardown edge.
+      deps.shutdownInputSessions()
       try {
         deps.setBootPowerSaveBlock(false)
         deps.endBootWatch(app.getPath('userData'))

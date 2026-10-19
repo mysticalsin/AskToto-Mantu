@@ -1,6 +1,8 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import {
   IPC,
+  LiveMeetingStartedAtSchema,
+  DraftMeetingLifecyclePayloadSchema,
   SaveMeetingSchema,
   stripProvisionalLines,
   type SaveDraftTranscriptResult,
@@ -20,6 +22,12 @@ interface DraftTranscriptIpcDependencies {
     meeting: SaveMeeting,
     beforeReplace?: () => void
   ) => Promise<SaveDraftTranscriptResult>
+  preserveDraftTranscript?: (startedAt: number) => Promise<void>
+  discardDraftTranscript?: (
+    settings: Settings,
+    startedAt: number,
+    isCurrent?: () => boolean
+  ) => Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Periodic best-effort snapshots retain the existing saved/failed/disabled renderer receipts. */
@@ -30,6 +38,7 @@ export function registerDraftTranscriptIpc(deps: DraftTranscriptIpcDependencies)
     const authCurrent = deps.captureAuthSessionBoundary()
     const parsed = SaveMeetingSchema.safeParse(raw)
     if (!parsed.success) return { status: 'failed' }
+    if (!LiveMeetingStartedAtSchema.safeParse(parsed.data.startedAt).success) return { status: 'failed' }
     const settings = deps.getSettings()
     const settingsCurrent = deps.captureDraftSettingsBoundary()
     const admissionRefused = Symbol('draft authority changed')
@@ -48,4 +57,32 @@ export function registerDraftTranscriptIpc(deps: DraftTranscriptIpcDependencies)
       throw error
     }
   })
+
+  if (deps.preserveDraftTranscript) {
+    deps.ipcMain.handle(IPC.preserveDraftTranscript, async (event, raw): Promise<{ ok: boolean }> => {
+      deps.assertMainWindow(event)
+      if (!deps.requireAuth()) return { ok: false }
+      const authCurrent = deps.captureAuthSessionBoundary()
+      const parsed = DraftMeetingLifecyclePayloadSchema.safeParse(raw)
+      if (!parsed.success || !authCurrent()) return { ok: false }
+      await deps.preserveDraftTranscript!(parsed.data.startedAt)
+      return { ok: authCurrent() }
+    })
+  }
+
+  if (deps.discardDraftTranscript) {
+    deps.ipcMain.handle(
+      IPC.discardDraftTranscript,
+      async (event, raw): Promise<{ ok: boolean; error?: string }> => {
+        deps.assertMainWindow(event)
+        if (!deps.requireAuth()) return { ok: false }
+        const authCurrent = deps.captureAuthSessionBoundary()
+        const parsed = DraftMeetingLifecyclePayloadSchema.safeParse(raw)
+        if (!parsed.success || !authCurrent()) return { ok: false }
+        const result = await deps.discardDraftTranscript!(deps.getSettings(), parsed.data.startedAt, authCurrent)
+        if (!authCurrent()) return { ok: false }
+        return result
+      }
+    )
+  }
 }

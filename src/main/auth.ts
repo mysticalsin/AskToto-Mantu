@@ -582,6 +582,15 @@ function loadSession(): void {
 }
 
 function saveSession(s: Session): void {
+  // Replacing an authenticated session is also an owner boundary. Tear down any meeting or
+  // interactive microphone capture bound to the previous session before advancing its generation.
+  if (session) {
+    try {
+      sessionClearedHandler?.()
+    } catch (e) {
+      mainLog.warn('[auth] prior-session teardown failed:', e instanceof Error ? e.message : String(e))
+    }
+  }
   invalidateSpeechAuthLease()
   speechAuthSessionEpoch += 1
   session = s
@@ -687,6 +696,10 @@ export function requireAuth(): boolean {
   if (authEnforced()) return s.signedIn
   if (isStickyConfigured()) return s.signedIn
   return !s.configured || s.signedIn
+}
+/** Main-owned auth identity generation. It advances whenever the authenticated session is saved or cleared. */
+export function authSessionGeneration(): number {
+  return speechAuthSessionEpoch
 }
 export const captureAuthSessionBoundary = () => speechAuthLeaseController.captureSessionBoundary(requireAuth)
 speechAuthLeaseController = new SpeechAuthLeaseController({

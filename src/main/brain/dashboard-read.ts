@@ -47,12 +47,34 @@ export async function readBrainDashboard(s: Settings) {
     Promise.all(dealSlugs.map((slug) => loadDeal(s, slug))),
     Promise.all((meetingSlugs ?? []).map((slug) => loadMeetingExtraction(s, slug)))
   ])
+  // Source receipts bind private on-device paths/bytes to ingestion. Keep them Main-only even though the
+  // dashboard needs the ordinary meeting refs and extraction fields.
+  const stripMeetingReceipt = <T extends { sourceRootId?: string }>(meeting: T) => {
+    const { sourceRootId: _sourceRootId, ...visible } = meeting
+    return visible
+  }
+  const publicIndex = {
+    ...index,
+    ingested: Object.fromEntries(Object.entries(index.ingested).map(([key, receipt]) => {
+      const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = receipt
+      return [key, visible]
+    }))
+  }
+  const stripEntityReceipts = <T extends { meetings: Array<{ sourceRootId?: string }> }>(entity: T) => ({
+    ...entity,
+    meetings: entity.meetings.map(stripMeetingReceipt)
+  })
+  const publicMeetings = meetings.filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
+    .map((meeting) => {
+      const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = meeting
+      return visible
+    })
   return {
-    index,
+    index: publicIndex,
     graph,
-    people: people.filter((person): person is NonNullable<typeof person> => !!person),
-    accounts: accounts.filter((account): account is NonNullable<typeof account> => !!account),
-    deals: deals.filter((deal): deal is NonNullable<typeof deal> => !!deal),
-    meetings: meetings.filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
+    people: people.filter((person): person is NonNullable<typeof person> => !!person).map(stripEntityReceipts),
+    accounts: accounts.filter((account): account is NonNullable<typeof account> => !!account).map(stripEntityReceipts),
+    deals: deals.filter((deal): deal is NonNullable<typeof deal> => !!deal).map(stripEntityReceipts),
+    meetings: publicMeetings
   }
 }

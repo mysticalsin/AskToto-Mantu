@@ -370,23 +370,26 @@ interface BrokerStartInput {
   consent: CloudSpeechConsentAcknowledgement
 }
 
+type StopDrainOutcome = 'drained' | 'aborted' | 'revoked'
+type StopDrainCallback = (outcome: StopDrainOutcome) => void
+
 interface StopDrainOperation {
   epoch: number
   requestId: string
   phase: 'sealing' | 'draining' | 'finalizing' | 'finished'
   pendingAcks: Map<Speaker, Channel>
-  callbacks: Array<() => void>
+  callbacks: StopDrainCallback[]
   ackTimer: ReturnType<typeof setTimeout> | null
   flushIncomplete: boolean
   drainIncomplete: boolean
   beginDrain: () => void
 }
 
-function settleStopCallbacks(operation: StopDrainOperation): void {
+function settleStopCallbacks(operation: StopDrainOperation, outcome: StopDrainOutcome): void {
   const callbacks = operation.callbacks.splice(0)
   for (const callback of callbacks) {
     try {
-      callback()
+      callback(outcome)
     } catch (error) {
       console.warn('[listen] stop drain callback failed:', error)
     }
@@ -462,10 +465,10 @@ export interface ListenApi {
     startedAt?: number,
     cloudConsent?: CloudSpeechConsentAcknowledgement
   ) => Promise<void>
-  /** onDrained (optional) fires when Stop reaches a terminal state: either every sealed window settled,
-   *  or a bounded no-progress watchdog ended an incomplete drain (reported through `error`). `text()` is
-   *  current at callback time but is not guaranteed complete. Skipped if a fresh start() supersedes Stop. */
-  stop: (onDrained?: () => void) => void
+  /** Stop observer receives `drained` after ordinary completion, `aborted` after a decoder crash, or
+   *  `revoked` when main forcibly ends the owning capture. `text()` is current at callback time but not
+   *  guaranteed complete. Skipped if a fresh start() supersedes Stop. */
+  stop: (onDrained?: StopDrainCallback) => void
   /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
    *  system-audio loopback session all stay warm so resume() picks back up mid-session. */
   pause: () => void
@@ -577,7 +580,7 @@ export function useListen(
   const brokerResumeAfterPauseRef = useRef(false)
   const cloudSpeechControllerRef = useRef<CloudSpeechController | null>(null)
   const cloudSegmentLinesRef = useRef(new Map<string, number>())
-  const brokerStopCallbacksRef = useRef<Array<() => void>>([])
+  const brokerStopCallbacksRef = useRef<StopDrainCallback[]>([])
   const failAdmittedCaptureRef = useRef<
     (error: string, options?: { forceCloudStop?: boolean; cloudCaptureId?: string }) => void
   >(() => {})
@@ -610,6 +613,7 @@ export function useListen(
   // The actual track object is session-local opaque identity only. It is never exposed in state, IPC,
   // telemetry, or persistence; public state contains only CaptureHealth's safe numeric/status fields.
   const activeMicTrackRef = useRef<MediaStreamTrack | null>(null)
+  const micAcquisitionAbortRef = useRef<AbortController | null>(null)
   const captureHealthRef = useRef<CaptureHealth | null>(null)
   const micSpeechAdmittedRef = useRef(false)
   const noSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1346,7 +1350,7 @@ export function useListen(
       workerRef.current = null
       readyRef.current = false
       crashedRef.current = true // the crash handler already tore everything down — stop() must not redo it
-      if (activeStop) settleStopCallbacks(activeStop)
+      if (activeStop) settleStopCallbacks(activeStop, 'aborted')
     }
     workerRef.current = w
     return w
@@ -1603,7 +1607,9 @@ export function useListen(
         admissionOpen: captureAdmissionIsOpen,
         wantsSystemAudio: () => wantsSystemRef.current,
         micDeviceId: () => micDeviceIdRef.current,
-        acquireMic,
+        meetingStartedAt: () => sessionStartedAtRef.current,
+        acquireMic: (deviceId, meetingStartedAt, signal) => acquireMic(deviceId, meetingStartedAt, signal),
+        captureSignal: () => micAcquisitionAbortRef.current?.signal,
         acquireLoopback,
         armAudio: (armed) => window.toto.armAudio(armed),
         openChannel,
@@ -1688,6 +1694,15 @@ export function useListen(
         themProbationDuration: () => THEM_WATCHDOG_MS,
         themDeviceChangeAction: (wantsSystem, hasSystemChannel, sawWindow, hasDeathEvidence) =>
           themDeviceChangeAction(wantsSystem, hasSystemChannel, sawWindow ?? null, hasDeathEvidence),
+        retireMicForRecovery: async (epoch) => {
+          const channel = channels.current.you
+          if (!channel || channel.admissionEpoch !== epoch || !captureAdmissionIsOpen(epoch)) return false
+          // Release this exact meeting capture before asking main for its replacement lease.
+          // This is channel retirement only; it does not end or recap the meeting.
+          audioChannels.close('you', channel)
+          await channel.micCapture?.release?.()
+          return channels.current.you !== channel && captureAdmissionIsOpen(epoch)
+        },
         recoverMicNow: () => {
           if (failBrokerAudioRecovery('microphone')) return
           void recoverMicRef.current?.()
@@ -1856,6 +1871,8 @@ export function useListen(
           readyRef.current = false
         }
         const myEpoch = ++sessionEpochRef.current
+        micAcquisitionAbortRef.current?.abort()
+        micAcquisitionAbortRef.current = new AbortController()
         const captureStart = captureStateRef.current.begin({
           generation: myEpoch,
           source,
@@ -1929,17 +1946,35 @@ export function useListen(
           capturing: false,
           paused: false
         }))
-        // MQA-285: same-turn capture. Kick getUserMedia BEFORE any await so the click gesture still
-        // covers the permission prompt and the first second of audio is on the MediaStream — not lost
-        // behind setListeningState / parakeetEnsure / getAsrBundled. Windows queue in pump() until
-        // the (prewarmed) engine reports ready.
-        let micP: Promise<MicCapture> | null = null
-        if (source === 'mic' || source === 'both') {
-          micP = acquireMic(micDeviceIdRef.current)
-        }
-        void window.toto.setListeningState(true, startedAt).catch(() => {})
-
+        // Keep the one main-owned meeting reservation promise visible to both setup and the
+        // independent channel acquisition flow. Mic capture is chained from the exact accepted
+        // reservation, including the broker-cloud path; neither path can prompt before main accepts.
+        const meetingAdmissionP = window.toto.setListeningState(true, startedAt).catch(() => false)
+        const micP: Promise<MicCapture> | null = source === 'mic' || source === 'both'
+          ? meetingAdmissionP.then((meetingAdmitted) => {
+              if (!meetingAdmitted) throw new Error('Meeting microphone admission was denied.')
+              if (!captureAdmissionIsOpen(myEpoch)) {
+                void window.toto.setListeningState(false, startedAt).catch(() => {})
+                throw new Error('Meeting microphone admission ended before capture startup.')
+              }
+              return acquireMic(micDeviceIdRef.current, startedAt, micAcquisitionAbortRef.current?.signal)
+            })
+          : null
         void (async () => {
+          // Main must accept the exact meeting reservation before the browser may open its mic.
+          // This IPC round trip can add startup latency before the OS prompt and first captured audio.
+          const meetingAdmitted = await meetingAdmissionP
+          if (!meetingAdmitted) {
+            failAdmittedCapture('Meeting microphone admission was denied.')
+            return
+          }
+          if (!captureAdmissionIsOpen(myEpoch)) {
+            // Stop or a successor session may have retired this epoch while main admitted the
+            // reservation. Release only this exact startedAt before any mic/grant startup; main
+            // rejects this cleanup if a newer meeting now owns the reservation.
+            void window.toto.setListeningState(false, startedAt).catch(() => {})
+            return
+          }
           if (engine === 'cloud' && activeBrokerSpeechRef.current?.transport === 'broker-v1') {
             if (workerRef.current) {
               workerRef.current.terminate()
@@ -2169,15 +2204,23 @@ export function useListen(
         let sysErr: Error | null = null // captured for error-message classification below
 
         if (micP) {
+          let mic: MicCapture | null = null
           try {
-            const mic = await micP
+            const admittedMic = await micP
+            mic = admittedMic
             if (!captureAdmissionIsOpen(myEpoch)) {
-              mic.stream.getTracks().forEach((t) => t.stop())
+              admittedMic.stream.getTracks().forEach((t) => t.stop())
+              admittedMic.release?.()
               return
             }
-            micOk = await openChannel('you', mic.stream, myEpoch, mic)
+            micOk = await openChannel('you', admittedMic.stream, myEpoch, admittedMic)
+            if (!micOk) admittedMic.release?.()
             if (!micOk && !captureAdmissionIsOpen(myEpoch)) return
           } catch (e) {
+            // openChannel can reject after capture acquisition but before it takes ownership.
+            // Always release the exact main meeting grant on that edge.
+            // (If a channel took ownership, its close path performs this release instead.)
+            mic?.release?.()
             if (!captureAdmissionIsOpen(myEpoch)) return
             publishCaptureHealth(
               myEpoch,
@@ -2350,12 +2393,36 @@ export function useListen(
    * must instead release every capture handle immediately and send the same start identity back to main.
    */
   const failAdmittedCapture = useCallback(
-    (error: string, options: { forceCloudStop?: boolean; cloudCaptureId?: string } = {}): void => {
+    (error: string, options: { forceCloudStop?: boolean; cloudCaptureId?: string; force?: boolean } = {}): void => {
       // A normal Stop owns its seal and drain once stoppingRef is true. A decoder rejection that lands
       // after that boundary belongs to the retiring session and must not bypass the final-audio path.
-      if (!captureAdmissionIsOpen(sessionEpochRef.current)) return
+      if (!options.force && !captureAdmissionIsOpen(sessionEpochRef.current)) return
+      micAcquisitionAbortRef.current?.abort()
+      micAcquisitionAbortRef.current = null
       const startedAt = sessionStartedAtRef.current
+      const epoch = sessionEpochRef.current
       liveRef.current = false
+      if (options.force) {
+        // A main-owned revoke is terminal even when the ordinary Stop path is sealing/draining.
+        // Invalidate that drain so it cannot later publish or retain work for this revoked epoch.
+        sessionEpochRef.current += 1
+        stoppingRef.current = true
+        if (drainTimerRef.current) clearTimeout(drainTimerRef.current)
+        drainTimerRef.current = null
+        const activeStop = stopDrainRef.current
+        if (activeStop) {
+          if (activeStop.ackTimer) clearTimeout(activeStop.ackTimer)
+          activeStop.ackTimer = null
+          activeStop.phase = 'finished'
+          settleStopCallbacks(activeStop, 'revoked')
+        }
+        stopDrainRef.current = null
+        for (const callback of brokerStopCallbacksRef.current.splice(0)) {
+          try { callback('revoked') } catch { /* finish the remaining stop observers */ }
+        }
+        workerRef.current?.terminate()
+        workerRef.current = null
+      }
       const brokerCapture = activeBrokerSpeechRef.current?.transport === 'broker-v1'
       const brokerController = cloudSpeechControllerRef.current
       if (brokerCapture) {
@@ -2384,7 +2451,7 @@ export function useListen(
         stream?.getTracks().forEach((track) => track.stop())
       )
       brokerRetainedStreamsRef.current = {}
-      captureStateRef.current.clear(sessionEpochRef.current)
+      captureStateRef.current.clear(epoch)
       if (options.forceCloudStop && !brokerCapture) {
         cloudSttFinalizingRef.current = false
         cloudSttUnsubRef.current?.()
@@ -2681,12 +2748,12 @@ export function useListen(
   }
 
   const stop = useCallback(
-    (onDrained?: () => void): void => {
+    (onDrained?: StopDrainCallback): void => {
       // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
       // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
       if (crashedRef.current) {
         // The crash handler already tore capture down and surfaced the failure; there is no live drain to join.
-        onDrained?.()
+        onDrained?.('aborted')
         return
       }
       if (stoppingRef.current) {
@@ -2699,6 +2766,8 @@ export function useListen(
         return
       }
       stoppingRef.current = true
+      micAcquisitionAbortRef.current?.abort()
+      micAcquisitionAbortRef.current = null
       const myEpoch = sessionEpochRef.current
       const cloudCaptureId = cloudCaptureIdRef.current
       const startedAt = sessionStartedAtRef.current
@@ -2749,7 +2818,7 @@ export function useListen(
           stoppingRef.current = false
           for (const callback of brokerStopCallbacksRef.current.splice(0)) {
             try {
-              callback()
+              callback('drained')
             } catch {
               // A caller callback cannot strand the completed Stop state.
             }
@@ -2859,7 +2928,7 @@ export function useListen(
             drainTimerRef.current = null
             stopDrainRef.current = null
             stoppingRef.current = false
-            settleStopCallbacks(operation)
+            settleStopCallbacks(operation, 'drained')
             // MQA-285: keep the hot engine. Unmount still tears the worker down.
           }
 
@@ -2959,6 +3028,23 @@ export function useListen(
     },
     [closeChannel, disarmNetworkRetry]
   )
+
+  useEffect(() => window.toto.onMeetingMicCaptureRevoked((event) => {
+    if (event.startedAt !== sessionStartedAtRef.current) return
+    if (event.reason === 'user-stop') {
+      // The admission helper has already cleaned the exact released grant/track. Normal Stop owns the
+      // channel drain and provider finalization; a delayed grant-release notification must not turn that
+      // completed graceful stop into a forced failure or global cloud stop.
+      return
+    }
+    // Main has already invalidated this exact meeting reservation. Tear down renderer-owned tracks,
+    // worklets, recognizers, and cloud capture synchronously before returning to the event loop.
+    failAdmittedCapture('Meeting microphone admission was revoked.', {
+      force: true,
+      forceCloudStop: true,
+      cloudCaptureId: cloudCaptureIdRef.current ?? undefined
+    })
+  }), [failAdmittedCapture])
 
   const clear = useCallback((): void => {
     setLines([])

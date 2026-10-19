@@ -135,7 +135,7 @@ describe('themDeviceChangeAction — them-side silent-death recovery (MQA-011)',
     // The recovery helper's devicechange/probation effects are exercised through a fake media host in
     // listen.loopback.contract.test.ts; retain the actual Listen callback wiring checks here.
     expect(listenSrc).toMatch(
-      /recoverMicNow: \(\) => \{\s*if \(failBrokerAudioRecovery\('microphone'\)\) return\s*void recoverMicRef\.current\?\.\(\)\s*\}/
+      /retireMicForRecovery: async \(epoch\) => \{[\s\S]*?audioChannels\.close\('you', channel\)[\s\S]*?await channel\.micCapture\?\.release\?\.\(\)[\s\S]*?\},\s*recoverMicNow: \(\) => \{\s*if \(failBrokerAudioRecovery\('microphone'\)\) return\s*void recoverMicRef\.current\?\.\(\)\s*\}/
     )
     expect(listenSrc).toMatch(/scheduleThemProbation: \(callback, delay\) => \{\s*audioChannels\.clearThemWatchdog\(\)/)
     expect(listenSrc).toMatch(/audioChannels\.close\('them'\)[\s\S]{0,400}recoverSystemAudioRef\.current/)

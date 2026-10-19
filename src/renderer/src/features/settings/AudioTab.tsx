@@ -17,6 +17,7 @@ import type { SpeechPackBridge } from './SpeechPackSection'
 import { OnDeviceSpeechSettings } from './OnDeviceSpeechSettings'
 import { CloudSpeechSection } from './CloudSpeechSection'
 import { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
+import { acquireInteractiveMic, type InputMicAdmission } from '../../lib/input-mic-admission'
 export { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
 
 export { LazyTextarea } from '../../ui/LazyText'
@@ -342,29 +343,37 @@ function MicLevelMeter({
 
   useEffect(() => {
     let cancelled = false
+    const admissionAbort = new AbortController()
     let stream: MediaStream | null = null
     let ctx: AudioContext | null = null
+    let admission: InputMicAdmission | null = null
     let raf = 0
 
     const teardown = (): void => {
       if (raf) cancelAnimationFrame(raf)
       raf = 0
+      admissionAbort.abort()
       stream?.getTracks().forEach((t) => t.stop())
       stream = null
       if (ctx && ctx.state !== 'closed') void ctx.close()
       ctx = null
+      void admission?.release()
+      admission = null
     }
 
     void (async (): Promise<void> => {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({
+        const capture = await acquireInteractiveMic({
           audio: deviceId ? { deviceId: { exact: deviceId } } : true
-        })
-        if (cancelled) {
-          s.getTracks().forEach((t) => t.stop()) // effect already torn down (unmount/device switch) mid-await
+        }, 'conversation', 'application-probe', admissionAbort.signal)
+        stream = capture.stream
+        admission = capture.admission
+        admission.onRevoke(teardown)
+        if (cancelled || admission.revoked) {
+          teardown()
           return
         }
-        stream = s
+        const s = capture.stream
         const audioCtx = new AudioContext()
         ctx = audioCtx
         void audioCtx.resume() // some autoplay policies create it suspended; harmless no-op if already running
@@ -453,6 +462,7 @@ function MicPicker({
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
+  const unlockAbortRef = useRef<AbortController | null>(null)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [needsPerm, setNeedsPerm] = useState(false)
   // Bumped whenever unlockLabels() lands a fresh permission grant — passed to MicLevelMeter so it
@@ -475,14 +485,22 @@ function MicPicker({
     return () => navigator.mediaDevices.removeEventListener('devicechange', refresh)
   }, [refresh])
 
+  useEffect(() => () => unlockAbortRef.current?.abort(), [])
+
   const unlockLabels = useCallback(async (): Promise<void> => {
+    const controller = new AbortController()
+    unlockAbortRef.current?.abort()
+    unlockAbortRef.current = controller
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const { stream: s, admission } = await acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
       s.getTracks().forEach((t) => t.stop()) // just needed the grant so labels populate
+      await admission.release()
       await refresh()
       setPermNonce((n) => n + 1)
     } catch {
       /* denied — leave the generic names in place */
+    } finally {
+      if (unlockAbortRef.current === controller) unlockAbortRef.current = null
     }
   }, [refresh])
 

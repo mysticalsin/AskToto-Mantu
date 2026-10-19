@@ -1,4 +1,4 @@
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import type { Settings, AskStart } from '@shared/ipc'
 import { PROVIDERS, providerBaseUrl, requiresUserBaseUrl, resolveModelTier, type ProviderId } from '@shared/providers'
 import {
@@ -1074,8 +1074,26 @@ type Job = {
   trigger: WorkTrigger
   /** Re-merge a durable extraction left behind by a crash after extraction but before index success. */
   strategy?: 'reconcile'
+  /** Live-save ownership fence; discarded meetings must not start or finish a later ingest effect. */
+  admissionChecks?: Array<() => void>
+  /** Receipt join callbacks run only after this job's full extraction and mutation lifecycle settles. */
+  settledCallbacks?: Array<() => void>
 }
 const queue: Job[] = []
+
+function isJobAdmissionOpen(job: Job): boolean {
+  for (const check of job.admissionChecks ?? []) {
+    try { check() } catch { return false }
+  }
+  return true
+}
+
+function settleJobCallbacks(job: Job): void {
+  for (const callback of job.settledCallbacks ?? []) {
+    try { callback() } catch { /* receipt settlement cannot fail ingest cleanup */ }
+  }
+  job.settledCallbacks = []
+}
 
 /** Background extraction nobody is waiting on: the only queue work the maintenance gate governs. */
 function isUnattendedModelWork(job: Job): boolean {
@@ -1536,7 +1554,9 @@ export async function ingestExtraction(
   // Ingest-index identity + team attribution for a shared-folder transcript. Both undefined for the user's
   // own meetings (key → basename, source_team → ''), so every existing direct caller (incl. tests) is unaffected.
   indexKey?: string,
-  sourceTeam?: string
+  sourceTeam?: string,
+  sourceDigest?: string,
+  sourceRootId?: string
 ): Promise<void> {
   // A persisted checkpoint can predate verification plumbing. Re-run deterministic verification before
   // its merge so every recovered amount, date, commitment, and band uses the same grounding rules.
@@ -1560,7 +1580,18 @@ export async function ingestExtraction(
     date = source.version ? new Date(Number(source.version.split(':')[0])).toISOString() : ''
     mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
   }
-  const ref: MeetingRef = { file: key, date, title: x.title24 || key }
+  const validReceipt = typeof sourceDigest === 'string' && /^[a-f0-9]{64}$/.test(sourceDigest) &&
+    typeof sourceRootId === 'string' && /^[a-f0-9]{64}$/.test(sourceRootId)
+  const ref: MeetingRef = {
+    file: key,
+    date,
+    title: x.title24 || key,
+    ...(validReceipt ? { sourceRootId } : {})
+  }
+  if (validReceipt) {
+    x.sourceDigest = sourceDigest
+    x.sourceRootId = sourceRootId
+  }
   // Stamp provenance the model can't know (its own source file + meeting date) so consumers can join
   // extractions back to meetings (call-grade timelines, meeting feeds) without re-reading entity refs.
   x.source_file = key
@@ -1613,7 +1644,13 @@ export async function ingestExtraction(
   await trackedPublication(() => publishForExtraction(s, x, ref, aliasMap))
   const version = sourceVersion ?? (await meetingSourceVersion(file))
   await updateIndex(s, (idx) => {
-    idx.ingested[key] = { at: Date.now(), ok: true, ...(version ? { sourceVersion: version } : {}), attempts: 0 }
+    idx.ingested[key] = {
+      at: Date.now(),
+      ok: true,
+      ...(version ? { sourceVersion: version } : {}),
+      ...(validReceipt ? { sourceDigest, sourceRootId } : {}),
+      attempts: 0
+    }
     idx.revision += 1
   })
 }
@@ -1622,8 +1659,8 @@ export async function ingestExtraction(
  *  Never rejects — a failure is carried as data (`ok: false`) so the caller can run up to
  *  EXTRACT_CONCURRENCY of these concurrently with Promise machinery, not try/catch across awaits. */
 type JobResult =
-  | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string; preparedText?: string }
-  | { job: Job; s: Settings; ok: false; error: unknown; unreadable: boolean }
+  | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string; preparedText?: string; sourceDigest: string; sourceRootId: string }
+  | { job: Job; s: Settings; ok: false; error: unknown; unreadable: boolean; aborted?: boolean }
 
 async function runExtractionStage(job: Job): Promise<JobResult> {
   // One Settings snapshot per job, taken at the moment its extraction starts, reused for its ingest and
@@ -1631,13 +1668,24 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
   // re-reading (and risking a mid-job change) between the extraction and ingest stages.
   const s = getSettings()
   try {
+    if (!isJobAdmissionOpen(job)) {
+      return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+    }
     const source = await readSourceText(job.file)
+    if (!isJobAdmissionOpen(job)) {
+      return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+    }
     if (source.status === 'missing')
       return { job, s, ok: false, error: new Error('Meeting file not found.'), unreadable: true }
     if (source.status === 'not-on-device') {
       return { job, s, ok: false, error: new Error('Meeting file is not available on this device.'), unreadable: true }
     }
     if (source.status === 'unreadable') return { job, s, ok: false, error: source.error, unreadable: true }
+    const sourceDigest = source.observation.sourceDigest
+    const sourceRootId = source.observation.sourceRootId
+    if (!sourceDigest || !/^[a-f0-9]{64}$/.test(sourceDigest) || !sourceRootId || !/^[a-f0-9]{64}$/.test(sourceRootId)) {
+      return { job, s, ok: false, error: new Error('Meeting source receipt is unavailable.'), unreadable: true }
+    }
     const md = source.text
     // A read failure says nothing about the transcript, so it must not spend an attempt.
     if (job.strategy === 'reconcile') {
@@ -1646,12 +1694,20 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
       // no second LLM call, no cloud cost, and mergeExtraction's per-meeting de-dup makes the repair
       // safe even if a previous attempt wrote some entities before it was interrupted.
       const savedExtraction = await loadMeetingExtraction(s, extractionSlug(jobKey(job)))
-      if (savedExtraction) return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md) }
+      if (!isJobAdmissionOpen(job)) {
+        return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+      }
+      if (savedExtraction && savedExtraction.sourceDigest === sourceDigest && savedExtraction.sourceRootId === sourceRootId) {
+        return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md), sourceDigest, sourceRootId }
+      }
     }
     const { extraction, preparedText } = await extractMeeting(s, md, job.file, job.route ?? 'default')
-    return { job, s, ok: true, x: extraction, md, preparedText }
+    if (!isJobAdmissionOpen(job)) {
+      return { job, s, ok: false, error: new Error('Meeting discard closed ingest admission.'), unreadable: false, aborted: true }
+    }
+    return { job, s, ok: true, x: extraction, md, preparedText, sourceDigest, sourceRootId }
   } catch (error) {
-    return { job, s, ok: false, error, unreadable: false }
+    return { job, s, ok: false, error, unreadable: false, aborted: !isJobAdmissionOpen(job) }
   }
 }
 
@@ -1663,6 +1719,7 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
  *  through store.ts's withEntityLock (never directly) so two of these never run concurrently. */
 async function finishJob(result: JobResult): Promise<void> {
   const { job, s } = result
+  if ((result.ok === false && result.aborted) || !isJobAdmissionOpen(job)) return
   let failed = false
   try {
     try {
@@ -1675,8 +1732,11 @@ async function finishJob(result: JobResult): Promise<void> {
         result.preparedText,
         job.sourceVersion,
         job.key,
-        job.label
+        job.label,
+        result.sourceDigest,
+        result.sourceRootId
       )
+      if (!isJobAdmissionOpen(job)) return
       auditLog('brain.ingest', { ok: true, source: job.source })
       {
         // Time saved: 2 min per captured commitment, cap 15. Only when ingest actually extracted some.
@@ -1690,6 +1750,7 @@ async function finishJob(result: JobResult): Promise<void> {
         }
       }
     } catch (e) {
+      if (!isJobAdmissionOpen(job)) return
       failed = true
       completionError(
         e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete'
@@ -1717,12 +1778,15 @@ async function finishJob(result: JobResult): Promise<void> {
         }
         idx.revision += 1
       })
+      if (!isJobAdmissionOpen(job)) return
       auditLog('brain.ingest', { ok: false, source: job.source })
     }
     if (job.origin === 'live') {
+      if (!isJobAdmissionOpen(job)) return
       await updateIndex(s, (idx) => {
         idx.warnings = lintBrain(s)
       })
+      if (!isJobAdmissionOpen(job)) return
       // Task MI-5: one index regen per live ingest, one per whole backfill drain, not per meeting.
       await trackedPublication(() => publishIndexes(s))
     }
@@ -1982,6 +2046,7 @@ function pump(): void {
         .catch((e) => mainLog.error('[brain] unexpected error finishing a brain ingest job:', e))
         .finally(() => {
           inFlightJobs.delete(job)
+          settleJobCallbacks(job)
           pump() // this job's ingest just completed — re-check for a drain, and for newly-eligible backfill work
         })
     })
@@ -2008,8 +2073,12 @@ onMaintenanceMayBegin(pump)
 export async function enqueueIngest(
   file: string,
   { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {},
-  assertAdmission?: () => void
+  assertAdmission?: () => void,
+  onSettled?: () => void
 ): Promise<void> {
+  const settle = (): void => {
+    try { onSettled?.() } catch { /* receipt settlement cannot fail ingest admission */ }
+  }
   let admissionRefused = false
   const checkAdmission = () => {
     try {
@@ -2035,6 +2104,7 @@ export async function enqueueIngest(
   // again (startBackfill scans by content, not by whether enqueueIngest ever ran for it).
   if (indexUnavailable(s)) {
     reportDeferred('ingest', 'ledger_unavailable')
+    settle()
     return
   }
   const key = basename(file)
@@ -2048,18 +2118,28 @@ export async function enqueueIngest(
   // never queues. jobKey(ownJob) === basename, so this still matches a genuine same-file own job.
   const tracked = [...queue, ...inFlightJobs].find((job) => jobKey(job) === key)
   if (tracked) {
+    const sameFile = resolve(tracked.file) === resolve(file)
+    if (sameFile) {
+      if (assertAdmission) (tracked.admissionChecks ??= []).push(assertAdmission)
+      if (onSettled) (tracked.settledCallbacks ??= []).push(settle)
+    }
     // A write that lands while the prior extraction is active cannot be safely folded into that job.
     // Keep the old job's result from clobbering the newer source by rebuilding from durable sources.
     if (force || (sourceVersion && tracked.sourceVersion && sourceVersion !== tracked.sourceVersion)) {
       await requestSourceRefresh(s, checkAdmission)
       checkAdmission()
     }
+    if (!sameFile) settle()
     return
   }
   if (previous?.ok) {
-    if (!force && sourceVersion && previous.sourceVersion === sourceVersion) return
+    if (!force && sourceVersion && previous.sourceVersion === sourceVersion) {
+      settle()
+      return
+    }
     await requestSourceRefresh(s, checkAdmission)
     checkAdmission()
+    settle()
     return
   }
   observeSource(key)
@@ -2081,9 +2161,15 @@ export async function enqueueIngest(
       `[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`
     )
   }
-  if (deferred) return
+  if (deferred) {
+    settle()
+    return
+  }
   checkAdmission()
-  queue.push({ file, source: 'meetings', origin: 'live', trigger: 'user', ...(sourceVersion ? { sourceVersion } : {}) })
+  const job: Job = { file, source: 'meetings', origin: 'live', trigger: 'user', ...(sourceVersion ? { sourceVersion } : {}) }
+  if (assertAdmission) job.admissionChecks = [assertAdmission]
+  if (onSettled) job.settledCallbacks = [settle]
+  queue.push(job)
   pump()
 }
 
@@ -2376,6 +2462,14 @@ export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */
 export async function requestSourceRefresh(s: Settings = getSettings(), assertAdmission?: () => void): Promise<void> {
   assertAdmission?.()
+  // A refresh request means one or more persisted sources may no longer match this derived brain.
+  // Invalidate answer contexts before source discovery awaits on filesystem or cloud-backed folders.
+  await updateIndex(s, (idx) => {
+    idx.sourceRefreshRequested = true
+    idx.backfillRequested = true
+    idx.revision += 1
+  })
+  assertAdmission?.()
   try {
     const idx = await readIndexAsync(s)
     assertAdmission?.()
@@ -2397,11 +2491,6 @@ export async function requestSourceRefresh(s: Settings = getSettings(), assertAd
     if (sourceRefreshWorkKeys.size === 0) sourceRefreshWorkKeys = claimSourceRefreshWork(readIndex(s))
     preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   }
-  await updateIndex(s, (idx) => {
-    idx.sourceRefreshRequested = true
-    idx.backfillRequested = true
-  })
-  assertAdmission?.()
   await maybeStartSourceRefreshAsync(assertAdmission)
   assertAdmission?.()
 }

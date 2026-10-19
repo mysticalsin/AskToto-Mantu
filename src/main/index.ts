@@ -38,7 +38,7 @@ import {
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import {
@@ -50,9 +50,28 @@ import {
 } from './lifecycle/reveal'
 import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
 import { operatorVisionModel } from '@shared/operator-vision'
+import { TranscriptSaveReceiptStore, type TranscriptSaveSideEffect } from './transcript-save-receipts'
+import { InputSessionAuthority } from './input-session-authority'
+import { createInputSessionHandlers } from './input-session-ipc'
+import { installInputMicPermissionHandlers } from './input-mic-permissions'
+import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
+import { MEETING_START_ACTION, MeetingStartActivationAuthority, type MeetingStartActivationFrame } from './meeting-start-activation-authority'
+import { CommandMicActivationAuthority, commandMicOwner, type CommandMicActivationFrame } from './command-mic-activation-authority'
+import { CommandSpeechCapture } from './command-speech-capture'
+import {
+  MeetingMicCaptureConfirmRequestSchema,
+  MeetingMicCaptureReleaseRequestSchema,
+  InputSessionStopRequestSchema
+} from '@shared/input-session'
 import {
   IPC,
   LiveMeetingStartedAtSchema,
+  DiscardSavedTranscriptPayloadSchema,
+  MeetingMicAdmissionRequestSchema,
+  CommandSpeechStartSchema,
+  CommandSpeechFrameSchema,
+  CommandSpeechFinishSchema,
+  CommandSpeechCancelSchema,
   AskStartSchema,
   SetApiKeyPayloadSchema,
   ClearApiKeyPayloadSchema,
@@ -108,6 +127,7 @@ import {
   type RecallExportPlainResult,
   ScreenCaptureCheckPayloadSchema,
   MetisCommandConfirmationSchema,
+  type CommandMicAvailabilityResult,
   RendererCrashContextSchema,
   type RendererCrashContext
 } from '@shared/ipc'
@@ -390,20 +410,40 @@ function recordLiveSpeakerSave(startedAt: number, file: string): boolean {
   return true
 }
 
-/** The one synchronous authority consumed by listening-state-ipc before it performs any side effect. */
-function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
+/** Synchronous meeting identity plus separate main-owned meeting microphone admission. */
+function acceptLiveSpeakerTransition(change: ListeningStatePayload, authorizeStart: () => boolean = () => true): boolean {
   cleanupExpiredLiveSpeakerReceipts()
+  // Quit has closed admission to new capture sessions, but an exact current meeting may still stop/flush.
+  if (change.on && (inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady)) return false
   const startedAt = change.startedAt
 
   if (startedAt === undefined) {
     if (activeLiveSpeakerStartedAt !== null) return false
     if (change.on === legacyListeningActive) return false
+    if (change.on) {
+      if (!authorizeStart()) return false
+      if (inputSessionAuthority.hasMeetingReservation) hardStopMeetingCapture('owner-replaced')
+      if (!inputSessionAuthority.reserveMeeting(null)) return false
+      inputSessionContextRevision += 1
+      meetingCaptureOwnerWebContentsId = win?.webContents.id ?? null
+    } else {
+      meetingStartActivationAuthority.revokeAll()
+      revokeMeetingMicCaptureGrants(null, 'user-stop')
+      if (!inputSessionAuthority.releaseMeeting(null)) return false
+      inputSessionContextRevision += 1
+      meetingCaptureOwnerWebContentsId = null
+    }
     setLegacyListeningActive(change.on)
     return true
   }
 
   if (change.on) {
     if (startedAt <= liveSpeakerStartedAtHighWater) return false
+    if (!authorizeStart()) return false
+    if (inputSessionAuthority.hasMeetingReservation) hardStopMeetingCapture('owner-replaced')
+    if (!inputSessionAuthority.reserveMeeting(startedAt)) return false
+    inputSessionContextRevision += 1
+    meetingCaptureOwnerWebContentsId = win?.webContents.id ?? null
     const previous = activeLiveSpeakerStartedAt
     if (previous !== null) closeLiveSpeakerReceipt(previous)
     activeLiveSpeakerStartedAt = startedAt
@@ -421,10 +461,15 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   }
 
   if (activeLiveSpeakerStartedAt !== startedAt) return false
+  meetingStartActivationAuthority.revokeAll()
   // Capture and close the prior exact owner synchronously before clearing authority. The async native
   // release that follows in listening-state-ipc therefore cannot resolve against a replacement.
+  revokeMeetingMicCaptureGrants(startedAt, 'user-stop')
   closeLiveSpeakerReceipt(startedAt)
+  if (!inputSessionAuthority.releaseMeeting(startedAt)) return false
+  inputSessionContextRevision += 1
   activeLiveSpeakerStartedAt = null
+  meetingCaptureOwnerWebContentsId = null
   setLegacyListeningActive(false)
   return true
 }
@@ -442,6 +487,7 @@ function captureLiveSpeakerKey(rawStartedAt: unknown): string | null {
 function discardActiveLiveSpeakerSession(): void {
   const startedAt = activeLiveSpeakerStartedAt
   activeLiveSpeakerStartedAt = null
+  inputSessionAuthority.releaseMeeting(startedAt)
   setLegacyListeningActive(false)
   if (startedAt === null) return
   const receipt = liveSpeakerReceipts.get(startedAt)
@@ -625,6 +671,7 @@ import {
 } from './intelligence'
 import {
   loadIndexForStatus as loadBrainIndexForStatus,
+  readIndex as readBrainIndex,
   writeIndex as writeBrainIndex,
   indexUnavailable,
   indexUnavailableAsync,
@@ -649,7 +696,16 @@ import {
   brainDir as brainStoreDir
 } from './brain/store'
 import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
-import { buildBrainContext } from './brain/context'
+import { areBrainContextRecordsCurrent, areBrainContextSourcesCurrent, buildBrainContextWithSources } from './brain/context'
+import {
+  brainContextForProvider,
+  createBrainContextEnvelope,
+  isBrainContextEnvelopeCurrent,
+  staleBrainContextEnvelope,
+  unavailableBrainContextEnvelope,
+  type BrainContextEnvelope,
+  type BrainContextOwner
+} from './brain/context-envelope'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
@@ -684,7 +740,7 @@ import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './op
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandConfirmation } from './command-confirmation'
 import { executeDesktopAction } from './desktop-adapters'
-import { ensureMetisCommandRuntime } from './metis-command-register'
+import { ensureMetisCommandRuntime, getMetisCommandRuntime } from './metis-command-register'
 import {
   consumeSecurityLimit,
   RATE_LIMIT_USER_MESSAGE,
@@ -738,6 +794,7 @@ import {
   signOut as authSignOut,
   requireAuth,
   captureAuthSessionBoundary,
+  authSessionGeneration,
   setSessionClearedHandler,
   resetSpeechAuthProfile,
   completeSpeechAuthProfileReset,
@@ -764,7 +821,7 @@ import {
 } from './cloud-stt/live-session'
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
-import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
+import { assertCloudOnlyAllowsEngine, resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from '../shared/cloud-stt-start'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
@@ -832,6 +889,8 @@ import {
   saveNote,
   appendDebrief,
   saveDraftTranscript,
+  preserveDraftTranscript,
+  discardDraftTranscript,
   clearDraftTranscript,
   recoverOrphanDrafts,
   parseRecapMarkdown,
@@ -850,6 +909,7 @@ import {
   recallRead,
   openExplicitly,
   deleteMeeting,
+  deleteMeetingAtPath,
   renameMeeting,
   updateMeetingRecap,
   updateMeetingTranscript,
@@ -935,7 +995,15 @@ import {
   tryAcquirePlaneTokenLock,
   releasePlaneTokenLock
 } from './mcp/planeOAuth'
-import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild, purgeGraphArtifacts } from './graphify'
+import {
+  graphifyStatus,
+  buildGraph,
+  relatedNotes,
+  graphHtml,
+  scheduleRebuild,
+  purgeGraphArtifacts,
+  acquireGraphBuildFence
+} from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -1326,6 +1394,262 @@ function speculativeLocalWorkAllowed(): boolean {
 // "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
+const transcriptSaveReceipts = new TranscriptSaveReceiptStore()
+let recoveredDraftsThisLaunch = 0
+let recoveredDraftCountRevision = 0
+function publishRecoveredDraftCount(): void {
+  if (!win || win.isDestroyed()) return
+  try { win.webContents.send(IPC.transcriptsRecovered, { count: recoveredDraftsThisLaunch, revision: recoveredDraftCountRevision }) }
+  catch { /* authenticated snapshot query can recover the current count */ }
+}
+let commandMicActivationLeaseId: string | null = null
+let commandSpeechCapture: CommandSpeechCapture | null = null
+let commandMicLeaseTimer: ReturnType<typeof setTimeout> | null = null
+function clearCommandMicLeaseTimer(sessionId?: string): void {
+  if (sessionId && commandMicActivationLeaseId !== sessionId) return
+  if (commandMicLeaseTimer) clearTimeout(commandMicLeaseTimer)
+  commandMicLeaseTimer = null
+}
+function armCommandMicLeaseTimeout(sessionId: string, delayMs: number): void {
+  clearCommandMicLeaseTimer()
+  commandMicLeaseTimer = setTimeout(() => {
+    commandMicLeaseTimer = null
+    const lease = inputSessionAuthority.activeLease
+    if (lease?.sessionId === sessionId && lease.purpose === 'command') inputSessionAuthority.hardStop('cancelled')
+  }, delayMs)
+}
+const inputSessionAuthority = new InputSessionAuthority({
+  onRevoked: (owner, lease, reason) => {
+    if (commandMicActivationLeaseId === lease.sessionId) {
+      clearCommandMicLeaseTimer(lease.sessionId)
+      commandMicActivationLeaseId = null
+    }
+    commandSpeechCapture?.cancelForLease(lease.sessionId)
+    if (!win || win.isDestroyed() || win.webContents.id !== owner.webContentsId) return
+    try { win.webContents.send(IPC.inputSessionRevoked, { sessionId: lease.sessionId, revision: lease.revision, reason }) }
+    catch { /* authority stays revoked even if the renderer disappeared */ }
+  }
+})
+let meetingCaptureOwnerWebContentsId: number | null = null
+let inputSessionContextRevision = 0
+let inputSessionProfilePath: string | null = null
+let inputPowerLifecycleHooksReady = false
+function currentInputSessionContext(): { authSessionGeneration: number; contextRevision: number } {
+  const profilePath = app.getPath('userData')
+  if (inputSessionProfilePath !== profilePath) {
+    inputSessionProfilePath = profilePath
+    inputSessionContextRevision += 1
+  }
+  return { authSessionGeneration: authSessionGeneration(), contextRevision: inputSessionContextRevision }
+}
+function currentBrainContextOwner(settings: Settings = getSettings()): BrainContextOwner {
+  const unavailable = indexUnavailable(settings)
+  if (unavailable) throw new Error(`Brain context index is unavailable: ${unavailable}`)
+  return {
+    ...currentInputSessionContext(),
+    brainRevision: readBrainIndex(settings).revision,
+    // The selected meetings folder is a profile boundary for local brain data. Keep only its digest in the
+    // envelope so a raw on-device path can never become prompt or renderer data.
+    profileKey: createHash('sha256').update(brainStoreDir(settings)).digest('hex')
+  }
+}
+function commandMicAvailability(): CommandMicAvailabilityResult {
+  if (!requireAuth()) return { ok: false, reason: 'unauthorized' }
+  const settings = getSettings()
+  const localPolicy = assertCloudOnlyAllowsEngine(
+    resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {}),
+    'parakeet'
+  )
+  if (!localPolicy.ok) return { ok: false, reason: 'policy_blocked' }
+  if (settings.asrEngine !== 'parakeet') return { ok: false, reason: 'unsupported_engine' }
+  return { ok: true }
+}
+function commandLeaseCurrentAndAllowed(sessionId: string): boolean {
+  const availability = commandMicAvailability()
+  if (!availability.ok) {
+    const active = inputSessionAuthority.activeLease
+    if (active?.purpose === 'command' && active.sessionId === sessionId) {
+      inputSessionAuthority.hardStop(availability.reason === 'unauthorized' ? 'sign-out' : 'cancelled')
+    }
+    return false
+  }
+  const active = inputSessionAuthority.activeLease
+  return active?.sessionId === sessionId && active.purpose === 'command'
+}
+function currentMainActivationFrame(): MeetingStartActivationFrame | null {
+  if (!win || win.isDestroyed()) return null
+  const frame = win.webContents.mainFrame
+  if (!frame) return null
+  return {
+    webContentsId: win.webContents.id,
+    frameId: `${frame.processId}:${frame.routingId}`,
+    isTopFrame: frame.parent === null,
+    url: frame.url
+  }
+}
+const meetingStartActivationAuthority = new MeetingStartActivationAuthority({
+  state: () => {
+    const frame = currentMainActivationFrame()
+    return {
+      mainWebContentsId: frame?.webContentsId ?? null,
+      mainFrameId: frame?.frameId ?? null,
+      isWindowVisible: Boolean(win && !win.isDestroyed() && win.isVisible()),
+      isAuthenticated: requireAuth(),
+      isStartAllowed: !inputSessionAuthority.isClosing,
+      currentUrl: win && !win.isDestroyed() ? win.webContents.getURL() : '',
+      context: currentInputSessionContext()
+    }
+  }
+})
+const commandMicActivationAuthority = new CommandMicActivationAuthority({
+  state: () => {
+    const frame = currentMainActivationFrame()
+    return {
+      mainWebContentsId: frame?.webContentsId ?? null,
+      mainFrameId: frame?.frameId ?? null,
+      currentUrl: win && !win.isDestroyed() ? win.webContents.getURL() : '',
+      isWindowVisible: Boolean(win && !win.isDestroyed() && win.isVisible()),
+      isAuthenticated: requireAuth() && !inputSessionAuthority.isClosing,
+      isParakeetSelected: commandMicAvailability().ok,
+      context: currentInputSessionContext()
+    }
+  }
+})
+function commandSpeechOwnerFromEvent(event: Electron.IpcMainInvokeEvent): ReturnType<typeof commandMicOwner> {
+  inputSessionAuthority.reconcileContext(currentInputSessionContext())
+  if (!requireAuth()) {
+    inputSessionAuthority.hardStop('sign-out')
+    return null
+  }
+  const frame = commandMicActivationFrameFromEvent(event)
+  const currentFrame = currentMainActivationFrame()
+  if (!frame || !currentFrame || frame.webContentsId !== currentFrame.webContentsId ||
+      frame.frameId !== currentFrame.frameId || frame.url !== currentFrame.url ||
+      frame.url !== (win && !win.isDestroyed() ? win.webContents.getURL() : '')) return null
+  return commandMicOwner(frame, currentInputSessionContext())
+}
+commandSpeechCapture = new CommandSpeechCapture({
+  isCurrent: (owner, sessionId) => Boolean(
+    win && !win.isDestroyed() && win.isVisible() && commandLeaseCurrentAndAllowed(sessionId) &&
+    owner.authSessionGeneration === currentInputSessionContext().authSessionGeneration &&
+    owner.contextRevision === currentInputSessionContext().contextRevision &&
+    commandMicActivationLeaseId === sessionId &&
+    inputSessionAuthority.isEstablishedLease(owner, sessionId, 'command')
+  ),
+  transcribe: async (samples) => {
+    const sessionId = commandMicActivationLeaseId
+    if (!sessionId || !commandLeaseCurrentAndAllowed(sessionId)) throw new Error('command_policy_blocked')
+    await ensureParakeetModel()
+    if (!commandLeaseCurrentAndAllowed(sessionId)) throw new Error('command_policy_blocked')
+    return parakeetTranscribe(samples)
+  },
+  ingestTranscript: (text) => { getMetisCommandRuntime()?.ingestTranscript(text, 'command') },
+  onExpired: (sessionId) => {
+    if (inputSessionAuthority.activeLease?.sessionId === sessionId) inputSessionAuthority.hardStop('cancelled')
+  }
+})
+function commandMicActivationFrameFromEvent(event: Electron.IpcMainInvokeEvent): CommandMicActivationFrame | null {
+  const frame = event.senderFrame
+  if (!frame) return null
+  return {
+    webContentsId: event.sender.id,
+    frameId: `${frame.processId}:${frame.routingId}`,
+    isTopFrame: frame.parent === null,
+    url: frame.url
+  }
+}
+function activationFrameFromEvent(event: Electron.IpcMainInvokeEvent): MeetingStartActivationFrame | null {
+  const frame = event.senderFrame
+  if (!frame) return null
+  return {
+    webContentsId: event.sender.id,
+    frameId: `${frame.processId}:${frame.routingId}`,
+    isTopFrame: frame.parent === null,
+    url: frame.url
+  }
+}
+const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
+  currentState: () => ({
+    mainWebContentsId: win && !win.isDestroyed() ? win.webContents.id : null,
+    isWindowVisible: Boolean(win && !win.isDestroyed() && win.isVisible()),
+    isAuthenticated: requireAuth(),
+    currentUrl: win && !win.isDestroyed() ? win.webContents.getURL() : '',
+    context: currentInputSessionContext(),
+    meetingStartedAt: inputSessionAuthority.hasMeetingReservation ? inputSessionAuthority.meetingStartedAt : null
+  }),
+  createCaptureId: () => randomUUID(),
+  onRevoked: (owner, reason) => {
+    if (!win || win.isDestroyed() || win.webContents.id !== owner.webContentsId) return
+    try { win.webContents.send(IPC.meetingMicCaptureRevoked, { captureId: owner.captureId, startedAt: owner.startedAt, reason }) }
+    catch { /* the renderer teardown still releases Chromium-owned tracks */ }
+  }
+})
+function hardStopInputSession(reason: import('@shared/input-session').InputSessionStopReason): void {
+  meetingStartActivationAuthority.revokeAll()
+  inputSessionContextRevision += 1
+  inputSessionAuthority.hardStop(reason)
+  if (reason === 'auth-revoked' || reason === 'sign-out' || reason === 'owner-replaced' ||
+      reason === 'system-suspend' || reason === 'screen-locked' || reason === 'shutdown') {
+    hardStopMeetingCapture(reason)
+  }
+}
+
+/** Fail closed if either OS lifecycle boundary cannot be observed. */
+function installInputPowerLifecycleHooks(): boolean {
+  let suspendRegistered = false
+  let lockScreenRegistered = false
+  try {
+    powerMonitor.on('suspend', () => hardStopInputSession('system-suspend'))
+    suspendRegistered = true
+  } catch (error) {
+    mainLog.error('[input-session] microphone suspend revocation hook failed:', error)
+  }
+  try {
+    powerMonitor.on('lock-screen', () => hardStopInputSession('screen-locked'))
+    lockScreenRegistered = true
+  } catch (error) {
+    mainLog.error('[input-session] microphone lock-screen revocation hook failed:', error)
+  }
+  inputPowerLifecycleHooksReady = suspendRegistered && lockScreenRegistered
+  if (!inputPowerLifecycleHooksReady) mainLog.error('[input-session] microphone admission disabled: OS lifecycle hooks are incomplete')
+  return inputPowerLifecycleHooksReady
+}
+
+function revokeMeetingMicCaptureGrants(
+  startedAt: number | null,
+  reason: import('@shared/input-session').InputSessionStopReason
+): void {
+  meetingMicCaptureAuthority.revokeMeeting(startedAt, reason)
+}
+
+/** Hiding the overlay revokes only captures that have not completed post-gUM confirmation. */
+function revokePendingMeetingMicCaptureGrants(reason: import('@shared/input-session').InputSessionStopReason): void {
+  meetingMicCaptureAuthority.revokePending(reason)
+}
+
+function hardStopMeetingCapture(reason: import('@shared/input-session').InputSessionStopReason): void {
+  if (!inputSessionAuthority.hasMeetingReservation) return
+  const startedAt = inputSessionAuthority.meetingStartedAt
+  if (startedAt !== null && meetingCaptureOwnerWebContentsId !== null && win && !win.isDestroyed() &&
+      win.webContents.id === meetingCaptureOwnerWebContentsId) {
+    try { win.webContents.send(IPC.meetingMicCaptureRevoked, { startedAt, reason }) }
+    catch { /* the owning renderer may already be gone */ }
+  }
+  revokeMeetingMicCaptureGrants(startedAt, reason)
+  inputSessionAuthority.releaseMeeting(startedAt)
+  inputSessionContextRevision += 1
+  meetingCaptureOwnerWebContentsId = null
+  if (startedAt !== null && activeLiveSpeakerStartedAt === startedAt) {
+    closeLiveSpeakerReceipt(startedAt)
+    activeLiveSpeakerStartedAt = null
+  }
+  setLegacyListeningActive(false)
+  setListeningActive(false)
+  setTrayRecording(false)
+  setRecordingPowerSaveBlock(false)
+  void parakeetRelease().catch(() => {})
+  void releaseSpeakerEmbedding('live').catch(() => {})
+}
 
 function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
   if (!shouldSampleIpcDeny()) return
@@ -2325,6 +2649,7 @@ function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
 
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
+  hardStopInputSession('owner-replaced')
   stopExclusiveBoundsWatch()
   stopExclusiveBoundsEventGuard()
   const dying = win
@@ -2361,6 +2686,7 @@ function recreateOverlayWindow(): void {
 
 /** Cover a transparent overlay with the opaque onboarding stage before retiring it, so replay cannot flash desktop. */
 function replaceTransparentOverlayWithExclusiveOnboarding(): void {
+  hardStopInputSession('owner-replaced')
   const dying = win
   if (!dying || dying.isDestroyed()) {
     win = null
@@ -2945,7 +3271,22 @@ function createWindow(targetDisplay?: Electron.Display): void {
     () => invalidateCloudSttOwner(selfOwner)
   )
   win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
-  win.on('hide', () => commandControl.onWindowHidden(win === self))
+  win.on('hide', () => {
+    if (win === self) {
+      hardStopInputSession('window-hidden')
+      revokePendingMeetingMicCaptureGrants('window-hidden')
+    }
+    commandControl.onWindowHidden(win === self)
+  })
+  const revalidateInputSessionAfterShow = (): void => {
+    // A renderer must fetch a fresh context after becoming visible; no pre-hide lease can be revived.
+    if (win === self) {
+      hardStopInputSession('cancelled')
+      revokePendingMeetingMicCaptureGrants('cancelled')
+    }
+  }
+  win.on('show', revalidateInputSessionAfterShow)
+  win.on('restore', revalidateInputSessionAfterShow)
   win.on('closed', () =>
     observeClosedCleanup(quitTrace, () => {
       clearCompletedOnboardingExitFallback(self)
@@ -2954,6 +3295,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
       // window can close after an opaque replacement has already become `win`; it must not cancel work
       // owned by that replacement.
       if (win !== self) return
+      // Window destruction ends the meeting renderer owner. Ordinary hide preserves it.
+      hardStopMeetingCapture('owner-replaced')
+      hardStopInputSession('window-hidden')
       commandControl.revokeForLifecycleEvent('window_closed')
       // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
       streams.forEach((s) => s.abort())
@@ -2974,6 +3318,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
   })
   win.webContents.on('will-navigate', (e, url) => {
     if (url !== win?.webContents.getURL()) e.preventDefault()
+  })
+  win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (win === self && isMainFrame && !isInPlace) hardStopInputSession('owner-replaced')
   })
   // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer console warnings/errors into the
   // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
@@ -3018,6 +3365,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // recovers instead of hanging forever.
   win.webContents.on('render-process-gone', (_e, details) => {
     if (win !== self) return
+    hardStopInputSession('cancelled')
+    hardStopMeetingCapture('owner-replaced')
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
@@ -4051,10 +4400,45 @@ function sendHotkey(action: HotkeyAction): void {
     w.webContents.send(IPC.hotkey, action)
     return
   }
+  if (action === 'toggle-listen' && !listeningActive && !w.isVisible()) {
+    // Showing/restoring synchronously advances the input context and revokes unused grants. Mint only
+    // after that lifecycle callback has run; otherwise a hidden-window shortcut could invalidate its
+    // own start grant before the renderer consumes it.
+    let routed = false
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const routeAfterShow = (): void => {
+      if (routed) return
+      if (w.isDestroyed() || !w.isVisible()) return
+      routed = true
+      if (timeout) clearTimeout(timeout)
+      w.removeListener('show', routeAfterShow)
+      w.removeListener('restore', routeAfterShow)
+      if (listeningActive) return
+      const frame = currentMainActivationFrame()
+      if (!frame || !meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)) return
+      w.webContents.send(IPC.hotkey, action)
+    }
+    w.once('show', routeAfterShow)
+    w.once('restore', routeAfterShow)
+    reveal('hotkey', { focus: false })
+    if (!routed) {
+      timeout = setTimeout(() => {
+        if (routed) return
+        routed = true
+        w.removeListener('show', routeAfterShow)
+        w.removeListener('restore', routeAfterShow)
+      }, 1_000)
+    }
+    return
+  }
   if (!w.isVisible() || islandResting) {
     // The ask hotkey opens the composer, so it reveals the island even over a parked Reader.
     if (action === 'ask' && islandResting) rightEdgeSession.noteIslandReveal()
     reveal('hotkey', { focus: action === 'ask' })
+  }
+  if (action === 'toggle-listen' && !listeningActive) {
+    const frame = currentMainActivationFrame()
+    if (frame) meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)
   }
   w.webContents.send(IPC.hotkey, action)
 }
@@ -4092,6 +4476,7 @@ function persistCrash(kind: CrashKind, detail: string, shortMessage: string, con
  * Reload button (lifecycle/render-loop-halted-dialog.ts).
  */
 function reloadOverlay(target: BrowserWindow): void {
+  if (target === win) hardStopInputSession('owner-replaced')
   target.loadURL(overlayRendererUrl()).catch((err) => {
     const message = redactSecrets(err instanceof Error ? err.message : String(err))
     mainLog.error('[renderer-gone] reload failed:', message)
@@ -4571,11 +4956,12 @@ function refreshScreenPreprocess(): void {
   screenPreprocess.refresh()
 }
 
-/** Revoke every privileged surface that outlives one IPC call when the session ends. */
+/** Revoke every privileged surface that outlives one IPC call at a session boundary. */
 function revokePrivilegedSurface(): void {
+  hardStopInputSession('auth-revoked')
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
-  if (!requireAuth()) closeIntelligenceWindow()
+  closeIntelligenceWindow() // account-scoped state belongs to the session being cleared or replaced
 }
 setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
 
@@ -5776,6 +6162,9 @@ function registerIpc(): void {
       resetSpeechAuthProfile()
       const archive = archiveEncryptedProfile()
       completeSpeechAuthProfileReset()
+      recoveredDraftsThisLaunch = 0
+      recoveredDraftCountRevision += 1
+      publishRecoveredDraftCount()
       auditLog('settings.profile_recovered', { movedFiles: archive.files.length })
       return {
         ok: true,
@@ -6814,6 +7203,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.authSignOut, async (e) => {
     assertMainWindow(e)
+    hardStopInputSession('sign-out')
     speechDesktop?.invalidate('auth-signout')
     authSignOut()
     await importJobs?.cancelAll()
@@ -7048,6 +7438,98 @@ function registerIpc(): void {
       await requestSourceRefresh(getSettings())
     }
     return result
+  })
+
+  // Explicit live-meeting Disregard resolves durable files from main-owned save receipts. The exact
+  // receipt path and captured folder are retained through confirmation, so a changed meetings-folder
+  // setting can never turn a basename into a deletion in a different folder.
+  ipcMain.handle(IPC.discardSavedTranscript, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const authCurrent = captureAuthSessionBoundary()
+    const parsed = DiscardSavedTranscriptPayloadSchema.safeParse(raw)
+    if (!parsed.success || !authCurrent()) return { ok: false, error: 'Could not verify this meeting.' }
+
+    const generation = authSessionGeneration()
+    await transcriptSaveReceipts.sealMeetingAndJoin(parsed.data.startedAt, generation)
+    let releaseGraphBuildFence: (() => void) | undefined
+    try {
+      if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
+      const paths = transcriptSaveReceipts.durablePathsForMeeting(parsed.data.startedAt, generation)
+      if (parsed.data.path && !paths.some((entry) => resolve(entry.path) === resolve(parsed.data.path!))) {
+        // Receipt eviction is recoverable only when the saved file proves it belongs to this live meeting.
+        const candidate = resolve(parsed.data.path)
+        const currentSettings = getSettings()
+        const currentFolder = resolve(resolveMeetingsFolder(currentSettings))
+        const safeName = safeMeetingBasename(candidate)
+        if (safeName && resolve(join(currentFolder, safeName)) === candidate && existsSync(candidate)) {
+          const identity = await recallRead(safeName)
+          if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
+          if (!identity.ok || identity.startedAt !== parsed.data.startedAt) {
+            return { ok: false, error: 'The saved transcript could not be verified. Try Disregard again.', deletedPaths: [] as string[] }
+          }
+          paths.push({ path: candidate, settings: currentSettings })
+        } else if (existsSync(candidate)) {
+          return { ok: false, error: 'The saved transcript could not be verified. Try Disregard again.', deletedPaths: [] as string[] }
+        }
+      }
+      if (!paths.length) {
+        if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
+        transcriptSaveReceipts.markMeetingDiscarded(parsed.data.startedAt, generation)
+        return { ok: true, deletedPaths: [] as string[] }
+      }
+
+      // Receipt-owned rebuilds were joined above; this fence also joins a manual/already-started
+      // build and queues later graph builds until deletion and derived-data cleanup are complete.
+      releaseGraphBuildFence = await acquireGraphBuildFence()
+      if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
+
+      const label = parsed.data.title?.trim() || 'this meeting'
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Delete meeting',
+        message: `Delete "${label}"?`,
+        detail:
+          'This removes the saved transcript, its notes, and its extracted knowledge from this device. This cannot be undone.',
+        buttons: ['Delete', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      if (response !== 0) return { ok: false, error: 'cancelled', deletedPaths: [] as string[] }
+      if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
+      // The confirmed discard permanently closes save admission before the first delete awaits.
+      transcriptSaveReceipts.markMeetingDiscarded(parsed.data.startedAt, generation)
+      const deletedPaths: string[] = []
+      for (const entry of paths) {
+        if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths }
+        const result = await deleteMeetingAtPath(entry.settings, entry.path)
+        if (!result.ok && result.error !== 'Meeting file not found.') {
+          return { ok: false, error: result.error || 'Could not delete the saved transcript.', deletedPaths }
+        }
+        transcriptSaveReceipts.markDurablePathDiscarded(entry.path, generation)
+        deletedPaths.push(entry.path)
+        const safeName = basename(entry.path)
+        auditLog('transcript.deleted', { file: safeName })
+        await publishMeetingCard(entry.settings, safeName).catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error)
+          mainLog.warn(`[publish] could not remove the note card for a deleted meeting: ${detail}`)
+        })
+        await exciseDeletedMeeting(entry.settings, safeName)
+          .then(({ gone }) => {
+            if (!gone) mainLog.warn(`[brain] extraction for a deleted meeting could not be removed: ${safeName}`)
+          })
+          .catch((error) => {
+            const detail = error instanceof Error ? error.message : String(error)
+            mainLog.warn(`[brain] excise failed for a deleted meeting: ${detail}`)
+          })
+        await requestSourceRefresh(entry.settings)
+      }
+      return { ok: true, deletedPaths }
+    } finally {
+      releaseGraphBuildFence?.()
+      transcriptSaveReceipts.releaseMeetingSeal(parsed.data.startedAt, generation)
+    }
   })
 
   // Recall rename: fix an auto-generated (recap-derived) title after the fact. Updates the frontmatter
@@ -7598,6 +8080,10 @@ function registerIpc(): void {
     }
     try {
       const req = AskStartSchema.parse(raw)
+      // Brain context is main-only. Clear renderer input before any early return or mode gate so a
+      // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
+      req.brainContext = undefined
+      let brainContextEnvelope: BrainContextEnvelope | undefined
       // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
       // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
       // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
@@ -7681,10 +8167,15 @@ function registerIpc(): void {
       // (its contract is a VERDICT-only response), so injecting brainContext here would add citable
       // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
       if (req.mode === 'answer' && req.kind !== 'factcheck') {
+        let owner: BrainContextOwner | undefined
         try {
-          const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
-          req.brainContext = hit.block || undefined
+          owner = currentBrainContextOwner(s)
+          const hit = buildBrainContextWithSources(s, `${req.prompt}\n${req.transcript ?? ''}`)
+          brainContextEnvelope = !hit.matched || areBrainContextSourcesCurrent(s, hit.sourceReferences)
+            ? createBrainContextEnvelope(owner, hit)
+            : unavailableBrainContextEnvelope(owner)
         } catch (err) {
+          if (owner) brainContextEnvelope = unavailableBrainContextEnvelope(owner)
           console.warn('[brain] context assembly failed', err)
         }
       }
@@ -7935,6 +8426,27 @@ function registerIpc(): void {
       // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
       // silently returns, so a losing leg's own cascading retries can never reach the renderer.
       const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
+        // Retries, failovers and hedged legs may start after an account/profile/context boundary changed.
+        // Revalidate at every provider dispatch and fail closed by omitting anything no longer current.
+        if (brainContextEnvelope) {
+          try {
+            const currentSettings = getSettings()
+            const current = currentBrainContextOwner(currentSettings)
+            if ((brainContextEnvelope.status === 'ready' || brainContextEnvelope.status === 'empty') &&
+                (!isBrainContextEnvelopeCurrent(brainContextEnvelope, current) ||
+                  (brainContextEnvelope.status === 'ready' &&
+                    (!areBrainContextRecordsCurrent(currentSettings, brainContextEnvelope.recordFingerprints) ||
+                     !areBrainContextSourcesCurrent(currentSettings, brainContextEnvelope.sourceReferences))))) {
+              brainContextEnvelope = staleBrainContextEnvelope(brainContextEnvelope)
+            }
+            req.brainContext = brainContextForProvider(brainContextEnvelope, current)
+          } catch {
+            brainContextEnvelope = staleBrainContextEnvelope(brainContextEnvelope)
+            req.brainContext = undefined
+          }
+        } else {
+          req.brainContext = undefined
+        }
         // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
         // one the hedge must not duplicate.
         if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
@@ -8645,46 +9157,149 @@ function registerIpc(): void {
   ipcMain.handle(IPC.saveTranscript, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    if (!takeHotPath('save-transcript')) throw new Error('Could not save the transcript.')
     const m = SaveMeetingSchema.parse(raw)
     // ASR quality (1B.2b) — a live-only interim placeholder must never reach disk (see
     // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
     // replaces a provisional line with the real one before it could ever be included here.
     m.lines = stripProvisionalLines(m.lines)
-    const r = { path: await saveMeeting(getSettings(), m) }
-    // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
-    // the live-meeting save path; the import path credits itself separately once its file is durable. A
-    // rebuild never reaches here, so a meeting is counted once for its lifetime.
-    recordMeetingSummarized(meetingDurationMin(m))
-    {
-      const words = wordsFromTexts(m.recap, ...m.lines.map((l) => l.text))
-      const mins = estimateNoteTakingMinutes(words)
-      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: r.path } })
-    }
-    void clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
-    auditLog('transcript.saved', {
-      mode: m.mode,
-      lines: m.lines.length,
-      durMin: Math.round((Date.now() - m.startedAt) / 60_000),
-      encrypted: !!getSettings().encryptTranscripts
-    })
-    scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
-    // Persist the small background-work marker before confirming the transcript save. The actual LLM
-    // extraction remains asynchronous, but a quit immediately after Save can now resume it.
-    // Wave 3 (settings.brainConsolidation): when batching is on, this meeting is marked pending but NOT
-    // queued for immediate extraction — it waits for the next consolidation pass (or a manual rebuild/
-    // "Index meetings" click, which scans for pending work independent of this flag) instead of paying a
-    // network round trip after every single save.
-    await enqueueIngest(r.path, { deferred: getSettings().brainConsolidation.enabled })
-    // A save matched to an admitted live owner is held until that exact owner closes. Even duplicate
-    // active saves remain claimed so text-only backfill cannot erase the original cluster-label join.
-    // Unmatched/legacy saves keep the existing fire-and-forget text-name improvement, without enrollment.
-    if (!recordLiveSpeakerSave(m.startedAt, r.path)) {
-      void backfillSpeakerNames(r.path).catch((error) => {
-        warnSpeakerFailure('post-save text backfill failed', error)
-      })
-    }
-    return r
+    // Fingerprint the exact durable payload before legacy timestamp normalization. A repeated payload
+    // with startedAt=0 must resume the same receipt and reuse its first normalized identity.
+    const payloadFingerprint = createHash('sha256').update(JSON.stringify(m) ?? '').digest('hex')
+    const saveAuthGeneration = authSessionGeneration()
+    const liveStartedAt = LiveMeetingStartedAtSchema.safeParse(m.startedAt)
+    const saveOwner = liveStartedAt.success
+      ? { startedAt: liveStartedAt.data, authGeneration: saveAuthGeneration }
+      : undefined
+    if (saveOwner && transcriptSaveReceipts.isMeetingDiscarded(saveOwner.startedAt, saveAuthGeneration))
+      throw new Error('This meeting was discarded.')
+    const receiptKey = `${saveAuthGeneration}:${payloadFingerprint}`
+    return transcriptSaveReceipts.run(receiptKey, saveOwner, async (receipt) => {
+      const assertSaveAdmission = (): void => {
+        if (receipt.discarded || receipt.discardRequested ||
+          (saveOwner && transcriptSaveReceipts.isMeetingDiscarded(saveOwner.startedAt, saveAuthGeneration))) {
+          throw new Error('This transcript is being discarded.')
+        }
+      }
+      assertSaveAdmission()
+      if (receipt.completed.has('complete') && receipt.durablePath !== undefined) return receipt.durablePath
+      if (!takeHotPath('save-transcript')) throw new Error('Could not save the transcript.')
+
+      if (receipt.normalizedStartedAt === undefined) {
+        // Use the same validity rule as saveMeeting, once per payload receipt. This keeps final save and
+        // draft finalization on one identity, including retries of legacy zero timestamps.
+        receipt.normalizedStartedAt = m.startedAt && Number.isFinite(m.startedAt) && Math.abs(m.startedAt) <= 8.64e15
+          ? m.startedAt
+          : Date.now()
+      }
+      m.startedAt = receipt.normalizedStartedAt
+      if (!receipt.settings) receipt.settings = getSettings()
+      const saveSettings = receipt.settings
+
+      // A rejected pre-durable write leaves no receipt behind, so the next request gets a fresh attempt.
+      // Once durablePath is present, retries resume side effects against that exact file.
+      if (receipt.durablePath === undefined) receipt.durablePath = await saveMeeting(saveSettings, m)
+      assertSaveAdmission()
+      const savedTranscriptPath = receipt.durablePath
+      const completed = receipt.completed
+      const mark = (stage: TranscriptSaveSideEffect): void => { completed.add(stage) }
+
+      // Time-saved: credit the durable live-meeting file once. Imports credit themselves separately.
+      if (!completed.has('summary-credit')) {
+        assertSaveAdmission()
+        recordMeetingSummarized(meetingDurationMin(m))
+        mark('summary-credit')
+      }
+      if (!completed.has('time-saved-credit')) {
+        assertSaveAdmission()
+        const words = wordsFromTexts(m.recap, ...m.lines.map((l) => l.text))
+        const mins = estimateNoteTakingMinutes(words)
+        if (mins > 0) {
+          const credited = appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: savedTranscriptPath } })
+          if (!credited.ok) {
+            // Keep this stage retryable; the durable transcript and earlier receipt stages remain recorded.
+            throw new Error('Transcript saved, but time-saved accounting could not be completed.')
+          }
+        }
+        mark('time-saved-credit')
+      }
+      if (!completed.has('draft-cleanup')) {
+        assertSaveAdmission()
+        // Cleanup is best-effort and nonfatal inside clearDraftTranscript.
+        await clearDraftTranscript(saveSettings, m.startedAt, savedTranscriptPath)
+        assertSaveAdmission()
+        mark('draft-cleanup')
+      }
+      if (!completed.has('audit')) {
+        assertSaveAdmission()
+        auditLog('transcript.saved', {
+          mode: m.mode,
+          lines: m.lines.length,
+          durMin: Math.round((Date.now() - m.startedAt) / 60_000),
+          encrypted: !!saveSettings.encryptTranscripts
+        })
+        mark('audit')
+      }
+      if (!completed.has('rebuild')) {
+        assertSaveAdmission()
+        // Join the full graph build to this receipt. Disregard closes admission and waits this promise
+        // before deleting the source transcript, including when the debounce timer already fired.
+        let settleRebuild!: () => void
+        const rebuildSettled = new Promise<void>((resolve) => { settleRebuild = resolve })
+        receipt.backgroundWork = receipt.backgroundWork
+          ? Promise.all([receipt.backgroundWork, rebuildSettled]).then(() => undefined)
+          : rebuildSettled
+        try {
+          await scheduleRebuild(assertSaveAdmission, settleRebuild)
+        } catch (error) {
+          settleRebuild()
+          throw error
+        }
+        assertSaveAdmission()
+        mark('rebuild')
+      }
+      if (!completed.has('ingest')) {
+        assertSaveAdmission()
+        // Retry a failed ingest against the durable path without repeating transcript completion effects.
+        // Preserve the first attempt's consolidation policy across retries.
+        receipt.deferredIngest ??= saveSettings.brainConsolidation.enabled
+        let settleIngest!: () => void
+        const ingestSettled = new Promise<void>((resolve) => { settleIngest = resolve })
+        receipt.backgroundWork = receipt.backgroundWork
+          ? Promise.all([receipt.backgroundWork, ingestSettled]).then(() => undefined)
+          : ingestSettled
+        try {
+          await enqueueIngest(savedTranscriptPath, { deferred: receipt.deferredIngest }, assertSaveAdmission, settleIngest)
+        } catch (error) {
+          settleIngest()
+          throw error
+        }
+        assertSaveAdmission()
+        mark('ingest')
+      }
+      if (!completed.has('speaker-save')) {
+        assertSaveAdmission()
+        // Matched saves remain registered until their exact live owner closes; unmatched saves get the
+        // existing best-effort text-name improvement, without enrollment.
+        const matched = recordLiveSpeakerSave(m.startedAt, savedTranscriptPath)
+        mark('speaker-save')
+        if (!matched) {
+          const speakerBackfill = backfillSpeakerNames(savedTranscriptPath).then(() => undefined).catch((error) => {
+            warnSpeakerFailure('post-save text backfill failed', error)
+          })
+          receipt.backgroundWork = receipt.backgroundWork
+            ? Promise.all([receipt.backgroundWork, speakerBackfill]).then(() => undefined)
+            : speakerBackfill
+        }
+      }
+      assertSaveAdmission()
+      mark('complete')
+      return savedTranscriptPath
+    }).then((path) => ({ path }))
+  })
+
+  ipcMain.handle(IPC.recoveredDraftCount, (e): { count: number; revision: number } => {
+    assertMainWindow(e)
+    return { count: requireAuth() ? recoveredDraftsThisLaunch : 0, revision: recoveredDraftCountRevision }
   })
 
   // --- Mantu Intelligence brain (see src/main/brain/) ---
@@ -9072,7 +9687,10 @@ function registerIpc(): void {
     if (!requireAuth()) return null
     const parsed = MeetingExtractionQuerySchema.safeParse(raw)
     if (!parsed.success) return null
-    return loadBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+    const extraction = await loadBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+    if (!extraction) return null
+    const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = extraction
+    return visible
   })
   ipcMain.handle(IPC.brainAttention, (e) => {
     assertMainWindow(e)
@@ -9087,7 +9705,9 @@ function registerIpc(): void {
     captureAuthSessionBoundary,
     getSettings,
     captureDraftSettingsBoundary,
-    saveDraftTranscript
+    saveDraftTranscript,
+    preserveDraftTranscript,
+    discardDraftTranscript
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {
@@ -9423,12 +10043,188 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
+  const inputSessionHandlers = createInputSessionHandlers<Electron.IpcMainInvokeEvent>({
+    authority: inputSessionAuthority,
+    assertMainWindow: (event) => assertMainWindow(event),
+    requireAuth,
+    isWindowVisible: () => Boolean(win && !win.isDestroyed() && win.isVisible()),
+    currentMainUrl: () => win && !win.isDestroyed() ? win.webContents.getURL() : '',
+    currentContext: currentInputSessionContext,
+    captureAuthBoundary: captureAuthSessionBoundary,
+    authorizeCommandStart: (event, owner) => {
+      if (!commandMicAvailability().ok) return false
+      const frame = commandMicActivationFrameFromEvent(event)
+      return !!frame && commandMicOwner(frame, currentInputSessionContext()) !== null &&
+        commandMicActivationAuthority.consume(frame)
+    }
+  })
+  ipcMain.handle(IPC.inputSessionContext, (event) => inputSessionHandlers.context(event))
+  ipcMain.handle(IPC.inputSessionStart, (event, request: unknown) => {
+    const result = inputSessionHandlers.start(event, request)
+    if (result.ok && result.lease.purpose === 'command') {
+      commandMicActivationLeaseId = result.lease.sessionId
+      armCommandMicLeaseTimeout(result.lease.sessionId, 15_000)
+    }
+    return result
+  })
+  ipcMain.handle(IPC.inputSessionStop, (event, request: unknown) => {
+    const result = inputSessionHandlers.stop(event, request)
+    const parsed = InputSessionStopRequestSchema.safeParse(request)
+    if (result.ok && parsed.success && commandMicActivationLeaseId === parsed.data.sessionId) {
+      clearCommandMicLeaseTimer(parsed.data.sessionId)
+      commandMicActivationLeaseId = null
+      commandSpeechCapture?.cancelForLease(parsed.data.sessionId)
+    }
+    return result
+  })
+  ipcMain.handle(IPC.inputSessionConfirm, (event, request: unknown) => {
+    const confirmed = inputSessionHandlers.confirm(event, request)
+    const lease = inputSessionAuthority.activeLease
+    if (confirmed && lease?.purpose === 'command' && lease.sessionId === commandMicActivationLeaseId) {
+      armCommandMicLeaseTimeout(lease.sessionId, 15_000)
+    }
+    return confirmed
+  })
+  ipcMain.handle(IPC.commandMicActivationObserved, (event) => {
+    assertMainWindow(event)
+    if (!commandMicAvailability().ok || inputSessionAuthority.isClosing || !win || win.isDestroyed() || !win.isVisible()) return false
+    const frame = commandMicActivationFrameFromEvent(event)
+    return frame ? commandMicActivationAuthority.mint(frame) : false
+  })
+  ipcMain.handle(IPC.commandMicActivationReady, (event) => {
+    assertMainWindow(event)
+    if (!commandMicAvailability().ok || inputSessionAuthority.isClosing || !win || win.isDestroyed() || !win.isVisible()) return false
+    const frame = commandMicActivationFrameFromEvent(event)
+    return frame ? commandMicActivationAuthority.hasPending(frame) : false
+  })
+  ipcMain.handle(IPC.commandMicActivationCancel, (event) => {
+    assertMainWindow(event)
+    const frame = commandMicActivationFrameFromEvent(event)
+    if (!frame || !commandMicActivationAuthority.hasPending(frame)) return false
+    commandMicActivationAuthority.revokeAll()
+    return true
+  })
+  ipcMain.handle(IPC.commandMicAvailability, (event) => {
+    assertMainWindow(event)
+    return commandMicAvailability()
+  })
+  ipcMain.handle(IPC.commandSpeechStart, (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = CommandSpeechStartSchema.safeParse(raw)
+    const owner = commandSpeechOwnerFromEvent(event)
+    if (!parsed.success || !owner || !requireAuth() || !win || win.isDestroyed() || !win.isVisible()) {
+      return { ok: false, reason: 'stale' }
+    }
+    const availability = commandMicAvailability()
+    if (!availability.ok) return availability.reason === 'unauthorized'
+      ? { ok: false, reason: 'stale' }
+      : { ok: false, reason: availability.reason }
+    if (commandMicActivationLeaseId !== parsed.data.sessionId ||
+        !inputSessionAuthority.isEstablishedLease(owner, parsed.data.sessionId, 'command')) return { ok: false, reason: 'stale' }
+    const result = commandSpeechCapture?.start(owner, parsed.data.sessionId) ?? { ok: false as const, reason: 'stale' as const }
+    if (result.ok) clearCommandMicLeaseTimer(parsed.data.sessionId)
+    return result
+  })
+  ipcMain.handle(IPC.commandSpeechFrame, (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = CommandSpeechFrameSchema.safeParse(raw)
+    const owner = commandSpeechOwnerFromEvent(event)
+    if (!parsed.success || !owner || !requireAuth() || !win || win.isDestroyed() || !win.isVisible() ||
+        commandMicActivationLeaseId !== parsed.data.sessionId) return { ok: false, reason: 'stale' }
+    const availability = commandMicAvailability()
+    if (!availability.ok) {
+      commandLeaseCurrentAndAllowed(parsed.data.sessionId)
+      return availability.reason === 'unauthorized'
+        ? { ok: false, reason: 'stale' }
+        : { ok: false, reason: availability.reason }
+    }
+    return commandSpeechCapture?.frame(owner, parsed.data.sessionId, parsed.data.sequence, parsed.data.samples) ??
+      { ok: false, reason: 'stale' }
+  })
+  ipcMain.handle(IPC.commandSpeechFinish, async (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = CommandSpeechFinishSchema.safeParse(raw)
+    const owner = commandSpeechOwnerFromEvent(event)
+    if (!parsed.success || !owner || !requireAuth() || !win || win.isDestroyed() || !win.isVisible() ||
+        commandMicActivationLeaseId !== parsed.data.sessionId) return { ok: false, reason: 'stale' }
+    const availability = commandMicAvailability()
+    if (!availability.ok) {
+      commandLeaseCurrentAndAllowed(parsed.data.sessionId)
+      return availability.reason === 'unauthorized'
+        ? { ok: false, reason: 'stale' }
+        : { ok: false, reason: availability.reason }
+    }
+    return (await commandSpeechCapture?.finish(owner, parsed.data.sessionId, parsed.data.frameCount)) ??
+      { ok: false, reason: 'stale' }
+  })
+  ipcMain.handle(IPC.commandSpeechCancel, (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = CommandSpeechCancelSchema.safeParse(raw)
+    const owner = commandSpeechOwnerFromEvent(event)
+    if (!parsed.success || !owner) return { ok: false, reason: 'stale' }
+    return commandSpeechCapture?.cancel(owner, parsed.data.sessionId) ?? { ok: false, reason: 'stale' }
+  })
+  ipcMain.handle(IPC.meetingMicAdmission, (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = MeetingMicAdmissionRequestSchema.safeParse(raw)
+    if (!parsed.success || inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady) return null
+    const frame = event.senderFrame
+    if (!frame) return null
+    return meetingMicCaptureAuthority.admit({
+      webContentsId: event.sender.id,
+      isTopFrame: frame.parent === null,
+      url: frame.url
+    }, parsed.data.startedAt)
+  })
+  ipcMain.handle(IPC.meetingStartActivationObserved, (event) => {
+    assertMainWindow(event)
+    if (!requireAuth() || inputSessionAuthority.isClosing || !win || win.isDestroyed() || !win.isVisible()) return false
+    const frame = activationFrameFromEvent(event)
+    return frame ? meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION) : false
+  })
+  ipcMain.handle(IPC.meetingStartActivationReady, (event) => {
+    assertMainWindow(event)
+    if (!requireAuth() || inputSessionAuthority.isClosing || !win || win.isDestroyed() || !win.isVisible()) return false
+    const frame = activationFrameFromEvent(event)
+    return frame ? meetingStartActivationAuthority.hasPending(frame) : false
+  })
+  ipcMain.handle(IPC.meetingStartActivationCancel, (event) => {
+    assertMainWindow(event)
+    const frame = activationFrameFromEvent(event)
+    if (!frame) return false
+    // Cancellation is owner/frame scoped by the surrounding main-window assertion and current top frame.
+    if (!meetingStartActivationAuthority.hasPending(frame)) return false
+    meetingStartActivationAuthority.revokeAll()
+    return true
+  })
+  ipcMain.handle(IPC.meetingMicCaptureConfirm, (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = MeetingMicCaptureConfirmRequestSchema.safeParse(raw)
+    if (!parsed.success || inputSessionAuthority.isClosing) return false
+    const frame = event.senderFrame
+    if (!frame) return false
+    return meetingMicCaptureAuthority.confirm({
+      webContentsId: event.sender.id,
+      isTopFrame: frame.parent === null,
+      url: frame.url
+    }, parsed.data.captureId, parsed.data.startedAt)
+  })
+  ipcMain.handle(IPC.meetingMicCaptureRelease, (event, raw: unknown) => {
+    assertMainWindow(event)
+    const parsed = MeetingMicCaptureReleaseRequestSchema.safeParse(raw)
+    if (!parsed.success) return false
+    return meetingMicCaptureAuthority.release(event.sender.id, parsed.data.captureId)
+  })
   ipcMain.handle(
     IPC.listeningState,
     createListeningStateHandler({
       assertMainWindow,
       requireAuth,
       acceptTransition: acceptLiveSpeakerTransition,
+      consumeMeetingStartActivation: (event) => {
+        const frame = activationFrameFromEvent(event)
+        return !!frame && meetingStartActivationAuthority.consume(frame, MEETING_START_ACTION)
+      },
       setListeningActive,
       setTrayRecording,
       setRecordingPowerSaveBlock,
@@ -9560,6 +10356,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.windowHide, (e) => {
     assertMainWindow(e)
+    hardStopInputSession('window-hidden')
     win?.hide()
     noteOverlay('renderer')
   })
@@ -9662,6 +10459,8 @@ if (!app.requestSingleInstanceLock()) {
         app.isPackaged
       )
       commandControl.initialize(powerMonitor, initLogging, mainLog)
+      // Capture admission remains closed unless both suspend and lock-screen invalidation are observed.
+      installInputPowerLifecycleHooks()
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
@@ -9861,15 +10660,22 @@ if (!app.requestSingleInstanceLock()) {
       // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
       // recovered meeting is visible in History and immediately subject to the same retention policy.
       // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
-      bootWork.run('recoverOrphanDrafts', () =>
-        recoverOrphanDrafts(getSettings())
+      bootWork.run('recoverOrphanDrafts', () => {
+        const recoveryRevision = recoveredDraftCountRevision
+        return recoverOrphanDrafts(getSettings())
           .then((r) => {
-            if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
+            if (recoveryRevision !== recoveredDraftCountRevision) return
+            if (r.recovered > 0) {
+              recoveredDraftsThisLaunch = r.recovered
+              recoveredDraftCountRevision += 1
+              auditLog('transcript.recovered', { recovered: r.recovered })
+              publishRecoveredDraftCount()
+            }
           })
           .catch(() => {
             /* best-effort — never block startup */
           })
-      )
+      })
       // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
       // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
       // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
@@ -9948,12 +10754,23 @@ if (!app.requestSingleInstanceLock()) {
 
       // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
       runStep('permissionHandlers', () => {
-        const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
+        const allowExistingPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
           (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
-        session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
-          callback(allowPermission(wc, permission))
-        )
-        session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+        installInputMicPermissionHandlers({
+          session: session.defaultSession,
+          getWindow: () => win,
+          isAuthenticated: requireAuth,
+          isCaptureLifecycleReady: () => inputPowerLifecycleHooksReady,
+          currentContext: currentInputSessionContext,
+          authority: inputSessionAuthority,
+          hasMeetingCaptureRequestOwner: (webContentsId, startedAt, context, requestingUrl) =>
+            meetingMicCaptureAuthority.hasPermissionRequestOwner(webContentsId, startedAt, context, requestingUrl),
+          hasMeetingCaptureCheckOwner: (webContentsId, startedAt, context, requestingUrl) =>
+            meetingMicCaptureAuthority.hasPermissionCheckOwner(webContentsId, startedAt, context, requestingUrl),
+          claimMeetingCapturePermission: (frame) => meetingMicCaptureAuthority.claimPermissionRequest(frame),
+          claimInteractiveCapturePermission: (owner) => inputSessionAuthority.claimPermissionRequest(owner),
+          allowExistingPermission
+        })
       })
 
       // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
@@ -10260,6 +11077,10 @@ if (!app.requestSingleInstanceLock()) {
 
 installAppQuitLifecycle(app, {
   speechPackDesktop: () => speechPackDesktop,
+  beginInputShutdown: () => {
+    inputSessionContextRevision += 1
+    inputSessionAuthority.beginShutdown()
+  },
   quitTrace,
   isQuitFlushDone: () => quitFlushDone,
   markQuitFlushDone: () => {
@@ -10270,6 +11091,12 @@ installAppQuitLifecycle(app, {
   hotkeyChannel: IPC.hotkey,
   speechDesktop: () => speechDesktop,
   invalidateCloudSttOwner,
+  shutdownInputSessions: () => {
+    // This runs from will-quit, after any prevented before-quit meeting flush has resumed final shutdown.
+    // Revoke exact grants/renderer captures first, then permanently close admission for this process.
+    hardStopInputSession('shutdown')
+    inputSessionAuthority.shutdown()
+  },
   setBootPowerSaveBlock,
   endBootWatch,
   globalShortcut,

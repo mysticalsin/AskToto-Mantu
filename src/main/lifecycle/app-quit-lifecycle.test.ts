@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { installAppQuitLifecycle } from './app-quit-lifecycle'
 import { createQuitTrace } from './quit-trace'
 
@@ -30,6 +30,8 @@ class TestApp extends EventEmitter {
 }
 
 describe('app quit lifecycle', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('stops the boot power-save blocker before clearing the watch with current userData', () => {
     const app = new TestApp()
     const cleanupOrder: string[] = []
@@ -37,6 +39,7 @@ describe('app quit lifecycle', () => {
     const invokedNames: string[] = []
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => null,
+      beginInputShutdown: () => cleanupOrder.push('inputs:begin'),
       quitTrace: createQuitTrace(false, () => undefined),
       isQuitFlushDone: () => true,
       markQuitFlushDone: () => undefined,
@@ -45,6 +48,7 @@ describe('app quit lifecycle', () => {
       hotkeyChannel: 'hotkey',
       speechDesktop: () => null,
       invalidateCloudSttOwner: () => undefined,
+      shutdownInputSessions: () => cleanupOrder.push('inputs:shutdown'),
       setBootPowerSaveBlock: (active) => cleanupOrder.push(`power:${String(active)}`),
       endBootWatch: (userData) => cleanupOrder.push(`watch:${userData}`),
       globalShortcut: { unregisterAll: () => undefined },
@@ -66,7 +70,7 @@ describe('app quit lifecycle', () => {
 
     expect(wrappedNames).toEqual(['app_quit'])
     expect(invokedNames).toEqual(['app_quit'])
-    expect(cleanupOrder).toEqual(['power:false', 'watch:/private-test-profile'])
+    expect(cleanupOrder).toEqual(['inputs:begin', 'inputs:shutdown', 'power:false', 'watch:/private-test-profile'])
   })
 
   it('keeps a prevented pack quit alive, resumes once, then runs will-quit cleanup', async () => {
@@ -74,6 +78,8 @@ describe('app quit lifecycle', () => {
     const lines: string[] = []
     const quitTrace = createQuitTrace(true, (line) => lines.push(line))
     let packReady = false
+    let shutdownCalls = 0
+    let beginCalls = 0
     const backgroundTimers: ReturnType<typeof setInterval>[] = []
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => ({
@@ -87,6 +93,7 @@ describe('app quit lifecycle', () => {
           })
         }
       }),
+      beginInputShutdown: () => { beginCalls += 1 },
       quitTrace,
       isQuitFlushDone: () => true,
       markQuitFlushDone: () => undefined,
@@ -95,6 +102,7 @@ describe('app quit lifecycle', () => {
       hotkeyChannel: 'hotkey',
       speechDesktop: () => null,
       invalidateCloudSttOwner: () => undefined,
+      shutdownInputSessions: () => { shutdownCalls += 1 },
       setBootPowerSaveBlock: () => undefined,
       endBootWatch: () => undefined,
       globalShortcut: { unregisterAll: () => undefined },
@@ -108,8 +116,12 @@ describe('app quit lifecycle', () => {
 
     app.quit()
     expect(app.quits).toBe(1)
+    expect(beginCalls).toBe(1)
+    expect(shutdownCalls).toBe(0)
     await Promise.resolve()
     expect(app.quits).toBe(2)
+    expect(beginCalls).toBe(1)
+    expect(shutdownCalls).toBe(1)
     expect(lines.map((line) => line.replace('[METIS_QUIT_TRACE] ', ''))).toEqual([
       'BEFORE_QUIT_ENTER',
       'BEFORE_QUIT_PREVENTED',
@@ -122,5 +134,46 @@ describe('app quit lifecycle', () => {
       'APP_QUIT',
       'QUIT_CALL_RETURNED_PACK_RESUME'
     ])
+  })
+
+  it('keeps input authority through the two-second meeting flush, then shuts it down at will-quit', async () => {
+    vi.useFakeTimers()
+    const app = new TestApp()
+    let shutdownCalls = 0
+    let beginCalls = 0
+    let flushRequests = 0
+    let flushDone = false
+    installAppQuitLifecycle(app, {
+      speechPackDesktop: () => null,
+      beginInputShutdown: () => { beginCalls += 1 },
+      quitTrace: createQuitTrace(false, () => undefined),
+      isQuitFlushDone: () => flushDone,
+      markQuitFlushDone: () => { flushDone = true },
+      meetingFlushPending: () => !flushDone,
+      window: () => ({ isDestroyed: () => false, webContents: { send: () => { flushRequests += 1 } } }),
+      hotkeyChannel: 'hotkey',
+      speechDesktop: () => null,
+      invalidateCloudSttOwner: () => undefined,
+      shutdownInputSessions: () => { shutdownCalls += 1 },
+      setBootPowerSaveBlock: () => undefined,
+      endBootWatch: () => undefined,
+      globalShortcut: { unregisterAll: () => undefined },
+      notifTimer: () => null,
+      backgroundTimers: [],
+      observability: () => null,
+      uptime: () => 1,
+      wrapLifecycleListener: (_name, listener) => listener,
+      warn: () => undefined
+    })
+
+    app.quit()
+    expect(app.quits).toBe(1)
+    expect(beginCalls).toBe(1)
+    expect(flushRequests).toBe(1)
+    expect(shutdownCalls).toBe(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(app.quits).toBe(2)
+    expect(beginCalls).toBe(1)
+    expect(shutdownCalls).toBe(1)
   })
 })

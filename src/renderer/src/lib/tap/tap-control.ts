@@ -14,6 +14,7 @@ import { extractFeatures } from './features'
 import { makeTrainGate, runGates, type RejectReason } from './gates'
 import { classify, type TapProfile } from './classify'
 import { TAP_WORKLET_SRC } from './tap-worklet-src'
+import { acquireInteractiveMic } from '../input-mic-admission'
 
 /** A keydown this close to an acoustic onset means "the user is typing", not "the user tapped". */
 const KEYDOWN_VETO_MS = 80
@@ -37,6 +38,7 @@ function tapWorkletUrl(): string {
 
 export interface TapCaptureSession {
   stop: () => void
+  onRevoke: (cleanup: () => void) => () => void
   setSensitivity: (s: number) => void
   /** The context's real sample rate — calibration stamps it into the profile. */
   sampleRate: number
@@ -48,6 +50,7 @@ export interface TapCaptureSession {
  */
 export async function startTapCapture(opts: {
   micDeviceId?: string
+  signal?: AbortSignal
   sensitivity: number
   onCandidate: (c: TapCandidatePayload) => void
   onError?: (message: string) => void
@@ -60,62 +63,72 @@ export async function startTapCapture(opts: {
     noiseSuppression: false,
     autoGainControl: false
   } as MediaTrackConstraints
-  let stream: MediaStream
+  let capture
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    capture = await acquireInteractiveMic({
       audio: opts.micDeviceId ? { ...base, deviceId: { exact: opts.micDeviceId } } : base
-    })
-  } catch {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: base })
+    }, 'conversation', 'deliberate-talk', opts.signal)
+  } catch (error) {
+    if (!opts.micDeviceId || opts.signal?.aborted) throw error
+    capture = await acquireInteractiveMic({ audio: base }, 'conversation', 'deliberate-talk', opts.signal)
   }
-  const ctx = new AudioContext()
-  try {
-    await ctx.audioWorklet.addModule(tapWorkletUrl())
-  } catch (e) {
-    stream.getTracks().forEach((t) => t.stop())
-    void ctx.close()
-    throw e
-  }
-  const src = ctx.createMediaStreamSource(stream)
-  const node = new AudioWorkletNode(ctx, 'tap-worklet', {
-    numberOfInputs: 1,
-    numberOfOutputs: 1,
-    channelCount: 1,
-    channelCountMode: 'explicit',
-    channelInterpretation: 'speakers'
-  })
-  node.port.onmessage = (e) => {
-    const d = e.data as TapCandidatePayload
-    if (d && d.pcm instanceof Float32Array) opts.onCandidate(d)
-  }
-  node.port.postMessage({ sensitivity: opts.sensitivity })
-  src.connect(node)
-  // Keep the node pulled without hearing it — the MicLevelMeter zero-gain trick.
-  const mute = ctx.createGain()
-  mute.gain.value = 0
-  node.connect(mute)
-  mute.connect(ctx.destination)
-
+  const { stream, admission } = capture
+  let ctx: AudioContext | null = null
+  let src: MediaStreamAudioSourceNode | null = null
+  let node: AudioWorkletNode | null = null
+  let mute: GainNode | null = null
   let stopped = false
-  return {
-    sampleRate: ctx.sampleRate,
-    setSensitivity(s) {
-      if (!stopped) node.port.postMessage({ sensitivity: s })
-    },
-    stop() {
-      if (stopped) return
-      stopped = true
-      node.port.onmessage = null
-      try {
-        node.disconnect()
-        src.disconnect()
-        mute.disconnect()
-      } catch {
-        /* already torn down */
-      }
-      stream.getTracks().forEach((t) => t.stop())
-      void ctx.close()
+  const teardown = (): void => {
+    if (stopped) return
+    stopped = true
+    if (node) node.port.onmessage = null
+    try { node?.disconnect() } catch { /* already disconnected */ }
+    try { src?.disconnect() } catch { /* already disconnected */ }
+    try { mute?.disconnect() } catch { /* already disconnected */ }
+    stream.getTracks().forEach((track) => track.stop())
+    if (ctx && ctx.state !== 'closed') void ctx.close()
+  }
+  admission.onRevoke(teardown)
+  try {
+    if (admission.revoked || opts.signal?.aborted) throw new Error('Tap microphone admission ended during startup.')
+    ctx = new AudioContext()
+    await ctx.audioWorklet.addModule(tapWorkletUrl())
+    if (admission.revoked || opts.signal?.aborted) throw new Error('Tap microphone admission ended during startup.')
+    src = ctx.createMediaStreamSource(stream)
+    node = new AudioWorkletNode(ctx, 'tap-worklet', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'speakers'
+    })
+    node.port.onmessage = (e) => {
+      const d = e.data as TapCandidatePayload
+      if (d && d.pcm instanceof Float32Array) opts.onCandidate(d)
     }
+    node.port.postMessage({ sensitivity: opts.sensitivity })
+    src.connect(node)
+    // Keep the node pulled without hearing it — the MicLevelMeter zero-gain trick.
+    mute = ctx.createGain()
+    mute.gain.value = 0
+    node.connect(mute)
+    mute.connect(ctx.destination)
+    const sampleRate = ctx.sampleRate
+    return {
+      sampleRate,
+      onRevoke: admission.onRevoke,
+      setSensitivity(s) {
+        if (!stopped) node?.port.postMessage({ sensitivity: s })
+      },
+      stop() {
+        teardown()
+        void admission.release()
+      }
+    }
+  } catch (error) {
+    teardown()
+    await admission.release()
+    throw error
   }
 }
 
@@ -129,6 +142,7 @@ export async function startTapControl(opts: {
   profile: TapProfile
   micDeviceId?: string
   sensitivity: number
+  signal?: AbortSignal
   onEvent: (e: TapEvent) => void
 }): Promise<TapControlSession> {
   const train = makeTrainGate()
@@ -142,6 +156,7 @@ export async function startTapControl(opts: {
   try {
     cap = await startTapCapture({
       micDeviceId: opts.micDeviceId,
+      signal: opts.signal,
       sensitivity: opts.sensitivity,
       onCandidate(c) {
         const now = performance.now()
@@ -173,6 +188,10 @@ export async function startTapControl(opts: {
         opts.onEvent({ kind: 'error', message })
       }
     })
+    if (opts.signal?.aborted) {
+      cap.stop()
+      throw new Error('Tap startup was cancelled.')
+    }
   } catch (e) {
     // stop() below is the listener's ONLY other release path, and a rejected capture never hands the
     // caller a session to call it on — without this, every failed arm (mic denied, device busy) orphans
@@ -181,12 +200,17 @@ export async function startTapControl(opts: {
     throw e
   }
 
-  return {
-    setSensitivity: cap.setSensitivity,
-    stop() {
+  let stopped = false
+  const stop = (): void => {
+    if (stopped) return
+    stopped = true
       window.removeEventListener('keydown', onKey, true)
       cap.stop()
-    }
+  }
+  cap.onRevoke(stop)
+  return {
+    setSensitivity: cap.setSensitivity,
+    stop
   }
 }
 
@@ -210,6 +234,7 @@ export function useTapControl(args: UseTapControlArgs): void {
   const zoneRef = useRef(args.onZone)
   zoneRef.current = args.onZone
   const sessionRef = useRef<TapControlSession | null>(null)
+  const acquisitionAbortRef = useRef<AbortController | null>(null)
 
   const { active, profile, micDeviceId, sensitivity } = args
   const sensitivityRef = useRef(sensitivity)
@@ -235,17 +260,22 @@ export function useTapControl(args: UseTapControlArgs): void {
     // settings snapshot (tapProfileMismatch), so the two can never disagree about whether it is armed.
     if (p.micDeviceId !== (micDeviceId ?? p.micDeviceId)) return
     const my = ++gen.current
+    const acquisitionAbort = new AbortController()
+    acquisitionAbortRef.current?.abort()
+    acquisitionAbortRef.current = acquisitionAbort
     const armed = sensitivityRef.current
     void startTapControl({
       profile: p,
       micDeviceId,
       sensitivity: armed,
+      signal: acquisitionAbort.signal,
       onEvent(e) {
         if (gen.current !== my) return
         if (e.kind === 'tap') zoneRef.current(e.zone)
       }
     })
       .then((s) => {
+        if (acquisitionAbortRef.current === acquisitionAbort) acquisitionAbortRef.current = null
         if (gen.current !== my) {
           s.stop()
           return
@@ -256,10 +286,13 @@ export function useTapControl(args: UseTapControlArgs): void {
         if (sensitivityRef.current !== armed) s.setSensitivity(sensitivityRef.current)
       })
       .catch(() => {
+        if (acquisitionAbortRef.current === acquisitionAbort) acquisitionAbortRef.current = null
         /* mic denied or worklet failed — feature silently unavailable this session */
       })
     return () => {
       gen.current++
+      acquisitionAbortRef.current?.abort()
+      acquisitionAbortRef.current = null
       sessionRef.current?.stop()
       sessionRef.current = null
     }

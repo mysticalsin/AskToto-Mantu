@@ -49,8 +49,9 @@ describe('MQA-009 — a fact-check ask still receives screenContext', () => {
     // personas.ts strips GROUNDING_RAIL for fact-check, so brainContext must stay out of it. Only the
     // screen block moved; it carries its own untrusted-data guard (llm/shared.ts screenContextBlock).
     const brainGate = blockAfter(indexSrc, BRAIN_GATE)
-    expect(brainGate).toMatch(/buildBrainContext\(s,/)
-    expect(brainGate).toMatch(/req\.brainContext = hit\.block \|\| undefined/)
+    expect(brainGate).toMatch(/buildBrainContextWithSources\(s,/)
+    expect(brainGate).toMatch(/createBrainContextEnvelope\(owner, hit\)/)
+    expect(indexSrc).toMatch(/req\.brainContext = undefined/)
   })
 
   it("the injector's own guard admits a fact-check ask and still excludes non-answer / non-screen asks", () => {

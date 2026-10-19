@@ -107,6 +107,7 @@ export function ControlBar(props: ControlBarProps): JSX.Element {
       {/* Listen / rec indicator */}
       <button
         type="button"
+        data-metis-meeting-start={!listening ? '' : undefined}
         title={listening ? 'End meeting & get summary' : 'Start listening'}
         aria-label={listening ? 'End meeting' : 'Start listening'}
         onClick={onToggleListen}

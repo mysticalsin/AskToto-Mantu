@@ -5,7 +5,8 @@ interface ListeningStateDependencies<Event> {
   assertMainWindow(event: Event): void
   requireAuth(): boolean
   /** Main owns the one authoritative identity. Rejected transitions must have no lifecycle effects. */
-  acceptTransition(change: ListeningStatePayload): boolean
+  acceptTransition(change: ListeningStatePayload, authorizeStart: () => boolean): boolean
+  consumeMeetingStartActivation(event: Event): boolean
   setListeningActive(on: boolean): void
   setTrayRecording(on: boolean): void
   setRecordingPowerSaveBlock(on: boolean): void
@@ -17,19 +18,22 @@ interface ListeningStateDependencies<Event> {
 /** Create the exact listening-state callback registered by index.ts over injectable side-effect seams. */
 export function createListeningStateHandler<Event>(
   dependencies: ListeningStateDependencies<Event>
-): (event: Event, rawOn: unknown) => Promise<void> {
+): (event: Event, rawOn: unknown) => Promise<boolean> {
   return async (event, rawOn) => {
     dependencies.assertMainWindow(event)
-    if (!dependencies.requireAuth()) return
+    if (!dependencies.requireAuth()) return false
     const parsed = ListeningStatePayloadSchema.safeParse(typeof rawOn === 'boolean' ? { on: rawOn } : rawOn)
-    if (!parsed.success || !dependencies.acceptTransition(parsed.data)) return
+    if (!parsed.success || !dependencies.acceptTransition(
+      parsed.data,
+      () => !parsed.data.on || dependencies.consumeMeetingStartActivation(event)
+    )) return false
     const { on } = parsed.data
     dependencies.setListeningActive(on)
     dependencies.setTrayRecording(on)
     dependencies.setRecordingPowerSaveBlock(on)
     if (on) {
       dependencies.onMeetingStart()
-      return
+      return true
     }
     // Both native helpers must get their teardown attempt even if one rejects. The handler stays pending
     // until both settle, then propagates the first failure so an unconfirmed exit is never reported clean.
@@ -39,5 +43,6 @@ export function createListeningStateHandler<Event>(
     ])
     const failed = releases.find((result): result is PromiseRejectedResult => result.status === 'rejected')
     if (failed) throw failed.reason
+    return true
   }
 }

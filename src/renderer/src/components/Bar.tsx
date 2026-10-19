@@ -259,6 +259,7 @@ function IconTool({
   edgeRight,
   edgeLeft,
   disabled,
+  meetingStart,
   children
 }: {
   title: string
@@ -289,6 +290,7 @@ function IconTool({
   // no-op; the tooltip (on the surrounding .group div, not the button itself) still shows on hover so the
   // "managed" reason stays visible instead of the control just silently doing nothing.
   disabled?: boolean
+  meetingStart?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -299,6 +301,7 @@ function IconTool({
         aria-haspopup={ariaHasPopup ? 'menu' : undefined}
         aria-expanded={ariaExpanded}
         disabled={disabled}
+        data-metis-meeting-start={meetingStart ? '' : undefined}
         onClick={onClick}
         onMouseEnter={onMouseEnter}
         onMouseDown={onMouseDown}
@@ -737,6 +740,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             active={props.listening}
             danger
             cyanIdle
+            meetingStart={!props.listening}
           >
             {props.listening ? (
               <span

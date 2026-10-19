@@ -154,6 +154,7 @@ function recoveryHost(overrides: Partial<ListenAudioRecoveryHost> = {}): ListenA
     onThemProbationRecycle: vi.fn(),
     themProbationDuration: () => 20_000,
     themDeviceChangeAction,
+    retireMicForRecovery: vi.fn(async () => true),
     recoverMicNow: vi.fn(),
     recoverSystemNow: vi.fn(),
     setSystemPermissionNote: vi.fn(),
@@ -217,11 +218,22 @@ describe('MQA-267: loopback acquisition keeps rendered system audio unprocessed'
       platform: 'MacIntel',
       mediaDevices: { getDisplayMedia, getUserMedia }
     })
+    vi.stubGlobal('window', {
+      toto: {
+        onMeetingMicCaptureRevoked: () => () => {},
+        meetingMicAdmission: vi.fn(async (startedAt: number) => ({
+          captureId: '00000000-0000-4000-8000-000000000001',
+          startedAt
+        })),
+        confirmMeetingMicCapture: vi.fn(async () => true),
+        releaseMeetingMicCapture: vi.fn(async () => true)
+      }
+    })
     vi.resetModules()
     const { acquireLoopback, acquireMic } = await import('./listen-audio-recovery')
 
     await expect(acquireLoopback()).resolves.toBe(stream)
-    await acquireMic('')
+    await acquireMic('', 123)
 
     expect(getDisplayMedia).toHaveBeenCalledTimes(1)
     expect(getDisplayMedia.mock.calls[0]?.[0]).toMatchObject({
@@ -375,6 +387,7 @@ describe('device recovery uses current ownership and positive death evidence', (
     await vi.advanceTimersByTimeAsync(800)
 
     expect(host.recoverMicNow).toHaveBeenCalledTimes(1)
+    expect(host.retireMicForRecovery).toHaveBeenCalledWith(1)
     expect(probation.current).toBeTypeOf('function')
     systemPresent = false
     listener.current()

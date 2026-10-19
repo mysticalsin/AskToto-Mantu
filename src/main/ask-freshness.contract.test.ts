@@ -63,6 +63,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
       assertMainWindow: () => {},
       requireAuth: () => true,
       acceptTransition: () => true,
+      consumeMeetingStartActivation: () => true,
       setListeningActive: (on) => {
         listeningActive = on
       },
