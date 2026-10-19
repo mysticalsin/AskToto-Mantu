@@ -51,6 +51,15 @@ job at a time at nice 15. It aborts if any resolved path points at `~/Documents/
 `~/Library/CloudStorage`, the Keychains or the installed Métis. A per-round tripwire fingerprints the real brain index
 and stops the loop on any unexplained change. Outside the 2.12 goal loop, D-28 still applies as written.
 
+**Isolation preflight:** an execution sandbox may deny `sysctl vm.loadavg` and `nice`/`setpriority` even when
+the wrapper exits 0. Stop on either diagnostic; exit 0 alone is not a pass. Use the tool's normal approval
+path to run the unchanged wrapper outside that execution sandbox, then verify readable load, sandbox-only
+paths and child nice value at least 15 before running repository code. If approval is denied, record the
+blocker; never bypass the wrapper or change security settings. Put the pinned Node 22.22.3 toolchain first
+in `PATH` **before invoking the wrapper**, so its preflight and npm child processes use the same Node.
+A portable toolchain belongs in the ignored goal-loop tools directory, outside its pruned run directories;
+verify official archive checksums and preserve the receipt. Do not replace the system Node or change lockfiles.
+
 | Purpose | Command |
 |---|---|
 | Type-check everything | `npm run typecheck` |
