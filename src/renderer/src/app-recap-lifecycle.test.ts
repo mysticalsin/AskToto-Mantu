@@ -99,6 +99,13 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+type DiscardSavedTranscript = (
+  startedAt: number,
+  title: string,
+  path?: string
+) => Promise<{ ok: boolean; error?: string; deletedPaths?: string[] }>
+type DiscardDraftTranscript = (startedAt: number) => Promise<{ ok: boolean; error?: string }>
+
 const ref = <T>(current: T) => ({ current })
 const lines: TranscriptLine[] = [{ speaker: 'them', text: 'Synthetic meeting A speech.', t: 1 }]
 const partial: AnswerState = {
@@ -122,6 +129,27 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
   }
   const saveTranscript = vi.fn(save)
   const recallUpdateRecap = vi.fn(async (..._args: unknown[]) => ({ ok: true }))
+  const preserveDraftTranscript = vi.fn(async (_startedAt: number) => ({ ok: true }))
+  const discardSavedTranscript = vi.fn<DiscardSavedTranscript>(async (startedAt, _title, path) => ({
+    ok: true,
+    deletedPaths: path ? [path] : []
+  }))
+  const discardDraftTranscript = vi.fn<DiscardDraftTranscript>(async (_startedAt) => ({ ok: true }))
+  const setDiscardPendingOwner = vi.fn()
+  const reset = vi.fn()
+  const retryCallbacks: Array<() => void> = []
+  const retryIds: number[] = []
+  const clearedRetryIds: number[] = []
+  let nextRetryId = 0
+  const setTimeoutSpy = vi.fn((callback: () => void, _delay: number) => {
+    const id = ++nextRetryId
+    retryIds.push(id)
+    retryCallbacks.push(callback)
+    return id as unknown as ReturnType<typeof setTimeout>
+  })
+  const clearTimeoutSpy = vi.fn((timer: ReturnType<typeof setTimeout>) => {
+    clearedRetryIds.push(timer as unknown as number)
+  })
   const context = vm.createContext({
     Error,
     Promise,
@@ -132,6 +160,7 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     ...ui,
     mode: 'meeting',
     savedPath: null,
+    saveAttempts: 0,
     ask: {
       answer: partial,
       cancel: vi.fn(() => {
@@ -142,6 +171,10 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     listen: { lines: [...lines] },
     meetingStartRef: ref(100),
     savedRef: ref(''),
+    discardPendingOwnerRef: ref<string | null>(null),
+    discardedMeetingRef: ref<string | null>(null),
+    deletedTranscriptForDiscardRef: ref<{ ownerId: string; paths: string[] } | null>(null),
+    saveRetryTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
     cancelledRef: ref(false),
     claimedSavesRef: ref(new Set<string>()),
     liveRecapWritesRef: ref(new Set<string>()),
@@ -153,7 +186,19 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     beginOwnedMeetingExit,
     persistRecapOnExit,
     retireRecapWriteKeys,
-    window: { toto: { saveTranscript, recallUpdateRecap } }
+    setDiscardPendingOwner,
+    reset,
+    setTimeout: setTimeoutSpy,
+    clearTimeout: clearTimeoutSpy,
+    window: {
+      toto: {
+        saveTranscript,
+        recallUpdateRecap,
+        preserveDraftTranscript,
+        discardSavedTranscript,
+        discardDraftTranscript
+      }
+    }
   })
   for (const name of [
     'recapWriteKey',
@@ -161,6 +206,7 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     'meetingSaveIsRedundant',
     'saveFailureReason',
     'saveMeetingNow',
+    'saveLiveMeetingNow',
     'persistLiveMeetingOnExit',
     'persistAndRetireLiveMeeting'
   ]) {
@@ -189,10 +235,40 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     ui,
     saveTranscript,
     recallUpdateRecap,
+    preserveDraftTranscript,
+    discardSavedTranscript,
+    discardDraftTranscript,
+    setDiscardPendingOwner,
+    reset,
+    retryCallbacks,
+    retryIds,
+    clearedRetryIds,
+    setTimeout: setTimeoutSpy,
+    clearTimeout: clearTimeoutSpy,
     startListen,
     exitPromises,
     manualSave: callback<() => Promise<void>>('manualSave', context),
-    newMeeting: callback<() => void>('newMeeting', context)
+    newMeeting: callback<() => void>('newMeeting', context),
+    saveLiveMeetingNow: callback<(lines: TranscriptLine[], started: number, recapText: string) => Promise<string | null>>(
+      'saveLiveMeetingNow',
+      context
+    ),
+    persistLiveMeetingOnExit: callback<(snapshot: AnswerState | null, maxAttempts?: number) => Promise<void>>(
+      'persistLiveMeetingOnExit',
+      context
+    ),
+    discardMeeting: callback<() => Promise<void>>('discardMeeting', context),
+    autosave() {
+      const effect = uniqueNode(
+        app,
+        (node) =>
+          ts.isCallExpression(node) &&
+          node.expression.getText(app) === 'useEffect' &&
+          node.arguments[0]?.getText(app).includes("if (view !== 'review') return")
+      ) as ts.CallExpression
+      const run = evaluate<() => void>(effect.arguments[0]!.getText(app), context)
+      return run()
+    }
   }
 }
 
@@ -389,6 +465,290 @@ describe('actual App live recap lifecycle', () => {
     })
     expect(h.ui.setSavedPath).toHaveBeenCalledExactlyOnceWith('transcript-only.md')
   })
+
+  it('holds the pending and completed discard fence to A while owner B remains saveable', async () => {
+    const joinedSave = deferred<string | null>()
+    const h = lifecycleHost(async () => ({ path: 'b.md' }))
+    try {
+      h.context.view = 'review'
+      h.context.answerId = 'run-a'
+      h.context.answerText = 'Meeting A summary.'
+      h.context.answerStreaming = false
+      h.context.answerError = null
+      h.context.answerCompletion = 'complete'
+      h.context.saveAttempts = 1
+      h.context.savingPromiseRef.current = joinedSave.promise
+
+      h.autosave()
+      expect(h.retryCallbacks).toHaveLength(1)
+      const retainedRetry = h.retryCallbacks[0]!
+      const discard = h.discardMeeting()
+      expect(h.context.discardPendingOwnerRef.current).toBe('100')
+      expect(h.clearTimeout).toHaveBeenCalledExactlyOnceWith(1)
+
+      await h.manualSave()
+      h.autosave()
+      await h.persistLiveMeetingOnExit(partial, 0)
+      retainedRetry() // A retry already queued by the event loop still sees the pending owner fence.
+      await Promise.resolve()
+      expect(h.saveTranscript).not.toHaveBeenCalled()
+      expect(h.preserveDraftTranscript).not.toHaveBeenCalled()
+
+      joinedSave.resolve('a.md')
+      await discard
+      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
+        100,
+        'Synthetic meeting A speech.',
+        'a.md'
+      )
+      expect(h.discardDraftTranscript).toHaveBeenCalledExactlyOnceWith(100)
+      expect(h.context.discardedMeetingRef.current).toBe('100')
+      expect(h.context.discardPendingOwnerRef.current).toBeNull()
+
+      await h.manualSave()
+      h.autosave()
+      await h.persistLiveMeetingOnExit(partial, 0)
+      expect(h.saveTranscript).not.toHaveBeenCalled()
+      expect(h.preserveDraftTranscript).not.toHaveBeenCalled()
+
+      h.context.meetingStartRef.current = 200
+      h.context.ask.answer = { ...partial, id: 'run-b', text: 'Meeting B notes.' }
+      h.context.liveRecapTargetRef.current = { ownerId: '200', runId: 'run-b', file: null, priorText: '' }
+      h.context.listen.lines = [{ speaker: 'them', text: 'Synthetic meeting B speech.', t: 2 }]
+      await h.manualSave()
+      expect(h.saveTranscript).toHaveBeenCalledExactlyOnceWith({
+        title: 'Synthetic meeting B speech.',
+        mode: 'meeting',
+        startedAt: 200,
+        lines: h.context.listen.lines,
+        recap: 'Meeting B notes.',
+        recapStatus: 'incomplete'
+      })
+    } finally {
+      joinedSave.resolve(null)
+      await Promise.allSettled(h.exitPromises)
+    }
+  })
+
+  it('preserves the exact owner draft after failed or skipped terminal persistence', async () => {
+    const storage = deferred<{ path: string }>()
+    const failed = lifecycleHost(() => storage.promise)
+    try {
+      const exit = failed.persistLiveMeetingOnExit(partial, 0)
+      failed.context.meetingStartRef.current = 200
+      failed.context.ask.answer = { ...partial, id: 'run-b', text: 'Meeting B notes.' }
+      storage.reject(new Error('Synthetic save failure'))
+      await exit
+      expect(failed.preserveDraftTranscript).toHaveBeenCalledExactlyOnceWith(100)
+      expect(failed.ui.setSavedPath).not.toHaveBeenCalled()
+    } finally {
+      storage.resolve({ path: 'cleanup.md' })
+    }
+
+    const skipped = lifecycleHost(async () => ({ path: 'unused.md' }))
+    skipped.context.listen.lines = []
+    await skipped.persistLiveMeetingOnExit(partial, 0)
+    expect(skipped.preserveDraftTranscript).toHaveBeenCalledExactlyOnceWith(100)
+    expect(skipped.saveTranscript).not.toHaveBeenCalled()
+
+    const durable = lifecycleHost(async () => ({ path: 'unused.md' }))
+    durable.context.savedPath = '/synthetic/meetings/a.md'
+    durable.context.savedRef.current = '100'
+    durable.context.liveRecapTargetRef.current = null
+    await durable.persistLiveMeetingOnExit(null, 0)
+    expect(durable.preserveDraftTranscript).not.toHaveBeenCalled()
+    expect(durable.saveTranscript).not.toHaveBeenCalled()
+  })
+
+  it('keeps the no-provider live save reachable by Disregard and joins it before deleting', async () => {
+    const storage = deferred<{ path: string }>()
+    const h = lifecycleHost(() => storage.promise)
+    try {
+      const liveSave = h.saveLiveMeetingNow([...lines], 100, '')
+      const discard = h.discardMeeting()
+      expect(h.saveTranscript).toHaveBeenCalledExactlyOnceWith({
+        title: 'Synthetic meeting A speech.',
+        mode: 'meeting',
+        startedAt: 100,
+        lines,
+        recap: ''
+      })
+      expect(h.discardSavedTranscript).not.toHaveBeenCalled()
+      expect(h.discardDraftTranscript).not.toHaveBeenCalled()
+      expect(h.reset).not.toHaveBeenCalled()
+
+      storage.resolve({ path: '/synthetic/meetings/a.md' })
+      await expect(liveSave).resolves.toBe('/synthetic/meetings/a.md')
+      await discard
+      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
+        100,
+        'Synthetic meeting A speech.',
+        '/synthetic/meetings/a.md'
+      )
+      expect(h.discardDraftTranscript).toHaveBeenCalledExactlyOnceWith(100)
+      expect(h.reset).toHaveBeenCalledTimes(1)
+      expect(h.context.discardedMeetingRef.current).toBe('100')
+    } finally {
+      storage.resolve({ path: '/synthetic/meetings/cleanup.md' })
+    }
+  })
+
+  it.each([
+    { result: { ok: false, error: 'cancelled' }, label: 'native cancel' },
+    { result: { ok: false, error: 'durable delete failed' }, label: 'durable-delete failure' }
+  ] as const)('$label keeps the draft and leaves Disregard retryable', async ({ result }) => {
+    const h = lifecycleHost(async () => ({ path: 'unused.md' }))
+    h.context.savedPath = '/synthetic/meetings/a.md'
+    h.discardSavedTranscript.mockResolvedValueOnce(result)
+    await h.discardMeeting()
+    expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
+      100,
+      'Synthetic meeting A speech.',
+      '/synthetic/meetings/a.md'
+    )
+    expect(h.discardDraftTranscript).not.toHaveBeenCalled()
+    expect(h.context.discardedMeetingRef.current).toBeNull()
+    expect(h.context.discardPendingOwnerRef.current).toBeNull()
+    expect(h.reset).not.toHaveBeenCalled()
+  })
+
+  it('retries failed draft retirement without repeating confirmed saved-file deletion', async () => {
+    const h = lifecycleHost(async () => ({ path: 'unused.md' }))
+    const savedPath = '/synthetic/meetings/a.md'
+    h.context.savedPath = savedPath
+    h.discardDraftTranscript
+      .mockResolvedValueOnce({ ok: false, error: 'draft retirement failed' })
+      .mockResolvedValueOnce({ ok: true })
+
+    await h.discardMeeting()
+    expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
+      100,
+      'Synthetic meeting A speech.',
+      savedPath
+    )
+    expect(h.context.deletedTranscriptForDiscardRef.current).toEqual({ ownerId: '100', paths: [savedPath] })
+    expect(h.context.discardedMeetingRef.current).toBeNull()
+    expect(h.context.discardPendingOwnerRef.current).toBeNull()
+    expect(h.reset).not.toHaveBeenCalled()
+
+    await h.discardMeeting()
+    expect(h.discardSavedTranscript).toHaveBeenCalledTimes(2)
+    expect(h.discardSavedTranscript.mock.calls[1]).toEqual([100, 'Synthetic meeting A speech.', undefined])
+    expect(h.discardDraftTranscript).toHaveBeenCalledTimes(2)
+    expect(h.context.discardedMeetingRef.current).toBe('100')
+    expect(h.context.discardPendingOwnerRef.current).toBeNull()
+    expect(h.reset).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not pass B data to A discard when ownership changes during the save join', async () => {
+    const storage = deferred<{ path: string }>()
+    const h = lifecycleHost(() => storage.promise)
+    try {
+      h.saveLiveMeetingNow([...lines], 100, '')
+      const discard = h.discardMeeting()
+      h.context.meetingStartRef.current = 200
+      h.context.savedPath = '/synthetic/meetings/b.md'
+      storage.resolve({ path: '/synthetic/meetings/a.md' })
+      await discard
+      expect(h.discardSavedTranscript).not.toHaveBeenCalled()
+      expect(h.discardDraftTranscript).not.toHaveBeenCalled()
+      expect(h.context.discardedMeetingRef.current).toBeNull()
+      expect(h.context.discardPendingOwnerRef.current).toBeNull()
+      expect(h.reset).not.toHaveBeenCalled()
+    } finally {
+      storage.resolve({ path: '/synthetic/meetings/cleanup.md' })
+    }
+  })
+
+  it.each(['resolved cancellation', 'IPC rejection'] as const)(
+    'does not paint A’s late delete %s over successor B',
+    async (failure) => {
+      const deletion = deferred<{ ok: boolean; error?: string }>()
+      const h = lifecycleHost(async () => ({ path: 'unused.md' }))
+      h.context.savedPath = '/synthetic/meetings/a.md'
+      h.discardSavedTranscript.mockImplementation(async () => deletion.promise)
+      try {
+        const discard = h.discardMeeting()
+        await Promise.resolve()
+        h.context.meetingStartRef.current = 200
+        if (failure === 'resolved cancellation') deletion.resolve({ ok: false, error: 'cancelled' })
+        else deletion.reject(new Error('Synthetic discard IPC failure'))
+        await discard
+        expect(h.ui.setSaveError).not.toHaveBeenCalled()
+        expect(h.discardDraftTranscript).not.toHaveBeenCalled()
+        expect(h.context.discardedMeetingRef.current).toBeNull()
+        expect(h.context.discardPendingOwnerRef.current).toBeNull()
+        expect(h.reset).not.toHaveBeenCalled()
+      } finally {
+        deletion.resolve({ ok: false, error: 'cleanup' })
+      }
+    }
+  )
+
+  it('does not paint A’s late draft-retirement failure over successor B', async () => {
+    const savedPath = '/synthetic/meetings/a.md'
+    const draftRetirement = deferred<{ ok: boolean; error?: string }>()
+    const draftStarted = deferred<number>()
+    const h = lifecycleHost(async () => ({ path: 'unused.md' }))
+    h.context.savedPath = savedPath
+    h.discardDraftTranscript.mockImplementation(async (startedAt) => {
+      draftStarted.resolve(startedAt)
+      return draftRetirement.promise
+    })
+    try {
+      const discard = h.discardMeeting()
+      await expect(draftStarted.promise).resolves.toBe(100)
+      h.context.meetingStartRef.current = 200
+      draftRetirement.resolve({ ok: false, error: 'draft retirement failed' })
+      await discard
+      expect(h.ui.setSaveError).not.toHaveBeenCalled()
+      expect(h.context.deletedTranscriptForDiscardRef.current).toEqual({ ownerId: '100', paths: [savedPath] })
+      expect(h.context.discardedMeetingRef.current).toBeNull()
+      expect(h.context.discardPendingOwnerRef.current).toBeNull()
+      expect(h.reset).not.toHaveBeenCalled()
+    } finally {
+      draftRetirement.resolve({ ok: false, error: 'cleanup' })
+    }
+  })
+
+  it('finishes A deletion and draft cleanup without painting or resetting a successor B', async () => {
+    const savedPath = '/synthetic/meetings/a.md'
+    const savedDelete = deferred<{ ok: boolean; deletedPaths?: string[] }>()
+    const draftRetirement = deferred<{ ok: boolean }>()
+    const draftStarted = deferred<number>()
+    const h = lifecycleHost(async () => ({ path: 'unused.md' }))
+    h.context.savedPath = savedPath
+    h.discardSavedTranscript.mockImplementation(async () => savedDelete.promise)
+    h.discardDraftTranscript.mockImplementation(async (startedAt) => {
+      draftStarted.resolve(startedAt)
+      return draftRetirement.promise
+    })
+    try {
+      const discard = h.discardMeeting()
+      expect(h.discardSavedTranscript).toHaveBeenCalledExactlyOnceWith(
+        100,
+        'Synthetic meeting A speech.',
+        savedPath
+      )
+      h.context.meetingStartRef.current = 200
+      h.context.savedPath = '/synthetic/meetings/b.md'
+      h.context.savedRef.current = 'b-prior-state'
+      savedDelete.resolve({ ok: true, deletedPaths: [savedPath] })
+      await expect(draftStarted.promise).resolves.toBe(100)
+      expect(h.discardDraftTranscript).toHaveBeenCalledExactlyOnceWith(100)
+      draftRetirement.resolve({ ok: true })
+      await discard
+      expect(h.context.discardedMeetingRef.current).toBe('100')
+      expect(h.context.savedRef.current).toBe('b-prior-state')
+      expect(h.context.discardPendingOwnerRef.current).toBeNull()
+      expect(h.reset).not.toHaveBeenCalled()
+      expect(h.ui.setSavedPath).not.toHaveBeenCalled()
+    } finally {
+      savedDelete.resolve({ ok: false })
+      draftRetirement.resolve({ ok: false })
+      await Promise.allSettled(h.exitPromises)
+    }
+  })
 })
 
 describe('actual App generated-write to Review manual-edit wiring', () => {
@@ -430,6 +790,10 @@ describe('actual App generated-write to Review manual-edit wiring', () => {
       savedPath: generatedPath,
       listen: { lines },
       meetingStartRef: ref(100),
+      discardPendingOwnerRef: ref<string | null>(null),
+      discardedMeetingRef: ref<string | null>(null),
+      deletedTranscriptForDiscardRef: ref<{ ownerId: string; paths: string[] } | null>(null),
+      saveRetryTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
       liveRecapWritesRef: ref(new Set<string>()),
       liveRecapTargetRef: ref({ ownerId: '100', runId: 'generated-a', file: null, priorText: '' }),
       answerId: 'generated-a',
@@ -448,7 +812,13 @@ describe('actual App generated-write to Review manual-edit wiring', () => {
             }
             storedText = String(args[1])
             return { ok: true }
-          }
+          },
+          preserveDraftTranscript: async (_startedAt: number) => ({ ok: true }),
+          discardSavedTranscript: async (_startedAt: number, _title: string, path?: string) => ({
+            ok: true,
+            deletedPaths: path ? [path] : []
+          }),
+          discardDraftTranscript: async (_startedAt: number) => ({ ok: true })
         }
       }
     })

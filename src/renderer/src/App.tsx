@@ -3000,6 +3000,9 @@ export function App(): JSX.Element {
       discardPendingOwnerRef.current = null
       setDiscardPendingOwner(null)
     }
+    const setDiscardError = (message: string | null): void => {
+      if (String(meetingStartRef.current) === ownerId) setSaveError(message)
+    }
     // An autosave triggered by the recap settling (the effect above) can still be in flight here — there's
     // no "saving" indicator on screen, so a click landing in that window used to read savedPath as still
     // null, skip the delete branch entirely, and let the save land moments later anyway. Await it so the
@@ -3023,21 +3026,25 @@ export function App(): JSX.Element {
         deletedTranscriptForDiscardRef.current = { ownerId, paths: confirmedDeletedPaths }
       }
       if (!result.ok) {
-        setSaveError(result.error === 'cancelled' ? null : result.error || 'Could not delete the saved transcript.')
+        setDiscardError(result.error === 'cancelled' ? null : result.error || 'Could not delete the saved transcript.')
         clearDiscardIntent() // native confirmation was cancelled or exact durable deletion failed
         return
       }
       const discarded = await window.toto.discardDraftTranscript(started)
       if (!discarded.ok) {
-        setSaveError(discarded.error || 'Could not remove the autosaved draft. Try Disregard again.')
+        setDiscardError(discarded.error || 'Could not remove the autosaved draft. Try Disregard again.')
         clearDiscardIntent()
         return
       }
       discardedMeetingRef.current = ownerId
-      savedRef.current = String(meetingStartRef.current)
-      reset()
+      const stillOwnsCurrentMeeting = String(meetingStartRef.current) === ownerId
+      if (stillOwnsCurrentMeeting) savedRef.current = ownerId
+      clearDiscardIntent()
+      // Main may finish deletion after the renderer has moved on. Finish A's durable cleanup, but never
+      // let A's late completion mark or reset the successor meeting.
+      if (stillOwnsCurrentMeeting) reset()
     } catch {
-      setSaveError('Could not remove the autosaved draft. Try Disregard again.')
+      setDiscardError('Could not remove the autosaved draft. Try Disregard again.')
       clearDiscardIntent()
     }
   }, [savedPath, listen.lines, mode, reset])

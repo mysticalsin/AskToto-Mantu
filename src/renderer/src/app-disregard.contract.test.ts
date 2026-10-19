@@ -2,15 +2,16 @@
  * app-disregard.contract.test.ts — source-contract test for MQA-030 (docs/qa/BUG-LEDGER.md): on a profile
  * with no AI provider, "Disregard" silently KEPT the meeting. maybeFireRecap's keyless branch persisted the
  * transcript through saveMeetingNow — the LEAVE-path saver, which deliberately writes neither savedPath nor
- * savingPromiseRef — so discardMeeting read null from both, skipped its delete branch (and main's native
- * confirm) entirely, and the .md stayed on disk, brain-ingested and, with publishing on, mirrored to the
+ * savingPromiseRef — so discardMeeting read null from both, skipped Main's durable-delete request and native
+ * confirmation entirely, and the .md stayed on disk, brain-ingested and, with publishing on, mirrored to the
  * wiki. The user's explicit "throw this away" did nothing, with no dialog and no error.
  *
  * There is no component-test harness for App.tsx anywhere in this repo (vitest runs the `node` environment,
  * no jsdom/testing-library), so this follows the established structural-proof pattern of
  * App.local-gates.test.ts / pinned-agent-boundary.contract.test.ts: readFileSync + regex over the real
  * source. It pins the whole chain — the keyless save reports its path, the live saver publishes it, and
- * discardMeeting still consumes it — since any one link going missing reopens the same silent-keep hole.
+ * discardMeeting sends that path through Main's confirmed-delete route before retiring the owner's draft —
+ * since any one link going missing reopens the same silent-keep hole.
  *
  * Anchors are function names and branch conditions, never line numbers, so unrelated reordering is safe.
  */
@@ -47,7 +48,7 @@ describe("MQA-030 — a keyless profile's auto-saved transcript is reachable by 
     // branch when none of those are true.
     const keylessBranch = blockBetween('if (!canSummarize) {', 'setRecapSkipped(false)')
     expect(keylessBranch).toMatch(/saveLiveMeetingNowRef\.current\?\.\(listen\.lines, meetingStartRef\.current, ''\)/)
-    // The bug verbatim: saveMeetingNow(Ref) here reports nothing back to the live session, so Disregard
+    // The old bug: saveMeetingNow(Ref) here reports nothing back to the live session, so Disregard
     // has no path to delete.
     expect(code(keylessBranch)).not.toMatch(/saveMeetingNowRef\.current/)
   })
@@ -74,10 +75,15 @@ describe("MQA-030 — a keyless profile's auto-saved transcript is reachable by 
     expect(liveSaverBlock).toMatch(/meetingStartRef\.current === started/)
   })
 
-  it('discardMeeting still consumes that promise and deletes the file it names', () => {
+  it('discardMeeting confirms deletion of the exact saved file before retiring its draft', () => {
     const discardBlock = blockBetween('const discardMeeting = useCallback(', 'const clearAnswer = useCallback(')
     expect(discardBlock).toMatch(/savingPromiseRef\.current \? await savingPromiseRef\.current : null/)
     expect(discardBlock).toMatch(/const path = inFlightPath \?\? savedPath/)
-    expect(discardBlock).toMatch(/window\.toto\.recallDelete\(path,/)
+    expect(discardBlock).toMatch(
+      /window\.toto\.discardSavedTranscript\(\s*started,\s*defaultMeetingTitle\(listen\.lines, mode\),\s*path && !priorDeletedPaths\.includes\(path\) \? path : undefined\s*\)/
+    )
+    expect(discardBlock).toMatch(/const discarded = await window\.toto\.discardDraftTranscript\(started\)/)
+    // The executable outcome, retry receipts and owner-change behavior are covered by
+    // app-recap-lifecycle.test.ts against this callback body.
   })
 })
