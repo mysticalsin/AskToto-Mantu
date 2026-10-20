@@ -100,6 +100,36 @@ let contextCloses = 0
 let workletNodes = 0
 let sensitivityPosts: number[] = []
 let inputSessionCounter = 0
+let startInputSession: ReturnType<typeof vi.fn>
+let stopInputSession: ReturnType<typeof vi.fn>
+let mediaListeners: Array<{ type: string; listener: unknown }> = []
+const inputContext = { authSessionGeneration: 7, contextRevision: 3 }
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+function inputLease(
+  input: { source: string; purpose: string; activation: string },
+  context: { authSessionGeneration: number; contextRevision: number },
+  sessionId: string
+) {
+  return {
+    sessionId,
+    source: input.source,
+    purpose: input.purpose,
+    activation: input.activation,
+    authSessionGeneration: context.authSessionGeneration,
+    contextRevision: context.contextRevision,
+    revision: 1,
+    startedAt: 1_700_000_000_000,
+    actionAuthority: false
+  }
+}
 
 class FakeAudioContext {
   sampleRate = 48000
@@ -175,31 +205,24 @@ beforeEach(() => {
   workletNodes = 0
   sensitivityPosts = []
   inputSessionCounter = 0
+  mediaListeners = []
   getUserMedia = vi.fn(async () => okStream())
+  startInputSession = vi.fn(
+    async (
+      input: { source: string; purpose: string; activation: string },
+      context: { authSessionGeneration: number; contextRevision: number }
+    ) => ({
+      ok: true as const,
+      lease: inputLease(input, context, (++inputSessionCounter).toString(16).padStart(48, '0'))
+    })
+  )
+  stopInputSession = vi.fn(async () => ({ ok: true as const }))
   vi.stubGlobal('window', {
     toto: {
-      getInputSessionContext: vi.fn(async () => ({ authSessionGeneration: 7, contextRevision: 3 })),
-      startInputSession: vi.fn(
-        async (
-          input: { source: string; purpose: string; activation: string },
-          context: { authSessionGeneration: number; contextRevision: number }
-        ) => ({
-          ok: true as const,
-          lease: {
-            sessionId: (++inputSessionCounter).toString(16).padStart(48, '0'),
-            source: input.source,
-            purpose: input.purpose,
-            activation: input.activation,
-            authSessionGeneration: context.authSessionGeneration,
-            contextRevision: context.contextRevision,
-            revision: 1,
-            startedAt: Date.now(),
-            actionAuthority: false
-          }
-        })
-      ),
+      getInputSessionContext: vi.fn(async () => inputContext),
+      startInputSession,
       confirmInputSession: vi.fn(async () => true),
-      stopInputSession: vi.fn(async () => ({ ok: true as const })),
+      stopInputSession,
       onInputSessionRevoked: vi.fn(() => () => {})
     },
     addEventListener: (type: string, fn: unknown, capture: unknown) => {
@@ -210,7 +233,15 @@ beforeEach(() => {
       if (i >= 0) keyListeners.splice(i, 1)
     }
   })
-  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: (c: unknown) => getUserMedia(c) } })
+  vi.stubGlobal('navigator', {
+    mediaDevices: {
+      getUserMedia: (c: unknown) => getUserMedia(c),
+      addEventListener: (type: string, listener: unknown) => mediaListeners.push({ type, listener }),
+      removeEventListener: (type: string, listener: unknown) => {
+        mediaListeners = mediaListeners.filter((entry) => entry.type !== type || entry.listener !== listener)
+      }
+    }
+  })
   vi.stubGlobal('AudioContext', FakeAudioContext)
   vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
 })
@@ -317,5 +348,75 @@ describe('MQA-084 — useTapControl does not re-acquire the mic on settings chur
     expect(trackStops).toBe(1)
     expect(contextCloses).toBe(1)
     expect(keyListeners.filter((l) => l.type === 'keydown')).toHaveLength(0)
+  })
+
+  it.each([
+    'disarm',
+    'unmount'
+  ] as const)('releases the exact admitted lease before late media resolves on %s', async (cleanup) => {
+    const pendingMedia = deferred<unknown>()
+    getUserMedia = vi.fn(() => pendingMedia.promise)
+    const onZone = vi.fn()
+    const args: UseArgs = { active: true, profile: makeProfile(), sensitivity: 0.5, onZone }
+
+    render(args)
+    await settle()
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    const expectedLeaseId = inputSessionCounter.toString(16).padStart(48, '0')
+    expect(startInputSession).toHaveBeenCalledTimes(1)
+    expect(startInputSession.mock.calls[0]?.[1]).toBe(inputContext)
+
+    if (cleanup === 'disarm') render({ ...args, active: false })
+    else host.unmount()
+    await settle()
+
+    expect(stopInputSession).toHaveBeenCalledWith({ sessionId: expectedLeaseId }, inputContext)
+    expect(workletNodes).toBe(0)
+    expect(mediaListeners).toHaveLength(0)
+    expect(onZone).not.toHaveBeenCalled()
+
+    pendingMedia.resolve(okStream())
+    await settle()
+    await settle()
+
+    expect(trackStops).toBe(1)
+    expect(workletNodes).toBe(0)
+    expect(keyListeners.filter((listener) => listener.type === 'keydown')).toHaveLength(0)
+    expect(mediaListeners).toHaveLength(0)
+    expect(onZone).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'disarm',
+    'unmount'
+  ] as const)('releases a late exact grant without opening media on %s', async (cleanup) => {
+    const pendingGrant = deferred<unknown>()
+    startInputSession.mockImplementation(() => pendingGrant.promise)
+    const onZone = vi.fn()
+    const args: UseArgs = { active: true, profile: makeProfile(), sensitivity: 0.5, onZone }
+
+    render(args)
+    await settle()
+    expect(startInputSession).toHaveBeenCalledTimes(1)
+    expect(getUserMedia).not.toHaveBeenCalled()
+
+    if (cleanup === 'disarm') render({ ...args, active: false })
+    else host.unmount()
+    await settle()
+    expect(stopInputSession).not.toHaveBeenCalled()
+
+    const grantInput = { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' }
+    const leaseId = 'f'.repeat(48)
+    pendingGrant.resolve({ ok: true, lease: inputLease(grantInput, inputContext, leaseId) })
+    await settle()
+    await settle()
+
+    expect(stopInputSession).toHaveBeenCalledTimes(1)
+    expect(stopInputSession).toHaveBeenCalledWith({ sessionId: leaseId }, inputContext)
+    expect(getUserMedia).not.toHaveBeenCalled()
+    expect(workletNodes).toBe(0)
+    expect(keyListeners.filter((listener) => listener.type === 'keydown')).toHaveLength(0)
+    expect(mediaListeners).toHaveLength(0)
+    expect(onZone).not.toHaveBeenCalled()
   })
 })

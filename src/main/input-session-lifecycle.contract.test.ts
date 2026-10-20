@@ -4,8 +4,6 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const listenSource = readFileSync(join(__dirname, '../renderer/src/lib/listen.ts'), 'utf8')
-const tapSource = readFileSync(join(__dirname, '../renderer/src/lib/tap/tap-control.ts'), 'utf8')
-const tapCardSource = readFileSync(join(__dirname, '../renderer/src/features/settings/TapControlCard.tsx'), 'utf8')
 
 function declarationIn(sourceText: string, name: string): string {
   const start = sourceText.indexOf('function ' + name + '(')
@@ -410,12 +408,8 @@ describe('input-session lifecycle revocation wiring', () => {
     expect(forcedCloudStop).toBeGreaterThan(failAdmittedCapture)
   })
 
-  it('makes pending interactive capture abortable and releases on devicechange', () => {
-    // Abort, devicechange, and revocation handling are covered behaviorally in input-mic-admission.test.ts.
+  it('retains the Listen acquisition abort contract', () => {
+    // Listen remains guarded here; shared admission behavior is covered by input-mic-admission.test.ts.
     expect(listenSource).toContain('micAcquisitionAbortRef.current?.abort()')
-    expect(tapSource).toContain('signal: acquisitionAbort.signal')
-    expect(tapSource).toContain('acquisitionAbortRef.current?.abort()')
-    expect(tapCardSource).toContain('signal: captureAbort.signal')
-    expect(tapCardSource).toContain('captureAbortRef.current?.abort()')
   })
 })
