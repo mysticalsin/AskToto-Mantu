@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
-import type { Browser, Page } from 'playwright'
+import type { Browser, BrowserContext, Page } from 'playwright'
 import { build, type Rollup } from 'vite'
 import react from '@vitejs/plugin-react'
 import type {
@@ -297,22 +297,143 @@ describe('SpeechPackSection browser behavior', () => {
   let page: Page
   let bundle: string
 
+  const diagnosticsEnabled = process.env.METIS_BROWSER_TEARDOWN_DIAGNOSTICS === '1'
+  const contextIds = new WeakMap<BrowserContext, string>()
+  const pageIds = new WeakMap<Page, string>()
+  const observedContexts = new WeakSet<BrowserContext>()
+  const observedPages = new WeakSet<Page>()
+  const closedContexts = new WeakSet<BrowserContext>()
+  let nextContextId = 1
+  let nextPageId = 1
+  let snapshotCaptureFailures = 0
+
+  const contextId = (context: BrowserContext): string => {
+    let id = contextIds.get(context)
+    if (!id) {
+      id = `context-${nextContextId++}`
+      contextIds.set(context, id)
+    }
+    return id
+  }
+
+  const pageId = (targetPage: Page): string => {
+    let id = pageIds.get(targetPage)
+    if (!id) {
+      id = `page-${nextPageId++}`
+      pageIds.set(targetPage, id)
+    }
+    return id
+  }
+
+  const recordLifecycle = (stage: string, observedPage?: Page): void => {
+    if (!diagnosticsEnabled) return
+
+    try {
+      const contexts = browser?.contexts() ?? []
+      const contextState = contexts.map((context) => {
+        const pages = context.pages()
+        return {
+          id: contextId(context),
+          closed: closedContexts.has(context),
+          pageCount: pages.length,
+          pages: pages.map((ownedPage) => ({ id: pageId(ownedPage), closed: ownedPage.isClosed() }))
+        }
+      })
+      const observedContext = observedPage?.context()
+      const observedPages = observedContext?.pages() ?? []
+      const observedState =
+        observedPage && observedContext
+          ? {
+              id: pageId(observedPage),
+              closed: observedPage.isClosed(),
+              contextId: contextId(observedContext),
+              contextClosed: closedContexts.has(observedContext),
+              contextPageCount: observedPages.length,
+              contextPages: observedPages.map((ownedPage) => ({ id: pageId(ownedPage), closed: ownedPage.isClosed() }))
+            }
+          : null
+
+      process.stderr.write(
+        `METIS_BROWSER_TEARDOWN_DIAGNOSTIC ${JSON.stringify({
+          stage,
+          monotonicNs: process.hrtime.bigint().toString(),
+          browserConnected: browser?.isConnected() ?? null,
+          contextCount: contexts.length,
+          contexts: contextState,
+          observedPage: observedState,
+          priorSnapshotCaptureFailures: snapshotCaptureFailures
+        })}\n`
+      )
+    } catch {
+      snapshotCaptureFailures += 1
+      try {
+        process.stderr.write(
+          `METIS_BROWSER_TEARDOWN_DIAGNOSTIC ${JSON.stringify({
+            stage: 'snapshot-capture-failed',
+            atStage: stage,
+            monotonicNs: process.hrtime.bigint().toString(),
+            snapshotCaptureFailures
+          })}\n`
+        )
+      } catch {
+        // Diagnostics must not replace a browser lifecycle result.
+      }
+    }
+  }
+
+  const observeOwnedPage = (ownedPage: Page): void => {
+    if (!diagnosticsEnabled) return
+
+    const context = ownedPage.context()
+    if (!observedPages.has(ownedPage)) {
+      observedPages.add(ownedPage)
+      ownedPage.once('close', () => recordLifecycle('page-close-event', ownedPage))
+    }
+    if (!observedContexts.has(context)) {
+      observedContexts.add(context)
+      context.once('close', () => {
+        closedContexts.add(context)
+        recordLifecycle('context-close-event', ownedPage)
+      })
+    }
+  }
+
   beforeAll(async () => {
     bundle = await bundleHarness()
     const { chromium } = await import('playwright')
     browser = await chromium.launch({ headless: true })
+    if (diagnosticsEnabled) {
+      browser.once('disconnected', () => recordLifecycle('browser-disconnected'))
+      recordLifecycle('browser-launch-completed')
+    }
   }, 120_000)
 
   beforeEach(async () => {
     page = await browser.newPage()
+    observeOwnedPage(page)
+    recordLifecycle('page-allocated', page)
   })
 
   afterEach(async () => {
-    await page?.close()
+    recordLifecycle('page-close-start', page)
+    try {
+      await page?.close()
+      recordLifecycle('page-close-settled', page)
+    } catch (error) {
+      recordLifecycle('page-close-rejected', page)
+      throw error
+    }
   })
 
   afterAll(async () => {
-    await browser?.close()
+    recordLifecycle('browser-close-start')
+    try {
+      await browser?.close()
+      recordLifecycle('browser-close-settled')
+    } catch (error) {
+      recordLifecycle('browser-close-rejected')
+      throw error
+    }
   })
 
   async function mount(config: HarnessConfig): Promise<void> {
