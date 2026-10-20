@@ -417,12 +417,17 @@ export function buildBrainContextWithSources(s: Settings, text: string): BrainCo
         sourceRootId: receipt.sourceRootId!,
         sourceDigest: receipt.sourceDigest!
       }
-      if (
-        sourceReferences.some(
-          (existing) => existing.source === item.source && existing.sourceRootId === item.sourceRootId
-        )
+      const existingIndex = sourceReferences.findIndex(
+        (existing) => existing.source === item.source && existing.sourceRootId === item.sourceRootId
       )
+      if (existingIndex >= 0) {
+        const existing = sourceReferences[existingIndex]
+        if (kind === 'provenance' && existing.kind === 'meeting') {
+          // A rendered field is more specific than the generic contributor for the same source.
+          sourceReferences[existingIndex] = item
+        }
         continue
+      }
       if (sourceReferences.length >= MAX_BRAIN_CONTEXT_SOURCE_REFERENCES) {
         sourceReferencesComplete = false
         continue

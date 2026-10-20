@@ -232,6 +232,141 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     expect(result.sourceReferencesComplete).toBe(true)
   })
 
+  it('preserves rendered role provenance when a later account contributes the same source', async () => {
+    const source = 'shared-role-sector.md'
+    const fieldDate = '2026-05-20'
+    const genericDate = '2026-06-01'
+    const sharedMeeting = { file: source, date: genericDate, title: 'Shared review', sourceRootId: ROOT }
+    const person = PersonEntitySchema.parse({
+      id: 'collision-person-first',
+      name: 'Collision Person First',
+      meetings: [sharedMeeting],
+      role_provenance: {
+        value: 'Verified role',
+        source_file: source,
+        date: fieldDate,
+        confidence: 'EXTRACTED',
+        state: 'verified'
+      }
+    })
+    const account = AccountEntitySchema.parse({
+      id: 'collision-account-later',
+      name: 'Collision Account Later',
+      meetings: [sharedMeeting]
+    })
+    await writePerson(s, person.id, person)
+    await writeAccount(s, account.id, account)
+    await seedReceipts([source])
+
+    const result = buildBrainContextWithSources(s, 'Summarize Collision Person First and Collision Account Later.')
+    expect(result.block).toContain('Verified role [' + source + ', ' + fieldDate + ']')
+    expect(
+      result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
+    ).toEqual([refFor('provenance', source, fieldDate)])
+    expect(result.sourceReferencesComplete).toBe(true)
+  })
+
+  it('promotes an earlier person meeting contributor when an account renders verified sector provenance', async () => {
+    const source = 'shared-person-account.md'
+    const fieldDate = '2026-05-21'
+    const genericDate = '2026-06-02'
+    const sharedMeeting = { file: source, date: genericDate, title: 'Shared review', sourceRootId: ROOT }
+    const person = PersonEntitySchema.parse({
+      id: 'collision-person-generic',
+      name: 'Collision Person Generic',
+      meetings: [sharedMeeting]
+    })
+    const account = AccountEntitySchema.parse({
+      id: 'collision-account-verified',
+      name: 'Collision Account Verified',
+      sector_provenance: {
+        value: 'banking',
+        source_file: source,
+        date: fieldDate,
+        confidence: 'EXTRACTED',
+        state: 'verified'
+      },
+      meetings: [MEETING]
+    })
+    await writePerson(s, person.id, person)
+    await writeAccount(s, account.id, account)
+    await seedReceipts([source, MEETING.file])
+
+    const result = buildBrainContextWithSources(s, 'Summarize Collision Person Generic and Collision Account Verified.')
+    expect(result.block).toContain('banking [' + source + ', ' + fieldDate + ']')
+    expect(
+      result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
+    ).toEqual([refFor('provenance', source, fieldDate)])
+    expect(result.sourceReferencesComplete).toBe(true)
+  })
+
+  it('promotes an existing source reference at the 64-source limit without taking another slot', async () => {
+    const fieldDate = '2026-05-22'
+    const meetings = Array.from({ length: 64 }, (_, index) => ({
+      file: 'budget-source-' + index + '.md',
+      date: '2026-06-03',
+      title: 'Budget review ' + index,
+      sourceRootId: ROOT
+    }))
+    const source = meetings[0].file
+    const person = PersonEntitySchema.parse({
+      id: 'budget-person-64',
+      name: 'Budget Person Sixty Four',
+      meetings,
+      role_provenance: {
+        value: 'Verified budget role',
+        source_file: source,
+        date: fieldDate,
+        confidence: 'EXTRACTED',
+        state: 'verified'
+      }
+    })
+    await writePerson(s, person.id, person)
+    await seedReceipts(meetings.map((meeting) => meeting.file))
+
+    const result = buildBrainContextWithSources(s, 'Summarize Budget Person 64.')
+    expect(result.block).toContain('Verified budget role [' + source + ', ' + fieldDate + ']')
+    expect(result.sourceReferences).toHaveLength(64)
+    expect(
+      result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
+    ).toEqual([refFor('provenance', source, fieldDate)])
+    expect(result.sourceReferencesComplete).toBe(true)
+  })
+
+  it('keeps the genuine 65th contributor incomplete while promoting a source inside the 64-slot budget', async () => {
+    const fieldDate = '2026-05-23'
+    const meetings = Array.from({ length: 65 }, (_, index) => ({
+      file: 'budget-overflow-source-' + index + '.md',
+      date: '2026-06-04',
+      title: 'Budget overflow review ' + index,
+      sourceRootId: ROOT
+    }))
+    const source = meetings[0].file
+    const person = PersonEntitySchema.parse({
+      id: 'budget-person-65',
+      name: 'Budget Person Sixty Five',
+      meetings,
+      role_provenance: {
+        value: 'Verified overflow role',
+        source_file: source,
+        date: fieldDate,
+        confidence: 'EXTRACTED',
+        state: 'verified'
+      }
+    })
+    await writePerson(s, person.id, person)
+    await seedReceipts(meetings.map((meeting) => meeting.file))
+
+    const result = buildBrainContextWithSources(s, 'Summarize Budget Person 65.')
+    expect(result.block).toContain('Verified overflow role [' + source + ', ' + fieldDate + ']')
+    expect(result.sourceReferences).toHaveLength(64)
+    expect(result.sourceReferences.length).toBeLessThanOrEqual(64)
+    expect(
+      result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
+    ).toEqual([refFor('provenance', source, fieldDate)])
+    expect(result.sourceReferencesComplete).toBe(false)
+  })
+
   it('omits plain role, organization, sector, stage, and band values without renderable provenance', async () => {
     const person = PersonEntitySchema.parse({
       id: 'unproven-person',
