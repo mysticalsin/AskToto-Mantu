@@ -1,7 +1,12 @@
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createRelaunchHarness, KILL_STAGES, readRaw, type RelaunchHarness } from '../../test-helpers/relaunch-harness'
+import {
+  createRelaunchHarness,
+  KILL_STAGES,
+  readRaw,
+  type RelaunchHarness
+} from '../../../test-helpers/relaunch-harness'
 
 vi.mock('electron')
 const unlinkFault = vi.hoisted(() => ({ path: '' }))

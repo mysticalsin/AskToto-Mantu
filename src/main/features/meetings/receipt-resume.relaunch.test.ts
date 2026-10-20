@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createRelaunchHarness, readRaw, type RelaunchHarness } from '../../test-helpers/relaunch-harness'
+import { createRelaunchHarness, readRaw, type RelaunchHarness } from '../../../test-helpers/relaunch-harness'
 
 vi.mock('electron')
 

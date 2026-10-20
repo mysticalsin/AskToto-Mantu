@@ -65,16 +65,16 @@ export async function createRelaunchHarness(startedAt: number, sharedFolder?: st
 
   const freshProcess = async () => {
     vi.resetModules()
-    const storage = await import('../infra/storage/meetings-storage')
+    const storage = await import('../main/infra/storage/meetings-storage')
     storage.useStorageForTests()
     return {
-      transcripts: await import('../transcripts'),
-      writeState: await import('../infra/storage/draft-transcript-write-state'),
-      store: await import('../features/meetings/transcript-revision-store'),
-      checkpoint: await import('../features/meetings/transcript-checkpoint-main'),
-      binding: await import('../features/meetings/transcript-checkpoint-binding'),
-      recovery: await import('../features/meetings/draft-recovery'),
-      document: await import('../features/meetings/meeting-document')
+      transcripts: await import('../main/transcripts'),
+      writeState: await import('../main/infra/storage/draft-transcript-write-state'),
+      store: await import('../main/features/meetings/transcript-revision-store'),
+      checkpoint: await import('../main/features/meetings/transcript-checkpoint-main'),
+      binding: await import('../main/features/meetings/transcript-checkpoint-binding'),
+      recovery: await import('../main/features/meetings/draft-recovery'),
+      document: await import('../main/features/meetings/meeting-document')
     }
   }
 
