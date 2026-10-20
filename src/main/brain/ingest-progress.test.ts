@@ -264,7 +264,7 @@ describe('backfill progress bookkeeping across runs', () => {
     const path = join(meetingsFolder, file)
     writeFileSync(path, '---\ndate: 2026-01-05\n---\nAcme asked for a follow-up.', 'utf8')
     const sourceDigest = createHash('sha256').update(readFileSync(path)).digest('hex')
-    const sourceRootId = createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+    const sourceRootId = createHash('sha256').update(realpathSync.native(meetingsFolder), 'utf8').digest('hex')
     await writeMeetingExtraction(
       getSettings(),
       slugify(file),
@@ -337,9 +337,9 @@ describe('backfill progress bookkeeping across runs', () => {
     writeFileSync(path, original, 'utf8')
 
     const savedDigest = createHash('sha256').update(readFileSync(path)).digest('hex')
-    const meetingsRootId = createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+    const meetingsRootId = createHash('sha256').update(realpathSync.native(meetingsFolder), 'utf8').digest('hex')
     const savedRootId = foreignRoot
-      ? createHash('sha256').update(realpathSync(userData), 'utf8').digest('hex')
+      ? createHash('sha256').update(realpathSync.native(userData), 'utf8').digest('hex')
       : meetingsRootId
     await writeMeetingExtraction(
       getSettings(),
@@ -355,7 +355,7 @@ describe('backfill progress bookkeeping across runs', () => {
     if (changedBytes) writeFileSync(path, `${original}\nAdditional synthetic text after checkpoint seeding.`, 'utf8')
 
     const currentDigest = createHash('sha256').update(readFileSync(path)).digest('hex')
-    const currentRootId = createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+    const currentRootId = createHash('sha256').update(realpathSync.native(meetingsFolder), 'utf8').digest('hex')
     const { createStream } = await import('../llm')
     const providerCallsBefore = vi.mocked(createStream).mock.calls.length
 
