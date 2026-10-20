@@ -155,23 +155,46 @@ describe('MeetingMicCaptureAuthority', () => {
   })
 
   it('revokes pending grants on hide and preserves established meeting streams', () => {
-    const env = setup()
-    env.authority.admit(topFrame(), 654)
-    expect(env.authority.claimPermissionRequest(topFrame())).toBe(true)
-    expect(env.authority.confirm(topFrame(), captureA, 654)).toBe(true)
-    env.setNextCaptureId(captureB)
-    env.authority.admit(topFrame(), 654)
-    expect(env.authority.claimPermissionRequest(topFrame())).toBe(true)
+    const established = setup()
+    expect(established.authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+    expect(established.authority.claimPermissionRequest(topFrame())).toBe(true)
+    expect(established.authority.confirm(topFrame(), captureA, 654)).toBe(true)
 
-    env.authority.revokePending('window-hidden')
+    const pending = setup()
+    pending.setNextCaptureId(captureB)
+    expect(pending.authority.admit(topFrame(), 654)).toEqual({ captureId: captureB, startedAt: 654 })
+    expect(pending.authority.claimPermissionRequest(topFrame())).toBe(true)
+    expect(pending.authority.hasPermissionCheckOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(
+      true
+    )
 
-    expect(env.onRevoked).toHaveBeenCalledTimes(1)
-    expect(env.onRevoked).toHaveBeenCalledWith(
+    pending.setCurrent({ isWindowVisible: false })
+    pending.authority.revokePending('window-hidden')
+
+    expect(pending.onRevoked).toHaveBeenCalledTimes(1)
+    expect(pending.onRevoked).toHaveBeenCalledWith(
       expect.objectContaining({ captureId: captureB, startedAt: 654, state: 'permission-authorized' }),
       'window-hidden'
     )
-    expect(env.authority.release(41, captureA)).toBe(true)
-    expect(env.onRevoked).toHaveBeenCalledTimes(1)
+    pending.setCurrent({ isWindowVisible: true })
+    expect(pending.authority.hasPermissionRequestOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(
+      false
+    )
+    expect(pending.authority.hasPermissionCheckOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(
+      false
+    )
+    expect(pending.authority.claimPermissionRequest(topFrame())).toBe(false)
+    expect(pending.authority.confirm(topFrame(), captureB, 654)).toBe(false)
+    expect(pending.authority.release(41, captureB)).toBe(false)
+    pending.authority.revokePending('window-hidden')
+    expect(pending.onRevoked).toHaveBeenCalledTimes(1)
+
+    established.setCurrent({ isWindowVisible: false })
+    established.authority.revokePending('window-hidden')
+    expect(established.onRevoked).not.toHaveBeenCalled()
+    expect(established.authority.release(41, captureA)).toBe(true)
+    expect(established.authority.release(41, captureA)).toBe(false)
+    expect(established.onRevoked).not.toHaveBeenCalled()
   })
 
   it('rejects a second capture while an established grant remains and admits after exact release', () => {
@@ -214,5 +237,30 @@ describe('MeetingMicCaptureAuthority', () => {
       'owner-replaced'
     )
     expect(env.authority.release(41, captureB)).toBe(true)
+  })
+
+  it('revokes a pre-permission pending capture on hide', () => {
+    const env = setup()
+    expect(env.authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+    expect(env.authority.hasPermissionRequestOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(true)
+
+    env.setCurrent({ isWindowVisible: false })
+    env.authority.revokePending('window-hidden')
+
+    expect(env.onRevoked).toHaveBeenCalledTimes(1)
+    expect(env.onRevoked).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: captureA, startedAt: 654, state: 'pending' }),
+      'window-hidden'
+    )
+    env.setCurrent({ isWindowVisible: true })
+    expect(env.authority.hasPermissionRequestOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(
+      false
+    )
+    expect(env.authority.hasPermissionCheckOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(false)
+    expect(env.authority.claimPermissionRequest(topFrame())).toBe(false)
+    expect(env.authority.confirm(topFrame(), captureA, 654)).toBe(false)
+    expect(env.authority.release(41, captureA)).toBe(false)
+    env.authority.revokePending('window-hidden')
+    expect(env.onRevoked).toHaveBeenCalledTimes(1)
   })
 })
