@@ -902,8 +902,14 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
 
   it.each(['meeting', 'folder'] as const)('does not wait for another %s draft', async (different) => {
     const otherSettings = different === 'folder' ? { ...settings, meetingsFolder: join(folder, 'other') } : settings
-    const other = different === 'meeting' ? { ...meeting, startedAt: meeting.startedAt + 500 } : meeting
-    await saveDraftTranscript(otherSettings, other)
+    const otherStartedAt = meeting.startedAt + 500
+    const other: SaveMeeting = {
+      ...meeting,
+      startedAt: otherStartedAt,
+      lines: meeting.lines.map((line) => ({ ...line, t: line.t - meeting.startedAt + otherStartedAt }))
+    }
+    expect(other.startedAt).not.toBe(meeting.startedAt)
+    await expect(saveDraftTranscript(otherSettings, other)).resolves.toEqual({ status: 'saved' })
     const otherDrafts = readdirSync(otherSettings.meetingsFolder).filter(
       (file) => file.startsWith('.autosave-draft-') && file.endsWith('.md')
     )
@@ -912,16 +918,21 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     const held = holdDraftRename()
     const draft = saveDraftTranscript(settings, meeting)
     const draftPath = await held.entered
+    let draftResult: Awaited<ReturnType<typeof saveDraftTranscript>> | undefined
     try {
+      expect(draftPath).not.toBe(otherDraftPath)
       await clearDraftTranscript(otherSettings, other.startedAt)
-      expect(existsSync(draftPath)).toBe(false)
       expect(existsSync(otherDraftPath)).toBe(false)
+      expect(existsSync(draftPath)).toBe(false)
+      expect(vi.mocked(unlinkAsync).mock.calls.some(([file]) => String(file) === draftPath)).toBe(false)
     } finally {
       held.release()
-      await draft
+      draftResult = await draft
     }
+    expect(draftResult).toEqual({ status: 'saved' })
     expect(existsSync(draftPath)).toBe(true)
     await clearDraftTranscript(settings, meeting.startedAt)
+    expect(existsSync(draftPath)).toBe(false)
   })
 
   it('keeps a finalized meeting path sealed after cleanup', async () => {
