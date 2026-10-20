@@ -88,8 +88,7 @@ export const ProviderIdSchema = z.enum([
   'custom'
 ])
 
-// Compile-time parity guard: ProviderIdSchema (this enum) must match the ProviderId union in
-// providers.ts exactly. If either side drifts, this assignment fails to typecheck.
+// ProviderIdSchema must match ProviderId in providers.ts exactly; drift fails this compile-time parity guard.
 type _ProviderIdEnum = z.infer<typeof ProviderIdSchema>
 const _providerIdParity: [_ProviderIdEnum] extends [ProviderId]
   ? [ProviderId] extends [_ProviderIdEnum]

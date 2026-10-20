@@ -223,6 +223,18 @@ describe('applyRevisionEvent', () => {
     expect(revised.next.segments[0]).toMatchObject({ text: 'better', state: 'final', providerSeq: 2 })
   })
 
+  it('provider-retract never erases a user correction', () => {
+    const rev = run([
+      final({ providerSeq: 1 }),
+      { kind: 'user-correct', baseRevision: 1, segmentId: 'seg-0', text: 'mine' }
+    ])
+    expect(apply(rev, { kind: 'provider-retract', relaySessionId: 'r1', providerSeq: 2, segmentId: 'seg-0' })).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
+    expect(rev.segments[0]).toMatchObject({ state: 'corrected', source: 'user', text: 'mine' })
+  })
+
   it('multi language resolves to the current language', () => {
     const empty = run([final({ providerSeq: 1, language: 'multi' })])
     expect(empty.segments[0].language).toBe('und')

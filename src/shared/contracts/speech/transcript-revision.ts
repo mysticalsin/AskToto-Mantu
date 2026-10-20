@@ -249,7 +249,7 @@ function reduceProviderEdit(rev: TranscriptRevision, ev: ProviderEditEvent): Can
   const target = rev.segments[index]
   if (ev.providerSeq <= lastProviderSeq(rev, ev.relaySessionId, target.channel)) return 'duplicate'
   if (target.state === 'retracted') return ev.kind === 'provider-retract' ? 'duplicate' : 'invalid'
-  if (ev.kind === 'provider-revise' && target.source === 'user') return 'invalid'
+  if (target.source === 'user') return 'invalid'
   // Only the producing relay session may advance its own dedupe cursor.
   const seqPatch = target.relaySessionId === ev.relaySessionId ? { providerSeq: ev.providerSeq } : {}
   const next = freezeSegment(
