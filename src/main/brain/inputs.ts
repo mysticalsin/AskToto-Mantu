@@ -5,15 +5,15 @@
  * the storage gateway has classified the file as local.
  */
 import { getMeetingSpeechReadLimitBytes, publicMeetingTextAsync } from '../features/meetings/meeting-speech'
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { realpath } from 'node:fs/promises'
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import type { BrainIndex } from '@shared/brain'
 import { fnv1a } from '@shared/hash'
 import { storageAt, classifyAll } from '../infra/storage/meetings-storage'
 import type { ContentVersion, StorageGateway } from '../infra/storage/gateway'
+import { canonicalPathSync, readStableRegularFileSync } from '../infra/storage/stable-read-sync'
 import { decodeSavedMeetingAsync, resolveMeetingsFolder } from '../transcripts'
 import { mainLog } from '../logger'
 import { brainDir, readIndex, slugify } from './store'
@@ -303,11 +303,8 @@ export function areBrainContextSourcesCurrent(
     if (!receipt?.ok || receipt.sourceRootId !== ref.sourceRootId || receipt.sourceDigest !== ref.sourceDigest)
       return false
     const matches = roots.filter(({ root, source }) => {
-      try {
-        if (createHash('sha256').update(realpathSync(root), 'utf8').digest('hex') !== ref.sourceRootId) return false
-      } catch {
-        return false
-      }
+      const canonical = canonicalPathSync(root)
+      if (!canonical || createHash('sha256').update(canonical, 'utf8').digest('hex') !== ref.sourceRootId) return false
       if (source === 'meetings') return basename(ref.source) === ref.source && !ref.source.includes('\\')
       const key = ref.source.match(/^team\/([^/]+)\/([^/]+)$/)
       return !!key && key[2] === basename(key[2]) && !key[2].includes('\\') && key[1] === (basename(root) || 'team')
@@ -322,73 +319,14 @@ export function areBrainContextSourcesCurrent(
     const name = basename(ref.source)
     if (!isMeetingTranscriptFile(name)) return false
     const root = uniqueRoots[0]!
-    const file = join(root, name)
     const maxBytes = getMeetingSpeechReadLimitBytes()
     if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 1) return false
-    let fd: number | undefined
-    try {
-      const canonicalRoot = realpathSync(root)
-      const canonicalFile = realpathSync(file)
-      const relativePath = relative(canonicalRoot, canonicalFile)
-      if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath))
-        return false
-      const pathBefore = lstatSync(file)
-      if (pathBefore.isSymbolicLink() || !pathBefore.isFile() || pathBefore.size < 1 || pathBefore.size > maxBytes)
-        return false
-      // The path may be swapped after lstat. Nonblocking open prevents a regular-file-to-FIFO race from
-      // hanging Main; NOFOLLOW rejects a symlink replacement at the open boundary where supported.
-      fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
-      const before = fstatSync(fd)
-      if (
-        !before.isFile() ||
-        before.dev !== pathBefore.dev ||
-        before.ino !== pathBefore.ino ||
-        before.size !== pathBefore.size ||
-        before.mtimeMs !== pathBefore.mtimeMs ||
-        before.ctimeMs !== pathBefore.ctimeMs
-      )
-        return false
-      const bytes = Buffer.allocUnsafe(before.size)
-      let offset = 0
-      while (offset < bytes.length) {
-        const count = readSync(fd, bytes, offset, bytes.length - offset, offset)
-        if (count <= 0) return false
-        offset += count
-      }
-      const after = fstatSync(fd)
-      const pathAfter = lstatSync(file)
-      if (
-        pathAfter.isSymbolicLink() ||
-        !pathAfter.isFile() ||
-        after.dev !== before.dev ||
-        after.ino !== before.ino ||
-        after.size !== before.size ||
-        after.mtimeMs !== before.mtimeMs ||
-        after.ctimeMs !== before.ctimeMs ||
-        pathAfter.dev !== after.dev ||
-        pathAfter.ino !== after.ino ||
-        pathAfter.size !== after.size ||
-        pathAfter.mtimeMs !== after.mtimeMs ||
-        pathAfter.ctimeMs !== after.ctimeMs ||
-        realpathSync(root) !== canonicalRoot ||
-        realpathSync(file) !== canonicalFile ||
-        createHash('sha256').update(realpathSync(root), 'utf8').digest('hex') !== ref.sourceRootId
-      )
-        return false
-      totalBytes += bytes.length
-      if (totalBytes > MAX_BRAIN_CONTEXT_SOURCE_BYTES) return false
-      if (createHash('sha256').update(bytes).digest('hex') !== ref.sourceDigest) return false
-    } catch {
-      return false
-    } finally {
-      if (fd !== undefined) {
-        try {
-          closeSync(fd)
-        } catch {
-          /* failed close cannot validate a source */
-        }
-      }
-    }
+    const read = readStableRegularFileSync(root, name, maxBytes)
+    if (read.status !== 'ok') return false
+    if (createHash('sha256').update(read.canonicalRoot, 'utf8').digest('hex') !== ref.sourceRootId) return false
+    totalBytes += read.bytes.length
+    if (totalBytes > MAX_BRAIN_CONTEXT_SOURCE_BYTES) return false
+    if (createHash('sha256').update(read.bytes).digest('hex') !== ref.sourceDigest) return false
   }
   return true
 }
