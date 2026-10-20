@@ -53,7 +53,7 @@ import { operatorVisionModel } from '@shared/operator-vision'
 import { TranscriptSaveReceiptStore, type TranscriptSaveSideEffect } from './transcript-save-receipts'
 import { InputSessionAuthority } from './input-session-authority'
 import { installInputMicPermissionHandlers } from './input-mic-permissions'
-import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
+import { MeetingMicCaptureAuthority, bindMeetingMicRendererReset } from './meeting-mic-capture-authority'
 import {
   MEETING_START_ACTION,
   MeetingStartActivationAuthority,
@@ -3387,6 +3387,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
     if (win === self && isMainFrame && !isInPlace) hardStopInputSession('owner-replaced')
   })
+  bindMeetingMicRendererReset(win.webContents, meetingMicCaptureAuthority)
   // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer console warnings/errors into the
   // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
   if (process.env.ASKTOTO_DEBUG_RENDERER) {

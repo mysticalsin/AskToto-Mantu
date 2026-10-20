@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { InputSessionContext, InputSessionStopReason } from '@shared/input-session'
-import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
+import { MeetingMicCaptureAuthority, bindMeetingMicRendererReset } from './meeting-mic-capture-authority'
 
 const context: InputSessionContext = { authSessionGeneration: 7, contextRevision: 12 }
 const currentState = () => ({
@@ -313,5 +313,126 @@ describe('MeetingMicCaptureAuthority', () => {
     expect(currentStateReader.mock.calls.length).toBe(readsBefore)
     expect(onRevoked).not.toHaveBeenCalled()
     expect(state.meetingStartedAt).toBe(654)
+  })
+
+  function establish(authority: MeetingMicCaptureAuthority) {
+    expect(authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+    expect(authority.claimPermissionRequest(topFrame())).toBe(true)
+    expect(authority.confirm(topFrame(), captureA, 654)).toBe(true)
+  }
+
+  it('revokePending preserves an established owner', () => {
+    const { authority, onRevoked } = setup()
+    establish(authority)
+    authority.revokePending('owner-replaced')
+    expect(onRevoked).not.toHaveBeenCalled()
+    expect(authority.release(41, captureA)).toBe(true)
+  })
+
+  it('revokePending revokes a permission-authorized owner', () => {
+    const { authority, onRevoked } = setup()
+    expect(authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+    expect(authority.claimPermissionRequest(topFrame())).toBe(true)
+    authority.revokePending('owner-replaced')
+    expect(onRevoked).toHaveBeenCalledTimes(1)
+    expect(onRevoked).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: captureA, state: 'permission-authorized' }),
+      'owner-replaced'
+    )
+    expect(authority.release(41, captureA)).toBe(false)
+  })
+
+  it('renderer reset frees the physical owner', () => {
+    const { authority, onRevoked } = setup()
+    establish(authority)
+    authority.revokeWebContents(41, 'renderer-reset')
+    expect(onRevoked).toHaveBeenCalledTimes(1)
+    expect(onRevoked).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: captureA, state: 'established' }),
+      'renderer-reset'
+    )
+    expect(authority.release(41, captureA)).toBe(false)
+    expect(authority.admit(topFrame(), 654)).toEqual({ captureId: captureB, startedAt: 654 })
+  })
+
+  it('revokeWebContents does not touch other webContents', () => {
+    const { authority, onRevoked, setCurrent } = setup()
+    expect(authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+    setCurrent({ mainWebContentsId: 42 })
+    expect(authority.admit({ ...topFrame(), webContentsId: 42 }, 654)).toEqual({
+      captureId: captureB,
+      startedAt: 654
+    })
+    authority.revokeWebContents(42, 'renderer-reset')
+    expect(onRevoked).toHaveBeenCalledTimes(1)
+    expect(onRevoked).toHaveBeenCalledWith(expect.objectContaining({ captureId: captureB }), 'renderer-reset')
+    expect(authority.release(41, captureA)).toBe(true)
+  })
+
+  it('rejects a second capture after a context revision change while established', () => {
+    const { authority, setCurrent } = setup()
+    establish(authority)
+    setCurrent({ context: { authSessionGeneration: 7, contextRevision: 13 } })
+    expect(authority.admit(topFrame(), 654)).toBeNull()
+    expect(authority.release(41, captureA)).toBe(true)
+    expect(authority.admit(topFrame(), 654)).toEqual({ captureId: captureB, startedAt: 654 })
+  })
+})
+
+describe('bindMeetingMicRendererReset', () => {
+  type Listener = (...args: unknown[]) => void
+
+  function fakeContents(id: number) {
+    const listeners = new Map<string, Listener[]>()
+    let idReadable = true
+    return {
+      get id(): number {
+        if (!idReadable) throw new Error('id read after destruction')
+        return id
+      },
+      on(event: string, listener: (...args: never[]) => void) {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener as Listener])
+        return this
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const listener of listeners.get(event) ?? []) listener(...args)
+      },
+      makeIdUnreadable() {
+        idReadable = false
+      }
+    }
+  }
+
+  it('revokes the bound webContents on render-process-gone and destroyed', () => {
+    const contents = fakeContents(41)
+    const authority = { revokeWebContents: vi.fn() }
+    bindMeetingMicRendererReset(contents, authority)
+    contents.emit('render-process-gone')
+    contents.emit('destroyed')
+    expect(authority.revokeWebContents).toHaveBeenCalledTimes(2)
+    expect(authority.revokeWebContents).toHaveBeenNthCalledWith(1, 41, 'renderer-reset')
+    expect(authority.revokeWebContents).toHaveBeenNthCalledWith(2, 41, 'renderer-reset')
+  })
+
+  it('revokes on a main-frame cross-document navigation only', () => {
+    const contents = fakeContents(41)
+    const authority = { revokeWebContents: vi.fn() }
+    bindMeetingMicRendererReset(contents, authority)
+    const url = 'https://metis.example/app/index.html'
+    contents.emit('did-start-navigation', {}, url, true, true)
+    contents.emit('did-start-navigation', {}, url, false, false)
+    expect(authority.revokeWebContents).not.toHaveBeenCalled()
+    contents.emit('did-start-navigation', {}, url, false, true)
+    expect(authority.revokeWebContents).toHaveBeenCalledTimes(1)
+    expect(authority.revokeWebContents).toHaveBeenCalledWith(41, 'renderer-reset')
+  })
+
+  it('uses the id captured at bind time', () => {
+    const contents = fakeContents(41)
+    const authority = { revokeWebContents: vi.fn() }
+    bindMeetingMicRendererReset(contents, authority)
+    contents.makeIdUnreadable()
+    expect(() => contents.emit('destroyed')).not.toThrow()
+    expect(authority.revokeWebContents).toHaveBeenCalledWith(41, 'renderer-reset')
   })
 })

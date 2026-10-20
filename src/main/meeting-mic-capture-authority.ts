@@ -175,6 +175,14 @@ export class MeetingMicCaptureAuthority {
     }
   }
 
+  /** Revoke every owner (pending, permission-authorized, established) bound to one webContents. */
+  revokeWebContents(webContentsId: number, reason: InputSessionStopReason): void {
+    for (const [captureId, owner] of this.#owners) {
+      if (owner.webContentsId !== webContentsId) continue
+      this.#revoke(captureId, owner, reason)
+    }
+  }
+
   #frameMatchesCurrentMain(frame: MeetingMicCaptureFrame, current: MeetingMicCaptureCurrentState): boolean {
     return (
       frame.webContentsId === current.mainWebContentsId &&
@@ -188,4 +196,29 @@ export class MeetingMicCaptureAuthority {
     this.#owners.delete(captureId)
     this.#deps.onRevoked(owner, reason)
   }
+}
+
+/** Structural subset of Electron WebContents needed to observe renderer resets (keeps electron out of this module). */
+export interface RendererResetSource {
+  readonly id: number
+  on(event: 'render-process-gone', listener: () => void): unknown
+  on(event: 'destroyed', listener: () => void): unknown
+  on(
+    event: 'did-start-navigation',
+    listener: (event: unknown, url: string, isInPlace: boolean, isMainFrame: boolean) => void
+  ): unknown
+}
+
+/** Free the meeting-mic owner of a webContents when its renderer crashes, is destroyed, or navigates away. */
+export function bindMeetingMicRendererReset(
+  contents: RendererResetSource,
+  authority: Pick<MeetingMicCaptureAuthority, 'revokeWebContents'>
+): void {
+  // webContents.id must not be read after destruction, so capture it once here.
+  const id = contents.id
+  contents.on('render-process-gone', () => authority.revokeWebContents(id, 'renderer-reset'))
+  contents.on('destroyed', () => authority.revokeWebContents(id, 'renderer-reset'))
+  contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame === true && isInPlace === false) authority.revokeWebContents(id, 'renderer-reset')
+  })
 }
