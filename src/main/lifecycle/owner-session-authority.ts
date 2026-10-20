@@ -65,10 +65,16 @@ interface LiveEntry {
 }
 
 export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): OwnerSessionAuthority {
+  const RETIRED_CAP = 256
+  const RETIRED_PER_FRAME_CAP = 64
+  const REFUSED_MESSAGE = 'owner-session-refused'
+
   const now = deps.now ?? Date.now
   const uuid = deps.uuid ?? randomUUID
   const live = new Map<string, LiveEntry>()
   const byFrame = new Map<string, string>()
+  // Superseded entries kept until revoked, so revocation can notify the exact retained refs.
+  const retired = new Map<string, LiveEntry>()
   const revoked = new Set<string>()
   const listeners = new Set<(ref: OwnerSessionRef, reason: OwnerSessionRevokeReason) => void>()
 
@@ -92,10 +98,20 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
     if (byFrame.get(entry.ref.frameOwner) === entry.ref.sessionId) byFrame.delete(entry.ref.frameOwner)
   }
 
+  const retiredCountFor = (frameOwner: string): number => {
+    let count = 0
+    for (const entry of retired.values()) {
+      if (entry.ref.frameOwner === frameOwner) count += 1
+    }
+    return count
+  }
+
   const revokeMatching = (match: (entry: LiveEntry) => boolean, reason: OwnerSessionRevokeReason): void => {
-    const hit = [...live.values()].filter(match)
+    // Retired entries first (oldest first), then live ones.
+    const hit = [...retired.values(), ...live.values()].filter(match)
     for (const entry of hit) {
       drop(entry)
+      retired.delete(entry.ref.sessionId)
       remember(entry.ref.sessionId)
     }
     for (const entry of hit) {
@@ -128,18 +144,29 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
       ) {
         return existing.ref
       }
-      if (existing) drop(existing)
+      if (existing && (retired.size >= RETIRED_CAP || retiredCountFor(frameOwner) >= RETIRED_PER_FRAME_CAP)) {
+        throw new Error(REFUSED_MESSAGE)
+      }
+      const sessionId = uuid()
+      if (live.has(sessionId) || retired.has(sessionId) || revoked.has(sessionId)) {
+        throw new Error(REFUSED_MESSAGE)
+      }
+      // Parse and freeze before any mutation: a parse throw leaves all state unchanged.
       const ref = Object.freeze(
         OwnerSessionRefSchema.parse({
           v: 1,
           ownerKey,
           authGeneration,
-          sessionId: uuid(),
+          sessionId,
           frameOwner,
           contextRevision,
           issuedAt: now()
         })
       )
+      if (existing) {
+        drop(existing)
+        retired.set(existing.ref.sessionId, existing)
+      }
       live.set(ref.sessionId, { ref, webContentsId })
       byFrame.set(frameOwner, ref.sessionId)
       return ref

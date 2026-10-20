@@ -109,7 +109,34 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
     const result = inputSessionHandlers.start(event, request)
     if (result.ok) {
       ownerRefs.clear()
-      const ref = event.senderFrame && deps.ownerSession?.mint(event.senderFrame, result.lease.contextRevision)
+      // Keep the rollback owner derived from the same trusted Electron event before mint can
+      // reenter. The lease context is the one already admitted by inputSessionHandlers.start.
+      const senderWebContentsId = event.sender.id
+      const senderFrame = event.senderFrame
+      const rollbackOwner: TrustedInputOwner | null = senderFrame
+        ? Object.freeze({
+            webContentsId: senderWebContentsId,
+            frameId: `${senderFrame.processId}:${senderFrame.routingId}`,
+            isTopFrame: senderFrame.parent === null,
+            authSessionGeneration: result.lease.authSessionGeneration,
+            contextRevision: result.lease.contextRevision
+          })
+        : null
+      let ref: OwnerSessionRef | null | undefined
+      if (senderFrame && deps.ownerSession) {
+        try {
+          ref = deps.ownerSession.mint(senderFrame, result.lease.contextRevision)
+        } catch {
+          if (deps.inputSessionAuthority.activeLease === result.lease) {
+            if (!rollbackOwner) throw new Error('input-session-mint-rollback-invariant')
+            const stopped = deps.inputSessionAuthority.stop(rollbackOwner, { sessionId: result.lease.sessionId })
+            if (!stopped.ok && deps.inputSessionAuthority.activeLease === result.lease) {
+              throw new Error('input-session-mint-rollback-invariant')
+            }
+          }
+          return { ok: false, reason: 'stale_session' }
+        }
+      }
       if (ref) ownerRefs.set(result.lease.sessionId, ref)
     }
     if (result.ok && result.lease.purpose === 'command') {
