@@ -38,6 +38,8 @@ export interface RangeOptions {
   changeValidatorOnResume?: boolean
   /** Send this many bytes of the first response, then drop the connection. */
   cutFirstAt?: number
+  /** Hold the first cut connection open until the client confirms it persisted the prefix. */
+  dropFirstAfter?: Promise<void>
   /** Transform the body served to request number `index`. */
   mutate?: (body: Buffer, index: number) => Buffer
 }
@@ -59,7 +61,14 @@ export function rangeHandler(body: Buffer, o: RangeOptions = {}): Handler {
     if (resume) res.setHeader('content-range', `bytes ${start}-${payload.length - 1}/${payload.length}`)
     if (index === 0 && o.cutFirstAt !== undefined) {
       res.write(slice.subarray(0, o.cutFirstAt))
-      setTimeout(() => res.destroy(), 20)
+      if (o.dropFirstAfter) {
+        void o.dropFirstAfter.then(
+          () => res.destroy(),
+          () => res.destroy()
+        )
+      } else {
+        setTimeout(() => res.destroy(), 20)
+      }
       return
     }
     res.end(slice)

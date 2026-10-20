@@ -106,15 +106,58 @@ describe('downloadVerified', () => {
 
   it('resumes a transfer cut at 30% with a guarded Range request', async () => {
     const cut = Math.floor(body.length * 0.3)
-    server = await serve(rangeHandler(body, { cutFirstAt: cut }))
-    await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
+    let releaseCut!: () => void
+    const cutReleased = new Promise<void>((resolve) => {
+      releaseCut = resolve
+    })
+    let confirmCutPersisted!: () => void
+    const cutPersisted = new Promise<void>((resolve) => {
+      confirmCutPersisted = resolve
+    })
+    const controller = new AbortController()
+    server = await serve(rangeHandler(body, { cutFirstAt: cut, dropFirstAfter: cutReleased }))
+    const transfer = downloadVerified(
+      {
+        ...request(`${server.base}/pin/model.bin`, controller.signal),
+        onProgress: (bytes) => {
+          if (bytes === cut) confirmCutPersisted()
+        }
+      },
+      deps()
+    )
+    let handshakeTimer: ReturnType<typeof setTimeout> | undefined
+    const handshakeTimeout = new Promise<never>((_resolve, reject) => {
+      handshakeTimer = setTimeout(() => {
+        const error = new Error('guarded-resume fixture did not complete within 5 seconds')
+        controller.abort(error)
+        reject(error)
+      }, 5_000)
+    })
+    let completed = false
+    try {
+      await Promise.race([
+        cutPersisted,
+        handshakeTimeout,
+        transfer.then(() => {
+          throw new Error('download completed before the cut prefix was persisted')
+        })
+      ])
+      releaseCut()
+      await transfer
+      completed = true
+    } finally {
+      if (handshakeTimer) clearTimeout(handshakeTimer)
+      // Always let the fixture finish its first response, then settle the transfer before teardown.
+      releaseCut()
+      if (!completed && !controller.signal.aborted) controller.abort(new Error('guarded-resume test is cleaning up'))
+      await transfer.catch(() => undefined)
+    }
     expect(readFileSync(join(dir, 'model.bin')).equals(body)).toBe(true)
     expect(server.requests).toHaveLength(2)
     const resumed = server.requests[1].headers
     expect(resumed['if-range']).toBe('"v1"')
     const from = Number(/^bytes=(\d+)-$/.exec(resumed.range ?? '')?.[1])
-    expect(from).toBeGreaterThan(0)
-    expect(from).toBeLessThanOrEqual(cut)
+    expect(from).toBe(cut)
   })
 
   it('discards partial bytes owned by a prior service session before a new explicit request', async () => {
