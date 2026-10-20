@@ -1656,24 +1656,16 @@ function hardStopInputSession(reason: import('@shared/input-session').InputSessi
 
 /** Fail closed if either OS lifecycle boundary cannot be observed. */
 function installInputPowerLifecycleHooks(): boolean {
-  let suspendRegistered = false
-  let lockScreenRegistered = false
-  try {
-    powerMonitor.on('suspend', () => hardStopInputSession('system-suspend'))
-    suspendRegistered = true
-  } catch (error) {
-    mainLog.error('[input-session] microphone suspend revocation hook failed:', error)
-  }
-  try {
-    powerMonitor.on('lock-screen', () => hardStopInputSession('screen-locked'))
-    lockScreenRegistered = true
-  } catch (error) {
-    mainLog.error('[input-session] microphone lock-screen revocation hook failed:', error)
-  }
-  inputPowerLifecycleHooksReady = suspendRegistered && lockScreenRegistered
-  if (!inputPowerLifecycleHooksReady)
-    mainLog.error('[input-session] microphone admission disabled: OS lifecycle hooks are incomplete')
-  return inputPowerLifecycleHooksReady
+  return inputSessionLifecycleController.installInputPowerLifecycleHooks(
+    (event, callback) => {
+      if (event === 'suspend') powerMonitor.on('suspend', callback)
+      else powerMonitor.on('lock-screen', callback)
+    },
+    (ready) => {
+      inputPowerLifecycleHooksReady = ready
+    },
+    mainLog
+  )
 }
 
 function revokeMeetingMicCaptureGrants(

@@ -38,6 +38,31 @@ export interface InputSessionLifecycleControllerDependencies {
 export class InputSessionLifecycleController {
   constructor(private readonly deps: InputSessionLifecycleControllerDependencies) {}
 
+  installInputPowerLifecycleHooks(
+    register: (event: 'suspend' | 'lock-screen', callback: () => void) => void,
+    setReady: (ready: boolean) => void,
+    logger: { error(message: string, error?: unknown): void }
+  ): boolean {
+    let suspendRegistered = false
+    let lockScreenRegistered = false
+    try {
+      register('suspend', () => this.hardStopInputSession('system-suspend'))
+      suspendRegistered = true
+    } catch (error) {
+      logger.error('[input-session] microphone suspend revocation hook failed:', error)
+    }
+    try {
+      register('lock-screen', () => this.hardStopInputSession('screen-locked'))
+      lockScreenRegistered = true
+    } catch (error) {
+      logger.error('[input-session] microphone lock-screen revocation hook failed:', error)
+    }
+    const ready = suspendRegistered && lockScreenRegistered
+    setReady(ready)
+    if (!ready) logger.error('[input-session] microphone admission disabled: OS lifecycle hooks are incomplete')
+    return ready
+  }
+
   hardStopInputSession(reason: InputSessionStopReason): void {
     this.deps.meetingStartActivationAuthority.revokeAll()
     this.deps.incrementInputSessionContextRevision()

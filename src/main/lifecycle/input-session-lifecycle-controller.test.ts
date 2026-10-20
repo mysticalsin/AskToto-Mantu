@@ -211,7 +211,216 @@ function admitCapture(fixture: ReturnType<typeof setup>, startedAt: number): str
   return grant.captureId
 }
 
+type InputPowerLifecycleEvent = 'suspend' | 'lock-screen'
+
+const POWER_HOOK_ERRORS: Record<InputPowerLifecycleEvent, string> = {
+  suspend: '[input-session] microphone suspend revocation hook failed:',
+  'lock-screen': '[input-session] microphone lock-screen revocation hook failed:'
+}
+const INCOMPLETE_POWER_HOOKS = '[input-session] microphone admission disabled: OS lifecycle hooks are incomplete'
+
+function installPowerHooks(
+  fixture: ReturnType<typeof setup>,
+  failures: Partial<Record<InputPowerLifecycleEvent, Error>> = {}
+) {
+  const trace: string[] = []
+  const callbacks = new Map<InputPowerLifecycleEvent, () => void>()
+  const register = vi.fn((event: InputPowerLifecycleEvent, callback: () => void) => {
+    trace.push(`register:${event}`)
+    const failure = failures[event]
+    if (failure) throw failure
+    callbacks.set(event, callback)
+  })
+  const setReady = vi.fn((ready: boolean) => trace.push(`ready:${ready}`))
+  const logger = {
+    error: vi.fn((message: string, error?: unknown) => {
+      trace.push(error === undefined ? `error:${message}` : `error:${message}:original`)
+    })
+  }
+  const ready = fixture.controller.installInputPowerLifecycleHooks(register, setReady, logger)
+  return { callbacks, logger, ready, register, setReady, trace }
+}
+
+function admitInteractiveCapture(fixture: ReturnType<typeof setup>): void {
+  fixture.meetingStartActivationAuthority.mint(FRAME, MEETING_START_ACTION)
+  expect(
+    fixture.inputSessionAuthority.start(INPUT_OWNER, {
+      source: 'push-to-talk',
+      purpose: 'dictation',
+      activation: 'explicit'
+    }).ok
+  ).toBe(true)
+}
+
+function expectInteractivePowerCallbackRevocation(
+  fixture: ReturnType<typeof setup>,
+  reason: 'system-suspend' | 'screen-locked'
+): void {
+  expect(fixture.events).toEqual([
+    'activation-revoke-all',
+    'context-revision',
+    `input-hard-stop:${reason}`,
+    `input-revoked:${reason}`
+  ])
+  expect(fixture.meetingStartActivationAuthority.hasPending(FRAME)).toBe(false)
+  expect(fixture.inputSessionAuthority.activeLease).toBeNull()
+  expect(fixture.revision()).toBe(1)
+}
+
+function expectMeetingPowerCallbackRevocation(
+  fixture: ReturnType<typeof setup>,
+  reason: 'system-suspend' | 'screen-locked',
+  captureId: string
+): void {
+  expect(fixture.events).toEqual([
+    'activation-revoke-all',
+    'context-revision',
+    `input-hard-stop:${reason}`,
+    `renderer-revoked:654:${reason}`,
+    `meeting-grants:654:${reason}`,
+    `capture-grant-revoked:${reason}`,
+    'release-meeting:654',
+    'close-live-speaker:654',
+    'active-speaker:null',
+    'context-revision',
+    'capture-owner:null',
+    'legacy-listening:false',
+    'listening:false',
+    'tray-recording:false',
+    'power-save:false',
+    'release-parakeet',
+    'release-speaker-embedding'
+  ])
+  expect(fixture.meetingStartActivationAuthority.hasPending(FRAME)).toBe(false)
+  expect(fixture.inputSessionAuthority.activeLease).toBeNull()
+  expect(fixture.meetingMicCaptureAuthority.release(1, captureId)).toBe(false)
+  expect(fixture.meetingMicCaptureAuthority.revokeMeeting).toHaveBeenCalledWith(654, reason)
+  expect(fixture.releaseMeeting).toHaveBeenCalledWith(654)
+  expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+  expect(fixture.activeSpeakerStartedAt()).toBeNull()
+  expect(fixture.revision()).toBe(2)
+  expect(fixture.captureOwnerWebContentsId()).toBeNull()
+  expect(fixture.send).toHaveBeenCalledExactlyOnceWith('meeting:mic-capture-revoked', {
+    startedAt: 654,
+    reason
+  })
+  expect(fixture.nativeReleases.parakeetRelease).toHaveBeenCalledTimes(1)
+  expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+}
+
 describe('InputSessionLifecycleController', () => {
+  it('registers suspend and lock-screen hooks before marking lifecycle readiness', () => {
+    const fixture = setup()
+
+    const hooks = installPowerHooks(fixture)
+
+    expect(hooks.ready).toBe(true)
+    expect(hooks.register.mock.calls.map(([event]) => event)).toEqual(['suspend', 'lock-screen'])
+    expect(hooks.trace).toEqual(['register:suspend', 'register:lock-screen', 'ready:true'])
+    expect(hooks.setReady).toHaveBeenCalledExactlyOnceWith(true)
+    expect(hooks.logger.error).not.toHaveBeenCalled()
+  })
+
+  it('continues to register lock-screen when suspend registration throws', () => {
+    const fixture = setup()
+    const suspendError = new Error('suspend registration failed')
+
+    const hooks = installPowerHooks(fixture, { suspend: suspendError })
+
+    expect(hooks.ready).toBe(false)
+    expect(hooks.register.mock.calls.map(([event]) => event)).toEqual(['suspend', 'lock-screen'])
+    expect(hooks.trace).toEqual([
+      'register:suspend',
+      'error:[input-session] microphone suspend revocation hook failed::original',
+      'register:lock-screen',
+      'ready:false',
+      `error:${INCOMPLETE_POWER_HOOKS}`
+    ])
+    expect(hooks.setReady).toHaveBeenCalledExactlyOnceWith(false)
+    expect(hooks.logger.error.mock.calls).toEqual([[POWER_HOOK_ERRORS.suspend, suspendError], [INCOMPLETE_POWER_HOOKS]])
+  })
+
+  it('keeps suspend registration when lock-screen registration throws', () => {
+    const fixture = setup()
+    const lockError = new Error('lock-screen registration failed')
+
+    const hooks = installPowerHooks(fixture, { 'lock-screen': lockError })
+
+    expect(hooks.ready).toBe(false)
+    expect(hooks.register.mock.calls.map(([event]) => event)).toEqual(['suspend', 'lock-screen'])
+    expect(hooks.trace).toEqual([
+      'register:suspend',
+      'register:lock-screen',
+      'error:[input-session] microphone lock-screen revocation hook failed::original',
+      'ready:false',
+      `error:${INCOMPLETE_POWER_HOOKS}`
+    ])
+    expect(hooks.setReady).toHaveBeenCalledExactlyOnceWith(false)
+    expect(hooks.logger.error.mock.calls).toEqual([
+      [POWER_HOOK_ERRORS['lock-screen'], lockError],
+      [INCOMPLETE_POWER_HOOKS]
+    ])
+  })
+
+  it('attempts both registrations and preserves both errors when both throw', () => {
+    const fixture = setup()
+    const suspendError = new Error('suspend registration failed')
+    const lockError = new Error('lock-screen registration failed')
+
+    const hooks = installPowerHooks(fixture, { suspend: suspendError, 'lock-screen': lockError })
+
+    expect(hooks.ready).toBe(false)
+    expect(hooks.register.mock.calls.map(([event]) => event)).toEqual(['suspend', 'lock-screen'])
+    expect(hooks.trace).toEqual([
+      'register:suspend',
+      'error:[input-session] microphone suspend revocation hook failed::original',
+      'register:lock-screen',
+      'error:[input-session] microphone lock-screen revocation hook failed::original',
+      'ready:false',
+      `error:${INCOMPLETE_POWER_HOOKS}`
+    ])
+    expect(hooks.setReady).toHaveBeenCalledExactlyOnceWith(false)
+    expect(hooks.logger.error.mock.calls).toEqual([
+      [POWER_HOOK_ERRORS.suspend, suspendError],
+      [POWER_HOOK_ERRORS['lock-screen'], lockError],
+      [INCOMPLETE_POWER_HOOKS]
+    ])
+  })
+
+  it.each([
+    ['suspend', 'system-suspend'],
+    ['lock-screen', 'screen-locked']
+  ] as const)('runs the registered %s callback through the real hard-stop chain', (event, reason) => {
+    const interactive = setup()
+    admitInteractiveCapture(interactive)
+    const interactiveHooks = installPowerHooks(interactive)
+
+    interactiveHooks.callbacks.get(event)?.()
+    expectInteractivePowerCallbackRevocation(interactive, reason)
+
+    const meeting = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+    const captureId = admitCapture(meeting, 654)
+    const meetingHooks = installPowerHooks(meeting)
+    meetingHooks.callbacks.get(event)?.()
+    expectMeetingPowerCallbackRevocation(meeting, reason, captureId)
+  })
+
+  it.each([
+    ['suspend', 'lock-screen', 'screen-locked'],
+    ['lock-screen', 'suspend', 'system-suspend']
+  ] as const)('keeps the %s listener live when %s registration fails', (failedEvent, liveEvent, reason) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+    const captureId = admitCapture(fixture, 654)
+    const failure = new Error(`${failedEvent} registration failed`)
+    const hooks = installPowerHooks(fixture, { [failedEvent]: failure })
+
+    expect(hooks.ready).toBe(false)
+    hooks.callbacks.get(liveEvent)?.()
+
+    expect(hooks.trace.indexOf('ready:false')).toBeGreaterThan(hooks.trace.indexOf(`register:${liveEvent}`))
+    expectMeetingPowerCallbackRevocation(fixture, reason, captureId)
+  })
+
   it('revokes activations, advances context, then stops interactive authority', () => {
     const fixture = setup()
     fixture.meetingStartActivationAuthority.mint(FRAME, MEETING_START_ACTION)

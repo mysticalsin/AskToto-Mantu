@@ -267,10 +267,19 @@ describe('input-session lifecycle revocation wiring', () => {
 
   it('revokes interactive and meeting microphone capture on system suspend and screen lock', () => {
     const installHooks = declaration('installInputPowerLifecycleHooks')
-    expect(installHooks).toContain("powerMonitor.on('suspend', () => hardStopInputSession('system-suspend'))")
-    expect(installHooks).toContain("powerMonitor.on('lock-screen', () => hardStopInputSession('screen-locked'))")
-    expect(installHooks).toContain('inputPowerLifecycleHooksReady = suspendRegistered && lockScreenRegistered')
-    expect(installHooks).toContain('if (!inputPowerLifecycleHooksReady)')
+    // Replacements: controller.test.ts covers both registrations, each error branch and captured callbacks.
+    expect(installHooks).toContain('return inputSessionLifecycleController.installInputPowerLifecycleHooks(')
+    expect(installHooks).toContain("if (event === 'suspend') powerMonitor.on('suspend', callback)")
+    expect(installHooks).toContain("else powerMonitor.on('lock-screen', callback)")
+    expect(installHooks).toContain('inputPowerLifecycleHooksReady = ready')
+    expect(installHooks).toContain('mainLog')
+    expect(source).toContain('let inputPowerLifecycleHooksReady = false')
+    const commandControlInit = source.indexOf('commandControl.initialize(powerMonitor, initLogging, mainLog)')
+    const lifecycleHookCall = source.indexOf('installInputPowerLifecycleHooks()', commandControlInit)
+    const bootWorkCall = source.indexOf('const bootWork = createBootWork()', lifecycleHookCall)
+    expect(commandControlInit).toBeGreaterThanOrEqual(0)
+    expect(lifecycleHookCall).toBeGreaterThan(commandControlInit)
+    expect(bootWorkCall).toBeGreaterThan(lifecycleHookCall)
     expect(source).toContain('isCaptureLifecycleReady: () => inputPowerLifecycleHooksReady')
     expect(source).toContain('inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady')
     const hardStop = declaration('hardStopInputSession')
