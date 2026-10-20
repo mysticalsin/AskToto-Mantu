@@ -234,35 +234,161 @@ function directStripAssignmentIndex(handler: ts.ArrowFunction): number {
   })
 }
 
+function isReceiptProperty(node: ts.Node, name: string): boolean {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'receipt' &&
+    node.name.text === name
+  )
+}
+
+function receiptAssignment(statement: ts.Statement, name: string): ts.Expression | undefined {
+  if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression)) return undefined
+  const assignment = statement.expression
+  if (assignment.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !isReceiptProperty(assignment.left, name))
+    return undefined
+  return assignment.right
+}
+
+// The handler's returned `transcriptSaveReceipts.run(key, owner, async (receipt) => { ... }).then((path) => ({ path }))`.
+function receiptRun(handler: ts.ArrowFunction): { index: number; callback: ts.ArrowFunction } | undefined {
+  if (!ts.isBlock(handler.body)) return undefined
+  const statements = handler.body.statements
+  for (let index = 0; index < statements.length; index++) {
+    const statement = statements[index]
+    if (!ts.isReturnStatement(statement) || !statement.expression) continue
+    const thenCall = statement.expression
+    if (
+      !ts.isCallExpression(thenCall) ||
+      !ts.isPropertyAccessExpression(thenCall.expression) ||
+      thenCall.expression.name.text !== 'then' ||
+      thenCall.arguments.length !== 1
+    )
+      continue
+    const run = thenCall.expression.expression
+    if (
+      !ts.isCallExpression(run) ||
+      !ts.isPropertyAccessExpression(run.expression) ||
+      !ts.isIdentifier(run.expression.expression) ||
+      run.expression.expression.text !== 'transcriptSaveReceipts' ||
+      run.expression.name.text !== 'run' ||
+      run.arguments.length !== 3
+    )
+      continue
+    const callback = run.arguments[2]
+    if (
+      !ts.isArrowFunction(callback) ||
+      !ts.isBlock(callback.body) ||
+      !callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) ||
+      callback.parameters.length !== 1 ||
+      !ts.isIdentifier(callback.parameters[0].name) ||
+      callback.parameters[0].name.text !== 'receipt'
+    )
+      continue
+    const mapper = thenCall.arguments[0]
+    if (
+      !ts.isArrowFunction(mapper) ||
+      mapper.parameters.length !== 1 ||
+      !ts.isIdentifier(mapper.parameters[0].name) ||
+      mapper.parameters[0].name.text !== 'path' ||
+      !ts.isParenthesizedExpression(mapper.body)
+    )
+      continue
+    const result = mapper.body.expression
+    if (
+      !ts.isObjectLiteralExpression(result) ||
+      result.properties.length !== 1 ||
+      !ts.isShorthandPropertyAssignment(result.properties[0]) ||
+      result.properties[0].name.text !== 'path'
+    )
+      continue
+    return { index, callback }
+  }
+  return undefined
+}
+
+// The durable save is guarded by `receipt.durablePath === undefined`: it is skipped only when this exact receipt
+// already saved. The receipt key fingerprints `m` after the provisional strip, so no unstripped payload bypasses it.
 function directSaveDurableIndex(handler: ts.ArrowFunction): number {
-  if (!ts.isBlock(handler.body)) return -1
-  return handler.body.statements.findIndex((statement) => {
-    if (!ts.isVariableStatement(statement)) return false
-    return statement.declarationList.declarations.some((declaration) => {
-      if (
-        !ts.isIdentifier(declaration.name) ||
-        declaration.name.text !== 'r' ||
-        !declaration.initializer ||
-        !ts.isObjectLiteralExpression(declaration.initializer)
-      )
-        return false
-      return declaration.initializer.properties.some((property) => {
-        if (
-          !ts.isPropertyAssignment(property) ||
-          property.name.getText() !== 'path' ||
-          !ts.isAwaitExpression(property.initializer)
-        )
-          return false
-        const call = property.initializer.expression
-        if (!callExpression(call, 'saveMeeting') || call.arguments.length !== 2) return false
-        return (
-          callExpression(call.arguments[0], 'getSettings') &&
-          ts.isIdentifier(call.arguments[1]) &&
-          call.arguments[1].text === 'm'
-        )
-      })
-    })
+  const flow = receiptRun(handler)
+  if (!flow || !ts.isBlock(flow.callback.body)) return -1
+  const statements = flow.callback.body.statements
+  const settingsIdx = statements.findIndex((statement) => {
+    if (
+      !ts.isIfStatement(statement) ||
+      statement.elseStatement ||
+      !ts.isPrefixUnaryExpression(statement.expression) ||
+      statement.expression.operator !== ts.SyntaxKind.ExclamationToken ||
+      !isReceiptProperty(statement.expression.operand, 'settings')
+    )
+      return false
+    const source = receiptAssignment(statement.thenStatement, 'settings')
+    return !!source && callExpression(source, 'getSettings') && source.arguments.length === 0
   })
+  const bindIdx = statements.findIndex(
+    (statement) =>
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (declaration) =>
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === 'saveSettings' &&
+          !!declaration.initializer &&
+          isReceiptProperty(declaration.initializer, 'settings')
+      )
+  )
+  const durableIdx = statements.findIndex((statement) => {
+    if (
+      !ts.isIfStatement(statement) ||
+      statement.elseStatement ||
+      !ts.isBinaryExpression(statement.expression) ||
+      statement.expression.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken ||
+      !isReceiptProperty(statement.expression.left, 'durablePath') ||
+      !ts.isIdentifier(statement.expression.right) ||
+      statement.expression.right.text !== 'undefined'
+    )
+      return false
+    const saved = receiptAssignment(statement.thenStatement, 'durablePath')
+    if (!saved || !ts.isAwaitExpression(saved)) return false
+    const call = saved.expression
+    return (
+      callExpression(call, 'saveMeeting') &&
+      call.arguments.length === 2 &&
+      ts.isIdentifier(call.arguments[0]) &&
+      call.arguments[0].text === 'saveSettings' &&
+      ts.isIdentifier(call.arguments[1]) &&
+      call.arguments[1].text === 'm'
+    )
+  })
+  if (settingsIdx < 0 || bindIdx <= settingsIdx || durableIdx <= bindIdx) return -1
+  return flow.index
+}
+
+function fixtureArrow(source: string): ts.ArrowFunction {
+  const file = parseInlineTypeScript(source)
+  return (file.statements[0] as ts.VariableStatement).declarationList.declarations[0].initializer as ts.ArrowFunction
+}
+
+function receiptFixtureSource(overrides: { start?: string; settings?: string; bind?: string; save?: string }): string {
+  const parts = {
+    start: 'return',
+    settings: 'if (!receipt.settings) receipt.settings = getSettings()',
+    bind: 'const saveSettings = receipt.settings',
+    save: 'if (receipt.durablePath === undefined) receipt.durablePath = await saveMeeting(saveSettings, m)',
+    ...overrides
+  }
+  return `
+    const fixture = async () => {
+      const m = SaveMeetingSchema.parse(raw)
+      m.lines = stripProvisionalLines(m.lines)
+      ${parts.start} transcriptSaveReceipts.run('key', undefined, async (receipt) => {
+        ${parts.settings}
+        ${parts.bind}
+        ${parts.save}
+        return receipt.durablePath
+      }).then((path) => ({ path }))
+    }
+  `
 }
 
 function directDraftSaveCalls(handler: ts.ArrowFunction): ts.CallExpression[] {
@@ -537,6 +663,32 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     expect(stripAssignment).toBeGreaterThan(parsedMeeting)
     expect(saveDurable).toBeGreaterThan(stripAssignment)
 
+    const receiptFlow = receiptRun(saveHandler)
+    expect(receiptFlow, 'saveTranscript must return the receipt flow').toBeDefined()
+    if (!receiptFlow) throw new Error('saveTranscript must return the receipt flow')
+    for (const name of ['SaveMeetingSchema', 'stripProvisionalLines', 'saveMeeting', 'getSettings', 'm'])
+      expect(shadowsName(receiptFlow.callback, name), `receipt callback must not shadow ${name}`).toBe(false)
+    const saveSettingsDeclarations = liveNodes(receiptFlow.callback).filter(
+      (node) => ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'saveSettings'
+    )
+    expect(saveSettingsDeclarations, 'receipt callback declares saveSettings once').toHaveLength(1)
+    const callbackReassignsMeeting = liveNodes(receiptFlow.callback).some(
+      (node) =>
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ['m', 'm.lines'].includes(node.left.getText())
+    )
+    expect(callbackReassignsMeeting, 'the receipt callback must not reassign the stripped meeting').toBe(false)
+    for (const statement of saveStatements.slice(stripAssignment + 1, saveDurable)) {
+      const reassigned = liveNodes(statement).some(
+        (node) =>
+          ts.isBinaryExpression(node) &&
+          node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ['m', 'm.lines'].includes(node.left.getText())
+      )
+      expect(reassigned, 'nothing may reassign the stripped meeting before the durable save').toBe(false)
+    }
+
     const disconnectedSaveSource = parseInlineTypeScript(`
       const disconnected = async () => {
         const m = SaveMeetingSchema.parse(raw)
@@ -547,6 +699,26 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     const disconnectedSave = (disconnectedSaveSource.statements[0] as ts.VariableStatement).declarationList
       .declarations[0].initializer as ts.ArrowFunction
     expect(directStripAssignmentIndex(disconnectedSave)).toBe(-1)
+
+    expect(directSaveDurableIndex(fixtureArrow(receiptFixtureSource({})))).toBeGreaterThanOrEqual(0)
+    const nestedSave =
+      'const unused = async () => { receipt.durablePath = await saveMeeting(saveSettings, m) }'
+    const disconnectedReceiptFixtures: Record<string, string> = {
+      'save in a nested arrow': receiptFixtureSource({ save: nestedSave }),
+      'wrong settings source': receiptFixtureSource({ settings: 'if (!receipt.settings) receipt.settings = {}' }),
+      'binding after the save': receiptFixtureSource({
+        bind: '',
+        save:
+          'if (receipt.durablePath === undefined) receipt.durablePath = await saveMeeting(saveSettings, m)\n' +
+          '        const saveSettings = receipt.settings'
+      }),
+      'receipt run not returned': receiptFixtureSource({ start: 'void' }),
+      'wrong meeting saved': receiptFixtureSource({
+        save: 'if (receipt.durablePath === undefined) receipt.durablePath = await saveMeeting(saveSettings, raw)'
+      })
+    }
+    for (const [label, source] of Object.entries(disconnectedReceiptFixtures))
+      expect(directSaveDurableIndex(fixtureArrow(source)), label).toBe(-1)
 
     const returnedDraftSource = parseInlineTypeScript(`
       const returned = async () => {
