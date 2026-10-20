@@ -49,6 +49,7 @@ import {
   type RevealReason
 } from './lifecycle/reveal'
 import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
+import { InputSessionLifecycleController } from './lifecycle/input-session-lifecycle-controller'
 import { operatorVisionModel } from '@shared/operator-vision'
 import { createMainTranscriptSaveReceipts, type TranscriptSaveSideEffect } from './features/meetings/main-save-receipts'
 import { InputSessionAuthority } from './input-session-authority'
@@ -1623,20 +1624,34 @@ const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
     }
   }
 })
+const inputSessionLifecycleController = new InputSessionLifecycleController({
+  inputSessionAuthority,
+  meetingStartActivationAuthority,
+  meetingMicCaptureAuthority,
+  meetingMicCaptureRevokedChannel: IPC.meetingMicCaptureRevoked,
+  incrementInputSessionContextRevision: () => {
+    inputSessionContextRevision += 1
+  },
+  getWindow: () => win,
+  getMeetingCaptureOwnerWebContentsId: () => meetingCaptureOwnerWebContentsId,
+  setMeetingCaptureOwnerWebContentsId: (id) => {
+    meetingCaptureOwnerWebContentsId = id
+  },
+  getActiveLiveSpeakerStartedAt: () => activeLiveSpeakerStartedAt,
+  setActiveLiveSpeakerStartedAt: (startedAt) => {
+    activeLiveSpeakerStartedAt = startedAt
+  },
+  discardActiveLiveSpeakerSession,
+  closeLiveSpeakerReceipt,
+  setLegacyListeningActive,
+  setListeningActive,
+  setTrayRecording,
+  setRecordingPowerSaveBlock,
+  parakeetRelease,
+  releaseSpeakerEmbedding
+})
 function hardStopInputSession(reason: import('@shared/input-session').InputSessionStopReason): void {
-  meetingStartActivationAuthority.revokeAll()
-  inputSessionContextRevision += 1
-  inputSessionAuthority.hardStop(reason)
-  if (
-    reason === 'auth-revoked' ||
-    reason === 'sign-out' ||
-    reason === 'owner-replaced' ||
-    reason === 'system-suspend' ||
-    reason === 'screen-locked' ||
-    reason === 'shutdown'
-  ) {
-    hardStopMeetingCapture(reason)
-  }
+  inputSessionLifecycleController.hardStopInputSession(reason)
 }
 
 /** Fail closed if either OS lifecycle boundary cannot be observed. */
@@ -1677,42 +1692,7 @@ function hardStopMeetingCapture(
   reason: import('@shared/input-session').InputSessionStopReason,
   speakerDisposition: 'close' | 'discard' = 'close'
 ): void {
-  if (!inputSessionAuthority.hasMeetingReservation) return
-  const startedAt = inputSessionAuthority.meetingStartedAt
-  const ownerWebContentsId = meetingCaptureOwnerWebContentsId
-  if (
-    startedAt !== null &&
-    ownerWebContentsId !== null &&
-    win &&
-    !win.isDestroyed() &&
-    win.webContents.id === ownerWebContentsId
-  ) {
-    try {
-      win.webContents.send(IPC.meetingMicCaptureRevoked, { startedAt, reason })
-    } catch {
-      /* the owning renderer may already be gone */
-    }
-  }
-  revokeMeetingMicCaptureGrants(startedAt, reason)
-  if (speakerDisposition === 'discard' && startedAt !== null && activeLiveSpeakerStartedAt === startedAt) {
-    // Discard releases this exact reservation itself. Continue all teardown below; an early return here
-    // would leave native capture and the tray/power indicators running after the renderer died.
-    discardActiveLiveSpeakerSession()
-  } else {
-    inputSessionAuthority.releaseMeeting(startedAt)
-    if (startedAt !== null && activeLiveSpeakerStartedAt === startedAt) {
-      closeLiveSpeakerReceipt(startedAt)
-      activeLiveSpeakerStartedAt = null
-    }
-  }
-  inputSessionContextRevision += 1
-  meetingCaptureOwnerWebContentsId = null
-  setLegacyListeningActive(false)
-  setListeningActive(false)
-  setTrayRecording(false)
-  setRecordingPowerSaveBlock(false)
-  void parakeetRelease().catch(() => {})
-  void releaseSpeakerEmbedding('live').catch(() => {})
+  inputSessionLifecycleController.hardStopMeetingCapture(reason, speakerDisposition)
 }
 
 function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {

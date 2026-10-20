@@ -15,11 +15,13 @@ vi.mock('./logger', () => ({
 import { LiveMeetingStartedAtSchema, SaveMeetingSchema } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { InputSessionAuthority } from './input-session-authority'
+import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
 import {
   MEETING_START_ACTION,
   MeetingStartActivationAuthority,
   type MeetingStartActivationFrame
 } from './meeting-start-activation-authority'
+import { InputSessionLifecycleController } from './lifecycle/input-session-lifecycle-controller'
 import { TranscriptSaveReceiptStore } from './transcript-save-receipts'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
@@ -211,6 +213,29 @@ function sessionApi(options: {
     }),
     now: options.now
   })
+  const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
+    currentState: () => {
+      const currentWindow = context ? (context as any).win : win
+      return {
+        mainWebContentsId: currentWindow && !currentWindow.isDestroyed() ? currentWindow.webContents.id : null,
+        isWindowVisible: true,
+        isAuthenticated: true,
+        currentUrl: frameUrl,
+        context: {
+          authSessionGeneration,
+          contextRevision: context?.result?.getContextRevision() ?? 0
+        },
+        meetingStartedAt: inputSessionAuthority.hasMeetingReservation ? inputSessionAuthority.meetingStartedAt : null
+      }
+    },
+    createCaptureId: randomUUID,
+    onRevoked: () => {}
+  })
+  const revokeMeeting = meetingMicCaptureAuthority.revokeMeeting.bind(meetingMicCaptureAuthority)
+  vi.spyOn(meetingMicCaptureAuthority, 'revokeMeeting').mockImplementation((startedAt, reason) => {
+    lifecycle.revokeMeetingMicCaptureGrants(startedAt, reason)
+    revokeMeeting(startedAt, reason)
+  })
   const exports = [
     'acceptLiveSpeakerTransition,',
     'captureLiveSpeakerKey,',
@@ -239,6 +264,26 @@ function sessionApi(options: {
     actualFunctionSource('hardStopInputSession'),
     actualFunctionSource('hardStopMeetingCapture'),
     region,
+    'const inputSessionLifecycleController = new InputSessionLifecycleController({',
+    '  inputSessionAuthority,',
+    '  meetingStartActivationAuthority,',
+    '  meetingMicCaptureAuthority,',
+    "  meetingMicCaptureRevokedChannel: 'meeting:mic-capture-revoked',",
+    '  incrementInputSessionContextRevision: () => { inputSessionContextRevision += 1; },',
+    '  getWindow: () => win,',
+    '  getMeetingCaptureOwnerWebContentsId: () => meetingCaptureOwnerWebContentsId,',
+    '  setMeetingCaptureOwnerWebContentsId: (id) => { meetingCaptureOwnerWebContentsId = id; },',
+    '  getActiveLiveSpeakerStartedAt: () => activeLiveSpeakerStartedAt,',
+    '  setActiveLiveSpeakerStartedAt: (startedAt) => { activeLiveSpeakerStartedAt = startedAt; },',
+    '  discardActiveLiveSpeakerSession,',
+    '  closeLiveSpeakerReceipt,',
+    '  setLegacyListeningActive,',
+    '  setListeningActive,',
+    '  setTrayRecording,',
+    '  setRecordingPowerSaveBlock,',
+    '  parakeetRelease,',
+    "  releaseSpeakerEmbedding: () => releaseSpeakerEmbedding('live')",
+    '});',
     'globalThis.result = {',
     exports,
     '};'
@@ -258,6 +303,8 @@ function sessionApi(options: {
     speechPackDesktop: { refresh: lifecycle.refreshSpeechPack },
     inputSessionAuthority,
     meetingStartActivationAuthority,
+    meetingMicCaptureAuthority,
+    InputSessionLifecycleController,
     revokeMeetingMicCaptureGrants: lifecycle.revokeMeetingMicCaptureGrants,
     setListeningActive: lifecycle.setListeningActive,
     setTrayRecording: lifecycle.setTrayRecording,

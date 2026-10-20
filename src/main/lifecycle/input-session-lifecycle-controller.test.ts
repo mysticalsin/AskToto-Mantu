@@ -1,0 +1,439 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { InputSessionStopReason } from '@shared/input-session'
+import { InputSessionAuthority } from '../input-session-authority'
+import { MeetingMicCaptureAuthority } from '../meeting-mic-capture-authority'
+import {
+  MEETING_START_ACTION,
+  MeetingStartActivationAuthority,
+  type MeetingStartActivationFrame
+} from '../meeting-start-activation-authority'
+import { InputSessionLifecycleController } from './input-session-lifecycle-controller'
+
+const URL = 'file:///renderer/index.html'
+const FRAME: MeetingStartActivationFrame = {
+  webContentsId: 1,
+  frameId: '11:22',
+  isTopFrame: true,
+  url: URL
+}
+const INPUT_OWNER = {
+  webContentsId: 1,
+  frameId: '11:22',
+  isTopFrame: true,
+  authSessionGeneration: 7,
+  contextRevision: 0
+} as const
+const FATAL_REASONS = [
+  'auth-revoked',
+  'sign-out',
+  'owner-replaced',
+  'system-suspend',
+  'screen-locked',
+  'shutdown'
+] as const satisfies readonly InputSessionStopReason[]
+const NONFATAL_REASONS = [
+  'user-stop',
+  'cancelled',
+  'window-hidden',
+  'device-change',
+  'renderer-reset',
+  'arbitration-preempted'
+] as const satisfies readonly InputSessionStopReason[]
+
+interface FixtureOptions {
+  reservation?: number | null
+  activeSpeakerStartedAt?: number | null
+  captureOwnerWebContentsId?: number | null
+  windowMode?: 'live' | 'missing' | 'destroyed' | 'mismatched'
+  throwOnSend?: boolean
+  rejectNativeReleases?: boolean
+}
+
+function setup(options: FixtureOptions = {}) {
+  const events: string[] = []
+  let contextRevision = 0
+  let activeSpeakerStartedAt =
+    'activeSpeakerStartedAt' in options
+      ? options.activeSpeakerStartedAt!
+      : typeof options.reservation === 'number'
+        ? options.reservation
+        : null
+  let captureOwnerWebContentsId: number | null =
+    'captureOwnerWebContentsId' in options ? options.captureOwnerWebContentsId! : 1
+  let captureSequence = 0
+
+  const inputSessionAuthority = new InputSessionAuthority({
+    onRevoked: (_owner, _lease, reason) => events.push(`input-revoked:${reason}`)
+  })
+  if (options.reservation !== undefined) inputSessionAuthority.reserveMeeting(options.reservation)
+
+  const meetingStartActivationAuthority = new MeetingStartActivationAuthority({
+    state: () => ({
+      mainWebContentsId: 1,
+      mainFrameId: FRAME.frameId,
+      isWindowVisible: true,
+      isAuthenticated: true,
+      isStartAllowed: true,
+      currentUrl: URL,
+      context: { authSessionGeneration: 7, contextRevision }
+    })
+  })
+
+  const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
+    currentState: () => ({
+      mainWebContentsId: 1,
+      isWindowVisible: true,
+      isAuthenticated: true,
+      currentUrl: URL,
+      context: { authSessionGeneration: 7, contextRevision },
+      meetingStartedAt: inputSessionAuthority.hasMeetingReservation ? inputSessionAuthority.meetingStartedAt : null
+    }),
+    createCaptureId: () => `00000000-0000-4000-8000-${String(++captureSequence).padStart(12, '0')}`,
+    onRevoked: (_owner, reason) => events.push(`capture-grant-revoked:${reason}`)
+  })
+
+  const originalRevokeAll = meetingStartActivationAuthority.revokeAll.bind(meetingStartActivationAuthority)
+  vi.spyOn(meetingStartActivationAuthority, 'revokeAll').mockImplementation(() => {
+    events.push('activation-revoke-all')
+    originalRevokeAll()
+  })
+  const originalHardStop = inputSessionAuthority.hardStop.bind(inputSessionAuthority)
+  vi.spyOn(inputSessionAuthority, 'hardStop').mockImplementation((reason) => {
+    events.push(`input-hard-stop:${reason}`)
+    originalHardStop(reason)
+  })
+  const originalRevokeMeeting = meetingMicCaptureAuthority.revokeMeeting.bind(meetingMicCaptureAuthority)
+  vi.spyOn(meetingMicCaptureAuthority, 'revokeMeeting').mockImplementation((startedAt, reason) => {
+    events.push(`meeting-grants:${String(startedAt)}:${reason}`)
+    originalRevokeMeeting(startedAt, reason)
+  })
+  const originalReleaseMeeting = inputSessionAuthority.releaseMeeting.bind(inputSessionAuthority)
+  const releaseMeeting = vi.spyOn(inputSessionAuthority, 'releaseMeeting').mockImplementation((startedAt) => {
+    events.push(`release-meeting:${String(startedAt)}`)
+    return originalReleaseMeeting(startedAt)
+  })
+
+  const send = vi.fn((_channel: string, payload: { startedAt: number; reason: InputSessionStopReason }) => {
+    events.push(`renderer-revoked:${payload.startedAt}:${payload.reason}`)
+    if (options.throwOnSend) throw new Error('synthetic renderer teardown')
+  })
+  let destroyed = options.windowMode === 'destroyed'
+  const liveWindow = {
+    isDestroyed: () => destroyed,
+    webContents: { id: options.windowMode === 'mismatched' ? 2 : 1, send }
+  }
+  let currentWindow: typeof liveWindow | null = options.windowMode === 'missing' ? null : liveWindow
+
+  const setLegacyListeningActive = vi.fn((on: boolean) => events.push(`legacy-listening:${on}`))
+  const setListeningActive = vi.fn((on: boolean) => events.push(`listening:${on}`))
+  const setTrayRecording = vi.fn((on: boolean) => events.push(`tray-recording:${on}`))
+  const setRecordingPowerSaveBlock = vi.fn((on: boolean) => events.push(`power-save:${on}`))
+  const parakeetRelease = vi.fn(() => {
+    events.push('release-parakeet')
+    return options.rejectNativeReleases ? Promise.reject(new Error('synthetic parakeet release')) : Promise.resolve()
+  })
+  const releaseSpeakerEmbedding = vi.fn(() => {
+    events.push('release-speaker-embedding')
+    return options.rejectNativeReleases
+      ? Promise.reject(new Error('synthetic speaker embedding release'))
+      : Promise.resolve()
+  })
+  const discardActiveLiveSpeakerSession = vi.fn(() => {
+    events.push('discard-live-speaker')
+    const startedAt = activeSpeakerStartedAt
+    activeSpeakerStartedAt = null
+    inputSessionAuthority.releaseMeeting(startedAt)
+    setLegacyListeningActive(false)
+  })
+
+  const controller = new InputSessionLifecycleController({
+    inputSessionAuthority,
+    meetingStartActivationAuthority,
+    meetingMicCaptureAuthority,
+    meetingMicCaptureRevokedChannel: 'meeting:mic-capture-revoked',
+    incrementInputSessionContextRevision: () => {
+      contextRevision += 1
+      events.push('context-revision')
+    },
+    getWindow: () => currentWindow,
+    getMeetingCaptureOwnerWebContentsId: () => captureOwnerWebContentsId,
+    setMeetingCaptureOwnerWebContentsId: (id) => {
+      captureOwnerWebContentsId = id
+      events.push(`capture-owner:${String(id)}`)
+    },
+    getActiveLiveSpeakerStartedAt: () => activeSpeakerStartedAt,
+    setActiveLiveSpeakerStartedAt: (startedAt) => {
+      activeSpeakerStartedAt = startedAt
+      events.push(`active-speaker:${String(startedAt)}`)
+    },
+    discardActiveLiveSpeakerSession,
+    closeLiveSpeakerReceipt: (startedAt) => events.push(`close-live-speaker:${startedAt}`),
+    setLegacyListeningActive,
+    setListeningActive,
+    setTrayRecording,
+    setRecordingPowerSaveBlock,
+    parakeetRelease,
+    releaseSpeakerEmbedding
+  })
+
+  return {
+    controller,
+    events,
+    inputSessionAuthority,
+    meetingStartActivationAuthority,
+    meetingMicCaptureAuthority,
+    releaseMeeting,
+    send,
+    setWindowMode(mode: 'live' | 'missing' | 'destroyed' | 'mismatched') {
+      destroyed = mode === 'destroyed'
+      currentWindow =
+        mode === 'missing'
+          ? null
+          : { ...liveWindow, webContents: { ...liveWindow.webContents, id: mode === 'mismatched' ? 2 : 1 } }
+    },
+    revision: () => contextRevision,
+    activeSpeakerStartedAt: () => activeSpeakerStartedAt,
+    captureOwnerWebContentsId: () => captureOwnerWebContentsId,
+    nativeReleases: { parakeetRelease, releaseSpeakerEmbedding },
+    speakerDisposition: {
+      discardActiveLiveSpeakerSession,
+      setLegacyListeningActive,
+      setListeningActive,
+      setTrayRecording,
+      setRecordingPowerSaveBlock
+    }
+  }
+}
+
+function admitCapture(fixture: ReturnType<typeof setup>, startedAt: number): string {
+  const grant = fixture.meetingMicCaptureAuthority.admit(FRAME, startedAt)
+  if (!grant) throw new Error('expected real meeting microphone capture admission')
+  return grant.captureId
+}
+
+describe('InputSessionLifecycleController', () => {
+  it('revokes activations, advances context, then stops interactive authority', () => {
+    const fixture = setup()
+    fixture.meetingStartActivationAuthority.mint(FRAME, MEETING_START_ACTION)
+    expect(
+      fixture.inputSessionAuthority.start(INPUT_OWNER, {
+        source: 'push-to-talk',
+        purpose: 'dictation',
+        activation: 'explicit'
+      }).ok
+    ).toBe(true)
+
+    fixture.controller.hardStopInputSession('window-hidden')
+
+    expect(fixture.events).toEqual([
+      'activation-revoke-all',
+      'context-revision',
+      'input-hard-stop:window-hidden',
+      'input-revoked:window-hidden'
+    ])
+    expect(fixture.meetingStartActivationAuthority.hasPending(FRAME)).toBe(false)
+    expect(fixture.inputSessionAuthority.activeLease).toBeNull()
+    expect(fixture.revision()).toBe(1)
+  })
+
+  it('advances context on an input hard stop even when no interactive lease exists', () => {
+    const fixture = setup()
+
+    fixture.controller.hardStopInputSession('device-change')
+
+    expect(fixture.inputSessionAuthority.activeLease).toBeNull()
+    expect(fixture.revision()).toBe(1)
+    expect(fixture.events.slice(0, 3)).toEqual([
+      'activation-revoke-all',
+      'context-revision',
+      'input-hard-stop:device-change'
+    ])
+  })
+
+  it.each(FATAL_REASONS)('tears down the admitted meeting for fatal input stop reason %s', (reason) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+
+    fixture.controller.hardStopInputSession(reason)
+
+    expect(fixture.events.indexOf(`activation-revoke-all`)).toBeLessThan(
+      fixture.events.indexOf(`input-hard-stop:${reason}`)
+    )
+    expect(fixture.events.indexOf(`input-hard-stop:${reason}`)).toBeLessThan(
+      fixture.events.indexOf(`meeting-grants:654:${reason}`)
+    )
+    expect(fixture.meetingMicCaptureAuthority.revokeMeeting).toHaveBeenCalledWith(654, reason)
+    expect(fixture.releaseMeeting).toHaveBeenCalledWith(654)
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.revision()).toBe(2)
+    expect(fixture.captureOwnerWebContentsId()).toBeNull()
+  })
+
+  it.each(NONFATAL_REASONS)('keeps the meeting reservation on nonfatal input stop reason %s', (reason) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+    const captureId = admitCapture(fixture, 654)
+
+    fixture.controller.hardStopInputSession(reason)
+
+    expect(fixture.inputSessionAuthority.meetingStartedAt).toBe(654)
+    expect(fixture.meetingMicCaptureAuthority.revokeMeeting).not.toHaveBeenCalled()
+    expect(fixture.releaseMeeting).not.toHaveBeenCalled()
+    expect(
+      fixture.meetingMicCaptureAuthority.hasPermissionRequestOwner(
+        1,
+        654,
+        { authSessionGeneration: 7, contextRevision: 0 },
+        URL
+      )
+    ).toBe(true)
+    expect(fixture.meetingMicCaptureAuthority.release(1, captureId)).toBe(true)
+    expect(fixture.revision()).toBe(1)
+    expect(fixture.nativeReleases.parakeetRelease).not.toHaveBeenCalled()
+  })
+
+  it('keeps pending-grant cleanup separate and preserves established meeting capture', () => {
+    const pending = setup({ reservation: 654 })
+    const pendingId = admitCapture(pending, 654)
+    pending.controller.hardStopInputSession('window-hidden')
+    pending.meetingMicCaptureAuthority.revokePending('window-hidden')
+    expect(pending.meetingMicCaptureAuthority.release(1, pendingId)).toBe(false)
+    expect(pending.inputSessionAuthority.meetingStartedAt).toBe(654)
+
+    const permissionAuthorized = setup({ reservation: 656 })
+    const permissionAuthorizedId = admitCapture(permissionAuthorized, 656)
+    expect(permissionAuthorized.meetingMicCaptureAuthority.claimPermissionRequest(FRAME)).toBe(true)
+    permissionAuthorized.controller.hardStopInputSession('window-hidden')
+    permissionAuthorized.meetingMicCaptureAuthority.revokePending('window-hidden')
+    expect(permissionAuthorized.meetingMicCaptureAuthority.release(1, permissionAuthorizedId)).toBe(false)
+    expect(permissionAuthorized.inputSessionAuthority.meetingStartedAt).toBe(656)
+
+    const established = setup({ reservation: 655 })
+    const establishedId = admitCapture(established, 655)
+    expect(established.meetingMicCaptureAuthority.claimPermissionRequest(FRAME)).toBe(true)
+    expect(established.meetingMicCaptureAuthority.confirm(FRAME, establishedId, 655)).toBe(true)
+    established.controller.hardStopInputSession('window-hidden')
+    established.meetingMicCaptureAuthority.revokePending('window-hidden')
+    expect(established.meetingMicCaptureAuthority.release(1, establishedId)).toBe(true)
+    expect(established.inputSessionAuthority.meetingStartedAt).toBe(655)
+  })
+
+  it('notifies the matching live owner, revokes exact grants, then closes the matching speaker receipt', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+    const captureId = admitCapture(fixture, 654)
+
+    fixture.controller.hardStopMeetingCapture('owner-replaced')
+
+    expect(fixture.send).toHaveBeenCalledWith('meeting:mic-capture-revoked', {
+      startedAt: 654,
+      reason: 'owner-replaced'
+    })
+    expect(fixture.events.indexOf('renderer-revoked:654:owner-replaced')).toBeLessThan(
+      fixture.events.indexOf('meeting-grants:654:owner-replaced')
+    )
+    expect(fixture.events.indexOf('meeting-grants:654:owner-replaced')).toBeLessThan(
+      fixture.events.indexOf('release-meeting:654')
+    )
+    expect(fixture.events.indexOf('release-meeting:654')).toBeLessThan(fixture.events.indexOf('close-live-speaker:654'))
+    expect(fixture.meetingMicCaptureAuthority.release(1, captureId)).toBe(false)
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.activeSpeakerStartedAt()).toBeNull()
+    expect(fixture.revision()).toBe(1)
+    expect(fixture.speakerDisposition.setLegacyListeningActive).toHaveBeenCalledWith(false)
+    expect(fixture.speakerDisposition.setListeningActive).toHaveBeenCalledWith(false)
+    expect(fixture.speakerDisposition.setTrayRecording).toHaveBeenCalledWith(false)
+    expect(fixture.speakerDisposition.setRecordingPowerSaveBlock).toHaveBeenCalledWith(false)
+    expect(fixture.events.slice(-2)).toEqual(['release-parakeet', 'release-speaker-embedding'])
+  })
+
+  it('does not close a different active speaker identity', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 655 })
+
+    fixture.controller.hardStopMeetingCapture('owner-replaced')
+
+    expect(fixture.events).not.toContain('close-live-speaker:654')
+    expect(fixture.activeSpeakerStartedAt()).toBe(655)
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+  })
+
+  it.each([
+    'missing',
+    'destroyed',
+    'mismatched'
+  ] as const)('continues teardown without notifying a %s capture window', (windowMode) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, windowMode })
+
+    fixture.controller.hardStopMeetingCapture('owner-replaced')
+
+    expect(fixture.send).not.toHaveBeenCalled()
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.nativeReleases.parakeetRelease).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues teardown when sending the renderer notification throws', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, throwOnSend: true })
+
+    expect(() => fixture.controller.hardStopMeetingCapture('owner-replaced')).not.toThrow()
+
+    expect(fixture.send).toHaveBeenCalledTimes(1)
+    expect(fixture.meetingMicCaptureAuthority.revokeMeeting).toHaveBeenCalledWith(654, 'owner-replaced')
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.nativeReleases.parakeetRelease).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps null legacy identity unnotified while still releasing its reservation', () => {
+    const fixture = setup({ reservation: null })
+
+    fixture.controller.hardStopMeetingCapture('user-stop')
+
+    expect(fixture.send).not.toHaveBeenCalled()
+    expect(fixture.releaseMeeting).toHaveBeenCalledWith(null)
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards an exact crashed speaker identity and lets discard own reservation release', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+
+    fixture.controller.hardStopMeetingCapture('owner-replaced', 'discard')
+
+    expect(fixture.speakerDisposition.discardActiveLiveSpeakerSession).toHaveBeenCalledTimes(1)
+    expect(fixture.events).not.toContain('close-live-speaker:654')
+    expect(fixture.releaseMeeting).toHaveBeenCalledTimes(1)
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.activeSpeakerStartedAt()).toBeNull()
+    expect(fixture.nativeReleases.parakeetRelease).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing without a reservation and makes completed teardown idempotent', () => {
+    const empty = setup()
+    empty.controller.hardStopMeetingCapture('owner-replaced')
+    expect(empty.events).toEqual([])
+
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+    fixture.controller.hardStopMeetingCapture('owner-replaced')
+    const completedEvents = [...fixture.events]
+    fixture.controller.hardStopMeetingCapture('owner-replaced')
+    expect(fixture.events).toEqual(completedEvents)
+    expect(fixture.releaseMeeting).toHaveBeenCalledTimes(1)
+    expect(fixture.nativeReleases.parakeetRelease).toHaveBeenCalledTimes(1)
+    expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+  })
+
+  it('attaches rejection handlers to both fire-and-forget native release promises', async () => {
+    const fixture = setup({ reservation: 654, rejectNativeReleases: true })
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+
+    try {
+      fixture.controller.hardStopMeetingCapture('owner-replaced')
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(fixture.nativeReleases.parakeetRelease).toHaveBeenCalledTimes(1)
+      expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+})

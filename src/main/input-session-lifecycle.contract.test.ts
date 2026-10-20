@@ -274,9 +274,11 @@ describe('input-session lifecycle revocation wiring', () => {
     expect(source).toContain('isCaptureLifecycleReady: () => inputPowerLifecycleHooksReady')
     expect(source).toContain('inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady')
     const hardStop = declaration('hardStopInputSession')
-    expect(hardStop).toContain("reason === 'system-suspend'")
-    expect(hardStop).toContain("reason === 'screen-locked'")
-    expect(hardStop).toContain('hardStopMeetingCapture(reason)')
+    expect(hardStop).toContain('inputSessionLifecycleController.hardStopInputSession(reason)')
+    expect(declaration('hardStopMeetingCapture')).toContain(
+      'inputSessionLifecycleController.hardStopMeetingCapture(reason, speakerDisposition)'
+    )
+    expect(source).toContain('const inputSessionLifecycleController = new InputSessionLifecycleController({')
   })
 
   it('routes hidden-window shortcut starts only after show/restore revalidation', () => {
