@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CLOUD_SPEECH_IPC } from '@shared/cloud-speech'
 import type { SpeechBrokerClient } from './broker-client'
 import type { CloudSpeechIpcOptions } from '../ipc/cloud-speech-ipc-support'
-import { languageChangeAuditRecord } from '../ipc/cloud-speech-language-audit'
+import { OwnerSessionRefSchema, type OwnerSessionRef } from '@shared/contracts/owner-session'
+import { createLanguageChangeAudit, languageChangeAuditRecord } from '../ipc/cloud-speech-language-audit'
 
 const relayHarness = vi.hoisted(() => ({ create: vi.fn() }))
 vi.mock('./relay-session', () => ({ RelaySpeechSession: { create: relayHarness.create } }))
@@ -408,7 +409,10 @@ describe('speech.language.change audit hook (WP02 catalog, S13 path)', () => {
   })
 
   it('observes each resolved request once with its outcome and no language value', async () => {
-    const onLanguageChange = vi.fn()
+    const onSettled = vi.fn()
+    const onLanguageChange = vi.fn(
+      (_owner: Parameters<NonNullable<CloudSpeechIpcOptions['onLanguageChange']>>[0]) => onSettled
+    )
     const run = await startLanguageRun({
       allowedLanguages: ['multi', 'en-US', 'fr'],
       candidateLanguage: 'fr',
@@ -416,12 +420,15 @@ describe('speech.language.change audit hook (WP02 catalog, S13 path)', () => {
     })
     await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('de')])).resolves.toMatchObject({ code: 'POLICY' })
     await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('fr')])).resolves.toMatchObject({ changed: true })
-    expect(onLanguageChange.mock.calls.map((call) => call[1])).toEqual([
+    expect(onLanguageChange).toHaveBeenCalledTimes(2)
+    expect(onSettled.mock.calls.map((call) => call[0])).toEqual([
       { ok: false, code: 'POLICY' },
       { ok: true, changed: true }
     ])
-    for (const [owner, outcome] of onLanguageChange.mock.calls) {
+    for (const [owner] of onLanguageChange.mock.calls) {
       expect(owner).toMatchObject({ captureId: FAKE_CAPTURE_ID, generation: 7 })
+    }
+    for (const [outcome] of onSettled.mock.calls) {
       const record = languageChangeAuditRecord(null, outcome, 1)
       expect(record).not.toBeNull()
       expect(JSON.stringify(record)).not.toMatch(/"(fr|de|en-US)"|language":/)
@@ -447,6 +454,53 @@ describe('speech.language.change audit hook (WP02 catalog, S13 path)', () => {
     expect(onLanguageChange).not.toHaveBeenCalled()
   })
 
+  it.each([
+    'replacement',
+    'sign-out',
+    'sign-in'
+  ] as const)('retains the requesting owner when %s happens during preflight', async (change) => {
+    const original = OwnerSessionRefSchema.parse({
+      v: 1,
+      ownerKey: 'ab'.repeat(32),
+      authGeneration: 1,
+      sessionId: OLD_ID,
+      frameOwner: '11:2',
+      contextRevision: 1,
+      issuedAt: M
+    })
+    let current: OwnerSessionRef | null = change === 'sign-in' ? null : original
+    const admitted = current
+    const audit = vi.fn()
+    const run = await startLanguageRun({
+      onLanguageChange: createLanguageChangeAudit({ resolveOwner: () => current, audit })
+    })
+    const capability = run.h.client.capability
+    let release!: () => void
+    const pendingCapability = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const delayed = vi.fn(async (...args: Parameters<typeof capability>) => {
+      await pendingCapability
+      return capability(...args)
+    })
+    run.h.client.capability = delayed
+    const pending = run.invoke(CLOUD_SPEECH_IPC.language, [request('en-US')])
+    await vi.waitFor(() => expect(delayed).toHaveBeenCalledTimes(1))
+    expect(audit).not.toHaveBeenCalled()
+    current = change === 'sign-out' ? null : { ...original, ownerKey: 'cd'.repeat(32), sessionId: CANDIDATE_ID }
+    release()
+    await expect(pending).resolves.toMatchObject({ ok: true, changed: false })
+    expect(audit).toHaveBeenCalledTimes(1)
+    expect(audit).toHaveBeenCalledWith(
+      'speech.language.change',
+      expect.objectContaining({
+        ownerKey: admitted?.ownerKey ?? null,
+        sessionId: admitted?.sessionId ?? null,
+        outcome: 'allowed'
+      })
+    )
+  })
+
   it('a throwing audit hook never changes the language result', async () => {
     const onLanguageChange = vi.fn(() => {
       throw new Error('audit sink down')
@@ -463,5 +517,31 @@ describe('speech.language.change audit hook (WP02 catalog, S13 path)', () => {
     })
     expect(onLanguageChange).toHaveBeenCalledTimes(1)
     expect(run.oldSession.cancel).not.toHaveBeenCalled()
+  })
+
+  it('a throwing settlement observer never changes the language result', async () => {
+    const onSettled = vi.fn(() => {
+      throw new Error('audit sink down')
+    })
+    const run = await startLanguageRun({ onLanguageChange: () => onSettled })
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('en-US')])).resolves.toMatchObject({
+      ok: true,
+      language: 'en-US',
+      changed: false
+    })
+    expect(onSettled).toHaveBeenCalledTimes(1)
+    expect(run.oldSession.cancel).not.toHaveBeenCalled()
+  })
+
+  it('provider-detected language changes never start or emit a user audit', async () => {
+    const onSettled = vi.fn()
+    const onLanguageChange = vi.fn(() => onSettled)
+    const run = await startLanguageRun({ startLanguage: 'multi', onLanguageChange })
+    run.emitOld(1, 'hello', ['en'])
+    run.emitOld(2, 'bonjour', ['fr'])
+    await vi.waitFor(() => expect(segmentSends(run.h)).toHaveLength(2))
+    expect(run.languages()).toEqual(['en', 'fr'])
+    expect(onLanguageChange).not.toHaveBeenCalled()
+    expect(onSettled).not.toHaveBeenCalled()
   })
 })

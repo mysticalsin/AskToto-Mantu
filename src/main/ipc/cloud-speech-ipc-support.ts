@@ -162,10 +162,10 @@ export type CloudSpeechIpcOptions = {
   /** Observes each event after it was delivered to the owning renderer. Must not throw. */
   onSegmentDelivered?: (owner: Owner, event: z.infer<typeof CloudSpeechEventSchema>) => void
   /**
-   * Observes each user language change request once its capture owner resolved, with the settled outcome. Carries no
-   * language value. Must not throw.
+   * Snapshots audit attribution once the user request's capture owner resolves, before any await. Returns the
+   * settled-outcome observer. Neither phase carries a language value or may affect the request result.
    */
-  onLanguageChange?: (owner: Owner, outcome: LanguageChangeOutcome) => void
+  onLanguageChange?: (owner: Owner) => (outcome: LanguageChangeOutcome) => void
 }
 
 export type LanguageChangeOutcome = { ok: true; changed: boolean } | { ok: false; code: CloudSpeechFailure['code'] }

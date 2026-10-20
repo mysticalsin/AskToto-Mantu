@@ -57,18 +57,27 @@ export interface LanguageChangeAuditDeps {
   now?: () => number
 }
 
-/** The `onLanguageChange` hook for registerCloudSpeechIpc. Best effort: it never throws into the IPC handler. */
+/** Snapshots attribution at request admission, then records only the settled outcome. Both phases are best effort. */
 export function createLanguageChangeAudit(
   deps: LanguageChangeAuditDeps
 ): NonNullable<CloudSpeechIpcOptions['onLanguageChange']> {
   const now = deps.now ?? (() => Date.now())
-  return (owner, outcome) => {
+  return (owner) => {
+    let ref: OwnerSessionRef | null
     try {
       const { processId, routingId } = owner.binding
-      const record = languageChangeAuditRecord(deps.resolveOwner({ processId, routingId }), outcome, now())
-      if (record) deps.audit(LANGUAGE_CHANGE_AUDIT_EVENT, record)
+      const resolved = deps.resolveOwner({ processId, routingId })
+      ref = resolved ? { ...resolved } : null
     } catch {
-      // auditing is best effort
+      return () => undefined
+    }
+    return (outcome) => {
+      try {
+        const record = languageChangeAuditRecord(ref, outcome, now())
+        if (record) deps.audit(LANGUAGE_CHANGE_AUDIT_EVENT, record)
+      } catch {
+        // auditing is best effort
+      }
     }
   }
 }

@@ -311,13 +311,14 @@ function reduceStreamEnd(
   rev: TranscriptRevision,
   ev: Extract<RevisionEvent, { kind: 'stream-end' }>
 ): Candidate | RevisionRefusal {
-  const index = rev.segments.findIndex(
-    (segment) =>
-      segment.relaySessionId === ev.relaySessionId && segment.channel === ev.channel && segment.state === 'partial'
-  )
-  if (index < 0) return 'duplicate'
-  const next = freezeSegment({ ...rev.segments[index], state: 'final' })
-  return { ...unchanged(rev), segments: replaceAt(rev.segments, index, next), changed: [next.segmentId] }
+  const changed: string[] = []
+  const segments = rev.segments.map((segment) => {
+    if (segment.relaySessionId !== ev.relaySessionId || segment.channel !== ev.channel || segment.state !== 'partial')
+      return segment
+    changed.push(segment.segmentId)
+    return freezeSegment({ ...segment, state: 'final' })
+  })
+  return changed.length === 0 ? 'duplicate' : { ...unchanged(rev), segments, changed }
 }
 
 function reduce(rev: TranscriptRevision, ev: RevisionEvent): Candidate | RevisionRefusal {

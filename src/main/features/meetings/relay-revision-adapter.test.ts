@@ -201,6 +201,37 @@ describe('relay revision adapter', () => {
     expect(store.snapshot(M)?.segments[0]?.state).toBe('partial')
   })
 
+  it.each([
+    'terminal',
+    'rotation'
+  ] as const)('settles every indexed partial on %s without changing heard text', (end) => {
+    const store = createTranscriptRevisionStore()
+    const changed = vi.fn()
+    store.onChange(changed)
+    const tap = createRelayRevisionTap({ store })
+    const owner = makeOwner()
+    tap(owner, segmentEvent({ sequence: 1, index: 1, text: 'first' }))
+    tap(owner, segmentEvent({ sequence: 2, index: 2, startMs: 100, text: 'second' }))
+    tap(owner, segmentEvent({ sequence: 1, index: 1, track: 'system', text: 'other track' }))
+    const before = store.snapshot(M)!
+    tap(owner, end === 'terminal' ? terminalEvent(1) : transition('opened', 1))
+    const after = store.snapshot(M)!
+    expect(after.segments).toEqual([
+      { ...before.segments[0], state: 'final' },
+      { ...before.segments[1], state: 'final' },
+      before.segments[2]
+    ])
+    expect(after.revision).toBe(before.revision + 1)
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        changed: after.segments.slice(0, 2),
+        revision: after.revision
+      })
+    )
+    tap(owner, end === 'terminal' ? terminalEvent(1) : transition('opened', 1))
+    expect(store.snapshot(M)).toBe(after)
+  })
+
   it('binds the store once per owner with the meeting id and optional owner ref', () => {
     const open = vi.fn(() => ({ ok: true as const }))
     const apply = vi.fn(() => ({ ok: false as const, reason: 'invalid' as const }))

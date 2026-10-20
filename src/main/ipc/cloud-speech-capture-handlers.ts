@@ -444,9 +444,15 @@ export function createCaptureHandlers(context: CaptureHandlersContext): CaptureI
       owner.binding.frame !== binding.frame
     )
       return failure('STALE')
+    let onSettled: ((outcome: LanguageChangeOutcome) => void) | undefined
+    try {
+      onSettled = context.onLanguageChange?.(owner)
+    } catch {
+      // an observer never changes the result
+    }
     const notify = (outcome: LanguageChangeOutcome): void => {
       try {
-        context.onLanguageChange?.(owner, outcome)
+        onSettled?.(outcome)
       } catch {
         // an observer never changes the result
       }

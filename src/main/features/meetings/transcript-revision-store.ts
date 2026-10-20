@@ -13,7 +13,7 @@ import {
 } from '@shared/contracts/speech/transcript-revision'
 import type { InputSessionStopReason } from '@shared/input-session'
 
-// checkpoint() is intentionally not part of this slice. It lands with WP03-S03, which needs the patch 0013 decision.
+// checkpoint() remains WP03-S03; patch 0013 is retained by the owner decision.
 
 export type FrameOwner = `${number}:${number}`
 

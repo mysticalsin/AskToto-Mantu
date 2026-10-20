@@ -71,8 +71,11 @@ describe('createLanguageChangeAudit', () => {
   it('resolves the owner from the capture frame and audits once', () => {
     const audit = vi.fn()
     const resolveOwner = vi.fn(() => ref)
-    createLanguageChangeAudit({ resolveOwner, audit, now: () => 9 })(owner, { ok: true, changed: true })
+    const settled = createLanguageChangeAudit({ resolveOwner, audit, now: () => 9 })(owner)
     expect(resolveOwner).toHaveBeenCalledWith({ processId: 11, routingId: 2 })
+    expect(resolveOwner).toHaveBeenCalledTimes(1)
+    expect(audit).not.toHaveBeenCalled()
+    settled({ ok: true, changed: true })
     expect(audit).toHaveBeenCalledTimes(1)
     expect(audit).toHaveBeenCalledWith(
       'speech.language.change',
@@ -85,10 +88,10 @@ describe('createLanguageChangeAudit', () => {
       throw new Error('boom')
     }
     expect(() =>
-      createLanguageChangeAudit({ resolveOwner: throwing, audit: vi.fn() })(owner, { ok: true, changed: true })
+      createLanguageChangeAudit({ resolveOwner: throwing, audit: vi.fn() })(owner)({ ok: true, changed: true })
     ).not.toThrow()
     expect(() =>
-      createLanguageChangeAudit({ resolveOwner: () => null, audit: throwing })(owner, { ok: true, changed: true })
+      createLanguageChangeAudit({ resolveOwner: () => null, audit: throwing })(owner)({ ok: true, changed: true })
     ).not.toThrow()
   })
 })
