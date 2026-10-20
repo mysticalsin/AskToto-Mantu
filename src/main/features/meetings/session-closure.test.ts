@@ -3,11 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ app: {}, safeStorage: {}, webContents: {} }))
 vi.mock('../../auth', () => ({ authStatus: vi.fn(), authSessionGeneration: vi.fn() }))
 
-import {
-  CloudSpeechEventSchema,
-  CloudSpeechSegmentEventSchema,
-  type CloudSpeechEvent
-} from '@shared/cloud-speech'
+import { CloudSpeechEventSchema, CloudSpeechSegmentEventSchema, type CloudSpeechEvent } from '@shared/cloud-speech'
 import {
   OWNER_SESSION_REVOKE_REASONS,
   type OwnerSessionRef,

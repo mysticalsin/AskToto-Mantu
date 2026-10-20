@@ -302,7 +302,9 @@ describe('input-capture IPC owner-session admission', () => {
     expect(authority.activeLease?.sessionId).not.toBe(attemptedLeaseId)
     expect(authority.claimPermissionRequest(owner)).toBe(true)
     ownerSession.validate.mockClear()
-    expect(setupResult.call(IPC.inputSessionConfirm, { sessionId: authority.activeLease?.sessionId, context })).toBe(false)
+    expect(setupResult.call(IPC.inputSessionConfirm, { sessionId: authority.activeLease?.sessionId, context })).toBe(
+      false
+    )
     expect(ownerSession.validate).toHaveBeenCalledWith(ref, senderFrame)
     expect(setupResult.setCommandMicActivationLeaseId).toHaveBeenCalledTimes(1)
     expect(setupResult.setCommandMicActivationLeaseId).toHaveBeenCalledWith('2'.padStart(48, '0'))
