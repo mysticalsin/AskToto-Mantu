@@ -250,7 +250,7 @@ describe('backfill run completion observes real work', () => {
   it('repairs a local checkpoint without requiring a provider', async () => {
     const file = meeting('checkpoint.md')
     const sourceDigest = createHash('sha256').update(readFileSync(file)).digest('hex')
-    const sourceRootId = createHash('sha256').update(realpathSync(folder), 'utf8').digest('hex')
+    const sourceRootId = createHash('sha256').update(realpathSync.native(folder), 'utf8').digest('hex')
     clearApiKey('anthropic')
     await brainStore.writeMeetingExtraction(
       getSettings(),
@@ -595,7 +595,7 @@ describe('backfill run completion observes real work', () => {
     const teamStats = statSync(teamFile)
     const teamVersion = `${Math.round(teamStats.mtimeMs)}:${teamStats.size}`
     const teamSourceDigest = createHash('sha256').update(teamBytes).digest('hex')
-    const teamSourceRootId = createHash('sha256').update(realpathSync(teamFolder), 'utf8').digest('hex')
+    const teamSourceRootId = createHash('sha256').update(realpathSync.native(teamFolder), 'utf8').digest('hex')
     const teamRecord = {
       at: Date.now(),
       ok: true,
@@ -623,7 +623,7 @@ describe('backfill run completion observes real work', () => {
     const ownFile = meeting('own-recovery.md')
     const ownBytes = readFileSync(ownFile)
     const ownSourceDigest = createHash('sha256').update(ownBytes).digest('hex')
-    const ownSourceRootId = createHash('sha256').update(realpathSync(folder), 'utf8').digest('hex')
+    const ownSourceRootId = createHash('sha256').update(realpathSync.native(folder), 'utf8').digest('hex')
     await brainStore.writeMeetingExtraction(
       getSettings(),
       brainStore.slugify('own-recovery.md'),

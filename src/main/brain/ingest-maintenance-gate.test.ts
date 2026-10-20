@@ -109,7 +109,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     sourceDigest: createHash('sha256')
       .update(readFileSync(join(meetingsFolder, name)))
       .digest('hex'),
-    sourceRootId: createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+    sourceRootId: createHash('sha256').update(realpathSync.native(meetingsFolder), 'utf8').digest('hex')
   })
 
   beforeEach(() => {

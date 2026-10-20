@@ -20,7 +20,7 @@ function sourceReceipts(root: string, file: string) {
     sourceDigest: createHash('sha256')
       .update(readFileSync(join(root, file)))
       .digest('hex'),
-    sourceRootId: createHash('sha256').update(realpathSync(root), 'utf8').digest('hex')
+    sourceRootId: createHash('sha256').update(realpathSync.native(root), 'utf8').digest('hex')
   }
 }
 

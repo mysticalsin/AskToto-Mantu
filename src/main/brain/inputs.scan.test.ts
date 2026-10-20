@@ -92,7 +92,7 @@ describe('scanMeetingSources missing-root classification', () => {
     writeFileSync(ownFile, 'synthetic metadata-only transcript\n', 'utf8')
     const scan = await scanOnly(settings(ownRoot, [missingTeamRoot]))
     const own = scan[0]?.sources[0]
-    const expectedRootId = createHash('sha256').update(realpathSync(ownRoot), 'utf8').digest('hex')
+    const expectedRootId = createHash('sha256').update(realpathSync.native(ownRoot), 'utf8').digest('hex')
     const stats = statSync(ownFile)
     const prior = BrainIndexSchema.parse({
       ingested: {
