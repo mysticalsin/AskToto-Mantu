@@ -48,17 +48,15 @@ jobs:
         run: bash scripts/ci/native-changes.sh
 
   quality:
-    # Matrix over both host platforms is LOAD-BEARING. This job was ubuntu-only for the app's whole
-    # history, so every Windows-gated test was a silent false-pass: nothing ever executed the win32
-    # branches of the suite, and three POSIX-only assertions in check-ffmpeg-sidecar.test.ts sat broken
-    # on main undetected because the only Windows job (build-windows) packages without running tests.
-    # A Windows runner here is the gate that keeps win32 test breakage from reaching main again.
+    # Matrix over all three host platforms is LOAD-BEARING: cross-platform runtime cases and Darwin-only
+    # supervision cases must execute on the platforms they target, while Windows-only test branches stay
+    # covered on Windows. Packaging remains gated on every quality matrix entry below.
     name: Quality checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     # Windows runners are consistently slower at npm ci + the Electron build than ubuntu.
     timeout-minutes: 30
     steps:
@@ -76,17 +74,6 @@ jobs:
       # regression test that cites its MQA id, so a re-broken bug fails a named test instead of
       # silently shipping again. Runs before the suite — it is fast and its failure is unambiguous.
       - run: npm run check:bugs
-      # FF-01: production code never imports across a process or layer boundary. Fails the job on any
-      # such import; test-only crossings are warnings held by the ratchet below.
-      - name: Architecture layering
-        if: runner.os == 'Linux'
-        run: npm run check:layering
-      # FF-01 test crossings and FF-02..FF-14 as per-file counts that may only fall
-      # (scripts/architecture-baseline.json). Blocking since 2026-09-28 (M2-0237): the report-only period
-      # (M2-0047) is over, so a differing count fails the job instead of only showing here.
-      - name: Architecture ratchet
-        if: runner.os == 'Linux'
-        run: npm run check:architecture
       - run: npm run build
       - name: QA fault-hook deterministic repeat
         shell: bash
@@ -145,6 +132,19 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           overwrite: false
+      # Run after retaining the root report so architecture failures cannot hide test/skip inventory.
+      # Keep both Linux gates blocking; they also run after a failed root attempt unless cancelled.
+      # FF-01: production code never imports across a process or layer boundary. Test-only crossings are
+      # warnings held by the ratchet below.
+      - name: Architecture layering
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: npm run check:layering
+      # FF-01 test crossings and FF-02..FF-14 as per-file counts that may only fall
+      # (scripts/architecture-baseline.json). Blocking since 2026-09-28 (M2-0237): the report-only period
+      # (M2-0047) is over, so a differing count fails the job instead of only showing here.
+      - name: Architecture ratchet
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: npm run check:architecture
       # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
       - run: npm run check:colors

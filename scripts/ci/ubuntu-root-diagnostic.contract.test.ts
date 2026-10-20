@@ -104,8 +104,19 @@ describe('independent Ubuntu root diagnostic evidence', () => {
 
   it('keeps the original architecture and packaging dependencies blocking in Build & Test', () => {
     const build = readFileSync(join(root, '.github', 'workflows', 'build.yml'), 'utf8').replace(/\r\n/g, '\n')
+    const layering = step(build, 'Architecture layering')
     const architecture = step(build, 'Architecture ratchet')
-    expect(architecture).toContain("        if: runner.os == 'Linux'\n        run: npm run check:architecture")
+    const retention = step(build, 'Retain original root test report')
+    for (const [gate, command] of [
+      [layering, 'npm run check:layering'],
+      [architecture, 'npm run check:architecture']
+    ] as const) {
+      expect(gate).toContain("        if: ${{ !cancelled() && runner.os == 'Linux' }}\n")
+      expect(gate).toContain(`        run: ${command}\n`)
+      expect(gate).not.toContain('continue-on-error')
+    }
+    expect(build.indexOf(retention)).toBeLessThan(build.indexOf(layering))
+    expect(build.indexOf(layering)).toBeLessThan(build.indexOf(architecture))
     expect(architecture).not.toContain('continue-on-error')
     expect(build.match(/^ {4}needs: \[quality, security\]$/gm)).toHaveLength(2)
     expect(build).not.toContain('ubuntu-root-diagnostic')

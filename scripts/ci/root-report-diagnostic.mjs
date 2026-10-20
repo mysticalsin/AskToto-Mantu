@@ -52,7 +52,7 @@ function trustedContext(context, io) {
     !/^[1-9][0-9]{0,19}$/.test(context.runId) ||
     typeof context.runAttempt !== 'string' ||
     !/^[1-9][0-9]{0,9}$/.test(context.runAttempt) ||
-    !['ubuntu-latest', 'windows-latest'].includes(context.matrixOs) ||
+    !['ubuntu-latest', 'windows-latest', 'macos-latest'].includes(context.matrixOs) ||
     !OUTCOMES.has(outcome(context.pipelineOutcome)) ||
     !OUTCOMES.has(outcome(context.auditOutcome))
   )

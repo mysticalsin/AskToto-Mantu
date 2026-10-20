@@ -57,6 +57,36 @@ function namedStep(job: string, name: string): string {
   return lines.slice(start, end === -1 ? undefined : end).join('\n')
 }
 
+describe('cross-platform quality matrix and post-root Linux architecture gates', () => {
+  it('runs quality on Ubuntu, Windows and macOS', () => {
+    const job = qualityJob()
+    expect(job).toContain('        os: [ubuntu-latest, windows-latest, macos-latest]\n')
+  })
+
+  it('retains the root report before running blocking Linux architecture checks', () => {
+    const job = qualityJob()
+    const retention = namedStep(job, 'Retain original root test report')
+    const layering = namedStep(job, 'Architecture layering')
+    const ratchet = namedStep(job, 'Architecture ratchet')
+    const colors = '      - run: npm run check:colors'
+    for (const [step, command] of [
+      [layering, 'npm run check:layering'],
+      [ratchet, 'npm run check:architecture']
+    ] as const) {
+      expect(step).toContain("        if: ${{ !cancelled() && runner.os == 'Linux' }}\n")
+      expect(step).toContain(`        run: ${command}\n`)
+      expect(step).not.toContain('continue-on-error')
+    }
+    expect(job.indexOf(namedStep(job, 'Run complete test pipeline'))).toBeLessThan(job.indexOf(retention))
+    expect(job.indexOf(namedStep(job, 'Audit declared skips from root report'))).toBeLessThan(job.indexOf(retention))
+    expect(job.indexOf(namedStep(job, 'Log bounded root report diagnostic'))).toBeLessThan(job.indexOf(retention))
+    expect(job.indexOf(retention)).toBeLessThan(job.indexOf(layering))
+    expect(job.indexOf(layering)).toBeLessThan(job.indexOf(ratchet))
+    expect(job.indexOf(ratchet)).toBeLessThan(job.indexOf(colors))
+    expect(job).not.toMatch(/continue-on-error:\s*true/)
+  })
+})
+
 describe('root Vitest report handoff workflow', () => {
   it('keeps npm test as the sole mode-lock, root, proxy, and Operator pipeline', () => {
     expect(project.scripts.test).toBe(
@@ -462,6 +492,26 @@ function expectNotPass(result: ReturnType<typeof diagnoseRootReport>, reason: st
 }
 
 describe('bounded root report diagnostic producer', () => {
+  it.each(['ubuntu-latest', 'windows-latest', 'macos-latest'])(
+    'accepts only the named hosted quality runner label: %s',
+    (matrixOs) =>
+      withReport((fixture) => {
+        fixture.context.matrixOs = matrixOs
+        fixture.context.reportPath = join(
+          fixture.context.runnerTemp,
+          `metis-ci-root-report-${fixture.context.runId}-${fixture.context.runAttempt}-${matrixOs}.json`
+        )
+        expect(diagnose(fixture).summary.status).toBe('DIAGNOSTIC_COMPLETE')
+      })
+  )
+
+  it.each(['linux-latest', 'macos-15', 'self-hosted'])('rejects an untrusted runner label: %s', (matrixOs) =>
+    withReport((fixture) => {
+      fixture.context.matrixOs = matrixOs
+      expectNotPass(diagnose(fixture), 'NOT_PASS_CONTEXT')
+    })
+  )
+
   it('keeps a coherent failed 38-skip inventory without claiming PASS or equating suites with files', () =>
     withReport((fixture) => {
       fixture.report.success = false
