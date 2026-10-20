@@ -189,17 +189,41 @@ describe('downloadVerified', () => {
 
   it('rejects a 206 response with a changed validator before appending its body', async () => {
     const progressByRequest: Array<{ requestCount: number; bytes: number }> = []
-    server = await serve(rangeHandler(body, { cutFirstAt: 60_000, changeValidatorOnResume: true }))
-    await downloadVerified(
-      {
-        ...request(`${server.base}/pin/model.bin`),
-        onProgress: (bytes) => progressByRequest.push({ requestCount: server!.requests.length, bytes })
-      },
-      deps()
+    const cut = 60_000
+    let releaseCut!: () => void
+    const cutPersisted = new Promise<void>((resolve) => {
+      releaseCut = resolve
+    })
+    const controller = new AbortController()
+    server = await serve(
+      rangeHandler(body, { cutFirstAt: cut, dropFirstAfter: cutPersisted, changeValidatorOnResume: true })
     )
+    const handshakeTimer = setTimeout(
+      () => controller.abort(new Error('changed-validator fixture did not complete within 5 seconds')),
+      5_000
+    )
+    try {
+      await downloadVerified(
+        {
+          ...request(`${server.base}/pin/model.bin`, controller.signal),
+          onProgress: (bytes) => {
+            const requestCount = server!.requests.length
+            progressByRequest.push({ requestCount, bytes })
+            // A slow client must persist the prefix before the fixture drops its connection.
+            if (requestCount === 1 && bytes === cut) releaseCut()
+          }
+        },
+        deps()
+      )
+    } finally {
+      clearTimeout(handshakeTimer)
+      releaseCut()
+    }
     expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
+    expect(progressByRequest).toContainEqual({ requestCount: 1, bytes: cut })
     expect(server.requests).toHaveLength(3)
     expect(server.requests[1].headers.range).toBe('bytes=60000-')
+    expect(server.requests[1].headers['if-range']).toBe('"v1"')
     expect(server.requests[2].headers.range).toBeUndefined()
     expect(progressByRequest.some(({ requestCount, bytes }) => requestCount === 2 && bytes > 60_000)).toBe(false)
   })
