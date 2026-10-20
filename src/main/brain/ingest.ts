@@ -2962,6 +2962,7 @@ async function startBackfillAsync(
       return { queued: 0 }
     }
     const scan = await scanMeetingSources(s)
+    if (scan.some((folder) => folder.status !== 'ok')) completionError('scan-failed')
     if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
     const idx = await readIndexAsync(s)
     const route = options.route ?? 'default'

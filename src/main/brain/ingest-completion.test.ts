@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -11,6 +21,7 @@ import * as brainStore from './store'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
 import {
+  extractionSlug,
   requestBackfillRun,
   requestSourceRefresh,
   resumeBackfillIfPending,
@@ -549,5 +560,127 @@ describe('backfill run completion observes real work', () => {
     const run = await requestBackfillRun({ force: true })
     extraction.release()
     await expect(run.completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
+  })
+
+  it('keeps an absent own-root scan failed after the index write recreates it, then recovers', async () => {
+    clearApiKey('anthropic')
+    rmSync(folder, { recursive: true, force: true })
+    expect(existsSync(folder)).toBe(false)
+
+    const interrupted = await requestBackfillRun({ force: true })
+    await expect(interrupted.completion).resolves.toEqual({ ok: false, error: 'scan-failed', total: 0, failed: 0 })
+    await settleBrainWritesForTests()
+
+    expect(existsSync(folder)).toBe(true)
+    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(createStream).not.toHaveBeenCalled()
+    expect(brainBackfillProgress()).toMatchObject({ running: false })
+    expect(brainBackfillProgress().preparing).not.toBe(true)
+
+    setApiKey('anthropic', 'synthetic-test-key')
+    meeting('restored-own-root.md')
+    const recovered = await requestBackfillRun({ force: true })
+    await expect(recovered.completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
+    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(false)
+    expect(createStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('reconciles an own checkpoint during team-root loss and retries the same sources after recovery', async () => {
+    const teamFolder = join(profile, 'shared')
+    mkdirSync(teamFolder)
+    const teamKey = 'team/shared/team-recovery.md'
+    const teamBytes = Buffer.from('---\ndate: 2026-01-01\n---\nSynthetic team transcript.\n', 'utf8')
+    const teamFile = join(teamFolder, 'team-recovery.md')
+    writeFileSync(teamFile, teamBytes)
+    const teamStats = statSync(teamFile)
+    const teamVersion = `${Math.round(teamStats.mtimeMs)}:${teamStats.size}`
+    const teamSourceDigest = createHash('sha256').update(teamBytes).digest('hex')
+    const teamSourceRootId = createHash('sha256').update(realpathSync(teamFolder), 'utf8').digest('hex')
+    const teamRecord = {
+      at: Date.now(),
+      ok: true,
+      sourceVersion: teamVersion,
+      sourceDigest: teamSourceDigest,
+      sourceRootId: teamSourceRootId
+    }
+    setSettings({ teamTranscriptFolders: [teamFolder] })
+    await brainStore.writeMeetingExtraction(
+      getSettings(),
+      extractionSlug(teamKey),
+      MeetingExtractionSchema.parse({
+        title24: 'Synthetic team recovery',
+        sourceDigest: teamSourceDigest,
+        sourceRootId: teamSourceRootId
+      })
+    )
+    const seededIndex = brainStore.readIndex(getSettings())
+    seededIndex.ingested[teamKey] = teamRecord
+    seededIndex.backfillRequested = true
+    seededIndex.sourceRefreshRequested = false
+    seededIndex.replayPending = false
+    await brainStore.writeIndex(getSettings(), seededIndex)
+
+    const ownFile = meeting('own-recovery.md')
+    const ownBytes = readFileSync(ownFile)
+    const ownSourceDigest = createHash('sha256').update(ownBytes).digest('hex')
+    const ownSourceRootId = createHash('sha256').update(realpathSync(folder), 'utf8').digest('hex')
+    await brainStore.writeMeetingExtraction(
+      getSettings(),
+      brainStore.slugify('own-recovery.md'),
+      MeetingExtractionSchema.parse({
+        title24: 'Synthetic own recovery',
+        sourceDigest: ownSourceDigest,
+        sourceRootId: ownSourceRootId
+      })
+    )
+    clearApiKey('anthropic')
+    rmSync(teamFolder, { recursive: true, force: true })
+    vi.mocked(createStream).mockClear()
+    vi.mocked(publish.publishAll).mockClear()
+    const purge = vi.spyOn(brainStore, 'purgeBrain')
+    expect(existsSync(teamFolder)).toBe(false)
+
+    const interrupted = await requestBackfillRun({ force: true })
+    await expect(interrupted.completion).resolves.toMatchObject({ ok: false, error: 'scan-failed', failed: 0 })
+    await settleBrainWritesForTests()
+
+    const partial = brainStore.readIndex(getSettings())
+    expect(partial.ingested['own-recovery.md']?.ok).toBe(true)
+    expect(partial.ingested[teamKey]).toEqual(teamRecord)
+    expect(partial).toMatchObject({ backfillRequested: true, sourceRefreshRequested: false, replayPending: false })
+    expect(brainStore.readMeetingExtraction(getSettings(), extractionSlug(teamKey))).toMatchObject({
+      sourceDigest: teamSourceDigest,
+      sourceRootId: teamSourceRootId
+    })
+    expect(brainStore.readMeetingExtraction(getSettings(), brainStore.slugify('own-recovery.md'))).toMatchObject({
+      sourceDigest: ownSourceDigest,
+      sourceRootId: ownSourceRootId
+    })
+    expect(createStream).not.toHaveBeenCalled()
+    expect(publish.publishAll).not.toHaveBeenCalled()
+    expect(purge).not.toHaveBeenCalled()
+    expect(brainBackfillProgress()).toMatchObject({ running: false })
+    expect(brainBackfillProgress().preparing).not.toBe(true)
+
+    mkdirSync(teamFolder, { recursive: true })
+    writeFileSync(teamFile, teamBytes)
+    const restoredMtime = new Date(Math.round(teamStats.mtimeMs))
+    utimesSync(teamFile, restoredMtime, restoredMtime)
+    const restoredStats = statSync(teamFile)
+    expect(`${Math.round(restoredStats.mtimeMs)}:${restoredStats.size}`).toBe(teamVersion)
+
+    const recovered = await requestBackfillRun({ force: true })
+    await expect(recovered.completion).resolves.toMatchObject({ ok: true, failed: 0 })
+    const finalIndex = brainStore.readIndex(getSettings())
+    expect(finalIndex).toMatchObject({ backfillRequested: false, sourceRefreshRequested: false, replayPending: false })
+    expect(finalIndex.ingested[teamKey]).toEqual(teamRecord)
+    expect(finalIndex.ingested['own-recovery.md']?.ok).toBe(true)
+    expect(brainStore.readMeetingExtraction(getSettings(), extractionSlug(teamKey))).toMatchObject({
+      sourceDigest: teamSourceDigest,
+      sourceRootId: teamSourceRootId
+    })
+    expect(createStream).not.toHaveBeenCalled()
+    expect(publish.publishAll).not.toHaveBeenCalled()
+    expect(purge).not.toHaveBeenCalled()
   })
 })
