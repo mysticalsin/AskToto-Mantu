@@ -5,6 +5,7 @@ import { createQuitTrace } from './quit-trace'
 
 class TestApp extends EventEmitter {
   quits = 0
+  lastBeforeQuitEvent: { defaultPrevented: boolean; preventDefault(): void } | null = null
 
   quit(): void {
     this.quits += 1
@@ -14,6 +15,7 @@ class TestApp extends EventEmitter {
         this.defaultPrevented = true
       }
     }
+    this.lastBeforeQuitEvent = event
     this.emit('before-quit', event)
     if (event.defaultPrevented) return
     this.emit('will-quit')
@@ -172,24 +174,36 @@ describe('app quit lifecycle', () => {
     let flushDone = false
     let flushMarkCalls = 0
     const flushMessages: { channel: string; args: unknown[] }[] = []
+    const flushEvents: string[] = []
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => null,
       beginInputShutdown: () => {
         beginCalls += 1
       },
       quitTrace: createQuitTrace(false, () => undefined),
-      isQuitFlushDone: () => flushDone,
+      isQuitFlushDone: () => {
+        flushEvents.push(`done:${String(flushDone)}`)
+        return flushDone
+      },
       markQuitFlushDone: () => {
+        expect(app.lastBeforeQuitEvent?.defaultPrevented).toBe(true)
         flushMarkCalls += 1
         flushDone = true
+        flushEvents.push('mark')
       },
-      meetingFlushPending: () => !flushDone,
+      meetingFlushPending: () => {
+        flushEvents.push('pending')
+        return true
+      },
       window: () => ({
         isDestroyed: () => false,
         webContents: {
           send: (channel, ...args) => {
             flushRequests += 1
             flushMessages.push({ channel, args })
+            expect(flushDone).toBe(true)
+            expect(vi.getTimerCount()).toBe(0)
+            flushEvents.push('reset')
           }
         }
       }),
@@ -216,6 +230,7 @@ describe('app quit lifecycle', () => {
     expect(flushRequests).toBe(1)
     expect(flushMarkCalls).toBe(1)
     expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['reset'] }])
+    expect(flushEvents).toEqual(['done:false', 'pending', 'mark', 'reset'])
     expect(shutdownCalls).toBe(0)
     expect(vi.getTimerCount()).toBe(1)
     await vi.advanceTimersByTimeAsync(1999)
@@ -229,6 +244,7 @@ describe('app quit lifecycle', () => {
     expect(flushRequests).toBe(1)
     expect(flushMarkCalls).toBe(1)
     expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['reset'] }])
+    expect(flushEvents).toEqual(['done:false', 'pending', 'mark', 'reset', 'done:true'])
     expect(vi.getTimerCount()).toBe(0)
   })
 
