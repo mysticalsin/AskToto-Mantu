@@ -58,6 +58,7 @@ export type RevisionEvent =
   | { kind: 'user-correct'; baseRevision: number; segmentId: string; text: string }
   | { kind: 'user-retract'; baseRevision: number; segmentId: string }
   | { kind: 'language-change'; language: string; atMs: number; origin: 'provider' | 'user' }
+  | { kind: 'stream-end'; relaySessionId: string; channel: 'mic' | 'system' }
   | { kind: 'finalize' }
 
 export type RevisionRefusal =
@@ -164,6 +165,7 @@ export const RevisionEventSchema = z
         origin: z.enum(['provider', 'user'])
       })
       .strict(),
+    z.object({ kind: z.literal('stream-end'), relaySessionId: IdSchema, channel: ChannelSchema }).strict(),
     z.object({ kind: z.literal('finalize') }).strict()
   ])
   .superRefine((event, context) => {
@@ -301,6 +303,23 @@ function reduceUserEdit(rev: TranscriptRevision, ev: UserEditEvent): Candidate |
   return { ...unchanged(rev), segments: replaceAt(rev.segments, index, next), changed: [next.segmentId] }
 }
 
+/**
+ * A stream ended (terminal or a rotation to the next epoch) while a partial of that lineage and channel was open.
+ * Logged default: commit the text as heard (state 'final'). The alternative was to retract it.
+ */
+function reduceStreamEnd(
+  rev: TranscriptRevision,
+  ev: Extract<RevisionEvent, { kind: 'stream-end' }>
+): Candidate | RevisionRefusal {
+  const index = rev.segments.findIndex(
+    (segment) =>
+      segment.relaySessionId === ev.relaySessionId && segment.channel === ev.channel && segment.state === 'partial'
+  )
+  if (index < 0) return 'duplicate'
+  const next = freezeSegment({ ...rev.segments[index], state: 'final' })
+  return { ...unchanged(rev), segments: replaceAt(rev.segments, index, next), changed: [next.segmentId] }
+}
+
 function reduce(rev: TranscriptRevision, ev: RevisionEvent): Candidate | RevisionRefusal {
   switch (ev.kind) {
     case 'provider-partial':
@@ -317,6 +336,8 @@ function reduce(rev: TranscriptRevision, ev: RevisionEvent): Candidate | Revisio
       if (ev.language === currentLanguage(rev)) return 'duplicate'
       return { ...unchanged(rev), languages: [...rev.languages.filter((l) => l !== ev.language), ev.language] }
     }
+    case 'stream-end':
+      return reduceStreamEnd(rev, ev)
     case 'finalize':
       return { ...unchanged(rev), finalized: true }
   }

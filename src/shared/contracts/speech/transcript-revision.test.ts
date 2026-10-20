@@ -39,6 +39,59 @@ function run(events: RevisionEvent[], limits: RevisionLimits = DEFAULT_REVISION_
   return events.reduce((rev, ev) => accept(applyRevisionEvent(rev, ev, limits)).next, emptyTranscriptRevision(1))
 }
 
+describe('stream-end', () => {
+  const streamEnd = (relaySessionId: string, channel: 'mic' | 'system'): RevisionEvent => ({
+    kind: 'stream-end',
+    relaySessionId,
+    channel
+  })
+
+  it('settles only its lineage and channel and keeps the heard text', () => {
+    // The same-lineage system partial comes first, so a channel-blind settle would pick it.
+    const rev = run([
+      partial({ providerSeq: 1, channel: 'system', text: 'two' }),
+      partial({ providerSeq: 1, text: 'one', startMs: 5, endMs: 50 }),
+      partial({ providerSeq: 1, relaySessionId: 'r2', text: 'three' })
+    ])
+    const before = rev.segments[1]
+    const { next, changed } = accept(applyRevisionEvent(rev, streamEnd('r1', 'mic'), DEFAULT_REVISION_LIMITS))
+    expect(changed).toEqual([before.segmentId])
+    expect(next.segments[1]).toMatchObject({
+      state: 'final',
+      text: 'one',
+      language: before.language,
+      startMs: 5,
+      endMs: 50,
+      providerSeq: 1
+    })
+    expect(next.segments[0]).toMatchObject({ channel: 'system', state: 'partial' })
+    expect(next.segments[2]).toMatchObject({ relaySessionId: 'r2', state: 'partial' })
+  })
+
+  it('refuses duplicate when nothing is open', () => {
+    const empty = emptyTranscriptRevision(1)
+    expect(applyRevisionEvent(empty, streamEnd('r1', 'mic'), DEFAULT_REVISION_LIMITS)).toEqual({
+      ok: false,
+      reason: 'duplicate'
+    })
+    const settled = run([partial({ providerSeq: 1 }), streamEnd('r1', 'mic')])
+    expect(applyRevisionEvent(settled, streamEnd('r1', 'mic'), DEFAULT_REVISION_LIMITS)).toEqual({
+      ok: false,
+      reason: 'duplicate'
+    })
+  })
+
+  it('schema refuses extra fields', () => {
+    const extra = { ...streamEnd('r1', 'mic'), providerSeq: 1 }
+    expect(RevisionEventSchema.safeParse(extra).success).toBe(false)
+    const rev = run([partial({ providerSeq: 1 })])
+    expect(applyRevisionEvent(rev, extra as unknown as RevisionEvent, DEFAULT_REVISION_LIMITS)).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
+  })
+})
+
 const apply = (rev: TranscriptRevision, ev: RevisionEvent, limits: RevisionLimits = DEFAULT_REVISION_LIMITS) =>
   applyRevisionEvent(rev, ev, limits)
 

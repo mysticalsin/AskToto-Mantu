@@ -57,7 +57,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
     }
     try {
       owner.binding.sender.send(CLOUD_SPEECH_IPC.event, parsed.data)
-      if (parsed.data.type === 'segment') notifyDelivered(owner, parsed.data)
+      notifyDelivered(owner, parsed.data)
       return true
     } catch {
       void retire(owner)

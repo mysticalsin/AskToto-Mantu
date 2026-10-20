@@ -88,9 +88,7 @@ describe('meeting-document codec', () => {
     expect(serialize(setMeetingField(doc, 'recap_status', 'ready'))).toBe(
       CRLF.replace('confidential: true\r\n', 'confidential: true\r\nrecap_status: ready\r\n')
     )
-    expect(serialize(setMeetingField(doc, 'confidential', null))).toBe(
-      CRLF.replace('confidential: true\r\n', '')
-    )
+    expect(serialize(setMeetingField(doc, 'confidential', null))).toBe(CRLF.replace('confidential: true\r\n', ''))
     expect(serialize(setMeetingField(doc, 'title', '"Renamed $&"'))).toContain('title: "Renamed $&"\r\n')
   })
 })

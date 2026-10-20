@@ -1,5 +1,6 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
+import { bindOwnerRevocationClosure } from '../features/meetings/session-closure'
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
@@ -37,6 +38,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     currentInputSessionContext
   })
   const transcriptRevision = createMainTranscriptRevision((frame) => ownerSession.current(frame))
+  // The disposer is discarded on purpose: the binding lives for the app lifetime.
+  bindOwnerRevocationClosure(ownerSession, transcriptRevision.store)
   return {
     ownerSession,
     authorizeSender,

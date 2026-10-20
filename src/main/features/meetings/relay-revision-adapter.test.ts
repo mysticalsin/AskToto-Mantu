@@ -64,6 +64,7 @@ function fakeStore(over: Partial<TranscriptRevisionStore> = {}): TranscriptRevis
     bindingOf: () => null,
     finalize: () => ({ ok: false, reason: 'invalid' }),
     close: () => undefined,
+    closeOwnedBy: () => [],
     onChange: () => () => undefined,
     ...over
   }
@@ -147,6 +148,57 @@ describe('relay revision adapter', () => {
     tap(makeOwner({ captureContext: null }), segmentEvent({ sequence: 1 }))
     expect(open).not.toHaveBeenCalled()
     expect(apply).not.toHaveBeenCalled()
+  })
+
+  const terminalEvent = (epoch: number) =>
+    CloudSpeechEventSchema.parse({
+      type: 'terminal',
+      captureId: CAPTURE,
+      captureGeneration: 1,
+      stream: { generation: 1, track: 'microphone', epoch },
+      lastSequence: 1,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    })
+
+  const transition = (stage: 'opened' | 'closed', previousEpoch: number) =>
+    CloudSpeechEventSchema.parse({
+      type: 'epoch-transition',
+      captureId: CAPTURE,
+      captureGeneration: 1,
+      transitionId: 1,
+      handoffNonce: '22222222-2222-4222-8222-222222222222',
+      stage,
+      streams: [
+        stage === 'opened'
+          ? { track: 'microphone', previousEpoch, nextEpoch: previousEpoch + 1, lastSequence: 1 }
+          : { track: 'microphone', previousEpoch, lastSequence: 1 }
+      ]
+    })
+
+  it('settles the open partial when its stream ends or a rotation opens the next epoch', () => {
+    const store = createTranscriptRevisionStore()
+    const tap = createRelayRevisionTap({ store })
+    const owner = makeOwner()
+    tap(owner, segmentEvent({ sequence: 1, text: 'one' }))
+    expect(store.snapshot(M)?.segments[0]?.state).toBe('partial')
+    tap(owner, terminalEvent(1))
+    expect(store.snapshot(M)?.segments[0]).toMatchObject({ state: 'final', text: 'one' })
+
+    tap(owner, segmentEvent({ sequence: 1, text: 'two', epoch: 2 }))
+    expect(store.snapshot(M)?.segments[1]?.state).toBe('partial')
+    tap(owner, transition('opened', 2))
+    expect(store.snapshot(M)?.segments[1]).toMatchObject({ state: 'final', text: 'two' })
+  })
+
+  it('does not settle on a closed transition', () => {
+    const store = createTranscriptRevisionStore()
+    const tap = createRelayRevisionTap({ store })
+    const owner = makeOwner()
+    tap(owner, segmentEvent({ sequence: 1, text: 'one' }))
+    tap(owner, transition('closed', 1))
+    expect(store.snapshot(M)?.segments[0]?.state).toBe('partial')
   })
 
   it('binds the store once per owner with the meeting id and optional owner ref', () => {

@@ -32,6 +32,8 @@ export interface TranscriptRevisionStore {
   bindingOf(meetingStartedAt: number): { frameOwner: FrameOwner; ownerKey: string | null } | null
   finalize(binding: TranscriptStoreBinding): ApplyResult
   close(meetingStartedAt: number, reason: InputSessionStopReason): void
+  /** Closes every open meeting owned by the owner session and returns the closed meetingStartedAt ids. */
+  closeOwnedBy(sessionId: string, reason: InputSessionStopReason): number[]
   onChange(listener: (delta: TranscriptRevisionDelta) => void): () => void
 }
 
@@ -84,7 +86,8 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
     }
   }
 
-  // The reason is for the caller's audit trail; S02 releases the same way for every reason (WP03-S15 adds closure audits).
+  // The reason is for the caller's audit trail; S02 releases the same way for every reason.
+  // There is no closure audit event in the catalog yet; none is added here.
   const close = (meetingStartedAt: number, _reason: InputSessionStopReason): void => {
     entries.delete(meetingStartedAt)
     closed.add(meetingStartedAt)
@@ -161,6 +164,17 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
       return apply(binding, { kind: 'finalize' })
     },
     close,
+    closeOwnedBy(sessionId, reason) {
+      const closedIds: number[] = []
+      for (const [id, entry] of [...entries]) {
+        // Decision: a meeting opened signed out (owner null) is never closed by an owner revocation.
+        if (entry.owner !== null && entry.owner.sessionId === sessionId) {
+          close(id, reason)
+          closedIds.push(id)
+        }
+      }
+      return closedIds
+    },
     onChange(listener) {
       listeners.add(listener)
       return () => {

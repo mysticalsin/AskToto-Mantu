@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CLOUD_SPEECH_IPC } from '../../shared/cloud-speech'
+import { CLOUD_SPEECH_IPC, CloudSpeechEventSchema } from '../../shared/cloud-speech'
 import { createCaptureLifecycle } from './cloud-speech-capture-lifecycle'
 import type { CaptureLifecycleContext } from './cloud-speech-ipc-context'
 import type { Authority, Owner } from './cloud-speech-ipc-support'
@@ -78,5 +78,23 @@ describe('cloud speech delivered-segment observer', () => {
     expect(lifecycle.sendEvent(owner, segment)).toBe(true)
     expect(send).toHaveBeenCalledTimes(1)
     expect(retire).not.toHaveBeenCalled()
+  })
+
+  it('observes a delivered terminal event too', () => {
+    const terminal = CloudSpeechEventSchema.parse({
+      type: 'terminal',
+      captureId: CAPTURE,
+      captureGeneration: 1,
+      stream: { generation: 1, track: 'microphone', epoch: 1 },
+      lastSequence: 1,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    })
+    const { lifecycle, owner, send, onDelivered } = setup()
+    expect(lifecycle.sendEvent(owner, terminal)).toBe(true)
+    expect(send).toHaveBeenCalledWith(CLOUD_SPEECH_IPC.event, expect.objectContaining({ type: 'terminal' }))
+    expect(onDelivered).toHaveBeenCalledTimes(1)
+    expect(onDelivered).toHaveBeenCalledWith(owner, expect.objectContaining({ type: 'terminal' }))
   })
 })
