@@ -19,6 +19,8 @@ export type OwnerSessionValidation =
 export interface OwnerSessionAuthority {
   mint(frame: FrameLike, contextRevision: number): OwnerSessionRef | null
   validate(ref: OwnerSessionRef, frame: FrameLike): OwnerSessionValidation
+  /** Read-only: the live ref for the frame under the current auth, or null. Never mints, drops or revokes. */
+  current(frame: FrameLike): OwnerSessionRef | null
   revokeAll(reason: OwnerSessionRevokeReason): void
   revokeFrame(webContentsId: number, reason: OwnerSessionRevokeReason): void
   onRevoked(cb: (ref: OwnerSessionRef, reason: OwnerSessionRevokeReason) => void): () => void
@@ -141,6 +143,15 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
       live.set(ref.sessionId, { ref, webContentsId })
       byFrame.set(frameOwner, ref.sessionId)
       return ref
+    },
+    current(frame) {
+      const sessionId = byFrame.get(`${frame.processId}:${frame.routingId}`)
+      const entry = sessionId ? live.get(sessionId) : undefined
+      if (!entry) return null
+      const ownerKey = currentOwnerKey()
+      if (!ownerKey || entry.ref.ownerKey !== ownerKey) return null
+      if (entry.ref.authGeneration !== deps.authGeneration()) return null
+      return entry.ref
     },
     validate(ref, frame) {
       if (!OwnerSessionRefSchema.safeParse(ref).success) return { ok: false, reason: 'unknown' }

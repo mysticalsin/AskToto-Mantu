@@ -24,6 +24,13 @@ import { identityOf } from './cloud-speech-ipc-support'
 export function createCaptureLifecycle(context: CaptureLifecycleContext): CaptureLifecycle {
   const { now, monotonicNow, schedule, currentAuthority, retire } = context
   const isCurrent = (owner: Owner): boolean => context.state.current === owner
+  const notifyDelivered = (owner: Owner, event: CloudSpeechEvent): void => {
+    try {
+      context.onDelivered?.(owner, event)
+    } catch {
+      // an observer never affects delivery
+    }
+  }
   const sendEvent = (owner: Owner, value: unknown): boolean => {
     if (!isCurrent(owner) || owner.phase === 'cancelled' || owner.phase === 'closed') return false
     if (!currentAuthority(owner, false)) {
@@ -50,6 +57,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
     }
     try {
       owner.binding.sender.send(CLOUD_SPEECH_IPC.event, parsed.data)
+      if (parsed.data.type === 'segment') notifyDelivered(owner, parsed.data)
       return true
     } catch {
       void retire(owner)

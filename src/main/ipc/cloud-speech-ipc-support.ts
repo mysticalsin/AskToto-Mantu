@@ -158,6 +158,8 @@ export type CloudSpeechIpcOptions = {
   scheduleCaptureDeadline?: CaptureDeadlineScheduler
   clientFactory?: (credentials: SpeechBrokerClientOptions) => SpeechBrokerClient
   now?: () => number
+  /** Observes each segment event after it was delivered to the owning renderer. Must not throw. */
+  onSegmentDelivered?: (owner: Owner, event: z.infer<typeof CloudSpeechEventSchema>) => void
 }
 
 const PositiveRevision = z.string().min(1).max(256)

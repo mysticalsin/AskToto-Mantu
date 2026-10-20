@@ -793,6 +793,7 @@ import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { createMainOwnerSessionAuthority } from './lifecycle/owner-session-authority'
 import { registerOwnerSessionIpc } from './ipc/register-owner-session'
+import { createMainTranscriptRevision } from './features/meetings/main-transcript-revision'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -5752,6 +5753,8 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
+  // ownerSession is declared later in this function; the callback runs only on segment delivery, after return.
+  const transcriptRevision = createMainTranscriptRevision((frame) => ownerSession.current(frame))
   speechDesktop = startSpeechDesktopBootstrap({
     ipcMain,
     assertMainWindow,
@@ -5761,6 +5764,7 @@ function registerIpc(): void {
     platform: process.platform,
     enabled: () => true,
     quitTrace,
+    onSegmentDelivered: transcriptRevision.onSegmentDelivered,
     ...speechDesktopBoundaryOptions()
   })
   // --- Settings & permissions ---

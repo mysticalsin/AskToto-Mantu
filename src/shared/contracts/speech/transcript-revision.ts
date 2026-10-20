@@ -121,6 +121,16 @@ export const TranscriptRevisionSchema = z
   })
   .strict()
 
+export const TranscriptRevisionDeltaSchema = z
+  .object({
+    meetingStartedAt: z.number().int().positive().safe(),
+    revision: z.number().int().nonnegative().safe(),
+    changed: z.array(TranscriptSegmentSchema).max(200),
+    finalized: z.boolean()
+  })
+  .strict()
+export type TranscriptRevisionDelta = z.infer<typeof TranscriptRevisionDeltaSchema>
+
 const providerFields = { relaySessionId: IdSchema, providerSeq: SeqSchema }
 const spanFields = {
   ...providerFields,

@@ -20,6 +20,7 @@ export type CaptureLifecycleContext = {
   readonly monotonicNow: () => number
   readonly schedule: CaptureDeadlineScheduler
   readonly prepareAuthority?: CloudSpeechIpcOptions['prepareAuthority']
+  readonly onDelivered?: CloudSpeechIpcOptions['onSegmentDelivered']
   readonly currentAuthority: (owner: Owner, requireCapture: boolean) => Authority | null
   readonly retire: (owner: Owner) => Promise<'confirmed' | 'unknown'>
 }

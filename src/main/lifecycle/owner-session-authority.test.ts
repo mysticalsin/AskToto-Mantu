@@ -46,6 +46,19 @@ function mustMint(authority: ReturnType<typeof setup>['authority'], frame = fram
 }
 
 describe('owner-session authority', () => {
+  it('current returns the live ref for a frame without minting or revoking', () => {
+    const { state, authority } = setup()
+    const revoked = vi.fn()
+    authority.onRevoked(revoked)
+    expect(authority.current(frameA)).toBeNull()
+    const ref = mustMint(authority)
+    expect(authority.current(frameA)).toBe(ref)
+    state.gen++
+    expect(authority.current(frameA)).toBeNull()
+    expect(authority.validate(ref, frameA)).toEqual({ ok: false, reason: 'stale-auth' })
+    expect(revoked).not.toHaveBeenCalled()
+  })
+
   it('mints null when signed out', () => {
     const { state, authority } = setup()
     state.identity = null

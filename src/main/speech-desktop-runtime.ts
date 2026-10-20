@@ -15,6 +15,7 @@ import {
 } from './capture-permissions/speech-capture-grant'
 import {
   registerCloudSpeechIpc,
+  type CloudSpeechIpcOptions,
   type CloudSpeechIpcRegistration,
   type CloudSpeechMainAuthority
 } from './ipc/cloud-speech-ipc'
@@ -53,6 +54,7 @@ export type SpeechDesktopRuntimeOptions = {
   scheduleCaptureDeadline?: CaptureDeadlineScheduler
   clientFactory?: (credentials: SpeechBrokerClientOptions) => SpeechBrokerClient
   now?: () => number
+  onSegmentDelivered?: CloudSpeechIpcOptions['onSegmentDelivered']
 }
 
 export type SpeechDesktopRuntime = CloudSpeechIpcRegistration & {
@@ -289,6 +291,7 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
     ...(options.monotonicNow ? { monotonicNow: options.monotonicNow } : {}),
     ...(options.scheduleCaptureDeadline ? { scheduleCaptureDeadline: options.scheduleCaptureDeadline } : {}),
     ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
+    ...(options.onSegmentDelivered ? { onSegmentDelivered: options.onSegmentDelivered } : {}),
     now
   })
   return { ...registration, registration, readAuthority }

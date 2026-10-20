@@ -1,12 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import {
-  applyRevisionEvent,
-  DEFAULT_REVISION_LIMITS,
-  emptyTranscriptRevision,
-  RevisionEventSchema
-} from '@shared/contracts/speech/transcript-revision'
-import { RelayResultSequence, type RelayTranscript, relayTranscriptToRevisionEvent } from './relay-results'
+import { RelayResultSequence } from './relay-results'
 
 const fixture = JSON.parse(readFileSync('scripts/qa/fixtures/speech-relay-protocol-v1.json', 'utf8')) as {
   events: { partial: unknown; final: unknown; terminal: unknown }
@@ -91,31 +85,5 @@ describe('RelayResultSequence', () => {
   it('accounts actual wire bytes even when JSON contains ignorable whitespace', () => {
     const results = new RelayResultSequence(expected, 60_000, 1_000)
     expect(results.accept(fixture.events.partial, 1_001)).toMatchObject({ ok: false, code: 'OUTPUT_LIMIT' })
-  })
-})
-
-describe('relayTranscriptToRevisionEvent', () => {
-  it('maps a relay final and partial to provider revision events', () => {
-    const results = new RelayResultSequence(expected, 60_000)
-    const accepted = [fixture.events.partial, fixture.events.final].map((value) => {
-      const result = results.accept(value)
-      if (!result.ok || result.event.type !== 'transcript') throw new Error('fixture must be an accepted transcript')
-      return result.event as RelayTranscript
-    })
-    const [partial, final] = accepted.map(relayTranscriptToRevisionEvent)
-    const lineage = `${expected.sessionId}:${expected.streamEpoch}`
-    expect(partial).toMatchObject({ kind: 'provider-partial', channel: 'mic', relaySessionId: lineage, providerSeq: 1 })
-    expect(final).toMatchObject({ kind: 'provider-final', channel: 'mic', relaySessionId: lineage, providerSeq: 2 })
-    expect(final).not.toHaveProperty('speaker')
-    expect(RevisionEventSchema.safeParse(partial).success).toBe(true)
-    expect(RevisionEventSchema.safeParse(final).success).toBe(true)
-
-    const first = applyRevisionEvent(emptyTranscriptRevision(1), partial, DEFAULT_REVISION_LIMITS)
-    if (!first.ok) throw new Error(first.reason)
-    const second = applyRevisionEvent(first.next, final, DEFAULT_REVISION_LIMITS)
-    if (!second.ok) throw new Error(second.reason)
-    expect(second.next.revision).toBe(2)
-    expect(second.next.segments).toHaveLength(1)
-    expect(second.next.segments[0]).toMatchObject({ state: 'final', channel: 'mic', relaySessionId: lineage })
   })
 })

@@ -207,6 +207,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
     monotonicNow,
     schedule: options.scheduleCaptureDeadline ?? scheduleCaptureDeadline,
     ...(options.prepareAuthority ? { prepareAuthority: options.prepareAuthority } : {}),
+    ...(options.onSegmentDelivered ? { onDelivered: options.onSegmentDelivered } : {}),
     currentAuthority,
     retire
   })
