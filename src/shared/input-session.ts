@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+export {
+  OwnerSessionRefSchema,
+  OwnerSessionHandleSchema,
+  OwnerSessionRevokeReasonSchema,
+  OwnerSessionStatusSchema,
+  type OwnerSessionRef,
+  type OwnerSessionHandle,
+  type OwnerSessionRevokeReason,
+  type OwnerSessionStatus
+} from './contracts/owner-session'
+
 /** Interactive capture sources compete for one lease. Meeting capture is reserved separately. */
 export const INTERACTIVE_INPUT_SOURCES = ['wake', 'deliberate-talk', 'push-to-talk', 'application-probe'] as const
 
@@ -122,7 +133,9 @@ export const INPUT_SESSION_STOP_REASONS = [
   'device-change',
   'system-suspend',
   'screen-locked',
-  'shutdown'
+  'shutdown',
+  'renderer-reset',
+  'arbitration-preempted'
 ] as const
 export const InputSessionStopReasonSchema = z.enum(INPUT_SESSION_STOP_REASONS)
 export type InputSessionStopReason = z.infer<typeof InputSessionStopReasonSchema>

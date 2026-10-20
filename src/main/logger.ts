@@ -1,4 +1,5 @@
 import log from 'electron-log'
+import type { ContractAuditEventName } from '@shared/contracts/audit-event'
 import { app } from 'electron'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -367,6 +368,8 @@ export type AuditEvent =
   // rejected outright — the device keeps using its last known-good cached policy (or today's
   // defaults, if it never had one). Reason only, never the raw payload.
   | 'operator.model_policy.rejected'
+  // WP02 contract names (content-free by schema).
+  | ContractAuditEventName
 
 /** What an event may carry: an observability event only its allowlisted fields. */
 export type AuditDetail<E extends AuditEvent> = E extends ObservabilityEvent ? ObservabilityDetail<E> : Record<string, unknown>
