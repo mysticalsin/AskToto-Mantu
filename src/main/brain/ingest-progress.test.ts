@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -260,23 +261,113 @@ describe('backfill progress bookkeeping across runs', () => {
 
   it('reconciles a saved extraction with no successful ingest record instead of making Index meetings a no-op', async () => {
     const file = 'partial-after-write.md'
-    writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-01-05\n---\nAcme asked for a follow-up.', 'utf8')
+    const path = join(meetingsFolder, file)
+    writeFileSync(path, '---\ndate: 2026-01-05\n---\nAcme asked for a follow-up.', 'utf8')
+    const sourceDigest = createHash('sha256').update(readFileSync(path)).digest('hex')
+    const sourceRootId = createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
     await writeMeetingExtraction(
       getSettings(),
       slugify(file),
       MeetingExtractionSchema.parse({
         title24: 'Acme follow-up',
-        account: { name: 'Acme', sector: 'technology', confidence: 'EXTRACTED' }
+        account: { name: 'Acme', sector: 'technology', confidence: 'EXTRACTED' },
+        sourceDigest,
+        sourceRootId
       })
     )
 
     // This models a crash or OneDrive error after extraction.json was saved but before entity merge +
     // index.json could record success. It must re-merge the saved extraction without calling the model.
+    const { createStream } = await import('../llm')
+    const providerCallsBefore = vi.mocked(createStream).mock.calls.length
     expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
+    const indexed = readIndex(getSettings()).ingested[file]
     expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+    expect(vi.mocked(createStream).mock.calls.length - providerCallsBefore).toBe(0)
+    expect(indexed?.sourceDigest).toBe(sourceDigest)
+    expect(indexed?.sourceRootId).toBe(sourceRootId)
     expect(readAccount(getSettings(), slugify('Acme'))?.meetings.map((m) => m.file)).toContain(file)
+  })
+
+  it.each([
+    {
+      guard: 'missing digest',
+      fileSuffix: 'missing-digest',
+      omitDigest: true,
+      omitRoot: false,
+      changedBytes: false,
+      foreignRoot: false
+    },
+    {
+      guard: 'missing root',
+      fileSuffix: 'missing-root',
+      omitDigest: false,
+      omitRoot: true,
+      changedBytes: false,
+      foreignRoot: false
+    },
+    {
+      guard: 'changed bytes',
+      fileSuffix: 'changed-bytes',
+      omitDigest: false,
+      omitRoot: false,
+      changedBytes: true,
+      foreignRoot: false
+    },
+    {
+      guard: 'foreign root',
+      fileSuffix: 'foreign-root',
+      omitDigest: false,
+      omitRoot: false,
+      changedBytes: false,
+      foreignRoot: true
+    }
+  ])('re-extracts when saved checkpoint has $guard receipts', async ({
+    fileSuffix,
+    omitDigest,
+    omitRoot,
+    changedBytes,
+    foreignRoot
+  }) => {
+    const file = `partial-after-write-${fileSuffix}.md`
+    const path = join(meetingsFolder, file)
+    const original = '---\ndate: 2026-01-05\n---\nAcme asked for a follow-up.'
+    writeFileSync(path, original, 'utf8')
+
+    const savedDigest = createHash('sha256').update(readFileSync(path)).digest('hex')
+    const meetingsRootId = createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+    const savedRootId = foreignRoot
+      ? createHash('sha256').update(realpathSync(userData), 'utf8').digest('hex')
+      : meetingsRootId
+    await writeMeetingExtraction(
+      getSettings(),
+      slugify(file),
+      MeetingExtractionSchema.parse({
+        title24: 'Acme follow-up',
+        account: { name: 'Acme', sector: 'technology', confidence: 'EXTRACTED' },
+        ...(omitDigest ? {} : { sourceDigest: savedDigest }),
+        ...(omitRoot ? {} : { sourceRootId: savedRootId })
+      })
+    )
+
+    if (changedBytes) writeFileSync(path, `${original}\nAdditional synthetic text after checkpoint seeding.`, 'utf8')
+
+    const currentDigest = createHash('sha256').update(readFileSync(path)).digest('hex')
+    const currentRootId = createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+    const { createStream } = await import('../llm')
+    const providerCallsBefore = vi.mocked(createStream).mock.calls.length
+
+    expect(await startBackfill()).toEqual({ queued: 1 })
+    await waitForIdle()
+
+    const indexed = readIndex(getSettings()).ingested[file]
+    expect(vi.mocked(createStream).mock.calls.length - providerCallsBefore).toBe(1)
+    expect(indexed?.ok).toBe(true)
+    expect(indexed?.sourceDigest).toBe(currentDigest)
+    expect(indexed?.sourceRootId).toBe(currentRootId)
+    expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
   })
 
   it('reconciles the meeting folder in the background without waiting for someone to open Intelligence', async () => {
