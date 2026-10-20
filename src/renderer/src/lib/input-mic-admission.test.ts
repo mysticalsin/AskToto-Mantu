@@ -188,6 +188,24 @@ describe('interactive microphone admission lifecycle', () => {
     expect(window.toto.confirmInputSession).toHaveBeenCalledExactlyOnceWith(lease.sessionId, context)
   })
 
+  it('detaches the abort and devicechange listeners when an established interactive capture releases', async () => {
+    const env = setup()
+    const controller = new AbortController()
+    const removeAbort = vi.spyOn(controller.signal, 'removeEventListener')
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+    expect(env.mediaDevices.removeEventListener).not.toHaveBeenCalled()
+    await admitted.admission.release()
+    expect(removeAbort).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(env.mediaDevices.removeEventListener).toHaveBeenCalledWith('devicechange', expect.any(Function))
+    controller.abort()
+    env.changeDevice()
+    expect(env.stopInputSession).toHaveBeenCalledOnce()
+  })
+
   it('stops and releases the stream when main refuses post-capture confirmation', async () => {
     const env = setup()
     vi.mocked(window.toto.confirmInputSession).mockResolvedValue(false)
@@ -356,5 +374,22 @@ describe('meeting microphone admission lifecycle', () => {
     await Promise.all([admitted.release(), admitted.release()])
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.releaseMeetingMicCapture).toHaveBeenCalledExactlyOnceWith('00000000-0000-4000-8000-000000000001')
+  })
+
+  it('detaches the abort and devicechange listeners when an established meeting capture starts and releases', async () => {
+    const env = setup()
+    const controller = new AbortController()
+    const removeAbort = vi.spyOn(controller.signal, 'removeEventListener')
+    const { acquireMeetingMic } = await import('./input-mic-admission')
+    const pending = acquireMeetingMic({ audio: true }, 654, controller.signal)
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+    // An established meeting stream keeps its device; a later device change cannot release it.
+    expect(env.mediaDevices.removeEventListener).toHaveBeenCalledWith('devicechange', expect.any(Function))
+    await admitted.release()
+    expect(removeAbort).toHaveBeenCalledWith('abort', expect.any(Function))
+    controller.abort()
+    expect(env.releaseMeetingMicCapture).toHaveBeenCalledOnce()
   })
 })

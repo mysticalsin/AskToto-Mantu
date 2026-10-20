@@ -263,4 +263,55 @@ describe('MeetingMicCaptureAuthority', () => {
     env.authority.revokePending('window-hidden')
     expect(env.onRevoked).toHaveBeenCalledTimes(1)
   })
+
+  it('refuses confirmation once the window hides, auth clears, or the context revision advances', () => {
+    for (const update of [
+      { isWindowVisible: false },
+      { isAuthenticated: false },
+      { context: { authSessionGeneration: 7, contextRevision: 13 } }
+    ]) {
+      const env = setup()
+      expect(env.authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+      expect(env.authority.claimPermissionRequest(topFrame())).toBe(true)
+      env.setCurrent(update)
+      expect(env.authority.confirm(topFrame(), captureA, 654)).toBe(false)
+      expect(env.authority.hasPermissionCheckOwner(41, 654, context, 'https://metis.example/app/index.html')).toBe(true)
+    }
+  })
+
+  it('binds an admitted grant to the admitting context and URL', () => {
+    const env = setup()
+    env.authority.admit(topFrame(), 654)
+    const url = 'https://metis.example/app/index.html'
+    expect(env.authority.hasPermissionRequestOwner(41, 654, context, url)).toBe(true)
+    expect(env.authority.hasPermissionRequestOwner(41, 654, { ...context, authSessionGeneration: 8 }, url)).toBe(false)
+    expect(env.authority.hasPermissionRequestOwner(41, 654, { ...context, contextRevision: 13 }, url)).toBe(false)
+    expect(env.authority.hasPermissionRequestOwner(41, 654, context, 'https://metis.example/other')).toBe(false)
+    expect(env.authority.hasPermissionRequestOwner(42, 654, context, url)).toBe(false)
+    expect(env.authority.hasPermissionRequestOwner(41, 655, context, url)).toBe(false)
+    expect(env.authority.hasPermissionRequestOwner(41, null, context, url)).toBe(false)
+  })
+
+  it('releases without consulting or changing the meeting reservation', () => {
+    let readable = true
+    const state = currentState()
+    const currentStateReader = vi.fn(() => {
+      if (!readable) throw new Error('release must not read the meeting reservation')
+      return state
+    })
+    const onRevoked = vi.fn()
+    const authority = new MeetingMicCaptureAuthority({
+      currentState: currentStateReader,
+      createCaptureId: () => captureA,
+      onRevoked
+    })
+    expect(authority.admit(topFrame(), 654)).toEqual({ captureId: captureA, startedAt: 654 })
+    readable = false
+    const readsBefore = currentStateReader.mock.calls.length
+    expect(authority.release(42, captureA)).toBe(false)
+    expect(authority.release(41, captureA)).toBe(true)
+    expect(currentStateReader.mock.calls.length).toBe(readsBefore)
+    expect(onRevoked).not.toHaveBeenCalled()
+    expect(state.meetingStartedAt).toBe(654)
+  })
 })

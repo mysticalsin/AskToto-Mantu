@@ -4,10 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const listenSource = readFileSync(join(__dirname, '../renderer/src/lib/listen.ts'), 'utf8')
-const admissionSource = readFileSync(join(__dirname, '../renderer/src/lib/input-mic-admission.ts'), 'utf8')
 const tapSource = readFileSync(join(__dirname, '../renderer/src/lib/tap/tap-control.ts'), 'utf8')
 const tapCardSource = readFileSync(join(__dirname, '../renderer/src/features/settings/TapControlCard.tsx'), 'utf8')
-const meetingCaptureAuthoritySource = readFileSync(join(__dirname, 'meeting-mic-capture-authority.ts'), 'utf8')
 const quitLifecycleSource = readFileSync(join(__dirname, 'lifecycle/app-quit-lifecycle.ts'), 'utf8')
 
 function declarationIn(sourceText: string, name: string): string {
@@ -463,12 +461,8 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('revokes pending and permission-authorized meeting grants while retaining established streams', () => {
-    const pendingStart = meetingCaptureAuthoritySource.indexOf('revokePending(')
-    const pendingEnd = meetingCaptureAuthoritySource.indexOf('#frameMatchesCurrentMain(', pendingStart)
-    const pendingRevocation = meetingCaptureAuthoritySource.slice(pendingStart, pendingEnd)
-    expect(pendingRevocation).toContain("if (owner.state === 'established') continue")
-    expect(pendingRevocation).toContain('this.#revoke(captureId, owner, reason)')
-    expect(meetingCaptureAuthoritySource).toContain("'pending' | 'permission-authorized' | 'established'")
+    // Pending-only revocation, confirmation guards, and established-stream retention are covered
+    // behaviorally in meeting-mic-capture-authority.test.ts.
 
     const hideHandler = source.slice(
       source.indexOf("win.on('hide'"),
@@ -481,47 +475,17 @@ describe('input-session lifecycle revocation wiring', () => {
     const showHandler = source.slice(showStart, showEnd)
     expect(showHandler).toContain("hardStopInputSession('cancelled')")
     expect(showHandler).toContain("revokePendingMeetingMicCaptureGrants('cancelled')")
-    expect(pendingRevocation).toContain("if (owner.state === 'established') continue")
-
-    const confirmStart = meetingCaptureAuthoritySource.indexOf('confirm(frame:')
-    const releaseStart = meetingCaptureAuthoritySource.indexOf('release(webContentsId:', confirmStart)
-    const confirmHandler = meetingCaptureAuthoritySource.slice(confirmStart, releaseStart)
-    expect(confirmHandler).toContain("owner.state !== 'permission-authorized'")
-    expect(confirmHandler).toContain('owner.startedAt !== startedAt')
-    expect(confirmHandler).toContain('owner.webContentsId !== frame.webContentsId')
-    expect(confirmHandler).toContain('owner.authSessionGeneration !== current.context.authSessionGeneration')
-    expect(confirmHandler).toContain('owner.contextRevision !== current.context.contextRevision')
-    expect(confirmHandler).toContain('owner.requestingUrl !== current.currentUrl')
-    expect(confirmHandler).toContain('!current.isWindowVisible')
-    expect(confirmHandler).toContain("owner.state = 'established'")
   })
 
   it('binds meeting grants to the accepted reservation and limits release to the exact sender-owned id', () => {
     // The IPC admission, confirm, and release handlers are covered behaviorally in ipc/meeting-mic-ipc.test.ts.
     expect(source).toContain('capture: meetingMicCaptureAuthority')
-    const admitStart = meetingCaptureAuthoritySource.indexOf('admit(frame:')
-    const confirmMethodStart = meetingCaptureAuthoritySource.indexOf('confirm(frame:', admitStart)
-    const admit = meetingCaptureAuthoritySource.slice(admitStart, confirmMethodStart)
-    expect(admit).toContain('current.meetingStartedAt !== startedAt')
-    expect(admit).toContain("state: 'pending'")
-    expect(admit).toContain('authSessionGeneration: current.context.authSessionGeneration')
-    expect(admit).toContain('contextRevision: current.context.contextRevision')
-    expect(admit).toContain('requestingUrl: current.currentUrl')
     expect(source).toContain(
       'meetingMicCaptureAuthority.hasPermissionRequestOwner(webContentsId, startedAt, context, requestingUrl)'
     )
     expect(source).toContain(
       'meetingMicCaptureAuthority.hasPermissionCheckOwner(webContentsId, startedAt, context, requestingUrl)'
     )
-
-    const releaseMethodStart = meetingCaptureAuthoritySource.indexOf('release(webContentsId:')
-    const pendingMethodStart = meetingCaptureAuthoritySource.indexOf('hasPermissionCheckOwner(', releaseMethodStart)
-    const releaseMethod = meetingCaptureAuthoritySource.slice(releaseMethodStart, pendingMethodStart)
-    expect(releaseMethod).toContain('owner.webContentsId !== webContentsId')
-    expect(releaseMethod).toContain('this.#owners.delete(captureId)')
-    // Release remains cleanup-only after reservation replacement; it cannot mutate the meeting reservation.
-    expect(releaseMethod).not.toContain('meetingStartedAt')
-    expect(releaseMethod).not.toContain('reserveMeeting(')
   })
 
   it('ignores delayed user-stop grant revocation after graceful Listen stop', () => {
@@ -541,10 +505,7 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('makes pending interactive capture abortable and releases on devicechange', () => {
-    expect(admissionSource).toContain("signal?.addEventListener('abort', onAbort")
-    expect(admissionSource).toMatch(/const onDeviceChange = \(\): void => \{\s*void admission\.release\(\)\s*\}/)
-    expect(admissionSource.match(/record\.cleanups\.add\(detachListeners\)/g)).toHaveLength(2)
-    expect(admissionSource).toContain('if (released || record.revoked)')
+    // Abort, devicechange, and revocation handling are covered behaviorally in input-mic-admission.test.ts.
     expect(listenSource).toContain('micAcquisitionAbortRef.current?.abort()')
     expect(tapSource).toContain('signal: acquisitionAbort.signal')
     expect(tapSource).toContain('acquisitionAbortRef.current?.abort()')
