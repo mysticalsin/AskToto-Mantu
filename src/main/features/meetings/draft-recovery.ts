@@ -60,8 +60,19 @@ export async function removeSavedMeetingDrafts(settings: Settings): Promise<{ re
   return { removed }
 }
 
-/** Launch recovery: drop drafts whose meeting was already saved, then promote the true orphans. */
+let launchResume: ((settings: Settings) => Promise<void>) | null = null
+
+/** Binds the durable receipt resumption that launch recovery runs first; the disposer unbinds only its own. */
+export function bindLaunchResume(resume: (settings: Settings) => Promise<void>): () => void {
+  launchResume = resume
+  return () => {
+    if (launchResume === resume) launchResume = null
+  }
+}
+
+/** Launch recovery: finish journaled saves, drop drafts whose meeting was already saved, then promote true orphans. */
 export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
+  await launchResume?.(settings).catch(() => undefined)
   await removeSavedMeetingDrafts(settings)
   return promoteOrphanDrafts(settings)
 }

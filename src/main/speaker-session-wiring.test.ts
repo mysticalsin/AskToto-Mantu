@@ -440,9 +440,10 @@ function saveHandler(
     scheduleRebuild?: (...args: any[]) => unknown
     enqueueIngest?: (...args: any[]) => unknown
     backfillSpeakerNames?: (file: string) => Promise<unknown>
+    receipts?: TranscriptSaveReceiptStore
   } = {}
 ): (...args: any[]) => Promise<any> {
-  const transcriptSaveReceipts = new TranscriptSaveReceiptStore()
+  const transcriptSaveReceipts = options.receipts ?? new TranscriptSaveReceiptStore()
   const scheduleRebuild = options.scheduleRebuild ?? vi.fn()
   const enqueueIngest = options.enqueueIngest ?? vi.fn()
   const handler = actualIpcHandler('saveTranscript', {
@@ -825,6 +826,43 @@ describe('bounded close and successful-save receipt join', () => {
     expect(enqueueIngest).toHaveBeenCalledOnce()
     expect(backfillSpeakerNames).not.toHaveBeenCalled()
     expect(meeting.startedAt).toBe(602)
+  })
+
+  it('the actual save handler journals its durable receipt stage by stage (WP03-S09)', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    const file = '/meetings/meeting-journal.md'
+    const records = new Map<string, any>()
+    const journal = {
+      load: async () => ({ ok: true as const, records: [...records.values()] }),
+      put: async (rec: any) => void records.set(rec.receiptId, structuredClone(rec)),
+      remove: async (id: string) => void records.delete(id)
+    }
+    const receipts = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: (path) => ({ savedBasename: path.split('/').pop()!, folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => 'receipt-1'
+    })
+    let ingestFails = true
+    const enqueueIngest = vi.fn(async () => {
+      if (ingestFails) throw new Error('brain busy')
+    })
+    const handler = saveHandler(api, file, { receipts, enqueueIngest })
+    const meeting = { startedAt: 603, lines: [], recap: '', mode: 'meeting' }
+    await expect(handler({}, meeting)).rejects.toThrow('brain busy')
+    await receipts.journalIdle()
+    expect([...records.values()]).toEqual([
+      expect.objectContaining({
+        meetingStartedAt: 603,
+        savedBasename: 'meeting-journal.md',
+        completed: ['summary-credit', 'time-saved-credit', 'draft-cleanup', 'audit', 'rebuild'],
+        deferredIngest: false,
+        stages: expect.objectContaining({ savedWritten: true, draftsUnlinked: true, brainIngestQueued: false })
+      })
+    ])
+    ingestFails = false
+    await expect(handler({}, meeting)).resolves.toEqual({ path: file })
+    await receipts.journalIdle()
+    expect(records.size).toBe(0)
   })
 
   it('defers active and duplicate saves, then snapshots and backfills the exact file once on Stop', async () => {

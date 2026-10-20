@@ -1,14 +1,11 @@
 import type { Settings } from '@shared/ipc'
+import type {
+  ReceiptJournalPort,
+  SaveReceiptRecord,
+  SaveReceiptStage
+} from './infra/storage/transcript-receipt-journal'
 
-export type TranscriptSaveSideEffect =
-  | 'summary-credit'
-  | 'time-saved-credit'
-  | 'draft-cleanup'
-  | 'audit'
-  | 'rebuild'
-  | 'ingest'
-  | 'speaker-save'
-  | 'complete'
+export type TranscriptSaveSideEffect = SaveReceiptStage
 
 export interface TranscriptSaveReceipt {
   /** Stored once, so legacy invalid timestamps reuse the same normalized identity on retry. */
@@ -36,6 +33,49 @@ interface ReceiptEntry {
   pending?: Promise<string>
   ownerKey?: string
   touched: number
+  journalId?: string
+}
+
+/** Where a durable save lives, P1 only. Null when the path cannot be named safely, so the receipt is not journaled. */
+export type ReceiptLocator = (
+  durablePath: string,
+  settings: Settings,
+  meetingStartedAt: number
+) => { savedBasename: string; folderIdSha256: string; revision: number } | null
+
+export interface ReceiptJournalOptions {
+  journal: ReceiptJournalPort
+  locate: ReceiptLocator
+  newId(): string
+  now?(): number
+  onError?(error: unknown): void
+}
+
+/** A receipt whose durable fields report every change, so the save handler persists them without knowing it. */
+function observedReceipt(changed: () => void): TranscriptSaveReceipt {
+  class ObservedStages extends Set<TranscriptSaveSideEffect> {
+    override add(stage: TranscriptSaveSideEffect): this {
+      const had = this.has(stage)
+      super.add(stage)
+      if (!had) changed()
+      return this
+    }
+  }
+  const receipt = { completed: new ObservedStages() } as TranscriptSaveReceipt
+  // The durable path, and the first attempt's ingest policy that retries must keep.
+  for (const field of ['durablePath', 'deferredIngest'] as const) {
+    let value: unknown
+    Object.defineProperty(receipt, field, {
+      enumerable: true,
+      get: () => value,
+      set: (next: unknown) => {
+        const changedValue = next !== value
+        value = next
+        if (changedValue) changed()
+      }
+    })
+  }
+  return receipt
 }
 
 /**
@@ -47,9 +87,22 @@ export class TranscriptSaveReceiptStore {
   readonly #discardedMeetings = new Map<string, number>()
   readonly #sealedMeetings = new Set<string>()
   #clock = 0
+  readonly #journal: ReceiptJournalOptions | undefined
+  /** Latest unwritten record (or removal) per journal id; one writer drains them in order. */
+  readonly #journalQueue = new Map<string, SaveReceiptRecord | null>()
+  #journalDrain: Promise<void> = Promise.resolve()
 
-  constructor(private readonly maxEntries = 256) {
+  constructor(
+    private readonly maxEntries = 256,
+    journal?: ReceiptJournalOptions
+  ) {
     if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) throw new Error('Invalid transcript receipt limit')
+    this.#journal = journal
+  }
+
+  /** Resolves once every journal write issued so far has settled. */
+  journalIdle(): Promise<void> {
+    return this.#journalDrain
   }
 
   run(
@@ -64,7 +117,9 @@ export class TranscriptSaveReceiptStore {
     let entry = this.#entries.get(key)
     if (!entry) {
       this.makeRoom()
-      entry = { receipt: { completed: new Set() }, ownerKey, touched: ++this.#clock }
+      const created: ReceiptEntry = { receipt: { completed: new Set() }, ownerKey, touched: ++this.#clock }
+      if (this.#journal) created.receipt = observedReceipt(() => this.journalChanged(key, created))
+      entry = created
       this.#entries.set(key, entry)
     } else if (ownerKey) {
       entry.ownerKey ??= ownerKey
@@ -164,7 +219,10 @@ export class TranscriptSaveReceiptStore {
   markDurablePathDiscarded(path: string, authGeneration: number): void {
     const prefix = `${authGeneration}:`
     for (const [key, entry] of this.#entries) {
-      if (key.startsWith(prefix) && entry.receipt.durablePath === path) entry.receipt.discarded = true
+      if (key.startsWith(prefix) && entry.receipt.durablePath === path) {
+        entry.receipt.discarded = true
+        this.journalForget(entry)
+      }
     }
   }
 
@@ -172,6 +230,7 @@ export class TranscriptSaveReceiptStore {
     const owner = this.meetingKey(startedAt, authGeneration)
     this.#discardedMeetings.delete(owner)
     this.#discardedMeetings.set(owner, ++this.#clock)
+    for (const entry of this.#entries.values()) if (entry.ownerKey === owner) this.journalForget(entry)
     while (this.#discardedMeetings.size > this.maxEntries) {
       const oldest = this.#discardedMeetings.keys().next().value
       if (oldest === undefined) break
@@ -186,6 +245,74 @@ export class TranscriptSaveReceiptStore {
 
   private meetingKey(startedAt: number, authGeneration: number): string {
     return `${authGeneration}:${startedAt}`
+  }
+
+  /** A durable receipt's state changed: queue its record, or its removal once every stage completed. */
+  private journalChanged(key: string, entry: ReceiptEntry): void {
+    const journal = this.#journal
+    const { receipt } = entry
+    if (!journal || receipt.discarded || receipt.durablePath === undefined || !receipt.settings) return
+    const separator = key.indexOf(':')
+    const authGeneration = Number(key.slice(0, separator))
+    const meetingStartedAt = receipt.normalizedStartedAt
+    if (meetingStartedAt === undefined || !Number.isSafeInteger(authGeneration)) return
+    if (receipt.completed.has('complete')) {
+      this.journalForget(entry)
+      return
+    }
+    try {
+      const where = journal.locate(receipt.durablePath, receipt.settings, meetingStartedAt)
+      if (!where) return
+      entry.journalId ??= journal.newId()
+      const completed = [...receipt.completed]
+      const has = (stage: TranscriptSaveSideEffect): boolean => receipt.completed.has(stage)
+      this.journalEnqueue(entry.journalId, {
+        receiptId: entry.journalId,
+        ownerKey: this.meetingKey(meetingStartedAt, authGeneration),
+        authGeneration,
+        meetingStartedAt,
+        payloadSha256: key.slice(separator + 1),
+        revision: where.revision,
+        stages: {
+          draftSealed: has('draft-cleanup'),
+          savedWritten: true,
+          brainIngestQueued: has('ingest'),
+          draftsUnlinked: has('draft-cleanup'),
+          receiptsDeleted: false
+        },
+        completed,
+        ...(receipt.deferredIngest !== undefined ? { deferredIngest: receipt.deferredIngest } : {}),
+        savedBasename: where.savedBasename,
+        folderIdSha256: where.folderIdSha256,
+        updatedAt: Math.max(0, Math.trunc(journal.now?.() ?? Date.now()))
+      })
+    } catch (error) {
+      journal.onError?.(error)
+    }
+  }
+
+  private journalForget(entry: ReceiptEntry): void {
+    if (entry.journalId === undefined) return
+    this.journalEnqueue(entry.journalId, null)
+  }
+
+  private journalEnqueue(id: string, record: SaveReceiptRecord | null): void {
+    const journal = this.#journal
+    if (!journal) return
+    const idle = this.#journalQueue.size === 0
+    this.#journalQueue.set(id, record)
+    if (!idle) return
+    this.#journalDrain = this.#journalDrain.then(async () => {
+      while (this.#journalQueue.size > 0) {
+        const [next, value] = this.#journalQueue.entries().next().value as [string, SaveReceiptRecord | null]
+        this.#journalQueue.delete(next)
+        try {
+          await (value === null ? journal.journal.remove(next) : journal.journal.put(value))
+        } catch (error) {
+          journal.onError?.(error)
+        }
+      }
+    })
   }
 
   private makeRoom(): void {

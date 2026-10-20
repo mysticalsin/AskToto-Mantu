@@ -33,3 +33,8 @@ export function savedRevisionFrontmatter(meetingStartedAt: number, summaryOnly: 
   if (!rev) return []
   return revisionCheckpointFields(rev, { languages: !summaryOnly }).map(([key, value]) => `${key}: ${value}`)
 }
+
+/** The meeting's current revision number for the durable save receipt; 0 (legacy) when no store entry is open. */
+export function savedRevisionNumber(meetingStartedAt: number): number {
+  return bound?.snapshot(meetingStartedAt)?.revision ?? 0
+}

@@ -50,7 +50,7 @@ import {
 } from './lifecycle/reveal'
 import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
 import { operatorVisionModel } from '@shared/operator-vision'
-import { TranscriptSaveReceiptStore, type TranscriptSaveSideEffect } from './transcript-save-receipts'
+import { createMainTranscriptSaveReceipts, type TranscriptSaveSideEffect } from './features/meetings/main-save-receipts'
 import { InputSessionAuthority } from './input-session-authority'
 import { installInputMicPermissionHandlers } from './input-mic-permissions'
 import { MeetingMicCaptureAuthority, bindMeetingMicRendererReset } from './meeting-mic-capture-authority'
@@ -1409,7 +1409,7 @@ function speculativeLocalWorkAllowed(): boolean {
 // "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
-const transcriptSaveReceipts = new TranscriptSaveReceiptStore()
+const transcriptSaveReceipts = createMainTranscriptSaveReceipts()
 const recoveredDraftCount = new RecoveredDraftCount()
 function publishRecoveredDraftCount(): void {
   if (!win || win.isDestroyed()) return
