@@ -20,21 +20,28 @@ import {
   ChevronDown
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
-import type {
-  PublicSettings,
-  Profile,
-  PlatformPermissions,
-  ProfileRecoveryResult,
-  DustCliImport,
-  SignInResult
-} from '@shared/ipc'
+import type { PublicSettings, Profile, PlatformPermissions, ProfileRecoveryResult } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
 import { acquireInteractiveMic } from '../lib/input-mic-admission'
-import { isEncryptedProfileRecoveryError } from '../lib/onboarding-completion'
+import { connectDust, isEncryptedProfileRecoveryError, ssoSignInVerdict } from '../lib/onboarding-completion'
+import {
+  API_KEY_PROVIDERS,
+  apiPickerFallbackProvider,
+  providerReadyCopy,
+  providerTileDisabledReason,
+  type ProviderTileDisabledReason
+} from '../lib/onboarding-readiness-copy'
+export { connectDust, ssoSignInVerdict, type SsoVerdict } from '../lib/onboarding-completion'
+export {
+  apiPickerFallbackProvider,
+  providerReadyCopy,
+  providerTileDisabledReason,
+  type ProviderTileDisabledReason
+} from '../lib/onboarding-readiness-copy'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
@@ -85,95 +92,6 @@ function ActionRow({
 // since Onboarding doesn't otherwise import from Settings.
 const managedChipCls =
   'inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--color-accent-text)]'
-
-/** Why a step-5 provider tile can't be tapped right now, or `null` if it can. Kept as a discriminated
- *  reason (not a plain boolean) so ProviderOption can show copy that matches what's actually true —
- *  'org' is a genuine managed-config/data-residency lock, 'busy' is only ever a transient in-flight
- *  probe (currently just the CLI tile's zero-token cliDetect/cliTest). Conflating the two previously made
- *  every tile read as org-restricted for the whole time the CLI tile alone was busy. */
-export type ProviderTileDisabledReason = 'org' | 'busy' | null
-
-/** Pure so it's unit-testable without a render harness (Onboarding.tsx has none). `busy` only ever
- *  applies to the CLI tile — the API-key and Mantu Dust tiles never pass it, so they can't be disabled
- *  by another tile's in-flight probe. */
-export function providerTileDisabledReason(opts: {
-  providerLocked: boolean
-  pathAllowed: boolean
-  busy?: boolean
-}): ProviderTileDisabledReason {
-  if (opts.providerLocked || !opts.pathAllowed) return 'org'
-  if (opts.busy) return 'busy'
-  return null
-}
-
-/** The API-key providers step 5's picker can route to, in preference order. One source for the tile
- *  grid, the "An API key" tile's enabled state, and the "Something else" escape hatch, so all three
- *  answer to the same org allowlist. */
-const API_KEY_PROVIDERS: ProviderId[] = ['anthropic', 'openai', 'nvidia', 'minimax']
-
-/** Where step 5's "Something else (DeepSeek, Qwen, Mistral, and more). Pick it in Settings" link lands.
- *  It used to be the literal 'anthropic', which walked straight past the data-residency allowlist the
- *  tile grid directly above it filters on — under an allowlist that omits Anthropic the link finished
- *  onboarding on a provider main rejects on every ask. `null` = the org approves no API-key provider at
- *  all, in which case the link must not render (the tile that opens this picker is already inert). */
-export function apiPickerFallbackProvider(allowed: string[] | null | undefined): ProviderId | null {
-  return filterAllowedProviders(API_KEY_PROVIDERS, allowed)[0] ?? null
-}
-
-/** Slide 1's reading of signIn(). `ok: true` with `configured: false` is main's "SSO isn't set up on
- *  this device" short-circuit (auth.ts): no browser opened, no session created. Consuming that as
- *  success advanced the walkthrough with nothing to show for the click, leaving the user believing they
- *  were on their work account. Mirrors SignInWall's branch on the same return value. */
-export type SsoVerdict = 'signed-in' | 'not-configured' | 'failed'
-export function ssoSignInVerdict(r: SignInResult): SsoVerdict {
-  if (!r.ok) return 'failed'
-  return r.configured === false ? 'not-configured' : 'signed-in'
-}
-
-/** Copy for step 6's provider readiness row. Dust needs its own branch: it's a one-click OAuth/CLI
- *  flow with no key to paste, so the generic API-key wording sends the user hunting for a key this
- *  path never asks for. */
-export function providerReadyCopy(
-  provider: ProviderId,
-  /** MQA-263: true when this install already holds a working key it never asked the user for — the
-   *  installer-embedded Cloudflare key. Without it the generic branch below tells someone to "add your
-   *  key" for a key that shipped with the app and that they were never given a copy of. */
-  opts?: { alreadyConnected?: boolean }
-): { label: string; hint: string } {
-  const p = PROVIDERS[provider]
-  const label = p?.label ?? 'AI provider'
-  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up, nothing to paste' }
-  if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
-  if (p?.kind === 'dust')
-    return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
-  return { label: `${label} API key`, hint: 'add your key to get live answers' }
-}
-
-/** Step 5's Mantu Dust path. Pure + injected (like providerTileDisabledReason) so the ORDER is testable
- *  without a render harness: dustImportCli writes the key and workspace id in the MAIN process only and
- *  there is no settings push channel — the renderer refetches settings on window 'focus', which never
- *  fires on the import path since nothing steals focus (`dust status` runs hidden, the session prompt
- *  auto-allows). Selecting Dust before the import and never re-reading afterwards left step 6 holding a
- *  pre-import snapshot, i.e. an amber "add your key" row for a workspace that was already connected. */
-export async function connectDust(deps: {
-  /** patch({ provider: 'dust' }) + advance. Stays first so the user isn't parked on step 5 for the import. */
-  select: () => void
-  importCli: () => Promise<DustCliImport>
-  /** Fire-and-forget native OAuth device-flow start — it opens the browser, so the focus refetch covers it.
-   *  The user finishes (code + workspace pick) in Settings, where the full flow lives. */
-  setupCli: () => void
-  /** Re-reads settings from main; a patch answers with the fresh snapshot. */
-  refreshSettings: () => Promise<void>
-  /** False once onboarding unmounted or the user left the readiness step — a late refresh must not
-   *  overwrite whatever provider they picked in the meantime. */
-  stillLive: () => boolean
-}): Promise<void> {
-  deps.select()
-  const imported = await deps.importCli()
-  if (!imported.ok) deps.setupCli()
-  if (!deps.stillLive()) return
-  await deps.refreshSettings()
-}
 
 /** One selectable "how to power Métis" path on the provider-choice slide. A plain-language card the
  *  user taps to route themselves — no jargon, no key required to read it. */
