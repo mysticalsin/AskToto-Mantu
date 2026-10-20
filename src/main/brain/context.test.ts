@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -42,12 +43,24 @@ vi.mock('./store', async (importOriginal) => {
 })
 
 import { buildBrainContext, buildBrainContextWithSources, formatDeal, resetMatchKeyCacheForTests } from './context'
-import { writePerson, writeAccount, writeDeal } from './store'
+import { writePerson, writeAccount, writeDeal, readIndex, writeIndex } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder }) as Settings
 
-const MEETING = { file: 'm1.md', date: '2026-06-01', title: 'Renewal call' }
+const ROOT = 'a'.repeat(64)
+const digestOf = (file: string): string => createHash('sha256').update(file).digest('hex')
+
+const MEETING = { file: 'm1.md', date: '2026-06-01', title: 'Renewal call', sourceRootId: ROOT }
+
+/** The full WP04A source-reference shape: canonical root identity plus the ingestion-bound digest. */
+const refFor = (kind: 'meeting' | 'provenance', source: string, date: string) => ({
+  kind,
+  source,
+  date,
+  sourceRootId: ROOT,
+  sourceDigest: digestOf(source)
+})
 
 const PEOPLE = ['maria-silva', 'nadia-haddad', 'tom-becker', 'priya-raman', 'lars-jensen', 'chen-wei']
 const ACCOUNTS = ['northwind-trading', 'initech', 'contoso-group']
@@ -67,6 +80,16 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
   let folder: string
   let s: Settings
 
+  // Seed Main-only ingestion receipts the way ingest stamps them. Settle the index-write lane first so a
+  // detached updateIndex from the preceding entity writes cannot land afterwards and clobber `ingested`.
+  const seedReceipts = async (files: string[]): Promise<void> => {
+    await settleBrainWritesForTests()
+    const index = readIndex(s)
+    const ingested = { ...index.ingested }
+    for (const file of files) ingested[file] = { at: 1, ok: true, sourceRootId: ROOT, sourceDigest: digestOf(file) }
+    await writeIndex(s, { ...index, ingested })
+  }
+
   beforeEach(async () => {
     resetMatchKeyCacheForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-brain-context-'))
@@ -78,6 +101,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     for (const slug of DEALS) {
       await writeDeal(s, slug, DealEntitySchema.parse({ id: slug, name: titleCase(slug), meetings: [MEETING] }))
     }
+    await seedReceipts([MEETING.file])
     opened.length = 0
   })
   // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
@@ -112,7 +136,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     buildBrainContext(s, 'what is the weather in Paris today')
     const result = buildBrainContextWithSources(s, 'what did Maria Silva promise?')
     expect(result.block).toContain('Renewal call')
-    expect(result.sourceReferences).toContainEqual({ kind: 'meeting', source: MEETING.file, date: MEETING.date })
+    expect(result.sourceReferences).toContainEqual(refFor('meeting', MEETING.file, MEETING.date))
     expect(result.sourceReferencesComplete).toBe(true)
     expect(result.sourceReferences.length).toBeLessThanOrEqual(64)
   })
@@ -123,7 +147,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       name: 'Provenance Person',
       role: 'Legacy Role',
       account: 'Legacy Organization',
-      meetings: [MEETING],
+      meetings: [MEETING, { file: 'person-role.md', date: '2026-05-20', title: 'Role review', sourceRootId: ROOT }],
       role_provenance: {
         value: 'Verified Role',
         source_file: 'person-role.md',
@@ -146,7 +170,10 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       name: 'Provenance Account',
       sector: 'retail',
       strategic: true,
-      meetings: [MEETING],
+      meetings: [
+        MEETING,
+        { file: 'account-sector.md', date: '2026-05-21', title: 'Sector review', sourceRootId: ROOT }
+      ],
       sector_provenance: {
         value: 'banking',
         source_file: 'account-sector.md',
@@ -163,7 +190,10 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       account: 'Unproven Deal Account',
       stage: 'legacy stage',
       win_likelihood_band: 'good',
-      meetings: [MEETING],
+      meetings: [
+        MEETING,
+        { file: 'deal-outlook.md', date: '2026-05-22', title: 'Outlook review', sourceRootId: ROOT }
+      ],
       stage_provenance: {
         value: 'contract',
         source_file: '',
@@ -181,6 +211,8 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     })
     await writeDeal(s, deal.id, deal)
 
+    await seedReceipts(['person-role.md', 'account-sector.md', 'deal-outlook.md'])
+
     const result = buildBrainContextWithSources(s, 'Summarize Provenance Person Provenance Account Provenance Deal.')
     expect(result.block).toContain('Verified Role [person-role.md, 2026-05-20]')
     expect(result.block).toContain('Pinned Organization (edited by you)')
@@ -194,17 +226,12 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     expect(result.block).not.toContain('Unproven Deal Account')
     expect(result.block).not.toContain('legacy stage')
     expect(result.block).not.toContain('good likelihood')
-    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: 'person-role.md', date: '2026-05-20' })
-    expect(result.sourceReferences).toContainEqual({
-      kind: 'provenance',
-      source: 'account-sector.md',
-      date: '2026-05-21'
-    })
-    expect(result.sourceReferences).toContainEqual({
-      kind: 'provenance',
-      source: 'deal-outlook.md',
-      date: '2026-05-22'
-    })
+    expect(result.sourceReferences).toContainEqual(refFor('provenance', 'person-role.md', '2026-05-20'))
+    expect(result.sourceReferences).toContainEqual(refFor('provenance', 'account-sector.md', '2026-05-21'))
+    expect(result.sourceReferences).toContainEqual(refFor('provenance', 'deal-outlook.md', '2026-05-22'))
+    expect(result.sourceReferences.filter((r) => r.source === 'person-role.md')).toHaveLength(1)
+    expect(result.sourceReferences.filter((r) => r.source === 'account-sector.md')).toHaveLength(1)
+    expect(result.sourceReferences.filter((r) => r.source === 'deal-outlook.md')).toHaveLength(1)
     expect(result.sourceReferencesComplete).toBe(true)
   })
 
@@ -296,7 +323,8 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
 
     const result = buildBrainContextWithSources(s, 'What is happening with the Velocity Deal?')
     expect(result.block).toContain(`Velocity ${value.signal}: ${value.evidence} [${MEETING.file}, ${MEETING.date}].`)
-    expect(result.sourceReferences).toContainEqual({ kind: 'provenance', source: MEETING.file, date: MEETING.date })
+    expect(result.sourceReferences).toContainEqual(refFor('provenance', MEETING.file, MEETING.date))
+    expect(result.sourceReferences.filter((r) => r.source === MEETING.file)).toHaveLength(1)
     expect(result.sourceReferencesComplete).toBe(true)
 
     const ungrounded = DealEntitySchema.parse({
