@@ -445,6 +445,8 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
             ...process.env,
             PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
             M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+            // Sampling is unavailable in this fixture, including on hosts with /usr/bin/sample.
+            M2_0008_CONTRACT_SAMPLE_BIN: 'false',
             M2_0008_CONTRACT_IDLE_SECONDS: '1',
             M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
           },
@@ -452,7 +454,9 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
         }
       )
 
-      expect(result.status).toBe(2)
+      expect(result.error).toBeUndefined()
+      expect(result.signal).toBeNull()
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
       expect(result.stderr).toContain('required main and renderer samples')
       const manifest = readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')
       expect(manifest).toContain('"result": "FAIL"')
@@ -527,6 +531,8 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
             ...process.env,
             PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
             M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+            // Sampling is unavailable in this fixture, including on hosts with /usr/bin/sample.
+            M2_0008_CONTRACT_SAMPLE_BIN: 'false',
             M2_0008_CONTRACT_IDLE_SECONDS: '1',
             M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
           },
@@ -534,7 +540,9 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
         }
       )
 
-      expect(result.status).toBe(2)
+      expect(result.error).toBeUndefined()
+      expect(result.signal).toBeNull()
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
       expect(result.stderr).toContain('required matrix rows exercised')
       expect(result.stderr).toContain('required interrupt checks exercised')
       const manifest = readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')
