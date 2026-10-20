@@ -24,7 +24,11 @@ function between(source: string, start: string, end: string): string {
 function guardedRevoke(event: string): RegExp {
   const teardown = String.raw`(?:\/\/[^\n]*\s*|hardStop(?:MeetingCapture|InputSession)\('[a-z-]+'(?:, '[a-z-]+')?\)\s*)*`
   return new RegExp(
-    String.raw`if \(win !== self\) return\s*` + teardown + String.raw`commandControl\.revokeForLifecycleEvent\('` + event + String.raw`'\)`
+    String.raw`if \(win !== self\) return\s*` +
+      teardown +
+      String.raw`commandControl\.revokeForLifecycleEvent\('` +
+      event +
+      String.raw`'\)`
   )
 }
 

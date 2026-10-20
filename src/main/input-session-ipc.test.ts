@@ -29,7 +29,9 @@ describe('input-session IPC owner binding', () => {
       ok: false,
       reason: 'unauthorized'
     })
-    expect(createInputSessionHandlers<TestEvent>({ ...base, authorizeCommandStart: authorize }).start(event, request)).toEqual({
+    expect(
+      createInputSessionHandlers<TestEvent>({ ...base, authorizeCommandStart: authorize }).start(event, request)
+    ).toEqual({
       ok: false,
       reason: 'unauthorized'
     })

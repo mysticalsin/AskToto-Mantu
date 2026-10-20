@@ -701,8 +701,7 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     expect(directStripAssignmentIndex(disconnectedSave)).toBe(-1)
 
     expect(directSaveDurableIndex(fixtureArrow(receiptFixtureSource({})))).toBeGreaterThanOrEqual(0)
-    const nestedSave =
-      'const unused = async () => { receipt.durablePath = await saveMeeting(saveSettings, m) }'
+    const nestedSave = 'const unused = async () => { receipt.durablePath = await saveMeeting(saveSettings, m) }'
     const disconnectedReceiptFixtures: Record<string, string> = {
       'save in a nested arrow': receiptFixtureSource({ save: nestedSave }),
       'wrong settings source': receiptFixtureSource({ settings: 'if (!receipt.settings) receipt.settings = {}' }),

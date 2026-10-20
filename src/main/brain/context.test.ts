@@ -190,10 +190,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
       account: 'Unproven Deal Account',
       stage: 'legacy stage',
       win_likelihood_band: 'good',
-      meetings: [
-        MEETING,
-        { file: 'deal-outlook.md', date: '2026-05-22', title: 'Outlook review', sourceRootId: ROOT }
-      ],
+      meetings: [MEETING, { file: 'deal-outlook.md', date: '2026-05-22', title: 'Outlook review', sourceRootId: ROOT }],
       stage_provenance: {
         value: 'contract',
         source_file: '',
