@@ -10,10 +10,13 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 
 export type StableReadSync = { status: 'ok'; bytes: Buffer; canonicalRoot: string } | { status: 'refused' }
 
-/** Canonical (symlink-resolved) path, or null when it cannot be resolved. */
+/**
+ * Canonical (symlink-resolved) path, or null when it cannot be resolved. Uses the native realpath
+ * (uv_fs_realpath) so it matches fs.promises.realpath / canonicalSourceRootId on Windows (8.3 names, casing).
+ */
 export function canonicalPathSync(path: string): string | null {
   try {
-    return realpathSync(path)
+    return realpathSync.native(path)
   } catch {
     return null
   }
@@ -27,8 +30,8 @@ export function readStableRegularFileSync(root: string, name: string, maxBytes: 
   const file = join(root, name)
   let fd: number | undefined
   try {
-    const canonicalRoot = realpathSync(root)
-    const canonicalFile = realpathSync(file)
+    const canonicalRoot = realpathSync.native(root)
+    const canonicalFile = realpathSync.native(file)
     const relativePath = relative(canonicalRoot, canonicalFile)
     if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath))
       return { status: 'refused' }
@@ -70,8 +73,8 @@ export function readStableRegularFileSync(root: string, name: string, maxBytes: 
       pathAfter.size !== after.size ||
       pathAfter.mtimeMs !== after.mtimeMs ||
       pathAfter.ctimeMs !== after.ctimeMs ||
-      realpathSync(root) !== canonicalRoot ||
-      realpathSync(file) !== canonicalFile
+      realpathSync.native(root) !== canonicalRoot ||
+      realpathSync.native(file) !== canonicalFile
     )
       return { status: 'refused' }
     return { status: 'ok', bytes, canonicalRoot }
