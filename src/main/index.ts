@@ -792,6 +792,7 @@ import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { createOwnerSessionWiring } from './lifecycle/owner-session-wiring'
+import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -907,7 +908,6 @@ import {
   preserveDraftTranscript,
   discardDraftTranscript,
   clearDraftTranscript,
-  recoverOrphanDrafts,
   parseRecapMarkdown,
   recapMarkdownToHtml,
   resolveMeetingsFolder,
