@@ -17,6 +17,10 @@ failure. When whitespace/typechecks pass, the current loop hashes the same resul
 successful commits. Read the executor's exact-tip receipts and compare failure identities, source
 changes and remaining acceptance criteria before retrying work. Preserve completed slices and plan
 the next unmet dependency; do not mark a package `blocked-tony` without a specific owner-only blocker.
+Evidence-only rounds can make progress without changing HEAD. Before replanning after an unblock,
+read the latest applicable `_relay/goal-loop/ASTRA-round-*.md` with the handoff and preserve accepted
+slices. An outer gate summary is not a fresh failure receipt when that round did not run the gate;
+check the recorded tip and natural exits. Keep historical receipts bound to their original tip.
 
 ## 2. What this repository is
 
