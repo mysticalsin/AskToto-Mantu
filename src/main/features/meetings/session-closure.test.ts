@@ -1,13 +1,21 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { CloudSpeechEventSchema, type CloudSpeechEvent } from '@shared/cloud-speech'
+vi.mock('electron', () => ({ app: {}, safeStorage: {}, webContents: {} }))
+vi.mock('../../auth', () => ({ authStatus: vi.fn(), authSessionGeneration: vi.fn() }))
+
+import {
+  CloudSpeechEventSchema,
+  CloudSpeechSegmentEventSchema,
+  type CloudSpeechEvent
+} from '@shared/cloud-speech'
 import {
   OWNER_SESSION_REVOKE_REASONS,
   type OwnerSessionRef,
   type OwnerSessionRevokeReason
 } from '@shared/contracts/owner-session'
 import { InputSessionStopReasonSchema } from '@shared/input-session'
-import { createRelayRevisionTap, type RevisionTapOwner } from './relay-revision-adapter'
+import { createOwnerSessionAuthority } from '../../lifecycle/owner-session-authority'
+import { createRelayRevisionTap, segmentEventToRevisionEvent, type RevisionTapOwner } from './relay-revision-adapter'
 import { finalizeDraftMeeting, onDraftMeetingFinalizing } from '../../infra/storage/draft-transcript-write-state'
 import {
   bindMeetingEndClosure,
@@ -33,8 +41,8 @@ const ref = (over: Partial<OwnerSessionRef> = {}): OwnerSessionRef => ({
   ...over
 })
 
-function segment(sequence: number): CloudSpeechEvent {
-  return CloudSpeechEventSchema.parse({
+function segment(sequence: number): ReturnType<typeof CloudSpeechSegmentEventSchema.parse> {
+  return CloudSpeechSegmentEventSchema.parse({
     type: 'segment',
     captureId: CAPTURE,
     captureGeneration: 1,
@@ -87,6 +95,41 @@ const makeOwner = (sender: RendererResetSource, listenStartedAt: number): Revisi
 })
 
 const emitter = (): EventEmitter & RendererResetSource => new EventEmitter() as EventEmitter & RendererResetSource
+
+function realOwnerAuthority(identity: string | null = 'owner-a') {
+  const state = { identity, authGeneration: 1, contextRevision: 1 }
+  const frame = { processId: 12, routingId: 3 }
+  let nextSession = 0
+  const authority = createOwnerSessionAuthority({
+    identityId: () => state.identity,
+    authGeneration: () => state.authGeneration,
+    currentContextRevision: () => state.contextRevision,
+    salt: () => Buffer.alloc(32, 9),
+    webContentsIdOf: () => 1,
+    now: () => M,
+    uuid: () => `00000000-0000-4000-8000-${String(++nextSession).padStart(12, '0')}`
+  })
+  return { state, frame, authority }
+}
+
+function openMeetingUnderOwnerSession() {
+  const { state, frame, authority } = realOwnerAuthority()
+  const first = authority.mint(frame, state.contextRevision)
+  if (!first) throw new Error('expected first owner session')
+  const checkpoint = vi.fn<CheckpointWriter>(async () => 'written')
+  const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: checkpoint })
+  const closeOwnedBy = vi.spyOn(store, 'closeOwnedBy')
+  bindOwnerRevocationClosure(authority, store)
+  const binding = { meetingStartedAt: M, frameOwner: '12:3' as const, owner: first }
+  expect(store.open(binding)).toEqual({ ok: true })
+  expect(store.apply(binding, segmentEventToRevisionEvent(segment(1))).ok).toBe(true)
+
+  state.contextRevision++
+  const second = authority.mint(frame, state.contextRevision)
+  if (!second) throw new Error('expected refreshed owner session')
+  const refreshedBinding = { ...binding, owner: second }
+  return { authority, frame, first, second, binding, refreshedBinding, closeOwnedBy, checkpoint, store }
+}
 
 describe('session closure', () => {
   it('owner revocation and renderer reset each close the store once', () => {
@@ -149,6 +192,77 @@ describe('session closure', () => {
     signedOut.open({ meetingStartedAt: M, frameOwner: '12:3', owner: null })
     expect(signedOut.closeOwnedBy(SESSION, 'sign-out')).toEqual([])
     expect(signedOut.snapshot(M)).not.toBeNull()
+  })
+
+  it('a context refresh does not orphan an A1 meeting from later revokeAll closure', () => {
+    const { authority, first, second, binding, refreshedBinding, closeOwnedBy, checkpoint, store } =
+      openMeetingUnderOwnerSession()
+    expect(second.sessionId).not.toBe(first.sessionId)
+    expect(store.apply(refreshedBinding, segmentEventToRevisionEvent(segment(2))).ok).toBe(true)
+    expect(store.snapshot(M)).not.toBeNull()
+
+    authority.revokeAll('sign-out')
+    authority.revokeAll('sign-out')
+
+    const firstRevocation = closeOwnedBy.mock.calls.findIndex(([sessionId]) => sessionId === first.sessionId)
+    expect(firstRevocation).toBeGreaterThanOrEqual(0)
+    expect(closeOwnedBy.mock.results[firstRevocation]).toMatchObject({ type: 'return', value: [M] })
+    expect(
+      closeOwnedBy.mock.results.filter((result) => result.type === 'return' && result.value.includes(M))
+    ).toHaveLength(1)
+    expect(checkpoint).toHaveBeenCalledTimes(1)
+    expect(store.snapshot(M)).toBeNull()
+    expect(store.apply(binding, segmentEventToRevisionEvent(segment(2)))).toEqual({ ok: false, reason: 'invalid' })
+    expect(store.closeOwnedBy(first.sessionId, 'sign-out')).toEqual([])
+    expect(checkpoint).toHaveBeenCalledTimes(1)
+  })
+
+  it('a context refresh does not orphan an A1 meeting from later revokeFrame closure', () => {
+    const { authority, frame, first, second, binding, refreshedBinding, closeOwnedBy, checkpoint, store } =
+      openMeetingUnderOwnerSession()
+    expect(second.sessionId).not.toBe(first.sessionId)
+    expect(store.apply(refreshedBinding, segmentEventToRevisionEvent(segment(2))).ok).toBe(true)
+    expect(store.snapshot(M)).not.toBeNull()
+
+    authority.revokeFrame(1, 'renderer-reset')
+    authority.revokeFrame(1, 'renderer-reset')
+
+    const firstRevocation = closeOwnedBy.mock.calls.findIndex(([sessionId]) => sessionId === first.sessionId)
+    expect(firstRevocation).toBeGreaterThanOrEqual(0)
+    expect(closeOwnedBy.mock.results[firstRevocation]).toMatchObject({ type: 'return', value: [M] })
+    expect(
+      closeOwnedBy.mock.results.filter((result) => result.type === 'return' && result.value.includes(M))
+    ).toHaveLength(1)
+    expect(checkpoint).toHaveBeenCalledTimes(1)
+    expect(store.snapshot(M)).toBeNull()
+    expect(store.apply(binding, segmentEventToRevisionEvent(segment(2)))).toEqual({ ok: false, reason: 'invalid' })
+    expect(store.closeOwnedBy(first.sessionId, 'renderer-reset')).toEqual([])
+    expect(checkpoint).toHaveBeenCalledTimes(1)
+    expect(authority.current(frame)).toBeNull()
+  })
+
+  it('real owner revocations leave a meeting opened while signed out available', () => {
+    const { state, authority, frame } = realOwnerAuthority(null)
+    expect(authority.mint(frame, 1)).toBeNull()
+    const store = createTranscriptRevisionStore({ now: () => M })
+    const closeOwnedBy = vi.spyOn(store, 'closeOwnedBy')
+    bindOwnerRevocationClosure(authority, store)
+    const revoked = vi.fn()
+    authority.onRevoked(revoked)
+    const binding = { meetingStartedAt: M, frameOwner: '12:3' as const, owner: null }
+    expect(store.open(binding)).toEqual({ ok: true })
+    expect(store.apply(binding, segmentEventToRevisionEvent(segment(1))).ok).toBe(true)
+
+    state.identity = 'owner-a'
+    const signedIn = authority.mint(frame, state.contextRevision)
+    if (!signedIn) throw new Error('expected signed-in owner session')
+    authority.revokeAll('sign-out')
+
+    expect(revoked).toHaveBeenCalledWith(signedIn, 'sign-out')
+    expect(closeOwnedBy).toHaveBeenCalledWith(signedIn.sessionId, 'sign-out')
+    expect(closeOwnedBy.mock.results[0]).toMatchObject({ type: 'return', value: [] })
+    expect(store.snapshot(M)).not.toBeNull()
+    expect(store.apply(binding, segmentEventToRevisionEvent(segment(2))).ok).toBe(true)
   })
 
   it('renderer reset ignores in-place and subframe navigations', () => {
