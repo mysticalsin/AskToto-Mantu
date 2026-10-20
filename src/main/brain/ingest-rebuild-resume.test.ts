@@ -18,6 +18,7 @@ import { readIndex, writeIndex, readAccount, writeAccount, brainDir, slugify } f
 import { renameEntity } from './corrections'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -48,9 +49,12 @@ vi.mock('../llm', () => ({
  * CI. Drain before teardown; same helper ingest-progress.test.ts already uses.
  */
 const waitForIdle = async (): Promise<void> => {
-  await vi.waitFor(() => {
-    expect(brainBackfillProgress().running).toBe(false)
-  }, { timeout: 10_000 })
+  await vi.waitFor(
+    () => {
+      expect(brainBackfillProgress().running).toBe(false)
+    },
+    { timeout: 10_000 }
+  )
   // running=false only means the QUEUE drained — the last job's own index.json record, any drain/
   // finalization/rebuild-replay follow-up, and its entity writes can still be in flight at that instant.
   // resumeBackfillIfPending() is deliberately not awaited by these tests, so that trailing work is exactly
@@ -61,8 +65,10 @@ const waitForIdle = async (): Promise<void> => {
 describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-resume-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-resume-meetings-'))
@@ -75,10 +81,19 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
   })
 
   afterEach(async () => {
-    await waitForIdle()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.restoreAllMocks()
+    try {
+      await waitForIdle()
+    } finally {
+      try {
+        await settleBrainWritesForTests()
+      } finally {
+        restoreSpeechReadPolicy()
+        restoreSpeechReadPolicy = () => {}
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.restoreAllMocks()
+      }
+    }
   })
 
   const accountExtraction = (): MeetingExtraction =>
@@ -106,9 +121,12 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
 
     resumeBackfillIfPending()
 
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).replayPending).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).replayPending).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     expect(readAccount(s, accountSlug)?.name).toBe('Acme') // replay re-applied the rename
   })
 
@@ -122,13 +140,19 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
 
     resumeBackfillIfPending()
 
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).replayPending).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).replayPending).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     expect(readIndex(getSettings()).backfillRequested).toBe(false)
   })
 
@@ -146,8 +170,10 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
 describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fix 2)', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-blocked-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-blocked-meetings-'))
@@ -159,16 +185,30 @@ describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fi
     setApiKey('anthropic', 'fake-test-key-not-real')
   })
   afterEach(async () => {
-    await waitForIdle()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.restoreAllMocks()
+    try {
+      await waitForIdle()
+    } finally {
+      try {
+        await settleBrainWritesForTests()
+      } finally {
+        restoreSpeechReadPolicy()
+        restoreSpeechReadPolicy = () => {}
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.restoreAllMocks()
+      }
+    }
   })
 
   const blockTheJournal = async (): Promise<void> => {
     const s = getSettings()
     const md = '---\ntype: meeting-transcript\nmode: "meeting"\ndate: 2026-06-01\n---\n\nhello'
-    await ingestExtraction(s, MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'banking', confidence: 'EXTRACTED' } }), md, join(meetingsFolder, 'm1.md'))
+    await ingestExtraction(
+      s,
+      MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'banking', confidence: 'EXTRACTED' } }),
+      md,
+      join(meetingsFolder, 'm1.md')
+    )
     // Corrupt the journal, then trigger detection+quarantine so the durable block is armed.
     writeFileSync(join(brainDir(s), 'corrections.json'), '{ corrupt not an array', 'utf8')
     await renameEntity(s, { kind: 'account', id: slugify('Acme'), newName: 'Acme Two' }).catch(() => undefined)
@@ -207,7 +247,12 @@ describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fi
   it('finishRebuildReplay over a healthy journal clears replayPending, replayError, and its warning', async () => {
     const s = getSettings()
     const md = '---\ntype: meeting-transcript\nmode: "meeting"\ndate: 2026-06-01\n---\n\nhello'
-    await ingestExtraction(s, MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'banking', confidence: 'EXTRACTED' } }), md, join(meetingsFolder, 'm1.md'))
+    await ingestExtraction(
+      s,
+      MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'banking', confidence: 'EXTRACTED' } }),
+      md,
+      join(meetingsFolder, 'm1.md')
+    )
     await renameEntity(s, { kind: 'account', id: slugify('Acme'), newName: 'Acme Two' })
 
     const idx = readIndex(s)

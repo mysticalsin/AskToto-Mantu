@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,7 +22,14 @@ import type { BackfillStartOptions } from './ingest'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { resetSecretKeyCache } from '../secrets'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill } from './ingest'
+import {
+  brainBackfillProgress,
+  reconcileMeetingsInBackground,
+  requestBackfill,
+  requestBackfillRun,
+  resumeBackfillIfPending,
+  startBackfill
+} from './ingest'
 import * as ingestModule from './ingest'
 import * as storeModule from './store'
 import { whenIngestWorkSettles } from '../test-helpers/settle-brain-writes'
@@ -20,6 +37,7 @@ import { catchUpIntelligenceIndexIfNeeded, settleIntelligenceIndexForTests } fro
 import { runConsolidationIfDue } from './consolidate'
 import { brainDir, readIndex, writeIndex, writeMeetingExtraction } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -74,18 +92,28 @@ describe('M2-0033 retry policy across backfill callers', () => {
   let userData: string
   let meetingsFolder: string
   let modelMarkers: string[]
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   const waitForIdle = async (
     ingest?: typeof import('./ingest'),
-    intelligenceIndex?: Pick<typeof import('./intelligence-index'), 'settleIntelligenceIndexForTests'>
+    intelligenceIndex?: Pick<typeof import('./intelligence-index'), 'settleIntelligenceIndexForTests'>,
+    store?: typeof import('./store')
   ): Promise<void> => {
     const idle = ingest ?? ingestModule
     const intel = intelligenceIndex ?? { settleIntelligenceIndexForTests }
-    await vi.waitFor(() => {
-      expect(idle.brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
-    await whenIngestWorkSettles(idle, ingest ? await import('./store') : storeModule)
+    await vi.waitFor(
+      () => {
+        expect(idle.brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
+    await whenIngestWorkSettles(idle, store ?? storeModule)
     await intel.settleIntelligenceIndexForTests()
+  }
+
+  const drainActiveGraph = async (): Promise<void> => {
+    await whenIngestWorkSettles(activeIngest, activeStore)
+    await activeIntelligence.settleIntelligenceIndexForTests()
   }
 
   const configureSettings = () => {
@@ -106,7 +134,11 @@ describe('M2-0033 retry policy across backfill callers', () => {
     writeFileSync(join(meetingsFolder, 'eligible.md'), '---\ndate: 2026-01-01\n---\neligible transcript body', 'utf8')
     writeFileSync(join(meetingsFolder, 'backedoff.md'), '---\ndate: 2026-01-02\n---\nbackedoff transcript body', 'utf8')
     writeFileSync(join(meetingsFolder, 'exhausted.md'), '---\ndate: 2026-01-03\n---\nexhausted transcript body', 'utf8')
-    writeFileSync(join(meetingsFolder, 'unreadable.md'), '---\ndate: 2026-01-04\n---\nunreadable transcript body', 'utf8')
+    writeFileSync(
+      join(meetingsFolder, 'unreadable.md'),
+      '---\ndate: 2026-01-04\n---\nunreadable transcript body',
+      'utf8'
+    )
     writeFileSync(join(meetingsFolder, 'unacked.md'), '---\ndate: 2026-01-05\n---\nunacked transcript body', 'utf8')
   }
 
@@ -115,24 +147,70 @@ describe('M2-0033 retry policy across backfill callers', () => {
     return `${Math.round(st.mtimeMs)}:${st.size}`
   }
 
+  const sourceReceipts = (name: string) => ({
+    sourceDigest: createHash('sha256')
+      .update(readFileSync(join(meetingsFolder, name)))
+      .digest('hex'),
+    sourceRootId: createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+  })
+
   const seedLedger = async () => {
     const now = Date.now()
-    await writeMeetingExtraction(getSettings(), 'unacked-md', MeetingExtractionSchema.parse({ title24: 'Unacked synthetic extraction' }))
+    await writeMeetingExtraction(
+      getSettings(),
+      'unacked-md',
+      MeetingExtractionSchema.parse({
+        title24: 'Unacked synthetic extraction',
+        ...sourceReceipts('unacked.md')
+      })
+    )
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       backfillRequested: true,
       ingested: {
-        'backedoff.md': { at: now, ok: false, error: 'synthetic backed off', attempts: 2, retryAfter: now + 60 * 60_000, sourceVersion: sourceVersion('backedoff.md') },
-        'exhausted.md': { at: now, ok: false, error: 'synthetic exhausted', attempts: MAX_INGEST_ATTEMPTS, exhausted: true, retryAfter: now - 1, sourceVersion: sourceVersion('exhausted.md') },
-        'unreadable.md': { at: now, ok: false, error: 'synthetic unreadable', attempts: 1, unreadable: { changedAtMs: Math.round(statSync(join(meetingsFolder, 'unreadable.md')).ctimeMs) }, sourceVersion: sourceVersion('unreadable.md') }
+        'backedoff.md': {
+          at: now,
+          ok: false,
+          error: 'synthetic backed off',
+          attempts: 2,
+          retryAfter: now + 60 * 60_000,
+          sourceVersion: sourceVersion('backedoff.md')
+        },
+        'exhausted.md': {
+          at: now,
+          ok: false,
+          error: 'synthetic exhausted',
+          attempts: MAX_INGEST_ATTEMPTS,
+          exhausted: true,
+          retryAfter: now - 1,
+          sourceVersion: sourceVersion('exhausted.md')
+        },
+        'unreadable.md': {
+          at: now,
+          ok: false,
+          error: 'synthetic unreadable',
+          attempts: 1,
+          unreadable: { changedAtMs: Math.round(statSync(join(meetingsFolder, 'unreadable.md')).ctimeMs) },
+          sourceVersion: sourceVersion('unreadable.md')
+        }
       }
     } as never)
   }
 
   const relaunch = async () => {
-    await whenIngestWorkSettles()
-    await settleIntelligenceIndexForTests()
+    try {
+      await waitForIdle(activeIngest, activeIntelligence, activeStore)
+    } finally {
+      try {
+        await drainActiveGraph()
+      } finally {
+        restoreSpeechReadPolicy()
+        restoreSpeechReadPolicy = () => {}
+      }
+    }
     vi.resetModules()
+    const speechReadPolicy = await import('./__fixtures__/speech-read-policy')
+    restoreSpeechReadPolicy = speechReadPolicy.installSpeechReadPolicy()
     const electron = await import('electron')
     ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
       if (name === 'userData') return userData
@@ -140,23 +218,41 @@ describe('M2-0033 retry policy across backfill callers', () => {
     })
     resetSecretKeyCache()
     ;(await import('../infra/storage/meetings-storage')).useStorageForTests()
+    const store = await import('./store')
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
+    activeIngest = ingest
+    activeIntelligence = intelligence
+    activeStore = store
     const maintenance = await import('../infra/scheduler/maintenance')
     maintenance.resetMaintenanceGateForTests()
-    maintenance.startMaintenanceGate({ uptimeMs: () => 121_000, schedule: (_run: () => void, _ms: number) => undefined, interactiveActive: () => false })
+    maintenance.startMaintenanceGate({
+      uptimeMs: () => 121_000,
+      schedule: (_run: () => void, _ms: number) => undefined,
+      interactiveActive: () => false
+    })
     maintenance.settlePriorExit('clean')
     ingest.resumeBackfillIfPending()
     ingest.reconcileMeetingsInBackground()
     await consolidate.runConsolidationIfDue()
     ingest.requestBackfill()
     await intelligence.catchUpIntelligenceIndexIfNeeded()
-    await waitForIdle(ingest, intelligence)
-    return { ingest, store: await import('./store') }
+    await waitForIdle(ingest, intelligence, store)
+    return { ingest, store }
   }
 
+  let activeIngest: typeof import('./ingest') = ingestModule
+  let activeIntelligence: Pick<typeof import('./intelligence-index'), 'settleIntelligenceIndexForTests'> = {
+    settleIntelligenceIndexForTests
+  }
+  let activeStore: typeof import('./store') = storeModule
+
   beforeEach(async () => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
+    activeIngest = ingestModule
+    activeIntelligence = { settleIntelligenceIndexForTests }
+    activeStore = storeModule
     useStorageForTests({
       fs: {
         readdir,
@@ -186,12 +282,20 @@ describe('M2-0033 retry policy across backfill callers', () => {
   })
 
   afterEach(async () => {
-    await whenIngestWorkSettles()
-    await settleIntelligenceIndexForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await waitForIdle(activeIngest, activeIntelligence, activeStore)
+    } finally {
+      try {
+        await drainActiveGraph()
+      } finally {
+        restoreSpeechReadPolicy()
+        restoreSpeechReadPolicy = () => {}
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.unstubAllEnvs()
+        vi.restoreAllMocks()
+      }
+    }
   })
 
   it('EX-1: three relaunches leave exhausted, backed-off and unreadable records byte-for-byte as seeded and never call a model for them', async () => {
@@ -219,26 +323,36 @@ describe('M2-0033 retry policy across backfill callers', () => {
   })
 
   it('EX-1: a completed-but-unacknowledged extraction is merged without any model call and is not repeated', async () => {
+    const unackedCallsBefore = modelMarkers.filter((marker) => marker === 'unacked').length
     for (let i = 0; i < 3; i++) await relaunch()
-    expect(modelMarkers).not.toContain('unacked')
-    expect(readIndex(getSettings()).ingested['unacked.md']?.ok).toBe(true)
+    expect(modelMarkers.filter((marker) => marker === 'unacked').length - unackedCallsBefore).toBe(0)
+    const indexed = readIndex(getSettings()).ingested['unacked.md']
+    expect(indexed?.ok).toBe(true)
+    const expectedReceipts = sourceReceipts('unacked.md')
+    expect(indexed?.sourceDigest).toBe(expectedReceipts.sourceDigest)
+    expect(indexed?.sourceRootId).toBe(expectedReceipts.sourceRootId)
+    const persisted = storeModule.readMeetingExtraction(getSettings(), 'unacked-md')
+    expect(persisted?.sourceDigest).toBe(expectedReceipts.sourceDigest)
+    expect(persisted?.sourceRootId).toBe(expectedReceipts.sourceRootId)
   })
 
   it('EX-1: each automatic scan audits scheduler.job with heldExhausted, heldBackedOff and heldUnreadable counts and no file names', async () => {
     await relaunch()
     const scans = auditLogMock.mock.calls.filter(([event]) => event === 'scheduler.job').map(([, payload]) => payload)
-    expect(scans).toContainEqual(expect.objectContaining({
-      kind: 'backfill',
-      trigger: 'automatic',
-      outcome: 'scanned',
-      heldExhausted: expect.any(Number),
-      heldBackedOff: expect.any(Number),
-      heldUnreadable: expect.any(Number)
-    }))
+    expect(scans).toContainEqual(
+      expect.objectContaining({
+        kind: 'backfill',
+        trigger: 'automatic',
+        outcome: 'scanned',
+        heldExhausted: expect.any(Number),
+        heldBackedOff: expect.any(Number),
+        heldUnreadable: expect.any(Number)
+      })
+    )
     expect(JSON.stringify(scans)).not.toMatch(/backedoff\.md|exhausted\.md|unreadable\.md|eligible\.md|unacked\.md/)
   })
 
-  it('EX-3: an explicit Retry (requestBackfillRun({ force: true, trigger: \'user\' })) revives an exhausted source; one more failure lands at attempts 1, not 7', async () => {
+  it("EX-3: an explicit Retry (requestBackfillRun({ force: true, trigger: 'user' })) revives an exhausted source; one more failure lands at attempts 1, not 7", async () => {
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondError('synthetic model failure', modelMarkers))
     const { completion } = await requestBackfillRun({ force: true, ...userTrigger })
@@ -316,12 +430,15 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect(createStreamMock).not.toHaveBeenCalled()
     expect(sha256(readFileSync(primary))).toBe(beforeIndex)
     expect(readdirSync(dir).sort()).toEqual(beforeListing)
-    expect(auditLogMock.mock.calls).toEqual(expect.arrayContaining([
-      ['scheduler.job', { kind: 'backfill', outcome: 'deferred', deferredReason: 'ledger_unavailable' }],
-      ['scheduler.job', { kind: 'intelligence-index', outcome: 'deferred', deferredReason: 'ledger_unavailable' }]
-    ]))
-    const deferred = auditLogMock.mock.calls.filter((call): call is [string, { kind: string, outcome: string }] =>
-      call[0] === 'scheduler.job' && call[1]?.outcome === 'deferred'
+    expect(auditLogMock.mock.calls).toEqual(
+      expect.arrayContaining([
+        ['scheduler.job', { kind: 'backfill', outcome: 'deferred', deferredReason: 'ledger_unavailable' }],
+        ['scheduler.job', { kind: 'intelligence-index', outcome: 'deferred', deferredReason: 'ledger_unavailable' }]
+      ])
+    )
+    const deferred = auditLogMock.mock.calls.filter(
+      (call): call is [string, { kind: string; outcome: string }] =>
+        call[0] === 'scheduler.job' && call[1]?.outcome === 'deferred'
     )
     expect(deferred.filter(([, payload]) => payload.kind === 'backfill')).toHaveLength(1)
     expect(deferred.filter(([, payload]) => payload.kind === 'intelligence-index')).toHaveLength(1)

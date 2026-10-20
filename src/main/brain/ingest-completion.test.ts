@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -9,20 +10,36 @@ import { createStream } from '../llm'
 import * as brainStore from './store'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
-import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress } from './ingest'
+import {
+  requestBackfillRun,
+  requestSourceRefresh,
+  resumeBackfillIfPending,
+  startBackfill,
+  startRebuild,
+  enqueueIngest,
+  brainBackfillProgress
+} from './ingest'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 vi.mock('../llm', () => ({ createStream: vi.fn() }))
 vi.mock('./publish', async (original) => {
   const actual = await original<typeof import('./publish')>()
-  return { ...actual, publishForExtraction: vi.fn(actual.publishForExtraction), publishIndexes: vi.fn(actual.publishIndexes), publishAll: vi.fn(actual.publishAll) }
+  return {
+    ...actual,
+    publishForExtraction: vi.fn(actual.publishForExtraction),
+    publishIndexes: vi.fn(actual.publishIndexes),
+    publishAll: vi.fn(actual.publishAll)
+  }
 })
 
 function gate() {
   let release!: () => void
-  const promise = new Promise<void>((resolve) => { release = resolve })
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
   return { promise, release }
 }
 
@@ -30,8 +47,12 @@ describe('backfill run completion observes real work', () => {
   let profile: string
   let folder: string
   let releases: Array<() => void>
+  let restoreSpeechReadPolicy: () => void = () => {}
   const success = (opts: StreamOptions & { handlers: StreamHandlers }) => {
-    queueMicrotask(() => { opts.handlers.onDelta('{}'); opts.handlers.onDone({}) })
+    queueMicrotask(() => {
+      opts.handlers.onDelta('{}')
+      opts.handlers.onDone({})
+    })
     return { abort: () => {} }
   }
   const meeting = (name: string) => {
@@ -39,13 +60,18 @@ describe('backfill run completion observes real work', () => {
     writeFileSync(path, '---\ndate: 2026-01-01\n---\nSynthetic meeting transcript.\n')
     return path
   }
-  const trackedGate = () => { const g = gate(); releases.push(g.release); return g }
+  const trackedGate = () => {
+    const g = gate()
+    releases.push(g.release)
+    return g
+  }
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     profile = mkdtempSync(join(tmpdir(), 'metis-completion-profile-'))
     folder = mkdtempSync(join(tmpdir(), 'metis-completion-meetings-'))
-    vi.mocked(app.getPath).mockImplementation((name) => name === 'userData' ? profile : join(profile, name))
+    vi.mocked(app.getPath).mockImplementation((name) => (name === 'userData' ? profile : join(profile, name)))
     for (const name of Object.keys(process.env)) if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
     setSettings({ meetingsFolder: folder, teamTranscriptFolders: [], publishBrainPages: false })
     setApiKey('anthropic', 'synthetic-test-key')
@@ -54,23 +80,34 @@ describe('backfill run completion observes real work', () => {
     releases = []
   })
   afterEach(async () => {
-    releases.forEach((release) => release())
-    vi.restoreAllMocks()
-    setApiKey('anthropic', 'synthetic-test-key')
-    vi.mocked(createStream).mockImplementation(success)
-    setSettings({ meetingsFolder: folder, teamTranscriptFolders: [] })
-    await startBackfill(undefined, { force: true })
-    await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
-    await settleBrainWritesForTests()
-    rmSync(profile, { recursive: true, force: true })
-    rmSync(folder, { recursive: true, force: true })
-    vi.unstubAllEnvs()
+    try {
+      releases.forEach((release) => release())
+      vi.restoreAllMocks()
+      setApiKey('anthropic', 'synthetic-test-key')
+      vi.mocked(createStream).mockImplementation(success)
+      setSettings({ meetingsFolder: folder, teamTranscriptFolders: [] })
+      await startBackfill(undefined, { force: true })
+      await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        await settleBrainWritesForTests()
+      } finally {
+        restoreSpeechReadPolicy()
+        restoreSpeechReadPolicy = () => {}
+        rmSync(profile, { recursive: true, force: true })
+        rmSync(folder, { recursive: true, force: true })
+        vi.unstubAllEnvs()
+      }
+    }
   })
 
   it('does not complete an empty run before its deferred scan has executed', async () => {
     const run = await requestBackfillRun({ force: true })
     let settled = false
-    void run.completion.then(() => { settled = true })
+    void run.completion.then(() => {
+      settled = true
+    })
     expect(run.result).toEqual({ queued: 0, preparing: true })
     await Promise.resolve()
     expect(settled).toBe(false)
@@ -81,10 +118,15 @@ describe('backfill run completion observes real work', () => {
     meeting('one.md')
     const finalPublication = trackedGate()
     let publishing = false
-    vi.mocked(publish.publishIndexes).mockImplementationOnce(async () => { publishing = true; await finalPublication.promise })
+    vi.mocked(publish.publishIndexes).mockImplementationOnce(async () => {
+      publishing = true
+      await finalPublication.promise
+    })
     const run = await requestBackfillRun({ force: true })
     let settled = false
-    void run.completion.then(() => { settled = true })
+    void run.completion.then(() => {
+      settled = true
+    })
     await vi.waitFor(() => expect(publishing).toBe(true))
     expect(brainStore.readIndex(getSettings()).ingested['one.md']?.ok).toBe(true)
     expect(settled).toBe(false)
@@ -96,7 +138,10 @@ describe('backfill run completion observes real work', () => {
   it('coalesces an existing legacy batch without an early callback or duplicate extraction', async () => {
     meeting('legacy.md')
     const extraction = trackedGate()
-    vi.mocked(createStream).mockImplementationOnce((opts) => { void extraction.promise.then(() => success(opts)); return { abort: () => {} } })
+    vi.mocked(createStream).mockImplementationOnce((opts) => {
+      void extraction.promise.then(() => success(opts))
+      return { abort: () => {} }
+    })
     const callback = vi.fn()
     await startBackfill(callback)
     const first = await requestBackfillRun({ force: true })
@@ -111,23 +156,40 @@ describe('backfill run completion observes real work', () => {
 
   it('returns a failed outcome for extraction errors and preserves retry intent', async () => {
     meeting('failed.md')
-    vi.mocked(createStream).mockImplementation((opts) => { queueMicrotask(() => opts.handlers.onError('synthetic provider failure')); return { abort: () => {} } })
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'incomplete', total: 1, failed: 1 })
+    vi.mocked(createStream).mockImplementation((opts) => {
+      queueMicrotask(() => opts.handlers.onError('synthetic provider failure'))
+      return { abort: () => {} }
+    })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'incomplete',
+      total: 1,
+      failed: 1
+    })
     expect(brainStore.readIndex(getSettings()).ingested['failed.md']?.ok).toBe(false)
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('counts deferred sources without pretending no-provider work succeeded', async () => {
-    meeting('a.md'); meeting('b.md')
+    meeting('a.md')
+    meeting('b.md')
     clearApiKey('anthropic')
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'no-provider', total: 2, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'no-provider',
+      total: 2,
+      failed: 0
+    })
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('settles a provider lost mid-batch without consuming the remaining source', async () => {
     for (const name of ['a.md', 'b.md', 'c.md', 'd.md']) meeting(name)
     const extraction = trackedGate()
-    vi.mocked(createStream).mockImplementation((opts) => { void extraction.promise.then(() => success(opts)); return { abort: () => {} } })
+    vi.mocked(createStream).mockImplementation((opts) => {
+      void extraction.promise.then(() => success(opts))
+      return { abort: () => {} }
+    })
     const run = await requestBackfillRun({ force: true })
     await vi.waitFor(() => expect(createStream).toHaveBeenCalledTimes(3))
     clearApiKey('anthropic')
@@ -141,30 +203,67 @@ describe('backfill run completion observes real work', () => {
     const blocked = join(profile, 'not-a-directory')
     writeFileSync(blocked, 'synthetic')
     setSettings({ teamTranscriptFolders: [blocked] })
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'scan-failed', total: 0, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'scan-failed',
+      total: 0,
+      failed: 0
+    })
     expect(brainBackfillProgress().preparing).toBeFalsy()
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('observes rejected detached index writes instead of trusting the swallowed lock tail', async () => {
     vi.spyOn(brainStore, 'writeIndex').mockRejectedValueOnce(new Error('synthetic disk failure'))
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'write-failed', total: 0, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'write-failed',
+      total: 0,
+      failed: 0
+    })
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('reports final publication rejection and retains durable retry state', async () => {
     meeting('publish.md')
     vi.mocked(publish.publishIndexes).mockRejectedValueOnce(new Error('synthetic publication failure'))
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'publication-failed', total: 1, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'publication-failed',
+      total: 1,
+      failed: 0
+    })
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('repairs a local checkpoint without requiring a provider', async () => {
-    meeting('checkpoint.md')
+    const file = meeting('checkpoint.md')
+    const sourceDigest = createHash('sha256').update(readFileSync(file)).digest('hex')
+    const sourceRootId = createHash('sha256').update(realpathSync(folder), 'utf8').digest('hex')
     clearApiKey('anthropic')
-    await brainStore.writeMeetingExtraction(getSettings(), brainStore.slugify('checkpoint.md'), MeetingExtractionSchema.parse({ title24: 'Synthetic repair' }))
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
+    await brainStore.writeMeetingExtraction(
+      getSettings(),
+      brainStore.slugify('checkpoint.md'),
+      MeetingExtractionSchema.parse({
+        title24: 'Synthetic repair',
+        sourceDigest,
+        sourceRootId
+      })
+    )
+    const persisted = brainStore.readMeetingExtraction(getSettings(), brainStore.slugify('checkpoint.md'))
+    expect(persisted?.sourceDigest).toBe(sourceDigest)
+    expect(persisted?.sourceRootId).toBe(sourceRootId)
+    const providerCallsBefore = vi.mocked(createStream).mock.calls.length
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: true,
+      total: 1,
+      failed: 0
+    })
     expect(createStream).not.toHaveBeenCalled()
+    expect(vi.mocked(createStream).mock.calls.length - providerCallsBefore).toBe(0)
+    const indexed = brainStore.readIndex(getSettings()).ingested['checkpoint.md']
+    expect(indexed?.sourceDigest).toBe(sourceDigest)
+    expect(indexed?.sourceRootId).toBe(sourceRootId)
   })
 
   it('awaits a source refresh replay and publication without blocking its drain callback', async () => {
@@ -175,11 +274,16 @@ describe('backfill run completion observes real work', () => {
     writeFileSync(file, '---\ndate: 2026-01-01\n---\nSynthetic edited meeting, new content.\n')
     const replayPublication = trackedGate()
     let replaying = false
-    vi.mocked(publish.publishAll).mockImplementationOnce(async () => { replaying = true; await replayPublication.promise })
+    vi.mocked(publish.publishAll).mockImplementationOnce(async () => {
+      replaying = true
+      await replayPublication.promise
+    })
     await requestSourceRefresh()
     const run = await requestBackfillRun({ force: true })
     let settled = false
-    void run.completion.then(() => { settled = true })
+    void run.completion.then(() => {
+      settled = true
+    })
     await vi.waitFor(() => expect(replaying).toBe(true))
     expect(settled).toBe(false)
     replayPublication.release()
@@ -191,8 +295,12 @@ describe('backfill run completion observes real work', () => {
     const recap = trackedGate()
     const run = await requestBackfillRun({ force: true }, recap.promise)
     let settled = false
-    void run.completion.then(() => { settled = true })
-    await vi.waitFor(() => expect(brainStore.readIndex(getSettings()).ingested['recap.md']?.ok).toBe(true), { timeout: 10_000 })
+    void run.completion.then(() => {
+      settled = true
+    })
+    await vi.waitFor(() => expect(brainStore.readIndex(getSettings()).ingested['recap.md']?.ok).toBe(true), {
+      timeout: 10_000
+    })
     expect(settled).toBe(false)
     writeFileSync(file, '---\ndate: 2026-01-01\n---\nSynthetic transcript with a newly saved recap.\n')
     recap.release()
@@ -205,7 +313,10 @@ describe('backfill run completion observes real work', () => {
     await (await requestBackfillRun({ force: true })).completion
     const publication = trackedGate()
     let publishing = false
-    vi.mocked(publish.publishIndexes).mockImplementationOnce(async () => { publishing = true; await publication.promise })
+    vi.mocked(publish.publishIndexes).mockImplementationOnce(async () => {
+      publishing = true
+      await publication.promise
+    })
     const run = await requestBackfillRun({ force: true })
     await vi.waitFor(() => expect(publishing).toBe(true))
     writeFileSync(file, 'Synthetic changed transcript while publication was pending.\n')
@@ -228,10 +339,17 @@ describe('backfill run completion observes real work', () => {
     const firstGate = trackedGate()
     const secondGate = trackedGate()
     const first = await requestBackfillRun({ force: true }, firstGate.promise)
-    const second = await requestBackfillRun({ force: true }, secondGate.promise.then(() => { throw new Error('synthetic recap failure') }))
+    const second = await requestBackfillRun(
+      { force: true },
+      secondGate.promise.then(() => {
+        throw new Error('synthetic recap failure')
+      })
+    )
     expect(first.completion).toBe(second.completion)
     let settled = false
-    void first.completion.then(() => { settled = true })
+    void first.completion.then(() => {
+      settled = true
+    })
     firstGate.release()
     await vi.waitFor(() => expect(brainBackfillProgress().preparing).toBeFalsy())
     expect(settled).toBe(false)
@@ -246,7 +364,12 @@ describe('backfill run completion observes real work', () => {
     writeFileSync(file, 'Synthetic edited source for a failed final replay publication.\n')
     vi.mocked(publish.publishAll).mockRejectedValueOnce(new Error('synthetic replay publication failure'))
     await requestSourceRefresh()
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'publication-failed', total: 1, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'publication-failed',
+      total: 1,
+      failed: 0
+    })
     expect(brainBackfillProgress().running).toBe(false)
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
@@ -268,10 +391,16 @@ describe('backfill run completion observes real work', () => {
     const write = brainStore.writeIndex
     vi.spyOn(brainStore, 'writeMeetingExtraction').mockRejectedValueOnce(new Error('synthetic extraction disk failure'))
     vi.spyOn(brainStore, 'writeIndex').mockImplementation(async (settings, idx) => {
-      if (idx.ingested['write-failure.md'] && !idx.ingested['write-failure.md'].ok) throw new Error('synthetic failure-ledger write failure')
+      if (idx.ingested['write-failure.md'] && !idx.ingested['write-failure.md'].ok)
+        throw new Error('synthetic failure-ledger write failure')
       return write(settings, idx)
     })
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'write-failed', total: 1, failed: 1 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'write-failed',
+      total: 1,
+      failed: 1
+    })
     expect(brainBackfillProgress()).toMatchObject({ running: false, total: 1, done: 1, failed: 1 })
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
   })
@@ -287,9 +416,14 @@ describe('backfill run completion observes real work', () => {
     })
     const run = await requestBackfillRun({ force: true })
     let settled = false
-    void run.completion.then(() => { settled = true })
+    void run.completion.then(() => {
+      settled = true
+    })
     await vi.waitFor(() => expect(publishing).toBe(true))
-    vi.mocked(createStream).mockImplementationOnce((opts) => { void extraction.promise.then(() => success(opts)); return { abort: () => {} } })
+    vi.mocked(createStream).mockImplementationOnce((opts) => {
+      void extraction.promise.then(() => success(opts))
+      return { abort: () => {} }
+    })
     await enqueueIngest(meeting('late-live.md'))
     publication.release()
     await new Promise<void>((resolve) => setTimeout(resolve, 20))
@@ -304,8 +438,15 @@ describe('backfill run completion observes real work', () => {
     writeFileSync(file, 'Synthetic edited source awaiting replay publication.\n')
     vi.mocked(publish.publishAll).mockClear().mockRejectedValueOnce(new Error('synthetic replay publication failure'))
     await requestSourceRefresh()
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toMatchObject({ ok: false, error: 'publication-failed' })
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: true, total: 0, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toMatchObject({
+      ok: false,
+      error: 'publication-failed'
+    })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: true,
+      total: 0,
+      failed: 0
+    })
     expect(publish.publishAll).toHaveBeenCalledTimes(2)
     expect(brainStore.readIndex(getSettings()).replayPending).toBe(false)
     expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(false)
@@ -318,11 +459,21 @@ describe('backfill run completion observes real work', () => {
     const purge = vi.spyOn(brainStore, 'purgeBrain')
     vi.mocked(publish.publishAll).mockClear().mockRejectedValueOnce(new Error('synthetic interrupted publication'))
     await requestSourceRefresh()
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toMatchObject({ ok: false, error: 'publication-failed' })
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: true, sourceRefreshRequested: true, backfillRequested: true })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toMatchObject({
+      ok: false,
+      error: 'publication-failed'
+    })
+    expect(brainStore.readIndex(getSettings())).toMatchObject({
+      replayPending: true,
+      sourceRefreshRequested: true,
+      backfillRequested: true
+    })
     const publication = trackedGate()
     let retrying = false
-    vi.mocked(publish.publishAll).mockImplementationOnce(async () => { retrying = true; await publication.promise })
+    vi.mocked(publish.publishAll).mockImplementationOnce(async () => {
+      retrying = true
+      await publication.promise
+    })
     resumeBackfillIfPending()
     resumeBackfillIfPending()
     const run = await requestBackfillRun({ force: true })
@@ -333,7 +484,11 @@ describe('backfill run completion observes real work', () => {
     expect(publish.publishAll).toHaveBeenCalledTimes(2)
     expect(purge).toHaveBeenCalledTimes(1)
     expect(createStream).toHaveBeenCalledTimes(2)
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
+    expect(brainStore.readIndex(getSettings())).toMatchObject({
+      replayPending: false,
+      sourceRefreshRequested: false,
+      backfillRequested: false
+    })
   })
 
   it('can retry replay after a refresh scan throws before registering its drain callback', async () => {
@@ -343,17 +498,33 @@ describe('backfill run completion observes real work', () => {
     writeFileSync(blocked, 'synthetic regular file, not a directory')
     setSettings({ teamTranscriptFolders: [blocked] })
     await requestSourceRefresh()
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'scan-failed', total: 1, failed: 0 })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: false,
+      error: 'scan-failed',
+      total: 1,
+      failed: 0
+    })
     setSettings({ teamTranscriptFolders: [] })
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({
+      ok: true,
+      total: 1,
+      failed: 0
+    })
+    expect(brainStore.readIndex(getSettings())).toMatchObject({
+      replayPending: false,
+      sourceRefreshRequested: false,
+      backfillRequested: false
+    })
   })
 
   it('refuses an overlapping rebuild during publication instead of losing its lifecycle callback', async () => {
     meeting('overlap-replay.md')
     const publication = trackedGate()
     let publishing = false
-    vi.mocked(publish.publishAll).mockImplementationOnce(async () => { publishing = true; await publication.promise })
+    vi.mocked(publish.publishAll).mockImplementationOnce(async () => {
+      publishing = true
+      await publication.promise
+    })
     const purge = vi.spyOn(brainStore, 'purgeBrain')
     await startRebuild(getSettings())
     await vi.waitFor(() => expect(publishing).toBe(true))
@@ -367,7 +538,10 @@ describe('backfill run completion observes real work', () => {
   it('gives only one concurrent rebuild ownership of asynchronous preflight and purge', async () => {
     meeting('overlap-preflight.md')
     const extraction = trackedGate()
-    vi.mocked(createStream).mockImplementation((opts) => { void extraction.promise.then(() => success(opts)); return { abort: () => {} } })
+    vi.mocked(createStream).mockImplementation((opts) => {
+      void extraction.promise.then(() => success(opts))
+      return { abort: () => {} }
+    })
     const purge = vi.spyOn(brainStore, 'purgeBrain')
     const results = await Promise.all([startRebuild(getSettings()), startRebuild(getSettings())])
     expect(results.filter((result) => result.error)).toHaveLength(1)

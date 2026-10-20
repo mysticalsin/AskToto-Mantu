@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -15,7 +16,7 @@ import {
   resumeBackfillIfPending,
   startBackfill
 } from './ingest'
-import { readIndex, writeIndex, writeMeetingExtraction } from './store'
+import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { MeetingExtractionSchema } from '@shared/brain'
 import {
@@ -25,6 +26,7 @@ import {
   startMaintenanceGate
 } from '../infra/scheduler/maintenance'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
 
@@ -63,6 +65,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
   let interactiveActive: boolean
   let scheduled: Array<{ run: () => void; ms: number }>
   let held: Array<() => void>
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   const startGate = (prior: 'clean' | 'unclean' | undefined = 'clean') => {
     resetMaintenanceGateForTests()
@@ -70,23 +73,31 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     startMaintenanceGate({
       uptimeMs: () => uptime,
       interactiveActive: () => interactiveActive,
-      schedule: (run: () => void, ms: number) => { scheduled.push({ run, ms }) }
+      schedule: (run: () => void, ms: number) => {
+        scheduled.push({ run, ms })
+      }
     })
     if (prior) settlePriorExit(prior)
   }
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
   const releaseHeldWork = async (): Promise<void> => {
-    await vi.waitFor(() => {
-      held.splice(0).forEach((release) => release())
-      expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        held.splice(0).forEach((release) => release())
+        expect(brainBackfillProgress().running).toBe(false)
+      },
+      { timeout: 10_000 }
+    )
     await settleBrainWritesForTests()
   }
 
@@ -94,7 +105,15 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     writeFileSync(join(meetingsFolder, name), `---\ndate: 2026-01-01\n---\n${body}`, 'utf8')
   }
 
+  const sourceReceipts = (name: string) => ({
+    sourceDigest: createHash('sha256')
+      .update(readFileSync(join(meetingsFolder, name)))
+      .digest('hex'),
+    sourceRootId: createHash('sha256').update(realpathSync(meetingsFolder), 'utf8').digest('hex')
+  })
+
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-gate-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-gate-meetings-'))
@@ -119,15 +138,25 @@ describe('M2-0033 maintenance gate for background ingest', () => {
   })
 
   afterEach(async () => {
-    uptime = 121_000
-    interactiveActive = false
-    startGate('clean')
-    await releaseHeldWork()
-    await settleBrainWritesForTests()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      uptime = 121_000
+      interactiveActive = false
+      startGate('clean')
+      await releaseHeldWork()
+      await settleBrainWritesForTests()
+    } finally {
+      try {
+        held.splice(0).forEach((release) => release())
+        await settleBrainWritesForTests()
+      } finally {
+        restoreSpeechReadPolicy()
+        restoreSpeechReadPolicy = () => {}
+        rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        vi.unstubAllEnvs()
+        vi.restoreAllMocks()
+      }
+    }
   })
 
   it('EX-2: in the boot quiet period, resume and reconcile queue work but call no model; firing the quiet-period wake at 120 s starts it and audits window-open with uptimeMs >= 120000', async () => {
@@ -146,12 +175,17 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
     held.splice(0).forEach((release) => release())
     await waitForIdle()
-    expect(auditLogMock).toHaveBeenCalledWith('scheduler.job', expect.objectContaining({
-      kind: 'model-work',
-      outcome: 'window-open',
-      uptimeMs: expect.any(Number)
-    }))
-    const event = auditLogMock.mock.calls.find(([eventName]) => eventName === 'scheduler.job')?.[1] as { uptimeMs?: number } | undefined
+    expect(auditLogMock).toHaveBeenCalledWith(
+      'scheduler.job',
+      expect.objectContaining({
+        kind: 'model-work',
+        outcome: 'window-open',
+        uptimeMs: expect.any(Number)
+      })
+    )
+    const event = auditLogMock.mock.calls.find(([eventName]) => eventName === 'scheduler.job')?.[1] as
+      | { uptimeMs?: number }
+      | undefined
     expect(event?.uptimeMs).toBeGreaterThanOrEqual(120_000)
   })
 
@@ -244,10 +278,26 @@ describe('M2-0033 maintenance gate for background ingest', () => {
 
     createStreamMock.mockClear()
     writeMeeting('repair.md')
-    await writeMeetingExtraction(getSettings(), 'repair-md', MeetingExtractionSchema.parse({ title24: 'Repair synthetic extraction' }))
+    const receipts = sourceReceipts('repair.md')
+    await writeMeetingExtraction(
+      getSettings(),
+      'repair-md',
+      MeetingExtractionSchema.parse({
+        title24: 'Repair synthetic extraction',
+        ...receipts
+      })
+    )
+    const persisted = readMeetingExtraction(getSettings(), 'repair-md')
+    expect(persisted?.sourceDigest).toBe(receipts.sourceDigest)
+    expect(persisted?.sourceRootId).toBe(receipts.sourceRootId)
+    const providerCallsBeforeRepair = createStreamMock.mock.calls.length
     await startBackfill(undefined, { force: true })
     await waitForIdle()
-    expect(readIndex(getSettings()).ingested['repair.md']?.ok).toBe(true)
+    const indexed = readIndex(getSettings()).ingested['repair.md']
+    expect(indexed?.ok).toBe(true)
+    expect(indexed?.sourceDigest).toBe(receipts.sourceDigest)
+    expect(indexed?.sourceRootId).toBe(receipts.sourceRootId)
+    expect(createStreamMock.mock.calls.length - providerCallsBeforeRepair).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 })
