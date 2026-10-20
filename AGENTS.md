@@ -97,6 +97,12 @@ Pushing a `v*` tag triggers the public release pipeline — never push tags.
   (`L01-F3`, `B2-F1`, …). Never renumber or delete a ticket; mark it `CANCELLED` with a reason instead.
 - **Branches.** `m2/M2-0001-short-slug` for program work, `fix/<slug>` for hotfixes. Branch from `main`.
 - **Commits.** Conventional commits with the ticket id: `fix(recall): cap read concurrency [M2-0012]`.
+- **Automation commit identity.** For authorized local agent commits, use the agent/tool name and the
+  established non-personal address `codex@local.invalid` (used by the 2.12 loop since round 3). Missing
+  Git identity configuration does not require owner credentials or a new approval. Pass the identity
+  explicitly with `git -c user.name='<agent/tool>' -c user.email=codex@local.invalid commit ...`,
+  through the isolation wrapper when hooks may execute. Never rely on Git's OS-derived personal
+  identity. Preserve commits already shared with a remote; do not rewrite them to repair metadata.
 - **Pull requests.** One ticket per PR, targeting `main`, using `.github/pull_request_template.md`. Keep a PR
   in draft until its Opus validation is recorded in the ticket. No direct pushes to `main`.
 - **Ledger and merges.** Only the Opus orchestrator edits ticket status in `ledger/tickets.json` and merges PRs,
