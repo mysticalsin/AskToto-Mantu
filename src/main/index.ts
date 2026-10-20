@@ -792,6 +792,7 @@ import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { captureDraftSettingsBoundary, getPublishedSettingsObservation } from './settings-observation'
 import { registerDraftTranscriptIpc } from './ipc/draft-transcript-ipc'
 import { registerRecoveredDraftCountIpc } from './ipc/recovered-draft-count-ipc'
+import { registerDiscardSavedTranscriptIpc } from './ipc/discard-saved-transcript-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -7505,106 +7506,25 @@ function registerIpc(): void {
     return result
   })
 
-  // Explicit live-meeting Disregard resolves durable files from main-owned save receipts. The exact
-  // receipt path and captured folder are retained through confirmation, so a changed meetings-folder
-  // setting can never turn a basename into a deletion in a different folder.
-  ipcMain.handle(IPC.discardSavedTranscript, async (e, raw) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const authCurrent = captureAuthSessionBoundary()
-    const parsed = DiscardSavedTranscriptPayloadSchema.safeParse(raw)
-    if (!parsed.success || !authCurrent()) return { ok: false, error: 'Could not verify this meeting.' }
-
-    const generation = authSessionGeneration()
-    await transcriptSaveReceipts.sealMeetingAndJoin(parsed.data.startedAt, generation)
-    let releaseGraphBuildFence: (() => void) | undefined
-    try {
-      if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
-      const paths = transcriptSaveReceipts.durablePathsForMeeting(parsed.data.startedAt, generation)
-      if (parsed.data.path && !paths.some((entry) => resolve(entry.path) === resolve(parsed.data.path!))) {
-        // Receipt eviction is recoverable only when the saved file proves it belongs to this live meeting.
-        const candidate = resolve(parsed.data.path)
-        const currentSettings = getSettings()
-        const currentFolder = resolve(resolveMeetingsFolder(currentSettings))
-        const safeName = safeMeetingBasename(candidate)
-        if (safeName && resolve(join(currentFolder, safeName)) === candidate && existsSync(candidate)) {
-          const identity = await recallRead(safeName)
-          if (!authCurrent())
-            return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
-          if (!identity.ok || identity.startedAt !== parsed.data.startedAt) {
-            return {
-              ok: false,
-              error: 'The saved transcript could not be verified. Try Disregard again.',
-              deletedPaths: [] as string[]
-            }
-          }
-          paths.push({ path: candidate, settings: currentSettings })
-        } else if (existsSync(candidate)) {
-          return {
-            ok: false,
-            error: 'The saved transcript could not be verified. Try Disregard again.',
-            deletedPaths: [] as string[]
-          }
-        }
-      }
-      if (!paths.length) {
-        if (!authCurrent())
-          return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
-        transcriptSaveReceipts.markMeetingDiscarded(parsed.data.startedAt, generation)
-        return { ok: true, deletedPaths: [] as string[] }
-      }
-
-      // Receipt-owned rebuilds were joined above; this fence also joins a manual/already-started
-      // build and queues later graph builds until deletion and derived-data cleanup are complete.
-      releaseGraphBuildFence = await acquireGraphBuildFence()
-      if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
-
-      const label = parsed.data.title?.trim() || 'this meeting'
-      const dialogOpts = {
-        type: 'warning' as const,
-        title: 'Delete meeting',
-        message: `Delete "${label}"?`,
-        detail:
-          'This removes the saved transcript, its notes, and its extracted knowledge from this device. This cannot be undone.',
-        buttons: ['Delete', 'Cancel'],
-        defaultId: 1,
-        cancelId: 1
-      }
-      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
-      if (response !== 0) return { ok: false, error: 'cancelled', deletedPaths: [] as string[] }
-      if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths: [] as string[] }
-      // The confirmed discard permanently closes save admission before the first delete awaits.
-      transcriptSaveReceipts.markMeetingDiscarded(parsed.data.startedAt, generation)
-      const deletedPaths: string[] = []
-      for (const entry of paths) {
-        if (!authCurrent()) return { ok: false, error: 'Sign-in changed before deletion.', deletedPaths }
-        const result = await deleteMeetingAtPath(entry.settings, entry.path)
-        if (!result.ok && result.error !== 'Meeting file not found.') {
-          return { ok: false, error: result.error || 'Could not delete the saved transcript.', deletedPaths }
-        }
-        transcriptSaveReceipts.markDurablePathDiscarded(entry.path, generation)
-        deletedPaths.push(entry.path)
-        const safeName = basename(entry.path)
-        auditLog('transcript.deleted', { file: safeName })
-        await publishMeetingCard(entry.settings, safeName).catch((error) => {
-          const detail = error instanceof Error ? error.message : String(error)
-          mainLog.warn(`[publish] could not remove the note card for a deleted meeting: ${detail}`)
-        })
-        await exciseDeletedMeeting(entry.settings, safeName)
-          .then(({ gone }) => {
-            if (!gone) mainLog.warn(`[brain] extraction for a deleted meeting could not be removed: ${safeName}`)
-          })
-          .catch((error) => {
-            const detail = error instanceof Error ? error.message : String(error)
-            mainLog.warn(`[brain] excise failed for a deleted meeting: ${detail}`)
-          })
-        await requestSourceRefresh(entry.settings)
-      }
-      return { ok: true, deletedPaths }
-    } finally {
-      releaseGraphBuildFence?.()
-      transcriptSaveReceipts.releaseMeetingSeal(parsed.data.startedAt, generation)
-    }
+  registerDiscardSavedTranscriptIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    captureAuthSessionBoundary,
+    authSessionGeneration,
+    receipts: transcriptSaveReceipts,
+    getSettings,
+    resolveMeetingsFolder,
+    safeMeetingBasename,
+    recallRead,
+    acquireGraphBuildFence,
+    showMessageBox: (options) => (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)),
+    deleteMeetingAtPath,
+    auditLog,
+    publishMeetingCard,
+    warn: (message) => mainLog.warn(message),
+    exciseDeletedMeeting,
+    requestSourceRefresh
   })
 
   // Recall rename: fix an auto-generated (recap-derived) title after the fact. Updates the frontmatter
