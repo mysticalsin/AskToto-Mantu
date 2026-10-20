@@ -1,3 +1,4 @@
+import type { RevisionEvent } from '@shared/contracts/speech/transcript-revision'
 import { z } from 'zod'
 
 export const RELAY_RESULT_MAX_TEXT = 8_192
@@ -170,5 +171,26 @@ export class RelayResultSequence {
     if (!Number.isSafeInteger(bytes) || bytes < 1 || this.outputBytes + bytes > this.maxOutputBytes) return false
     this.outputBytes += bytes
     return true
+  }
+}
+
+/**
+ * Maps a validated relay transcript to a revision event. Production caller is the WP03-S02 revision adapter.
+ * The lineage id carries the stream epoch because the relay restarts `sequence` for every epoch.
+ * Times stay in the relay stream time base; the adapter rebases them by `firstCaptureSampleOffset` as
+ * `makeRelayTranscript` does before applying.
+ */
+export function relayTranscriptToRevisionEvent(
+  event: RelayTranscript
+): Extract<RevisionEvent, { kind: 'provider-partial' | 'provider-final' }> {
+  return {
+    kind: event.final ? 'provider-final' : 'provider-partial',
+    relaySessionId: `${event.sessionId}:${event.streamEpoch}`,
+    providerSeq: event.sequence,
+    channel: event.track === 'microphone' ? 'mic' : 'system',
+    text: event.text,
+    language: event.languages?.[0] ?? 'multi',
+    startMs: event.startMs,
+    endMs: event.endMs
   }
 }
