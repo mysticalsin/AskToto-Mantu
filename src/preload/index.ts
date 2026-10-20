@@ -3,7 +3,7 @@ import { createSpeechPackBridge } from './speech-pack'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
-import type { OwnerSessionStatus } from '../shared/contracts/owner-session'
+import { OWNER_SESSION_IPC, type OwnerSessionStatus } from '../shared/contracts/owner-session'
 import {
   IPC,
   type InputSessionStart,
@@ -555,7 +555,7 @@ const api = {
   releaseMeetingMicCapture: (captureId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.meetingMicCaptureRelease, { captureId }),
   getInputSessionContext: (): Promise<InputSessionContext | null> => ipcRenderer.invoke(IPC.inputSessionContext),
-  getOwnerSessionStatus: (): Promise<OwnerSessionStatus> => ipcRenderer.invoke(IPC.ownerSessionStatus),
+  getOwnerSessionStatus: (): Promise<OwnerSessionStatus> => ipcRenderer.invoke(OWNER_SESSION_IPC.status),
   startInputSession: (request: InputSessionStart, context: InputSessionContext): Promise<InputSessionResult> =>
     ipcRenderer.invoke(IPC.inputSessionStart, { input: request, context }),
   confirmInputSession: (sessionId: string, context: InputSessionContext): Promise<boolean> =>

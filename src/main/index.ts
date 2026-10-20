@@ -791,8 +791,7 @@ import { registerDiscardSavedTranscriptIpc } from './ipc/discard-saved-transcrip
 import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
-import { createMainOwnerSessionAuthority } from './lifecycle/owner-session-authority'
-import { registerOwnerSessionIpc } from './ipc/register-owner-session'
+import { createOwnerSessionWiring } from './lifecycle/owner-session-wiring'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -5752,6 +5751,7 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
+  const owners = createOwnerSessionWiring({ ipcMain, assertMainWindow, currentInputSessionContext })
   speechDesktop = startSpeechDesktopBootstrap({
     ipcMain,
     assertMainWindow,
@@ -5761,7 +5761,7 @@ function registerIpc(): void {
     platform: process.platform,
     enabled: () => true,
     quitTrace,
-    ...speechDesktopBoundaryOptions((frame) => ownerSession.current(frame))
+    ...speechDesktopBoundaryOptions(owners.speechHooks)
   })
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
@@ -10065,20 +10065,12 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
-  const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
-  const authorizeSender = registerOwnerSessionIpc({
-    ipcMain,
-    assertMainWindow,
-    ownerSession,
-    currentInputSessionContext
-  })
   registerInputCaptureIpc({
     ipcMain,
     assertMainWindow,
     requireAuth,
     inputSessionAuthority,
-    ownerSession,
-    authorizeSender,
+    ...owners.inputCapture,
     commandMicActivationAuthority,
     getWin: () => win,
     getCommandMicActivationLeaseId: () => commandMicActivationLeaseId,

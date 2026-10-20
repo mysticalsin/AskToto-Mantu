@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { IPC } from '@shared/ipc'
+import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { createOwnerSessionAuthority } from '../lifecycle/owner-session-authority'
 import { fakeAssertMainWindow, senderEvent } from '../test-helpers/sender-auth-fixtures'
 import { registerOwnerSessionIpc } from './register-owner-session'
@@ -32,7 +32,7 @@ function setup() {
     signedIn: () => state.identity !== null
   })
   const call = (kind: Parameters<typeof senderEvent>[0] = 'main', payload?: unknown) => {
-    const handler = handlers.get(IPC.ownerSessionStatus)
+    const handler = handlers.get(OWNER_SESSION_IPC.status)
     if (!handler) throw new Error('missing handler')
     return handler(senderEvent(kind), payload) as { signedIn: boolean; handle: string | null; authGeneration: number }
   }
@@ -40,6 +40,10 @@ function setup() {
 }
 
 describe('ownerSession:status', () => {
+  it('keeps the renderer-facing channel name after moving out of shared/ipc.ts', () => {
+    expect(OWNER_SESSION_IPC.status).toBe('ownerSession:status')
+  })
+
   it('status returns a stable opaque handle for one ref', () => {
     const { call } = setup()
     const first = call()

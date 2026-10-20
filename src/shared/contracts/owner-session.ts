@@ -48,6 +48,9 @@ export const OwnerSessionHandleSchema: z.ZodType<OwnerSessionHandle, z.ZodTypeDe
   .refine((value) => !/^[0-9a-fA-F]+$/.test(value), { message: 'handle must not be hex' })
   .transform((value) => value as OwnerSessionHandle)
 
+/** Owner-session IPC channels. Kept out of shared/ipc.ts so that file's FF-04 count does not grow. */
+export const OWNER_SESSION_IPC = { status: 'ownerSession:status' } as const
+
 export const OWNER_SESSION_REVOKE_REASONS = [
   'sign-out',
   'auth-changed',

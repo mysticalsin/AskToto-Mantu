@@ -27,13 +27,13 @@ import {
 } from './model-policy-client'
 import { getSettings } from './store'
 import { screenPermission } from './capture-permissions/screen-permission-runtime'
-import { createMainTranscriptRevision } from './features/meetings/main-transcript-revision'
-import type { RevisionTapDeps } from './features/meetings/relay-revision-adapter'
+import type { CloudSpeechIpcOptions } from './ipc/cloud-speech-ipc-support'
+
+/** Main-side observers of delivered cloud speech, wired by lifecycle/owner-session-wiring. */
+export type SpeechDesktopHooks = Pick<CloudSpeechIpcOptions, 'onSegmentDelivered'>
 
 /** Actual Electron/store adapters: only explicit authority boundaries call these filesystem readers. */
-export function speechDesktopBoundaryOptions(resolveOwner: RevisionTapDeps['resolveOwner']) {
-  // The caller's owner authority is initialized before the first delivered segment invokes this resolver.
-  const transcriptRevision = createMainTranscriptRevision(resolveOwner)
+export function speechDesktopBoundaryOptions(hooks: SpeechDesktopHooks = {}) {
   let lease: SpeechAuthLease | null = null
   const actualPathsRevision = () => JSON.stringify([app.getPath('userData'), adminManagedConfigPath()])
   let pathsRevision = actualPathsRevision()
@@ -47,7 +47,7 @@ export function speechDesktopBoundaryOptions(resolveOwner: RevisionTapDeps['reso
     readTrustedAdminManagedBytes
   })
   return {
-    onSegmentDelivered: transcriptRevision.onSegmentDelivered,
+    ...hooks,
     requireAuth: () => isSpeechAuthLeaseCurrent(lease),
     prepareAuthentication: async () => {
       pathsRevision = actualPathsRevision()

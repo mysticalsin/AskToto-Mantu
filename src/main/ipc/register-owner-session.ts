@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
-import { OwnerSessionStatusSchema } from '@shared/contracts/owner-session'
+import { OWNER_SESSION_IPC, OwnerSessionStatusSchema } from '@shared/contracts/owner-session'
 import type { OwnerSessionRef } from '@shared/contracts/owner-session'
-import { IPC } from '@shared/ipc'
 import { authStatus } from '../auth'
 import type { OwnerSessionAuthority } from '../lifecycle/owner-session-authority'
 import { auditLog } from '../logger'
@@ -68,7 +67,7 @@ export function registerOwnerSessionIpc(deps: RegisterOwnerSessionDeps): Authori
 
   deps.ownerSession.onRevoked((ref) => dropSession(ref.sessionId))
 
-  deps.ipcMain.handle(IPC.ownerSessionStatus, (event: IpcMainInvokeEvent, payload?: unknown) => {
+  deps.ipcMain.handle(OWNER_SESSION_IPC.status, (event: IpcMainInvokeEvent, payload?: unknown) => {
     authorizeSender(event, { surface: 'ownerSession.status', requireOwner: false, allowedFrames: 'main-window-top' })
     if (payload !== undefined) throw new Error('invalid_request')
     const context = deps.currentInputSessionContext()
