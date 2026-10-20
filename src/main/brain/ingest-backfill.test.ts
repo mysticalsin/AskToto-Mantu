@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, unlinkSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync, unlinkSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -11,8 +12,18 @@ import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground } f
 import { readAccount, readDeal, readIndex, slugify, writeIndex, writeMeetingExtraction } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
 
 vi.mock('electron')
+
+function sourceReceipts(root: string, file: string) {
+  return {
+    sourceDigest: createHash('sha256')
+      .update(readFileSync(join(root, file)))
+      .digest('hex'),
+    sourceRootId: createHash('sha256').update(realpathSync(root), 'utf8').digest('hex')
+  }
+}
 
 /**
  * R1 — a backfill queued with no configured AI provider must not fire 60+ doomed extraction calls
@@ -23,6 +34,7 @@ vi.mock('electron')
 describe('startBackfill with no configured provider', () => {
   let userData: string
   let meetingsFolder: string
+  let restoreSpeechReadPolicy: () => void = () => {}
 
   /** Module is fully quiet: queue drained, no deferred scan pending, and every index write landed. */
   const waitForBrainIdle = async (): Promise<void> => {
@@ -38,6 +50,7 @@ describe('startBackfill with no configured provider', () => {
   }
 
   beforeEach(() => {
+    restoreSpeechReadPolicy = installSpeechReadPolicy()
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-backfill-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-backfill-meetings-'))
@@ -49,14 +62,28 @@ describe('startBackfill with no configured provider', () => {
     // the on-disk key — a real ANTHROPIC_API_KEY etc. in the test runner's shell would silently make a
     // provider resolve and defeat the whole point of this test. Clear every provider's env var.
     for (const p of PROVIDER_IDS) {
-      const envVar = ({
-        anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', grok: 'XAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
-        deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', minimax: 'MINIMAX_API_KEY',
-        kimi: 'KIMI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
-        together: 'TOGETHER_API_KEY', fireworks: 'FIREWORKS_API_KEY', mistral: 'MISTRAL_API_KEY',
-        dust: 'DUST_API_KEY', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
-        custom: 'ASKTOTO_CUSTOM_API_KEY'
-      } as Partial<Record<string, string>>)[p]
+      const envVar = (
+        {
+          anthropic: 'ANTHROPIC_API_KEY',
+          openai: 'OPENAI_API_KEY',
+          grok: 'XAI_API_KEY',
+          nvidia: 'NVIDIA_API_KEY',
+          deepseek: 'DEEPSEEK_API_KEY',
+          qwen: 'DASHSCOPE_API_KEY',
+          minimax: 'MINIMAX_API_KEY',
+          kimi: 'KIMI_API_KEY',
+          openrouter: 'OPENROUTER_API_KEY',
+          groq: 'GROQ_API_KEY',
+          together: 'TOGETHER_API_KEY',
+          fireworks: 'FIREWORKS_API_KEY',
+          mistral: 'MISTRAL_API_KEY',
+          dust: 'DUST_API_KEY',
+          'claude-cli': '',
+          'codex-cli': '',
+          gemini: 'GEMINI_API_KEY',
+          custom: 'ASKTOTO_CUSTOM_API_KEY'
+        } as Partial<Record<string, string>>
+      )[p]
       if (envVar) vi.stubEnv(envVar, '')
     }
     setSettings({ meetingsFolder })
@@ -73,11 +100,18 @@ describe('startBackfill with no configured provider', () => {
     // waitFor times out with nothing to show. That was the ~1-in-4 full-suite flake.
     // `preparing` matters as much as `running`: requestBackfill() returns {queued:0, preparing:true} and
     // finishes its scan on a later turn, so running===false alone does not mean the module is idle.
-    await waitForBrainIdle()
-    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    vi.unstubAllEnvs()
-    vi.restoreAllMocks()
+    try {
+      await waitForBrainIdle()
+      rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    } finally {
+      try {
+        vi.unstubAllEnvs()
+        vi.restoreAllMocks()
+      } finally {
+        restoreSpeechReadPolicy()
+      }
+    }
   })
 
   it('queues nothing and preserves backfillRequested for a later resume', async () => {
@@ -91,9 +125,12 @@ describe('startBackfill with no configured provider', () => {
     // startBackfill's `backfillRequested = true` write is fire-and-forget (updateIndex isn't awaited,
     // by design — callers must never block on it), so give its file write a tick to land before reading
     // it back.
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).backfillRequested).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).backfillRequested).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     // Exactly one short warning, not one per candidate transcript that would have been queued.
     const brainWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[brain]'))
     expect(brainWarnings.length).toBe(1)
@@ -114,10 +151,12 @@ describe('startBackfill with no configured provider', () => {
       '---\ndate: 2026-01-03\n---\nThe confirmed EUR 240000 budget will close on 2026-09-30.',
       'utf8'
     )
+    const receipts = sourceReceipts(meetingsFolder, file)
     await writeMeetingExtraction(
       getSettings(),
       slugify(file),
       MeetingExtractionSchema.parse({
+        ...receipts,
         title24: 'Recover partial merge',
         account: { name: 'Recovered Account', sector: 'technology', confidence: 'EXTRACTED' },
         deal: {
@@ -137,10 +176,14 @@ describe('startBackfill with no configured provider', () => {
     // The two baseline sources still need first-pass extraction, so the result makes that deferral
     // explicit while allowing this saved extraction to proceed locally now.
     expect(await startBackfill()).toEqual({ queued: 1, deferred: 'no-provider' })
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
     expect(readAccount(getSettings(), slugify('Recovered Account'))?.meetings.map((m) => m.file)).toContain(file)
+    expect(readIndex(getSettings()).ingested[file]).toMatchObject(receipts)
     expect(readIndex(getSettings()).backfillRequested).toBe(true)
     const deal = readDeal(getSettings(), slugify('Recovered renewal'))
     expect(deal?.amount?.state).toBe('verified')
@@ -152,10 +195,11 @@ describe('startBackfill with no configured provider', () => {
   it('repairs a saved extraction from the background reconciliation loop without a provider', async () => {
     const file = 'background-repair.md'
     writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-01-04\n---\nBackground repair is local.', 'utf8')
+    const receipts = sourceReceipts(meetingsFolder, file)
     await writeMeetingExtraction(
       getSettings(),
       slugify(file),
-      MeetingExtractionSchema.parse({ title24: 'Background checkpoint repair' })
+      MeetingExtractionSchema.parse({ ...receipts, title24: 'Background checkpoint repair' })
     )
 
     reconcileMeetingsInBackground()
@@ -171,6 +215,7 @@ describe('startBackfill with no configured provider', () => {
       },
       { timeout: 15_000 }
     )
+    expect(readIndex(getSettings()).ingested[file]).toMatchObject(receipts)
     // The per-test budget has to clear the waitFor above too: vitest's 5s default would abort the test
     // before that 15s ever elapsed, turning a slow-but-correct run into a failure at the it() line.
   }, 20_000)
@@ -185,9 +230,14 @@ describe('startBackfill with no configured provider', () => {
     } as never)
 
     expect((await startBackfill()).queued).toBe(0)
-    await vi.waitFor(() => {
-      expect((readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(
+          (readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested
+        ).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
   })
 
   it('marks a deleted successfully indexed source for a clean rebuild instead of retaining its derived facts', async () => {
@@ -200,9 +250,14 @@ describe('startBackfill with no configured provider', () => {
     } as never)
 
     expect((await startBackfill()).queued).toBe(0)
-    await vi.waitFor(() => {
-      expect((readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested).toBe(true)
-    }, { timeout: 10_000 })
+    await vi.waitFor(
+      () => {
+        expect(
+          (readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested
+        ).toBe(true)
+      },
+      { timeout: 10_000 }
+    )
   })
 
   it('does not retry a failed unchanged source before its persisted retry window expires during background reconciliation', async () => {
