@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { lstat, open, rename, unlink, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { recordLocalWrite } from './local-writes'
@@ -124,6 +124,57 @@ async function isUnchangedTemp(
   }
 }
 
+async function tempContentMatches(
+  path: string,
+  identity: TempIdentity,
+  expectedBytes: number,
+  expectedDigest: Buffer
+): Promise<boolean> {
+  let handle: FileHandle | undefined
+  try {
+    handle = await open(path, 'r')
+    const stats = await handle.stat()
+    if (
+      !stats.isFile() ||
+      stats.nlink !== 1 ||
+      stats.dev !== identity.dev ||
+      stats.ino !== identity.ino ||
+      stats.size !== expectedBytes
+    )
+      return false
+    const hash = createHash('sha256')
+    const buffer = Buffer.alloc(Math.min(expectedBytes + 1, 64 * 1024))
+    let total = 0
+    while (total <= expectedBytes) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, null)
+      if (bytesRead === 0) break
+      hash.update(buffer.subarray(0, bytesRead))
+      total += bytesRead
+    }
+    return total === expectedBytes && hash.digest().equals(expectedDigest)
+  } catch {
+    return false
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
+async function ownsTemp(
+  path: string,
+  identity: TempIdentity | undefined,
+  expectedBytes: number,
+  expectedDigest: Buffer | undefined
+): Promise<boolean> {
+  if (!identity || !expectedDigest) return false
+  if (!(await isUnchangedTemp(path, identity, expectedBytes))) return false
+  return tempContentMatches(path, identity, expectedBytes, expectedDigest)
+}
+
+function ownsCleanupTemp(path: string, identity: TempIdentity, digest: Buffer | undefined): Promise<boolean> {
+  if (!digest) return isUnchangedTemp(path, identity, identity.size)
+  return ownsTemp(path, identity, identity.size, digest)
+}
+
 /**
  * Writes a bounded async byte stream to an owned sibling temp, syncs that file, then atomically replaces
  * the destination. `fileSyncCompleted` describes the temp-file data sync only; parent-directory crash
@@ -152,6 +203,8 @@ export async function atomicSavedWriteStream(
   let created = false
   let createdIdentity: CreatedIdentity | undefined
   let tempIdentity: TempIdentity | undefined
+  let tempDigest: Buffer | undefined
+  const contentHash = createHash('sha256')
   try {
     checkAdmission(limits.beforeChunk)
     handle = await open(tmp, 'wx', 0o600)
@@ -179,10 +232,12 @@ export async function atomicSavedWriteStream(
       const owned = new Uint8Array(view.byteLength)
       owned.set(new Uint8Array(view.buffer, 0, view.byteLength))
       await writeAll(handle, owned, () => checkAdmission(limits.beforeChunk))
+      contentHash.update(owned)
       bytesWritten += view.byteLength
       chunksWritten += 1
     }
     checkAdmission(limits.beforeChunk)
+    tempDigest = contentHash.digest()
     await handle.sync()
     checkAdmission(limits.beforeChunk)
     const syncedStats = await handle.stat()
@@ -210,13 +265,13 @@ export async function atomicSavedWriteStream(
     handle = undefined
     for (let attempt = 0; ; attempt++) {
       checkAdmission(limits.beforeChunk)
-      if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
+      if (!(await ownsTemp(tmp, tempIdentity, bytesWritten, tempDigest))) {
         const error = new Error('Streamed saved write lost ownership of its temporary file.')
         error.name = 'TEMP_OWNERSHIP'
         throw error
       }
       await limits.prepareBeforeReplace?.()
-      if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
+      if (!(await ownsTemp(tmp, tempIdentity, bytesWritten, tempDigest))) {
         const error = new Error('Streamed saved write lost ownership of its temporary file.')
         error.name = 'TEMP_OWNERSHIP'
         throw error
@@ -273,7 +328,7 @@ export async function atomicSavedWriteStream(
       cleanupIdentity &&
       cleanupIdentity.dev === createdIdentity?.dev &&
       cleanupIdentity.ino === createdIdentity?.ino &&
-      (await isUnchangedTemp(tmp, cleanupIdentity, cleanupIdentity.size))
+      (await ownsCleanupTemp(tmp, cleanupIdentity, tempDigest))
     )
       await unlink(tmp).catch(() => {})
   }
