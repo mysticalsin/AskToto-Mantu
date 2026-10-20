@@ -18,7 +18,7 @@ import {
 } from '../../shared/cloud-speech'
 import type { SpeechBrokerOperation, SpeechTrack } from '../cloud-stt/broker-client'
 import type { RelaySpeechSessionOptions, RelayTrackClosure } from '../cloud-stt/relay-session'
-import type { CaptureLifecycle, CaptureLifecycleContext } from './cloud-speech-ipc-context'
+import type { CaptureLifecycle, CaptureLifecycleContext, LanguageChangeResult } from './cloud-speech-ipc-context'
 import { identityOf } from './cloud-speech-ipc-support'
 
 export function createCaptureLifecycle(context: CaptureLifecycleContext): CaptureLifecycle {
@@ -201,6 +201,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
     return owner.rotationDeadlineAt
   }
   const failRotation = (owner: Owner): void => {
+    owner.targetLanguage = null
     owner.outputIntegrityFailure = true
     owner.rotationAbort?.abort()
     owner.captureSession?.invalidate('cancelled', failure('TRANSPORT', identityOf(owner)))
@@ -323,6 +324,81 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
     owner.cancelRotationSchedule = schedule(() => void rotate(owner), delay)
   }
 
+  /**
+   * Switches the provider language without stopping capture by running the normal rotation handoff with a new
+   * target language. Refusals before acceptance are non-fatal and leave the session untouched. Once accepted
+   * (step k), a rotation failure is fatal exactly like a lease rotation failure.
+   */
+  const changeLanguage = async (owner: Owner, requested: string): Promise<LanguageChangeResult> => {
+    const client = owner.client
+    if (
+      !owner.session ||
+      !client ||
+      !isCurrent(owner) ||
+      owner.phase !== 'active' ||
+      owner.rotationPromise ||
+      owner.rotationAbort ||
+      owner.finishAfterRotation !== null ||
+      owner.ceilingRequested ||
+      owner.targetLanguage !== null
+    )
+      return { ok: false, code: 'STALE' }
+    let authority = currentAuthority(owner, true)
+    if (!authority) {
+      void retire(owner)
+      return { ok: false, code: 'CLOSED' }
+    }
+    if (requested !== 'auto' && !authority.allowedLanguages.includes(requested)) return { ok: false, code: 'POLICY' }
+    const controller = new AbortController()
+    owner.rotationAbort = controller
+    const releaseAbort = (): void => {
+      if (owner.rotationAbort === controller) owner.rotationAbort = null
+    }
+    const capability = await client
+      .capability({ signal: controller.signal, deadlineAt: monotonicNow() + CLOUD_SPEECH_HANDOFF_MAX_MS })
+      .catch(() => ({ ok: false as const, code: 'TRANSPORT' as const }))
+    if (controller.signal.aborted || !isCurrent(owner) || owner.phase !== 'active') {
+      releaseAbort()
+      return { ok: false, code: 'STALE' }
+    }
+    releaseAbort()
+    if (!capability.ok) return { ok: false, code: 'TRANSPORT' }
+    authority = currentAuthority(owner, true)
+    if (!authority) {
+      void retire(owner)
+      return { ok: false, code: 'CLOSED' }
+    }
+    const currentSession = owner.session?.identity
+    const broker = capability.value
+    const expectedRoute = ROUTES[owner.engine]
+    if (
+      !currentSession ||
+      !broker.ready ||
+      broker.routeId !== expectedRoute.routeId ||
+      broker.modelId !== expectedRoute.modelId ||
+      broker.configVersion !== currentSession.configVersion ||
+      broker.policyVersion !== currentSession.policyVersion ||
+      broker.validUntil <= now() ||
+      !broker.allowed.some(
+        (route) => route.routeId === expectedRoute.routeId && route.modelId === expectedRoute.modelId
+      )
+    )
+      return { ok: false, code: 'POLICY' }
+    const language =
+      requested === 'auto' && owner.engine === 'deepgram-nova3' && broker.languages.includes('multi')
+        ? 'multi'
+        : requested
+    if (!broker.languages.includes(language) || !authority.allowedLanguages.includes(language))
+      return { ok: false, code: 'POLICY' }
+    if (language === currentSession.language) return { ok: true, language, changed: false }
+    owner.preflightBinding = { configVersion: broker.configVersion, policyVersion: broker.policyVersion }
+    owner.targetLanguage = language
+    owner.cancelRotationSchedule?.()
+    owner.cancelRotationSchedule = null
+    void rotate(owner)
+    return { ok: true, language, changed: true }
+  }
+
   const rotate = async (owner: Owner): Promise<void> => {
     if (owner.rotationPromise) return owner.rotationPromise
     const session = owner.session
@@ -386,6 +462,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
         failRotation(owner)
         return
       }
+      const targetLanguage = owner.targetLanguage ?? previousIdentity.language
       const issuedAt = now()
       // Consent stays a fresh, valid two-minute grant. The independent
       // monotonic capture deadline bounds allocation and tears down every
@@ -396,7 +473,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
         operation: 'create-session' as const,
         captureGeneration: owner.generation,
         tracks: [...owner.tracks],
-        language: previousIdentity.language,
+        language: targetLanguage,
         consent: {
           accepted: true as const,
           captureGeneration: owner.generation,
@@ -446,7 +523,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
         nextIdentity.captureGeneration !== owner.generation ||
         nextIdentity.routeId !== previousIdentity.routeId ||
         nextIdentity.model !== previousIdentity.model ||
-        nextIdentity.language !== previousIdentity.language ||
+        nextIdentity.language !== targetLanguage ||
         nextIdentity.configVersion !== previousIdentity.configVersion ||
         nextIdentity.policyVersion !== previousIdentity.policyVersion ||
         owner.candidateAllocation?.sessionId !== nextIdentity.sessionId
@@ -474,6 +551,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
         return
       }
       owner.session = next.value
+      owner.targetLanguage = null
       owner.primaryAllocation = owner.candidateAllocation!
       owner.candidateAllocation = null
       for (const event of owner.candidatePendingEvents) {
@@ -610,6 +688,7 @@ export function createCaptureLifecycle(context: CaptureLifecycleContext): Captur
     armRotation,
     rotate,
     failRotation,
+    changeLanguage,
     startCaptureCeiling,
     armCaptureCeiling
   }

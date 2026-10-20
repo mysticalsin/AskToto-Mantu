@@ -11,7 +11,8 @@ export const CLOUD_SPEECH_IPC = {
   status: 'cloud-speech:v1:status',
   transitionAck: 'cloud-speech:v1:transition-ack',
   ceilingAck: 'cloud-speech:v1:ceiling-ack',
-  event: 'cloud-speech:v1:event'
+  event: 'cloud-speech:v1:event',
+  language: 'cloud-speech:v1:language'
 } as const
 
 export const CLOUD_SPEECH_DISCLOSURE_VERSION = 'cloud-speech-v1' as const
@@ -301,6 +302,23 @@ export const CloudSpeechFinishResultSchema = z.union([
     })
 ])
 export type CloudSpeechFinishResult = z.infer<typeof CloudSpeechFinishResultSchema>
+
+export const CloudSpeechLanguageRequestSchema = CaptureIdentitySchema.extend({ language: LanguageSchema }).strict()
+export type CloudSpeechLanguageRequest = z.infer<typeof CloudSpeechLanguageRequestSchema>
+
+export const CloudSpeechLanguageResultSchema = z.union([
+  FailureSchema,
+  z
+    .object({
+      ok: z.literal(true),
+      captureId: CaptureIdSchema,
+      captureGeneration: CounterSchema,
+      language: LanguageSchema,
+      changed: z.boolean()
+    })
+    .strict()
+])
+export type CloudSpeechLanguageResult = z.infer<typeof CloudSpeechLanguageResultSchema>
 
 export const CloudSpeechCancelResultSchema = z.union([
   FailureSchema,

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CLOUD_SPEECH_IPC } from '@shared/cloud-speech'
 import type { SpeechBrokerClient } from './broker-client'
@@ -23,7 +24,7 @@ const OLD_ID = '93d23d44-347e-490c-841b-0ff31facbc7e'
 const CANDIDATE_ID = 'c3d23d44-347c-490c-841b-0ff31facbc7e'
 const GRANT_TOKEN = 'A'.repeat(43)
 
-type SegmentView = { text: string; seq: number; state: string; relaySessionId: string }
+type SegmentView = { text: string; seq: number; state: string; relaySessionId: string; language: string }
 type DeltaView = { meetingStartedAt: number; revision: number }
 
 afterEach(() => relayHarness.create.mockReset())
@@ -35,7 +36,8 @@ function transcript(
   segmentIndex: number,
   revision: number,
   text: string,
-  final: boolean
+  final: boolean,
+  languages?: string[]
 ) {
   return {
     protocolVersion: 1,
@@ -50,7 +52,8 @@ function transcript(
     text,
     startMs: (segmentIndex - 1) * 100,
     endMs: (segmentIndex - 1) * 100 + 50,
-    final
+    final,
+    ...(languages ? { languages } : {})
   }
 }
 
@@ -195,5 +198,200 @@ describe('relay session reconnect', () => {
     for (const id of ids) expect(id.startsWith(`${FAKE_CAPTURE_ID}/7/`)).toBe(true)
     expect(ids.filter((id) => id.endsWith('/3'))).toHaveLength(1)
     expect(ids.filter((id) => id.endsWith('/4'))).toHaveLength(1)
+  })
+})
+
+async function startLanguageRun(
+  opts: {
+    startLanguage?: string
+    allowedLanguages?: string[]
+    candidateLanguage?: string
+    oldLastSequence?: number
+  } = {}
+) {
+  const startLanguage = opts.startLanguage ?? fakeStartRequest.language
+  const candidateLanguage = opts.candidateLanguage ?? startLanguage
+  const clock = captureClock()
+  const store = createTranscriptRevisionStore()
+  const tap = createRelayRevisionTap({ store })
+  const h = createFakeBrokerHarness({
+    clock,
+    listenStartedAt: M,
+    onSegmentDelivered: tap,
+    ...(opts.allowedLanguages ? { allowedLanguages: opts.allowedLanguages } : {})
+  })
+  const invokeLog: string[] = []
+  const invoke = async (channel: string, args: unknown[] = []) => {
+    invokeLog.push(channel)
+    return h.invoke(channel, args)
+  }
+  const oldSession = readyRelay(
+    OLD_ID,
+    [{ track: 'microphone', streamEpoch: 3 }],
+    clock.wallNow(),
+    opts.oldLastSequence ?? 0,
+    startLanguage
+  )
+  const candidateSession = readyRelay(
+    CANDIDATE_ID,
+    [{ track: 'microphone', streamEpoch: 4 }],
+    clock.wallNow(),
+    0,
+    candidateLanguage
+  )
+  let onTranscript: ((event: unknown, context: unknown) => void) | undefined
+  let renewalClient: SpeechBrokerClient | undefined
+  relayHarness.create.mockImplementation(
+    async (options: {
+      client: SpeechBrokerClient
+      onAllocated?: (id: string) => void
+      onTranscript?: (event: unknown, context: unknown) => void
+    }) => {
+      options.onAllocated?.(OLD_ID)
+      renewalClient = options.client
+      onTranscript = options.onTranscript
+      return { ok: true, value: oldSession }
+    }
+  )
+  h.client.createSession = vi.fn(async () =>
+    createdSession({ sessionId: CANDIDATE_ID, streamEpoch: 4, wallNow: clock.wallNow(), language: candidateLanguage })
+  ) as FakeBrokerClient['createSession']
+  const renew = vi.fn(async (createRequest: unknown) => {
+    const created = await renewalClient!.createSession(createRequest as never)
+    if (!created.ok) throw new Error('candidate allocation failed')
+    candidateSession.identity.audioDeadlineAt = created.value.limits.audioDeadlineAt
+    return { ok: true, value: candidateSession }
+  })
+  ;(oldSession as unknown as { renew: typeof renew }).renew = renew
+
+  const oldContext = { timeBase: 'stream', firstCaptureSampleOffset: 0, sessionId: OLD_ID }
+  const candidateContext = { timeBase: 'stream', firstCaptureSampleOffset: 0, sessionId: CANDIDATE_ID }
+
+  await expect(
+    invoke(CLOUD_SPEECH_IPC.start, [{ ...fakeStartRequest, language: startLanguage }])
+  ).resolves.toMatchObject({ ok: true })
+
+  const capabilityCalls = () => (h.client.capability as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+  return {
+    h,
+    store,
+    clock,
+    oldSession,
+    candidateSession,
+    renew,
+    invoke,
+    invokeLog,
+    capabilityCalls,
+    capabilityCallsAtStart: capabilityCalls(),
+    emitOld: (sequence: number, text: string, languages?: string[]) =>
+      onTranscript?.(transcript(OLD_ID, 3, sequence, sequence, 1, text, true, languages), oldContext),
+    emitCandidate: (sequence: number, text: string, languages?: string[]) =>
+      onTranscript?.(transcript(CANDIDATE_ID, 4, sequence, sequence, 1, text, true, languages), candidateContext),
+    segments: () => (store.snapshot(M)?.segments ?? []) as unknown as SegmentView[],
+    languages: () => ((store.snapshot(M) as unknown as { languages?: string[] } | null)?.languages ?? []) as string[]
+  }
+}
+
+describe('relay session language change', () => {
+  it('provider language event mid-stream labels later segments only', async () => {
+    const run = await startLanguageRun({ startLanguage: 'multi' })
+    run.emitOld(1, 'hello', ['en'])
+    run.emitOld(2, 'bonjour', ['fr'])
+    run.emitOld(3, 'encore')
+    run.emitOld(4, 'again', ['en'])
+    run.emitOld(5, 'still')
+    await vi.waitFor(() => expect(segmentSends(run.h)).toHaveLength(5))
+
+    const segments = run.segments()
+    expect(segments.map((segment) => segment.text)).toEqual(['hello', 'bonjour', 'encore', 'again', 'still'])
+    expect(segments.map((segment) => segment.language)).toEqual(['en', 'fr', 'fr', 'en', 'en'])
+    expect(segments[0]!.language).toBe('en')
+    expect(run.languages()).toEqual(['fr', 'en'])
+
+    const types = run.h.sender.send.mock.calls.map((call) => String((call[1] as { type?: string }).type))
+    expect(new Set(types)).toEqual(new Set(['segment']))
+    expect(run.oldSession.finish).not.toHaveBeenCalled()
+    expect(run.oldSession.cancel).not.toHaveBeenCalled()
+  })
+
+  it('user language change takes effect without stopping the relay session', async () => {
+    const run = await startLanguageRun({
+      allowedLanguages: ['multi', 'en-US', 'fr'],
+      candidateLanguage: 'fr',
+      oldLastSequence: 1
+    })
+    run.emitOld(1, 'hello')
+    await vi.waitFor(() => expect(segmentSends(run.h)).toHaveLength(1))
+    expect(run.segments()[0]!.language).toBe('en-US')
+    const bindingBefore = run.store.bindingOf(M)
+
+    const request = { captureId: FAKE_CAPTURE_ID, captureGeneration: 7, language: 'fr' }
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request])).resolves.toMatchObject({
+      ok: true,
+      language: 'fr',
+      changed: true
+    })
+
+    const closed = await rotationReceipt(run.h, 'closed', 3)
+    await expect(
+      run.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
+    ).resolves.toMatchObject({ ok: true })
+    const opened = await rotationReceipt(run.h, 'opened', 3)
+    run.emitCandidate(1, 'bonjour')
+    await run.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...opened, type: 'epoch-transition-ack' }])
+    await vi.waitFor(() => expect(segmentSends(run.h).some((event) => event.segment?.stream?.epoch === 4)).toBe(true))
+
+    expect(run.renew).toHaveBeenCalledTimes(1)
+    expect((run.renew.mock.calls[0]![0] as { language?: string }).language).toBe('fr')
+
+    const segments = run.segments()
+    expect(segments.map((segment) => segment.text)).toEqual(['hello', 'bonjour'])
+    expect(segments.map((segment) => segment.language)).toEqual(['en-US', 'fr'])
+    expect(run.languages().at(-1)).toBe('fr')
+    expect(bindingBefore).not.toBeNull()
+    expect(run.store.bindingOf(M)).toEqual(bindingBefore)
+
+    expect(run.oldSession.cancel).not.toHaveBeenCalled()
+    expect(run.invokeLog).not.toContain(CLOUD_SPEECH_IPC.finish)
+    expect(run.invokeLog).not.toContain(CLOUD_SPEECH_IPC.cancel)
+
+    await vi.waitFor(async () => {
+      await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request])).resolves.toMatchObject({
+        ok: true,
+        language: 'fr',
+        changed: false
+      })
+    })
+  })
+
+  it('refuses a language the authority does not allow without touching the session', async () => {
+    const run = await startLanguageRun({ allowedLanguages: ['multi', 'en-US', 'fr'] })
+    await expect(
+      run.invoke(CLOUD_SPEECH_IPC.language, [{ captureId: FAKE_CAPTURE_ID, captureGeneration: 7, language: 'de' }])
+    ).resolves.toMatchObject({ ok: false, code: 'POLICY' })
+    expect(run.renew).not.toHaveBeenCalled()
+    expect(run.capabilityCalls()).toBe(run.capabilityCallsAtStart)
+    expect(run.oldSession.cancel).not.toHaveBeenCalled()
+  })
+
+  it('refuses a language change from another frame', async () => {
+    const run = await startLanguageRun({ allowedLanguages: ['multi', 'en-US', 'fr'], candidateLanguage: 'fr' })
+    const otherSender = Object.assign(new EventEmitter(), {
+      mainFrame: run.h.mainFrame,
+      isDestroyed: () => false,
+      getURL: () => run.h.mainFrame.url,
+      send: vi.fn()
+    })
+    const otherEvent = { sender: otherSender, senderFrame: run.h.mainFrame } as never
+    await expect(
+      run.h.invoke(
+        CLOUD_SPEECH_IPC.language,
+        [{ captureId: FAKE_CAPTURE_ID, captureGeneration: 7, language: 'fr' }],
+        otherEvent
+      )
+    ).resolves.toMatchObject({ ok: false, code: 'STALE' })
+    expect(run.renew).not.toHaveBeenCalled()
+    const types = run.h.sender.send.mock.calls.map((call) => (call[1] as { type?: string }).type)
+    expect(types.includes('epoch-transition')).toBe(false)
   })
 })

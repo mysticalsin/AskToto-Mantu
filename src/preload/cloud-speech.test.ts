@@ -491,4 +491,21 @@ describe('cloud speech preload boundary', () => {
       captureGeneration: capture.generation
     })
   })
+
+  it('sends a validated language change and refuses a reply for another capture', async () => {
+    const fixture = makeRenderer()
+    const api = createCloudSpeechPreloadApi(fixture.renderer)
+    const request = { captureId, captureGeneration: capture.generation, language: 'fr' }
+    fixture.invoke.mockResolvedValueOnce({ ok: true, ...request, changed: true })
+    await expect(api.cloudSpeechSetLanguage(request)).resolves.toEqual({ ok: true, ...request, changed: true })
+    expect(fixture.invoke).toHaveBeenLastCalledWith(CLOUD_SPEECH_IPC.language, request)
+    fixture.invoke.mockResolvedValueOnce({ ok: true, ...request, captureGeneration: 8, changed: true })
+    await expect(api.cloudSpeechSetLanguage(request)).resolves.toMatchObject({ ok: false, code: 'TRANSPORT' })
+    fixture.invoke.mockClear()
+    await expect(api.cloudSpeechSetLanguage({ ...request, language: 'French' })).resolves.toMatchObject({
+      ok: false,
+      code: 'INVALID_REQUEST'
+    })
+    expect(fixture.invoke).not.toHaveBeenCalled()
+  })
 })

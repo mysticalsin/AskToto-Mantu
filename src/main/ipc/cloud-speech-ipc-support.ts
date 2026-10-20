@@ -132,6 +132,7 @@ export type Owner = {
   ceilingAcked: boolean
   ceilingFrameDeadlineAt: number | null
   preflightBinding: { configVersion: string; policyVersion: string } | null
+  targetLanguage: string | null
   rotationDeadlineAt: number | null
   candidateAllocation: SpeechAllocation | null
   candidatePendingEvents: Array<z.infer<typeof CloudSpeechEventSchema>>
@@ -386,7 +387,8 @@ export function capabilityBinding(value: unknown, language: string): CapabilityB
 
 export function bindCreateToCapability(
   client: SpeechBrokerClient,
-  expected: CapabilityBinding,
+  /** A getter is read at each allocation, so a main-approved language change re-binds later renewals. */
+  expected: CapabilityBinding | (() => CapabilityBinding),
   onAllocated: (sessionId: string, slot: SpeechAllocationSlot) => void,
   beginAttempt: () => SpeechAllocationSlot = () => ({ attempted: false, sessionId: null })
 ): SpeechBrokerClient {
@@ -401,12 +403,13 @@ export function bindCreateToCapability(
           const value = created.value
           slot.sessionId = value.sessionId
           onAllocated(value.sessionId, slot)
+          const want = typeof expected === 'function' ? expected() : expected
           if (
-            value.routeId !== expected.routeId ||
-            value.model !== expected.modelId ||
-            value.language !== expected.language ||
-            value.configVersion !== expected.configVersion ||
-            value.policyVersion !== expected.policyVersion
+            value.routeId !== want.routeId ||
+            value.model !== want.modelId ||
+            value.language !== want.language ||
+            value.configVersion !== want.configVersion ||
+            value.policyVersion !== want.policyVersion
           ) {
             await target.cancel(value.sessionId, 1_000).catch(() => undefined)
             return { ok: false as const, code: 'SCHEMA' as const }

@@ -179,6 +179,18 @@ describe('applyRevisionEvent', () => {
     })
   })
 
+  it('a provider language seen earlier becomes current again', () => {
+    const rev = run([
+      final({ providerSeq: 1, language: 'en', startMs: 0, endMs: 100 }),
+      final({ providerSeq: 2, language: 'fr', startMs: 200, endMs: 300 }),
+      final({ providerSeq: 3, language: 'en', startMs: 400, endMs: 500 }),
+      final({ providerSeq: 4, language: 'multi', startMs: 600, endMs: 700 })
+    ])
+    expect(rev.segments.map((segment) => segment.language)).toEqual(['en', 'fr', 'en', 'en'])
+    expect(rev.languages.at(-1)).toBe('en')
+    expect(rev.segments[0].language).toBe('en')
+  })
+
   it('a final commits the open partial for the same relay session and channel', () => {
     const rev = run([
       partial({ providerSeq: 1, text: 'hel', startMs: 10, endMs: 50 }),

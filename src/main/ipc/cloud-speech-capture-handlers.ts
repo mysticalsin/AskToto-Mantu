@@ -7,7 +7,9 @@ import {
   CloudSpeechFinishRequestSchema,
   CloudSpeechFinishResultSchema,
   CloudSpeechFrameResultSchema,
-  CloudSpeechFrameSchema
+  CloudSpeechFrameSchema,
+  CloudSpeechLanguageRequestSchema,
+  CloudSpeechLanguageResultSchema
 } from '../../shared/cloud-speech'
 import {
   failure,
@@ -426,5 +428,30 @@ export function createCaptureHandlers(context: CaptureHandlersContext): CaptureI
     }
     return CloudSpeechCaptureCeilingAckResultSchema.safeParse(result).success ? result : failure('TRANSPORT', identity)
   }
-  return { frame, transitionAck, finishCapture, ceilingAck }
+  const changeLanguage = async (event: SpeechIpcEvent, raw: unknown): Promise<unknown> => {
+    const binding = getBinding(event, context.assertMainWindow)
+    if (!binding) return failure('AUTH')
+    const parsed = CloudSpeechLanguageRequestSchema.safeParse(raw)
+    if (!parsed.success) return failure('INVALID_REQUEST')
+    const request = parsed.data
+    const identity = { captureId: request.captureId, captureGeneration: request.captureGeneration }
+    const owner = ownerFor(identity)
+    if (
+      !owner ||
+      state.current !== owner ||
+      owner.binding.sender !== binding.sender ||
+      owner.binding.frame !== binding.frame
+    )
+      return failure('STALE')
+    if (!state.acceptingInput) {
+      void retire(owner)
+      return failure('CLOSED', identity)
+    }
+    const result = await lifecycle.changeLanguage(owner, request.language)
+    const value = result.ok
+      ? { ok: true as const, ...identity, language: result.language, changed: result.changed }
+      : failure(result.code, identity)
+    return CloudSpeechLanguageResultSchema.safeParse(value).success ? value : failure('TRANSPORT', identity)
+  }
+  return { frame, transitionAck, finishCapture, ceilingAck, changeLanguage }
 }

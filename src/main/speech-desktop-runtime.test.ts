@@ -6,6 +6,7 @@ import { resolveSpeechPolicyIdentity } from './speech-policy-authority'
 import type { VerifiedSpeechPolicy } from './model-policy-client'
 import { createSpeechDesktopRuntime, type SpeechDesktopRuntimeState } from './speech-desktop-runtime'
 import { authorityRevision } from './ipc/cloud-speech-ipc-support'
+import { CLOUD_SPEECH_IPC } from '@shared/cloud-speech'
 
 vi.mock('./model-policy-client', () => ({ getVerifiedSpeechPolicySnapshot: () => null }))
 vi.mock('./platform-perms', () => ({
@@ -136,7 +137,14 @@ describe('speech desktop runtime authority composition', () => {
   it('registers the actual IPC adapter and resolves exact signed-policy route authority from cached inputs', () => {
     const h = makeHarness()
     expect(h.ipcMain.handle).toHaveBeenCalled()
-    expect(h.handlers.size).toBe(8)
+    // Every invoke channel; `event` is a main-to-renderer push and is never handled.
+    expect([...h.handlers.keys()].sort()).toEqual(
+      Object.entries(CLOUD_SPEECH_IPC)
+        .filter(([key]) => key !== 'event')
+        .map(([, channel]) => channel)
+        .sort()
+    )
+    expect(h.handlers.size).toBe(9)
     const authority = h.runtime.readAuthority(invokeEvent, startRequest())
     expect(authority).toMatchObject({
       enabled: true,

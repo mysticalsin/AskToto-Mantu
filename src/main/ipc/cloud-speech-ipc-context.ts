@@ -1,6 +1,11 @@
 import type { Authority, CloudSpeechIpcOptions, Owner, SpeechIpcEvent } from './cloud-speech-ipc-support'
 import type { CaptureDeadlineScheduler } from '../infra/scheduler/capture-deadline'
 import type { RelayTrackClosure } from '../cloud-stt/relay-session'
+import type { CloudSpeechFailure } from '../../shared/cloud-speech'
+
+export type LanguageChangeResult =
+  | { ok: true; language: string; changed: boolean }
+  | { ok: false; code: CloudSpeechFailure['code'] }
 
 export type CaptureIdentity = { captureId: string; captureGeneration: number }
 
@@ -38,6 +43,7 @@ export type CaptureLifecycle = {
   armRotation: (owner: Owner) => void
   rotate: (owner: Owner) => Promise<void>
   failRotation: (owner: Owner) => void
+  changeLanguage: (owner: Owner, requested: string) => Promise<LanguageChangeResult>
   startCaptureCeiling: (owner: Owner) => void
   armCaptureCeiling: (owner: Owner) => void
 }
@@ -60,4 +66,5 @@ export type CaptureIpcHandlers = {
   transitionAck: (event: SpeechIpcEvent, raw: unknown) => unknown
   finishCapture: (event: SpeechIpcEvent, raw: unknown) => Promise<unknown>
   ceilingAck: (event: SpeechIpcEvent, raw: unknown) => Promise<unknown>
+  changeLanguage: (event: SpeechIpcEvent, raw: unknown) => Promise<unknown>
 }

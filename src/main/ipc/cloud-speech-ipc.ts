@@ -276,6 +276,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       ceilingAcked: false,
       ceilingFrameDeadlineAt: null,
       preflightBinding: null,
+      targetLanguage: null,
       rotationDeadlineAt: null,
       candidateAllocation: null,
       candidatePendingEvents: [],
@@ -393,7 +394,11 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
         expectedCapability: { configVersion: binding.configVersion, policyVersion: binding.policyVersion },
         client: bindCreateToCapability(
           client,
-          binding,
+          // Start language until allocated; then a user language change's approved target, else the live session's.
+          () => ({
+            ...binding,
+            language: owner.targetLanguage ?? owner.session?.identity.language ?? binding.language
+          }),
           (id, slot) => {
             slot.attempted = true
             slot.sessionId = id
@@ -530,6 +535,7 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
   handle(CLOUD_SPEECH_IPC.transitionAck, captureHandlers.transitionAck)
   handle(CLOUD_SPEECH_IPC.finish, captureHandlers.finishCapture)
   handle(CLOUD_SPEECH_IPC.ceilingAck, captureHandlers.ceilingAck)
+  handle(CLOUD_SPEECH_IPC.language, captureHandlers.changeLanguage)
 
   handle(CLOUD_SPEECH_IPC.capability, async (event) => {
     const binding = getBinding(event, options.assertMainWindow)

@@ -256,7 +256,6 @@ export class RelaySpeechSession {
       createRequest.tracks.some((track, index) => track !== this.tracksOrder[index]) ||
       createRequest.consent.tracks.length !== this.tracksOrder.length ||
       createRequest.consent.tracks.some((track, index) => track !== this.tracksOrder[index]) ||
-      (createRequest.language ?? this.language) !== this.language ||
       !Number.isSafeInteger(createRequest.consent.issuedAt) ||
       !Number.isSafeInteger(createRequest.consent.expiresAt) ||
       createRequest.consent.issuedAt <= this.consentIssuedAt ||
@@ -297,7 +296,11 @@ export class RelaySpeechSession {
     const next = await RelaySpeechSession.create({
       client: this.client,
       createRequest,
-      expectedSelection: { routeId: this.routeId, modelId: this.model, language: this.language },
+      expectedSelection: {
+        routeId: this.routeId,
+        modelId: this.model,
+        language: createRequest.language ?? this.language
+      },
       expectedContinuation: {
         configVersion: this.configVersion,
         policyVersion: this.policyVersion,

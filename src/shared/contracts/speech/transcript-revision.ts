@@ -223,8 +223,11 @@ function reduceSpan(rev: TranscriptRevision, ev: SpanEvent): Candidate | Revisio
   }
   if (latestFinal && ev.startMs < latestFinal.startMs) return 'out-of-order'
   const language = isConcrete(ev.language) ? ev.language : currentLanguage(rev)
+  // `languages` is most-recent-last: a concrete language becomes current again by moving to the end.
   const languages =
-    isConcrete(language) && !rev.languages.includes(language) ? [...rev.languages, language] : rev.languages
+    isConcrete(language) && language !== currentLanguage(rev)
+      ? [...rev.languages.filter((l) => l !== language), language]
+      : rev.languages
   const speaker = ev.kind === 'provider-final' && ev.speaker !== undefined ? { speaker: ev.speaker } : {}
   const open = openIndex >= 0 ? rev.segments[openIndex] : undefined
   let next: TranscriptSegment

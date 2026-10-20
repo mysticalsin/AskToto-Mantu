@@ -19,6 +19,8 @@ import {
   CloudSpeechFrameResultSchema,
   CloudSpeechFrameSchema,
   CloudSpeechIdentitySchema,
+  CloudSpeechLanguageRequestSchema,
+  CloudSpeechLanguageResultSchema,
   CloudSpeechStartRequestSchema,
   CloudSpeechStartResultSchema,
   CloudSpeechStatusRequestSchema,
@@ -35,6 +37,8 @@ import {
   type CloudSpeechFinishResult,
   type CloudSpeechFrame,
   type CloudSpeechFrameResult,
+  type CloudSpeechLanguageRequest,
+  type CloudSpeechLanguageResult,
   type CloudSpeechStartRequest,
   type CloudSpeechStartResult,
   type CloudSpeechStatusRequest,
@@ -49,6 +53,7 @@ export type CloudSpeechPreloadApi = {
   cloudSpeechStart: (request: CloudSpeechStartRequest) => Promise<CloudSpeechStartResult>
   cloudSpeechFrame: (frame: CloudSpeechFrame) => Promise<CloudSpeechFrameResult>
   cloudSpeechFinish: (request: CloudSpeechFinishRequest) => Promise<CloudSpeechFinishResult>
+  cloudSpeechSetLanguage: (request: CloudSpeechLanguageRequest) => Promise<CloudSpeechLanguageResult>
   cloudSpeechCancel: (request: CloudSpeechCancelRequest) => Promise<CloudSpeechCancelResult>
   cloudSpeechStatus: (request: CloudSpeechStatusRequest) => Promise<CloudSpeechStatusResult>
   cloudSpeechAckEpochTransition: (
@@ -233,6 +238,30 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
             result.tracks.map((track) => track.stream.track),
             parsed.data.tracks.map((track) => track.track)
           )
+        )
+          return failure(parsed.data, 'TRANSPORT')
+        return result
+      } catch {
+        return failure(parsed.data, 'TRANSPORT')
+      }
+    },
+    async cloudSpeechSetLanguage(request) {
+      let parsed: ReturnType<typeof CloudSpeechLanguageRequestSchema.safeParse>
+      try {
+        parsed = CloudSpeechLanguageRequestSchema.safeParse(request)
+      } catch {
+        return failure(request, 'INVALID_REQUEST')
+      }
+      if (!parsed.success) return failure(request, 'INVALID_REQUEST')
+      try {
+        const result = transportFailure(
+          CloudSpeechLanguageResultSchema,
+          await renderer.invoke(CLOUD_SPEECH_IPC.language, parsed.data),
+          parsed.data
+        )
+        if (
+          result.ok &&
+          (result.captureId !== parsed.data.captureId || result.captureGeneration !== parsed.data.captureGeneration)
         )
           return failure(parsed.data, 'TRANSPORT')
         return result

@@ -28,8 +28,8 @@ export const fakeStartRequest: CloudSpeechStartRequest = {
   consent: { accepted: true, disclosureVersion: 'cloud-speech-v1' }
 }
 
-export function createdSession(opts: { sessionId: string; streamEpoch: number; wallNow: number }) {
-  const { sessionId, streamEpoch, wallNow } = opts
+export function createdSession(opts: { sessionId: string; streamEpoch: number; wallNow: number; language?: string }) {
+  const { sessionId, streamEpoch, wallNow, language = 'en-US' } = opts
   return {
     ok: true as const,
     value: {
@@ -40,7 +40,7 @@ export function createdSession(opts: { sessionId: string; streamEpoch: number; w
       model: FAKE_ROUTE.modelId,
       configVersion: 'config-r1',
       policyVersion: 'policy-r1',
-      language: 'en-US',
+      language,
       captureGeneration: 7,
       grantExpiresAt: wallNow + 60_000,
       leaseExpiresAt: wallNow + 60_000,
@@ -57,7 +57,7 @@ export function createdSession(opts: { sessionId: string; streamEpoch: number; w
   } satisfies Awaited<ReturnType<SpeechBrokerClient['createSession']>>
 }
 
-export function readyCapability(wallNow: number) {
+export function readyCapability(wallNow: number, languages: string[] = ['multi', 'en-US']) {
   return {
     ok: true as const,
     value: {
@@ -70,7 +70,7 @@ export function readyCapability(wallNow: number) {
       modelId: FAKE_ROUTE.modelId,
       configVersion: 'config-r1',
       policyVersion: 'policy-r1',
-      languages: ['multi', 'en-US'],
+      languages,
       format: { encoding: 'pcm_s16le' as const, sampleRate: 16_000 as const, channels: 1 as const },
       validUntil: wallNow + 60_000,
       limits: {
@@ -89,7 +89,8 @@ export function readyRelay(
   trackDefinitions: Array<{ track: SpeechTrack; streamEpoch: number }>,
   wallNow: number,
   /** The last transcript sequence this session delivered; its finish terminal must report exactly that frontier. */
-  lastSequence = 0
+  lastSequence = 0,
+  language: string = fakeStartRequest.language
 ) {
   return {
     identity: {
@@ -97,7 +98,7 @@ export function readyRelay(
       captureGeneration: fakeStartRequest.capture.generation,
       routeId: FAKE_ROUTE.routeId,
       model: FAKE_ROUTE.modelId,
-      language: fakeStartRequest.language,
+      language,
       configVersion: 'config-r1',
       policyVersion: 'policy-r1',
       audioDeadlineAt: wallNow + 60_000,
@@ -164,8 +165,9 @@ export function createFakeBrokerHarness(opts: {
   clock: ReturnType<typeof captureClock>
   listenStartedAt: number
   onSegmentDelivered?: CloudSpeechIpcOptions['onSegmentDelivered']
+  allowedLanguages?: string[]
 }) {
-  const { clock, listenStartedAt, onSegmentDelivered } = opts
+  const { clock, listenStartedAt, onSegmentDelivered, allowedLanguages = ['multi', 'en-US'] } = opts
   const handlers = new Map<string, Handler>()
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -186,7 +188,7 @@ export function createFakeBrokerHarness(opts: {
     policyReady: true,
     selectedEngine: 'deepgram-nova3',
     allowedEngines: ['deepgram-nova3'],
-    allowedLanguages: ['multi', 'en-US'],
+    allowedLanguages,
     credentials: {
       operatorUrl: 'https://operator.example',
       operatorLicenseToken: 'METIS-OP-1.test',
@@ -199,7 +201,7 @@ export function createFakeBrokerHarness(opts: {
     finishAllowed: true
   } as unknown as CloudSpeechMainAuthority
   const client: FakeBrokerClient = {
-    capability: vi.fn(async () => readyCapability(clock.wallNow())),
+    capability: vi.fn(async () => readyCapability(clock.wallNow(), allowedLanguages)),
     cancel: vi.fn(async () => ({
       ok: true as const,
       value: {

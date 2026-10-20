@@ -105,7 +105,8 @@ function makeClient(
   afterCreate?: () => void,
   tracks: SpeechTrack[] = ['microphone'],
   versions: { configVersion?: string; policyVersion?: string } = {},
-  advanceEpochOnSuccessor = false
+  advanceEpochOnSuccessor = false,
+  echoLanguage = false
 ): SpeechBrokerClient {
   const response = {
     ...fixture.create.responseTemplate,
@@ -117,7 +118,7 @@ function makeClient(
     afterCreate?.()
     let result: Record<string, unknown> = response
     try {
-      const request = JSON.parse(String(init?.body)) as { operation?: string }
+      const request = JSON.parse(String(init?.body)) as { operation?: string; language?: string }
       if (request.operation === 'create-session') {
         createCount += 1
         if (advanceEpochOnSuccessor && createCount > 1) {
@@ -127,6 +128,7 @@ function makeClient(
             grants: tracks.map((track, index) => ({ track, streamEpoch: 16 + index, token: 'B'.repeat(43) }))
           }
         }
+        if (echoLanguage && request.language) result = { ...result, language: request.language }
       }
     } catch {
       /* non-create operation keeps the safe fixed response fixture */
@@ -319,6 +321,53 @@ describe('RelaySpeechSession', () => {
     expect(MockRelaySocket.instances[0]?.sent).toContain('{"type":"finish"}')
     expect(MockRelaySocket.instances).toHaveLength(2)
     if (renewed.ok) await renewed.value.cancel()
+  })
+
+  it('renews into a new language when the broker allocates that language', async () => {
+    MockRelaySocket.instances = []
+    const client = makeClient(undefined, ['microphone'], {}, true, true)
+    const started = await RelaySpeechSession.create({
+      client,
+      createRequest: { ...singleTrackCreateRequest(), language: 'multi' },
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect(started.value.identity.language).toBe('multi')
+    const request = { ...singleTrackCreateRequest(), language: 'fr' }
+    request.consent = {
+      ...request.consent,
+      issuedAt: request.consent.issuedAt + 10,
+      expiresAt: request.consent.expiresAt + 10
+    }
+    const renewed = await started.value.renew(request)
+    expect(renewed.ok).toBe(true)
+    if (!renewed.ok) return
+    expect(renewed.value.identity.language).toBe('fr')
+    expect(MockRelaySocket.instances[0]?.sent).toContain('{"type":"finish"}')
+    await renewed.value.cancel()
+  })
+
+  it('refuses a language renewal the broker did not honor', async () => {
+    MockRelaySocket.instances = []
+    const client = makeClient(undefined, ['microphone'], {}, true, false)
+    const started = await RelaySpeechSession.create({
+      client,
+      createRequest: { ...singleTrackCreateRequest(), language: 'multi' },
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const request = { ...singleTrackCreateRequest(), language: 'fr' }
+    request.consent = {
+      ...request.consent,
+      issuedAt: request.consent.issuedAt + 10,
+      expiresAt: request.consent.expiresAt + 10
+    }
+    const renewed = await started.value.renew(request)
+    expect(renewed.ok).toBe(false)
   })
 
   it('rejects a renewal with stale consent before finishing or allocating', async () => {
