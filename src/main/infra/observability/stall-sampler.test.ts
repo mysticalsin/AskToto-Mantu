@@ -286,7 +286,14 @@ describe('startStallSampler', () => {
       audit,
       deps: { spawn: (() => child) as unknown as typeof nodeSpawn, collect }
     })
-    await flush()
+    await vi.waitFor(
+      () =>
+        expect(audit).toHaveBeenCalledWith(
+          'sidecar.spawn',
+          expect.objectContaining({ name: 'stall-watch', pid: TEST_PID })
+        ),
+      { timeout: 2_500 }
+    )
     sampler.stop()
     sampler.stop()
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL')
