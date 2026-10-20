@@ -30,7 +30,7 @@ import { screenPermission } from './capture-permissions/screen-permission-runtim
 import type { CloudSpeechIpcOptions } from './ipc/cloud-speech-ipc-support'
 
 /** Main-side observers of delivered cloud speech, wired by lifecycle/owner-session-wiring. */
-export type SpeechDesktopHooks = Pick<CloudSpeechIpcOptions, 'onSegmentDelivered'>
+export type SpeechDesktopHooks = Pick<CloudSpeechIpcOptions, 'onSegmentDelivered' | 'onLanguageChange'>
 
 /** Actual Electron/store adapters: only explicit authority boundaries call these filesystem readers. */
 export function speechDesktopBoundaryOptions(hooks: SpeechDesktopHooks = {}) {

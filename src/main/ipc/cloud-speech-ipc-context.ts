@@ -59,6 +59,7 @@ export type CaptureHandlersContext = {
   readonly clearCurrentIf: (owner: Owner) => void
   readonly releaseCaptureOwner: (owner: Owner) => void
   readonly lifecycle: CaptureLifecycle
+  readonly onLanguageChange?: CloudSpeechIpcOptions['onLanguageChange']
 }
 
 export type CaptureIpcHandlers = {

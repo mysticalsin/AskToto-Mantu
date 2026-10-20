@@ -9,7 +9,8 @@ export const CONTRACT_AUDIT_EVENTS = [
   'dig_up.capture',
   'dig_up.explain.dispatch',
   'component.acquire',
-  'component.verify'
+  'component.verify',
+  'speech.language.change'
 ] as const
 
 export const ContractAuditEventNameSchema = z.enum(CONTRACT_AUDIT_EVENTS)

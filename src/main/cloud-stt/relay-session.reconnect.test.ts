@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CLOUD_SPEECH_IPC } from '@shared/cloud-speech'
 import type { SpeechBrokerClient } from './broker-client'
+import type { CloudSpeechIpcOptions } from '../ipc/cloud-speech-ipc-support'
+import { languageChangeAuditRecord } from '../ipc/cloud-speech-language-audit'
 
 const relayHarness = vi.hoisted(() => ({ create: vi.fn() }))
 vi.mock('./relay-session', () => ({ RelaySpeechSession: { create: relayHarness.create } }))
@@ -207,6 +209,7 @@ async function startLanguageRun(
     allowedLanguages?: string[]
     candidateLanguage?: string
     oldLastSequence?: number
+    onLanguageChange?: CloudSpeechIpcOptions['onLanguageChange']
   } = {}
 ) {
   const startLanguage = opts.startLanguage ?? fakeStartRequest.language
@@ -218,6 +221,7 @@ async function startLanguageRun(
     clock,
     listenStartedAt: M,
     onSegmentDelivered: tap,
+    ...(opts.onLanguageChange ? { onLanguageChange: opts.onLanguageChange } : {}),
     ...(opts.allowedLanguages ? { allowedLanguages: opts.allowedLanguages } : {})
   })
   const invokeLog: string[] = []
@@ -393,5 +397,71 @@ describe('relay session language change', () => {
     expect(run.renew).not.toHaveBeenCalled()
     const types = run.h.sender.send.mock.calls.map((call) => (call[1] as { type?: string }).type)
     expect(types.includes('epoch-transition')).toBe(false)
+  })
+})
+
+describe('speech.language.change audit hook (WP02 catalog, S13 path)', () => {
+  const request = (language: string, captureGeneration = 7) => ({
+    captureId: FAKE_CAPTURE_ID,
+    captureGeneration,
+    language
+  })
+
+  it('observes each resolved request once with its outcome and no language value', async () => {
+    const onLanguageChange = vi.fn()
+    const run = await startLanguageRun({
+      allowedLanguages: ['multi', 'en-US', 'fr'],
+      candidateLanguage: 'fr',
+      onLanguageChange
+    })
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('de')])).resolves.toMatchObject({ code: 'POLICY' })
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('fr')])).resolves.toMatchObject({ changed: true })
+    expect(onLanguageChange.mock.calls.map((call) => call[1])).toEqual([
+      { ok: false, code: 'POLICY' },
+      { ok: true, changed: true }
+    ])
+    for (const [owner, outcome] of onLanguageChange.mock.calls) {
+      expect(owner).toMatchObject({ captureId: FAKE_CAPTURE_ID, generation: 7 })
+      const record = languageChangeAuditRecord(null, outcome, 1)
+      expect(record).not.toBeNull()
+      expect(JSON.stringify(record)).not.toMatch(/"(fr|de|en-US)"|language":/)
+    }
+  })
+
+  it('does not observe a request whose capture owner never resolved', async () => {
+    const onLanguageChange = vi.fn()
+    const run = await startLanguageRun({ allowedLanguages: ['multi', 'en-US', 'fr'], onLanguageChange })
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('fr', 8)])).resolves.toMatchObject({ code: 'STALE' })
+    const otherSender = Object.assign(new EventEmitter(), {
+      mainFrame: run.h.mainFrame,
+      isDestroyed: () => false,
+      getURL: () => run.h.mainFrame.url,
+      send: vi.fn()
+    })
+    await expect(
+      run.h.invoke(CLOUD_SPEECH_IPC.language, [request('fr')], { sender: otherSender, senderFrame: run.h.mainFrame })
+    ).resolves.toMatchObject({ code: 'STALE' })
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [{ captureId: 'nope' }])).resolves.toMatchObject({
+      code: 'INVALID_REQUEST'
+    })
+    expect(onLanguageChange).not.toHaveBeenCalled()
+  })
+
+  it('a throwing audit hook never changes the language result', async () => {
+    const onLanguageChange = vi.fn(() => {
+      throw new Error('audit sink down')
+    })
+    const run = await startLanguageRun({
+      allowedLanguages: ['multi', 'en-US', 'fr'],
+      candidateLanguage: 'fr',
+      onLanguageChange
+    })
+    await expect(run.invoke(CLOUD_SPEECH_IPC.language, [request('fr')])).resolves.toMatchObject({
+      ok: true,
+      language: 'fr',
+      changed: true
+    })
+    expect(onLanguageChange).toHaveBeenCalledTimes(1)
+    expect(run.oldSession.cancel).not.toHaveBeenCalled()
   })
 })

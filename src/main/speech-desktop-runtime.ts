@@ -55,6 +55,7 @@ export type SpeechDesktopRuntimeOptions = {
   clientFactory?: (credentials: SpeechBrokerClientOptions) => SpeechBrokerClient
   now?: () => number
   onSegmentDelivered?: CloudSpeechIpcOptions['onSegmentDelivered']
+  onLanguageChange?: CloudSpeechIpcOptions['onLanguageChange']
 }
 
 export type SpeechDesktopRuntime = CloudSpeechIpcRegistration & {
@@ -292,6 +293,7 @@ export function createSpeechDesktopRuntime(options: SpeechDesktopRuntimeOptions)
     ...(options.scheduleCaptureDeadline ? { scheduleCaptureDeadline: options.scheduleCaptureDeadline } : {}),
     ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
     ...(options.onSegmentDelivered ? { onSegmentDelivered: options.onSegmentDelivered } : {}),
+    ...(options.onLanguageChange ? { onLanguageChange: options.onLanguageChange } : {}),
     now
   })
   return { ...registration, registration, readAuthority }

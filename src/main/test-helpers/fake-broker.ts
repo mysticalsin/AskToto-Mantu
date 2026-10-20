@@ -165,9 +165,10 @@ export function createFakeBrokerHarness(opts: {
   clock: ReturnType<typeof captureClock>
   listenStartedAt: number
   onSegmentDelivered?: CloudSpeechIpcOptions['onSegmentDelivered']
+  onLanguageChange?: CloudSpeechIpcOptions['onLanguageChange']
   allowedLanguages?: string[]
 }) {
-  const { clock, listenStartedAt, onSegmentDelivered, allowedLanguages = ['multi', 'en-US'] } = opts
+  const { clock, listenStartedAt, onSegmentDelivered, onLanguageChange, allowedLanguages = ['multi', 'en-US'] } = opts
   const handlers = new Map<string, Handler>()
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -224,7 +225,8 @@ export function createFakeBrokerHarness(opts: {
     now: clock.wallNow,
     monotonicNow: clock.monotonicNow,
     scheduleCaptureDeadline: clock.schedule,
-    ...(onSegmentDelivered ? { onSegmentDelivered } : {})
+    ...(onSegmentDelivered ? { onSegmentDelivered } : {}),
+    ...(onLanguageChange ? { onLanguageChange } : {})
   })
   const invoke = async (channel: string, args: unknown[] = [], callerEvent: unknown = event) => {
     const handler = handlers.get(channel)

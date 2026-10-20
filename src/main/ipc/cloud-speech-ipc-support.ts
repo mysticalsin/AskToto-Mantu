@@ -161,7 +161,14 @@ export type CloudSpeechIpcOptions = {
   now?: () => number
   /** Observes each segment event after it was delivered to the owning renderer. Must not throw. */
   onSegmentDelivered?: (owner: Owner, event: z.infer<typeof CloudSpeechEventSchema>) => void
+  /**
+   * Observes each user language change request once its capture owner resolved, with the settled outcome. Carries no
+   * language value. Must not throw.
+   */
+  onLanguageChange?: (owner: Owner, outcome: LanguageChangeOutcome) => void
 }
+
+export type LanguageChangeOutcome = { ok: true; changed: boolean } | { ok: false; code: CloudSpeechFailure['code'] }
 
 const PositiveRevision = z.string().min(1).max(256)
 

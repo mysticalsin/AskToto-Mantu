@@ -17,6 +17,7 @@ import {
   identityOf,
   mapClosureReason,
   sameBinding,
+  type LanguageChangeOutcome,
   type Owner,
   type SpeechIpcEvent
 } from './cloud-speech-ipc-support'
@@ -443,7 +444,15 @@ export function createCaptureHandlers(context: CaptureHandlersContext): CaptureI
       owner.binding.frame !== binding.frame
     )
       return failure('STALE')
+    const notify = (outcome: LanguageChangeOutcome): void => {
+      try {
+        context.onLanguageChange?.(owner, outcome)
+      } catch {
+        // an observer never changes the result
+      }
+    }
     if (!state.acceptingInput) {
+      notify({ ok: false, code: 'CLOSED' })
       void retire(owner)
       return failure('CLOSED', identity)
     }
@@ -451,7 +460,9 @@ export function createCaptureHandlers(context: CaptureHandlersContext): CaptureI
     const value = result.ok
       ? { ok: true as const, ...identity, language: result.language, changed: result.changed }
       : failure(result.code, identity)
-    return CloudSpeechLanguageResultSchema.safeParse(value).success ? value : failure('TRANSPORT', identity)
+    const settled = CloudSpeechLanguageResultSchema.safeParse(value).success ? value : failure('TRANSPORT', identity)
+    notify(settled.ok ? { ok: true, changed: settled.changed } : { ok: false, code: settled.code })
+    return settled
   }
   return { frame, transitionAck, finishCapture, ceilingAck, changeLanguage }
 }

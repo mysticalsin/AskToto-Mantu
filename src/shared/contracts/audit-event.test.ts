@@ -19,7 +19,8 @@ describe('AuditEventRecordSchema', () => {
   })
 
   it('accepts every reserved contract event name', () => {
-    expect(CONTRACT_AUDIT_EVENTS).toHaveLength(8)
+    expect(CONTRACT_AUDIT_EVENTS).toHaveLength(9)
+    expect(CONTRACT_AUDIT_EVENTS).toContain('speech.language.change')
     for (const event of CONTRACT_AUDIT_EVENTS) {
       expect(AuditEventRecordSchema.safeParse({ ...base, event }).success).toBe(true)
     }

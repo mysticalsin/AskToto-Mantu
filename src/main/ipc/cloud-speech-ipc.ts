@@ -529,7 +529,8 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
       if (state.current === owner) state.current = null
     },
     releaseCaptureOwner,
-    lifecycle
+    lifecycle,
+    ...(options.onLanguageChange ? { onLanguageChange: options.onLanguageChange } : {})
   })
   handle(CLOUD_SPEECH_IPC.frame, captureHandlers.frame)
   handle(CLOUD_SPEECH_IPC.transitionAck, captureHandlers.transitionAck)
