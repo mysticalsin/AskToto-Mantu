@@ -193,8 +193,10 @@ describe('transcript revision store checkpoint', () => {
     const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
     store.open(binding(null))
     store.close(M, 'user-stop')
+    // close() itself made the one closing checkpoint (WP03-S15); the checkpoint after the seal adds no write.
+    expect(writer).toHaveBeenCalledTimes(1)
     expect(await store.checkpoint(M)).toEqual({ ok: false, error: 'sealed' })
-    expect(writer).not.toHaveBeenCalled()
+    expect(writer).toHaveBeenCalledTimes(1)
 
     const sealingWriter = vi.fn<CheckpointWriter>(async () => 'sealed')
     const other = createTranscriptRevisionStore({ now: () => M, checkpointWriter: sealingWriter })
@@ -261,5 +263,50 @@ describe('transcript revision store checkpoint', () => {
     const unconfigured = createTranscriptRevisionStore({ now: () => M })
     unconfigured.open(binding(null))
     expect(await unconfigured.checkpoint(M)).toEqual({ ok: false, error: 'write-failed' })
+  })
+})
+
+describe('transcript revision store closing checkpoint (WP03-S15)', () => {
+  it('close checkpoints the closing snapshot once and a second close writes nothing', async () => {
+    const writer = vi.fn<CheckpointWriter>(async () => 'written')
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
+    store.open(binding(null))
+    store.apply(binding(null), partial(1))
+    const closing = store.snapshot(M)
+    store.close(M, 'renderer-reset')
+    store.close(M, 'renderer-reset')
+    expect(writer).toHaveBeenCalledTimes(1)
+    expect(writer).toHaveBeenCalledWith(M, closing)
+  })
+
+  it('closing an owned meeting after its auth generation moved writes nothing', () => {
+    let gen = 1
+    const writer = vi.fn<CheckpointWriter>(async () => 'written')
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer, authGeneration: () => gen })
+    store.open(binding(ref({ authGeneration: 1 })))
+    gen = 2
+    expect(store.closeOwnedBy(ref().sessionId, 'sign-out')).toEqual([M])
+    expect(writer).not.toHaveBeenCalled()
+  })
+
+  it('opening a new meeting checkpoints the replaced one once', () => {
+    const writer = vi.fn<CheckpointWriter>(async () => 'written')
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
+    store.open(binding(null))
+    store.open(binding(null, '12:3', M + 1))
+    expect(writer).toHaveBeenCalledTimes(1)
+    expect(writer.mock.calls[0][0]).toBe(M)
+  })
+
+  it('a failing closing checkpoint never throws out of close', () => {
+    const store = createTranscriptRevisionStore({
+      now: () => M,
+      checkpointWriter: async () => {
+        throw new Error('disk gone')
+      }
+    })
+    store.open(binding(null))
+    expect(() => store.close(M, 'user-stop')).not.toThrow()
+    expect(store.snapshot(M)).toBeNull()
   })
 })

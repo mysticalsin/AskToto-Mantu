@@ -19,6 +19,16 @@ const finalizedDraftPaths = new Set<string>()
 const draftPathsByMeeting = new Map<number, Set<string>>()
 const finalizedDraftMeetings = new Set<number>()
 const draftMeetingFinalizations = new Map<number, Promise<readonly string[]>>()
+const finalizingListeners = new Set<(startedAt: number) => void>()
+
+/** Called synchronously the first time a meeting identity is finalized (its draft cleanup, keep or discard), before
+ *  the seal, so a listener may admit one last tracked write that the finalization then joins. */
+export function onDraftMeetingFinalizing(listener: (startedAt: number) => void): () => void {
+  finalizingListeners.add(listener)
+  return () => {
+    finalizingListeners.delete(listener)
+  }
+}
 
 /** Serialize replacement operations for one exact draft path while allowing unrelated paths to progress. */
 export function serializeDraftWrite<T>(file: string, operation: () => Promise<T>): Promise<T> {
@@ -80,6 +90,15 @@ export function finalizeDraftMeeting(startedAt: number, files: readonly string[]
   const existing = draftMeetingFinalizations.get(startedAt)
   if (existing) return existing
 
+  if (!finalizedDraftMeetings.has(startedAt)) {
+    for (const listener of [...finalizingListeners]) {
+      try {
+        listener(startedAt)
+      } catch {
+        // a listener never blocks the seal
+      }
+    }
+  }
   finalizedDraftMeetings.add(startedAt)
   const paths = new Set(draftPathsByMeeting.get(startedAt) ?? [])
   draftPathsByMeeting.delete(startedAt)

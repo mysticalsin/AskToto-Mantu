@@ -6,14 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RevisionEvent } from '@shared/contracts/speech/transcript-revision'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 import { useStorageForTests } from '../../infra/storage/meetings-storage'
+import { onDraftMeetingFinalizing } from '../../infra/storage/draft-transcript-write-state'
 import {
   clearDraftTranscript,
+  preserveDraftTranscript,
   isEncryptedFile,
   readSavedFile,
   saveDraftTranscript,
   saveMeeting
 } from '../../transcripts'
 import { readMeetingFields, stripMeetingFrontmatter } from './meeting-document'
+import { bindMeetingEndClosure } from './session-closure'
 import { readRevisionCheckpoint } from './transcript-checkpoint'
 import { bindTranscriptCheckpointStore, checkpointAfterDraftSave } from './transcript-checkpoint-binding'
 import { writeTranscriptCheckpoint } from './transcript-checkpoint-main'
@@ -193,6 +196,31 @@ describe('transcript checkpoint (production IO against real meeting files)', () 
     await clearDraftTranscript(settings, meeting.startedAt, file)
     await expect(store.checkpoint(meeting.startedAt)).resolves.toEqual({ ok: false, error: 'sealed' })
     expect(drafts()).toEqual([])
+  })
+
+  it('keeping a retired meeting stamps its retained draft with the closing revision (WP03-S15)', async () => {
+    const store = make()
+    const unbindEnd = bindMeetingEndClosure(onDraftMeetingFinalizing, store)
+    try {
+      store.open(binding)
+      store.apply(binding, final(0, 'en-US', 'hello'))
+      await autosave()
+      // Speech after the last autosave: only the closing checkpoint can carry it to disk.
+      store.apply(binding, final(1, 'fr', 'bonjour'))
+      const closing = store.snapshot(meeting.startedAt)
+      await preserveDraftTranscript(meeting.startedAt)
+      expect(store.snapshot(meeting.startedAt)).toBeNull()
+      const kept = readRevisionCheckpoint(readFileSync(draftPath(), 'utf8'))
+      expect(kept?.revision).toBe(closing?.revision)
+      expect(kept?.languages).toEqual([
+        { language: 'en-US', from: 0, to: 0 },
+        { language: 'fr', from: 1, to: 1 }
+      ])
+      // Sealed now: a later checkpoint writes nothing.
+      await expect(store.checkpoint(meeting.startedAt)).resolves.toEqual({ ok: false, error: 'sealed' })
+    } finally {
+      unbindEnd()
+    }
   })
 
   it('never creates a draft that was not autosaved', async () => {

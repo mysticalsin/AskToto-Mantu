@@ -37,6 +37,21 @@ export function bindOwnerRevocationClosure(
   })
 }
 
+/** Closes a meeting as it ends: its draft cleanup, keep or discard finalizes the meeting identity. The close makes
+ *  the one closing checkpoint before the seal, so a kept draft carries the final revision. */
+export function bindMeetingEndClosure(
+  onFinalizing: (listener: (startedAt: number) => void) => () => void,
+  store: Pick<TranscriptRevisionStore, 'close'>
+): () => void {
+  return onFinalizing((startedAt) => {
+    try {
+      store.close(startedAt, 'user-stop')
+    } catch {
+      // closure is best effort and never blocks the seal
+    }
+  })
+}
+
 /** Calls `onReset` when the renderer crashes, is destroyed, or navigates its main frame away. */
 export function bindRendererResetClosure(contents: RendererResetSource, onReset: () => void): void {
   const reset = (): void => {

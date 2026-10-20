@@ -36,6 +36,7 @@ export interface TranscriptRevisionStore {
   snapshot(meetingStartedAt: number): TranscriptRevision | null
   bindingOf(meetingStartedAt: number): { frameOwner: FrameOwner; ownerKey: string | null } | null
   finalize(binding: TranscriptStoreBinding): ApplyResult
+  /** Releases the meeting and makes one best-effort checkpoint of its closing snapshot. */
   close(meetingStartedAt: number, reason: InputSessionStopReason): void
   /** Closes every open meeting owned by the owner session and returns the closed meetingStartedAt ids. */
   closeOwnedBy(sessionId: string, reason: InputSessionStopReason): number[]
@@ -95,9 +96,48 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
     }
   }
 
-  // The reason is for the caller's audit trail; S02 releases the same way for every reason.
-  // There is no closure audit event in the catalog yet; none is added here.
+  // Starts synchronously (the auth check, the revision capture and the writer's own admission all run before
+  // the first await), so a caller sealing right after this call still joins the write.
+  const checkpointEntry = async (
+    meetingStartedAt: number,
+    entry: Entry,
+    rev: TranscriptRevision
+  ): Promise<CheckpointResult> => {
+    // A meeting opened signed out (owner null) is never refused by an auth generation change.
+    if (entry.owner !== null && deps.authGeneration && deps.authGeneration() !== entry.owner.authGeneration) {
+      return { ok: false, error: 'auth-changed' }
+    }
+    const writer = deps.checkpointWriter
+    if (!writer) return { ok: false, error: 'write-failed' }
+    let outcome: CheckpointWriteOutcome
+    try {
+      outcome = await writer(meetingStartedAt, rev)
+    } catch {
+      outcome = 'failed'
+    }
+    switch (outcome) {
+      case 'written':
+        return { ok: true, revision: rev.revision }
+      case 'sealed':
+        return { ok: false, error: 'sealed' }
+      case 'absent':
+        return { ok: false, error: 'absent' }
+      default:
+        return { ok: false, error: 'write-failed' }
+    }
+  }
+
+  const checkpoint = (meetingStartedAt: number): Promise<CheckpointResult> => {
+    const entry = entries.get(meetingStartedAt)
+    if (!entry) return Promise.resolve({ ok: false, error: 'sealed' })
+    // Captured before any await: later applies must not change what this call writes.
+    return checkpointEntry(meetingStartedAt, entry, entry.rev)
+  }
+
+  // The reason is for the caller's audit trail; every reason releases the same way. There is no closure audit
+  // event in the catalog yet; none is added here. WP03-S15: the closing snapshot gets one checkpoint attempt.
   const close = (meetingStartedAt: number, _reason: InputSessionStopReason): void => {
+    const entry = entries.get(meetingStartedAt)
     entries.delete(meetingStartedAt)
     closed.add(meetingStartedAt)
     while (closed.size > CLOSED_CAP) {
@@ -105,6 +145,7 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
       if (oldest === undefined) break
       closed.delete(oldest)
     }
+    if (entry) void checkpointEntry(meetingStartedAt, entry, entry.rev)
   }
 
   const emit = (delta: TranscriptRevisionDelta): void => {
@@ -142,35 +183,6 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
       finalized: result.next.finalized
     })
     return result
-  }
-
-  const checkpoint = async (meetingStartedAt: number): Promise<CheckpointResult> => {
-    const entry = entries.get(meetingStartedAt)
-    if (!entry) return { ok: false, error: 'sealed' }
-    // A meeting opened signed out (owner null) is never refused by an auth generation change.
-    if (entry.owner !== null && deps.authGeneration && deps.authGeneration() !== entry.owner.authGeneration) {
-      return { ok: false, error: 'auth-changed' }
-    }
-    const writer = deps.checkpointWriter
-    if (!writer) return { ok: false, error: 'write-failed' }
-    // Captured before any await: later applies must not change what this call writes.
-    const rev = entry.rev
-    let outcome: CheckpointWriteOutcome
-    try {
-      outcome = await writer(meetingStartedAt, rev)
-    } catch {
-      outcome = 'failed'
-    }
-    switch (outcome) {
-      case 'written':
-        return { ok: true, revision: rev.revision }
-      case 'sealed':
-        return { ok: false, error: 'sealed' }
-      case 'absent':
-        return { ok: false, error: 'absent' }
-      default:
-        return { ok: false, error: 'write-failed' }
-    }
   }
 
   return {

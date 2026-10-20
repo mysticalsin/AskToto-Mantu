@@ -8,13 +8,15 @@ import {
 } from '@shared/contracts/owner-session'
 import { InputSessionStopReasonSchema } from '@shared/input-session'
 import { createRelayRevisionTap, type RevisionTapOwner } from './relay-revision-adapter'
+import { finalizeDraftMeeting, onDraftMeetingFinalizing } from '../../infra/storage/draft-transcript-write-state'
 import {
+  bindMeetingEndClosure,
   bindOwnerRevocationClosure,
   bindRendererResetClosure,
   STOP_REASON_FOR_REVOCATION,
   type RendererResetSource
 } from './session-closure'
-import { createTranscriptRevisionStore } from './transcript-revision-store'
+import { createTranscriptRevisionStore, type CheckpointWriter } from './transcript-revision-store'
 
 const M = 1_700_000_000_000
 const CAPTURE = '11111111-1111-4111-8111-111111111111'
@@ -187,5 +189,43 @@ describe('session closure', () => {
       throw new Error('boom')
     })
     expect(() => sender.emit('destroyed')).not.toThrow()
+  })
+
+  it('stop, sign-out and renderer reset each close the store and checkpoint once', async () => {
+    // Quit is not wired: its revokeAll caller is WP02-S06's lifecycle controller.
+    const writer = vi.fn<CheckpointWriter>(async () => 'written')
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
+    const tap = createRelayRevisionTap({ store, resolveOwner: () => ref() })
+    const { authority, fire } = fakeAuthority()
+    bindOwnerRevocationClosure(authority, store)
+    const unbindEnd = bindMeetingEndClosure(onDraftMeetingFinalizing, store)
+    try {
+      // stop: the meeting's draft cleanup finalizes its identity
+      tap(makeOwner(emitter(), M), segment(1))
+      const atStop = store.snapshot(M)
+      await finalizeDraftMeeting(M)
+      await finalizeDraftMeeting(M)
+      expect(store.snapshot(M)).toBeNull()
+      expect(writer.mock.calls).toEqual([[M, atStop]])
+
+      // sign-out
+      tap(makeOwner(emitter(), M + 1), segment(1))
+      const atSignOut = store.snapshot(M + 1)
+      fire(ref(), 'sign-out')
+      fire(ref(), 'sign-out')
+      expect(store.snapshot(M + 1)).toBeNull()
+      expect(writer.mock.calls.slice(1)).toEqual([[M + 1, atSignOut]])
+
+      // renderer reset
+      const sender = emitter()
+      tap(makeOwner(sender, M + 2), segment(1))
+      const atReset = store.snapshot(M + 2)
+      sender.emit('render-process-gone')
+      sender.emit('destroyed')
+      expect(store.snapshot(M + 2)).toBeNull()
+      expect(writer.mock.calls.slice(2)).toEqual([[M + 2, atReset]])
+    } finally {
+      unbindEnd()
+    }
   })
 })

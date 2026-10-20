@@ -1,7 +1,8 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
-import { bindOwnerRevocationClosure } from '../features/meetings/session-closure'
+import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
+import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-write-state'
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
@@ -45,6 +46,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   // The disposers are discarded on purpose: these bindings live for the app lifetime.
   bindOwnerRevocationClosure(ownerSession, transcriptRevision.store)
   bindTranscriptCheckpointStore(transcriptRevision.store)
+  bindMeetingEndClosure(onDraftMeetingFinalizing, transcriptRevision.store)
   return {
     ownerSession,
     authorizeSender,

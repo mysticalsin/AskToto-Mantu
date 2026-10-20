@@ -9,8 +9,13 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../auth', () => ({ authStatus: vi.fn(() => ({ signedIn: false })), authSessionGeneration: vi.fn(() => 1) }))
 vi.mock('../logger', () => ({ auditLog: vi.fn() }))
+vi.mock('../infra/storage/draft-transcript-write-state', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/storage/draft-transcript-write-state')>()),
+  onDraftMeetingFinalizing: vi.fn(() => () => undefined)
+}))
 
 import { checkpointAfterDraftSave } from '../features/meetings/transcript-checkpoint-binding'
+import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-write-state'
 import { createOwnerSessionWiring } from './owner-session-wiring'
 
 function wire() {
@@ -53,5 +58,12 @@ describe('owner session wiring', () => {
     wire()
     // No meeting is open, so the bound store answers 'sealed'; an unbound app would answer null.
     await expect(checkpointAfterDraftSave(1_700_000_000_000)).resolves.toEqual({ ok: false, error: 'sealed' })
+  })
+
+  it('closes the store when a meeting ends', () => {
+    vi.mocked(onDraftMeetingFinalizing).mockClear()
+    wire()
+    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(1)
+    expect(typeof vi.mocked(onDraftMeetingFinalizing).mock.calls[0][0]).toBe('function')
   })
 })
