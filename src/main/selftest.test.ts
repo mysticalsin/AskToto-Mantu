@@ -60,31 +60,59 @@ function applyAskTotoUserData(): void {
   if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_USERDATA)
 }
 
-// devEnv() (imported by selftest.ts) reads process.env.ASKTOTO_SELFTEST and app.isPackaged directly, so
-// every test that touches either — or the ASKTOTO_USERDATA redirectSelfTestUserData() now sets — must
-// clean up, otherwise a later, unrelated test could inherit a planted env var or a packaged flag left on
-// the shared mock.
+type EnvSnapshot = { present: boolean; value: string | undefined }
+
+function snapshotEnv(name: string): EnvSnapshot {
+  return {
+    present: Object.prototype.hasOwnProperty.call(process.env, name),
+    value: process.env[name]
+  }
+}
+
+function restoreEnv(name: string, snapshot: EnvSnapshot): void {
+  if (snapshot.present) process.env[name] = snapshot.value!
+  else delete process.env[name]
+}
+
+let inheritedSelfTest: EnvSnapshot
+let inheritedUserData: EnvSnapshot
+let inheritedIsPackaged: PropertyDescriptor | undefined
+
+beforeEach(() => {
+  inheritedSelfTest = snapshotEnv('ASKTOTO_SELFTEST')
+  inheritedUserData = snapshotEnv('ASKTOTO_USERDATA')
+  inheritedIsPackaged = Object.getOwnPropertyDescriptor(app, 'isPackaged')
+})
+
+// devEnv() reads the environment and app.isPackaged directly. Restore each test's exact inherited state,
+// including the isolation wrapper's QA override, even when an assertion or setup fails.
 afterEach(() => {
-  delete process.env.ASKTOTO_SELFTEST
-  delete process.env.ASKTOTO_USERDATA
-  delete (app as { isPackaged?: boolean }).isPackaged
+  restoreEnv('ASKTOTO_SELFTEST', inheritedSelfTest)
+  restoreEnv('ASKTOTO_USERDATA', inheritedUserData)
+  if (inheritedIsPackaged) Object.defineProperty(app, 'isPackaged', inheritedIsPackaged)
+  else Reflect.deleteProperty(app, 'isPackaged')
 })
 
 describe('redirectSelfTestUserData — the boot-time isolation gate (M2-0004)', () => {
   let priorUd: string
+  let qaUserDataDir: string | undefined
 
   beforeEach(() => {
     callOrder.length = 0
+    qaUserDataDir = undefined
+    ;(app as { isPackaged?: boolean }).isPackaged = false
     priorUd = mkdtempSync(join(tmpdir(), 'asktoto-selftest-prior-'))
     mockRedirectableUserData(priorUd)
   })
 
   afterEach(() => {
+    if (qaUserDataDir) rmSync(qaUserDataDir, { recursive: true, force: true })
     rmSync(priorUd, { recursive: true, force: true })
   })
 
   it('does not touch userData or ASKTOTO_USERDATA when ASKTOTO_SELFTEST is unset', () => {
     delete process.env.ASKTOTO_SELFTEST
+    delete process.env.ASKTOTO_USERDATA
 
     redirectSelfTestUserData()
 
@@ -97,6 +125,7 @@ describe('redirectSelfTestUserData — the boot-time isolation gate (M2-0004)', 
     // The threat this guards against: a persistent `setx ASKTOTO_SELFTEST out.json` plus a relaunch of a
     // shipped install must never redirect (and therefore never run self-test against) a real profile.
     process.env.ASKTOTO_SELFTEST = '/tmp/planted-selftest-out.json'
+    delete process.env.ASKTOTO_USERDATA
     ;(app as { isPackaged?: boolean }).isPackaged = true
 
     redirectSelfTestUserData()
@@ -104,6 +133,31 @@ describe('redirectSelfTestUserData — the boot-time isolation gate (M2-0004)', 
     expect(callOrder).toEqual([])
     expect(process.env.ASKTOTO_USERDATA).toBeUndefined()
     expect(app.getPath('userData')).toBe(priorUd)
+  })
+
+  it('preserves an existing QA override when ASKTOTO_SELFTEST is unset', () => {
+    delete process.env.ASKTOTO_SELFTEST
+    qaUserDataDir = mkdtempSync(join(tmpdir(), 'asktoto-selftest-qa-unset-'))
+    process.env.ASKTOTO_USERDATA = qaUserDataDir
+
+    redirectSelfTestUserData()
+
+    expect(process.env.ASKTOTO_USERDATA).toBe(qaUserDataDir)
+    expect(app.getPath('userData')).toBe(priorUd)
+    expect(callOrder).toEqual([])
+  })
+
+  it('preserves an existing QA override in a packaged build with ASKTOTO_SELFTEST set', () => {
+    process.env.ASKTOTO_SELFTEST = '/tmp/planted-selftest-out.json'
+    qaUserDataDir = mkdtempSync(join(tmpdir(), 'asktoto-selftest-qa-packaged-'))
+    process.env.ASKTOTO_USERDATA = qaUserDataDir
+    ;(app as { isPackaged?: boolean }).isPackaged = true
+
+    redirectSelfTestUserData()
+
+    expect(process.env.ASKTOTO_USERDATA).toBe(qaUserDataDir)
+    expect(app.getPath('userData')).toBe(priorUd)
+    expect(callOrder).toEqual([])
   })
 
   it('sets ASKTOTO_USERDATA to a newly created directory on an unpackaged run, leaving userData for the caller to apply', () => {
