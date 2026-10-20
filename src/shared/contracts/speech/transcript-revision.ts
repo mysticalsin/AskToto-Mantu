@@ -17,6 +17,7 @@ export interface TranscriptSegment {
   source: SegmentSource
   relaySessionId: string
   providerSeq?: number
+  providerSegmentIndex?: number
 }
 
 export interface TranscriptRevision {
@@ -33,6 +34,7 @@ export type RevisionEvent =
       kind: 'provider-partial'
       relaySessionId: string
       providerSeq: number
+      providerSegmentIndex?: number
       channel: 'mic' | 'system'
       text: string
       language: string
@@ -43,6 +45,7 @@ export type RevisionEvent =
       kind: 'provider-final'
       relaySessionId: string
       providerSeq: number
+      providerSegmentIndex?: number
       channel: 'mic' | 'system'
       text: string
       language: string
@@ -101,7 +104,8 @@ export const TranscriptSegmentSchema = z
     state: z.enum(['partial', 'final', 'corrected', 'retracted']),
     source: z.enum(['provider', 'user']),
     relaySessionId: IdSchema,
-    providerSeq: SeqSchema.optional()
+    providerSeq: SeqSchema.optional(),
+    providerSegmentIndex: z.number().int().positive().safe().optional()
   })
   .strict()
   .superRefine((segment, context) => {
@@ -134,6 +138,7 @@ export type TranscriptRevisionDelta = z.infer<typeof TranscriptRevisionDeltaSche
 const providerFields = { relaySessionId: IdSchema, providerSeq: SeqSchema }
 const spanFields = {
   ...providerFields,
+  providerSegmentIndex: z.number().int().positive().safe().optional(),
   channel: ChannelSchema,
   text: z.string(),
   language: LanguageSchema,
@@ -218,6 +223,14 @@ function reduceSpan(rev: TranscriptRevision, ev: SpanEvent): Candidate | Revisio
   for (let i = 0; i < rev.segments.length; i += 1) {
     const segment = rev.segments[i]
     if (segment.relaySessionId !== relaySessionId || segment.channel !== channel) continue
+    if (ev.providerSegmentIndex !== undefined) {
+      if (segment.providerSegmentIndex !== ev.providerSegmentIndex) continue
+      if (segment.source === 'user' || segment.state !== 'partial') return 'invalid'
+      if (segment.startMs !== ev.startMs) return 'invalid'
+      openIndex = i
+      break
+    }
+    if (segment.providerSegmentIndex !== undefined) continue
     if (segment.state === 'final') latestFinal = segment
     if (segment.state === 'partial') openIndex = i
   }
@@ -248,6 +261,7 @@ function reduceSpan(rev: TranscriptRevision, ev: SpanEvent): Candidate | Revisio
       source: 'provider',
       relaySessionId,
       providerSeq: ev.providerSeq,
+      ...(ev.providerSegmentIndex !== undefined ? { providerSegmentIndex: ev.providerSegmentIndex } : {}),
       ...speaker
     }
   }

@@ -22,6 +22,7 @@ interface SegmentOptions {
   epoch?: number
   generation?: number
   languages?: string[]
+  startMs?: number
 }
 
 function segmentEvent(options: SegmentOptions): DeliveredSegmentEvent {
@@ -38,7 +39,7 @@ function segmentEvent(options: SegmentOptions): DeliveredSegmentEvent {
       revision: options.revision ?? 1,
       final: options.final ?? false,
       text: options.text ?? 'hello',
-      startMs: 0,
+      startMs: options.startMs ?? 0,
       endMs: 500
     },
     ...(options.languages ? { languages: options.languages } : {})
@@ -69,6 +70,47 @@ function fakeStore(over: Partial<TranscriptRevisionStore> = {}): TranscriptRevis
 }
 
 describe('relay revision adapter', () => {
+  it('preserves interleaved provider segments and their identities when finals arrive in reverse order', () => {
+    const store = createTranscriptRevisionStore()
+    const tap = createRelayRevisionTap({ store })
+    const owner = makeOwner()
+    tap(owner, segmentEvent({ sequence: 1, index: 1, text: 'first partial' }))
+    tap(owner, segmentEvent({ sequence: 2, index: 2, startMs: 100, text: 'second partial' }))
+    const partials = store.snapshot(M)!.segments
+    expect(partials.map((segment) => segment.text)).toEqual(['first partial', 'second partial'])
+    const ids = partials.map((segment) => segment.segmentId)
+    tap(owner, segmentEvent({ sequence: 3, index: 2, revision: 2, startMs: 100, final: true, text: 'second final' }))
+    tap(owner, segmentEvent({ sequence: 4, index: 1, revision: 2, final: true, text: 'first final' }))
+    const finals = store.snapshot(M)!.segments
+    expect(finals.map((segment) => segment.segmentId)).toEqual(ids)
+    expect(finals.map((segment) => [segment.text, segment.startMs, segment.state])).toEqual([
+      ['first final', 0, 'final'],
+      ['second final', 100, 'final']
+    ])
+    expect(store.snapshot(M)!.revision).toBe(4)
+  })
+
+  it.each([
+    'user-correct',
+    'user-retract'
+  ] as const)('does not duplicate or replace a partial after %s when its provider final arrives', (kind) => {
+    const store = createTranscriptRevisionStore()
+    const tap = createRelayRevisionTap({ store })
+    const owner = makeOwner()
+    tap(owner, segmentEvent({ sequence: 1, index: 1, text: 'partial' }))
+    const before = store.snapshot(M)!
+    const result = store.apply(
+      { meetingStartedAt: M, frameOwner: '12:3', owner: null },
+      kind === 'user-correct'
+        ? { kind, baseRevision: before.revision, segmentId: before.segments[0].segmentId, text: 'user correction' }
+        : { kind, baseRevision: before.revision, segmentId: before.segments[0].segmentId }
+    )
+    expect(result.ok).toBe(true)
+    const corrected = store.snapshot(M)
+    tap(owner, segmentEvent({ sequence: 2, index: 1, revision: 2, final: true, text: 'provider final' }))
+    expect(store.snapshot(M)).toBe(corrected)
+  })
+
   it('maps relay finals, revisions and retractions to revision events', () => {
     const lineage = `${CAPTURE}/1/1`
     const events = [

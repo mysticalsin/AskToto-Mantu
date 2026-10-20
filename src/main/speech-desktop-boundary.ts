@@ -27,9 +27,13 @@ import {
 } from './model-policy-client'
 import { getSettings } from './store'
 import { screenPermission } from './capture-permissions/screen-permission-runtime'
+import { createMainTranscriptRevision } from './features/meetings/main-transcript-revision'
+import type { RevisionTapDeps } from './features/meetings/relay-revision-adapter'
 
 /** Actual Electron/store adapters: only explicit authority boundaries call these filesystem readers. */
-export function speechDesktopBoundaryOptions() {
+export function speechDesktopBoundaryOptions(resolveOwner: RevisionTapDeps['resolveOwner']) {
+  // The caller's owner authority is initialized before the first delivered segment invokes this resolver.
+  const transcriptRevision = createMainTranscriptRevision(resolveOwner)
   let lease: SpeechAuthLease | null = null
   const actualPathsRevision = () => JSON.stringify([app.getPath('userData'), adminManagedConfigPath()])
   let pathsRevision = actualPathsRevision()
@@ -43,6 +47,7 @@ export function speechDesktopBoundaryOptions() {
     readTrustedAdminManagedBytes
   })
   return {
+    onSegmentDelivered: transcriptRevision.onSegmentDelivered,
     requireAuth: () => isSpeechAuthLeaseCurrent(lease),
     prepareAuthentication: async () => {
       pathsRevision = actualPathsRevision()

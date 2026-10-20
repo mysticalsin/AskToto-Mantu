@@ -235,7 +235,7 @@ export function createMainOwnerSessionAuthority(currentContextRevision: () => nu
   let salt: Buffer | null = null
   const path = join(app.getPath('userData'), 'identity', 'owner-key-salt.v1')
   const crypto: OwnerKeySaltCrypto = {
-    wrap: app.isPackaged && safeStorage.isEncryptionAvailable(),
+    wrap: app.isPackaged && !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable(),
     encrypt: (plain) => safeStorage.encryptString(plain),
     decrypt: (buf) => safeStorage.decryptString(buf)
   }

@@ -28,6 +28,7 @@ export function segmentEventWithFallbackLanguage(
     kind: event.segment.final ? 'provider-final' : 'provider-partial',
     relaySessionId: `${event.captureId}/${event.captureGeneration.toString(36)}/${event.segment.stream.epoch.toString(36)}`,
     providerSeq: event.sequence,
+    providerSegmentIndex: event.segment.index,
     channel: event.segment.stream.track === 'microphone' ? 'mic' : 'system',
     text: event.segment.text,
     language: event.languages?.[0] ?? fallbackLanguage,
