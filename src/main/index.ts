@@ -52,7 +52,6 @@ import { captureActiveForWindowRestart as captureActiveForWindowRestartState } f
 import { operatorVisionModel } from '@shared/operator-vision'
 import { TranscriptSaveReceiptStore, type TranscriptSaveSideEffect } from './transcript-save-receipts'
 import { InputSessionAuthority } from './input-session-authority'
-import { createInputSessionHandlers } from './input-session-ipc'
 import { installInputMicPermissionHandlers } from './input-mic-permissions'
 import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
 import {
@@ -792,6 +791,7 @@ import {
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { captureDraftSettingsBoundary, getPublishedSettingsObservation } from './settings-observation'
 import { registerDraftTranscriptIpc } from './ipc/draft-transcript-ipc'
+import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -10152,174 +10152,34 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
-  const inputSessionHandlers = createInputSessionHandlers<Electron.IpcMainInvokeEvent>({
-    authority: inputSessionAuthority,
-    assertMainWindow: (event) => assertMainWindow(event),
+  registerInputCaptureIpc({
+    ipcMain,
+    assertMainWindow,
     requireAuth,
-    isWindowVisible: () => Boolean(win && !win.isDestroyed() && win.isVisible()),
-    currentMainUrl: () => (win && !win.isDestroyed() ? win.webContents.getURL() : ''),
-    currentContext: currentInputSessionContext,
-    captureAuthBoundary: captureAuthSessionBoundary,
-    authorizeCommandStart: (event, owner) => {
-      if (!commandMicAvailability().ok) return false
-      const frame = commandMicActivationFrameFromEvent(event)
-      return (
-        !!frame &&
-        commandMicOwner(frame, currentInputSessionContext()) !== null &&
-        commandMicActivationAuthority.consume(frame)
-      )
+    inputSessionAuthority,
+    commandMicActivationAuthority,
+    getWin: () => win,
+    getCommandMicActivationLeaseId: () => commandMicActivationLeaseId,
+    setCommandMicActivationLeaseId: (id) => {
+      commandMicActivationLeaseId = id
+    },
+    getCommandSpeechCapture: () => commandSpeechCapture,
+    currentInputSessionContext,
+    captureAuthSessionBoundary,
+    commandMicAvailability,
+    commandMicActivationFrameFromEvent,
+    commandMicOwner,
+    commandSpeechOwnerFromEvent,
+    commandLeaseCurrentAndAllowed,
+    armCommandMicLeaseTimeout,
+    clearCommandMicLeaseTimer,
+    schemas: {
+      inputSessionStop: InputSessionStopRequestSchema,
+      commandSpeechStart: CommandSpeechStartSchema,
+      commandSpeechFrame: CommandSpeechFrameSchema,
+      commandSpeechFinish: CommandSpeechFinishSchema,
+      commandSpeechCancel: CommandSpeechCancelSchema
     }
-  })
-  ipcMain.handle(IPC.inputSessionContext, (event) => inputSessionHandlers.context(event))
-  ipcMain.handle(IPC.inputSessionStart, (event, request: unknown) => {
-    const result = inputSessionHandlers.start(event, request)
-    if (result.ok && result.lease.purpose === 'command') {
-      commandMicActivationLeaseId = result.lease.sessionId
-      armCommandMicLeaseTimeout(result.lease.sessionId, 15_000)
-    }
-    return result
-  })
-  ipcMain.handle(IPC.inputSessionStop, (event, request: unknown) => {
-    const result = inputSessionHandlers.stop(event, request)
-    const parsed = InputSessionStopRequestSchema.safeParse(request)
-    if (result.ok && parsed.success && commandMicActivationLeaseId === parsed.data.sessionId) {
-      clearCommandMicLeaseTimer(parsed.data.sessionId)
-      commandMicActivationLeaseId = null
-      commandSpeechCapture?.cancelForLease(parsed.data.sessionId)
-    }
-    return result
-  })
-  ipcMain.handle(IPC.inputSessionConfirm, (event, request: unknown) => {
-    const confirmed = inputSessionHandlers.confirm(event, request)
-    const lease = inputSessionAuthority.activeLease
-    if (confirmed && lease?.purpose === 'command' && lease.sessionId === commandMicActivationLeaseId) {
-      armCommandMicLeaseTimeout(lease.sessionId, 15_000)
-    }
-    return confirmed
-  })
-  ipcMain.handle(IPC.commandMicActivationObserved, (event) => {
-    assertMainWindow(event)
-    if (
-      !commandMicAvailability().ok ||
-      inputSessionAuthority.isClosing ||
-      !win ||
-      win.isDestroyed() ||
-      !win.isVisible()
-    )
-      return false
-    const frame = commandMicActivationFrameFromEvent(event)
-    return frame ? commandMicActivationAuthority.mint(frame) : false
-  })
-  ipcMain.handle(IPC.commandMicActivationReady, (event) => {
-    assertMainWindow(event)
-    if (
-      !commandMicAvailability().ok ||
-      inputSessionAuthority.isClosing ||
-      !win ||
-      win.isDestroyed() ||
-      !win.isVisible()
-    )
-      return false
-    const frame = commandMicActivationFrameFromEvent(event)
-    return frame ? commandMicActivationAuthority.hasPending(frame) : false
-  })
-  ipcMain.handle(IPC.commandMicActivationCancel, (event) => {
-    assertMainWindow(event)
-    const frame = commandMicActivationFrameFromEvent(event)
-    if (!frame || !commandMicActivationAuthority.hasPending(frame)) return false
-    commandMicActivationAuthority.revokeAll()
-    return true
-  })
-  ipcMain.handle(IPC.commandMicAvailability, (event) => {
-    assertMainWindow(event)
-    return commandMicAvailability()
-  })
-  ipcMain.handle(IPC.commandSpeechStart, (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = CommandSpeechStartSchema.safeParse(raw)
-    const owner = commandSpeechOwnerFromEvent(event)
-    if (!parsed.success || !owner || !requireAuth() || !win || win.isDestroyed() || !win.isVisible()) {
-      return { ok: false, reason: 'stale' }
-    }
-    const availability = commandMicAvailability()
-    if (!availability.ok)
-      return availability.reason === 'unauthorized'
-        ? { ok: false, reason: 'stale' }
-        : { ok: false, reason: availability.reason }
-    if (
-      commandMicActivationLeaseId !== parsed.data.sessionId ||
-      !inputSessionAuthority.isEstablishedLease(owner, parsed.data.sessionId, 'command')
-    )
-      return { ok: false, reason: 'stale' }
-    const result = commandSpeechCapture?.start(owner, parsed.data.sessionId) ?? {
-      ok: false as const,
-      reason: 'stale' as const
-    }
-    if (result.ok) clearCommandMicLeaseTimer(parsed.data.sessionId)
-    return result
-  })
-  ipcMain.handle(IPC.commandSpeechFrame, (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = CommandSpeechFrameSchema.safeParse(raw)
-    const owner = commandSpeechOwnerFromEvent(event)
-    if (
-      !parsed.success ||
-      !owner ||
-      !requireAuth() ||
-      !win ||
-      win.isDestroyed() ||
-      !win.isVisible() ||
-      commandMicActivationLeaseId !== parsed.data.sessionId
-    )
-      return { ok: false, reason: 'stale' }
-    const availability = commandMicAvailability()
-    if (!availability.ok) {
-      commandLeaseCurrentAndAllowed(parsed.data.sessionId)
-      return availability.reason === 'unauthorized'
-        ? { ok: false, reason: 'stale' }
-        : { ok: false, reason: availability.reason }
-    }
-    return (
-      commandSpeechCapture?.frame(owner, parsed.data.sessionId, parsed.data.sequence, parsed.data.samples) ?? {
-        ok: false,
-        reason: 'stale'
-      }
-    )
-  })
-  ipcMain.handle(IPC.commandSpeechFinish, async (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = CommandSpeechFinishSchema.safeParse(raw)
-    const owner = commandSpeechOwnerFromEvent(event)
-    if (
-      !parsed.success ||
-      !owner ||
-      !requireAuth() ||
-      !win ||
-      win.isDestroyed() ||
-      !win.isVisible() ||
-      commandMicActivationLeaseId !== parsed.data.sessionId
-    )
-      return { ok: false, reason: 'stale' }
-    const availability = commandMicAvailability()
-    if (!availability.ok) {
-      commandLeaseCurrentAndAllowed(parsed.data.sessionId)
-      return availability.reason === 'unauthorized'
-        ? { ok: false, reason: 'stale' }
-        : { ok: false, reason: availability.reason }
-    }
-    return (
-      (await commandSpeechCapture?.finish(owner, parsed.data.sessionId, parsed.data.frameCount)) ?? {
-        ok: false,
-        reason: 'stale'
-      }
-    )
-  })
-  ipcMain.handle(IPC.commandSpeechCancel, (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = CommandSpeechCancelSchema.safeParse(raw)
-    const owner = commandSpeechOwnerFromEvent(event)
-    if (!parsed.success || !owner) return { ok: false, reason: 'stale' }
-    return commandSpeechCapture?.cancel(owner, parsed.data.sessionId) ?? { ok: false, reason: 'stale' }
   })
   ipcMain.handle(IPC.meetingMicAdmission, (event, raw: unknown) => {
     assertMainWindow(event)
