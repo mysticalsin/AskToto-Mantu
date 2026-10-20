@@ -10066,7 +10066,12 @@ function registerIpc(): void {
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
-  const authorizeSender = registerOwnerSessionIpc({ ipcMain, assertMainWindow, ownerSession, currentInputSessionContext })
+  const authorizeSender = registerOwnerSessionIpc({
+    ipcMain,
+    assertMainWindow,
+    ownerSession,
+    currentInputSessionContext
+  })
   registerInputCaptureIpc({
     ipcMain,
     assertMainWindow,

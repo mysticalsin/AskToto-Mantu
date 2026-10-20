@@ -128,7 +128,10 @@ function loadChainTip(): void {
     if (tip === null) {
       const dir = dirname(live)
       const newest = existsSync(dir)
-        ? readdirSync(dir).filter((f) => /^audit-\d+\.log$/.test(f)).sort().pop()
+        ? readdirSync(dir)
+            .filter((f) => /^audit-\d+\.log$/.test(f))
+            .sort()
+            .pop()
         : undefined
       if (newest) tip = lastAuditLine(join(dir, newest))
     }
@@ -372,7 +375,9 @@ export type AuditEvent =
   | ContractAuditEventName
 
 /** What an event may carry: an observability event only its allowlisted fields. */
-export type AuditDetail<E extends AuditEvent> = E extends ObservabilityEvent ? ObservabilityDetail<E> : Record<string, unknown>
+export type AuditDetail<E extends AuditEvent> = E extends ObservabilityEvent
+  ? ObservabilityDetail<E>
+  : Record<string, unknown>
 export type AuditSink = typeof auditLog
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
