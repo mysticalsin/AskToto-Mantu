@@ -27,7 +27,6 @@
     "src/renderer/src/lib/onboarding-starfield-spec.ts": 1,
     "src/renderer/src/lib/right-edge/contrast.ts": 1,
     "src/renderer/src/lib/scramble.ts": 1,
-    "src/renderer/src/lib/use-command-mic.ts": 1,
     "src/renderer/src/lib/whisper-worklet.ts": 1,
     "src/shared/brain-analyze.ts": 1,
     "src/shared/contracts/knowledge/identity.ts": 1,
@@ -38,7 +37,7 @@
     "src/shared/contracts/knowledge/record.ts": 1
   },
   "FF-04": {
-    "src/main/auth.ts": 981,
+    "src/main/auth.ts": 976,
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3076,
     "src/main/brain/publish.ts": 954,
@@ -49,19 +48,18 @@
     "src/main/store.ts": 1361,
     "src/main/transcripts.ts": 1084,
     "src/renderer/src/App.tsx": 4771,
-    "src/renderer/src/components/Bar.tsx": 962,
+    "src/renderer/src/components/Bar.tsx": 942,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
     "src/renderer/src/components/BrainView.tsx": 1445,
-    "src/renderer/src/components/Onboarding.tsx": 1000,
-    "src/renderer/src/components/OnboardingExperience.tsx": 1831,
-    "src/renderer/src/components/RecallView.tsx": 1166,
-    "src/renderer/src/components/Review.tsx": 1950,
+    "src/renderer/src/components/Onboarding.tsx": 974,
+    "src/renderer/src/components/OnboardingExperience.tsx": 1731,
+    "src/renderer/src/components/RecallView.tsx": 1109,
+    "src/renderer/src/components/Review.tsx": 1946,
     "src/renderer/src/features/settings/AiSection.tsx": 2410,
-    "src/renderer/src/features/settings/AudioTab.tsx": 888,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3120,
-    "src/shared/ipc.ts": 2393
+    "src/shared/ipc.ts": 2347
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
