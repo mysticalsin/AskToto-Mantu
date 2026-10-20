@@ -6,7 +6,6 @@ const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const listenSource = readFileSync(join(__dirname, '../renderer/src/lib/listen.ts'), 'utf8')
 const tapSource = readFileSync(join(__dirname, '../renderer/src/lib/tap/tap-control.ts'), 'utf8')
 const tapCardSource = readFileSync(join(__dirname, '../renderer/src/features/settings/TapControlCard.tsx'), 'utf8')
-const quitLifecycleSource = readFileSync(join(__dirname, 'lifecycle/app-quit-lifecycle.ts'), 'utf8')
 
 function declarationIn(sourceText: string, name: string): string {
   const start = sourceText.indexOf('function ' + name + '(')
@@ -31,32 +30,8 @@ function boundedBody(source: string, startPattern: RegExp, endPattern: RegExp): 
   return body
 }
 
-type CallbackScope = { body: string; scope: string; start: number; end: number }
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function boundedCallbackScopes(sourceText: string, startPattern: RegExp, callbackEndPattern?: RegExp): CallbackScope[] {
-  const flags = startPattern.flags.includes('g') ? startPattern.flags : startPattern.flags + 'g'
-  const matcher = new RegExp(startPattern.source, flags)
-  const scopes: CallbackScope[] = []
-  let start: RegExpExecArray | null
-  while ((start = matcher.exec(sourceText)) !== null) {
-    const bodyStart = start.index + start[0].length
-    const indent = /^[\t ]*/.exec(start[0])?.[0] ?? ''
-    const endPattern = callbackEndPattern ?? new RegExp('^' + escapeRegExp(indent) + '\\}[\\t ]*\\)', 'm')
-    const remainder = sourceText.slice(bodyStart)
-    const end = endPattern.exec(remainder)
-    if (!end) throw new Error(`Missing callback end boundary after: ${startPattern}`)
-    const body = remainder.slice(0, end.index)
-    if (!body.trim()) throw new Error('Expected a nonempty callback body between boundaries')
-    const endIndex = bodyStart + end.index + end[0].length
-    scopes.push({ body, scope: sourceText.slice(start.index, endIndex), start: start.index, end: endIndex })
-    matcher.lastIndex = endIndex
-  }
-  if (scopes.length === 0) throw new Error(`Missing callback registration: ${startPattern}`)
-  return scopes
 }
 
 function requiredIndex(sourceText: string, token: string): number {
@@ -161,44 +136,8 @@ function assertHiddenToggleShortcutContract(sourceText: string): void {
   expect(routeAfterShow.match(/meetingStartActivationAuthority\.mint\(frame, MEETING_START_ACTION\)/g)).toHaveLength(1)
 }
 
-function assertQuitLifecycleContract(quitLifecycle: string, mainSource: string): void {
-  quitLifecycle = quitLifecycle.replace(/\r\n/g, '\n')
+function assertMainInputShutdownBindings(mainSource: string): void {
   mainSource = mainSource.replace(/\r\n/g, '\n')
-  const beforeQuitHandlers = boundedCallbackScopes(
-    quitLifecycle,
-    /^[\t ]*app\.on\(\s*['"]before-quit['"]\s*,\s*\(event\)\s*=>\s*\{/gm
-  )
-  for (const handler of beforeQuitHandlers) {
-    expect(handler.body).not.toContain('deps.shutdownInputSessions()')
-    expect(handler.body).not.toContain('inputSessionAuthority.shutdown()')
-  }
-
-  const beginShutdownHandler = beforeQuitHandlers.find((handler) => handler.body.includes('deps.beginInputShutdown()'))
-  if (!beginShutdownHandler) throw new Error('Missing before-quit beginInputShutdown callback')
-  expectOrdered(beginShutdownHandler.body, ['deps.beginInputShutdown()', 'deps.speechPackDesktop()?.beforeQuit'])
-
-  const flushHandler = beforeQuitHandlers.find((handler) => handler.body.includes('setTimeout(() => app.quit(), 2000)'))
-  if (!flushHandler) throw new Error('Missing before-quit live-meeting flush/resume handler')
-  expectOrdered(flushHandler.body, [
-    'deps.isQuitFlushDone()',
-    'deps.meetingFlushPending()',
-    'event.preventDefault()',
-    'deps.markQuitFlushDone()',
-    "window.webContents.send(deps.hotkeyChannel, 'reset')",
-    'setTimeout(() => app.quit(), 2000)'
-  ])
-
-  const willQuitHandlers = boundedCallbackScopes(
-    quitLifecycle,
-    /^[\t ]*app\.on\(\s*['"]will-quit['"]\s*,\s*deps\.wrapLifecycleListener\(\s*['"]app_quit['"]\s*,\s*\(\)\s*=>\s*\{/gm,
-    /^[\t ]*\}[\t ]*\)\r?\n[\t ]*\)/m
-  )
-  expect(willQuitHandlers).toHaveLength(1)
-  const willQuitHandler = willQuitHandlers[0]
-  if (!willQuitHandler) throw new Error('Missing bounded will-quit callback')
-  expect(willQuitHandler.scope).toMatch(/app\.on\(\s*['"]will-quit['"]\s*,\s*deps\.wrapLifecycleListener\s*\(/s)
-  expect(hasDirectStatement(willQuitHandler.body, 'deps.shutdownInputSessions()')).toBe(true)
-  expect(willQuitHandler.start).toBeGreaterThan(Math.max(...beforeQuitHandlers.map((handler) => handler.end)))
 
   const beginBinding = boundedBody(
     mainSource,
@@ -294,7 +233,7 @@ function assertForcedRendererTeardownContract(listenSourceText: string): void {
 it.each(['\n', '\r\n'])('accepts lifecycle source contracts with %j line endings', (lineEnding) => {
   const checkoutText = (text: string): string => text.replace(/\r?\n/g, lineEnding)
   assertHiddenToggleShortcutContract(checkoutText(source))
-  assertQuitLifecycleContract(checkoutText(quitLifecycleSource), checkoutText(source))
+  assertMainInputShutdownBindings(checkoutText(source))
   assertForcedRendererTeardownContract(checkoutText(listenSource))
 })
 
@@ -377,41 +316,8 @@ describe('input-session lifecycle revocation wiring', () => {
     )
   })
 
-  it('permanently shuts admission only at final will-quit after before-quit flush gates', () => {
-    const quitLifecycle = quitLifecycleSource
-    assertQuitLifecycleContract(quitLifecycle, source)
-
-    const beginBeforeQuit = '    deps.beginInputShutdown()\n    }\n    deps.speechPackDesktop()?.beforeQuit'
-    const shutdownBeforeFinalQuit =
-      '    deps.beginInputShutdown()\n' +
-      '      deps.shutdownInputSessions()\n' +
-      '    }\n' +
-      '    deps.speechPackDesktop()?.beforeQuit'
-    const assertQuit = (text: string): void => assertQuitLifecycleContract(text, source)
-    expectRejectedSource(replaceOnce(quitLifecycle, beginBeforeQuit, shutdownBeforeFinalQuit), assertQuit)
-
-    expectRejectedSource(
-      replaceOnce(quitLifecycle, '      deps.shutdownInputSessions()\n', '      // deps.shutdownInputSessions()\n'),
-      assertQuit
-    )
-
-    expectRejectedSource(
-      replaceOnce(
-        quitLifecycle,
-        '      deps.shutdownInputSessions()\n',
-        '      setTimeout(() => deps.shutdownInputSessions(), 0)\n'
-      ),
-      assertQuit
-    )
-
-    expectRejectedSource(
-      replaceOnce(
-        quitLifecycle,
-        '      deps.shutdownInputSessions()\n',
-        '      /*\n      deps.shutdownInputSessions()\n      */\n'
-      ),
-      assertQuit
-    )
+  it('keeps main input-shutdown wiring and admission fences', () => {
+    assertMainInputShutdownBindings(source)
   })
 
   it('forces full renderer teardown when meeting revocation arrives during Stop drain', () => {

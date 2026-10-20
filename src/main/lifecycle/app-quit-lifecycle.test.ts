@@ -34,12 +34,14 @@ describe('app quit lifecycle', () => {
 
   it('stops the boot power-save blocker before clearing the watch with current userData', () => {
     const app = new TestApp()
-    const cleanupOrder: string[] = []
+    const lifecycleOrder: string[] = []
     const wrappedNames: string[] = []
     const invokedNames: string[] = []
     installAppQuitLifecycle(app, {
-      speechPackDesktop: () => null,
-      beginInputShutdown: () => cleanupOrder.push('inputs:begin'),
+      speechPackDesktop: () => ({
+        beforeQuit: () => lifecycleOrder.push('pack:before-quit')
+      }),
+      beginInputShutdown: () => lifecycleOrder.push('inputs:begin'),
       quitTrace: createQuitTrace(false, () => undefined),
       isQuitFlushDone: () => true,
       markQuitFlushDone: () => undefined,
@@ -47,10 +49,10 @@ describe('app quit lifecycle', () => {
       window: () => null,
       hotkeyChannel: 'hotkey',
       speechDesktop: () => null,
-      invalidateCloudSttOwner: () => undefined,
-      shutdownInputSessions: () => cleanupOrder.push('inputs:shutdown'),
-      setBootPowerSaveBlock: (active) => cleanupOrder.push(`power:${String(active)}`),
-      endBootWatch: (userData) => cleanupOrder.push(`watch:${userData}`),
+      invalidateCloudSttOwner: () => lifecycleOrder.push('cloud:invalidate'),
+      shutdownInputSessions: () => lifecycleOrder.push('inputs:shutdown'),
+      setBootPowerSaveBlock: (active) => lifecycleOrder.push(`power:${String(active)}`),
+      endBootWatch: (userData) => lifecycleOrder.push(`watch:${userData}`),
       globalShortcut: { unregisterAll: () => undefined },
       notifTimer: () => null,
       backgroundTimers: [],
@@ -70,12 +72,20 @@ describe('app quit lifecycle', () => {
 
     expect(wrappedNames).toEqual(['app_quit'])
     expect(invokedNames).toEqual(['app_quit'])
-    expect(cleanupOrder).toEqual(['inputs:begin', 'inputs:shutdown', 'power:false', 'watch:/private-test-profile'])
+    expect(lifecycleOrder).toEqual([
+      'inputs:begin',
+      'pack:before-quit',
+      'cloud:invalidate',
+      'inputs:shutdown',
+      'power:false',
+      'watch:/private-test-profile'
+    ])
   })
 
   it('keeps a prevented pack quit alive, resumes once, then runs will-quit cleanup', async () => {
     const app = new TestApp()
     const lines: string[] = []
+    const lifecycleOrder: string[] = []
     const quitTrace = createQuitTrace(true, (line) => lines.push(line))
     let packReady = false
     let shutdownCalls = 0
@@ -84,6 +94,7 @@ describe('app quit lifecycle', () => {
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => ({
         beforeQuit(event, quit) {
+          lifecycleOrder.push('pack:before-quit')
           if (packReady) return
           event.preventDefault()
           queueMicrotask(() => {
@@ -95,6 +106,7 @@ describe('app quit lifecycle', () => {
       }),
       beginInputShutdown: () => {
         beginCalls += 1
+        lifecycleOrder.push('inputs:begin')
       },
       quitTrace,
       isQuitFlushDone: () => true,
@@ -103,12 +115,13 @@ describe('app quit lifecycle', () => {
       window: () => null,
       hotkeyChannel: 'hotkey',
       speechDesktop: () => null,
-      invalidateCloudSttOwner: () => undefined,
+      invalidateCloudSttOwner: () => lifecycleOrder.push('cloud:invalidate'),
       shutdownInputSessions: () => {
         shutdownCalls += 1
+        lifecycleOrder.push('inputs:shutdown')
       },
-      setBootPowerSaveBlock: () => undefined,
-      endBootWatch: () => undefined,
+      setBootPowerSaveBlock: () => lifecycleOrder.push('power:cleanup'),
+      endBootWatch: () => lifecycleOrder.push('watch:cleanup'),
       globalShortcut: { unregisterAll: () => undefined },
       notifTimer: () => null,
       backgroundTimers,
@@ -122,10 +135,20 @@ describe('app quit lifecycle', () => {
     expect(app.quits).toBe(1)
     expect(beginCalls).toBe(1)
     expect(shutdownCalls).toBe(0)
+    expect(lifecycleOrder.slice(0, 2)).toEqual(['inputs:begin', 'pack:before-quit'])
     await Promise.resolve()
     expect(app.quits).toBe(2)
     expect(beginCalls).toBe(1)
     expect(shutdownCalls).toBe(1)
+    expect(lifecycleOrder).toEqual([
+      'inputs:begin',
+      'pack:before-quit',
+      'pack:before-quit',
+      'cloud:invalidate',
+      'inputs:shutdown',
+      'power:cleanup',
+      'watch:cleanup'
+    ])
     expect(lines.map((line) => line.replace('[METIS_QUIT_TRACE] ', ''))).toEqual([
       'BEFORE_QUIT_ENTER',
       'BEFORE_QUIT_PREVENTED',
@@ -147,6 +170,8 @@ describe('app quit lifecycle', () => {
     let beginCalls = 0
     let flushRequests = 0
     let flushDone = false
+    let flushMarkCalls = 0
+    const flushMessages: { channel: string; args: unknown[] }[] = []
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => null,
       beginInputShutdown: () => {
@@ -155,14 +180,16 @@ describe('app quit lifecycle', () => {
       quitTrace: createQuitTrace(false, () => undefined),
       isQuitFlushDone: () => flushDone,
       markQuitFlushDone: () => {
+        flushMarkCalls += 1
         flushDone = true
       },
       meetingFlushPending: () => !flushDone,
       window: () => ({
         isDestroyed: () => false,
         webContents: {
-          send: () => {
+          send: (channel, ...args) => {
             flushRequests += 1
+            flushMessages.push({ channel, args })
           }
         }
       }),
@@ -187,10 +214,90 @@ describe('app quit lifecycle', () => {
     expect(app.quits).toBe(1)
     expect(beginCalls).toBe(1)
     expect(flushRequests).toBe(1)
+    expect(flushMarkCalls).toBe(1)
+    expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['reset'] }])
     expect(shutdownCalls).toBe(0)
-    await vi.advanceTimersByTimeAsync(2000)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(app.quits).toBe(1)
+    expect(shutdownCalls).toBe(0)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
     expect(app.quits).toBe(2)
     expect(beginCalls).toBe(1)
     expect(shutdownCalls).toBe(1)
+    expect(flushRequests).toBe(1)
+    expect(flushMarkCalls).toBe(1)
+    expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['reset'] }])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    {
+      state: 'missing',
+      window: () => null
+    },
+    {
+      state: 'destroyed',
+      window: () => ({ isDestroyed: () => true, webContents: { send: vi.fn() } })
+    }
+  ])('runs final cleanup without a flush timer when the window is $state', ({ window: getWindow }) => {
+    vi.useFakeTimers()
+    const app = new TestApp()
+    const lifecycleOrder: string[] = []
+    const send = vi.fn()
+    let beginCalls = 0
+    let shutdownCalls = 0
+    let flushDoneCalls = 0
+
+    const window = getWindow()
+    if (window) window.webContents.send = send
+
+    installAppQuitLifecycle(app, {
+      speechPackDesktop: () => null,
+      beginInputShutdown: () => {
+        beginCalls += 1
+        lifecycleOrder.push('inputs:begin')
+      },
+      quitTrace: createQuitTrace(false, () => undefined),
+      isQuitFlushDone: () => false,
+      markQuitFlushDone: () => {
+        flushDoneCalls += 1
+      },
+      meetingFlushPending: () => true,
+      window: () => window,
+      hotkeyChannel: 'hotkey',
+      speechDesktop: () => null,
+      invalidateCloudSttOwner: () => lifecycleOrder.push('cloud:invalidate'),
+      shutdownInputSessions: () => {
+        shutdownCalls += 1
+        lifecycleOrder.push('inputs:shutdown')
+      },
+      setBootPowerSaveBlock: () => lifecycleOrder.push('power:cleanup'),
+      endBootWatch: () => lifecycleOrder.push('watch:cleanup'),
+      globalShortcut: { unregisterAll: () => undefined },
+      notifTimer: () => null,
+      backgroundTimers: [],
+      observability: () => null,
+      uptime: () => 1,
+      wrapLifecycleListener: (_name, listener) => listener,
+      warn: () => undefined
+    })
+
+    app.quit()
+
+    expect(app.quits).toBe(1)
+    expect(beginCalls).toBe(1)
+    expect(flushDoneCalls).toBe(0)
+    expect(send).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(shutdownCalls).toBe(1)
+    expect(lifecycleOrder).toEqual([
+      'inputs:begin',
+      'cloud:invalidate',
+      'inputs:shutdown',
+      'power:cleanup',
+      'watch:cleanup'
+    ])
   })
 })
