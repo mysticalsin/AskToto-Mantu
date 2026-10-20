@@ -220,14 +220,10 @@ function assertQuitLifecycleContract(quitLifecycle: string, mainSource: string):
     'if (change.on && (inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady)) return false',
     "hardStopMeetingCapture('owner-replaced')"
   ])
-  const activationObserved = boundedBody(
-    mainSource,
-    /ipcMain\.handle\(IPC\.meetingStartActivationObserved,\s*\(event\)\s*=>\s*\{\s*/,
-    /\n[\t ]*\}\)\s*\n[\t ]*ipcMain\.handle\(IPC\.meetingStartActivationReady/
-  )
-  expect(activationObserved).toContain('assertMainWindow(event)')
-  expect(activationObserved).toContain('if (!requireAuth() || inputSessionAuthority.isClosing')
-  expect(activationObserved).toContain('meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION)')
+  // The meeting-start activation handlers are covered behaviorally in ipc/meeting-mic-ipc.test.ts.
+  expect(mainSource).toContain('activation: meetingStartActivationAuthority')
+  expect(mainSource).toContain('isInputClosing: () => inputSessionAuthority.isClosing')
+  expect(mainSource).toContain('isMainWindowVisible: () => !!win && !win.isDestroyed() && win.isVisible()')
 }
 
 function failAdmittedCaptureBody(listenSourceText: string): string {
@@ -342,7 +338,6 @@ describe('input-session lifecycle revocation wiring', () => {
     expect(installHooks).toContain('if (!inputPowerLifecycleHooksReady)')
     expect(source).toContain('isCaptureLifecycleReady: () => inputPowerLifecycleHooksReady')
     expect(source).toContain('inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady')
-    expect(source).toContain('inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady) return null')
     const hardStop = declaration('hardStopInputSession')
     expect(hardStop).toContain("reason === 'system-suspend'")
     expect(hardStop).toContain("reason === 'screen-locked'")
@@ -502,13 +497,8 @@ describe('input-session lifecycle revocation wiring', () => {
   })
 
   it('binds meeting grants to the accepted reservation and limits release to the exact sender-owned id', () => {
-    const admissionStart = source.indexOf('ipcMain.handle(IPC.meetingMicAdmission')
-    const confirmStart = source.indexOf('ipcMain.handle(IPC.meetingMicCaptureConfirm', admissionStart)
-    const admission = source.slice(admissionStart, confirmStart)
-    expect(admission.indexOf('assertMainWindow(event)')).toBeLessThan(
-      admission.indexOf('meetingMicCaptureAuthority.admit(')
-    )
-    expect(admission).toContain('meetingMicCaptureAuthority.admit(')
+    // The IPC admission, confirm, and release handlers are covered behaviorally in ipc/meeting-mic-ipc.test.ts.
+    expect(source).toContain('capture: meetingMicCaptureAuthority')
     const admitStart = meetingCaptureAuthoritySource.indexOf('admit(frame:')
     const confirmMethodStart = meetingCaptureAuthoritySource.indexOf('confirm(frame:', admitStart)
     const admit = meetingCaptureAuthoritySource.slice(admitStart, confirmMethodStart)
@@ -524,13 +514,6 @@ describe('input-session lifecycle revocation wiring', () => {
       'meetingMicCaptureAuthority.hasPermissionCheckOwner(webContentsId, startedAt, context, requestingUrl)'
     )
 
-    const releaseStart = source.indexOf('ipcMain.handle(IPC.meetingMicCaptureRelease', confirmStart)
-    const releaseEnd = source.indexOf('ipcMain.handle(', releaseStart + 1)
-    const release = source.slice(releaseStart, releaseEnd)
-    expect(release.indexOf('assertMainWindow(event)')).toBeLessThan(
-      release.indexOf('meetingMicCaptureAuthority.release(')
-    )
-    expect(release).toContain('meetingMicCaptureAuthority.release(event.sender.id, parsed.data.captureId)')
     const releaseMethodStart = meetingCaptureAuthoritySource.indexOf('release(webContentsId:')
     const pendingMethodStart = meetingCaptureAuthoritySource.indexOf('hasPermissionCheckOwner(', releaseMethodStart)
     const releaseMethod = meetingCaptureAuthoritySource.slice(releaseMethodStart, pendingMethodStart)

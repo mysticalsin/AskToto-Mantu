@@ -65,16 +65,11 @@ import {
   type CommandMicActivationFrame
 } from './command-mic-activation-authority'
 import { CommandSpeechCapture } from './command-speech-capture'
-import {
-  MeetingMicCaptureConfirmRequestSchema,
-  MeetingMicCaptureReleaseRequestSchema,
-  InputSessionStopRequestSchema
-} from '@shared/input-session'
+import { InputSessionStopRequestSchema } from '@shared/input-session'
 import {
   IPC,
   LiveMeetingStartedAtSchema,
   DiscardSavedTranscriptPayloadSchema,
-  MeetingMicAdmissionRequestSchema,
   CommandSpeechStartSchema,
   CommandSpeechFrameSchema,
   CommandSpeechFinishSchema,
@@ -793,6 +788,7 @@ import { captureDraftSettingsBoundary, getPublishedSettingsObservation } from '.
 import { registerDraftTranscriptIpc } from './ipc/draft-transcript-ipc'
 import { registerRecoveredDraftCountIpc } from './ipc/recovered-draft-count-ipc'
 import { registerDiscardSavedTranscriptIpc } from './ipc/discard-saved-transcript-ipc'
+import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -10095,63 +10091,16 @@ function registerIpc(): void {
       commandSpeechCancel: CommandSpeechCancelSchema
     }
   })
-  ipcMain.handle(IPC.meetingMicAdmission, (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = MeetingMicAdmissionRequestSchema.safeParse(raw)
-    if (!parsed.success || inputSessionAuthority.isClosing || !inputPowerLifecycleHooksReady) return null
-    const frame = event.senderFrame
-    if (!frame) return null
-    return meetingMicCaptureAuthority.admit(
-      {
-        webContentsId: event.sender.id,
-        isTopFrame: frame.parent === null,
-        url: frame.url
-      },
-      parsed.data.startedAt
-    )
-  })
-  ipcMain.handle(IPC.meetingStartActivationObserved, (event) => {
-    assertMainWindow(event)
-    if (!requireAuth() || inputSessionAuthority.isClosing || !win || win.isDestroyed() || !win.isVisible()) return false
-    const frame = activationFrameFromEvent(event)
-    return frame ? meetingStartActivationAuthority.mint(frame, MEETING_START_ACTION) : false
-  })
-  ipcMain.handle(IPC.meetingStartActivationReady, (event) => {
-    assertMainWindow(event)
-    if (!requireAuth() || inputSessionAuthority.isClosing || !win || win.isDestroyed() || !win.isVisible()) return false
-    const frame = activationFrameFromEvent(event)
-    return frame ? meetingStartActivationAuthority.hasPending(frame) : false
-  })
-  ipcMain.handle(IPC.meetingStartActivationCancel, (event) => {
-    assertMainWindow(event)
-    const frame = activationFrameFromEvent(event)
-    if (!frame) return false
-    // Cancellation is owner/frame scoped by the surrounding main-window assertion and current top frame.
-    if (!meetingStartActivationAuthority.hasPending(frame)) return false
-    meetingStartActivationAuthority.revokeAll()
-    return true
-  })
-  ipcMain.handle(IPC.meetingMicCaptureConfirm, (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = MeetingMicCaptureConfirmRequestSchema.safeParse(raw)
-    if (!parsed.success || inputSessionAuthority.isClosing) return false
-    const frame = event.senderFrame
-    if (!frame) return false
-    return meetingMicCaptureAuthority.confirm(
-      {
-        webContentsId: event.sender.id,
-        isTopFrame: frame.parent === null,
-        url: frame.url
-      },
-      parsed.data.captureId,
-      parsed.data.startedAt
-    )
-  })
-  ipcMain.handle(IPC.meetingMicCaptureRelease, (event, raw: unknown) => {
-    assertMainWindow(event)
-    const parsed = MeetingMicCaptureReleaseRequestSchema.safeParse(raw)
-    if (!parsed.success) return false
-    return meetingMicCaptureAuthority.release(event.sender.id, parsed.data.captureId)
+  registerMeetingMicIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    isInputClosing: () => inputSessionAuthority.isClosing,
+    isCaptureLifecycleReady: () => inputPowerLifecycleHooksReady,
+    isMainWindowVisible: () => !!win && !win.isDestroyed() && win.isVisible(),
+    activationFrameFromEvent,
+    activation: meetingStartActivationAuthority,
+    capture: meetingMicCaptureAuthority
   })
   ipcMain.handle(
     IPC.listeningState,
