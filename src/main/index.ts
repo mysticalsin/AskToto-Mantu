@@ -791,6 +791,7 @@ import { registerDiscardSavedTranscriptIpc } from './ipc/discard-saved-transcrip
 import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
+import { createMainOwnerSessionAuthority } from './lifecycle/owner-session-authority'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -10067,6 +10068,7 @@ function registerIpc(): void {
     assertMainWindow,
     requireAuth,
     inputSessionAuthority,
+    ownerSession: createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision),
     commandMicActivationAuthority,
     getWin: () => win,
     getCommandMicActivationLeaseId: () => commandMicActivationLeaseId,

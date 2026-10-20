@@ -1,7 +1,9 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { InputSessionContext, TrustedInputOwner } from '@shared/input-session'
+import type { OwnerSessionRef } from '@shared/contracts/owner-session'
 import type { InputSessionAuthority } from '../input-session-authority'
+import type { OwnerSessionAuthority } from '../lifecycle/owner-session-authority'
 import { createInputSessionHandlers } from '../input-session-ipc'
 
 type ParseResult<T> = { success: true; data: T } | { success: false }
@@ -38,6 +40,8 @@ interface InputCaptureIpcDependencies<Frame, Samples> {
   assertMainWindow: (event: IpcMainInvokeEvent) => void
   requireAuth: () => boolean
   inputSessionAuthority: InputSessionAuthority
+  /** Absent on installs without an owner: admission is then unchanged. */
+  ownerSession?: Pick<OwnerSessionAuthority, 'mint' | 'validate'>
   commandMicActivationAuthority: ActivationAuthorityLike<Frame>
   /** Read live: the main window is replaced when it is recreated. */
   getWin: () => WindowLike | null | undefined
@@ -65,6 +69,7 @@ interface InputCaptureIpcDependencies<Frame, Samples> {
 
 /** Input-session, command-mic and command-speech IPC registrations (moved verbatim from registerIpc). */
 export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDependencies<Frame, Samples>): void {
+  const ownerRefs = new Map<string, OwnerSessionRef>()
   const inputSessionHandlers = createInputSessionHandlers<IpcMainInvokeEvent>({
     authority: deps.inputSessionAuthority,
     assertMainWindow: (event) => deps.assertMainWindow(event),
@@ -92,6 +97,11 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
   deps.ipcMain.handle(IPC.inputSessionContext, (event) => inputSessionHandlers.context(event))
   deps.ipcMain.handle(IPC.inputSessionStart, (event, request: unknown) => {
     const result = inputSessionHandlers.start(event, request)
+    if (result.ok) {
+      ownerRefs.clear()
+      const ref = event.senderFrame && deps.ownerSession?.mint(event.senderFrame, result.lease.contextRevision)
+      if (ref) ownerRefs.set(result.lease.sessionId, ref)
+    }
     if (result.ok && result.lease.purpose === 'command') {
       deps.setCommandMicActivationLeaseId(result.lease.sessionId)
       deps.armCommandMicLeaseTimeout(result.lease.sessionId, 15_000)
@@ -101,6 +111,7 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
   deps.ipcMain.handle(IPC.inputSessionStop, (event, request: unknown) => {
     const result = inputSessionHandlers.stop(event, request)
     const parsed = deps.schemas.inputSessionStop.safeParse(request)
+    if (result.ok && parsed.success) ownerRefs.delete(parsed.data.sessionId)
     if (result.ok && parsed.success && deps.getCommandMicActivationLeaseId() === parsed.data.sessionId) {
       deps.clearCommandMicLeaseTimer(parsed.data.sessionId)
       deps.setCommandMicActivationLeaseId(null)
@@ -109,6 +120,15 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
     return result
   })
   deps.ipcMain.handle(IPC.inputSessionConfirm, (event, request: unknown) => {
+    const rawId =
+      typeof request === 'object' && request !== null ? (request as { sessionId?: unknown }).sessionId : null
+    const confirmId = typeof rawId === 'string' ? rawId : null
+    const storedRef = confirmId !== null ? ownerRefs.get(confirmId) : undefined
+    if (confirmId !== null && storedRef && deps.ownerSession) {
+      const frame = event.senderFrame
+      // The ref stays stored: a refused lease remains refused until it is stopped or replaced.
+      if (!frame || !deps.ownerSession.validate(storedRef, frame).ok) return false
+    }
     const confirmed = inputSessionHandlers.confirm(event, request)
     const lease = deps.inputSessionAuthority.activeLease
     if (confirmed && lease?.purpose === 'command' && lease.sessionId === deps.getCommandMicActivationLeaseId()) {
