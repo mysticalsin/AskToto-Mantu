@@ -160,6 +160,7 @@ import {
 } from '@shared/quick-actions'
 import { micSpeakerLabel } from '@shared/speaker-names'
 import { onboardingLaunchFromSearch } from './lib/onboarding-launch'
+import { useRecoveredDraftCount } from './lib/recovered-draft-count'
 
 function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`
@@ -718,41 +719,11 @@ export function App(): JSX.Element {
     { open: false }
   )
   const [newMeetingToast, setNewMeetingToast] = useState(false)
-  const [recoveredDraftCount, setRecoveredDraftCount] = useState(0)
-  const recoveredDraftRevisionRef = useRef(-1)
-  const recoveredDraftOwnerRef = useRef<string | null>(null)
+  const [recoveredDraftCount, setRecoveredDraftCount] = useRecoveredDraftCount(
+    auth.status?.signedIn,
+    settings?.profile?.name
+  )
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
-
-  useEffect(() => {
-    let active = true
-    const owner = `${auth.status?.signedIn === true ? 'signed-in' : 'signed-out'}:${settings?.profile?.name ?? ''}`
-    if (recoveredDraftOwnerRef.current !== null && recoveredDraftOwnerRef.current !== owner) {
-      setRecoveredDraftCount(0)
-      recoveredDraftRevisionRef.current = -1
-    }
-    recoveredDraftOwnerRef.current = owner
-    const acceptCount = ({ count, revision }: { count: number; revision: number }): void => {
-      if (
-        active &&
-        Number.isSafeInteger(count) &&
-        count >= 0 &&
-        Number.isSafeInteger(revision) &&
-        revision >= recoveredDraftRevisionRef.current
-      ) {
-        recoveredDraftRevisionRef.current = revision
-        setRecoveredDraftCount(count)
-      }
-    }
-    const unsubscribe = window.toto.onTranscriptsRecovered(acceptCount)
-    void window.toto
-      .recoveredDraftCount()
-      .then(acceptCount)
-      .catch(() => {})
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [auth.status?.signedIn, settings?.profile?.name])
 
   // ── Vibe-Island-style auto-hide overlay (MQA-274) ──────────────────────────────────────────────
   // The overlay collapses to a slim top-center peek strip whenever it's idle and the pointer isn't over

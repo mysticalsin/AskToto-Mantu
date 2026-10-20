@@ -791,6 +791,8 @@ import {
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { captureDraftSettingsBoundary, getPublishedSettingsObservation } from './settings-observation'
 import { registerDraftTranscriptIpc } from './ipc/draft-transcript-ipc'
+import { registerRecoveredDraftCountIpc } from './ipc/recovered-draft-count-ipc'
+import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -1410,15 +1412,11 @@ function speculativeLocalWorkAllowed(): boolean {
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
 const transcriptSaveReceipts = new TranscriptSaveReceiptStore()
-let recoveredDraftsThisLaunch = 0
-let recoveredDraftCountRevision = 0
+const recoveredDraftCount = new RecoveredDraftCount()
 function publishRecoveredDraftCount(): void {
   if (!win || win.isDestroyed()) return
   try {
-    win.webContents.send(IPC.transcriptsRecovered, {
-      count: recoveredDraftsThisLaunch,
-      revision: recoveredDraftCountRevision
-    })
+    win.webContents.send(IPC.transcriptsRecovered, recoveredDraftCount.snapshot())
   } catch {
     /* authenticated snapshot query can recover the current count */
   }
@@ -6230,8 +6228,7 @@ function registerIpc(): void {
       resetSpeechAuthProfile()
       const archive = archiveEncryptedProfile()
       completeSpeechAuthProfileReset()
-      recoveredDraftsThisLaunch = 0
-      recoveredDraftCountRevision += 1
+      recoveredDraftCount.resetForProfileRecovery()
       publishRecoveredDraftCount()
       auditLog('settings.profile_recovered', { movedFiles: archive.files.length })
       return {
@@ -9406,10 +9403,7 @@ function registerIpc(): void {
       .then((path) => ({ path }))
   })
 
-  ipcMain.handle(IPC.recoveredDraftCount, (e): { count: number; revision: number } => {
-    assertMainWindow(e)
-    return { count: requireAuth() ? recoveredDraftsThisLaunch : 0, revision: recoveredDraftCountRevision }
-  })
+  registerRecoveredDraftCountIpc({ ipcMain, assertMainWindow, requireAuth, counter: recoveredDraftCount })
 
   // --- Mantu Intelligence brain (see src/main/brain/) ---
   ipcMain.handle(IPC.brainOpenDashboard, (e) => {
@@ -10685,13 +10679,10 @@ if (!app.requestSingleInstanceLock()) {
       // recovered meeting is visible in History and immediately subject to the same retention policy.
       // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
       bootWork.run('recoverOrphanDrafts', () => {
-        const recoveryRevision = recoveredDraftCountRevision
+        const recoveryRevision = recoveredDraftCount.revisionToken()
         return recoverOrphanDrafts(getSettings())
           .then((r) => {
-            if (recoveryRevision !== recoveredDraftCountRevision) return
-            if (r.recovered > 0) {
-              recoveredDraftsThisLaunch = r.recovered
-              recoveredDraftCountRevision += 1
+            if (recoveredDraftCount.recordRecovered(recoveryRevision, r.recovered)) {
               auditLog('transcript.recovered', { recovered: r.recovered })
               publishRecoveredDraftCount()
             }
