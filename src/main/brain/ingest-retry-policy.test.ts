@@ -11,7 +11,6 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -44,9 +43,26 @@ vi.mock('electron')
 const createStreamMock = vi.hoisted(() => vi.fn())
 const auditLogMock = vi.hoisted(() => vi.fn())
 const unreadablePaths = vi.hoisted(() => new Set<string>())
+const unreadableOpenMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    // Keep the gateway's real bounded reader; inject only the intended hydration failure.
+    open: async (...args: Parameters<typeof actual.open>) => {
+      if (unreadablePaths.has(String(args[0]))) {
+        unreadableOpenMock(args[0])
+        const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
+        error.code = 'ETIMEDOUT'
+        throw error
+      }
+      return actual.open(...args)
+    }
+  }
+})
 const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 function respondJson(markerCalls: string[], json = '{}') {
@@ -253,26 +269,12 @@ describe('M2-0033 retry policy across backfill callers', () => {
     activeIngest = ingestModule
     activeIntelligence = { settleIntelligenceIndexForTests }
     activeStore = storeModule
-    useStorageForTests({
-      fs: {
-        readdir,
-        realpath,
-        stat,
-        lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })),
-        readFile: async (path) => {
-          if (unreadablePaths.has(path)) {
-            const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
-            error.code = 'ETIMEDOUT'
-            throw error
-          }
-          return readFile(path)
-        }
-      }
-    })
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-ud-'))
     meetingsFolder = realpathSync.native(mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-')))
     modelMarkers = []
     unreadablePaths.clear()
+    unreadableOpenMock.mockClear()
     configureSettings()
     seedFiles()
     createStreamMock.mockReset()
@@ -396,6 +398,8 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect((await startBackfill(undefined, { force: true })).queued).toBe(5)
     await waitForIdle()
     const failed = readIndex(getSettings()).ingested['unreadable.md']
+    expect(unreadableOpenMock).toHaveBeenCalledExactlyOnceWith(file)
+    expect(failed?.error).toContain('ETIMEDOUT')
     expect(failed?.attempts).toBe(0)
     expect(failed?.retryAfter).toBeUndefined()
     expect(failed?.exhausted).toBeUndefined()
@@ -404,6 +408,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     createStreamMock.mockClear()
     expect((await startBackfill()).queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
+    expect(unreadableOpenMock).toHaveBeenCalledTimes(1)
 
     unreadablePaths.delete(file)
     writeFileSync(file, '---\ndate: 2026-01-04\n---\nunreadable transcript body hydrated', 'utf8')
