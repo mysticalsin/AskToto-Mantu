@@ -292,6 +292,7 @@ export const IPC = {
   inputSessionConfirm: 'input-session:confirm',
   inputSessionContext: 'input-session:context',
   inputSessionRevoked: 'input-session:revoked',
+  ownerSessionStatus: 'ownerSession:status',
   meetingMicAdmission: 'meeting:mic-admission',
   meetingMicCaptureConfirm: 'meeting:mic-capture-confirm',
   meetingMicCaptureRelease: 'meeting:mic-capture-release',

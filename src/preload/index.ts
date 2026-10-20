@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createSpeechPackBridge } from './speech-pack'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
+import type { OwnerSessionStatus } from '../shared/contracts/owner-session'
 import {
   IPC,
   type InputSessionStart,
@@ -552,6 +553,7 @@ const api = {
   releaseMeetingMicCapture: (captureId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.meetingMicCaptureRelease, { captureId }),
   getInputSessionContext: (): Promise<InputSessionContext | null> => ipcRenderer.invoke(IPC.inputSessionContext),
+  getOwnerSessionStatus: (): Promise<OwnerSessionStatus> => ipcRenderer.invoke(IPC.ownerSessionStatus),
   startInputSession: (request: InputSessionStart, context: InputSessionContext): Promise<InputSessionResult> =>
     ipcRenderer.invoke(IPC.inputSessionStart, { input: request, context }),
   confirmInputSession: (sessionId: string, context: InputSessionContext): Promise<boolean> =>

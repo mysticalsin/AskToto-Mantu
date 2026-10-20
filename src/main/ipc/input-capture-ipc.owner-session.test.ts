@@ -32,7 +32,10 @@ const ref: OwnerSessionRef = Object.freeze({
 
 type Handler = (event: unknown, request?: unknown) => unknown
 
-function setup(ownerSession?: { mint: ReturnType<typeof vi.fn>; validate: ReturnType<typeof vi.fn> }) {
+function setup(
+  ownerSession?: { mint: ReturnType<typeof vi.fn>; validate: ReturnType<typeof vi.fn> },
+  authorizeSender?: ReturnType<typeof vi.fn>
+) {
   const handlers = new Map<string, Handler>()
   const authority = new InputSessionAuthority({ token: () => 'a'.repeat(48), now: () => 1 })
   const never = { safeParse: () => ({ success: false as const }) }
@@ -71,7 +74,8 @@ function setup(ownerSession?: { mint: ReturnType<typeof vi.fn>; validate: Return
       commandSpeechFinish: never,
       commandSpeechCancel: never
     },
-    ownerSession
+    ownerSession,
+    authorizeSender
   } as never)
   const call = (channel: string, request?: unknown) => {
     const handler = handlers.get(channel)
@@ -125,5 +129,27 @@ describe('input-capture IPC owner-session admission', () => {
     expect(stopped.ok).toBe(true)
     call(IPC.inputSessionConfirm, { sessionId, context })
     expect(ownerSession.validate).not.toHaveBeenCalled()
+  })
+
+  it('input-session handlers route through authorizeSender when provided', () => {
+    const authorizeSender = vi.fn(() => null)
+    const { start } = setup(undefined, authorizeSender)
+    start()
+    expect(authorizeSender).toHaveBeenCalledWith(event, {
+      surface: 'inputSession',
+      requireOwner: false,
+      allowedFrames: 'main-window-top'
+    })
+  })
+
+  it('a refusal from authorizeSender propagates and the authority is not reached', () => {
+    const ownerSession = { mint: vi.fn(() => ref), validate: vi.fn(() => ({ ok: true })) }
+    const authorizeSender = vi.fn(() => {
+      throw new Error('IPC refused: wrong-window')
+    })
+    const { authority, call } = setup(ownerSession, authorizeSender)
+    expect(() => call(IPC.inputSessionStart, startRequest)).toThrow('IPC refused: wrong-window')
+    expect(authority.activeLease).toBeNull()
+    expect(ownerSession.mint).not.toHaveBeenCalled()
   })
 })

@@ -792,6 +792,7 @@ import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { createMainOwnerSessionAuthority } from './lifecycle/owner-session-authority'
+import { registerOwnerSessionIpc } from './ipc/register-owner-session'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -10063,12 +10064,15 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
+  const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
+  const authorizeSender = registerOwnerSessionIpc({ ipcMain, assertMainWindow, ownerSession, currentInputSessionContext })
   registerInputCaptureIpc({
     ipcMain,
     assertMainWindow,
     requireAuth,
     inputSessionAuthority,
-    ownerSession: createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision),
+    ownerSession,
+    authorizeSender,
     commandMicActivationAuthority,
     getWin: () => win,
     getCommandMicActivationLeaseId: () => commandMicActivationLeaseId,

@@ -4,6 +4,7 @@ import type { InputSessionContext, TrustedInputOwner } from '@shared/input-sessi
 import type { OwnerSessionRef } from '@shared/contracts/owner-session'
 import type { InputSessionAuthority } from '../input-session-authority'
 import type { OwnerSessionAuthority } from '../lifecycle/owner-session-authority'
+import type { AuthorizeSender } from './sender-auth'
 import { createInputSessionHandlers } from '../input-session-ipc'
 
 type ParseResult<T> = { success: true; data: T } | { success: false }
@@ -42,6 +43,8 @@ interface InputCaptureIpcDependencies<Frame, Samples> {
   inputSessionAuthority: InputSessionAuthority
   /** Absent on installs without an owner: admission is then unchanged. */
   ownerSession?: Pick<OwnerSessionAuthority, 'mint' | 'validate'>
+  /** When present, the input-session handlers gate through it (audited refusals). */
+  authorizeSender?: AuthorizeSender
   commandMicActivationAuthority: ActivationAuthorityLike<Frame>
   /** Read live: the main window is replaced when it is recreated. */
   getWin: () => WindowLike | null | undefined
@@ -70,9 +73,16 @@ interface InputCaptureIpcDependencies<Frame, Samples> {
 /** Input-session, command-mic and command-speech IPC registrations (moved verbatim from registerIpc). */
 export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDependencies<Frame, Samples>): void {
   const ownerRefs = new Map<string, OwnerSessionRef>()
+  const gate = (event: IpcMainInvokeEvent): void => {
+    if (deps.authorizeSender) {
+      deps.authorizeSender(event, { surface: 'inputSession', requireOwner: false, allowedFrames: 'main-window-top' })
+    } else {
+      deps.assertMainWindow(event)
+    }
+  }
   const inputSessionHandlers = createInputSessionHandlers<IpcMainInvokeEvent>({
     authority: deps.inputSessionAuthority,
-    assertMainWindow: (event) => deps.assertMainWindow(event),
+    assertMainWindow: (event) => gate(event),
     requireAuth: deps.requireAuth,
     isWindowVisible: () => {
       const win = deps.getWin()
