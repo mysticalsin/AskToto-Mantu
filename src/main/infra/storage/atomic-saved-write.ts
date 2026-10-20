@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { constants } from 'node:fs'
 import { lstat, open, rename, unlink, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { recordLocalWrite } from './local-writes'
@@ -132,7 +133,8 @@ async function tempContentMatches(
 ): Promise<boolean> {
   let handle: FileHandle | undefined
   try {
-    handle = await open(path, 'r')
+    // A path can change after lstat. Refuse symlinks and avoid blocking on a substituted FIFO.
+    handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
     const stats = await handle.stat()
     if (
       !stats.isFile() ||
@@ -151,7 +153,12 @@ async function tempContentMatches(
       hash.update(buffer.subarray(0, bytesRead))
       total += bytesRead
     }
-    return total === expectedBytes && hash.digest().equals(expectedDigest)
+    // The descriptor may still name our bytes after the pathname is replaced during the read.
+    return (
+      total === expectedBytes &&
+      hash.digest().equals(expectedDigest) &&
+      (await isUnchangedTemp(path, identity, expectedBytes))
+    )
   } catch {
     return false
   } finally {
