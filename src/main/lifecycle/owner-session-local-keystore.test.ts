@@ -1,4 +1,8 @@
+import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const qaIdentityDir = join('/synthetic/qa-profile', 'identity')
+const qaSaltPath = join(qaIdentityDir, 'owner-key-salt.v1')
 
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: true, getPath: vi.fn(() => '/synthetic/qa-profile') },
@@ -47,13 +51,14 @@ describe('owner-session salt backend selection', () => {
     mocks.readFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }))
     const authority = createMainOwnerSessionAuthority(() => 0)
     await vi.waitFor(() => expect(authority.mint({ processId: 1, routingId: 2 }, 0)).not.toBeNull())
-    const [path, bytes, mode] = mocks.writeFile.mock.calls[0]
-    expect(path).toMatch(/^\/synthetic\/qa-profile\/identity\/owner-key-salt\.v1\.tmp-[a-f0-9]+$/)
+    const [temporaryPath, bytes, mode] = mocks.writeFile.mock.calls[0]
+    expect(dirname(temporaryPath)).toBe(qaIdentityDir)
+    expect(basename(temporaryPath)).toMatch(/^owner-key-salt\.v1\.tmp-[a-f0-9]+$/)
     expect(bytes).toBeInstanceOf(Buffer)
     expect(bytes).toHaveLength(32)
     expect(mode).toEqual({ mode: 0o600 })
-    expect(mocks.mkdir).toHaveBeenCalledWith('/synthetic/qa-profile/identity', { recursive: true, mode: 0o700 })
-    expect(mocks.rename).toHaveBeenCalledWith(path, '/synthetic/qa-profile/identity/owner-key-salt.v1')
+    expect(mocks.mkdir).toHaveBeenCalledWith(qaIdentityDir, { recursive: true, mode: 0o700 })
+    expect(mocks.rename).toHaveBeenCalledWith(temporaryPath, qaSaltPath)
     expect(mocks.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled()
     expect(mocks.safeStorage.encryptString).not.toHaveBeenCalled()
     expect(mocks.safeStorage.decryptString).not.toHaveBeenCalled()
@@ -69,7 +74,7 @@ describe('owner-session salt backend selection', () => {
     expect(mocks.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled()
     expect(mocks.safeStorage.decryptString).not.toHaveBeenCalled()
     expect(mocks.safeStorage.encryptString).not.toHaveBeenCalled()
-    expect(mocks.readFile).toHaveBeenCalledWith('/synthetic/qa-profile/identity/owner-key-salt.v1')
+    expect(mocks.readFile).toHaveBeenCalledWith(qaSaltPath)
   })
 
   it('retains wrapped salt use for a packaged app without the local override', async () => {
