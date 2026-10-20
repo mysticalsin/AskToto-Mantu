@@ -1105,12 +1105,11 @@ function isFile(fileClass: FileClass | undefined): boolean {
  * the stamp prefix the sweep parses), and the user loses at most the final autosave interval instead
  * of the whole meeting. Runs before any Listen session starts, and drafts are keyed by their own
  * startedAt, so a live meeting's draft can never be promoted out from under it. Undecryptable drafts
- * (foreign keychain) are left in place for the device that can read them. Idempotent across repeated
- * runs: a draft whose promoted file already exists (e.g. because a prior run's unlink failed after a
+ * (foreign keychain) are left for the device that can read them. A draft whose promoted file exists (e.g. after a
  * successful write) is never re-promoted — only its stale source file is retried for cleanup — and,
  * in plaintext mode, the recovered meeting gets an index.md row exactly like a normally-saved one.
  */
-export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
+export async function recoverOrphanDrafts(settings: Settings, savedDrafts?: ReadonlySet<string>) {
   let recovered = 0
   try {
     const folder = resolveMeetingsFolder(settings)
@@ -1121,6 +1120,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
     const draftClasses = await classifyAll(gateway, draftNames)
     const occupied = new Set(listing.names)
     for (const f of draftNames) {
+      if (savedDrafts?.has(f)) continue
       if (!isFile(draftClasses.get(f))) continue
       const draftPath = join(folder, f)
       try {

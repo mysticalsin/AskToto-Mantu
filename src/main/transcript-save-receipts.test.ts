@@ -37,15 +37,67 @@ function journaled(journal = memoryJournal()): { store: TranscriptSaveReceiptSto
 }
 
 /** One durable save, as the save handler runs it: identity, settings, durable write, then the named stages. */
-const durable = (startedAt: number, stages: string[] = []) => async (receipt: any) => {
-  receipt.normalizedStartedAt = startedAt
-  receipt.settings = settings
-  receipt.durablePath = `/m/meeting-${startedAt}.md`
-  for (const stage of stages) receipt.completed.add(stage)
-  return receipt.durablePath as string
-}
+const durable =
+  (startedAt: number, stages: string[] = []) =>
+  async (receipt: any) => {
+    receipt.normalizedStartedAt = startedAt
+    receipt.settings = settings
+    receipt.durablePath = `/m/meeting-${startedAt}.md`
+    for (const stage of stages) receipt.completed.add(stage)
+    return receipt.durablePath as string
+  }
 
 describe('TranscriptSaveReceiptStore', () => {
+  it('keeps each barrier bound to its failed drain while another caller retries', async () => {
+    const journal = memoryJournal()
+    let attempts = 0
+    let release!: () => void
+    const heldRetry = new Promise<void>((resolve) => (release = resolve))
+    journal.put = async () => {
+      if (++attempts === 1) throw new Error('first write failed')
+      await heldRetry
+    }
+    let retry: Promise<void> | undefined
+    let barrier: Promise<string> | undefined
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => 'race',
+      onError: () => queueMicrotask(() => (retry = store.journalIdle()))
+    })
+    const saved = store.run(key(1), owner(42), async (receipt) => {
+      await durable(42)(receipt)
+      barrier = store.journalIdle().then(
+        () => 'resolved',
+        () => 'rejected'
+      )
+      await barrier
+      return receipt.durablePath!
+    })
+    await vi.waitFor(() => expect(attempts).toBe(2))
+    await expect(barrier).resolves.toBe('rejected')
+    release()
+    await retry
+    await saved
+  })
+  it('keeps the saved revision after draft cleanup closes the live store', async () => {
+    const journal = memoryJournal()
+    let revision = 12
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision }),
+      newId: () => 'fixed'
+    })
+    await store.run(key(1), owner(42), async (receipt) => {
+      await durable(42)(receipt)
+      await store.journalIdle()
+      revision = 0
+      receipt.completed.add('draft-cleanup')
+      await store.journalIdle()
+      return receipt.durablePath!
+    })
+    expect(journal.records.get('fixed')?.revision).toBe(12)
+  })
   it('caps receipts at 256', async () => {
     const store = new TranscriptSaveReceiptStore()
     for (let i = 0; i < 256; i++) await store.run(key(i), owner(i + 1), durable(i + 1, ['complete']))
@@ -167,10 +219,12 @@ describe('TranscriptSaveReceiptStore', () => {
     expect(journal.records.size).toBe(0)
   })
 
-  it('a failing journal never fails the save', async () => {
+  it('a failing journal prevents success and retains the write for retry', async () => {
     const journal = memoryJournal()
+    const put = journal.put
+    let fail = true
     journal.put = async () => {
-      throw new Error('EIO')
+      if (fail) throw new Error('EIO')
     }
     const onError = vi.fn()
     const store = new TranscriptSaveReceiptStore(256, {
@@ -179,9 +233,13 @@ describe('TranscriptSaveReceiptStore', () => {
       newId: () => 'x',
       onError
     })
-    await expect(store.run(key(1), owner(1), durable(1, ['summary-credit']))).resolves.toBe('/m/meeting-1.md')
-    await store.journalIdle()
+    await expect(store.run(key(1), owner(1), durable(1, ['summary-credit']))).rejects.toThrow('EIO')
+    await expect(store.journalIdle()).rejects.toThrow('EIO')
     expect(onError).toHaveBeenCalled()
+    fail = false
+    journal.put = put
+    await store.journalIdle()
+    expect([...journal.records.values()][0].completed).toEqual(['summary-credit'])
   })
 
   it('does not journal a save it cannot name safely', async () => {

@@ -34,6 +34,7 @@ interface ReceiptEntry {
   ownerKey?: string
   touched: number
   journalId?: string
+  journalLocation?: NonNullable<ReturnType<ReceiptLocator>>
 }
 
 /** Where a durable save lives, P1 only. Null when the path cannot be named safely, so the receipt is not journaled. */
@@ -90,7 +91,8 @@ export class TranscriptSaveReceiptStore {
   readonly #journal: ReceiptJournalOptions | undefined
   /** Latest unwritten record (or removal) per journal id; one writer drains them in order. */
   readonly #journalQueue = new Map<string, SaveReceiptRecord | null>()
-  #journalDrain: Promise<void> = Promise.resolve()
+  #journalDrain: Promise<{ error: unknown } | undefined> = Promise.resolve(undefined)
+  #journalDraining = false
 
   constructor(
     private readonly maxEntries = 256,
@@ -100,9 +102,11 @@ export class TranscriptSaveReceiptStore {
     this.#journal = journal
   }
 
-  /** Resolves once every journal write issued so far has settled. */
-  journalIdle(): Promise<void> {
-    return this.#journalDrain
+  /** Resolves after persistence, or rejects with this drain's failure even if another caller retries it. */
+  async journalIdle(): Promise<void> {
+    this.drainJournal()
+    const result = await this.#journalDrain
+    if (result) throw result.error
   }
 
   run(
@@ -131,7 +135,12 @@ export class TranscriptSaveReceiptStore {
     const current = entry
     let pending!: Promise<string>
     pending = Promise.resolve()
-      .then(() => work(current.receipt))
+      .then(async () => {
+        await this.journalIdle()
+        const path = await work(current.receipt)
+        await this.journalIdle()
+        return path
+      })
       .then(
         (path) => {
           if (current.pending === pending) current.pending = undefined
@@ -261,8 +270,9 @@ export class TranscriptSaveReceiptStore {
       return
     }
     try {
-      const where = journal.locate(receipt.durablePath, receipt.settings, meetingStartedAt)
+      const where = entry.journalLocation ?? journal.locate(receipt.durablePath, receipt.settings, meetingStartedAt)
       if (!where) return
+      entry.journalLocation ??= { ...where }
       entry.journalId ??= journal.newId()
       const completed = [...receipt.completed]
       const has = (stage: TranscriptSaveSideEffect): boolean => receipt.completed.has(stage)
@@ -297,21 +307,37 @@ export class TranscriptSaveReceiptStore {
   }
 
   private journalEnqueue(id: string, record: SaveReceiptRecord | null): void {
-    const journal = this.#journal
-    if (!journal) return
-    const idle = this.#journalQueue.size === 0
+    if (!this.#journal) return
     this.#journalQueue.set(id, record)
-    if (!idle) return
+    this.drainJournal()
+  }
+
+  private drainJournal(): void {
+    const journal = this.#journal
+    if (!journal || this.#journalDraining || this.#journalQueue.size === 0) return
+    this.#journalDraining = true
     this.#journalDrain = this.#journalDrain.then(async () => {
-      while (this.#journalQueue.size > 0) {
-        const [next, value] = this.#journalQueue.entries().next().value as [string, SaveReceiptRecord | null]
-        this.#journalQueue.delete(next)
-        try {
-          await (value === null ? journal.journal.remove(next) : journal.journal.put(value))
-        } catch (error) {
-          journal.onError?.(error)
+      try {
+        while (this.#journalQueue.size > 0) {
+          const [next, value] = this.#journalQueue.entries().next().value as [string, SaveReceiptRecord | null]
+          this.#journalQueue.delete(next)
+          try {
+            await (value === null ? journal.journal.remove(next) : journal.journal.put(value))
+          } catch (error) {
+            // Retain the latest state for a retry, without replaying its already-completed effect.
+            if (!this.#journalQueue.has(next)) this.#journalQueue.set(next, value)
+            try {
+              journal.onError?.(error)
+            } catch {
+              // A logging failure must not lose the retry or replace the persistence error.
+            }
+            return { error }
+          }
         }
+      } finally {
+        this.#journalDraining = false
       }
+      return undefined
     })
   }
 

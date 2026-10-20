@@ -29,7 +29,10 @@ async function fieldsOf(gateway: StorageGateway, folder: string, name: string): 
  * a save whose draft cleanup never finished (killed after the save, or mid-unlink), so it is removed instead of
  * being promoted into a duplicate. Drafts that cannot be read or matched are left for promotion, as before.
  */
-export async function removeSavedMeetingDrafts(settings: Settings): Promise<{ removed: number }> {
+export async function removeSavedMeetingDrafts(
+  settings: Settings,
+  savedDrafts = new Set<string>()
+): Promise<{ removed: number }> {
   let removed = 0
   try {
     const folder = resolveMeetingsFolder(settings)
@@ -46,6 +49,8 @@ export async function removeSavedMeetingDrafts(settings: Settings): Promise<{ re
         for (const candidate of candidates) {
           const fields = await fieldsOf(gateway, folder, candidate)
           if (!fields || !MEETING_TYPES.has(fields.type ?? '') || fields.date !== identity) continue
+          // Exclude the matched draft from promotion even if a transient lock prevents its deletion.
+          savedDrafts.add(name)
           await unlink(join(folder, name))
           removed++
           break
@@ -73,6 +78,7 @@ export function bindLaunchResume(resume: (settings: Settings) => Promise<void>):
 /** Launch recovery: finish journaled saves, drop drafts whose meeting was already saved, then promote true orphans. */
 export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
   await launchResume?.(settings).catch(() => undefined)
-  await removeSavedMeetingDrafts(settings)
-  return promoteOrphanDrafts(settings)
+  const savedDrafts = new Set<string>()
+  await removeSavedMeetingDrafts(settings, savedDrafts)
+  return promoteOrphanDrafts(settings, savedDrafts)
 }

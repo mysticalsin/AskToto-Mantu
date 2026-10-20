@@ -4,6 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRelaunchHarness, KILL_STAGES, readRaw, type RelaunchHarness } from '../../test-helpers/relaunch-harness'
 
 vi.mock('electron')
+const unlinkFault = vi.hoisted(() => ({ path: '' }))
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      if (String(args[0]) === unlinkFault.path) throw Object.assign(new Error('busy draft'), { code: 'EBUSY' })
+      return actual.unlink(...args)
+    }
+  }
+})
 
 let nextStartedAt = 1_700_000_200_123
 let harness: RelaunchHarness | undefined
@@ -16,11 +27,32 @@ const start = async (): Promise<RelaunchHarness> => {
 }
 
 afterEach(async () => {
+  unlinkFault.path = ''
   await harness?.dispose()
   harness = undefined
 })
 
 describe('meeting recovery across a relaunch (GATE-07)', () => {
+  it('keeps a saved meeting unique when its stale draft cannot be deleted, while recovering other orphans', async () => {
+    const h = await start()
+    await h.runUntilKilled('after-saved-written')
+    const orphan = await createRelaunchHarness(h.meeting.startedAt + 1000, h.folder)
+    await orphan.runUntilKilled('after-draft-sealed')
+    const [saved] = await h.meetings()
+    const before = await readRaw(h.folder, saved.name)
+    const stale = (await h.drafts()).sort()[0]
+    unlinkFault.path = join(h.folder, stale)
+    await expect(h.relaunch()).resolves.toEqual({ recovered: 1 })
+    expect(await h.meetings()).toHaveLength(1)
+    expect(await orphan.meetings()).toHaveLength(1)
+    expect(await h.drafts()).toEqual([stale])
+    await expect(h.relaunch()).resolves.toEqual({ recovered: 0 })
+    expect(await h.meetings()).toHaveLength(1)
+    unlinkFault.path = ''
+    await expect(h.relaunch()).resolves.toEqual({ recovered: 0 })
+    expect(await h.drafts()).toEqual([])
+    expect((await readRaw(h.folder, saved.name)).equals(before)).toBe(true)
+  })
   it.each(KILL_STAGES)('kill at each stage then relaunch yields exactly one meeting (%s)', async (killAt) => {
     const h = await start()
     await h.runUntilKilled(killAt)

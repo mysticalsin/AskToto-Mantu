@@ -9202,21 +9202,21 @@ function registerIpc(): void {
         if (!receipt.settings) receipt.settings = getSettings()
         const saveSettings = receipt.settings
 
-        // A rejected pre-durable write leaves no receipt behind, so the next request gets a fresh attempt.
-        // Once durablePath is present, retries resume side effects against that exact file.
+        // Persist the saved receipt before effects; retries retain its exact file and stage history.
         if (receipt.durablePath === undefined) receipt.durablePath = await saveMeeting(saveSettings, m)
+        await transcriptSaveReceipts.journalIdle()
         assertSaveAdmission()
         const savedTranscriptPath = receipt.durablePath
         const completed = receipt.completed
-        const mark = (stage: TranscriptSaveSideEffect): void => {
+        const mark = async (stage: TranscriptSaveSideEffect): Promise<void> => {
           completed.add(stage)
+          await transcriptSaveReceipts.journalIdle()
         }
 
-        // Time-saved: credit the durable live-meeting file once. Imports credit themselves separately.
         if (!completed.has('summary-credit')) {
           assertSaveAdmission()
           recordMeetingSummarized(meetingDurationMin(m))
-          mark('summary-credit')
+          await mark('summary-credit')
         }
         if (!completed.has('time-saved-credit')) {
           assertSaveAdmission()
@@ -9233,14 +9233,14 @@ function registerIpc(): void {
               throw new Error('Transcript saved, but time-saved accounting could not be completed.')
             }
           }
-          mark('time-saved-credit')
+          await mark('time-saved-credit')
         }
         if (!completed.has('draft-cleanup')) {
           assertSaveAdmission()
           // Cleanup is best-effort and nonfatal inside clearDraftTranscript.
           await clearDraftTranscript(saveSettings, m.startedAt, savedTranscriptPath)
           assertSaveAdmission()
-          mark('draft-cleanup')
+          await mark('draft-cleanup')
         }
         if (!completed.has('audit')) {
           assertSaveAdmission()
@@ -9250,7 +9250,7 @@ function registerIpc(): void {
             durMin: Math.round((Date.now() - m.startedAt) / 60_000),
             encrypted: !!saveSettings.encryptTranscripts
           })
-          mark('audit')
+          await mark('audit')
         }
         if (!completed.has('rebuild')) {
           assertSaveAdmission()
@@ -9270,7 +9270,7 @@ function registerIpc(): void {
             throw error
           }
           assertSaveAdmission()
-          mark('rebuild')
+          await mark('rebuild')
         }
         if (!completed.has('ingest')) {
           assertSaveAdmission()
@@ -9296,14 +9296,13 @@ function registerIpc(): void {
             throw error
           }
           assertSaveAdmission()
-          mark('ingest')
+          await mark('ingest')
         }
         if (!completed.has('speaker-save')) {
           assertSaveAdmission()
           // Matched saves remain registered until their exact live owner closes; unmatched saves get the
           // existing best-effort text-name improvement, without enrollment.
           const matched = recordLiveSpeakerSave(m.startedAt, savedTranscriptPath)
-          mark('speaker-save')
           if (!matched) {
             const speakerBackfill = backfillSpeakerNames(savedTranscriptPath)
               .then(() => undefined)
@@ -9314,9 +9313,10 @@ function registerIpc(): void {
               ? Promise.all([receipt.backgroundWork, speakerBackfill]).then(() => undefined)
               : speakerBackfill
           }
+          await mark('speaker-save')
         }
         assertSaveAdmission()
-        mark('complete')
+        await mark('complete')
         return savedTranscriptPath
       })
       .then((path) => ({ path }))

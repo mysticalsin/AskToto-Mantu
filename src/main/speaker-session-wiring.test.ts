@@ -865,6 +865,99 @@ describe('bounded close and successful-save receipt join', () => {
     expect(records.size).toBe(0)
   })
 
+  it('waits for durable journal writes before side effects and for removal before IPC success', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    let releaseWrite!: () => void
+    let releaseRemoval!: () => void
+    const writeGate = new Promise<void>((resolve) => (releaseWrite = resolve))
+    const removalGate = new Promise<void>((resolve) => (releaseRemoval = resolve))
+    const journal = {
+      load: async () => ({ ok: true as const, records: [] }),
+      put: vi.fn(async () => writeGate),
+      remove: vi.fn(async () => removalGate)
+    }
+    const receipts = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => 'gated'
+    })
+    const credit = vi.fn()
+    const handler = saveHandler(api, '/meetings/a.md', { receipts, recordMeetingSummarized: credit })
+    let returned = false
+    const result = handler({}, { startedAt: 604, lines: [], recap: '', mode: 'meeting' }).then((value) => {
+      returned = true
+      return value
+    })
+    await vi.waitFor(() => expect(journal.put).toHaveBeenCalled())
+    expect(credit).not.toHaveBeenCalled()
+    expect(returned).toBe(false)
+    releaseWrite()
+    await vi.waitFor(() => expect(journal.remove).toHaveBeenCalled())
+    expect(credit).toHaveBeenCalledOnce()
+    expect(returned).toBe(false)
+    releaseRemoval()
+    await expect(result).resolves.toEqual({ path: '/meetings/a.md' })
+  })
+
+  it('retries a failed completion receipt before advancing without repeating the credited effect', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    let failJournal = true
+    const journal = {
+      load: async () => ({ ok: true as const, records: [] }),
+      put: vi.fn(async (rec: { completed: string[] }) => {
+        if (failJournal && rec.completed.includes('summary-credit')) throw new Error('journal EIO')
+      }),
+      remove: vi.fn(async () => undefined)
+    }
+    const receipts = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => 'retry'
+    })
+    const credit = vi.fn()
+    const cleanup = vi.fn(async () => undefined)
+    const handler = saveHandler(api, '/meetings/a.md', {
+      receipts,
+      recordMeetingSummarized: credit,
+      clearDraftTranscript: cleanup
+    })
+    const meeting = { startedAt: 605, lines: [], recap: '', mode: 'meeting' }
+    await expect(handler({}, meeting)).rejects.toThrow('journal EIO')
+    expect(credit).toHaveBeenCalledOnce()
+    expect(cleanup).not.toHaveBeenCalled()
+    await expect(handler({}, meeting)).rejects.toThrow('journal EIO')
+    expect(credit).toHaveBeenCalledOnce()
+    expect(cleanup).not.toHaveBeenCalled()
+    failJournal = false
+    await expect(handler({}, meeting)).resolves.toEqual({ path: '/meetings/a.md' })
+    expect(credit).toHaveBeenCalledOnce()
+    expect(cleanup).toHaveBeenCalledOnce()
+  })
+
+  it('registers unmatched speaker backfill before persisting speaker completion', async () => {
+    const api = sessionApi({ id: realSpeakerId() })
+    let fail = true
+    const receipts = new TranscriptSaveReceiptStore(256, {
+      journal: {
+        load: async () => ({ ok: true as const, records: [] }),
+        put: async (rec) => {
+          if (fail && rec.completed.includes('speaker-save')) throw new Error('speaker journal EIO')
+        },
+        remove: async () => undefined
+      },
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => 'speaker'
+    })
+    const backfill = vi.fn(async () => ({ ok: true, named: 0 }))
+    const handler = saveHandler(api, '/meetings/a.md', { receipts, backfillSpeakerNames: backfill })
+    const meeting = { startedAt: 606, lines: [], recap: '', mode: 'meeting' }
+    await expect(handler({}, meeting)).rejects.toThrow('speaker journal EIO')
+    expect(backfill).toHaveBeenCalledOnce()
+    fail = false
+    await expect(handler({}, meeting)).resolves.toEqual({ path: '/meetings/a.md' })
+    expect(backfill).toHaveBeenCalledOnce()
+  })
+
   it('defers active and duplicate saves, then snapshots and backfills the exact file once on Stop', async () => {
     const backfill = vi.fn(async (_file: string, _snapshot?: SpeakerEnrollmentSnapshot) => ({ ok: true, named: 1 }))
     const id = realSpeakerId()
