@@ -10,6 +10,7 @@ vi.mock('electron', () => ({
 vi.mock('../auth', () => ({ authStatus: vi.fn(() => ({ signedIn: false })), authSessionGeneration: vi.fn(() => 1) }))
 vi.mock('../logger', () => ({ auditLog: vi.fn() }))
 
+import { checkpointAfterDraftSave } from '../features/meetings/transcript-checkpoint-binding'
 import { createOwnerSessionWiring } from './owner-session-wiring'
 
 function wire() {
@@ -46,5 +47,11 @@ describe('owner session wiring', () => {
       captureContext: null
     }
     expect(() => onSegmentDelivered?.(owner as never, { type: 'terminal' } as never)).not.toThrow()
+  })
+
+  it('binds its transcript store for draft checkpoints', async () => {
+    wire()
+    // No meeting is open, so the bound store answers 'sealed'; an unbound app would answer null.
+    await expect(checkpointAfterDraftSave(1_700_000_000_000)).resolves.toEqual({ ok: false, error: 'sealed' })
   })
 })

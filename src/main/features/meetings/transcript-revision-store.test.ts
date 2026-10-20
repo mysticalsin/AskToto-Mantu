@@ -8,6 +8,8 @@ import {
 } from '@shared/contracts/speech/transcript-revision'
 import {
   createTranscriptRevisionStore,
+  type CheckpointWriteOutcome,
+  type CheckpointWriter,
   type FrameOwner,
   type TranscriptStoreBinding
 } from './transcript-revision-store'
@@ -146,5 +148,118 @@ describe('transcript revision store', () => {
     expect(deltas).toHaveLength(2)
     expect(deltas[1]).toMatchObject({ finalized: true, changed: [] })
     expect(store.apply(binding(null), partial(2, 'cap/1/2'))).toEqual({ ok: false, reason: 'finalized' })
+  })
+})
+
+describe('transcript revision store checkpoint', () => {
+  const written = (): ReturnType<typeof vi.fn<CheckpointWriter>> => vi.fn<CheckpointWriter>(async () => 'written')
+
+  it('checkpoint writes the current revision and reports it', async () => {
+    const writer = written()
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
+    store.open(binding(null))
+    store.apply(binding(null), partial(1))
+    const snapshot = store.snapshot(M)
+    expect(snapshot).not.toBeNull()
+    const result = await store.checkpoint(M)
+    expect(result).toEqual({ ok: true, revision: snapshot?.revision })
+    expect(writer).toHaveBeenCalledTimes(1)
+    expect(writer).toHaveBeenCalledWith(M, snapshot)
+  })
+
+  it('checkpoint captures the revision before awaiting the writer', async () => {
+    let release: (outcome: CheckpointWriteOutcome) => void = () => {}
+    const writer = vi.fn<CheckpointWriter>(
+      () =>
+        new Promise<CheckpointWriteOutcome>((resolve) => {
+          release = resolve
+        })
+    )
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
+    store.open(binding(null))
+    store.apply(binding(null), partial(1))
+    const before = store.snapshot(M)?.revision as number
+    const pending = store.checkpoint(M)
+    store.apply(binding(null), partial(2, 'cap/1/2'))
+    expect(store.snapshot(M)?.revision).toBeGreaterThan(before)
+    release('written')
+    const result = await pending
+    expect(writer.mock.calls[0][1].revision).toBe(before)
+    expect(result).toEqual({ ok: true, revision: before })
+  })
+
+  it('checkpoint after seal returns sealed and writes nothing', async () => {
+    const writer = written()
+    const store = createTranscriptRevisionStore({ now: () => M, checkpointWriter: writer })
+    store.open(binding(null))
+    store.close(M, 'user-stop')
+    expect(await store.checkpoint(M)).toEqual({ ok: false, error: 'sealed' })
+    expect(writer).not.toHaveBeenCalled()
+
+    const sealingWriter = vi.fn<CheckpointWriter>(async () => 'sealed')
+    const other = createTranscriptRevisionStore({ now: () => M, checkpointWriter: sealingWriter })
+    other.open(binding(null))
+    expect(await other.checkpoint(M)).toEqual({ ok: false, error: 'sealed' })
+    expect(sealingWriter).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkpoint refuses when authGeneration changed', async () => {
+    let gen = 1
+    const writer = written()
+    const store = createTranscriptRevisionStore({
+      now: () => M,
+      checkpointWriter: writer,
+      authGeneration: () => gen
+    })
+    store.open(binding(ref({ authGeneration: 1 })))
+    gen = 2
+    expect(await store.checkpoint(M)).toEqual({ ok: false, error: 'auth-changed' })
+    expect(writer).not.toHaveBeenCalled()
+    gen = 1
+    expect((await store.checkpoint(M)).ok).toBe(true)
+    expect(writer).toHaveBeenCalledTimes(1)
+  })
+
+  it('a meeting opened signed out is not refused by an auth generation change', async () => {
+    let gen = 1
+    const writer = written()
+    const store = createTranscriptRevisionStore({
+      now: () => M,
+      checkpointWriter: writer,
+      authGeneration: () => gen
+    })
+    store.open(binding(null))
+    gen = 5
+    expect((await store.checkpoint(M)).ok).toBe(true)
+    expect(writer).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkpoint maps writer failure, throw and absence', async () => {
+    const failing = createTranscriptRevisionStore({
+      now: () => M,
+      checkpointWriter: vi.fn<CheckpointWriter>(async () => 'failed')
+    })
+    failing.open(binding(null))
+    expect(await failing.checkpoint(M)).toEqual({ ok: false, error: 'write-failed' })
+
+    const throwing = createTranscriptRevisionStore({
+      now: () => M,
+      checkpointWriter: vi.fn<CheckpointWriter>(async () => {
+        throw new Error('boom')
+      })
+    })
+    throwing.open(binding(null))
+    expect(await throwing.checkpoint(M)).toEqual({ ok: false, error: 'write-failed' })
+
+    const absent = createTranscriptRevisionStore({
+      now: () => M,
+      checkpointWriter: vi.fn<CheckpointWriter>(async () => 'absent')
+    })
+    absent.open(binding(null))
+    expect(await absent.checkpoint(M)).toEqual({ ok: false, error: 'absent' })
+
+    const unconfigured = createTranscriptRevisionStore({ now: () => M })
+    unconfigured.open(binding(null))
+    expect(await unconfigured.checkpoint(M)).toEqual({ ok: false, error: 'write-failed' })
   })
 })

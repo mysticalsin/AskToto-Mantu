@@ -13,7 +13,12 @@ import {
 } from '@shared/contracts/speech/transcript-revision'
 import type { InputSessionStopReason } from '@shared/input-session'
 
-// checkpoint() remains WP03-S03; patch 0013 is retained by the owner decision.
+export type CheckpointWriteOutcome = 'written' | 'sealed' | 'absent' | 'failed'
+export type CheckpointResult =
+  | { ok: true; revision: number }
+  | { ok: false; error: 'sealed' | 'write-failed' | 'auth-changed' | 'absent' }
+/** Rewrites the meeting's autosave drafts with `rev`; never creates a file. */
+export type CheckpointWriter = (meetingStartedAt: number, rev: TranscriptRevision) => Promise<CheckpointWriteOutcome>
 
 export type FrameOwner = `${number}:${number}`
 
@@ -34,6 +39,8 @@ export interface TranscriptRevisionStore {
   close(meetingStartedAt: number, reason: InputSessionStopReason): void
   /** Closes every open meeting owned by the owner session and returns the closed meetingStartedAt ids. */
   closeOwnedBy(sessionId: string, reason: InputSessionStopReason): number[]
+  /** Stamps the meeting's current revision into its autosave drafts. Never throws, never emits onChange. */
+  checkpoint(meetingStartedAt: number): Promise<CheckpointResult>
   onChange(listener: (delta: TranscriptRevisionDelta) => void): () => void
 }
 
@@ -41,6 +48,8 @@ export interface TranscriptRevisionStoreDeps {
   limits?: RevisionLimits
   now?: () => number
   audit?: (event: 'ipc.refused', detail: AuditEventRecord) => void
+  checkpointWriter?: CheckpointWriter
+  authGeneration?: () => number
 }
 
 interface Entry {
@@ -135,6 +144,35 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
     return result
   }
 
+  const checkpoint = async (meetingStartedAt: number): Promise<CheckpointResult> => {
+    const entry = entries.get(meetingStartedAt)
+    if (!entry) return { ok: false, error: 'sealed' }
+    // A meeting opened signed out (owner null) is never refused by an auth generation change.
+    if (entry.owner !== null && deps.authGeneration && deps.authGeneration() !== entry.owner.authGeneration) {
+      return { ok: false, error: 'auth-changed' }
+    }
+    const writer = deps.checkpointWriter
+    if (!writer) return { ok: false, error: 'write-failed' }
+    // Captured before any await: later applies must not change what this call writes.
+    const rev = entry.rev
+    let outcome: CheckpointWriteOutcome
+    try {
+      outcome = await writer(meetingStartedAt, rev)
+    } catch {
+      outcome = 'failed'
+    }
+    switch (outcome) {
+      case 'written':
+        return { ok: true, revision: rev.revision }
+      case 'sealed':
+        return { ok: false, error: 'sealed' }
+      case 'absent':
+        return { ok: false, error: 'absent' }
+      default:
+        return { ok: false, error: 'write-failed' }
+    }
+  }
+
   return {
     open(binding) {
       const id = binding.meetingStartedAt
@@ -175,6 +213,7 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
       }
       return closedIds
     },
+    checkpoint,
     onChange(listener) {
       listeners.add(listener)
       return () => {

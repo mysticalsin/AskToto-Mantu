@@ -1,10 +1,12 @@
 import type { SaveMeeting } from '@shared/ipc'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { escapeSpeechMarkers } from './speech-provenance'
+import { savedRevisionFrontmatter } from './transcript-checkpoint-binding'
 
 const yamlSafe = (text: string): string => text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
-/** Pure final-save projection. The existing encrypted writer still owns the one atomic file. */
+/** Final-save projection. The existing encrypted writer still owns the one atomic file. Its only input outside
+ *  `input` is the bound transcript revision (WP03-S03), written in the same atomic write. */
 export function buildMeetingSaveDocument(input: {
   meeting: SaveMeeting
   title: string
@@ -31,6 +33,7 @@ export function buildMeetingSaveDocument(input: {
     ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
     ...(tags.length ? [`topics: [${tags.map(yamlSafe).join(', ')}]`] : []),
     ...(summaryOnly ? ['retention: summary-only'] : []),
+    ...savedRevisionFrontmatter(started, summaryOnly),
     'status: ready-for-followup',
     '---',
     ''

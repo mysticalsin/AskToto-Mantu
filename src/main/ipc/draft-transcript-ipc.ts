@@ -9,6 +9,7 @@ import {
   type SaveMeeting,
   type Settings
 } from '@shared/ipc'
+import { checkpointAfterDraftSave } from '../features/meetings/transcript-checkpoint-binding'
 
 interface DraftTranscriptIpcDependencies {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -43,7 +44,7 @@ export function registerDraftTranscriptIpc(deps: DraftTranscriptIpcDependencies)
     const settingsCurrent = deps.captureDraftSettingsBoundary()
     const admissionRefused = Symbol('draft authority changed')
     try {
-      return await deps.saveDraftTranscript(
+      const result = await deps.saveDraftTranscript(
         settings,
         // UI-only provisional speech must never appear in a recovered draft.
         { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) },
@@ -52,6 +53,9 @@ export function registerDraftTranscriptIpc(deps: DraftTranscriptIpcDependencies)
           if (!authCurrent() || !settingsCurrent()) throw admissionRefused
         }
       )
+      // WP03-S03: stamp the store's revision into the draft just written. Best effort; the receipt is unchanged.
+      if (result.status === 'saved') await checkpointAfterDraftSave(parsed.data.startedAt)
+      return result
     } catch (error) {
       if (error === admissionRefused) return { status: 'failed' }
       throw error

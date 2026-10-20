@@ -65,6 +65,7 @@ function fakeStore(over: Partial<TranscriptRevisionStore> = {}): TranscriptRevis
     finalize: () => ({ ok: false, reason: 'invalid' }),
     close: () => undefined,
     closeOwnedBy: () => [],
+    checkpoint: async () => ({ ok: false, error: 'sealed' }),
     onChange: () => () => undefined,
     ...over
   }
