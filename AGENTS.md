@@ -12,6 +12,12 @@ ChatGPT (GitHub plugin), Antigravity and humans. Keep it short enough to read ev
    Do not reload the whole plan or kit for every subtask. Program documents never go into this public repository.
 3. Say in one line what you are resuming, then work.
 
+**Goal-loop stall triage:** A repeated `ROUND_RESULT: progress` fingerprint is not proof of a repeated
+failure. When whitespace/typechecks pass, the current loop hashes the same result text even after
+successful commits. Read the executor's exact-tip receipts and compare failure identities, source
+changes and remaining acceptance criteria before retrying work. Preserve completed slices and plan
+the next unmet dependency; do not mark a package `blocked-tony` without a specific owner-only blocker.
+
 ## 2. What this repository is
 
 Métis (npm package `asktoto`, bundle id `com.mantu.asktoto`) is an Electron + React + TypeScript desktop
