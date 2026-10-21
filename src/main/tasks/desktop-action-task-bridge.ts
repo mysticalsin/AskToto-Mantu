@@ -136,7 +136,9 @@ function pruneState(state: TaskRuntimeState, now: number, limits: TaskStateCodec
     if (task.status === 'dispatching' || task.expiresAt > now) tasks.set(task.taskId, task)
   }
   if (tasks.size >= limits.maxTasks) {
-    const finished = [...tasks.values()].filter((task) => isTerminal(task.status)).sort((a, b) => a.createdAt - b.createdAt)
+    const finished = [...tasks.values()]
+      .filter((task) => isTerminal(task.status))
+      .sort((a, b) => a.createdAt - b.createdAt)
     for (const task of finished) {
       if (tasks.size < limits.maxTasks) break
       tasks.delete(task.taskId)
@@ -263,7 +265,9 @@ export class DesktopActionTaskBridge {
           this.deps.log?.error('[desktop-action-task] could not set a corrupt task archive aside:', error)
           return { available: false, uncertain: 0 }
         }
-        this.deps.log?.warn(`[desktop-action-task] task archive was corrupt (${result.reason}); set aside, starting fresh`)
+        this.deps.log?.warn(
+          `[desktop-action-task] task archive was corrupt (${result.reason}); set aside, starting fresh`
+        )
         this.deps.audit?.('task.recovered', { status: 'quarantined', reason: result.reason })
         this.state = createTaskRuntimeState()
       } else if (result.kind === 'loaded') {
@@ -278,14 +282,20 @@ export class DesktopActionTaskBridge {
         this.state = pruneState(next, this.now(), limits)
         for (const task of this.state.tasks.values()) {
           if (task.effectOutcome !== 'uncertain') continue
-          this.deps.audit?.('task.recovered', { taskId: task.taskId, actionId: task.scope.capabilities[0] ?? '', status: 'uncertain' })
+          this.deps.audit?.('task.recovered', {
+            taskId: task.taskId,
+            actionId: task.scope.capabilities[0] ?? '',
+            status: 'uncertain'
+          })
         }
         await this.persistQuietly()
       }
       this.loaded = true
       const summary = this.recovery()
       if (summary.uncertain > 0) {
-        this.deps.log?.warn(`[desktop-action-task] ${summary.uncertain} desktop action(s) have an unverified outcome; they will not be replayed`)
+        this.deps.log?.warn(
+          `[desktop-action-task] ${summary.uncertain} desktop action(s) have an unverified outcome; they will not be replayed`
+        )
       }
       return summary
     })
@@ -411,7 +421,13 @@ export class DesktopActionTaskBridge {
     this.state = cancelled.ok ? cancelled.state : settled.state
   }
 
-  private recordProgress(taskId: string, owner: TaskOwner, sequence: number, completedUnits: number, label: string): void {
+  private recordProgress(
+    taskId: string,
+    owner: TaskOwner,
+    sequence: number,
+    completedUnits: number,
+    label: string
+  ): void {
     const task = this.state.tasks.get(taskId)
     const recorded = recordTaskProgress(
       this.progress,
@@ -423,7 +439,11 @@ export class DesktopActionTaskBridge {
     if (recorded.accepted) this.progress = recorded.state
   }
 
-  private settle(begun: Extract<Begun, { ok: true }>, request: DesktopActionRequest, outcome: EffectOutcome): Promise<void> {
+  private settle(
+    begun: Extract<Begun, { ok: true }>,
+    request: DesktopActionRequest,
+    outcome: EffectOutcome
+  ): Promise<void> {
     return this.locked(async () => {
       try {
         if (outcome === 'applied') this.recordProgress(begun.taskId, begun.owner, 2, 1, 'done')
