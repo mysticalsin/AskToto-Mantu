@@ -64,7 +64,13 @@ export function bootstrapMeetingSpeech(deps: MeetingSpeechBootstrapDeps): Meetin
 
   const now = deps.now ?? Date.now
   const entryPath = deps.entryPath ?? defaultMeetingSpeechWorkerEntry()
-  const entryExists = deps.entryExists ?? ((path: string) => access(path).then(() => true, () => false))
+  const entryExists =
+    deps.entryExists ??
+    ((path: string) =>
+      access(path).then(
+        () => true,
+        () => false
+      ))
   let inner: MeetingSpeechPersistenceService | null = null
   let tripped = false
   let disposed = false
