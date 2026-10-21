@@ -176,7 +176,9 @@ describe('orb selection persist + Bar-only law', () => {
     expect(app).toMatch(/setMinimized\(false\)/)
     expect(app).toMatch(/window\.toto\.minimize\(false\)/)
     expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
-    expect(settings).toMatch(/overlayShowsBarRestPicker\(resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout\)/)
+    expect(settings).toMatch(
+      /overlayShowsBarRestPicker\(\s*resolveOverlayPresentation\(\{\s*layout: settings\.overlayLayout,\s*placement: settings\.overlayPlacement\s*\}\)\.layout\s*\)/
+    )
     expect(settings).toMatch(/onClick=\{onClose\}/)
     expect(settings).toMatch(/>\s*Done\s*</)
     expect(orb).toMatch(/runOrbPillActivate/)
