@@ -50,15 +50,7 @@ import {
   promoteDraftTranscript,
   recoveredDraftIndexFields
 } from './features/meetings/draft-transcript-document'
-import {
-  cleanTitle,
-  escapeHeadingLines,
-  opaqueNamePart,
-  pad,
-  slug,
-  stamp,
-  yamlSafeTitle
-} from './features/meetings/transcript-document-format'
+import { cleanTitle, escapeHeadingLines, opaqueNamePart, slug, stamp } from './features/meetings/transcript-document-format'
 import {
   decryptMeetingEnvelopeAsync,
   encryptMeetingEnvelopeAsync,
@@ -74,6 +66,16 @@ import {
   refuseReservedSpeechProse
 } from './features/meetings/speech-provenance'
 import { buildMeetingSaveDocument } from './features/meetings/meeting-save-document'
+import {
+  applyDebriefSection,
+  buildNoteDocument,
+  DEBRIEF_HEADING,
+  formatIndexRow,
+  indexDateString,
+  INDEX_HEADER,
+  README
+} from './transcript-markdown-documents'
+import { draftCleanupCandidates } from './transcript-draft-cleanup'
 import { parseRecapMarkdown } from './transcripts-recap'
 import { readEnvelopeLocalKey } from './transcript-envelope-reader'
 
@@ -621,26 +623,6 @@ export function sweepStaleTempFiles(): void {
   }
 }
 
-const README = `# Métis — Meeting transcripts
-
-This folder is created and maintained by **Métis**. Every meeting you run the copilot in is
-saved here automatically as one markdown file: AI notes + the full timestamped transcript, with
-frontmatter (\`type: meeting-transcript\`, \`status: ready-for-followup\`).
-
-## For your Dust agents
-- Read **index.md** for the running list of meetings, or scan the \`*.md\` files directly.
-- Each file is tagged \`status: ready-for-followup\` — generate follow-ups, then update the status.
-- Filenames are \`YYYY-MM-DD_HHMMSS-<slug>.md\`; frontmatter carries date, mode, participants, duration.
-
-Do not rename this folder — Métis and your agents read from here.
-`
-
-const INDEX_HEADER = `# Métis Meetings — Index
-
-| Date | Title | Mode | Duration | File |
-|------|-------|------|----------|------|
-`
-
 /** Ensure the meetings folder exists and is self-documenting (README + index). Safe to call repeatedly. */
 export function ensureMeetingsFolder(settings: Settings): string {
   const folder = resolveMeetingsFolder(settings)
@@ -667,9 +649,7 @@ function appendIndexRow(
   try {
     const index = join(folder, 'index.md')
     if (!existsSync(index)) writeFileSync(index, INDEX_HEADER, 'utf8')
-    const safeTitle = title.replace(/\|/g, '/')
-    const safeMode = mode.replace(/\|/g, '/').replace(/[\r\n]/g, ' ')
-    appendFileSync(index, `| ${dateStr} | ${safeTitle} | ${safeMode} | ${durMin} min | [open](${fileName}) |\n`, 'utf8')
+    appendFileSync(index, formatIndexRow(dateStr, title, mode, durMin, fileName), 'utf8')
   } catch {
     /* ignore */
   }
@@ -692,29 +672,13 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   for (let i = 2; existsSync(file); i++) {
     file = join(folder, `${stamp(started)}-note-${namePart}-${i}.md`)
   }
-  const frontmatter = [
-    '---',
-    'type: note',
-    'source: Métis',
-    `mode: "${yamlSafeTitle(cleanTitle(n.mode))}"`,
-    `date: ${new Date(started).toISOString()}`,
-    `title: "${yamlSafeTitle(title)}"`,
-    'status: ready-for-followup',
-    '---',
-    ''
-  ].join('\n')
-  const body =
-    `# ${title}\n\n_${new Date(started).toLocaleString()} · note · Métis_\n\n` +
-    (n.question ? `## Question\n\n${n.question}\n\n` : '') +
-    `## Answer\n\n${n.answer}\n`
+  const document = buildNoteDocument(n, title, started)
   // Atomic write (encrypted at rest when enabled).
-  await writeSaved(file, frontmatter + body, settings.encryptTranscripts)
+  await writeSaved(file, document, settings.encryptTranscripts)
 
   // The plaintext index.md would leak titles/dates, defeating encryption — skip it in that mode.
   if (!settings.encryptTranscripts) {
-    const di = new Date(started)
-    const dateStr = `${di.getFullYear()}-${pad(di.getMonth() + 1)}-${pad(di.getDate())} ${pad(di.getHours())}:${pad(di.getMinutes())}`
-    appendIndexRow(folder, dateStr, title, 'note', 0, file.slice(folder.length + 1))
+    appendIndexRow(folder, indexDateString(started), title, 'note', 0, file.slice(folder.length + 1))
   }
   return file
 }
@@ -777,9 +741,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeRepl
   await writeSaved(file, document, settings.encryptTranscripts, beforeReplace)
 
   if (!settings.encryptTranscripts) {
-    const di = new Date(started)
-    const dateStr = `${di.getFullYear()}-${pad(di.getMonth() + 1)}-${pad(di.getDate())} ${pad(di.getHours())}:${pad(di.getMinutes())}`
-    appendIndexRow(folder, dateStr, title, m.mode, durMin, file.slice(folder.length + 1))
+    appendIndexRow(folder, indexDateString(started), title, m.mode, durMin, file.slice(folder.length + 1))
   }
   return file
 }
@@ -803,8 +765,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeRepl
  *      match text inside the debrief body on an older, pre-marker file). Files written before this
  *      marker existed fall back to the old "next heading" search.
  */
-export const DEBRIEF_HEADING = '## Debrief (off the record)'
-const DEBRIEF_END_MARKER = '<!-- /debrief -->'
+export { DEBRIEF_HEADING }
 export async function appendDebrief(
   settings: Settings,
   file: string,
@@ -825,25 +786,7 @@ export async function appendDebrief(
   if (!md) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
   const safeText = escapeSpeechMarkers(escapeHeadingLines(text.trim()))
-  const section =
-    `${DEBRIEF_HEADING}\n\n_Captured right after the meeting — impressions, not transcript._\n\n` +
-    `${safeText}\n${DEBRIEF_END_MARKER}\n`
-  const start = md.indexOf(DEBRIEF_HEADING, meetingSpeechTailOffset(md))
-  let updated: string
-  if (start < 0) {
-    updated = md.trimEnd() + '\n\n' + section
-  } else {
-    const markerIdx = md.indexOf(DEBRIEF_END_MARKER, start + DEBRIEF_HEADING.length)
-    if (markerIdx >= 0) {
-      // Exact boundary: everything after the marker's own line belongs to whatever comes next.
-      const afterMarker = md.indexOf('\n', markerIdx)
-      updated = md.slice(0, start) + section + (afterMarker >= 0 ? md.slice(afterMarker + 1) : '')
-    } else {
-      // Legacy file written before this marker existed: fall back to the old heuristic.
-      const next = md.indexOf('\n## ', start + DEBRIEF_HEADING.length)
-      updated = md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
-    }
-  }
+  const updated = applyDebriefSection(md, safeText, meetingSpeechTailOffset(md))
   // Preserve the file's ORIGINAL at-rest encryption exactly as found (mirrors updateMeetingRecap /
   // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
   // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
@@ -920,31 +863,6 @@ export async function saveDraftTranscript(
  * "(recovered)". Retrying rides out the transient lock; a genuinely stuck file still degrades to the
  * old behaviour rather than failing the meeting end.
  */
-function draftCleanupCandidates(settings: Settings, startedAt: number, savedTranscriptPath?: string): string[] {
-  const candidateFiles: string[] = []
-  let filename: string | undefined
-  try {
-    filename = draftFilename(startedAt, stamp(startedAt))
-  } catch {
-    /* still seal the meeting identity */
-  }
-  if (filename) {
-    try {
-      candidateFiles.push(join(resolveMeetingsFolder(settings), filename))
-    } catch {
-      /* known paths still clean up */
-    }
-    if (savedTranscriptPath) {
-      try {
-        candidateFiles.push(join(dirname(savedTranscriptPath), filename))
-      } catch {
-        /* known paths still clean up */
-      }
-    }
-  }
-  return candidateFiles
-}
-
 async function unlinkDraftFiles(
   files: readonly string[],
   isCurrent: () => boolean = () => true
