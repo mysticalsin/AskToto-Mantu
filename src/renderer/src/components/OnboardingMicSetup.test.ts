@@ -1,10 +1,17 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { PlatformPermissions, ScreenDiagnosisState } from '@shared/screen-permission'
 import { MEETING_AUDIO_SCREEN_WHY } from '../lib/screen-permission-copy'
 import { MicSetupActions } from './OnboardingMicSetup'
 import { ScreenSetupActions } from './OnboardingScreenSetup'
+
+// These rows pin the macOS copy and deep links. Node exposes the host's navigator.platform, so on a Windows
+// runner isWindows would be true and the rows would render their Windows variants instead.
+vi.mock('../lib/keys', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/keys')>()),
+  isWindows: false
+}))
 
 /**
  * C26 (HIG P3) — a pre-alert row explains why first, then offers ONE button titled "Continue" that opens the

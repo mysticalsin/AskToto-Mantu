@@ -16,7 +16,13 @@ const NOTE = 'text-[11px] leading-snug text-[color:var(--color-ink-3)]'
 const SOFT_BUTTON =
   'no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25'
 
-export function MicSetupActions({ state, onContinue }: { state: SetupRowState; onContinue: () => void }): JSX.Element | null {
+export function MicSetupActions({
+  state,
+  onContinue
+}: {
+  state: SetupRowState
+  onContinue: () => void
+}): JSX.Element | null {
   const whyId = useId()
   if (state === 'action') {
     return (
@@ -38,7 +44,11 @@ export function MicSetupActions({ state, onContinue }: { state: SetupRowState; o
           ? 'Windows is blocking the microphone. Turn it back on in Privacy settings.'
           : "macOS won't ask again once you've said no. Turn it back on in Privacy settings."}
       </span>
-      <button type="button" onClick={() => void window.toto.openPermissionSettings('microphone')} className={SOFT_BUTTON}>
+      <button
+        type="button"
+        onClick={() => void window.toto.openPermissionSettings('microphone')}
+        className={SOFT_BUTTON}
+      >
         Open Microphone Settings
       </button>
     </div>

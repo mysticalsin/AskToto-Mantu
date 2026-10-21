@@ -96,7 +96,9 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
       await page.goto(`${url}?manualMount`)
       await page.locator('#act1-boot-next').click()
       expect(await page.locator('#act1-boot-next').count()).toBe(0)
-      await page.evaluate(() => (window as unknown as { __mountOnboardingBrowserTest: () => void }).__mountOnboardingBrowserTest())
+      await page.evaluate(() =>
+        (window as unknown as { __mountOnboardingBrowserTest: () => void }).__mountOnboardingBrowserTest()
+      )
       await page.getByText("You're in the meeting.").waitFor({ state: 'visible' })
       expect(await page.locator('button.onboard-cta').count()).toBe(1)
     } finally {
@@ -124,7 +126,9 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
       await page.goto(url)
       await page.getByRole('button', { name: 'Next', exact: true }).click()
       await page.getByRole('button', { name: 'Continue' }).click()
-      await page.getByRole('heading', { name: 'Here’s what that looks like.' }).waitFor({ state: 'visible', timeout: 500 })
+      await page
+        .getByRole('heading', { name: 'Here’s what that looks like.' })
+        .waitFor({ state: 'visible', timeout: 500 })
       expect(await page.getByText('See Métis in action').count()).toBe(0)
       expect(delayedDemoRequest).toBe(true)
     } finally {
@@ -151,7 +155,9 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
         await page.getByRole('button', { name: 'Next', exact: true }).click()
         await page.getByText("You're in the meeting.").waitFor({ state: 'visible' })
         await page.getByRole('button', { name: 'Continue' }).click()
-        await page.getByRole('heading', { name: 'Here’s what that looks like.' }).waitFor({ state: 'visible', timeout: 5_000 })
+        await page
+          .getByRole('heading', { name: 'Here’s what that looks like.' })
+          .waitFor({ state: 'visible', timeout: 5_000 })
 
         // Both motion preferences retain the same four user-controlled stages.
         for (let i = 0; i < 3; i++) {
@@ -159,7 +165,9 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
           expect(await page.getByRole('heading', { name: 'Here’s what that looks like.' }).count()).toBe(1)
         }
         await page.getByRole('button', { name: 'Next', exact: true }).click()
-        await page.getByRole('heading', { name: 'Where should Métis sit?' }).waitFor({ state: 'visible', timeout: 5_000 })
+        await page
+          .getByRole('heading', { name: 'Where should Métis sit?' })
+          .waitFor({ state: 'visible', timeout: 5_000 })
       } finally {
         await page.close()
       }
@@ -178,7 +186,14 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
         const perms = () => ({
           microphone: 'unknown',
           screenRecording: 'unknown',
-          screenDiagnosis: { state: 'not-asked', reasons: [], action: 'none', duplicates: [], grantedFor: null, repairFailed: false }
+          screenDiagnosis: {
+            state: 'not-asked',
+            reasons: [],
+            action: 'none',
+            duplicates: [],
+            grantedFor: null,
+            repairFailed: false
+          }
         })
         const base: Record<string, unknown> = {
           asrAssetsEnsure: async () => ready,
@@ -202,10 +217,16 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
         // Anything else the scene touches answers "nothing" (a callable promise covers both shapes).
         const nothing = () => {
           const done = Promise.resolve(undefined)
-          return Object.assign(() => {}, { then: done.then.bind(done), catch: done.catch.bind(done), finally: done.finally.bind(done) })
+          return Object.assign(() => {}, {
+            then: done.then.bind(done),
+            catch: done.catch.bind(done),
+            finally: done.finally.bind(done)
+          })
         }
         ;(window as unknown as { __c26: typeof calls }).__c26 = calls
-        ;(window as unknown as { toto: unknown }).toto = new Proxy(base, { get: (t, k: string) => (k in t ? t[k] : nothing) })
+        ;(window as unknown as { toto: unknown }).toto = new Proxy(base, {
+          get: (t, k: string) => (k in t ? t[k] : nothing)
+        })
       })
       type Calls = { requests: (string | null)[]; reads: number; micOpens: number }
       const calls = (): Promise<Calls> => page.evaluate(() => (window as unknown as { __c26: Calls }).__c26)
@@ -221,7 +242,9 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
       expect((await calls()).requests).toEqual(['microphone'])
       const before = (await calls()).reads
       await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-      await page.waitForFunction((n) => (window as unknown as { __c26: Calls }).__c26.reads > n, before, { timeout: 500 })
+      await page.waitForFunction((n) => (window as unknown as { __c26: Calls }).__c26.reads > n, before, {
+        timeout: 500
+      })
     } finally {
       await page.close()
     }
@@ -243,7 +266,9 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
       await page.getByRole('button', { name: 'Continue' }).click()
       await page.getByRole('heading', { name: 'Here’s what that looks like.' }).waitFor({ state: 'visible' })
       await page.evaluate(() => {
-        HTMLMediaElement.prototype.play = () => { throw new Error('media decoder unavailable') }
+        HTMLMediaElement.prototype.play = () => {
+          throw new Error('media decoder unavailable')
+        }
       })
 
       for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next', exact: true }).click()

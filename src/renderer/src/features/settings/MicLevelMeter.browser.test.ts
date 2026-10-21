@@ -138,7 +138,16 @@ describe('C26 — MicLevelMeter opens the microphone only at the moment of need'
     await page.evaluate(
       ({ mic, ans }) => {
         Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
-        window.__micState = { microphone: mic, answer: ans, reads: 0, requests: [], opened: [], opens: [], releases: 0, granted: 0 }
+        window.__micState = {
+          microphone: mic,
+          answer: ans,
+          reads: 0,
+          requests: [],
+          opened: [],
+          opens: [],
+          releases: 0,
+          granted: 0
+        }
       },
       { mic: microphone, ans: answer }
     )

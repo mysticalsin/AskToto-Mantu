@@ -94,7 +94,8 @@ async function bundleHarness(): Promise<string> {
         enforce: 'pre',
         resolveId: (id: string, importer?: string) => {
           if (id === HARNESS_ID || id === SELF_TEST_ID) return id
-          if (id === '../lib/loopback-self-test' && importer?.endsWith('/OnboardingScreenSetup.tsx')) return SELF_TEST_ID
+          if (id === '../lib/loopback-self-test' && importer?.endsWith('/OnboardingScreenSetup.tsx'))
+            return SELF_TEST_ID
           return null
         },
         load: (id: string) => (id === HARNESS_ID ? HARNESS : id === SELF_TEST_ID ? SELF_TEST_MODULE : null)

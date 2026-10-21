@@ -73,7 +73,13 @@ export function PermissionsSection(): JSX.Element {
     return <div className="text-[13px] text-[color:var(--cl-muted-foreground)]">Checking permissions…</div>
   }
 
-  const rows: { label: string; status: string; note: string; kind: 'microphone' | 'screenRecording'; fixLabel?: string }[] = [
+  const rows: {
+    label: string
+    status: string
+    note: string
+    kind: 'microphone' | 'screenRecording'
+    fixLabel?: string
+  }[] = [
     {
       label: 'Microphone',
       status: permissions.microphone,
@@ -89,7 +95,7 @@ export function PermissionsSection(): JSX.Element {
       kind: 'screenRecording',
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
-        : "Needed so Métis can answer questions about your screen and capture system audio. Grant in System Settings → Privacy & Security → Screen Recording.",
+        : 'Needed so Métis can answer questions about your screen and capture system audio. Grant in System Settings → Privacy & Security → Screen Recording.',
       fixLabel: isWin ? 'Check Windows Settings' : undefined
     }
   ]
@@ -113,7 +119,15 @@ export function PermissionsSection(): JSX.Element {
         // another build or copy"; the diagnosis can, and owns this row's copy and actions.
         const screenDiagnosis = r.kind === 'screenRecording' && !isWin ? permissions.screenDiagnosis : undefined
         if (screenDiagnosis) {
-          return <ScreenPermissionRow key={r.label} status={r.status} diagnosis={screenDiagnosis} restarting={restarting} onRestart={restart} />
+          return (
+            <ScreenPermissionRow
+              key={r.label}
+              status={r.status}
+              diagnosis={screenDiagnosis}
+              restarting={restarting}
+              onRestart={restart}
+            />
+          )
         }
         return (
           <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
@@ -180,20 +194,21 @@ export function PermissionsSection(): JSX.Element {
           </button>
         </div>
         <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-          First check is the OS permission probe. Check again to send a frame to Local AI if it is ready,
-          otherwise the active API (including Dust when that is the provider). The result stays here. It
-          is never sent to a teammate.
+          First check is the OS permission probe. Check again to send a frame to Local AI if it is ready, otherwise the
+          active API (including Dust when that is the provider). The result stays here. It is never sent to a teammate.
         </div>
         {checkResult && (
           <div
             className={[
               'flex items-start gap-1.5 text-[12px]',
-              checkResult.ok
-                ? 'text-[color:var(--cl-success)]'
-                : 'text-[color:var(--cl-destructive)]'
+              checkResult.ok ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-destructive)]'
             ].join(' ')}
           >
-            {checkResult.ok ? <Check size={13} className="mt-0.5 shrink-0" /> : <AlertCircle size={13} className="mt-0.5 shrink-0" />}
+            {checkResult.ok ? (
+              <Check size={13} className="mt-0.5 shrink-0" />
+            ) : (
+              <AlertCircle size={13} className="mt-0.5 shrink-0" />
+            )}
             <span>
               {checkResult.message}
               {checkResult.ok && checkResult.preview ? ` ${checkResult.preview}` : ''}

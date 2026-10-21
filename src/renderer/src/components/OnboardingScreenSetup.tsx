@@ -121,7 +121,8 @@ const SETUP_PRIMARY_BUTTON =
   'no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60'
 const SETUP_SOFT_BUTTON =
   'no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25'
-const SETUP_LINK_BUTTON = 'no-drag focus-ring text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline'
+const SETUP_LINK_BUTTON =
+  'no-drag focus-ring text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline'
 
 /**
  * The row's why-copy and actions, from the diagnosis. Why-before-prompt, then one "Continue" that raises the
@@ -191,12 +192,20 @@ export function ScreenSetupActions({
           </button>
         )}
         {(copy.openSettings || repairGuidance) && (
-          <button type="button" onClick={() => void window.toto.openPermissionSettings('screenRecording')} className={SETUP_SOFT_BUTTON}>
+          <button
+            type="button"
+            onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+            className={SETUP_SOFT_BUTTON}
+          >
             Open Screen Recording Settings
           </button>
         )}
         {copy.attest && (
-          <button type="button" onClick={() => void window.toto.attestScreenPermission().catch(() => {})} className={SETUP_LINK_BUTTON}>
+          <button
+            type="button"
+            onClick={() => void window.toto.attestScreenPermission().catch(() => {})}
+            className={SETUP_LINK_BUTTON}
+          >
             It’s already on
           </button>
         )}
@@ -204,12 +213,19 @@ export function ScreenSetupActions({
       {diagnosis && diagnosis.duplicates.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
           {diagnosis.duplicates.map((c) => (
-            <li key={c.path} className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--color-ink-3)]">
+            <li
+              key={c.path}
+              className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--color-ink-3)]"
+            >
               <span className="min-w-0 truncate" title={c.path}>
                 {c.path}
                 {c.version ? ` (${c.version})` : ''}
               </span>
-              <button type="button" onClick={() => void window.toto.revealAppCopy(c.path).catch(() => {})} className={SETUP_LINK_BUTTON}>
+              <button
+                type="button"
+                onClick={() => void window.toto.revealAppCopy(c.path).catch(() => {})}
+                className={SETUP_LINK_BUTTON}
+              >
                 Show in Finder
               </button>
             </li>
