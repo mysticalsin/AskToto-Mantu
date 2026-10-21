@@ -54,6 +54,44 @@ describe('MQA-272 — the invisible-state overlay shows a multi-colour glow, not
     expect(css).toMatch(/prefers-reduced-motion: reduce/)
   })
 
+  it('C30: the breathe is held keyframes (no frame between visibly different values), same ease-in-out 0.82–1 curve', () => {
+    const start = css.indexOf('@keyframes aw-hidden-breathe')
+    const body = css.slice(start, css.indexOf('\n}', start))
+    const frames = [...body.matchAll(/([\d.]+)%\s*\{\s*opacity:\s*([\d.]+);/g)].map((m) => ({
+      at: Number(m[1]) / 100,
+      opacity: Number(m[2])
+    }))
+    // Held, not interpolated: the compositor only needs a frame when the value changes.
+    const rule = css.slice(css.indexOf('.aw-hidden-rainbow::before'))
+    expect(rule).toMatch(/animation:\s*aw-hidden-breathe 4\.2s step-end infinite/)
+    // ~11 updates a second over the 4.2s period, never 120.
+    expect(frames.length).toBeGreaterThanOrEqual(40)
+    expect(frames.length / 4.2).toBeLessThanOrEqual(12.5)
+    expect(frames[0]).toEqual({ at: 0, opacity: 0.82 })
+    expect(frames[frames.length - 1]).toEqual({ at: 1, opacity: 0.82 })
+    expect(frames.find((frame) => frame.at === 0.5)?.opacity).toBe(1)
+    // Each step is at most 0.013 opacity (about 3 of 255 levels), so the sampling is invisible.
+    for (let i = 1; i < frames.length; i += 1)
+      expect(Math.abs(frames[i].opacity - frames[i - 1].opacity)).toBeLessThanOrEqual(0.013)
+    // The samples follow the original per-half ease-in-out (cubic-bezier(0.42, 0, 0.58, 1)).
+    const bezier = (t: number, p1: number, p2: number): number =>
+      3 * (1 - t) ** 2 * t * p1 + 3 * (1 - t) * t * t * p2 + t ** 3
+    const easeInOut = (x: number): number => {
+      let lo = 0
+      let hi = 1
+      for (let i = 0; i < 50; i += 1) {
+        const mid = (lo + hi) / 2
+        if (bezier(mid, 0.42, 0.58) < x) lo = mid
+        else hi = mid
+      }
+      return bezier((lo + hi) / 2, 0, 1)
+    }
+    for (const frame of frames) {
+      const x = frame.at <= 0.5 ? frame.at * 2 : (1 - frame.at) * 2
+      expect(Math.abs(frame.opacity - (0.82 + 0.18 * easeInOut(x)))).toBeLessThanOrEqual(0.0002)
+    }
+  })
+
   it('the overlay root widens its margin while invisible so the halo is not clipped by the window', () => {
     expect(appSrc).toMatch(/\(settings\?\.contentProtection \?\? true\) && !minimized\s*\?\s*'p-5 stealth-glow'/)
   })

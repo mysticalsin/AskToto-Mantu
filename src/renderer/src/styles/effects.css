@@ -134,16 +134,161 @@
   opacity: 1;
   /* A slow, gentle breathe so the rim reads as "alive" without a repaint storm. opacity is a
      compositor-only property (its own layer), so this animates on the GPU — no per-frame paint,
-     unlike the conic-angle spin this indicator used to run. */
-  animation: aw-hidden-breathe 4.2s ease-in-out infinite;
+     unlike the conic-angle spin this indicator used to run.
+     C30 (idle CPU): a running compositor animation still makes the transparent overlay recomposite on
+     EVERY vsync (120/s on ProMotion, ~20% of a core in the GPU process at idle, measured). The same
+     ease-in-out breathe is therefore sampled into 48 held keyframes (step-end): ~11 updates/s, each at
+     most 0.013 opacity — the 0.82–1 curve and its 4.2s period are unchanged, only the redundant frames
+     between visibly different values are gone. Pinned by stealth-glow.mqa272.test.ts. */
+  animation: aw-hidden-breathe 4.2s step-end infinite;
 }
 @keyframes aw-hidden-breathe {
-  0%,
-  100% {
+  0% {
     opacity: 0.82;
+  }
+  2.0833% {
+    opacity: 0.8206;
+  }
+  4.1667% {
+    opacity: 0.8224;
+  }
+  6.25% {
+    opacity: 0.8256;
+  }
+  8.3333% {
+    opacity: 0.8301;
+  }
+  10.4167% {
+    opacity: 0.8360;
+  }
+  12.5% {
+    opacity: 0.8432;
+  }
+  14.5833% {
+    opacity: 0.8519;
+  }
+  16.6667% {
+    opacity: 0.8617;
+  }
+  18.75% {
+    opacity: 0.8727;
+  }
+  20.8333% {
+    opacity: 0.8846;
+  }
+  22.9167% {
+    opacity: 0.8971;
+  }
+  25% {
+    opacity: 0.9100;
+  }
+  27.0833% {
+    opacity: 0.9229;
+  }
+  29.1667% {
+    opacity: 0.9354;
+  }
+  31.25% {
+    opacity: 0.9473;
+  }
+  33.3333% {
+    opacity: 0.9583;
+  }
+  35.4167% {
+    opacity: 0.9681;
+  }
+  37.5% {
+    opacity: 0.9768;
+  }
+  39.5833% {
+    opacity: 0.9840;
+  }
+  41.6667% {
+    opacity: 0.9899;
+  }
+  43.75% {
+    opacity: 0.9944;
+  }
+  45.8333% {
+    opacity: 0.9976;
+  }
+  47.9167% {
+    opacity: 0.9994;
   }
   50% {
     opacity: 1;
+  }
+  52.0833% {
+    opacity: 0.9994;
+  }
+  54.1667% {
+    opacity: 0.9976;
+  }
+  56.25% {
+    opacity: 0.9944;
+  }
+  58.3333% {
+    opacity: 0.9899;
+  }
+  60.4167% {
+    opacity: 0.9840;
+  }
+  62.5% {
+    opacity: 0.9768;
+  }
+  64.5833% {
+    opacity: 0.9681;
+  }
+  66.6667% {
+    opacity: 0.9583;
+  }
+  68.75% {
+    opacity: 0.9473;
+  }
+  70.8333% {
+    opacity: 0.9354;
+  }
+  72.9167% {
+    opacity: 0.9229;
+  }
+  75% {
+    opacity: 0.9100;
+  }
+  77.0833% {
+    opacity: 0.8971;
+  }
+  79.1667% {
+    opacity: 0.8846;
+  }
+  81.25% {
+    opacity: 0.8727;
+  }
+  83.3333% {
+    opacity: 0.8617;
+  }
+  85.4167% {
+    opacity: 0.8519;
+  }
+  87.5% {
+    opacity: 0.8432;
+  }
+  89.5833% {
+    opacity: 0.8360;
+  }
+  91.6667% {
+    opacity: 0.8301;
+  }
+  93.75% {
+    opacity: 0.8256;
+  }
+  95.8333% {
+    opacity: 0.8224;
+  }
+  97.9167% {
+    opacity: 0.8206;
+  }
+  100% {
+    opacity: 0.82;
   }
 }
 @media (prefers-reduced-motion: reduce) {

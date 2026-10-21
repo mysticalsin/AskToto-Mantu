@@ -1,11 +1,14 @@
 import { useEffect, useRef, type CanvasHTMLAttributes } from 'react'
 import { MODE_DRAWS, resolvePreset, type OrbState, type OrbTheme } from 'thinking-orbs'
+import { ORB_STATE } from '../lib/bar-pill-orb'
+import { createFrameLoop, orbFrameBudget } from '../lib/decorative-frame-loop'
 
 /**
  * Jakub thinking-orb for the Métis Bar / Settings Circle.
  * Always animates: Windows Show animations off maps to OS reduce media query
  * and the stock ThinkingOrb freezes to one frame — that killed the product identity.
  * Still pauses when the document is hidden or the host is off-screen.
+ * The resting state paints on a frame budget (C30, lib/decorative-frame-loop.ts): same motion, lower cadence.
  */
 export function BrandThinkingOrb({
   state = 'solving',
@@ -43,21 +46,31 @@ export function BrandThinkingOrb({
       ctx.clearRect(0, 0, size, size)
       draw(ctx, size, t, dark, opts)
     }
-    let raf = 0
-    let running = false
-    const stop = (): void => {
-      running = false
-      cancelAnimationFrame(raf)
-    }
+    // The resting orb is decorative: budget its cadence by whether the overlay has the user's focus or pointer.
+    // Every other state animates for a reason and keeps painting on every vsync.
+    const resting = state === ORB_STATE.idle
+    let engaged = typeof document.hasFocus === 'function' ? document.hasFocus() : true
+    let pointerInside = false
+    const loop = createFrameLoop(
+      () => paint((performance.now() / 1000) * rate),
+      () => orbFrameBudget({ resting, engaged: engaged || pointerInside })
+    )
+    const stop = (): void => loop.stop()
     const start = (): void => {
-      if (running) return
       if (document.visibilityState === 'hidden') return
-      running = true
-      const loop = (): void => {
-        paint((performance.now() / 1000) * rate)
-        if (running) raf = requestAnimationFrame(loop)
-      }
-      raf = requestAnimationFrame(loop)
+      loop.start()
+    }
+    const onFocus = (): void => {
+      engaged = true
+    }
+    const onBlur = (): void => {
+      engaged = false
+    }
+    const onPointerOver = (): void => {
+      pointerInside = true
+    }
+    const onPointerOut = (event: PointerEvent): void => {
+      if (!event.relatedTarget) pointerInside = false
     }
     paint((performance.now() / 1000) * rate)
     if (!animate) {
@@ -78,11 +91,19 @@ export function BrandThinkingOrb({
       else if (onScreen) start()
     }
     document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+    document.addEventListener('pointerover', onPointerOver)
+    document.addEventListener('pointerout', onPointerOut)
     if (!io) start()
     return () => {
       stop()
       io?.disconnect()
       document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+      document.removeEventListener('pointerover', onPointerOver)
+      document.removeEventListener('pointerout', onPointerOut)
     }
   }, [state, size, dark, speed, animate])
 
