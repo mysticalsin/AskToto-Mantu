@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 
@@ -111,22 +111,100 @@ async function readJournal(file: string): Promise<ReceiptJournalLoad> {
   return parsed.success ? { ok: true, records: parsed.data.records } : { ok: false, error: 'corrupt' }
 }
 
+interface FileIdentity {
+  dev: bigint
+  ino: bigint
+}
+
+async function assertTempStillOwned(tmp: string, identity: FileIdentity): Promise<void> {
+  const current = await lstat(tmp, { bigint: true })
+  if (!current.isFile() || current.dev !== identity.dev || current.ino !== identity.ino) {
+    throw new Error('Transcript receipt journal temporary file ownership changed')
+  }
+}
+
 async function writeAtomic(file: string, text: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    const handle = await open(tmp, 'wx', 0o600)
-    try {
-      await handle.writeFile(text, 'utf8')
-      await handle.sync()
-    } finally {
-      await handle.close()
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  let identity: FileIdentity | undefined
+  let closeAttempted = false
+  let failed = false
+  let firstFailure: unknown
+  const rememberFailure = (error: unknown) => {
+    if (!failed) {
+      failed = true
+      firstFailure = error
     }
-    await rename(tmp, file)
-  } catch (error) {
-    await unlink(tmp).catch(() => {})
-    throw error
   }
+  const closeOnce = async () => {
+    if (!handle || closeAttempted) return
+    closeAttempted = true
+    await handle.close()
+  }
+
+  try {
+    handle = await open(tmp, 'wx', 0o600)
+  } catch (error) {
+    // A failed exclusive open does not grant ownership of the candidate path.
+    rememberFailure(error)
+  }
+
+  if (handle) {
+    try {
+      const stats = await handle.stat({ bigint: true })
+      if (!stats.isFile() || stats.ino <= 0n) {
+        throw new Error('Transcript receipt journal temporary file identity is unavailable')
+      }
+      identity = { dev: stats.dev, ino: stats.ino }
+    } catch (error) {
+      rememberFailure(error)
+    }
+
+    if (!failed) {
+      try {
+        await handle.writeFile(text, 'utf8')
+        await handle.sync()
+      } catch (error) {
+        rememberFailure(error)
+      }
+    }
+
+    try {
+      await closeOnce()
+    } catch (error) {
+      rememberFailure(error)
+    }
+  }
+
+  if (!failed && identity) {
+    try {
+      await assertTempStillOwned(tmp, identity)
+    } catch (error) {
+      rememberFailure(error)
+    }
+  }
+
+  if (!failed) {
+    try {
+      await rename(tmp, file)
+    } catch (error) {
+      rememberFailure(error)
+    }
+  }
+
+  if (failed) {
+    if (identity) {
+      try {
+        await assertTempStillOwned(tmp, identity)
+        await unlink(tmp)
+      } catch {
+        // Ownership uncertainty and secondary cleanup failures never replace the first failure.
+      }
+    }
+    throw firstFailure
+  }
+
   // Persist the rename itself where the platform lets a directory be fsynced (not Windows).
   try {
     const dir = await open(dirname(file), 'r')

@@ -1,7 +1,7 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createReceiptJournal,
   RECEIPT_JOURNAL_LIMIT,
@@ -9,14 +9,138 @@ import {
   type SaveReceiptRecord
 } from './transcript-receipt-journal'
 
+const io = vi.hoisted(() => ({
+  randomHex: null as string | null,
+  observe: false,
+  tempPath: null as string | null,
+  renameCount: 0,
+  unlinkCount: 0,
+  closeCount: 0,
+  tempOpen: null as { flags: unknown; mode: unknown } | null,
+  fault: null as string | null,
+  primary: undefined as unknown,
+  primaryArmed: false,
+  closeError: undefined as unknown,
+  closeErrorArmed: false,
+  cleanupError: undefined as unknown,
+  cleanupErrorArmed: false,
+  renameError: undefined as unknown,
+  renameErrorArmed: false,
+  substitution: null as 'file' | 'symlink' | null,
+  foreignTarget: null as string | null
+}))
+
+vi.mock('node:crypto', async () => {
+  const actual = await vi.importActual<typeof import('node:crypto')>('node:crypto')
+  return {
+    ...actual,
+    randomBytes: (size: number) => {
+      if (size === 6 && io.randomHex !== null) {
+        const hex = io.randomHex
+        io.randomHex = null
+        return Buffer.from(hex, 'hex')
+      }
+      return actual.randomBytes(size)
+    }
+  }
+})
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args)
+      const [path, flags, mode] = args
+      const pathText = String(path)
+      if (!io.observe || pathText !== io.tempPath) return handle
+      io.tempOpen = { flags, mode }
+
+      if (io.substitution === 'file') {
+        await actual.unlink(pathText)
+        await actual.writeFile(pathText, 'foreign replacement')
+      } else if (io.substitution === 'symlink' && io.foreignTarget) {
+        await actual.unlink(pathText)
+        await actual.symlink(io.foreignTarget, pathText)
+      }
+
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'stat' && io.fault === 'stat') {
+            return async () => {
+              if (io.primaryArmed) throw io.primary
+              throw new Error('descriptor identity unavailable')
+            }
+          }
+          if (property === 'writeFile' && io.fault === 'partial-write') {
+            return async (data: string | Uint8Array, options?: BufferEncoding) => {
+              await target.writeFile(typeof data === 'string' ? data.slice(0, 8) : data.subarray(0, 8), options)
+              if (io.primaryArmed) throw io.primary
+              throw new Error('partial write rejected')
+            }
+          }
+          if (property === 'sync' && io.fault === 'sync') {
+            return async () => {
+              await target.sync()
+              if (io.primaryArmed) throw io.primary
+              throw new Error('sync rejected')
+            }
+          }
+          if (property === 'close') {
+            return async () => {
+              io.closeCount += 1
+              const result = await target.close()
+              if (io.closeErrorArmed) throw io.closeError
+              return result
+            }
+          }
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      }) as typeof handle
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      if (io.observe) io.renameCount += 1
+      if (io.observe && io.renameErrorArmed) throw io.renameError
+      return actual.rename(...args)
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      if (io.observe) io.unlinkCount += 1
+      if (io.observe && io.cleanupErrorArmed && String(args[0]) === io.tempPath) throw io.cleanupError
+      return actual.unlink(...args)
+    }
+  }
+})
+
 let dir: string
 let file: string
 
 beforeEach(async () => {
+  Object.assign(io, {
+    randomHex: null,
+    observe: false,
+    tempPath: null,
+    renameCount: 0,
+    unlinkCount: 0,
+    closeCount: 0,
+    tempOpen: null,
+    fault: null,
+    primary: undefined,
+    primaryArmed: false,
+    closeError: undefined,
+    closeErrorArmed: false,
+    cleanupError: undefined,
+    cleanupErrorArmed: false,
+    renameError: undefined,
+    renameErrorArmed: false,
+    substitution: null,
+    foreignTarget: null
+  })
   dir = await mkdtemp(join(tmpdir(), 'metis-receipts-'))
   file = join(dir, 'transcript-receipts', 'receipts.v1.json')
 })
 afterEach(async () => {
+  io.observe = false
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -41,7 +165,283 @@ const record = (receiptId: string, patch: Partial<SaveReceiptRecord> = {}): Save
   ...patch
 })
 
+const controlTemp = (hex = 'a1b2c3d4e5f6') => {
+  if (hex.length !== 12) throw new Error('Controlled random basename must contain exactly six bytes')
+  io.randomHex = hex
+  io.tempPath = `${file}.${hex}.tmp`
+}
+
 describe('transcript receipt journal', () => {
+  it('preserves a colliding temporary file it did not create through the exported put API', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const sentinel = Buffer.from('foreign temporary file')
+    controlTemp()
+    await writeFile(io.tempPath!, sentinel, { mode: 0o600 })
+    io.observe = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    const journalAfter = await readFile(file)
+    const sentinelAfter = await readFile(io.tempPath!).catch(() => null)
+    expect({
+      rejectionCode: (rejection as NodeJS.ErrnoException | undefined)?.code,
+      journalUnchanged: journalAfter.equals(originalJournal),
+      sentinelUnchanged: sentinelAfter?.equals(sentinel) ?? false,
+      renameCount: io.renameCount
+    }).toEqual({ rejectionCode: 'EEXIST', journalUnchanged: true, sentinelUnchanged: true, renameCount: 0 })
+  })
+
+  it('closes after a partial write failure, keeps the first error and leaves the queue usable', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const primary = new Error('write failed after partial bytes')
+    controlTemp('a1b2c3d4e501')
+    io.observe = true
+    io.fault = 'partial-write'
+    io.primary = primary
+    io.primaryArmed = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('failed'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBe(primary)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.renameCount).toBe(0)
+    expect(io.closeCount).toBe(1)
+    await expect(readFile(io.tempPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+
+    controlTemp('a1b2c3d4e502')
+    io.fault = null
+    io.primaryArmed = false
+    await journal.put(record('after'))
+    const loaded = await journal.load()
+    expect(loaded.ok && loaded.records.map(({ receiptId }) => receiptId)).toEqual(['existing', 'after'])
+    expect(io.tempOpen).toEqual({ flags: 'wx', mode: 0o600 })
+    expect(io.renameCount).toBe(1)
+  })
+
+  it('prevents promotion after a sync rejection and cleans only the owned temporary', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const primary = new Error('sync rejected')
+    controlTemp('a1b2c3d4e503')
+    io.observe = true
+    io.fault = 'sync'
+    io.primary = primary
+    io.primaryArmed = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBe(primary)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.renameCount).toBe(0)
+    expect(io.closeCount).toBe(1)
+    await expect(readFile(io.tempPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not retry a close that releases its descriptor and then rejects', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const primary = new Error('close rejected after release')
+    controlTemp('a1b2c3d4e504')
+    io.observe = true
+    io.closeError = primary
+    io.closeErrorArmed = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBe(primary)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.closeCount).toBe(1)
+    expect(io.renameCount).toBe(0)
+    await expect(readFile(io.tempPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps a write error when close and cleanup also reject', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const primary = new Error('primary write failure')
+    controlTemp('a1b2c3d4e505')
+    io.observe = true
+    io.fault = 'partial-write'
+    io.primary = primary
+    io.primaryArmed = true
+    io.closeError = new Error('secondary close failure')
+    io.closeErrorArmed = true
+    io.cleanupError = new Error('secondary cleanup failure')
+    io.cleanupErrorArmed = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBe(primary)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.closeCount).toBe(1)
+    expect(io.unlinkCount).toBe(1)
+    expect(io.renameCount).toBe(0)
+    await expect(readFile(io.tempPath!)).resolves.toHaveLength(8)
+  })
+
+  it('refuses an unavailable descriptor identity and closes the acquired handle once', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const primary = new Error('descriptor identity unavailable')
+    controlTemp('a1b2c3d4e506')
+    io.observe = true
+    io.fault = 'stat'
+    io.primary = primary
+    io.primaryArmed = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBe(primary)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.closeCount).toBe(1)
+    expect(io.renameCount).toBe(0)
+    await expect(readFile(io.tempPath!)).resolves.toHaveLength(0)
+  })
+
+  it.each([
+    { label: 'undefined', value: undefined, index: 0 },
+    { label: 'null', value: null, index: 1 },
+    { label: 'false', value: false, index: 2 },
+    { label: 'zero', value: 0, index: 3 },
+    { label: 'empty string', value: '', index: 4 }
+  ])('preserves an exact falsy write failure: $label', async ({ value, index }) => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    controlTemp(`a1b2c3d4e5f${index}`)
+    io.observe = true
+    io.fault = 'partial-write'
+    io.primary = value
+    io.primaryArmed = true
+
+    let rejected = false
+    let rejection: unknown
+    try {
+      await journal.put(record(`falsy-${index}`))
+    } catch (error) {
+      rejected = true
+      rejection = error
+    }
+
+    expect(rejected).toBe(true)
+    expect(rejection).toBe(value)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.closeCount).toBe(1)
+    expect(io.renameCount).toBe(0)
+    await expect(readFile(io.tempPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not promote or remove a regular file substituted after exclusive open', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    controlTemp('a1b2c3d4e520')
+    io.observe = true
+    io.substitution = 'file'
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBeInstanceOf(Error)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(await readFile(io.tempPath!, 'utf8')).toBe('foreign replacement')
+    expect(io.closeCount).toBe(1)
+    expect(io.renameCount).toBe(0)
+  })
+
+  it('does not promote or remove a symlink substituted after exclusive open', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const target = join(dir, 'foreign-target')
+    await writeFile(target, 'foreign symlink target')
+    controlTemp('a1b2c3d4e521')
+    io.observe = true
+    io.substitution = 'symlink'
+    io.foreignTarget = target
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBeInstanceOf(Error)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect((await lstat(io.tempPath!)).isSymbolicLink()).toBe(true)
+    expect(await readlink(io.tempPath!)).toBe(target)
+    expect(await readFile(target, 'utf8')).toBe('foreign symlink target')
+    expect(io.closeCount).toBe(1)
+    expect(io.renameCount).toBe(0)
+  })
+
+  it('cleans an owned temporary after rename rejects before promotion', async () => {
+    const journal = createReceiptJournal(file)
+    await journal.put(record('existing'))
+    const originalJournal = await readFile(file)
+    const primary = new Error('rename rejected')
+    controlTemp('a1b2c3d4e522')
+    io.observe = true
+    io.renameError = primary
+    io.renameErrorArmed = true
+
+    let rejection: unknown
+    try {
+      await journal.put(record('next'))
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBe(primary)
+    expect(await readFile(file)).toEqual(originalJournal)
+    expect(io.renameCount).toBe(1)
+    expect(io.closeCount).toBe(1)
+    await expect(readFile(io.tempPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('round-trips records through atomic temp and rename', async () => {
     const journal = createReceiptJournal(file)
     await expect(journal.load()).resolves.toEqual({ ok: true, records: [] })
