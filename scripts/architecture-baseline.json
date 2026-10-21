@@ -14,6 +14,7 @@
     "src/main/application-command-session.ts": 1,
     "src/main/application-discovery.ts": 1,
     "src/main/application-intents.ts": 1,
+    "src/main/features/meetings/meeting-public-projection.ts": 1,
     "src/main/operator-test-keypair.ts": 1,
     "src/renderer/src/components/CommandListeningPill.tsx": 1,
     "src/renderer/src/components/CommandProposalCard.tsx": 1,
