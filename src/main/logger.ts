@@ -374,6 +374,8 @@ export type AuditEvent =
   // WP07: confirmed desktop commands run as tasks. Action id and reason only, never request arguments.
   // Metadata-only: the meeting speech worker thread was disabled for this launch (circuit breaker or load failure).
   | 'meeting.speech.worker.degraded'
+  // Metadata-only: the live meeting journal refused or lost a record (reason enum + count), never content.
+  | 'meeting.journal.degraded'
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'

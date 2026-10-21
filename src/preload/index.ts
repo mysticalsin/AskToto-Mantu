@@ -22,6 +22,8 @@ import {
   type ScreenContextResult,
   type SaveMeeting,
   type SaveDraftTranscriptResult,
+  type AppendMeetingJournalPayload,
+  type AppendMeetingJournalResult,
   type SaveNote,
   type RecapExport,
   type MeetingSummary,
@@ -392,6 +394,9 @@ const api = {
   // Periodic crash-recovery snapshot of an in-progress meeting — fire-and-forget, best-effort.
   saveDraftTranscript: (m: SaveMeeting): Promise<SaveDraftTranscriptResult> =>
     ipcRenderer.invoke(IPC.saveDraftTranscript, m),
+  // Live meeting journal: one durable record per committed cloud final. Fire-and-forget; never gates capture.
+  appendMeetingJournal: (p: AppendMeetingJournalPayload): Promise<AppendMeetingJournalResult> =>
+    ipcRenderer.invoke(IPC.appendMeetingJournal, p),
   preserveDraftTranscript: (startedAt: number): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke(IPC.preserveDraftTranscript, { startedAt }),
   discardDraftTranscript: (startedAt: number): Promise<{ ok: boolean; error?: string }> =>

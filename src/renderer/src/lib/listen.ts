@@ -24,6 +24,8 @@ import { CLOUD_CAPTURE_WORKLET_SRC } from './cloud-capture-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
+import { evictOldest } from './bounded-map'
+import { journalCommittedLine } from './meeting-journal-seam'
 import { shouldUseBundledAsr } from './asr-offline'
 import { withDiagnosedThemNote } from './screen-permission-copy'
 import { sysRetryDelayMs } from './loopback-retry'
@@ -697,12 +699,9 @@ export function useListen(
       setLines(next)
       if (options?.segmentId) {
         cloudSegmentLinesRef.current.set(options.segmentId, line.t)
-        while (cloudSegmentLinesRef.current.size > 512) {
-          const oldest = cloudSegmentLinesRef.current.keys().next().value
-          if (oldest === undefined) break
-          cloudSegmentLinesRef.current.delete(oldest)
-        }
+        evictOldest(cloudSegmentLinesRef.current, 512)
       }
+      journalCommittedLine(sessionStartedAtRef.current, line)
       // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
       // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
       // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.

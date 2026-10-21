@@ -31,22 +31,7 @@ export {
   ScreenCaptureCheckResultSchema
 } from './screen-permission'
 
-/** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
-export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
-export const ListeningStatePayloadSchema = z.object({
-  on: z.boolean(),
-  startedAt: LiveMeetingStartedAtSchema.optional()
-})
-export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
-export const MeetingMicAdmissionRequestSchema = z.object({ startedAt: LiveMeetingStartedAtSchema }).strict()
-export const DraftMeetingLifecyclePayloadSchema = z.object({ startedAt: LiveMeetingStartedAtSchema }).strict()
-export const DiscardSavedTranscriptPayloadSchema = z
-  .object({
-    startedAt: LiveMeetingStartedAtSchema,
-    title: z.string().max(200).optional(),
-    path: z.string().max(4096).optional()
-  })
-  .strict()
+export * from './live-meeting-contracts'
 
 export type PreservedBrainIndexCopy = {
   id: string
@@ -179,6 +164,7 @@ export const IPC = {
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
   saveDraftTranscript: 'transcript:saveDraft',
+  appendMeetingJournal: 'transcript:journalAppend',
   preserveDraftTranscript: 'transcript:preserveDraft',
   discardDraftTranscript: 'transcript:discardDraft',
   discardSavedTranscript: 'transcript:discardSaved',
@@ -1027,6 +1013,7 @@ export const BaseSettingsSchema = z.object({
   // transparently either way. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(true),
   meetingSpeechWorker: z.boolean().default(true), // WP03 kill switch: off runs speech codecs inline, same output
+  liveMeetingJournal: z.boolean().default(true), // WP03 kill switch: off = no live-journal I/O at all
   // Task MI-5 — publish a plaintext markdown mirror (entity pages + per-meeting note cards + an
   // llms.txt-shaped index) under `<meetingsFolder>/wiki/` so Dust/graphify/any agent can read the
   // CRM-corrected brain even while encryptTranscripts keeps the raw transcripts locked. First-run
@@ -1641,6 +1628,7 @@ export const DEFAULT_SETTINGS: Settings = {
   summaryLanguage: 'auto',
   encryptTranscripts: true,
   meetingSpeechWorker: true,
+  liveMeetingJournal: true,
   publishBrainPages: false,
   transcriptRetentionDays: 0,
   systemPrompt:

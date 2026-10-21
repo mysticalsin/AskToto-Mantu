@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
+import { IPC } from '@shared/ipc'
 import type { InputSessionStopReason } from '@shared/input-session'
 
 vi.mock('electron', () => ({
@@ -56,9 +57,12 @@ function wire() {
 }
 
 describe('owner session wiring', () => {
-  it('registers only the owner-session status channel', () => {
+  it('registers the owner-session status channel and the live journal write seam, nothing else', () => {
     const { ipcMain } = wire()
-    expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([OWNER_SESSION_IPC.status])
+    expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([
+      OWNER_SESSION_IPC.status,
+      IPC.appendMeetingJournal
+    ])
   })
 
   it('installs the trusted meeting speech policy before it registers any handler', () => {
@@ -74,7 +78,8 @@ describe('owner session wiring', () => {
       assertMainWindow: vi.fn(),
       currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 })
     })
-    expect(installedAtFirstHandler).toEqual([true])
+    // Every handler (owner-session status, live journal seam) registers after the policy is installed.
+    expect(installedAtFirstHandler).toEqual([true, true])
     expect(getMeetingSpeechLimits()).toEqual(MEETING_SPEECH_LIMITS)
     expect(getMeetingSpeechReadLimitBytes()).toBe(MEETING_SPEECH_WORKER_BOUNDS.maxInputBytes)
   })
@@ -105,10 +110,10 @@ describe('owner session wiring', () => {
     await expect(checkpointAfterDraftSave(1_700_000_000_000)).resolves.toEqual({ ok: false, error: 'sealed' })
   })
 
-  it('closes the store when a meeting ends', () => {
+  it('closes the store and ends the live journal session when a meeting ends', () => {
     vi.mocked(onDraftMeetingFinalizing).mockClear()
     wire()
-    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(1)
+    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(2)
     expect(typeof vi.mocked(onDraftMeetingFinalizing).mock.calls[0][0]).toBe('function')
   })
 })

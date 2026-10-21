@@ -6,12 +6,13 @@ import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-writ
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
-import { authSessionGeneration } from '../auth'
+import { authSessionGeneration, requireAuth } from '../auth'
 import { auditLog, mainLog } from '../logger'
 import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
 import { getPublishedSettingsObservation } from '../settings-observation'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
+import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { createMainOwnerSessionAuthority, type OwnerSessionAuthority } from './owner-session-authority'
 
@@ -72,6 +73,20 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   bindMeetingSpeechInvalidation(ownerSession, meetingSpeech)
   bindTranscriptCheckpointStore(transcriptRevision.store)
   bindMeetingEndClosure(onDraftMeetingFinalizing, transcriptRevision.store)
+  // WP03 live meeting journal: one durable record per committed cloud final, behind the `liveMeetingJournal` switch.
+  bootstrapLiveMeetingJournal({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    store: transcriptRevision.store,
+    ownerSession,
+    onMeetingEnd: onDraftMeetingFinalizing,
+    readSettings: getPublishedSettingsObservation,
+    userDataPath: () => app.getPath('userData'),
+    authGeneration: authSessionGeneration,
+    audit: (event, record) => auditLog(event, { ...record }),
+    onWillQuit: (listener) => app.once('will-quit', listener)
+  })
   return {
     ownerSession,
     authorizeSender,
