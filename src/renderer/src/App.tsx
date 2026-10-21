@@ -447,7 +447,18 @@ export function App(): JSX.Element {
   // Transcript watermark of the last speculative run. `key` is a content hash of the exact transcript
   // tail the shadow suggestion was generated from — freshness = the CONVERSATION STATE still matches
   // (precise), not merely "≤2 new lines" (which could adopt a stale answer or miss a fresh one).
-  const specWatermarkRef = useRef({ lineCount: 0, at: 0, key: 0 })
+  const specWatermarkRef = useRef({ lineCount: 0, at: 0, key: 0, meetingStart: 0, runId: '' })
+  const retireSpeculativeMeeting = useCallback(() => {
+    specWatermarkRef.current = {
+      lineCount: 0,
+      at: 0,
+      key: 0,
+      meetingStart: meetingStartRef.current,
+      runId: ''
+    }
+    setShowSpec(false)
+    speculative.clear()
+  }, [speculative.clear])
   // Watermark for the Métis Local pre-warm ping (PLAN.md §4.4) — same {lineCount, at} idiom as
   // specWatermarkRef above, on its own ~5s cadence independent of the 15s shadow-suggestion one below.
   const prewarmWatermarkRef = useRef({ lineCount: 0, at: 0 })
@@ -2031,12 +2042,15 @@ export function App(): JSX.Element {
   // every "what to say next" entry point so the adopt rule can't drift between them.
   const tryAdoptSpeculative = useCallback((): boolean => {
     const spec = speculative.answer
+    const watermark = specWatermarkRef.current
     if (
       settings?.instantSuggestions === false ||
       !spec?.text ||
       spec.streaming ||
       spec.error ||
-      transcriptStateKey(listen.text()) !== specWatermarkRef.current.key
+      watermark.meetingStart !== meetingStartRef.current ||
+      watermark.runId !== spec.id ||
+      transcriptStateKey(listen.text()) !== watermark.key
     ) {
       return false
     }
@@ -2070,8 +2084,15 @@ export function App(): JSX.Element {
     if (lines.length === w.lineCount || Date.now() - w.at < everyMs) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     const transcript = listen.text()
-    specWatermarkRef.current = { lineCount: lines.length, at: Date.now(), key: transcriptStateKey(transcript) }
-    speculative.run({ mode: 'suggest', transcript })
+    const at = Date.now()
+    const runId = speculative.run({ mode: 'suggest', transcript })
+    specWatermarkRef.current = {
+      lineCount: lines.length,
+      at,
+      key: transcriptStateKey(transcript),
+      meetingStart: meetingStartRef.current,
+      runId
+    }
   }, [
     listen.lines,
     listen.listening,
@@ -2451,6 +2472,7 @@ export function App(): JSX.Element {
       setView('copilot')
       setCollapsed(false)
       meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
+      retireSpeculativeMeeting()
       meetingPauseRef.current = freshMeetingPauseClock()
       savedRef.current = ''
       setSavedPath(null)
@@ -2496,6 +2518,7 @@ export function App(): JSX.Element {
       listen.start,
       ask.cancel,
       suggest.clear,
+      retireSpeculativeMeeting,
       followup.clear,
       coaching.clear,
       booking.clear,
@@ -2922,6 +2945,7 @@ export function App(): JSX.Element {
     // Invalidate this meeting even when it was already stopped in Review. Monotonic ownership prevents a
     // same-millisecond reset/restart from letting its late save publish a path or release the next lock.
     meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
+    retireSpeculativeMeeting()
     meetingPauseRef.current = freshMeetingPauseClock()
     pendingRecapRef.current = false // cancel any recap still waiting on endReview's drain — reset abandons it
     setRecapSkipped(false)
@@ -2948,6 +2972,7 @@ export function App(): JSX.Element {
     ask.clear,
     suggest.cancel,
     suggest.clear,
+    retireSpeculativeMeeting,
     followup.clear,
     listen.lines,
     listen.stop,
@@ -3837,7 +3862,17 @@ export function App(): JSX.Element {
     () => (
       <Copilot
         lines={listen.lines}
-        suggestion={showSpec && speculative.answer ? speculative.answer : suggest.answer}
+        suggestion={
+          showSpec &&
+          speculative.answer &&
+          !speculative.answer.streaming &&
+          !speculative.answer.error &&
+          specWatermarkRef.current.meetingStart === meetingStartRef.current &&
+          specWatermarkRef.current.runId === speculative.answer.id &&
+          transcriptStateKey(listen.text()) === specWatermarkRef.current.key
+            ? speculative.answer
+            : suggest.answer
+        }
         mode={mode}
         listening={listen.listening}
         loading={listen.loading}
@@ -3853,6 +3888,7 @@ export function App(): JSX.Element {
     // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
     [
       listen.lines,
+      listen.text,
       suggest.answer,
       showSpec,
       speculative.answer,
