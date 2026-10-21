@@ -521,35 +521,316 @@ describe('waitUntilParked', () => {
 
 describe('runRevealRow', () => {
   it('takes the reveal baseline after smoke prep so a prep second-instance cannot satisfy the row', async () => {
-    const rows = initialRvRows('darwin')
-    const reveals: Array<{ event: string; reason: string; outcome: string; parked: boolean; layout: string }> = []
-    let exercisedReopen = false
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-baseline-'))
+    const auditLogPath = join(dir, 'audit.log')
+    try {
+      writeFileSync(auditLogPath, '')
+      const rows = initialRvRows('darwin')
+      const reveals: Array<{ event: string; reason: string; outcome: string; parked: boolean; layout: string }> = []
+      let exercisedReopen = false
 
-    await runRevealRow({
-      auditLogPath: '/tmp/metis-smoke-audit.log',
-      rows,
-      id: 'RV-2-macos-open-new-instance',
-      reason: 'second-instance',
-      prepare: async () => {
-        reveals.push({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
-        return { error: false }
-      },
-      run: async () => {
-        exercisedReopen = true
-        return { error: false }
-      },
-      countReveals: (_auditLogPath, reason) => reveals.filter((record) => record.reason === reason).length,
-      waitForRevealRecord: async (_auditLogPath, reason, seenCount) =>
-        reveals.filter((record) => record.reason === reason)[seenCount] ?? null,
-      failure: 'missing second-instance reveal'
-    })
+      await runRevealRow({
+        auditLogPath,
+        rows,
+        id: 'RV-2-macos-open-new-instance',
+        reason: 'second-instance',
+        prepare: async () => {
+          reveals.push({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
+          return { code: 0, signal: null, error: false }
+        },
+        run: async () => {
+          exercisedReopen = true
+          return { code: 0, signal: null, error: false }
+        },
+        countReveals: (_auditLogPath, reason) => reveals.filter((record) => record.reason === reason).length,
+        waitForRevealRecord: async (_auditLogPath, reason, seenCount) =>
+          reveals.filter((record) => record.reason === reason)[seenCount] ?? null,
+        failure: 'missing second-instance reveal'
+      })
 
-    expect(exercisedReopen).toBe(true)
-    expect(rows.find((row) => row.id === 'RV-2-macos-open-new-instance')).toMatchObject({
-      status: 'FAIL',
-      evidence: null,
-      unblock: 'missing second-instance reveal'
+      expect(exercisedReopen).toBe(true)
+      expect(rows.find((row) => row.id === 'RV-2-macos-open-new-instance')).toMatchObject({
+        status: 'FAIL',
+        evidence: null,
+        unblock: 'missing second-instance reveal'
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a nonzero launch receipt before polling even when the injected waiter passes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-nonzero-'))
+    const auditLogPath = join(dir, 'audit.log')
+    try {
+      writeFileSync(auditLogPath, '')
+      const rows = initialRvRows('win32')
+      let waiterCalls = 0
+
+      await runRevealRow({
+        auditLogPath,
+        rows,
+        id: 'RV-3-windows-shortcut-relaunch',
+        reason: 'second-instance',
+        run: async () => ({ code: 1, signal: null, error: false }),
+        waitForRevealRecord: async () => {
+          waiterCalls += 1
+          return { outcome: 'shown', parked: true }
+        },
+        failure: 'missing Windows shortcut reveal'
+      })
+
+      expect(waiterCalls).toBe(0)
+      expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')).toMatchObject({
+        status: 'FAIL',
+        evidence: null
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  const launchRefusals: Array<{
+    label: string
+    receipt: unknown
+    expected: {
+      code: number | null
+      signal: 'signal' | 'timeout' | null
+      error: boolean
+      reason: string
+    }
+  }> = [
+    {
+      label: 'nonzero exit',
+      receipt: { code: 1, signal: null, error: false },
+      expected: { code: 1, signal: null, error: false, reason: 'nonzero-exit' }
+    },
+    {
+      label: 'signal exit',
+      receipt: { code: 0, signal: 'SIGTERM', error: false },
+      expected: { code: 0, signal: 'signal', error: false, reason: 'signal' }
+    },
+    {
+      label: 'timeout',
+      receipt: { code: null, signal: 'timeout', error: false },
+      expected: { code: null, signal: 'timeout', error: false, reason: 'timeout' }
+    },
+    {
+      label: 'spawn error',
+      receipt: { code: null, signal: null, error: true },
+      expected: { code: null, signal: null, error: true, reason: 'spawn-error' }
+    },
+    {
+      label: 'undefined receipt',
+      receipt: undefined,
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'null receipt',
+      receipt: null,
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'empty receipt',
+      receipt: {},
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'partial receipt',
+      receipt: { code: 0, signal: null },
+      expected: { code: 0, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'fractional code',
+      receipt: { code: 1.5, signal: null, error: false },
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'nonfinite code',
+      receipt: { code: Number.POSITIVE_INFINITY, signal: null, error: false },
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'unsafe integer code',
+      receipt: { code: Number.MAX_SAFE_INTEGER + 1, signal: null, error: false },
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'missing exit and signal',
+      receipt: { error: false },
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    },
+    {
+      label: 'explicitly empty exit and signal',
+      receipt: { code: null, signal: null, error: false },
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    }
+  ]
+
+  for (const refusal of launchRefusals) {
+    it(`refuses ${refusal.label} launch receipts before reveal polling`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'metis-rv-launch-refusal-'))
+      const auditLogPath = join(dir, 'audit.log')
+      try {
+        writeFileSync(auditLogPath, '')
+        const rows = initialRvRows('win32')
+        let waiterCalls = 0
+
+        await runRevealRow({
+          auditLogPath,
+          rows,
+          id: 'RV-3-windows-shortcut-relaunch',
+          reason: 'second-instance',
+          run: async () => refusal.receipt,
+          waitForRevealRecord: async () => {
+            waiterCalls += 1
+            return { outcome: 'shown', parked: true }
+          },
+          failure: 'missing Windows shortcut reveal'
+        })
+
+        expect(waiterCalls).toBe(0)
+        expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')).toMatchObject({
+          status: 'FAIL',
+          evidence: null,
+          diagnostics: {
+            stage: 'launch',
+            prepare: { code: 0, signal: null, error: false, reason: 'success' },
+            launch: refusal.expected
+          }
+        })
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
     })
+  }
+
+  it('uses the fixed process reason priority for combined failure fields', async () => {
+    const cases = [
+      {
+        receipt: { code: 7, signal: 'SIGTERM', error: true },
+        expected: { code: 7, signal: 'signal', error: true, reason: 'spawn-error' }
+      },
+      {
+        receipt: { code: 7, signal: 'timeout', error: false },
+        expected: { code: 7, signal: 'timeout', error: false, reason: 'timeout' }
+      },
+      {
+        receipt: { code: 7, signal: 'SIGTERM', error: false },
+        expected: { code: 7, signal: 'signal', error: false, reason: 'signal' }
+      }
+    ]
+    for (const { receipt, expected } of cases) {
+      const dir = mkdtempSync(join(tmpdir(), 'metis-rv-priority-'))
+      const auditLogPath = join(dir, 'audit.log')
+      try {
+        writeFileSync(auditLogPath, '')
+        const rows = initialRvRows('win32')
+        await runRevealRow({
+          auditLogPath,
+          rows,
+          id: 'RV-3-windows-shortcut-relaunch',
+          reason: 'second-instance',
+          run: async () => receipt,
+          waitForRevealRecord: async () => ({ outcome: 'shown', parked: true }),
+          failure: 'missing Windows shortcut reveal'
+        })
+        expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')).toMatchObject({
+          status: 'FAIL',
+          evidence: null,
+          diagnostics: { launch: expected }
+        })
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it('fails closed for malformed and throwing-getter receipts without logging receipt data', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-receipt-privacy-'))
+    const auditLogPath = join(dir, 'audit.log')
+    const sentinel = 'synthetic-private-receipt-path'
+    const throwingReceipt = Object.defineProperty({}, 'code', {
+      get() {
+        throw new Error(sentinel)
+      }
+    })
+    const receipts: unknown[] = [
+      { code: sentinel, signal: sentinel, error: false, stderr: sentinel },
+      { code: 0, signal: '', error: false },
+      throwingReceipt
+    ]
+    const capturedErrors: string[] = []
+    const originalConsoleError = console.error
+    try {
+      writeFileSync(auditLogPath, '')
+      console.error = (...args: unknown[]) => capturedErrors.push(args.map((arg) => String(arg)).join(' '))
+
+      for (const receipt of receipts) {
+        const rows = initialRvRows('win32')
+        let waiterCalls = 0
+        await runRevealRow({
+          auditLogPath,
+          rows,
+          id: 'RV-3-windows-shortcut-relaunch',
+          reason: 'second-instance',
+          run: async () => receipt,
+          waitForRevealRecord: async () => {
+            waiterCalls += 1
+            return { outcome: 'shown', parked: true }
+          },
+          failure: 'missing Windows shortcut reveal'
+        })
+
+        const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch')
+        expect(waiterCalls).toBe(0)
+        expect(row).toMatchObject({
+          status: 'FAIL',
+          evidence: null,
+          diagnostics: {
+            stage: 'launch',
+            launch: { reason: 'invalid-receipt' }
+          }
+        })
+        expect(JSON.stringify(row)).not.toContain(sentinel)
+      }
+
+      expect(capturedErrors.join('\n')).not.toContain(sentinel)
+    } finally {
+      console.error = originalConsoleError
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('treats no preparation callback as successful and keeps the 15,000 ms default', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-no-prepare-'))
+    const auditLogPath = join(dir, 'audit.log')
+    try {
+      writeFileSync(auditLogPath, '')
+      const rows = initialRvRows('win32')
+      let waitedWith: number | undefined
+      await runRevealRow({
+        auditLogPath,
+        rows,
+        id: 'RV-3-windows-shortcut-relaunch',
+        reason: 'second-instance',
+        run: async () => ({ code: 0, signal: null, error: false }),
+        waitForRevealRecord: async (_path, _reason, _seenCount, timeoutMs) => {
+          waitedWith = timeoutMs
+          return { outcome: 'shown', parked: true, layout: 'hide' }
+        },
+        failure: 'missing Windows shortcut reveal'
+      })
+
+      expect(waitedWith).toBe(15_000)
+      expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')).toMatchObject({
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' },
+        unblock: null
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   const auditLine = (record: Record<string, unknown>): string => `${JSON.stringify(record)}\n`
@@ -557,6 +838,7 @@ describe('runRevealRow', () => {
   it('waits for a detached relaunch reveal that lands after run() resolves, within the row reveal window', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'metis-rv-row-'))
     const auditLogPath = join(dir, 'audit.log')
+    let delayedWrite: ReturnType<typeof setTimeout> | undefined
     try {
       writeFileSync(auditLogPath, auditLine({ event: 'app.renderer.ready' }))
       const rows = initialRvRows('win32')
@@ -570,7 +852,7 @@ describe('runRevealRow', () => {
         prepare: async () => ({ code: 0, signal: null, error: false }),
         run: async () => {
           // The shortcut's cmd launcher detaches Metis.exe: the relaunched instance hands off after run() returns.
-          setTimeout(() => {
+          delayedWrite = setTimeout(() => {
             appendFileSync(
               auditLogPath,
               auditLine({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
@@ -599,6 +881,7 @@ describe('runRevealRow', () => {
       expect(row).toMatchObject({ status: 'PASS', unblock: null })
       expect(row).not.toHaveProperty('diagnostics')
     } finally {
+      if (delayedWrite !== undefined) clearTimeout(delayedWrite)
       rmSync(dir, { recursive: true, force: true })
     }
   })
@@ -614,6 +897,7 @@ describe('runRevealRow', () => {
           auditLine({ event: 'app.renderer.ready' })
       )
       const rows = initialRvRows('win32')
+      let waiterCalls = 0
 
       await runRevealRow({
         auditLogPath,
@@ -640,6 +924,10 @@ describe('runRevealRow', () => {
           return { code: null, signal: 'timeout', error: false }
         },
         revealTimeoutMs: 300,
+        waitForRevealRecord: async () => {
+          waiterCalls += 1
+          return { outcome: 'shown', parked: true }
+        },
         failure: 'missing Windows shortcut reveal'
       })
 
@@ -648,9 +936,9 @@ describe('runRevealRow', () => {
         | undefined
       expect(row).toMatchObject({ status: 'FAIL', evidence: null, unblock: 'missing Windows shortcut reveal' })
       expect(row?.diagnostics).toEqual({
-        stage: 'no-reveal',
-        prepare: { code: 0, signal: null, error: false },
-        launch: { code: null, signal: 'timeout', error: false },
+        stage: 'launch',
+        prepare: { code: 0, signal: null, error: false, reason: 'success' },
+        launch: { code: null, signal: 'timeout', error: false, reason: 'timeout' },
         waitedMs: expect.any(Number),
         auditBefore: [
           { event: 'app.started' },
@@ -667,6 +955,7 @@ describe('runRevealRow', () => {
         ],
         auditAfter: [{ event: 'security.ipc_denied' }]
       })
+      expect(waiterCalls).toBe(0)
       expect(JSON.stringify(row)).not.toContain(secret)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -674,34 +963,108 @@ describe('runRevealRow', () => {
   })
 
   it('names the prepare stage when the row never got to relaunch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-prepare-nonzero-'))
+    const auditLogPath = join(dir, 'audit.log')
     const rows = initialRvRows('win32')
     let launched = false
+    let waiterCalls = 0
 
-    await runRevealRow({
-      auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
-      rows,
-      id: 'RV-3-windows-shortcut-relaunch',
-      reason: 'second-instance',
-      prepare: async () => ({ code: 1, signal: null, error: true }),
-      run: async () => {
-        launched = true
-        return { code: 0, signal: null, error: false }
-      },
-      failure: 'missing Windows shortcut reveal'
-    })
+    try {
+      writeFileSync(auditLogPath, '')
+      await runRevealRow({
+        auditLogPath,
+        rows,
+        id: 'RV-3-windows-shortcut-relaunch',
+        reason: 'second-instance',
+        prepare: async () => ({ code: 1, signal: null, error: false }),
+        run: async () => {
+          launched = true
+          return { code: 0, signal: null, error: false }
+        },
+        waitForRevealRecord: async () => {
+          waiterCalls += 1
+          return { outcome: 'shown', parked: true }
+        },
+        failure: 'missing Windows shortcut reveal'
+      })
 
-    expect(launched).toBe(false)
-    const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as
-      | { diagnostics?: unknown }
-      | undefined
-    expect(row?.diagnostics).toMatchObject({
-      stage: 'prepare',
-      prepare: { code: 1, signal: null, error: true },
-      launch: null,
-      auditBefore: [],
-      auditAfter: []
-    })
+      expect(launched).toBe(false)
+      expect(waiterCalls).toBe(0)
+      const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as
+        | { diagnostics?: unknown }
+        | undefined
+      expect(row?.diagnostics).toMatchObject({
+        stage: 'prepare',
+        prepare: { code: 1, signal: null, error: false, reason: 'nonzero-exit' },
+        launch: null,
+        auditBefore: [],
+        auditAfter: []
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
+
+  const preparationRefusals: Array<{
+    label: string
+    receipt: unknown
+    expected: { code: number | null; signal: 'signal' | 'timeout' | null; error: boolean; reason: string }
+  }> = [
+    {
+      label: 'timeout',
+      receipt: { code: null, signal: 'timeout', error: false },
+      expected: { code: null, signal: 'timeout', error: false, reason: 'timeout' }
+    },
+    {
+      label: 'undefined receipt',
+      receipt: undefined,
+      expected: { code: null, signal: null, error: false, reason: 'invalid-receipt' }
+    }
+  ]
+
+  for (const refusal of preparationRefusals) {
+    it(`refuses ${refusal.label} preparation receipts before launch and reveal polling`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'metis-rv-prepare-refusal-'))
+      const auditLogPath = join(dir, 'audit.log')
+      try {
+        writeFileSync(auditLogPath, '')
+        const rows = initialRvRows('win32')
+        let launchCalls = 0
+        let waiterCalls = 0
+
+        await runRevealRow({
+          auditLogPath,
+          rows,
+          id: 'RV-3-windows-shortcut-relaunch',
+          reason: 'second-instance',
+          prepare: async () => refusal.receipt,
+          run: async () => {
+            launchCalls += 1
+            return { code: 0, signal: null, error: false }
+          },
+          waitForRevealRecord: async () => {
+            waiterCalls += 1
+            return { outcome: 'shown', parked: true }
+          },
+          failure: 'missing Windows shortcut reveal'
+        })
+
+        expect(launchCalls).toBe(0)
+        expect(waiterCalls).toBe(0)
+        expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')).toMatchObject({
+          status: 'FAIL',
+          evidence: null,
+          diagnostics: {
+            stage: 'prepare',
+            prepare: refusal.expected,
+            launch: null
+          }
+        })
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
 })
 
 describe('auditDiagnostic', () => {

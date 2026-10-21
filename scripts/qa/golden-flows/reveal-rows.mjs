@@ -21,26 +21,41 @@ const RV_AUDIT_AFTER = 40
 
 export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-1-macos-open-activate', platform: 'darwin', reason: 'activate', automation: 'open-app-path' },
-  { id: 'RV-2-macos-open-new-instance', platform: 'darwin', reason: 'second-instance', automation: 'open-new-instance' },
+  {
+    id: 'RV-2-macos-open-new-instance',
+    platform: 'darwin',
+    reason: 'second-instance',
+    automation: 'open-new-instance'
+  },
   { id: 'RV-3-windows-exe-relaunch', platform: 'win32', reason: 'second-instance', automation: 'exe-relaunch' },
   { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'tray-menu' },
   { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'global-hotkey' },
-  { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'finder-open-app-file' },
-  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' },
+  {
+    id: 'RV-1-macos-finder-spotlight-launchpad',
+    platform: 'darwin',
+    reason: 'activate',
+    automation: 'finder-open-app-file'
+  },
+  {
+    id: 'RV-3-windows-shortcut-relaunch',
+    platform: 'win32',
+    reason: 'second-instance',
+    automation: 'windows-shortcut'
+  },
   { id: RV_BOOT_ROW_ID, platform: 'darwin', reason: 'activate', automation: 'launchservices-cold-launch' }
 ])
 
 export function initialRvRows(platform) {
-  return RV_SCENARIOS
-    .filter((scenario) => scenario.platform === 'all' || scenario.platform === platform)
-    .map((scenario) => ({
+  return RV_SCENARIOS.filter((scenario) => scenario.platform === 'all' || scenario.platform === platform).map(
+    (scenario) => ({
       id: scenario.id,
       reason: scenario.reason,
       automation: scenario.automation,
       status: 'PENDING',
       evidence: null,
       unblock: null
-    }))
+    })
+  )
 }
 
 function completeRvRow(rows, id, patch) {
@@ -53,7 +68,11 @@ async function runAppleScript(script, timeoutMs) {
 }
 
 async function runPowerShell(script, timeoutMs) {
-  return runProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], timeoutMs)
+  return runProcess(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    timeoutMs
+  )
 }
 
 async function waitForReveal(auditLogPath, reason, seenCount, timeoutMs = RV_TIMEOUT_MS) {
@@ -92,10 +111,79 @@ export function auditDiagnostic(record) {
   return out
 }
 
+const INVALID_PROCESS_OUTCOME = Object.freeze({
+  code: null,
+  signal: null,
+  error: false,
+  reason: 'invalid-receipt'
+})
+
+const NO_PREPARE_OUTCOME = Object.freeze({ code: 0, signal: null, error: false })
+
 function processOutcome(result) {
-  return { code: result?.code ?? null, signal: result?.signal ?? null, error: result?.error === true }
+  try {
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) return INVALID_PROCESS_OUTCOME
+    const hasCode = Object.prototype.hasOwnProperty.call(result, 'code')
+    const hasSignal = Object.prototype.hasOwnProperty.call(result, 'signal')
+    const hasError = Object.prototype.hasOwnProperty.call(result, 'error')
+    const code = hasCode ? result.code : undefined
+    const signal = hasSignal ? result.signal : undefined
+    const error = hasError ? result.error : undefined
+    const valid =
+      hasCode &&
+      hasSignal &&
+      hasError &&
+      (code === null || Number.isSafeInteger(code)) &&
+      (signal === null || (typeof signal === 'string' && signal.length > 0)) &&
+      typeof error === 'boolean' &&
+      !(code === null && signal === null && error === false)
+
+    const projected = {
+      code: Number.isSafeInteger(code) ? code : null,
+      signal: typeof signal === 'string' && signal.length > 0 ? (signal === 'timeout' ? 'timeout' : 'signal') : null,
+      error: typeof error === 'boolean' ? error : false
+    }
+
+    if (!valid) return { ...projected, reason: 'invalid-receipt' }
+
+    const reason = error
+      ? 'spawn-error'
+      : signal === 'timeout'
+        ? 'timeout'
+        : signal !== null
+          ? 'signal'
+          : code === 0
+            ? 'success'
+            : 'nonzero-exit'
+    return { ...projected, reason }
+  } catch {
+    return INVALID_PROCESS_OUTCOME
+  }
 }
 
+async function readProcessOutcome(callback) {
+  if (typeof callback !== 'function') return INVALID_PROCESS_OUTCOME
+  try {
+    return processOutcome(await callback())
+  } catch {
+    return INVALID_PROCESS_OUTCOME
+  }
+}
+
+/**
+ * @param {{
+ *   auditLogPath: string,
+ *   rows: Array<{id: string}>,
+ *   id: string,
+ *   reason: string,
+ *   prepare?: () => unknown | Promise<unknown>,
+ *   run: () => unknown | Promise<unknown>,
+ *   failure: string,
+ *   revealTimeoutMs?: number,
+ *   countReveals?: (auditLogPath: string, reason: string) => number,
+ *   waitForRevealRecord?: (auditLogPath: string, reason: string, seenCount: number, timeoutMs?: number) => Promise<unknown>
+ * }} options
+ */
 export async function runRevealRow({
   auditLogPath,
   rows,
@@ -108,12 +196,14 @@ export async function runRevealRow({
   countReveals = revealCount,
   waitForRevealRecord = waitForReveal
 }) {
-  const prepared = prepare ? await prepare() : { error: false }
+  const prepared = prepare === undefined ? processOutcome(NO_PREPARE_OUTCOME) : await readProcessOutcome(prepare)
+  const preparedSuccessfully = prepared.reason === 'success'
   const baseline = auditRecords(auditLogPath).length
   const seen = countReveals(auditLogPath, reason)
   const launchedAt = Date.now()
-  const launched = prepared.error ? prepared : await run()
-  const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen, revealTimeoutMs)
+  const launched = preparedSuccessfully ? await readProcessOutcome(run) : null
+  const launchedSuccessfully = launched?.reason === 'success'
+  const reveal = launchedSuccessfully ? await waitForRevealRecord(auditLogPath, reason, seen, revealTimeoutMs) : null
   const pass = isPassingRevealEvidence(reveal)
   let diagnostics = null
   if (!pass) {
@@ -121,9 +211,15 @@ export async function runRevealRow({
     const records = auditRecords(auditLogPath)
     const split = records.length >= baseline ? baseline : 0
     diagnostics = {
-      stage: prepared.error ? 'prepare' : launched.error ? 'launch' : reveal === null ? 'no-reveal' : 'reveal-not-passing',
-      prepare: processOutcome(prepared),
-      launch: prepared.error ? null : processOutcome(launched),
+      stage: !preparedSuccessfully
+        ? 'prepare'
+        : !launchedSuccessfully
+          ? 'launch'
+          : reveal === null
+            ? 'no-reveal'
+            : 'reveal-not-passing',
+      prepare: prepared,
+      launch: preparedSuccessfully ? launched : null,
       waitedMs: Date.now() - launchedAt,
       auditBefore: records.slice(Math.max(0, split - RV_AUDIT_BEFORE), split).map(auditDiagnostic),
       auditAfter: records.slice(split, split + RV_AUDIT_AFTER).map(auditDiagnostic)
@@ -132,13 +228,15 @@ export async function runRevealRow({
   }
   completeRvRow(rows, id, {
     status: pass ? 'PASS' : 'FAIL',
-    evidence: reveal ? {
-      event: 'reveal',
-      reason,
-      outcome: reveal.outcome ?? null,
-      parked: reveal.parked === true,
-      layout: typeof reveal.layout === 'string' ? reveal.layout : null
-    } : null,
+    evidence: reveal
+      ? {
+          event: 'reveal',
+          reason,
+          outcome: reveal.outcome ?? null,
+          parked: reveal.parked === true,
+          layout: typeof reveal.layout === 'string' ? reveal.layout : null
+        }
+      : null,
     unblock: pass ? null : failure,
     ...(diagnostics ? { diagnostics } : {})
   })
@@ -225,7 +323,8 @@ export async function runPackagedRvRows({ platform, target, executable, auditLog
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
       prepare: hideBeforeReveal,
-      run: () => runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000),
+      run: () =>
+        runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
@@ -263,7 +362,8 @@ export async function runPackagedRvRows({ platform, target, executable, auditLog
       // the relaunched instance boots after run() resolves: its boot budget is part of the reveal window.
       run: () => runPowerShell(launchScript, 30_000),
       revealTimeoutMs: RELAUNCH_BOOT_MS + RV_TIMEOUT_MS,
-      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
+      failure:
+        'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
     })
 
     await runRevealRow({
@@ -272,7 +372,11 @@ export async function runPackagedRvRows({ platform, target, executable, auditLog
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
       prepare: hideBeforeReveal,
-      run: () => runPowerShell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')", 10_000),
+      run: () =>
+        runPowerShell(
+          "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')",
+          10_000
+        ),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
