@@ -197,6 +197,29 @@ describe('durable save receipts across a module-reset relaunch (WP03-S09, GATE-0
     expect(await h.meetings()).toEqual([])
   })
 
+  it('preserves the autosave draft byte-for-byte when launch resume refuses a same-date revision replacement', async () => {
+    const { h, saveUntilBoundary, relaunch } = await setup()
+    const file = await saveUntilBoundary('after-saved-written')
+    const [draftName] = await h.drafts()
+    expect(draftName).toBeDefined()
+    const draftBytes = await readRaw(h.folder, draftName)
+    const savedText = await readFile(file, 'utf8')
+    const replacementText = savedText
+      .replace(/^transcriptRevision:.*\r?\n/gm, '')
+      .replace(/^revisionSchema:.*\r?\n/gm, '')
+      .replace(/^(date:.*)$/m, '$1\ntranscriptRevision: 1\nrevisionSchema: 1')
+    await writeFile(file, replacementText)
+    const replacementBytes = await readRaw(h.folder, basename(file))
+
+    const first = await relaunch()
+
+    expect(first.outcome).toMatchObject({ finished: 0, kept: 1, dropped: 0 })
+    expect(first.recovered).toEqual({ recovered: 0 })
+    expect(await h.drafts()).toContain(draftName)
+    expect(await readRaw(h.folder, draftName)).toEqual(draftBytes)
+    expect(await readRaw(h.folder, basename(file))).toEqual(replacementBytes)
+  })
+
   it('a corrupt journal fails closed: nothing is resumed and the journal is not rewritten', async () => {
     const { h, effects, journalFile, saveUntilBoundary, relaunch } = await setup()
     await saveUntilBoundary('after-draft-cleanup')
