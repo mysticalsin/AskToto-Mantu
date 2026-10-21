@@ -168,16 +168,20 @@ export class DesktopActionTaskBridge {
   private readonly now: () => number
   private readonly newId: () => string
 
+  /** Bound executor handed to CommandControl. */
+  readonly execute: CommandExecutor
+
+  /** Bound recovery hook handed to the boot sequence. Idempotent. */
+  readonly recover: () => Promise<DesktopActionTaskRecovery>
+
   constructor(private readonly deps: DesktopActionTaskBridgeDeps) {
     this.now = deps.now ?? Date.now
     this.newId = deps.newId ?? (() => randomBytes(16).toString('hex'))
+    // Bound in the constructor, not as arrow class properties: the main bundle's bytecode step cannot
+    // compile arrow functions inside class property initializers.
+    this.execute = this.run.bind(this)
+    this.recover = this.recoverState.bind(this)
   }
-
-  /** Bound executor handed to CommandControl. */
-  readonly execute: CommandExecutor = (request, context) => this.run(request, context)
-
-  /** Bound recovery hook handed to the boot sequence. Idempotent. */
-  readonly recover = (): Promise<DesktopActionTaskRecovery> => this.recoverState()
 
   snapshot(): DesktopActionTaskSnapshot[] {
     return [...this.state.tasks.values()].map((task) => ({
