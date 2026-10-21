@@ -56,19 +56,19 @@ const REASONS = [
   },
   {
     match:
-      'local-runtime.concurrency.test.ts :: uses one real supervisor wrapper and waits for forwarded health and registry receipt',
+      'llm/local-runtime.concurrency.test.ts :: uses one real supervisor wrapper and waits for forwarded health and registry receipt',
     exact: true,
     why: 'Drives the macOS supervisor wrapper (macSupervisorHelperPath, resolveBinaryPath for mac) with its exact spawn argv and registry receipt ordering. The wrapper is a macOS-only helper and this describe is gated to darwin; the cross-platform start(), generation-guard and Windows-fallback cancellation cases in the same file run on every platform.'
   },
   {
     match:
-      'local-runtime.concurrency.test.ts :: does not launch a direct fallback when stop precedes a supervised helper setup failure',
+      'llm/local-runtime.concurrency.test.ts :: does not launch a direct fallback when stop precedes a supervised helper setup failure',
     exact: true,
     why: 'Exercises the macOS supervised-helper setup-failure path, which only exists where the macOS supervisor wrapper does. The Windows candidate-fallback cancellation cases in the same file run on every platform.'
   },
   {
     match:
-      'local-runtime.concurrency.test.ts :: keeps a healthy successor when the old supervised generation emits delayed output and exit',
+      'llm/local-runtime.concurrency.test.ts :: keeps a healthy successor when the old supervised generation emits delayed output and exit',
     exact: true,
     why: 'Exercises generation ownership of delayed output and exit from a macOS supervised wrapper. The same generation guard is covered cross-platform for unsupervised sidecars by the G1 and detached-start cases in the same file.'
   },
