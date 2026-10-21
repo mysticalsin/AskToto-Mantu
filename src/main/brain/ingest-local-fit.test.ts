@@ -11,6 +11,7 @@ import { readIndex } from './store'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { LOCAL_PREEMPTED_MESSAGE } from '../llm/local'
 import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -71,6 +72,10 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
 
   beforeEach(() => {
     restoreSpeechReadPolicy = installSpeechReadPolicy()
+    // Without this the scan asks the real per-platform dataless probe (macOS helper / PowerShell), which
+    // is absent or slow under a test and classifies the fixture 'unknown' (not on this device), so the
+    // backfill queues nothing. Hosted Windows CI happened to have a working probe.
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-local-fit-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-local-fit-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
