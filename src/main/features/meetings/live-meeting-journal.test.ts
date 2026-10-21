@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CloudSpeechEvent } from '@shared/cloud-speech'
 import type { TranscriptLine } from '@shared/transcript-line'
@@ -115,7 +115,7 @@ function files(dir: string): Array<[string, number]> {
       const full = join(current, name)
       const stat = statSync(full)
       if (stat.isDirectory()) walk(full)
-      else out.push([relative(dir, full), stat.size])
+      else out.push([relative(dir, full).split(sep).join('/'), stat.size]) // POSIX-style names on every host
     }
   }
   walk(dir)
@@ -189,7 +189,8 @@ describe('live meeting journal session', () => {
     expect(tree.filter((name) => !name.startsWith('records/') && name !== 'key.v1')).toEqual([])
     expect(tree.some((name) => name.startsWith('records/record-'))).toBe(true)
     expect(tree).toContain('records/manifest.v1')
-    expect(statSync(join(directory, 'key.v1')).mode & 0o777).toBe(0o600)
+    // POSIX permission bits only exist on macOS/Linux; Windows reports 0o666 for any writable file.
+    if (process.platform !== 'win32') expect(statSync(join(directory, 'key.v1')).mode & 0o777).toBe(0o600)
     await journal.dispose()
 
     const back = await readBack()
@@ -310,7 +311,9 @@ describe('live meeting journal session', () => {
     it('maps a busy mutation lock to UNAVAILABLE and stays consistent: the next append lands at the next revision', async () => {
       const journal = journalWith()
       await journal.append(input(cloudLine(1)))
-      const key = `${realpathSync(join(journalDir(), 'records'))}\0${liveMeetingJournalId(STARTED_AT, OWNER)}`
+      // The production lock key uses the native realpath (fs.promises.realpath), which on Windows also expands 8.3 short
+      // names such as RUNNER~1; the JS realpathSync does not, so the test must use .native to hit the same lock.
+      const key = `${resolve(realpathSync.native(join(journalDir(), 'records')))}\0${liveMeetingJournalId(STARTED_AT, OWNER)}`
       let release!: () => void
       const gate = new Promise<void>((resolve) => {
         release = resolve
@@ -521,9 +524,15 @@ describe('live meeting journal session', () => {
       const journal = journalWith()
       await journal.append(input(cloudLine(1)))
       const root = join(userData, 'meeting-journal')
-      expect(statSync(root).mode & 0o777).toBe(0o700)
-      expect(statSync(journalDir()).mode & 0o777).toBe(0o700)
-      expect(statSync(join(journalDir(), 'records')).mode & 0o777).toBe(0o700)
+      expect(statSync(root).isDirectory()).toBe(true)
+      expect(statSync(journalDir()).isDirectory()).toBe(true)
+      expect(statSync(join(journalDir(), 'records')).isDirectory()).toBe(true)
+      // POSIX permission bits only exist on macOS/Linux (Windows reports 0o666 for directories and ignores mkdir's mode).
+      if (process.platform !== 'win32') {
+        expect(statSync(root).mode & 0o777).toBe(0o700)
+        expect(statSync(journalDir()).mode & 0o777).toBe(0o700)
+        expect(statSync(join(journalDir(), 'records')).mode & 0o777).toBe(0o700)
+      }
       await journal.dispose()
     })
   })
