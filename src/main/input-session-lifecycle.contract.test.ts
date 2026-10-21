@@ -1,9 +1,8 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../test-helpers/module-source'
 
-const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const listenSource = readFileSync(join(__dirname, '../renderer/src/lib/listen.ts'), 'utf8')
+const source = readModuleSource(__dirname, './index').text
+const listenSource = readModuleSource(__dirname, '../renderer/src/lib/listen').text
 
 function declarationIn(sourceText: string, name: string): string {
   const start = sourceText.indexOf('function ' + name + '(')

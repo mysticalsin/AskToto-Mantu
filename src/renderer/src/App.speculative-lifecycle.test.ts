@@ -1,13 +1,13 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { transcriptStateKey } from '@shared/hash'
+import { readModuleSource } from '../../test-helpers/module-source'
 
+const appModule = readModuleSource(__dirname, './App')
 const app = ts.createSourceFile(
-  'App.tsx',
-  readFileSync(join(__dirname, 'App.tsx'), 'utf8'),
+  appModule.path,
+  appModule.text,
   ts.ScriptTarget.Latest,
   true,
   ts.ScriptKind.TSX

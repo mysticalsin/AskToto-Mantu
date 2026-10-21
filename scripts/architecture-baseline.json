@@ -41,7 +41,7 @@
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3076,
     "src/main/brain/publish.ts": 954,
-    "src/main/brain/store.ts": 1190,
+    "src/main/brain/store.ts": 1187,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 999,
     "src/main/index.ts": 10282,
@@ -59,7 +59,7 @@
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3120,
-    "src/shared/ipc.ts": 2347
+    "src/shared/ipc.ts": 2346
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,

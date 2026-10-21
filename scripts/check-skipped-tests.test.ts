@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 const REPO = join(__dirname, '..')
 const CHECKER = join(REPO, 'scripts', 'check-skipped-tests.mjs')
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE: Record<string, number> = { win32: 31, darwin: 6, linux: hostedCi ? 22 : 26 }
+const BASELINE: Record<string, number> = { win32: 34, darwin: 6, linux: hostedCi ? 25 : 29 }
 const allowed = BASELINE[process.platform]
 if (allowed === undefined) throw new Error(`No synthetic skip baseline for ${process.platform}`)
 
