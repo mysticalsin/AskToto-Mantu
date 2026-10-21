@@ -73,6 +73,39 @@ export {
 } from './listen-capture-state'
 export type { CaptureDegraded, CaptureHealth, CaptureSelectionOutcome } from './listen-capture-state'
 export { sysRetryDelayMs }
+import {
+  PROBE_EVERY,
+  PROBE_MIN_WORDS_AGGRESSIVE,
+  PROBE_WINDOW_BUDGET,
+  SWITCH_AFTER,
+  advanceLanguageProbe,
+  probeMinWords,
+  probeResultIsStale,
+  shouldProbeLanguageWindow
+} from './listen-language-probe'
+import {
+  DROPPED_MSG,
+  MIC_LOST_MSG,
+  OFFLINE_MSG,
+  RECONNECTING_MSG,
+  THEM_LOST_MSG,
+  THEM_SILENT_MSG,
+  looksLikeNetworkError,
+  noteAfterDecodedWindow
+} from './listen-notes'
+import { feedEmptyIsEcho, trimQueue } from './listen-queue-policy'
+import { isQuestion } from './listen-question'
+import { recognizerStatusFor, type RecognizerStatus } from './listen-recognizer-status'
+export {
+  advanceLanguageProbe,
+  probeMinWords,
+  probeResultIsStale,
+  shouldProbeLanguageWindow
+} from './listen-language-probe'
+export { looksLikeNetworkError, noteAfterDecodedWindow } from './listen-notes'
+export { feedEmptyIsEcho, trimQueue } from './listen-queue-policy'
+export { isQuestion } from './listen-question'
+export { recognizerStatusFor, type RecognizerStatus } from './listen-recognizer-status'
 
 const SR = 16000
 const NO_SPEECH_WARNING_MS = 30_000
@@ -135,27 +168,6 @@ const STOP_DRAIN_INCOMPLETE_MSG =
   'Transcription did not finish before Stop completed. The transcript may be incomplete.'
 const CLOUD_STT_FINALIZE_INCOMPLETE_MSG =
   'Cloud speech did not confirm its final words before Stop completed. The transcript may be incomplete.'
-// ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
-// auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
-// decodes ENGLISH regardless of what was actually spoken. So asrLanguage:'auto' needs a language-agnostic
-// signal to pin off, exactly like the import path (main/whisper-import.ts) was just fixed to use: Parakeet
-// takes no `language` option, so its output reflects what was actually said. Probe early/periodic 'them'
-// or 'you' windows through window.toto.parakeetFeed (main-side, bundled on both platforms) alongside the
-// whisper decode — fire-and-forget, never blocking — and once shared/lang-id.ts confidently identifies the
-// audio, post the worker a 'pinLanguage' message (see whisper.worker.ts's block comment for the invariants
-// that message latches: never un-pin once pinned; explicit settings languages are never probed at all).
-const PROBE_WINDOW_BUDGET = 5 // probe EVERY one of the opening windows this densely, then drop to PROBE_EVERY
-const PROBE_MIN_WORDS = 8 // a near-empty window ("Hello") can only mislead — wait for real substance
-// 1B.2c — shouldProbeLanguageWindow already keeps probing forever past PROBE_WINDOW_BUDGET when no pin
-// has landed (see its own block comment), but every one of those probes still had to clear PROBE_MIN_WORDS
-// (8) — a meeting whose opening minute is entirely short utterances ("Sim.", "Tá bom.", "Oi, oi.") never
-// produces a single qualifying window, so the FIRST pin could be delayed indefinitely even though the
-// probe cadence itself never gave up. Once the opening budget is spent with no pin yet, lower the bar for
-// that FIRST pin only (a shakier signal beats staying wrongly latched to English for the rest of the
-// meeting) — see probeMinWords below. Once pinned, re-probes go back to the normal, stricter gate.
-const PROBE_MIN_WORDS_AGGRESSIVE = 5
-const PROBE_EVERY = 2 // once pinned, re-probe often enough to catch a mid-meeting / mid-sentence switch
-const SWITCH_AFTER = 2 // consecutive confirming re-probes required before actually re-pinning
 // Cross-line half of the repetition-loop guard (intra-line half = collapseRepeatedPhrase): a looping
 // decoder returns the identical line for window after window; real speech repeats the same normalized
 // line at most once. Two consecutive copies stay, the rest of the run is dropped.
@@ -163,202 +175,9 @@ const MAX_CONSECUTIVE_DUPES = 2
 const PARAKEET_MAX_FAILURES = 3 // consecutive Parakeet failures → fall back to Whisper for the rest of the session
 const PARAKEET_EMPTY_RUN_MAX = 5 // consecutive '' returns on flowing audio → treat as engine stall, fall back to Whisper
 const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no window emitted → surface soft note
-// Exact text of the soft "not hearing the other side" note, shared by the watchdog (sets it) and the
-// first-'them'-emission handler (clears it) so loopback arriving AFTER the watchdog fired isn't left stuck.
-const THEM_SILENT_MSG = isWindows
-  ? 'Not hearing the other side. Check the call volume and that the meeting is playing through your default output device.'
-  : 'Not hearing the other side. Check the call volume and that Screen Recording is granted.'
-// Silent-capture-death recovery notes. A Bluetooth headset disconnect, default-device change, or
-// lid-close sleep kills a capture track with no error anywhere — the UI kept saying "Listening" while
-// a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
-const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep); reconnecting automatically…'
-const THEM_LOST_MSG = 'System-audio capture stopped (display sleep or a device change); reconnecting automatically…'
-// Backpressure became user-visible truncation: transcription fell behind capture long enough that
-// audio windows were discarded. Exact-string contract like the other sticky notes.
-const DROPPED_MSG = 'Transcription fell behind, so some audio was skipped. The transcript may have gaps.'
-// Exact text of the "offline, waiting to reconnect" / "reconnected, restarting" notes, shared by
-// armNetworkRetry (sets them) and the worker's 'ready' handler (clears them once recovery succeeds) —
-// matched by exact string so other sticky notes (THEM_SILENT_MSG, the Parakeet-fallback footnote) are
-// never accidentally cleared by a network recovery that has nothing to do with them.
-const OFFLINE_MSG =
-  "No internet connection. The speech model is paused and will restart automatically once you're back online."
-const RECONNECTING_MSG = 'Back online. Restarting the speech model…'
-// A model-load failure that looks connectivity-related (DNS/fetch/ECONNREFUSED-style messages
-// transformers.js/fetch surface), so it can be distinguished from a genuine non-network load failure
-// (e.g. a missing bundled file) — which should surface as-is instead of wrongly claiming "you're offline".
-const NETWORK_ERR =
-  /network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns|failed to fetch|err_internet_disconnected/i
-
-/** Exported for unit testing — the pure decision behind armNetworkRetry (see useListen below). */
-export function looksLikeNetworkError(message: string, online: boolean): boolean {
-  return !online || NETWORK_ERR.test(message)
-}
-
-/**
- * Exported for unit testing — which live-banner note survives a window that decoded successfully.
- * A Whisper decode failure is per-window, not per-session (the very next window normally transcribes
- * fine), yet its note used to sit in the danger banner for the rest of the meeting because nothing ever
- * retracted it. `decodeNote` is the exact text the failing window put up, so the retraction is an
- * exact-string match — the same contract as OFFLINE_MSG/THEM_SILENT_MSG above, and the reason a fuzzy
- * "clear anything engine-shaped" rule is wrong: it would erase MIC_LOST_MSG/THEM_LOST_MSG/DROPPED_MSG,
- * which describe conditions a decoded window says nothing about.
- */
-export function noteAfterDecodedWindow(current: string | null, decodeNote: string | null): string | null {
-  return decodeNote !== null && current === decodeNote ? null : current
-}
-
-/**
- * Exported for unit testing — the pure probe cadence behind pump() (see PROBE_EVERY's block comment).
- * The un-pinned budget is an opening BURST, not a retirement: a meeting whose first windows are short
- * openers ("Oi", "Tudo bem?") burns all five of them on returns the PROBE_MIN_WORDS substance gate throws
- * away, and a probe that never landed must keep trying — an un-pinned whisper decode is hard-coded to
- * English by transformers.js, so "give up and stay auto" silently means "transcribe the rest of a
- * Portuguese meeting as English". Falling back to the PROBE_EVERY cadence (not every window) keeps the
- * steady-state probe load identical to the already-pinned case.
- */
-export function shouldProbeLanguageWindow(windowIndex: number, pinned: boolean): boolean {
-  if (pinned) return windowIndex % PROBE_EVERY === 0
-  return windowIndex <= PROBE_WINDOW_BUDGET || windowIndex % PROBE_EVERY === 0
-}
-
-/**
- * Exported for unit testing — the pure minimum-substance gate behind probeLanguageWindow (see
- * PROBE_MIN_WORDS_AGGRESSIVE's block comment above). Only the FIRST pin ever gets the lower bar: once
- * `pinned` is true this returns the normal, stricter PROBE_MIN_WORDS regardless of windowIndex, so a
- * genuine mid-meeting language switch still needs real substance to re-pin, exactly as before.
- */
-export function probeMinWords(pinned: boolean, windowIndex: number): number {
-  return !pinned && windowIndex > PROBE_WINDOW_BUDGET ? PROBE_MIN_WORDS_AGGRESSIVE : PROBE_MIN_WORDS
-}
-
-/**
- * Live language pin / re-pin confirmation (MQA-235 for live).
- *
- * Import already majority-votes before the first pin because window 0 is often a wrong-language
- * greeting. Live used to latch on the FIRST confident probe — an English "thanks for joining" on a
- * French call pinned English for the rest of the meeting. The INITIAL pin now needs the same
- * SWITCH_AFTER consecutive confirming detections as a mid-meeting switch.
- *
- * Returns the next switch-run state and whether the worker should be (re)pinned to `detected`.
- */
-export function advanceLanguageProbe(args: {
-  detected: string
-  pinnedLang: string | null
-  switchRun: { lang: string; count: number } | null
-  switchAfter?: number
-  /** Window itself contains the new language alongside another — counts as stronger switch evidence. */
-  mixed?: boolean
-}): { pinnedLang: string | null; switchRun: { lang: string; count: number } | null; shouldPin: boolean } {
-  const switchAfter = args.switchAfter ?? SWITCH_AFTER
-  // Mixed evidence only accelerates a MID-meeting switch — first pin still needs SWITCH_AFTER.
-  const step = args.mixed && args.pinnedLang !== null && args.detected !== args.pinnedLang ? 2 : 1
-  if (args.pinnedLang === null) {
-    const run =
-      args.switchRun && args.switchRun.lang === args.detected
-        ? { lang: args.detected, count: args.switchRun.count + step }
-        : { lang: args.detected, count: step }
-    if (run.count >= switchAfter) {
-      return { pinnedLang: args.detected, switchRun: null, shouldPin: true }
-    }
-    return { pinnedLang: null, switchRun: run, shouldPin: false }
-  }
-  if (args.detected === args.pinnedLang) {
-    return { pinnedLang: args.pinnedLang, switchRun: null, shouldPin: false }
-  }
-  const run =
-    args.switchRun && args.switchRun.lang === args.detected
-      ? { lang: args.detected, count: args.switchRun.count + step }
-      : { lang: args.detected, count: step }
-  if (run.count >= switchAfter) {
-    return { pinnedLang: args.detected, switchRun: null, shouldPin: true }
-  }
-  return { pinnedLang: args.pinnedLang, switchRun: run, shouldPin: false }
-}
-
-/** True when a Parakeet/Apple feed returned empty because echo-defense dropped operator bleed — not an engine stall. */
-export function feedEmptyIsEcho(res: string | { text: string; name?: string; echo?: boolean }): boolean {
-  return typeof res !== 'string' && res.echo === true && res.text === ''
-}
-
-/**
- * Exported for unit testing — the pure trim behind pushAudio's backpressure guard (1B.2a). Bounds the
- * queue to maxLen by dropping the OLDEST windows first, same as before — but a naive drop-the-front trim
- * can silently erase every queued window of one speaker's channel when the other channel produced a
- * longer burst just ahead of it (e.g. five consecutive THEM windows queued right before a stale YOU one)
- * even though there was still room to keep one of each. So the newest already-queued window of EACH
- * speaker present is protected from the trim; oldest-first dropping still applies to everything else, so
- * a single-speaker backlog (the common case) trims exactly as it always did.
- */
-export function trimQueue<T extends { speaker: string }>(queue: readonly T[], maxLen: number): T[] {
-  if (queue.length <= maxLen) return queue.slice()
-  const lastIndexOfSpeaker = new Map<string, number>()
-  queue.forEach((job, i) => lastIndexOfSpeaker.set(job.speaker, i))
-  const protectedIdx = new Set(lastIndexOfSpeaker.values())
-  let excess = queue.length - maxLen
-  const kept: T[] = []
-  for (let i = 0; i < queue.length; i++) {
-    if (excess > 0 && !protectedIdx.has(i)) {
-      excess--
-      continue
-    }
-    kept.push(queue[i])
-  }
-  return kept
-}
-
-/**
- * Exported for unit testing — the pure staleness decision behind probeLanguageWindow's `.then` (see)
- * useListen below). A probe is a fire-and-forget IPC round trip with no timeout whose first call of a
- * session pays the multi-second sherpa model load (parakeetRelease frees it between meetings), so it can
- * still be in flight when the user stops and starts a new meeting. `live` alone cannot express that:
- * start() raises it again for the NEXT session, so a session-1 probe resolving inside session 2 passed
- * the guard and pinned session 2's freshly reset worker to session 1's language. The session epoch
- * stamped at dispatch is the identity that survives the round trip — the same primitive stop()'s drain
- * uses to refuse to clobber a session it no longer owns.
- */
-export function probeResultIsStale(
-  dispatchEpoch: number,
-  currentEpoch: number,
-  live: boolean,
-  engine: 'whisper' | 'parakeet' | 'apple' | 'cloud',
-  language: string
-): boolean {
-  return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
-}
-
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
 type LiveAudioWindow = { audio: Float32Array; speaker: Speaker; partial?: boolean; startedAt?: number }
-
-const QWORDS =
-  /^(what|why|how|when|where|who|which|can|could|would|do|does|did|are|is|have|has|tell me|walk me|describe|explain|give me)\b/i
-// Words a complete question never ends on: articles, coordinating conjunctions, possessive determiners.
-// A line that dangles on one of these (e.g. "what is the…") is a question cut mid-sentence by a VAD endpoint,
-// not a finished one — so we hold off firing the auto-answer and let the coalesced turn accumulate the rest.
-// (Stranded prepositions like "where are you from" are deliberately NOT here — they DO end real questions.)
-const DANGLING = /\b(the|a|an|and|or|but|your|my|our|their|its)$/i
-// Terminal question-mark variants beyond ASCII '?' (U+003F): fullwidth '？' (U+FF1F, CJK) and Arabic '؟'
-// (U+061F) — Whisper transcribes many languages with these, so relying on endsWith('?') alone silently
-// dropped every non-English question from proactive auto-suggest.
-const TERMINAL_Q = /[?？؟]$/
-// QWORDS is a hard-coded English word list — only meaningful for space-delimited Latin-script clauses.
-// Gate the word-count/QWORDS branch on that so it can't misfire on non-Latin text (CJK/Arabic/Cyrillic,
-// which QWORDS wouldn't match anyway and which TERMINAL_Q already handles). Cover the full Latin range,
-// NOT just ASCII: Whisper/entity-casing emit a curly apostrophe (U+2019 in "What's"/"don't"/"L'Oréal")
-// and accented letters (café, naïve) — a pure-ASCII gate silently dropped every such English question.
-const LATIN_CLAUSE = /^[\x00-ɏ‘’“”–—…]*$/
-export function isQuestion(t: string): boolean {
-  const s = t.trim()
-  if (!s) return false
-  if (TERMINAL_Q.test(s)) return true // explicit terminal punctuation → complete even when short
-  // Evaluate only the run's last clause: an accumulated/long turn may carry a completed leading sentence
-  // (e.g. "So we shipped the update. What should we prioritize") -- QWORDS must match that clause's opening
-  // word, not the whole run's, or a finished non-question opener permanently blocks every later question
-  // in the same 'them' turn.
-  const lastClause = s.split(/(?<=[.!?？؟])\s+/).pop() ?? s
-  if (DANGLING.test(lastClause.replace(/[.,;:!?？؟\s]+$/, ''))) return false // still mid-sentence → not yet a question
-  return LATIN_CLAUSE.test(lastClause) && lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
-}
 
 type Channel = ListenAudioChannel
 type MicCapture = ListenMicCapture
@@ -403,43 +222,6 @@ function settleStopCallbacks(operation: StopDrainOperation, outcome: StopDrainOu
   }
 }
 
-export interface RecognizerStatus {
-  engine: 'whisper' | 'parakeet' | 'apple' | 'cloud'
-  model: 'whisper-base' | 'whisper-large-v3-turbo' | 'parakeet' | 'apple-speech' | 'cloud-stt' | null
-  /** Effective engine behavior, which can differ from the user's requested language. */
-  languageMode: 'explicit' | 'detecting' | 'pinned' | 'engine-auto'
-  language: string | null
-  requestedLanguage: string | null
-}
-
-export function recognizerStatusFor(
-  engine: RecognizerStatus['engine'],
-  workerEngine: 'wasm' | 'webgpu' | null,
-  language: string,
-  pinnedLanguage: string | null
-): RecognizerStatus {
-  const model =
-    engine === 'whisper'
-      ? workerEngine === 'webgpu'
-        ? 'whisper-large-v3-turbo'
-        : workerEngine === 'wasm'
-          ? 'whisper-base'
-          : null
-      : engine === 'parakeet'
-        ? 'parakeet'
-        : engine === 'apple'
-          ? 'apple-speech'
-          : 'cloud-stt'
-  const requestedLanguage = language === 'auto' ? null : language
-  // Parakeet's live recognizer auto-detects regardless of the configured preference. Keep the preference
-  // separately for supportability, but never present it as an engine-enforced language.
-  if (engine === 'parakeet') return { engine, model, languageMode: 'engine-auto', language: null, requestedLanguage }
-  return language !== 'auto'
-    ? { engine, model, languageMode: 'explicit', language, requestedLanguage }
-    : pinnedLanguage
-      ? { engine, model, languageMode: 'pinned', language: pinnedLanguage, requestedLanguage: null }
-      : { engine, model, languageMode: 'detecting', language: null, requestedLanguage: null }
-}
 
 export interface ListenApi {
   listening: boolean
