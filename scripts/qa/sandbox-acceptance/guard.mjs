@@ -69,6 +69,15 @@ export function isInside(parent, child) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
+/**
+ * True for the installed-app location /Applications (or anything below it). Compared on forward-slash form with an
+ * optional drive prefix, so the answer does not depend on the host's path separator or on `resolve` adding a drive.
+ * @param {string} path
+ */
+export function isInstalledAppsPath(path) {
+  return /^(?:[A-Za-z]:)?\/Applications(?:\/|$)/.test(String(path).replaceAll('\\', '/'))
+}
+
 const pass = (id, detail) => ({ id, ok: true, detail })
 const fail = (id, detail) => ({ id, ok: false, detail })
 
@@ -114,7 +123,7 @@ export function checkAppPath(appPath, sandboxRoot, { realpath = realpathSync } =
   if (!appPath || !isAbsolute(appPath)) return fail('app-path', 'app path is missing or not absolute')
   if (!appPath.endsWith('.app')) return fail('app-path', 'app path must name an .app bundle')
   const raw = resolve(appPath)
-  if (raw === '/Applications' || raw.startsWith('/Applications/')) {
+  if (isInstalledAppsPath(appPath) || isInstalledAppsPath(raw)) {
     return fail('app-path', 'refusing an app under /Applications (the installed Métis lives there)')
   }
   let real
@@ -123,7 +132,7 @@ export function checkAppPath(appPath, sandboxRoot, { realpath = realpathSync } =
   } catch {
     return fail('app-path', 'app bundle does not exist')
   }
-  if (real === '/Applications' || real.startsWith('/Applications/')) {
+  if (isInstalledAppsPath(real)) {
     return fail('app-path', 'app resolves under /Applications (symlink into the installed Métis)')
   }
   if (!isInside(realpathDeep(sandboxRoot, realpath), real)) return fail('app-path', 'app resolves outside the sandbox')

@@ -56,7 +56,9 @@ const parentEnv = () => ({
   GITHUB_TOKEN: 'should-not-reach-the-app'
 })
 
-describe('launchApp', () => {
+// The fake bundle is an extension-less bash script launched by direct spawn, the macOS bundle launch under
+// isolate.sh; Windows cannot execute it, so the launch path is only exercised on posix hosts.
+describe.skipIf(process.platform === 'win32')('launchApp', () => {
   it('direct-spawns the bundle executable with only the sandbox environment and waits for the app’s own ready record', async () => {
     writeApp(`${BOOT}\nsleep 30`)
     const layout = layoutFor()

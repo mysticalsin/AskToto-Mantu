@@ -74,7 +74,7 @@ describe('path containment', () => {
   })
 
   it('resolves symlinks of the deepest existing prefix, so a link out of the sandbox is outside', () => {
-    symlinkSync(outside, join(sandboxRoot, 'escape'))
+    symlinkSync(outside, join(sandboxRoot, 'escape'), 'junction')
     expect(realpathDeep(join(sandboxRoot, 'escape', 'not-yet', 'file'))).toBe(join(outside, 'not-yet', 'file'))
     expect(checkMeetingsFolder(join(sandboxRoot, 'escape', 'meetings'), sandboxRoot).ok).toBe(false)
     expect(
@@ -100,7 +100,7 @@ describe('app path', () => {
     })
     expect(checkAppPath(join(sandboxRoot, 'Applications'), sandboxRoot).ok).toBe(false)
     expect(checkAppPath(join(sandboxRoot, 'Applications', 'Missing.app'), sandboxRoot).ok).toBe(false)
-    symlinkSync(join(outside, 'Metis QA.app'), join(sandboxRoot, 'Applications', 'Link.app'))
+    symlinkSync(join(outside, 'Metis QA.app'), join(sandboxRoot, 'Applications', 'Link.app'), 'junction')
     expect(checkAppPath(join(sandboxRoot, 'Applications', 'Link.app'), sandboxRoot).ok).toBe(false)
     expect(checkAppPath('relative/Metis QA.app', sandboxRoot).ok).toBe(false)
   })

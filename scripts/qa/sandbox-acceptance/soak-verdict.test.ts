@@ -1,3 +1,4 @@
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { COUNTED_EVENTS } from '../census/audit-counts.mjs'
 import { parsePsResourceRows, parsePsTime, sampleTree, totalRss } from './sampler.mjs'
@@ -305,8 +306,10 @@ describe('soak configuration', () => {
     expect(config.values.minutes).toBe(60)
     expect(config.values['interval-seconds']).toBe(30)
     expect(config.phases.map((phase) => phase.id)).toEqual(['idle', 'meeting', 'post'])
-    expect(config.appPath).toBe('/x/_relay/goal-loop/sandbox-home/Applications/Metis QA.app')
-    expect(config.layout.sandboxRoot).toBe('/x/_relay/goal-loop/sandbox-home')
+    // The config resolves paths for the host (a drive is added on Windows), so compare against the host spelling.
+    const sandboxRoot = resolve('/x/_relay/goal-loop/sandbox-home')
+    expect(config.appPath).toBe(join(sandboxRoot, 'Applications', 'Metis QA.app'))
+    expect(config.layout.sandboxRoot).toBe(sandboxRoot)
   })
 
   it('refuses a plan without a meeting or idle phase, and bad arguments', () => {

@@ -1,3 +1,4 @@
+import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   CliError,
@@ -69,12 +70,12 @@ describe('sandbox layout', () => {
       layout.appsDir,
       layout.auditLog
     ]) {
-      expect(path.startsWith(`${root}/`)).toBe(true)
-      expect(path).not.toMatch(/\/run-/)
+      expect(path.startsWith(`${join(root)}${sep}`)).toBe(true)
+      expect(path).not.toMatch(/[\\/]run-/)
     }
-    expect(layout.meetingsFolder).toBe(`${layout.userData}/Métis Meetings`)
-    expect(layout.captureWav.startsWith(`${layout.userData}/`)).toBe(true) // qa-capture-source needs the WAV inside the profile
-    expect(layout.auditLog).toBe(`${layout.userData}/logs/audit.log`)
+    expect(layout.meetingsFolder).toBe(join(layout.userData, 'Métis Meetings'))
+    expect(layout.captureWav.startsWith(`${layout.userData}${sep}`)).toBe(true) // qa-capture-source needs the WAV inside the profile
+    expect(layout.auditLog).toBe(join(layout.userData, 'logs', 'audit.log'))
   })
 
   it('keeps TMPDIR short enough for the single-instance socket, and flags a root that is too deep', () => {
@@ -130,8 +131,8 @@ describe('child environment', () => {
   })
 
   it('names the executable after the bundle, as electron-builder does', () => {
-    expect(executableForApp('/s/Applications/Metis QA.app')).toBe(
-      '/s/Applications/Metis QA.app/Contents/MacOS/Metis QA'
+    expect(executableForApp(join('/s', 'Applications', 'Metis QA.app'))).toBe(
+      join('/s', 'Applications', 'Metis QA.app', 'Contents', 'MacOS', 'Metis QA')
     )
   })
 

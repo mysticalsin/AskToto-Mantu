@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prepareAudio } from './audio.mjs'
 import { parseCodesign, readBundleId } from './bundle.mjs'
@@ -14,8 +14,9 @@ import { assertSyntheticCaptureActive } from './scenario.mjs'
 let base: string
 let sandboxRoot: string
 beforeEach(() => {
-  // Short on purpose: the socket-path budget check rejects a deep sandbox root, and os.tmpdir() can be deep under isolate.sh.
-  base = realpathSync(mkdtempSync(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'w14-')))
+  // Short on purpose: the socket-path budget check rejects a deep sandbox root, and os.tmpdir() can be deep under
+  // isolate.sh (and on Windows, where the user temp directory alone is about 40 characters). Use the drive root there.
+  base = realpathSync(mkdtempSync(join(process.platform === 'win32' ? parse(tmpdir()).root : '/tmp', 'w14-')))
   sandboxRoot = join(base, '_relay', 'goal-loop', 'sandbox-home')
   mkdirSync(join(sandboxRoot, 'Applications', 'Metis QA.app'), { recursive: true })
 })
@@ -145,7 +146,7 @@ TeamIdentifier=not set
       'raw',
       '-o',
       '-',
-      '/s/Metis QA.app/Contents/Info.plist'
+      join('/s', 'Metis QA.app', 'Contents', 'Info.plist')
     ])
     expect(
       readBundleId('/s/x.app', () => ({ status: 1, stdout: '', stderr: 'no', signal: null, error: null }))

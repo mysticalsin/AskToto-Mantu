@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 const REPO = join(__dirname, '..')
 const CHECKER = join(REPO, 'scripts', 'check-skipped-tests.mjs')
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE: Record<string, number> = { win32: 34, darwin: 6, linux: hostedCi ? 25 : 29 }
+const BASELINE: Record<string, number> = { win32: 40, darwin: 6, linux: hostedCi ? 25 : 29 }
 // Mirrors check-skipped-tests.mjs: off hosted CI on a host without `pwsh`, windows/baseline.contract.test.ts
 // skips its four pwsh-driven cases and the checker raises the baseline by exactly four.
 const pwshMissing =
