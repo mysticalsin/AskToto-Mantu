@@ -343,6 +343,38 @@ function selectedSuggestion(element: ReactElement | undefined): SpecAnswer | nul
   return (element?.props.suggestion as SpecAnswer | null | undefined) ?? null
 }
 
+function prepareEligibleGenerationCase(
+  h: ReturnType<typeof makeHarness>,
+  options: { instantSuggestions?: boolean } = {}
+) {
+  const settings = h.context.settings as {
+    instantSuggestions: boolean
+    providerReady: boolean
+    localSuggestReady: boolean
+    suggestEverySec: number
+  }
+  settings.instantSuggestions = options.instantSuggestions ?? true
+  settings.providerReady = true
+  settings.localSuggestReady = false
+  settings.suggestEverySec = 8
+
+  const listen = h.context.listen as { listening: boolean }
+  listen.listening = true
+  h.updateTranscript(
+    MEETING_A_TEXT,
+    MEETING_A_LINES.map((line) => ({ ...line, speaker: 'them' }))
+  )
+
+  const ask = h.context.ask as { answer: SpecAnswer | null }
+  const suggest = h.context.suggest as { answer: SpecAnswer | null }
+  ask.answer = null
+  suggest.answer = null
+  h.setAnswer({ ...h.initialAnswer, streaming: false })
+
+  const watermark = h.context.specWatermarkRef as { current: Record<string, unknown> }
+  watermark.current = { ...h.initialWatermark, lineCount: 0, at: 1 }
+}
+
 describe('actual App speculative meeting lifecycle', () => {
   it('retires A on accepted same-text replacement and lets equal-line-count B start fresh work', async () => {
     const h = makeHarness()
@@ -483,14 +515,21 @@ describe('actual App speculative meeting lifecycle', () => {
   it('does not adopt or generate when instant suggestions are disabled', async () => {
     const h = makeHarness()
     try {
-      ;(h.context.settings as { instantSuggestions: boolean }).instantSuggestions = false
+      const settings = h.context.settings as { instantSuggestions: boolean }
+      settings.instantSuggestions = false
       expect(h.tryAdoptSpeculative()).toBe(false)
-      h.updateTranscript(
-        MEETING_A_TEXT,
-        MEETING_A_LINES.map((line) => ({ ...line, t: line.t + 1 }))
-      )
+
+      prepareEligibleGenerationCase(h, { instantSuggestions: false })
       h.speculationEffect.render()
-      expect(h.speculativeRun).not.toHaveBeenCalled()
+      expect(h.runRequests).toEqual([])
+
+      settings.instantSuggestions = true
+      h.speculationEffect.render()
+      const expected = [{ mode: 'suggest', transcript: MEETING_A_TEXT }]
+      expect(h.runRequests).toEqual(expected)
+
+      h.speculationEffect.render()
+      expect(h.runRequests).toEqual(expected)
     } finally {
       await h.settle()
     }
@@ -498,60 +537,124 @@ describe('actual App speculative meeting lifecycle', () => {
 
   it.each([
     {
-      guard: 'the line-count watermark',
-      prepare(h: ReturnType<typeof makeHarness>) {
-        ;(h.context.specWatermarkRef as { current: { lineCount: number } }).current.lineCount = MEETING_A_LINES.length
-        h.updateTranscript(
-          MEETING_A_TEXT,
-          MEETING_A_LINES.map((line) => ({ ...line, t: line.t + 1 }))
-        )
-      }
-    },
-    {
-      guard: 'the provider readiness gate',
-      prepare(h: ReturnType<typeof makeHarness>) {
+      guard: 'cloud provider readiness',
+      block(h: ReturnType<typeof makeHarness>) {
         const settings = h.context.settings as { providerReady: boolean; localSuggestReady: boolean }
         settings.providerReady = false
         settings.localSuggestReady = false
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const settings = h.context.settings as { providerReady: boolean; localSuggestReady: boolean }
+        settings.providerReady = true
       }
     },
     {
-      guard: 'the other-speaker gate',
-      prepare(h: ReturnType<typeof makeHarness>) {
+      guard: 'local-only provider readiness',
+      block(h: ReturnType<typeof makeHarness>) {
+        const settings = h.context.settings as { providerReady: boolean; localSuggestReady: boolean }
+        settings.providerReady = false
+        settings.localSuggestReady = false
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const settings = h.context.settings as { providerReady: boolean; localSuggestReady: boolean }
+        settings.localSuggestReady = true
+      }
+    },
+    {
+      guard: 'the other-speaker condition',
+      block(h: ReturnType<typeof makeHarness>) {
         h.updateTranscript(
           MEETING_A_TEXT,
           MEETING_A_LINES.map((line) => ({ ...line, speaker: 'you' }))
+        )
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        h.updateTranscript(
+          MEETING_A_TEXT,
+          MEETING_A_LINES.map((line) => ({ ...line, speaker: 'them' }))
         )
       }
     },
     {
       guard: 'the throttle',
-      prepare(h: ReturnType<typeof makeHarness>) {
-        ;(h.context.specWatermarkRef as { current: { at: number } }).current.at = 99_500
+      block(h: ReturnType<typeof makeHarness>) {
+        const watermark = h.context.specWatermarkRef as { current: { at: number } }
+        watermark.current.at = 99_500
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const watermark = h.context.specWatermarkRef as { current: { at: number } }
+        watermark.current.at = 92_000
         h.updateTranscript(
           MEETING_A_TEXT,
-          MEETING_A_LINES.map((line) => ({ ...line, t: line.t + 1 }))
+          MEETING_A_LINES.map((line) => ({ ...line, speaker: 'them' }))
         )
       }
     },
     {
-      guard: 'visible streaming work',
-      prepare(h: ReturnType<typeof makeHarness>) {
-        ;(h.context.ask as { answer: SpecAnswer | null }).answer = {
-          id: 'visible',
-          text: '',
-          streaming: true,
-          error: null
-        }
+      guard: 'ask answer streaming',
+      block(h: ReturnType<typeof makeHarness>) {
+        const ask = h.context.ask as { answer: SpecAnswer | null }
+        ask.answer = { ...h.initialAnswer, id: 'ask-visible', text: '', streaming: true }
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const ask = h.context.ask as { answer: SpecAnswer | null }
+        if (!ask.answer) throw new Error('ask streaming blocker was not configured')
+        ask.answer = { ...ask.answer, streaming: false }
+      }
+    },
+    {
+      guard: 'suggest answer streaming',
+      block(h: ReturnType<typeof makeHarness>) {
+        const suggest = h.context.suggest as { answer: SpecAnswer | null }
+        suggest.answer = { ...h.initialAnswer, id: 'suggest-visible', text: '', streaming: true }
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const suggest = h.context.suggest as { answer: SpecAnswer | null }
+        if (!suggest.answer) throw new Error('suggest streaming blocker was not configured')
+        suggest.answer = { ...suggest.answer, streaming: false }
+      }
+    },
+    {
+      guard: 'speculative answer streaming',
+      block(h: ReturnType<typeof makeHarness>) {
+        h.setAnswer({ ...h.initialAnswer, streaming: true })
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const speculative = h.context.speculative as { answer: SpecAnswer | null }
+        if (!speculative.answer) throw new Error('speculative streaming blocker was not configured')
+        h.setAnswer({ ...speculative.answer, streaming: false })
+      }
+    },
+    {
+      guard: 'the line-count watermark',
+      block(h: ReturnType<typeof makeHarness>) {
+        const watermark = h.context.specWatermarkRef as { current: { lineCount: number } }
+        watermark.current.lineCount = MEETING_A_LINES.length
+      },
+      release(h: ReturnType<typeof makeHarness>) {
+        const watermark = h.context.specWatermarkRef as { current: { lineCount: number } }
+        watermark.current.lineCount = 0
+        h.updateTranscript(
+          MEETING_A_TEXT,
+          MEETING_A_LINES.map((line) => ({ ...line, speaker: 'them' }))
+        )
       }
     }
-  ])('retains $guard in the actual speculation effect', async ({ prepare }) => {
+  ])('blocks on $guard alone, then issues one request after release', async ({ block, release }) => {
     const h = makeHarness()
     try {
+      prepareEligibleGenerationCase(h)
+      block(h)
       h.speculationEffect.render()
-      prepare(h)
+      expect(h.runRequests).toEqual([])
+
+      release(h)
       h.speculationEffect.render()
-      expect(h.speculativeRun).not.toHaveBeenCalled()
+      const expected = [{ mode: 'suggest', transcript: MEETING_A_TEXT }]
+      expect(h.runRequests).toEqual(expected)
+
+      h.speculationEffect.render()
+      expect(h.runRequests).toEqual(expected)
     } finally {
       await h.settle()
     }
