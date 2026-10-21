@@ -73,6 +73,13 @@ export function currentOwnerSession(): OwnerSessionAuthority | null {
   return activeOwnerSession
 }
 
+/** What the input-session lifecycle controller needs: the lazy authority and a record of failed revocations. */
+export const ownerSessionLifecycle = {
+  current: currentOwnerSession,
+  onRevocationError: (reason: string, errorName: string): void =>
+    mainLog.error('[input-session] owner-session revocation failed', { reason, error: errorName })
+}
+
 type ResetListener = (...args: never[]) => void
 
 /** The WebContents surface the owner-session renderer binding needs. `removeListener` lets it undo only its own listeners. */

@@ -35,6 +35,7 @@ import {
   createOwnerSessionRendererBinder,
   createOwnerSessionWiring,
   currentOwnerSession,
+  ownerSessionLifecycle,
   type OwnerSessionRendererSource
 } from './owner-session-wiring'
 
@@ -165,7 +166,7 @@ function world(identity: string | null = 'owner-a') {
   bindOwnerRevocationClosure(authority, store)
   authority.onRevoked((_ref, reason) => order.push(`owner-revoked:${reason}`))
   const controller = new InputSessionLifecycleController({
-    ownerSession: () => authority,
+    ownerSession: { current: () => authority },
     inputSessionAuthority: {
       hardStop: (reason: InputSessionStopReason) => order.push(`hard-stop:${reason}`),
       hasMeetingReservation: false,
@@ -572,5 +573,15 @@ describe('createOwnerSessionWiring retains its authority for lazy lookup', () =>
     mainNavigation(contents)
     expect(revokeFrame).toHaveBeenCalledExactlyOnceWith(5, 'renderer-reset')
     expect(revokeWebContents).toHaveBeenCalledWith(5, 'renderer-reset')
+  })
+
+  it('records a failed revocation through the main log with the reason and error name only', async () => {
+    const { mainLog } = await import('../logger')
+    ownerSessionLifecycle.onRevocationError('sign-out', 'TypeError')
+    expect(mainLog.error).toHaveBeenCalledWith('[input-session] owner-session revocation failed', {
+      reason: 'sign-out',
+      error: 'TypeError'
+    })
+    expect(ownerSessionLifecycle.current).toBe(currentOwnerSession)
   })
 })

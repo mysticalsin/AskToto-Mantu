@@ -735,7 +735,7 @@ import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
-import { bindRendererResets, createOwnerSessionWiring, currentOwnerSession } from './lifecycle/owner-session-wiring'
+import { bindRendererResets, createOwnerSessionWiring, ownerSessionLifecycle } from './lifecycle/owner-session-wiring'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -1546,7 +1546,7 @@ const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
   }
 })
 const inputSessionLifecycleController = new InputSessionLifecycleController({
-  ownerSession: currentOwnerSession,
+  ownerSession: ownerSessionLifecycle,
   inputSessionAuthority,
   meetingStartActivationAuthority,
   meetingMicCaptureAuthority,

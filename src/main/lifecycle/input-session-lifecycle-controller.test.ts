@@ -155,12 +155,18 @@ function setup(options: FixtureOptions = {}) {
     if (options.ownerSession === 'throws') throw new Error('synthetic owner revocation failure')
   })
   let ownerAuthority: { revokeAll: typeof ownerRevokeAll } | null = { revokeAll: ownerRevokeAll }
+  const ownerRevocationError = vi.fn((reason: InputSessionStopReason, errorName: string) => {
+    events.push(`owner-revoke-error:${reason}:${errorName}`)
+  })
   const controller = new InputSessionLifecycleController({
     ...(options.ownerSession
       ? {
-          ownerSession: () => {
-            if (options.ownerSession === 'getter-throws') throw new Error('synthetic owner lookup failure')
-            return ownerAuthority
+          ownerSession: {
+            current: () => {
+              if (options.ownerSession === 'getter-throws') throw new Error('synthetic owner lookup failure')
+              return ownerAuthority
+            },
+            onRevocationError: ownerRevocationError
           }
         }
       : {}),
@@ -197,6 +203,7 @@ function setup(options: FixtureOptions = {}) {
     controller,
     events,
     ownerRevokeAll,
+    ownerRevocationError,
     setOwnerAuthority(next: { revokeAll: typeof ownerRevokeAll } | null) {
       ownerAuthority = next
     },
@@ -777,6 +784,18 @@ describe('InputSessionLifecycleController owner-session revocation', () => {
     })
     expect(() => fixture.controller.hardStopInputSession('shutdown')).toThrow('synthetic native release failure')
     expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith('quit')
+  })
+
+  it('still completes when the failure reporter itself throws, and reports nothing for a successful revocation', () => {
+    const failing = setup({ ownerSession: 'throws' })
+    failing.ownerRevocationError.mockImplementation(() => {
+      throw new Error('reporter down')
+    })
+    expect(() => failing.controller.hardStopInputSession('shutdown')).not.toThrow()
+
+    const ok = setup({ ownerSession: 'live' })
+    ok.controller.hardStopInputSession('shutdown')
+    expect(ok.ownerRevocationError).not.toHaveBeenCalled()
   })
 
   it('keeps existing construction without an owner-session dependency working', () => {

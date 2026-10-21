@@ -28,10 +28,14 @@ const GLOBAL_OWNER_REVOCATION: Readonly<Partial<Record<InputSessionStopReason, O
 
 export interface InputSessionLifecycleControllerDependencies {
   /**
-   * Lazy lookup of the one owner-session authority. Main creates it inside registerIpc, after this controller,
-   * so it is resolved on every global boundary rather than captured. Null until it exists.
+   * The owner-session authority. Main creates it inside registerIpc, after this controller, so `current` is resolved
+   * on every global boundary rather than captured (null until it exists). `onRevocationError` makes a failed global
+   * revocation observable; it receives the stop reason and the error name only.
    */
-  ownerSession?: () => { revokeAll(reason: OwnerSessionRevokeReason): void } | null
+  ownerSession?: {
+    current(): { revokeAll(reason: OwnerSessionRevokeReason): void } | null
+    onRevocationError?(reason: InputSessionStopReason, errorName: string): void
+  }
   inputSessionAuthority: Pick<
     InputSessionAuthority,
     'hardStop' | 'hasMeetingReservation' | 'meetingStartedAt' | 'releaseMeeting'
@@ -96,10 +100,16 @@ export class InputSessionLifecycleController {
   private revokeOwnerSessions(reason: InputSessionStopReason): void {
     const ownerReason = GLOBAL_OWNER_REVOCATION[reason]
     if (ownerReason === undefined) return
+    const owner = this.deps.ownerSession
     try {
-      this.deps.ownerSession?.()?.revokeAll(ownerReason)
-    } catch {
-      /* owner revocation is best effort and must never reach a caller mid-teardown */
+      owner?.current()?.revokeAll(ownerReason)
+    } catch (error) {
+      // Never reaches a caller mid-teardown, but a failed global revocation must not be silent.
+      try {
+        owner?.onRevocationError?.(reason, error instanceof Error ? error.name : typeof error)
+      } catch {
+        /* reporting is best effort too */
+      }
     }
   }
 
