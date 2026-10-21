@@ -1,4 +1,5 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import { installMeetingSpeechPolicy } from '../features/meetings/meeting-speech-policy'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
 import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
@@ -34,6 +35,10 @@ export interface OwnerSessionWiring {
  */
 export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSessionWiring {
   const { ipcMain, assertMainWindow, currentInputSessionContext } = deps
+  // The trusted speech budget must exist before any handler can save, autosave or read a meeting: without it a
+  // broker-speech line is refused (fail closed). registerIpc runs before the first window shows and before any
+  // boot-work job (draft recovery, retention, brain reads), so this is the earliest main seam that covers them all.
+  installMeetingSpeechPolicy()
   const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
   activeOwnerSession = ownerSession
   const authorizeSender = registerOwnerSessionIpc({

@@ -31,6 +31,12 @@ import { installAppQuitLifecycle } from './app-quit-lifecycle'
 import { createQuitTrace } from './quit-trace'
 import { createOwnerSessionAuthority } from './owner-session-authority'
 import {
+  configureMeetingSpeechLimits,
+  getMeetingSpeechLimits,
+  getMeetingSpeechReadLimitBytes
+} from '../features/meetings/meeting-speech'
+import { MEETING_SPEECH_LIMITS, MEETING_SPEECH_WORKER_BOUNDS } from '../features/meetings/meeting-speech-policy'
+import {
   bindRendererResets,
   createOwnerSessionRendererBinder,
   createOwnerSessionWiring,
@@ -53,6 +59,24 @@ describe('owner session wiring', () => {
   it('registers only the owner-session status channel', () => {
     const { ipcMain } = wire()
     expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([OWNER_SESSION_IPC.status])
+  })
+
+  it('installs the trusted meeting speech policy before it registers any handler', () => {
+    configureMeetingSpeechLimits(undefined)
+    const installedAtFirstHandler: boolean[] = []
+    const ipcMain = {
+      handle: vi.fn(() => {
+        installedAtFirstHandler.push(getMeetingSpeechLimits() !== undefined)
+      })
+    }
+    createOwnerSessionWiring({
+      ipcMain,
+      assertMainWindow: vi.fn(),
+      currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 })
+    })
+    expect(installedAtFirstHandler).toEqual([true])
+    expect(getMeetingSpeechLimits()).toEqual(MEETING_SPEECH_LIMITS)
+    expect(getMeetingSpeechReadLimitBytes()).toBe(MEETING_SPEECH_WORKER_BOUNDS.maxInputBytes)
   })
 
   it('hands input capture the same authority and authorizer it exposes', () => {

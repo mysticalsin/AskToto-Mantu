@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import { SaveMeetingSchema, stripProvisionalLines, type Settings, type SaveMeeting } from '@shared/ipc'
 import type { CloudSpeechEvent } from '@shared/cloud-speech'
-import { cloudSpeechTranscriptSegment } from '../renderer/src/lib/cloud-speech-listen'
 import { saveMeeting, saveDraftTranscript } from './transcripts'
 import { recallRead } from './recall'
 import { configureMeetingSpeechLimits, configureMeetingSpeechPersistence } from './features/meetings/meeting-speech'
+import { installMeetingSpeechPolicy } from './features/meetings/meeting-speech-policy'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
 vi.mock('electron')
@@ -45,8 +45,10 @@ function brokerFinalEvent(text = SYNTHETIC_TEXT): Extract<CloudSpeechEvent, { ty
 
 /** Mirrors listen.ts applyEvent -> commitLine for a cloud final: the line carries `speech: event`. */
 function rendererCommittedMeeting(): SaveMeeting {
-  const segment = cloudSpeechTranscriptSegment(brokerFinalEvent())
-  if (!segment) throw new Error('fixture must be a final segment')
+  // Same mapping as the renderer's cloudSpeechTranscriptSegment (system track -> 'them', speech: the event). It is
+  // restated here because the node test project cannot type-check renderer modules.
+  const event = brokerFinalEvent()
+  const segment = { speaker: 'them' as const, text: event.segment.text, speech: event }
   return SaveMeetingSchema.parse({
     title: 'Synthetic cloud speech meeting',
     mode: 'general',
@@ -72,9 +74,11 @@ describe('P0: cloud-speech meeting save in default production configuration', ()
     vi.mocked(app.getPath).mockReturnValue(folder)
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
     useStorageForTests()
-    // Production default: no main code installs a speech budget or persistence service.
+    // Production default configuration: main installs the trusted speech policy at boot (createOwnerSessionWiring)
+    // and no persistence service is configured, so every codec runs inline.
     configureMeetingSpeechLimits(undefined)
     configureMeetingSpeechPersistence(undefined)
+    installMeetingSpeechPolicy()
   })
 
   afterEach(() => {
