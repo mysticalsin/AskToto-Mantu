@@ -6,17 +6,18 @@
 // Scenario (explicit PASS / FAIL / NOT_SUPPORTED / SKIPPED per step, each backed by something the run observed):
 //   launch -> renderer ready -> synthetic meeting live -> transcript segments -> stop and save -> meeting file in the sandbox
 //   meetings folder -> review opens it -> clean quit -> relaunch -> saved meeting still listed -> clean quit.
-// --scenario settings-hig swaps it for the Apple HIG Settings scenario (settings-hig.mjs): Command-Comma, instant-apply toggle,
+// --scenario upgrade (upgrade.mjs, needs --previous-zip and --candidate-zip) runs update, single-instance and rollback on one
+// shared profile. --scenario settings-hig swaps it for the Apple HIG Settings scenario (settings-hig.mjs): Command-Comma, instant-apply toggle,
 // confirmation sheet, no mic request, inline endpoint validation, persistence and last pane across a relaunch.
 // Exit codes: 0 PASS or PASS_WITH_GAPS, 1 FAIL or INCOMPLETE, 2 PRECONDITION (a guard refused, or a bad argument).
 // --dry-run validates arguments and every guard, prints the plan and touches nothing.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { arch, platform as osPlatform, release } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readBundleId, readBundleVersion, readCodesign, mainExecutableSha256 } from './bundle.mjs'
 import { prepareAudio, AUDIO_KINDS } from './audio.mjs'
-import { assertWritableInSandbox, deriveSandboxRoot, GuardError } from './guard.mjs'
+import { assertWritableInSandbox, deriveSandboxRoot, evaluateGuards, GuardError } from './guard.mjs'
 import {
   CliError,
   EXIT_CODES,
@@ -27,9 +28,12 @@ import {
   newRunId,
   parseCli,
   runStep,
-  sandboxLayout
+  sandboxLayout,
+  sha256File,
+  checkSocketBudget
 } from './lib.mjs'
-import { guardReport, launchApp, prepareProfile } from './session.mjs'
+import { guardReport, launchApp, planLaunch, prepareProfile } from './session.mjs'
+import { DEFAULT_CANDIDATE_VERSION, runUpgradeScenario, UPGRADE_STEPS } from './upgrade.mjs'
 import { HIG_SEED_SETTINGS, SETTINGS_HIG_STEPS, runSettingsHigScenario } from './settings-hig.mjs'
 import {
   observeTranscriptDraft,
@@ -39,11 +43,14 @@ import {
   verifyMeetingPreserved
 } from './scenario.mjs'
 
-export const SCENARIOS = Object.freeze(['meeting', 'settings-hig'])
+export const SCENARIOS = Object.freeze(['meeting', 'settings-hig', 'upgrade'])
 
 export const CLI_SPEC = Object.freeze({
   scenario: { type: 'string', default: 'meeting' },
   app: { type: 'string' },
+  'previous-zip': { type: 'string' },
+  'candidate-zip': { type: 'string' },
+  'candidate-version': { type: 'string', default: DEFAULT_CANDIDATE_VERSION },
   'sandbox-root': { type: 'string' },
   'run-id': { type: 'string' },
   out: { type: 'string' },
@@ -79,7 +86,43 @@ export function resolveConfig(argv, env = process.env) {
   if (!/^[A-Za-z0-9-]{1,16}$/.test(runId))
     throw new CliError('--run-id must be 1-16 characters of letters, digits and -')
   const layout = sandboxLayout({ sandboxRoot, runId })
-  return { values, layout, appPath: values.app ?? join(layout.appsDir, 'Metis QA.app') }
+  if (values.scenario !== 'upgrade') {
+    for (const flag of ['previous-zip', 'candidate-zip'])
+      if (values[flag]) throw new CliError(`--${flag} is only valid with --scenario upgrade`)
+    return { values, layout, appPath: values.app ?? join(layout.appsDir, 'Metis QA.app') }
+  }
+  // The upgrade scenario installs both builds itself, into its own Applications directory inside the sandbox. It never uses
+  // (or replaces) the shared <sandbox>/Applications install, which a soak or another run may have running.
+  if (values.app) throw new CliError('--app is not used by --scenario upgrade (it installs from --previous-zip/--candidate-zip)')
+  for (const flag of ['previous-zip', 'candidate-zip']) {
+    if (!values[flag]) throw new CliError(`--scenario upgrade needs --${flag} <Metis-QA-*.zip>`)
+    if (!/Metis-QA-.*\.zip$/.test(basename(values[flag])))
+      throw new CliError(`--${flag} must name a Metis-QA-*.zip (the QA-identity artifact)`)
+    if (!existsSync(values[flag]) || !statSync(values[flag]).isFile())
+      throw new CliError(`--${flag}: no such file ${values[flag]}`)
+  }
+  const appsDir = join(sandboxRoot, 'upgrade', runId, 'Applications')
+  return {
+    values: { ...values, 'previous-zip': resolve(values['previous-zip']), 'candidate-zip': resolve(values['candidate-zip']) },
+    layout: { ...layout, appsDir },
+    appPath: join(appsDir, 'Metis QA.app')
+  }
+}
+
+/** Guards that do not need an installed bundle: sandbox root, child env, meetings folder, parent env, socket budget. */
+function upgradeGuardReport({ layout, env, platform }) {
+  const childEnv = planLaunch({ layout, appPath: layout.appsDir, parentEnv: env, captureFile: layout.captureWav, bundleId: null, platform }).childEnv
+  const result = evaluateGuards({
+    sandboxRoot: layout.sandboxRoot,
+    childEnv,
+    parentEnv: env,
+    meetingsFolder: layout.meetingsFolder
+  })
+  const checks = [...result.checks, checkSocketBudget(layout.tmp)]
+  if (layout.appsDir === join(layout.sandboxRoot, 'Applications'))
+    checks.push({ id: 'upgrade-apps-dir', ok: false, detail: 'the upgrade scenario must not use the shared sandbox Applications dir' })
+  else checks.push({ id: 'upgrade-apps-dir', ok: true, detail: 'a per-run Applications dir inside the sandbox' })
+  return { ok: checks.every((check) => check.ok), checks, childEnvKeys: Object.keys(childEnv).sort() }
 }
 
 /**
@@ -90,7 +133,11 @@ export function resolveConfig(argv, env = process.env) {
  */
 export function dryRunPlan(config, env = process.env, { bundleId = undefined, platform = process.platform } = {}) {
   const { layout, appPath, values } = config
-  const guards = guardReport({ layout, appPath, parentEnv: env, captureFile: layout.captureWav, bundleId, platform })
+  // The upgrade scenario installs its own bundle, so before the run there is no app to read yet: check everything else.
+  const guards =
+    values.scenario === 'upgrade' && !existsSync(appPath)
+      ? upgradeGuardReport({ layout, env, platform })
+      : guardReport({ layout, appPath, parentEnv: env, captureFile: layout.captureWav, bundleId, platform })
   return {
     ok: guards.ok,
     checks: guards.checks,
@@ -102,10 +149,15 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
       scenario: values.scenario,
       audio: values.audio,
       meetingSeconds: values['meeting-seconds'],
+      ...(values.scenario === 'upgrade'
+        ? { previousZip: values['previous-zip'], candidateZip: values['candidate-zip'], appsDir: layout.appsDir }
+        : {}),
       steps:
-        values.scenario === 'settings-hig'
-          ? [...SETTINGS_HIG_STEPS]
-          : [
+        values.scenario === 'upgrade'
+          ? [...UPGRADE_STEPS]
+          : values.scenario === 'settings-hig'
+            ? [...SETTINGS_HIG_STEPS]
+            : [
               'launch-and-renderer-ready',
               'meeting-live',
               'transcript-observed',
@@ -165,12 +217,22 @@ async function main(argv) {
       runId: layout.runId
     },
     meta: {
-      bundleId: readBundleId(appPath),
-      appVersion: readBundleVersion(appPath),
-      codesign: (({ adhoc, signature, teamIdentifier }) => ({ adhoc, signature, teamIdentifier }))(
-        readCodesign(appPath)
-      ),
-      mainExecutableSha256: mainExecutableSha256(appPath),
+      ...(values.scenario === 'upgrade'
+        ? {
+            previousZip: { name: basename(values['previous-zip']), sha256: sha256File(values['previous-zip']) },
+            candidateZip: { name: basename(values['candidate-zip']), sha256: sha256File(values['candidate-zip']) },
+            appsDir: layout.appsDir,
+            userData: layout.userData,
+            note: 'both builds are QA-identity (com.mantu.asktoto.qa) zips; the "previous" one is a branch build labelled 1.9.7, not the shipped public 1.9.7'
+          }
+        : {
+            bundleId: readBundleId(appPath),
+            appVersion: readBundleVersion(appPath),
+            codesign: (({ adhoc, signature, teamIdentifier }) => ({ adhoc, signature, teamIdentifier }))(
+              readCodesign(appPath)
+            ),
+            mainExecutableSha256: mainExecutableSha256(appPath)
+          }),
       audio,
       host: { platform: osPlatform(), arch: arch(), osRelease: release(), node: process.version }
     }
@@ -191,7 +253,26 @@ async function main(argv) {
   }
   process.once('SIGINT', () => void cleanup().finally(() => process.exit(130)))
   try {
-    if (values.scenario === 'settings-hig') {
+    if (values.scenario === 'upgrade') {
+      await runUpgradeScenario({
+        report,
+        layout,
+        appsDir: layout.appsDir,
+        previousZip: values['previous-zip'],
+        candidateZip: values['candidate-zip'],
+        candidateVersion: values['candidate-version'],
+        audio,
+        meetingSeconds: values['meeting-seconds'],
+        transcriptWaitSeconds: values['transcript-wait-seconds'],
+        saveWaitSeconds: values['save-wait-seconds'],
+        parentEnv: process.env,
+        launch: (app) => launchApp({ ...launchArgs, appPath: app }),
+        onSession: (next) => {
+          session = next
+        },
+        log
+      })
+    } else if (values.scenario === 'settings-hig') {
       await runSettingsHigScenario({
         report,
         launch: () => launchApp(launchArgs),

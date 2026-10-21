@@ -8,6 +8,7 @@ Nothing here touches `/Applications`, the Keychain, the real brain, OneDrive or 
 |---|---|
 | `install.mjs` | Extracts the QA zip into `<sandbox>/Applications/`, proves bundle id and ad-hoc signature, records sha256 of zip and executable. |
 | `run-acceptance.mjs` | Launch, meeting with synthetic speech, save, review, clean quit, relaunch, data preserved, quit. JSON report with a PASS/FAIL/NOT_SUPPORTED/SKIPPED per step. `--scenario settings-hig` runs the Apple HIG Settings acceptance instead (below). |
+| `upgrade.mjs` | The opt-in `upgrade` scenario (update, single instance, rollback on one shared profile) and its pure judges. `install.mjs --apps-dir` installs beside the shared install. |
 | `settings-hig.mjs` | The opt-in `settings-hig` scenario and its pure helpers (CDP key-event builders, observation classifiers). |
 | `soak.mjs` | Idle, then synthetic meeting, then post-meeting; CPU/RSS every 30 s; growth verdict SOAK-ACCEPT-1; JSON and markdown. |
 | `guard.mjs` | Pure refusal rules used by all three (see below). |
@@ -127,6 +128,27 @@ $ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance
 A post-relaunch step whose pre-quit step was NOT_SUPPORTED is NOT_SUPPORTED too; if that step FAILED it is SKIPPED. The toggle is left
 in its new value (the profile is a throwaway sandbox). "Replay onboarding" is used for the confirmation, so a build without the
 confirmation sheet would start onboarding and the later steps would fail visibly rather than pass.
+
+## Upgrade scenario (`--scenario upgrade`, C29)
+
+Opt-in. Needs `--previous-zip` and `--candidate-zip` (both `Metis-QA-*.zip`, QA identity) and optionally `--candidate-version` (default
+`2.12.0`). It installs both builds itself into `<sandbox>/upgrade/<run-id>/Applications/` (never the shared `<sandbox>/Applications`
+that a soak may be using) and runs every launch against ONE profile, `<sandbox>/acceptance/<run-id>/userdata`. `--run-id` is at most 16 characters.
+
+```bash
+$ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance.mjs --scenario upgrade --run-id upg-1 --previous-zip release/Metis-QA-1.9.7.zip --candidate-zip release/Metis-QA-2.12.0.zip"
+```
+
+| Phase | Steps (PASS only on the observation named) |
+|---|---|
+| Previous build | `install-previous`; `previous-launch-and-ready`; `previous-settings-written` (setSettings, then getSettings and settings.json hold the value); meeting live, transcript draft, stop and save (the meeting scenario's own observations); `previous-clean-quit` (a hash snapshot of every meeting file is taken). |
+| Upgrade | `install-candidate-over-previous` (new main-executable hash, profile files unchanged by the install); `candidate-launch-on-previous-profile`; `candidate-reports-version` (Info.plist, `getSettings().version` and the audit `app.started`/`app.renderer.ready` version all equal the expected version and differ from the previous build); `candidate-meeting-preserved` (listed, `recallRead` decodes it, byte-identical to the snapshot); `candidate-settings-preserved`; a second meeting. |
+| Single instance | `single-instance`: a second process on the same profile (same env, no debug port) must exit 0 by itself within 15 s, the first must still be running and answer `getSettings()`, and no crash record may appear. The audit events written meanwhile are recorded by name. |
+| Rollback | `install-previous-again`; `rollback-launch` (the older build on the profile the newer one wrote; recorded honestly as started or refused); `rollback-meetings-listed`; `rollback-clean-quit`; `rollback-data-integrity` (sha256 of every meeting file equals the pre-rollback snapshot). FAIL only on a crash, or a meeting that changed or vanished. A safe refusal is NOT_SUPPORTED with the reason. |
+| Re-upgrade | `install-candidate-again`; `reupgrade-launch`; `reupgrade-meetings-present`; `reupgrade-clean-quit`. |
+| Gap | `legacy-profile-migration` is NOT_SUPPORTED: the Metis/AskToto profile-dir adoption only runs when `ASKTOTO_USERDATA` is unset, where Electron would resolve the real Application Support folder, which this harness must never touch. |
+
+The "previous" build is whatever zip is passed; a branch build labelled 1.9.7 is not the shipped public 1.9.7.
 
 ## Soak verdict SOAK-ACCEPT-1
 

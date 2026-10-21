@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import { CliError, parseWavInfo } from './lib.mjs'
 import { dryRunPlan, resolveConfig } from './run-acceptance.mjs'
 import { assertSyntheticCaptureActive } from './scenario.mjs'
 import { SETTINGS_HIG_STEPS } from './settings-hig.mjs'
+import { UPGRADE_STEPS } from './upgrade.mjs'
 
 let base: string
 let sandboxRoot: string
@@ -124,6 +125,47 @@ describe('run-acceptance configuration', () => {
   })
 })
 
+describe('upgrade scenario configuration', () => {
+  const zips = () => {
+    const previous = join(base, 'Metis-QA-1.9.7.zip')
+    const candidate = join(base, 'Metis-QA-2.12.0.zip')
+    writeFileSync(previous, 'p')
+    writeFileSync(candidate, 'c')
+    return { previous, candidate }
+  }
+
+  it('needs both zips, named as QA-identity artifacts, and rejects --app', () => {
+    const { previous, candidate } = zips()
+    expect(() => resolveConfig(['--scenario', 'upgrade'], isolatedEnv())).toThrow(/--previous-zip/)
+    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous], isolatedEnv())).toThrow(/--candidate-zip/)
+    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', join(base, 'x.zip')], isolatedEnv())).toThrow(/Metis-QA/)
+    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', join(base, 'Metis-QA-9.zip')], isolatedEnv())).toThrow(/no such file/)
+    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', candidate, '--app', '/x/Metis QA.app'], isolatedEnv())).toThrow(/--app is not used/)
+    expect(() => resolveConfig(['--previous-zip', previous], isolatedEnv())).toThrow(/only valid with --scenario upgrade/)
+  })
+
+  it('installs into a per-run Applications dir, never the shared sandbox install', () => {
+    const { previous, candidate } = zips()
+    const config = resolveConfig(['--scenario', 'upgrade', '--run-id', 'upg-1', '--previous-zip', previous, '--candidate-zip', candidate], isolatedEnv())
+    expect(config.layout.appsDir).toBe(join(sandboxRoot, 'upgrade', 'upg-1', 'Applications'))
+    expect(config.appPath).toBe(join(config.layout.appsDir, 'Metis QA.app'))
+    expect(config.appPath).not.toBe(join(sandboxRoot, 'Applications', 'Metis QA.app'))
+    expect(config.values['candidate-version']).toBe('2.12.0')
+    expect(config.layout.userData).toBe(join(sandboxRoot, 'acceptance', 'upg-1', 'userdata'))
+  })
+
+  it('dry-runs with every guard before any bundle is installed, and plans the upgrade steps', () => {
+    const { previous, candidate } = zips()
+    const env = isolatedEnv()
+    const plan = dryRunPlan(resolveConfig(['--scenario', 'upgrade', '--run-id', 'upg-1', '--previous-zip', previous, '--candidate-zip', candidate], env), env, { platform: 'darwin' })
+    expect(plan.ok).toBe(true)
+    expect(plan.checks.map((check) => check.id)).toContain('upgrade-apps-dir')
+    expect(plan.plan.steps).toEqual([...UPGRADE_STEPS])
+    expect(plan.plan.steps).toContain('single-instance')
+    expect(plan.plan.steps).toContain('rollback-data-integrity')
+  })
+})
+
 describe('install configuration', () => {
   it('needs a zip and a derivable sandbox, and installs into <sandbox>/Applications', () => {
     expect(() => resolveInstallConfig([], isolatedEnv())).toThrow(/--zip/)
@@ -135,6 +177,12 @@ describe('install configuration', () => {
       replace: true,
       dryRun: false
     })
+  })
+
+  it('takes an explicit --apps-dir so a second install can sit beside the shared one', () => {
+    const appsDir = join(sandboxRoot, 'upgrade', 'u1', 'Applications')
+    const config = resolveInstallConfig(['--zip', 'release/Metis-QA-1.0-mac.zip', '--apps-dir', appsDir], isolatedEnv())
+    expect(config.appsDir).toBe(appsDir)
   })
 
   it('requires exactly one .app in the extracted zip', () => {
