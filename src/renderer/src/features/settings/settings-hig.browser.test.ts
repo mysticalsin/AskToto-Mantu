@@ -241,7 +241,7 @@ describe('Settings HIG behaviour (C25)', () => {
     expect(await toggle.getAttribute('aria-checked')).toBe('false')
     const hintId = await toggle.getAttribute('aria-describedby')
     expect(await page.locator(`[id="${hintId}"]`).textContent()).toContain('needs your approval')
-    await page.getByRole('button', { name: 'Open System Settings' }).click()
+    await page.getByRole('button', { name: /^Open (System )?Settings$/ }).click()
     await expect
       .poll(async () => (await inspect()).callArgs.find((c) => c.name === 'openSystemSettings')?.args)
       .toEqual(['loginItems'])
