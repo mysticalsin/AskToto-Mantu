@@ -13,6 +13,13 @@ import { PassThrough } from 'node:stream'
 
 const auditMock = vi.hoisted(() => ({ auditLog: vi.fn() }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: auditMock.auditLog }))
+// The darwin supervised path needs resources/mac-helper/metis-mac-helper, a gitignored build output that a
+// fresh checkout or worktree does not have. Report it present so the supervised launch (and the
+// wrapper-missing assertion below) does not depend on whether the host built it; spawn itself is faked.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, existsSync: () => true }
+})
 const spawnMock = vi.hoisted(() => ({ spawn: vi.fn() }))
 vi.mock('node:child_process', () => ({ spawn: spawnMock.spawn }))
 vi.mock('node:net', () => ({

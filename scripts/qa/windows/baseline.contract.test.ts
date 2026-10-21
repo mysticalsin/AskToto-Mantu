@@ -5,6 +5,14 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 const SCRIPT = 'scripts/qa/windows/baseline.ps1'
+
+// The four harness-driving cases spawn the real PowerShell 7 `pwsh` against baseline.ps1. Every hosted CI
+// runner (windows, ubuntu, macos) ships pwsh, so there they always run and a missing pwsh fails them loudly.
+// An owner or agent Mac without PowerShell cannot execute the script at all (spawnSync returns status null),
+// so only off-CI hosts skip them; scripts/check-skipped-tests.mjs declares and counts exactly these four.
+const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
+const pwshAvailable = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], { timeout: 30_000 }).status === 0
+const skipWithoutPwsh = !hostedCi && !pwshAvailable
 const workflow = readFileSync('.github/workflows/windows-baseline.yml', 'utf8').replace(/\r\n/g, '\n')
 
 interface Row {
@@ -15,7 +23,7 @@ interface Row {
 }
 
 describe('M2-0415 Windows 1.9.6 baseline harness', () => {
-  it('plan mode lists measured census rows and reports every external row BLOCKED_EXTERNAL with an unblock step', () => {
+  it.skipIf(skipWithoutPwsh)('plan mode lists measured census rows and reports every external row BLOCKED_EXTERNAL with an unblock step', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0415-baseline-'))
     try {
       const result = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-OutDir', out, '-PlanOnly'], {
@@ -46,7 +54,7 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
     }
   })
 
-  it('records the artifact sha and release-note handoff without private program paths', () => {
+  it.skipIf(skipWithoutPwsh)('records the artifact sha and release-note handoff without private program paths', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0195-baseline-'))
     try {
       const sha = 'a'.repeat(64)
@@ -74,7 +82,7 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
     }
   })
 
-  it('refuses to measure without an app path', () => {
+  it.skipIf(skipWithoutPwsh)('refuses to measure without an app path', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0415-baseline-'))
     try {
       const result = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-OutDir', out], {
@@ -88,7 +96,7 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
     }
   })
 
-  it('refuses to measure without a representative profile manifest', () => {
+  it.skipIf(skipWithoutPwsh)('refuses to measure without a representative profile manifest', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0415-baseline-'))
     const blank = mkdtempSync(join(tmpdir(), 'm2-0415-blank-profile-'))
     const env = { ...process.env }

@@ -23,7 +23,7 @@
  * Run: `npm run check:skips [root-report.json]`. With no report argument it produces its own report;
  * a supplied report is evidence from a completed root run and must be complete and successful.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -120,6 +120,10 @@ const REASONS = [
     why: 'Loads a real Windows Authenticode signature through the system PowerShell with an inherited, incompatible PSModulePath (MQA-300) — needs the real windows powershell.exe and its built-in signature module, so it only runs on a Windows host.'
   },
   {
+    match: 'windows/baseline.contract.test.ts',
+    why: 'Drives the real PowerShell 7 `pwsh` against scripts/qa/windows/baseline.ps1. Hosted CI runners all ship pwsh and always run these four cases (a missing pwsh fails them there); only an off-CI host without PowerShell skips them, and the baseline below is raised by exactly four for that host so the allowance cannot hide a skip on CI. The workflow-lane cases in the same file run everywhere.'
+  },
+  {
     match: 'install-proxy.test.ts',
     why: 'Proves a lowercase https_proxy is refused separately from HTTPS_PROXY. process.env keys are case-insensitive on Windows, so the two names collapse into one variable there and the distinct-case scenario this test sets up cannot occur.'
   },
@@ -157,10 +161,16 @@ const REASONS = [
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
 // The six Dust CLI import cases now run against a mocked process boundary on every platform.
 const BASELINE = { win32: 34, darwin: 6, linux: hostedCi ? 25 : 29 }
+// windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
+// `pwsh`; on hosted CI they must run, so the allowance never applies there.
+const PWSH_BASELINE_SKIPS = 4
+const pwshMissing =
+  !hostedCi && spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], { timeout: 30_000 }).status !== 0
 const reasonFor = (id) => REASONS.find((reason) => (reason.exact ? id === reason.match : id.includes(reason.match)))
 
 const platform = process.platform
-const allowed = BASELINE[platform]
+const allowed =
+  BASELINE[platform] === undefined ? undefined : BASELINE[platform] + (pwshMissing ? PWSH_BASELINE_SKIPS : 0)
 if (allowed === undefined) {
   console.error(`[check:skips] FAIL — no declared skip baseline for platform ${platform}.`)
   process.exit(1)

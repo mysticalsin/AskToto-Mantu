@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,8 +8,13 @@ const REPO = join(__dirname, '..')
 const CHECKER = join(REPO, 'scripts', 'check-skipped-tests.mjs')
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
 const BASELINE: Record<string, number> = { win32: 34, darwin: 6, linux: hostedCi ? 25 : 29 }
-const allowed = BASELINE[process.platform]
-if (allowed === undefined) throw new Error(`No synthetic skip baseline for ${process.platform}`)
+// Mirrors check-skipped-tests.mjs: off hosted CI on a host without `pwsh`, windows/baseline.contract.test.ts
+// skips its four pwsh-driven cases and the checker raises the baseline by exactly four.
+const pwshMissing =
+  !hostedCi && spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], { timeout: 30_000 }).status !== 0
+const base = BASELINE[process.platform]
+if (base === undefined) throw new Error(`No synthetic skip baseline for ${process.platform}`)
+const allowed = base + (pwshMissing ? 4 : 0)
 
 type Assertion = { status: string; title: string }
 type TestResult = {

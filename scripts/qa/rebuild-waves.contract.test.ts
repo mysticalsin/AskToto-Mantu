@@ -98,13 +98,13 @@ function namedReExport(source: ts.SourceFile, moduleName: string, exportedName: 
   })
 }
 
-function ipcHandler(source: ts.SourceFile, channel: string): ts.ArrowFunction {
+function ipcHandler(source: ts.SourceFile, channel: string, registrar = 'registerIpc'): ts.ArrowFunction {
   const registration = source.statements.find(
-    (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === 'registerIpc'
+    (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === registrar
   )
-  expect(registration && ts.isFunctionDeclaration(registration) && registration.body, 'registerIpc body').toBeTruthy()
+  expect(registration && ts.isFunctionDeclaration(registration) && registration.body, `${registrar} body`).toBeTruthy()
   if (!registration || !ts.isFunctionDeclaration(registration) || !registration.body)
-    throw new Error('registerIpc function body is missing')
+    throw new Error(`${registrar} function body is missing`)
   const handlers = registration.body.statements.filter((statement) => {
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false
     const call = statement.expression
@@ -484,10 +484,14 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
     const main = mainSource
     expect(namedBindings(transcripts, './transcripts-recap', 'parseRecapMarkdown')).toBe(true)
     expect(namedReExport(transcripts, './transcripts-recap', 'parseRecapMarkdown')).toBe(true)
-    expect(namedBindings(main, './transcripts', 'parseRecapMarkdown')).toBe(true)
+    // The exportRecapJson handler moved out of the main entry into registerWorkspaceIpc (a35394c4); the entry
+    // still owns the real ipcMain and hands it to that module.
+    const workspace = parseTypeScript('src/main/ipc/workspace-ipc.ts')
+    expect(namedBindings(workspace, '../transcripts', 'parseRecapMarkdown')).toBe(true)
+    expect(namedBindings(workspace, '@shared/ipc', 'IPC')).toBe(true)
     expect(namedBindings(main, 'electron', 'ipcMain')).toBe(true)
-    expect(namedBindings(main, '@shared/ipc', 'IPC')).toBe(true)
-    const recapHandler = ipcHandler(main, 'exportRecapJson')
+    expect(namedBindings(main, './ipc/workspace-ipc', 'registerWorkspaceIpc')).toBe(true)
+    const recapHandler = ipcHandler(workspace, 'exportRecapJson', 'registerWorkspaceIpc')
     expect(shadowsName(recapHandler, 'parseRecapMarkdown')).toBe(false)
     const recapReturns = directRecapReturns(recapHandler)
     expect(recapReturns).toHaveLength(1)
