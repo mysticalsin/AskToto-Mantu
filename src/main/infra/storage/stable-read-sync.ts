@@ -77,6 +77,10 @@ export function readStableRegularFileSync(root: string, name: string, maxBytes: 
       realpathSync.native(file) !== canonicalFile
     )
       return { status: 'refused' }
+    // Relinquish ownership before close: an error must refuse the read without retrying a reused fd.
+    const completedFd = fd
+    fd = undefined
+    closeSync(completedFd)
     return { status: 'ok', bytes, canonicalRoot }
   } catch {
     return { status: 'refused' }
@@ -85,7 +89,7 @@ export function readStableRegularFileSync(root: string, name: string, maxBytes: 
       try {
         closeSync(fd)
       } catch {
-        /* failed close cannot validate a source */
+        /* The read is already refused; do not retry an uncertain descriptor. */
       }
     }
   }
@@ -142,6 +146,10 @@ export function readStableSnapshotBytesSync(rootPath: string, path: string, maxB
       !sameFileVersion(after, statSync(canonicalPathAfterRead))
     )
       return null
+    // Relinquish ownership before close: an error must refuse the read without retrying a reused fd.
+    const completedFd = fd
+    fd = undefined
+    closeSync(completedFd)
     return bytes
   } catch {
     return null
@@ -150,7 +158,7 @@ export function readStableSnapshotBytesSync(rootPath: string, path: string, maxB
       try {
         closeSync(fd)
       } catch {
-        /* A close failure cannot make an incomplete snapshot usable. */
+        /* The snapshot is already refused; do not retry an uncertain descriptor. */
       }
     }
   }
