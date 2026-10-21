@@ -38,7 +38,10 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
     expect(read('src/renderer/src/lib/whisper.worker.ts')).toMatch(
       /qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu'/
     )
-    expect(read('src/renderer/src/App.tsx')).toMatch(/asrWebgpuFallbackAt/)
+    // The qualityDegraded -> asrWebgpuFallbackAt patch lives in useWebgpuFallbackNote (asr-fallback-notes.ts);
+    // App still wires it to the listen hook's qualityDegraded flag.
+    expect(read('src/renderer/src/lib/asr-fallback-notes.ts')).toMatch(/asrWebgpuFallbackAt/)
+    expect(read('src/renderer/src/App.tsx')).toMatch(/useWebgpuFallbackNote\(listen\.qualityDegraded, patch\)/)
     const settings = settingsSource()
     expect(settings).toMatch(/A recent live session used Whisper base instead of the requested large model\./)
     expect(settings).toMatch(/Packaged builds use Whisper\s+base for live transcription\./)

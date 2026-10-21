@@ -15,6 +15,12 @@ import { sourceIndexOf } from '../../scripts/lib/source-layout'
 // as pinned-agent-boundary.contract.test.ts), so the invariant is pinned here against the actual source.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
+// The follow-up-memory effects moved out of App.tsx into lib/conversation-memory.ts (c07eb166); App still
+// owns the refs and passes them in.
+const conversationMemorySrc = readFileSync(
+  join(__dirname, '..', 'renderer', 'src', 'lib', 'conversation-memory.ts'),
+  'utf8'
+)
 const onboardingSrc = readFileSync(
   join(__dirname, '..', 'renderer', 'src', 'components', 'OnboardingExperience.tsx'),
   'utf8'
@@ -103,12 +109,17 @@ describe('review fixes (2026-08-04) stay wired', () => {
   })
 
   it('flipping askFollowUpMemory clears the RENDERER history refs (pre-opt-in Q&A never surfaces)', () => {
-    const start = sourceIndexOf(appSrc, '// Flipping follow-up memory is itself a conversation boundary')
+    const start = sourceIndexOf(conversationMemorySrc, '// Flipping follow-up memory is itself a conversation boundary')
     expect(start).toBeGreaterThan(-1)
-    const body = appSrc.slice(start, start + 700)
-    expect(body).toMatch(/historyRef\.current = \[\]/)
-    expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
-    expect(body).toMatch(/\}, \[settings\?\.askFollowUpMemory\]\)/)
+    const body = conversationMemorySrc.slice(start, start + 700)
+    expect(body).toMatch(/history\.current = \[\]/)
+    expect(body).toMatch(/copilotHistory\.current = \[\]/)
+    expect(body).toMatch(/\}, \[askFollowUpMemory\]\)/)
+    // ...and App feeds it the renderer's own refs and the live setting.
+    const wiring = appSrc.slice(appSrc.indexOf('useConversationMemory(ask.answer'))
+    expect(wiring.slice(0, 400)).toMatch(/settings\?\.askFollowUpMemory/)
+    expect(wiring.slice(0, 400)).toMatch(/history: historyRef/)
+    expect(wiring.slice(0, 400)).toMatch(/copilotHistory: copilotHistoryRef/)
   })
 
   it("screen-ask's stay-fast branch re-captures when history would be wiped (memory off or idle-expired)", () => {

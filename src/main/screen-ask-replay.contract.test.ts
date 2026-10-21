@@ -26,6 +26,10 @@ const stateSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'state.ts
   /\r\n/g,
   '\n'
 )
+const askContextSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'lib', 'ask-context.ts'), 'utf8').replace(
+  /\r\n/g,
+  '\n'
+)
 const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8').replace(
   /\r\n/g,
   '\n'
@@ -98,7 +102,8 @@ describe('MQA-180 — main reports whether the answer actually saw the screen', 
   it('announces the degrade instead of silently answering without the screen', () => {
     // Same contract as the live capture path: a screen ask that ends up without the screen says so
     // (App.tsx's captureError banner), it does not just quietly drop the badge.
-    expect(appSrc).toMatch(/const SCREEN_CONTEXT_LOST_NOTICE =/)
+    expect(askContextSrc).toMatch(/export const SCREEN_CONTEXT_LOST_NOTICE =/)
+    expect(appSrc).toMatch(/setCaptureError\(SCREEN_CONTEXT_LOST_NOTICE\)/)
     expect(appSrc).toMatch(/ask\.answer\?\.screenMissed/)
   })
 })

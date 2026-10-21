@@ -33,7 +33,8 @@ describe('MQA-338 — renderer diagnostics never capture or export private rende
   const main = readFileSync(join(__dirname, './index.ts'), 'utf8')
   const rendererMain = readFileSync(join(__dirname, '../renderer/src/main.tsx'), 'utf8')
   const rendererStyles = readAppCss()
-  const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+  // The demo-seed URL gate moved from App.tsx into lib/app-demo.ts (c07eb166).
+  const app = readFileSync(join(__dirname, '../renderer/src/lib/app-demo.ts'), 'utf8')
 
   it('keeps the shared URL matcher but removes raw screenshot, DOM, and caller-selected file output', () => {
     expect(shot).toContain('isRealRendererShotUrl')

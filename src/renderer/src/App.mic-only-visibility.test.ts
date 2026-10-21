@@ -12,6 +12,9 @@ import { sourceIndexOf } from '../../../scripts/lib/source-layout'
 const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const listenPath = join(__dirname, 'lib', 'listen.ts')
 const listen = readFileSync(listenPath, 'utf8').replace(/\r\n/g, '\n')
+// The recovery note literals moved out of listen.ts into listen-notes.ts (0a89199f); listen.ts imports them.
+const listenNotesPath = join(__dirname, 'lib', 'listen-notes.ts')
+const listenNotes = readFileSync(listenNotesPath, 'utf8').replace(/\r\n/g, '\n')
 const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const pill = readFileSync(join(__dirname, 'components', 'ControlPill.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const settingsUi = readFileSync(join(__dirname, 'features', 'settings', 'AudioTab.tsx'), 'utf8').replace(/\r\n/g, '\n')
@@ -154,7 +157,22 @@ function systemRecoverySuccessExpression(): { expression: ts.ArrowFunction; sour
   const assignment = only(assignments, 'recovery method ref binding')
   if (assignment.parent.parent !== recovery.parent.parent.parent)
     throw new Error('Recovery ref must bind in the factory scope')
-  const messages = descendants(source).filter(
+  const notesSource = ts.createSourceFile(listenNotesPath, listenNotes, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const notesImport = only(
+    descendants(source).filter(
+      (node): node is ts.ImportSpecifier => ts.isImportSpecifier(node) && node.name.text === 'THEM_LOST_MSG'
+    ),
+    'THEM_LOST_MSG import in listen'
+  )
+  const notesDeclaration = notesImport.parent.parent.parent
+  if (
+    !ts.isImportDeclaration(notesDeclaration) ||
+    notesDeclaration.moduleSpecifier.getText(source) !== "'./listen-notes'" ||
+    notesDeclaration.importClause?.isTypeOnly ||
+    notesImport.isTypeOnly
+  )
+    throw new Error('Expected runtime THEM_LOST_MSG import from listen-notes')
+  const messages = descendants(notesSource).filter(
     (node): node is ts.VariableDeclaration =>
       ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'THEM_LOST_MSG'
   )

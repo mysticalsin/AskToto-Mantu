@@ -14,6 +14,8 @@ import {
 
 const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+// The Settings window-mode effect moved out of App.tsx into lib/overlay-window-effects.ts (c07eb166).
+const windowEffects = readFileSync(join(__dirname, '../renderer/src/lib/overlay-window-effects.ts'), 'utf8')
 
 const TOTOS_MAC = {
   bounds: { x: 0, y: 0, width: 1800, height: 1169 },
@@ -66,8 +68,9 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(index).toMatch(/if \(settingsSurfaceOpen\)/)
     expect(index).toMatch(/settingsContentHeight/)
     expect(index).toMatch(/sendHotkey\('settings'\)/)
-    expect(app).toMatch(/windowMode\('settings'\)/)
-    expect(app).toMatch(/prevViewRef\.current === 'settings'/)
+    expect(windowEffects).toMatch(/windowMode\('settings'\)/)
+    expect(windowEffects).toMatch(/prevViewRef\.current === 'settings'/)
+    expect(app).toMatch(/useSettingsWindowMode\(view\)/)
     expect(app).toMatch(/onBarSettings/)
     expect(app).toMatch(/openSettingsDefault/)
     expect(app).toMatch(/overlayShowsSettingsSheet\(view, minimized\) \? 'h-full min-h-0'/)
