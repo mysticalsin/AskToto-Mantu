@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
-import { rename, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { open, rename } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { IpcMainInvokeEvent } from 'electron'
 import { IPC, type SaveDraftTranscriptResult, type SaveMeeting, type Settings } from '@shared/ipc'
@@ -37,7 +37,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
-    writeFile: vi.fn(actual.writeFile),
+    open: vi.fn(actual.open),
     rename: vi.fn(async (from: string, to: string) => renameSync(from, to))
   }
 })
@@ -108,14 +108,20 @@ describe('draft receipt reaches the renderer through the imported draft registra
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
     publishSettingsSnapshot(settings, true)
     actualFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-    vi.mocked(writeFile).mockImplementation(actualFs.writeFile)
-    vi.mocked(rename).mockImplementation(async (from, to) => renameSync(from, to))
+    vi.mocked(open).mockReset().mockImplementation(actualFs.open)
+    vi.mocked(rename)
+      .mockReset()
+      .mockImplementation(async (from, to) => renameSync(from, to))
   })
 
   afterEach(() => {
     activeHost = undefined
     electronBoundary.invoke.mockReset()
     vi.restoreAllMocks()
+    vi.mocked(open).mockReset().mockImplementation(actualFs.open)
+    vi.mocked(rename)
+      .mockReset()
+      .mockImplementation(async (from, to) => renameSync(from, to))
     rmSync(folder, { recursive: true, force: true })
   })
 
@@ -352,10 +358,28 @@ describe('draft receipt reaches the renderer through the imported draft registra
     const written = new Promise<void>((resolve) => {
       didWrite = resolve
     })
-    vi.mocked(writeFile).mockImplementationOnce(async (...args) => {
-      await actualFs.writeFile(...args)
-      didWrite()
-      await gate
+    let ownedOpen: Parameters<typeof open> | undefined
+    let restoreWrite: (() => void) | undefined
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const handle = await actualFs.open(...args)
+      const [path, flags] = args
+      if (
+        !ownedOpen &&
+        typeof path === 'string' &&
+        dirname(path) === folder &&
+        /^\.autosave-draft-\d{4}-\d{2}-\d{2}_\d{6}-000\.md\.[a-f0-9]{12}\.tmp$/.test(basename(path)) &&
+        flags === 'wx'
+      ) {
+        ownedOpen = args
+        const write = handle.writeFile.bind(handle)
+        const spy = vi.spyOn(handle, 'writeFile').mockImplementation(async (...writeArgs) => {
+          await write(...writeArgs)
+          didWrite()
+          await gate
+        })
+        restoreWrite = () => spy.mockRestore()
+      }
+      return handle
     })
     const pending = h.tick()
     try {
@@ -366,11 +390,16 @@ describe('draft receipt reaches the renderer through the imported draft registra
         })
       ])
       expect(readdirSync(folder).some((file) => file.endsWith('.tmp'))).toBe(true)
-      expect(vi.mocked(writeFile).mock.lastCall?.[2]).toEqual({ mode: 0o600 })
+      expect(ownedOpen).toEqual([expect.any(String), 'wx', 0o600])
       transition()
     } finally {
       release()
-      await pending
+      try {
+        await pending
+      } finally {
+        restoreWrite?.()
+        vi.mocked(open).mockReset().mockImplementation(actualFs.open)
+      }
     }
   }
 
