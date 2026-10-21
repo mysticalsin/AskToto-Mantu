@@ -46,6 +46,11 @@ import { createWriteAdmissionGuard } from './infra/storage/write-with-admission'
 import type { FileClass } from './infra/storage/gateway'
 import { speakerLabel } from './features/meetings/transcript-format'
 import {
+  buildDraftTranscriptDocument,
+  promoteDraftTranscript,
+  recoveredDraftIndexFields
+} from './features/meetings/draft-transcript-document'
+import {
   cleanTitle,
   escapeHeadingLines,
   opaqueNamePart,
@@ -890,32 +895,8 @@ export async function saveDraftTranscript(
       const title = cleanTitle(m.title) || `${m.mode} meeting`
       refuseReservedSpeechProse(title, m.mode)
       const transcript = await renderMeetingTranscriptAsync(m.lines)
-      // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
-      // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
-      // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
-      const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
-      const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
-      const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
-      const frontmatter = [
-        '---',
-        'type: meeting-transcript-draft',
-        'source: Métis',
-        `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
-        `date: ${new Date(started).toISOString()}`,
-        `title: "${yamlSafeTitle(title)}"`,
-        `participants: [${participants.join(', ')}]`,
-        `duration_min: ${durMin}`,
-        'status: interrupted',
-        '---',
-        ''
-      ].join('\n')
-      const body =
-        `# ${title} (in progress — autosaved draft)\n\n` +
-        'This is an automatic snapshot of a meeting still in progress, or one that ended without a normal ' +
-        'save (crash / force quit). If Métis is still running this meeting, ignore this file — the real ' +
-        'save replaces it when the meeting ends.\n\n' +
-        `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
-      await writeSaved(file, frontmatter + body, settings.encryptTranscripts, admission.guard)
+      const document = buildDraftTranscriptDocument(m, started, title, transcript)
+      await writeSaved(file, document, settings.encryptTranscripts, admission.guard)
       return { status: 'saved' }
     })
   } catch {
@@ -1054,8 +1035,6 @@ export async function clearDraftTranscript(
   }
 }
 
-const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
-
 // Never follow a symlink planted with a draft-shaped name: `FileClass.isSymlink` is the directory
 // entry's own type (from lstat), not the target's, so a symlink to another meeting already inside the
 // folder is rejected here even though the gateway's `read()` would otherwise follow it.
@@ -1115,11 +1094,7 @@ export async function recoverOrphanDrafts(settings: Settings, savedDrafts?: Read
         const decoded = await decodeSavedMeetingAsync(read.bytes, false, draftPath)
         const text = decoded.ok ? decoded.text : ''
         if (!text) continue // undecryptable on this device — leave it alone
-        const promoted = text
-          .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
-          .replace('status: interrupted', 'status: recovered')
-          .replace(/^## Transcript so far$/m, '## Full transcript')
-          .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
+        const promoted = promoteDraftTranscript(text)
         let out = primaryOut
         for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
         await writeSaved(out, promoted, wasEncrypted)
@@ -1137,16 +1112,7 @@ export async function recoverOrphanDrafts(settings: Settings, savedDrafts?: Read
         // just wrote, not the live toggle: index.md is always cleartext, so a preserved-encrypted
         // recovery would otherwise leak the meeting's title and date beside the ciphertext.
         if (!wasEncrypted) {
-          const lines = text.split('\n')
-          const dateLine = lines.find((l) => l.startsWith('date: '))
-          const modeLine = lines.find((l) => l.startsWith('mode: '))
-          const h1Line = lines.find((l) => l.startsWith('# ') && l.endsWith(IN_PROGRESS_SUFFIX))
-          const d = dateLine ? new Date(dateLine.slice('date: '.length)) : new Date()
-          const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-          const title = h1Line ? h1Line.slice(2, -IN_PROGRESS_SUFFIX.length) : 'Recovered meeting'
-          // mode is now written quoted (see saveDraftTranscript); strip the wrapping quotes so a
-          // recovered meeting's index row shows the bare value, same as before that change.
-          const mode = modeLine ? modeLine.slice('mode: '.length).replace(/^"|"$/g, '') : 'meeting'
+          const { dateStr, title, mode } = recoveredDraftIndexFields(text)
           appendIndexRow(folder, dateStr, title, mode, 0, basename(out))
         }
       } catch {
