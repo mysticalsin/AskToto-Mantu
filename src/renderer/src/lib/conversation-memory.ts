@@ -37,7 +37,11 @@ export function useConversationMemory(
     if (!p || p.id !== a.id) return
     pendingUser.current = null
     if (cancelled.current) return // user cancelled — don't record a truncated turn into memory
-    const next: ChatTurn[] = [...history.current, { role: 'user', content: p.q }, { role: 'assistant', content: a.text }]
+    const next: ChatTurn[] = [
+      ...history.current,
+      { role: 'user', content: p.q },
+      { role: 'assistant', content: a.text }
+    ]
     history.current = next.slice(-12)
     lastTurnAt.current = Date.now()
   }, [askAnswer])
