@@ -114,7 +114,7 @@
     "@azure/msal-node": "^5.3.0",
     "@dust-tt/client": "^1.2.6",
     "@huggingface/transformers": "^3.0.0",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@sigstore/bundle": "5.0.0",
     "@sigstore/protobuf-specs": "0.5.0",
     "@sigstore/verify": "4.1.2",
