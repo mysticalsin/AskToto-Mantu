@@ -52,13 +52,16 @@ export function registerPermissionHelperIpc(deps: {
   let helperContents: WebContents | null = null
   let dragIcon: NativeImage | null = null
   let iconUrl: string | null = null
-  void app
-    .getFileIcon(bundle ?? process.execPath, { size: 'normal' })
-    .then((icon) => {
-      dragIcon = icon
-      iconUrl = icon.isEmpty() ? null : icon.toDataURL()
-    })
-    .catch(() => undefined)
+  // The app's own icon, for the drag image and the helper's app item. Read on first use, never at boot.
+  let iconRead: Promise<void> | null = null
+  const ensureIcon = (): Promise<void> =>
+    (iconRead ??= app
+      .getFileIcon(bundle ?? process.execPath, { size: 'normal' })
+      .then((icon) => {
+        dragIcon = icon
+        iconUrl = icon.isEmpty() ? null : icon.toDataURL()
+      })
+      .catch(() => undefined))
   const view = (state: HelperState): HelperView => ({
     ...state,
     drag: state.drag && !!bundle,
@@ -103,8 +106,9 @@ export function registerPermissionHelperIpc(deps: {
 
   const fromHelper = (sender: WebContents): boolean => helperContents !== null && sender === helperContents
 
-  ipcMain.handle(PERMISSION_HELPER_IPC.open, (e, kind: unknown) => {
+  ipcMain.handle(PERMISSION_HELPER_IPC.open, async (e, kind: unknown) => {
     deps.assertMainWindow(e)
+    await ensureIcon()
     return helper.open(kind)
   })
   ipcMain.handle(PERMISSION_HELPER_IPC.getState, (e) => {

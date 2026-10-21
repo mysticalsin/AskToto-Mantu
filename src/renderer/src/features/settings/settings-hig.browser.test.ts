@@ -314,7 +314,7 @@ describe('Settings HIG behaviour (C25)', () => {
     await expect.poll(async () => (await inspect()).calls).toContain('repairScreenPermission')
   })
 
-  it('the not-asked Screen Recording row has one Continue button that asks only for Screen Recording (HIG P3)', async () => {
+  it('the not-asked Screen Recording row has one Continue that opens the pane and the guided helper, never a prompt (HIG P3, C32 Part D)', async () => {
     await mount({
       section: 'screen',
       settings: SETTINGS,
@@ -330,7 +330,8 @@ describe('Settings HIG behaviour (C25)', () => {
     expect(await page.getByRole('button', { name: /Allow/ }).count()).toBe(0)
     await page.getByRole('button', { name: 'Continue', exact: true }).click()
     await expect
-      .poll(async () => (await inspect()).callArgs.find((c) => c.name === 'requestPermissionsUpfront')?.args)
+      .poll(async () => (await inspect()).callArgs.find((c) => c.name === 'openPermissionHelper')?.args)
       .toEqual(['screenRecording'])
+    expect((await inspect()).calls).not.toContain('requestPermissionsUpfront')
   })
 })
