@@ -50,7 +50,9 @@ describe('diagnostics export — logs out, content never', () => {
   })
 
   it('is exposed to the renderer through the preload bridge', () => {
-    expect(preloadSrc).toMatch(/diagnosticsExport: \(\): Promise<DiagnosticsExportResult> => ipcRenderer\.invoke\(IPC\.diagnosticsExport\)/)
+    expect(preloadSrc).toMatch(
+      /diagnosticsExport: \(\): Promise<DiagnosticsExportResult> => ipcRenderer\.invoke\(IPC\.diagnosticsExport\)/
+    )
   })
 })
 

@@ -29,7 +29,12 @@ function requireImportSnapshotConnection(indexText: string, audioIpcText: string
   // These parser labels are synthetic; keep real source-read paths literal above.
   const fixtureExtension = '.' + 'ts'
   const index = ts.createSourceFile('index' + fixtureExtension, indexText, ts.ScriptTarget.Latest, true)
-  const audioIpc = ts.createSourceFile('import-audio-ipc' + fixtureExtension, audioIpcText, ts.ScriptTarget.Latest, true)
+  const audioIpc = ts.createSourceFile(
+    'import-audio-ipc' + fixtureExtension,
+    audioIpcText,
+    ts.ScriptTarget.Latest,
+    true
+  )
   const helper = ts.createSourceFile(
     'import-jobs-snapshot-ipc' + fixtureExtension,
     helperText,
@@ -562,7 +567,11 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(body).toContain('sniffMediaFile(sourcePath)')
     expect(body).toContain('IMPORT_NOT_MEDIA')
     expect(body.indexOf('sniffMediaFile(sourcePath)')).toBeLessThan(body.indexOf('child = spawn('))
-    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList', importAudioIpcSrc)
+    const start = sliceBetween(
+      'ipcMain.handle(IPC.importAudioStart',
+      'ipcMain.handle(IPC.importJobsList',
+      importAudioIpcSrc
+    )
     expect(start).not.toMatch(/shell\.openPath/)
     expect(start).not.toMatch(/execFile|execSync/)
   })
@@ -572,7 +581,11 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(accessor).toMatch(/initializeImportJobs\(\)/)
     expect(accessor).toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
-    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList', importAudioIpcSrc)
+    const start = sliceBetween(
+      'ipcMain.handle(IPC.importAudioStart',
+      'ipcMain.handle(IPC.importJobsList',
+      importAudioIpcSrc
+    )
     expect(start).toMatch(/const jobs = getImportJobs\(\)/)
     expect(start).toMatch(/jobs\.start\(consumePickedAudio\(parsed\.token\)\)/)
     expect(start).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
