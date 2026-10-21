@@ -59,8 +59,8 @@
     "src/renderer/src/features/settings/AiSection.tsx": 2410,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
-    "src/renderer/src/lib/listen.ts": 2994,
-    "src/shared/ipc.ts": 2271
+    "src/renderer/src/lib/listen.ts": 2993,
+    "src/shared/ipc.ts": 2259
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
