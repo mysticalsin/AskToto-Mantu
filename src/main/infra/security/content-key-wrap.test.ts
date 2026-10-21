@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCipheriv, randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
@@ -65,10 +74,7 @@ describe('content-key wrap: compatibility with envelopes written before the extr
   })
 
   it("decrypts a pre-extraction 'S:' envelope", () => {
-    const buf = legacyEnvelope(
-      'KEYCHAIN-BODY',
-      (b64) => 'S:' + safeStorage.encryptString(b64).toString('base64')
-    )
+    const buf = legacyEnvelope('KEYCHAIN-BODY', (b64) => 'S:' + safeStorage.encryptString(b64).toString('base64'))
     expect(decodeSavedResult(buf)).toEqual({ ok: true, text: 'KEYCHAIN-BODY' })
   })
 
@@ -130,7 +136,7 @@ describe('content-key wrap: generate / wrap / unwrap', () => {
     expect(unwrapped.key.equals(key)).toBe(true)
   })
 
-  it("falls back to the file backend when packaged but safeStorage is unavailable", () => {
+  it('falls back to the file backend when packaged but safeStorage is unavailable', () => {
     appState.isPackaged = true
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
     const wrapped = wrapContentKey(generateContentKey())
@@ -153,7 +159,9 @@ describe('content-key wrap: generate / wrap / unwrap', () => {
     expect(refused.ok).toBe(false)
     if (!refused.ok) {
       expect(refused.reason).toBe('refused')
-      expect(String(refused.error)).toBe('Error: Keychain-wrapped transcript is unavailable while the local keystore is active')
+      expect(String(refused.error)).toBe(
+        'Error: Keychain-wrapped transcript is unavailable while the local keystore is active'
+      )
     }
     expect(unwrapContentKey(s.slice(2)).ok).toBe(false)
     expect(f.ok && unwrapContentKey(f.wrapped).ok).toBe(true)
