@@ -313,4 +313,24 @@ describe('Settings HIG behaviour (C25)', () => {
     await page.keyboard.press('Enter') // deliberately chosen: Repair and Relaunch is the default
     await expect.poll(async () => (await inspect()).calls).toContain('repairScreenPermission')
   })
+
+  it('the not-asked Screen Recording row has one Continue button that asks only for Screen Recording (HIG P3)', async () => {
+    await mount({
+      section: 'screen',
+      settings: SETTINGS,
+      diagnosis: {
+        state: 'not-asked',
+        reasons: [],
+        action: 'request',
+        duplicates: [],
+        grantedFor: null,
+        repairFailed: false
+      }
+    })
+    expect(await page.getByRole('button', { name: /Allow/ }).count()).toBe(0)
+    await page.getByRole('button', { name: 'Continue', exact: true }).click()
+    await expect
+      .poll(async () => (await inspect()).callArgs.find((c) => c.name === 'requestPermissionsUpfront')?.args)
+      .toEqual(['screenRecording'])
+  })
 })
