@@ -10,6 +10,7 @@ import { renameEntity, readAliasMap, resolveEntitySlug } from './brain/correctio
 import { settleCommitment } from './brain/ingest'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 vi.mock('electron')
 
@@ -18,6 +19,7 @@ vi.mock('electron')
 // pinned against the actual source text — same pattern and rationale as pinned-agent-boundary.contract.
 // test.ts — while the behavior each handler now depends on is proven for real against the live functions.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const brainIpcSrc = ipcModuleSource('brain-ipc')
 
 /** Source text of the block opened by the first `{` at/after `marker`, brace-matched to its close. The
  *  regions matched below contain no unbalanced brace in a string or comment (template-literal `${…}`
@@ -151,12 +153,12 @@ describe('MQA-013 — settle/outcome resolve a renamed deal by its stable id', (
     expect(resolveEntitySlug(readAliasMap(s), 'deal', 'Never Seen Before')).toBe('never-seen-before')
   })
 
-  it('both index.ts handlers route the wire name through the alias map, not brainSlugify', () => {
-    const settle = blockAfter(indexSrc, 'ipcMain.handle(IPC.brainCommitmentSettle')
+  it('both brain IPC handlers route the wire name through the alias map, not brainSlugify', () => {
+    const settle = blockAfter(brainIpcSrc, 'ipcMain.handle(IPC.brainCommitmentSettle')
     expect(settle).toMatch(/settleCommitment\(\s*s,\s*resolveEntitySlug\(readAliasMap\(s\),\s*'deal',\s*deal\)/)
     expect(settle).not.toMatch(/brainSlugify/)
 
-    const outcome = blockAfter(indexSrc, 'ipcMain.handle(IPC.brainSetDealOutcome')
+    const outcome = blockAfter(brainIpcSrc, 'ipcMain.handle(IPC.brainSetDealOutcome')
     expect(outcome).toMatch(
       /setDealOutcome\(\s*s,\s*resolveEntitySlug\(readAliasMap\(s\),\s*'deal',\s*parsed\.data\.dealSlug\)/
     )

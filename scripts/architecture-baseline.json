@@ -44,7 +44,7 @@
     "src/main/brain/store.ts": 1187,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 999,
-    "src/main/index.ts": 10282,
+    "src/main/index.ts": 10043,
     "src/main/store.ts": 1361,
     "src/main/transcripts.ts": 1084,
     "src/renderer/src/App.tsx": 4771,
@@ -83,7 +83,7 @@
     "src/main/import-audio.ts": 2,
     "src/main/import-job-store.ts": 1,
     "src/main/import-magic.ts": 3,
-    "src/main/index.ts": 23,
+    "src/main/index.ts": 22,
     "src/main/infra/observability/stall-sampler.ts": 1,
     "src/main/infra/process/reaper.ts": 3,
     "src/main/infra/process/registry.ts": 3,
@@ -156,7 +156,7 @@
     "src/main/bank-grade-hardening.contract.test.ts": 1,
     "src/main/bar-idle-ghost.contract.test.ts": 2,
     "src/main/boot-nonblocking.contract.test.ts": 1,
-    "src/main/brain-entity-names.contract.test.ts": 2,
+    "src/main/brain-entity-names.contract.test.ts": 1,
     "src/main/brain/intelligence-pass.test.ts": 5,
     "src/main/c-main-fixes.contract.test.ts": 3,
     "src/main/caveman-ask.contract.test.ts": 2,
@@ -312,7 +312,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 160
+    "src/main/index.ts": 107
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,

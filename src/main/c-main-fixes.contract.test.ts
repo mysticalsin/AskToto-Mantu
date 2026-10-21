@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAsrModelProtocolHandler } from './asr-model-protocol'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 /**
  * Source-contract tests for the C_Main fix batch (main/index.ts + main/store.ts wiring gaps). Same
@@ -13,6 +14,7 @@ import { sourceIndexOf } from '../../scripts/lib/source-layout'
  */
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const brainIpcSource = ipcModuleSource('brain-ipc')
 
 describe('finding 1: "settings" hotkey is registered, not just bindable', () => {
   it('shortcutActions includes a settings entry wired to sendHotkey', () => {
@@ -139,10 +141,10 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
 
 describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', () => {
   it('the handler requires both assertMainWindow and requireAuth before purging', () => {
-    const start = sourceIndexOf(source, 'ipcMain.handle(IPC.brainRebuildAll,')
+    const start = sourceIndexOf(brainIpcSource, 'ipcMain.handle(IPC.brainRebuildAll,')
     expect(start).toBeGreaterThan(-1)
-    const end = source.indexOf('\n  })', start)
-    const body = source.slice(start, end)
+    const end = brainIpcSource.indexOf('\n  })', start)
+    const body = brainIpcSource.slice(start, end)
     expect(body).toMatch(/assertMainWindow\(e\)/)
     expect(body).toMatch(/requireAuth\(\)/)
     // MI-2.5 superseded the direct purgeBrain(getSettings()) call with ingest.ts's startRebuild, which

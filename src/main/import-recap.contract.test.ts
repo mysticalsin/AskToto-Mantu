@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 // Source-contract lock for the imported-recording auto-summary path (runImportedRecap lives in
 // import-recap.ts; index.ts is a thin wiring wrapper).
@@ -8,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 // Older source-contract coverage remains for import wiring and diarization. Stream completion behavior
 // is exercised through runImportedRecap/provider callbacks in import-recap.test.ts.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const brainIpcSrc = ipcModuleSource('brain-ipc')
 const recapSrc = readFileSync(join(__dirname, 'import-recap.ts'), 'utf8')
 
 // Diarized import lines carry line.name ("Jane Doe" / "Speaker N"). The recap prompt asks the model to
@@ -42,7 +44,7 @@ describe('ASR echo defense returns echo:true so the renderer can act (Parakeet /
 
 describe('brain status failedFiles excludes pending deferred ingest', () => {
   it('filters with isPendingIngestRecord so consolidation-queued meetings are not red "failed"', () => {
-    expect(indexSrc).toMatch(/failedFiles: Object\.entries\(idx\.ingested\)/)
-    expect(indexSrc).toMatch(/!v\.ok && !isPendingIngestRecord\(v\)/)
+    expect(brainIpcSrc).toMatch(/failedFiles: Object\.entries\(idx\.ingested\)/)
+    expect(brainIpcSrc).toMatch(/!v\.ok && !isPendingIngestRecord\(v\)/)
   })
 })

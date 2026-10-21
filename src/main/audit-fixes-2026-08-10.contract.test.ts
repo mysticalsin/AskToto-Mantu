@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 /**
  * Source contracts for two fixes from the 178-agent deep audit (2026-08-10, docs/qa/BUG-LEDGER.md). Both
@@ -8,14 +9,21 @@ import { describe, expect, it } from 'vitest'
  * beside them — the fix is pinned against source text.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const workspaceIpcSrc = ipcModuleSource('workspace-ipc')
 const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
 
 describe('MQA-129 — team-transcript-folder IPC handlers require auth', () => {
   it('both add/remove handlers gate on requireAuth() like every other settings-writing handler', () => {
     // These mutate settings.teamTranscriptFolders — adding a folder to the brain's ingestion set — so an
     // unauthenticated caller must not reach them.
-    const add = indexSrc.slice(indexSrc.indexOf('IPC.addTeamTranscriptFolder'), indexSrc.indexOf('IPC.removeTeamTranscriptFolder'))
-    const remove = indexSrc.slice(indexSrc.indexOf('IPC.removeTeamTranscriptFolder'), indexSrc.indexOf('IPC.openPath'))
+    const add = workspaceIpcSrc.slice(
+      workspaceIpcSrc.indexOf('IPC.addTeamTranscriptFolder'),
+      workspaceIpcSrc.indexOf('IPC.removeTeamTranscriptFolder')
+    )
+    const remove = workspaceIpcSrc.slice(
+      workspaceIpcSrc.indexOf('IPC.removeTeamTranscriptFolder'),
+      workspaceIpcSrc.indexOf('IPC.openPath')
+    )
     expect(add).toMatch(/if \(!requireAuth\(\)\) return publicSettings\(\)/)
     expect(remove).toMatch(/if \(!requireAuth\(\)\) return publicSettings\(\)/)
   })

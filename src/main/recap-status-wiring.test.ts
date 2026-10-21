@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { UpdateRecapPayloadSchema } from '@shared/ipc'
 import { createImportMeetingWriteAdapters } from './import-meeting-write-adapters'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 const mainFile = join(__dirname, 'index.ts')
 
@@ -98,7 +99,9 @@ function boundary(
   globals: Record<string, unknown>
 ): (...args: any[]) => any {
   const file = kind === 'preload' ? join(__dirname, '../preload/index.ts') : mainFile
-  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+  // The recall-update handler moved out of the entry point into the recall IPC module.
+  const text = kind === 'main' ? ipcModuleSource('recall-ipc') : readFileSync(file, 'utf8')
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
   let callback: ts.Node | undefined
   const inFunction = (node: ts.Node, name: string): boolean => {
     let parent = node.parent

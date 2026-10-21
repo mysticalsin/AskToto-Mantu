@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 /**
  * Source contract for the brainEntityNames IPC shape — MQA-115 (docs/qa/BUG-LEDGER.md).
@@ -18,7 +19,7 @@ import { describe, expect, it } from 'vitest'
  * thin call-site delegate; this file only pins that it stays one, so the merge logic can't drift back
  * into index.ts (and out of the gateway) unnoticed.
  */
-const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const brainIpcSrc = ipcModuleSource('brain-ipc')
 const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
 
 describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, accounts }', () => {
@@ -29,9 +30,9 @@ describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, a
   })
 
   it('the handler is a thin gateway-backed delegate, not an inline sync directory scan', () => {
-    const handler = indexSrc.slice(
-      indexSrc.indexOf('ipcMain.handle(IPC.brainEntityNames'),
-      indexSrc.indexOf('ipcMain.handle(IPC.brainSetDealOutcome')
+    const handler = brainIpcSrc.slice(
+      brainIpcSrc.indexOf('ipcMain.handle(IPC.brainEntityNames'),
+      brainIpcSrc.indexOf('ipcMain.handle(IPC.brainSetDealOutcome')
     )
     // Delegates the merge to the gateway-backed store function — never reads entities inline here.
     expect(handler).toMatch(/return loadBrainEntityDisplayNames\(getSettings\(\)\)/)

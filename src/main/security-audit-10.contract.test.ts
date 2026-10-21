@@ -7,23 +7,29 @@ import { createListeningStateHandler } from './listening-state-ipc'
 import { calendarToday } from './calendar'
 import { getGraphToken } from './auth'
 import { auditLog } from './logger'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'synthetic-calendar-security-token') }))
 vi.mock('./logger', () => ({ auditLog: vi.fn() }))
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const importSnapshotSrc = readFileSync(join(__dirname, 'import-jobs-snapshot-ipc.ts'), 'utf8')
+const importAudioIpcSrc = ipcModuleSource('import-audio-ipc')
+const historyIpcSrc = ipcModuleSource('history-ipc')
+const recallIpcSrc = ipcModuleSource('recall-ipc')
 
 function onlySourceNode<T>(nodes: T[], label: string): T {
   if (nodes.length !== 1) throw new Error(`Expected one ${label}, found ${nodes.length}`)
   return nodes[0]
 }
 
-/** Bind the extracted contracts to actual imports, registrations and returned public fields. */
-function requireImportSnapshotConnection(indexText: string, helperText: string): void {
+/** Bind the extracted contracts to actual imports, registrations and returned public fields. The mapper binding
+ *  and the registration call live in index.ts; the list handler itself lives in the import-audio IPC module. */
+function requireImportSnapshotConnection(indexText: string, audioIpcText: string, helperText: string): void {
   // These parser labels are synthetic; keep real source-read paths literal above.
   const fixtureExtension = '.' + 'ts'
   const index = ts.createSourceFile('index' + fixtureExtension, indexText, ts.ScriptTarget.Latest, true)
+  const audioIpc = ts.createSourceFile('import-audio-ipc' + fixtureExtension, audioIpcText, ts.ScriptTarget.Latest, true)
   const helper = ts.createSourceFile(
     'import-jobs-snapshot-ipc' + fixtureExtension,
     helperText,
@@ -45,6 +51,21 @@ function requireImportSnapshotConnection(indexText: string, helperText: string):
     throw new Error('Expected runtime snapshot namespace import')
   expect(snapshotImport.namedBindings.name.text).toBe('importJobsSnapshotIpc')
 
+  const audioSnapshotImport = onlySourceNode(
+    audioIpc.statements.filter(
+      (node): node is ts.ImportDeclaration =>
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) &&
+        node.moduleSpecifier.text === '../import-jobs-snapshot-ipc'
+    ),
+    'import-audio snapshot module import'
+  ).importClause
+  expect(audioSnapshotImport?.isTypeOnly).toBe(false)
+  if (!audioSnapshotImport?.namedBindings || !ts.isNamespaceImport(audioSnapshotImport.namedBindings))
+    throw new Error('Expected runtime snapshot namespace import in the import-audio IPC module')
+  expect(audioSnapshotImport.namedBindings.name.text).toBe('importJobsSnapshotIpc')
+
+  // The entry point must hand the real job manager accessor and the public mapper to the registration.
   const registerIpc = onlySourceNode(
     index.statements.filter(
       (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'registerIpc'
@@ -52,8 +73,35 @@ function requireImportSnapshotConnection(indexText: string, helperText: string):
     'top-level registerIpc declaration'
   )
   if (!registerIpc.body) throw new Error('Expected actual registerIpc body')
-  const registration = onlySourceNode(
+  const audioRegistration = onlySourceNode(
     registerIpc.body.statements
+      .filter(ts.isExpressionStatement)
+      .map((node) => node.expression)
+      .filter(
+        (node): node is ts.CallExpression =>
+          ts.isCallExpression(node) && compact(node.expression) === 'registerImportAudioIpc'
+      ),
+    'direct registerImportAudioIpc call'
+  )
+  const audioDeps = audioRegistration.arguments[0]
+  if (!audioDeps || !ts.isObjectLiteralExpression(audioDeps)) throw new Error('Expected registerImportAudioIpc deps')
+  for (const name of ['getImportJobs', 'importJobView']) {
+    expect(
+      audioDeps.properties.some((node) => ts.isShorthandPropertyAssignment(node) && node.name.text === name),
+      `registerImportAudioIpc receives ${name}`
+    ).toBe(true)
+  }
+
+  const registerAudioIpc = onlySourceNode(
+    audioIpc.statements.filter(
+      (node): node is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(node) && node.name?.text === 'registerImportAudioIpc'
+    ),
+    'top-level registerImportAudioIpc declaration'
+  )
+  if (!registerAudioIpc.body) throw new Error('Expected actual registerImportAudioIpc body')
+  const registration = onlySourceNode(
+    registerAudioIpc.body.statements
       .filter(ts.isExpressionStatement)
       .map((node) => node.expression)
       .filter(
@@ -71,7 +119,7 @@ function requireImportSnapshotConnection(indexText: string, helperText: string):
   expect(handler.parameters.map(compact)).toEqual(['e'])
   expect(handler.body.statements.map(compact)).toEqual([
     'assertMainWindow(e)',
-    'returnimportJobsSnapshotIpc.listImportJobsSnapshot(e,()=>win,()=>getImportJobs().snapshot(),importJobView)'
+    'returnimportJobsSnapshotIpc.listImportJobsSnapshot(e,deps.getWindow,()=>getImportJobs().snapshot(),importJobView)'
   ])
   const mapper = onlySourceNode(
     index.statements
@@ -176,12 +224,19 @@ function requireImportSnapshotConnection(indexText: string, helperText: string):
   ])
 }
 
-function sliceBetween(from: string, to: string): string {
-  const start = sourceIndexOf(indexSrc, from)
+function sliceBetween(from: string, to: string, source = indexSrc): string {
+  const start = sourceIndexOf(source, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = sourceIndexOf(indexSrc, to, start + 1)
+  const end = sourceIndexOf(source, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
-  return indexSrc.slice(start, end)
+  return source.slice(start, end)
+}
+
+/** Slice `source` from `from` to its end — for the last handler of a register function module. */
+function sliceToEnd(from: string, source: string): string {
+  const start = sourceIndexOf(source, from)
+  expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
+  return source.slice(start)
 }
 
 describe('AUDIT-10 — Settings surface stays on the isolated main window', () => {
@@ -265,13 +320,13 @@ describe('AUDIT-10 — outbound IPC caps sit in front of the network', () => {
     expect(push.indexOf('skipped_confidential')).toBeLessThan(push.indexOf('recordOperatorCrmSend'))
     expect(push.indexOf('skipped_confidential')).toBeLessThan(push.indexOf('pushQueue.enqueue'))
 
-    const cal = sliceBetween('ipcMain.handle(IPC.calendarToday', 'ipcMain.handle(IPC.recallRead')
+    const cal = sliceBetween('ipcMain.handle(IPC.calendarToday', 'registerRecallIpc(')
     expect(cal).toMatch(/denyIfLimited\('graph-calendar'\)/)
     expect(cal.indexOf('requireAuth()')).toBeLessThan(cal.indexOf("denyIfLimited('graph-calendar')"))
   })
 
   it('the capture path does not call denyIfLimited', () => {
-    const save = sliceBetween('ipcMain.handle(IPC.saveTranscript', 'ipcMain.handle(IPC.brainOpenDashboard')
+    const save = sliceBetween('ipcMain.handle(IPC.saveTranscript', 'registerBrainIpc(')
     expect(save).not.toMatch(/denyIfLimited/)
     const feed = sliceBetween('ipcMain.handle(IPC.parakeetFeed', 'ipcMain.handle(IPC.appleSpeechFeed')
     expect(feed).not.toMatch(/denyIfLimited/)
@@ -280,7 +335,7 @@ describe('AUDIT-10 — outbound IPC caps sit in front of the network', () => {
   })
 
   it('the live listen path uses takeHotPath so overflow is dropped, never queued', () => {
-    const save = sliceBetween('ipcMain.handle(IPC.saveTranscript', 'ipcMain.handle(IPC.brainOpenDashboard')
+    const save = sliceBetween('ipcMain.handle(IPC.saveTranscript', 'registerBrainIpc(')
     expect(save).toMatch(/takeHotPath\('save-transcript'\)/)
     expect(save.indexOf("takeHotPath('save-transcript')")).toBeLessThan(save.indexOf('saveMeeting'))
 
@@ -337,16 +392,16 @@ describe('AUDIT-10 — remaining disk/network IPC is SSO-gated', () => {
 
 describe('AUDIT-10 — meeting-file IPC uses the shared basename allow-list', () => {
   it('recallOpen, recallExportPlain, recallDelete, and debriefSave call safeMeetingBasename', () => {
-    const open = sliceBetween('ipcMain.handle(IPC.recallOpen', 'ipcMain.handle(IPC.openBrainForClaude')
+    const open = sliceToEnd('ipcMain.handle(IPC.recallOpen', historyIpcSrc)
     expect(open).toMatch(/safeMeetingBasename\(/)
 
-    const exp = sliceBetween('ipcMain.handle(IPC.recallExportPlain', 'ipcMain.handle(IPC.diagnosticsExport')
+    const exp = sliceBetween('ipcMain.handle(IPC.recallExportPlain', 'ipcMain.handle(IPC.recallDelete,', recallIpcSrc)
     expect(exp).toMatch(/safeMeetingBasename\(/)
 
-    const del = sliceBetween('ipcMain.handle(IPC.recallDelete', 'ipcMain.handle(IPC.recallRename')
+    const del = sliceBetween('ipcMain.handle(IPC.recallDelete', 'ipcMain.handle(IPC.recallRename', recallIpcSrc)
     expect(del).toMatch(/safeMeetingBasename\(/)
 
-    const debrief = sliceBetween('ipcMain.handle(IPC.debriefSave', 'ipcMain.handle(IPC.recallDeleteAll')
+    const debrief = sliceBetween('ipcMain.handle(IPC.debriefSave', 'ipcMain.handle(IPC.recallDeleteAll', recallIpcSrc)
     expect(debrief).toMatch(/safeMeetingBasename\(/)
   })
 })
@@ -507,7 +562,7 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(body).toContain('sniffMediaFile(sourcePath)')
     expect(body).toContain('IMPORT_NOT_MEDIA')
     expect(body.indexOf('sniffMediaFile(sourcePath)')).toBeLessThan(body.indexOf('child = spawn('))
-    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList')
+    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList', importAudioIpcSrc)
     expect(start).not.toMatch(/shell\.openPath/)
     expect(start).not.toMatch(/execFile|execSync/)
   })
@@ -517,41 +572,64 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(accessor).toMatch(/initializeImportJobs\(\)/)
     expect(accessor).toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
-    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList')
+    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList', importAudioIpcSrc)
     expect(start).toMatch(/const jobs = getImportJobs\(\)/)
     expect(start).toMatch(/jobs\.start\(consumePickedAudio\(parsed\.token\)\)/)
     expect(start).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
-    const listAndMutations = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.on(IPC.importDecoderReady')
-    requireImportSnapshotConnection(indexSrc, importSnapshotSrc)
+    const listAndMutations = sliceToEnd('ipcMain.handle(IPC.importJobsList', importAudioIpcSrc)
+    requireImportSnapshotConnection(indexSrc, importAudioIpcSrc, importSnapshotSrc)
     expect(listAndMutations).not.toMatch(/getImportJobs\(\)\.list\(\)/)
     const registrationText = sliceBetween(
       'ipcMain.handle(IPC.importJobsList',
-      'ipcMain.handle(IPC.importJobCancel'
+      'ipcMain.handle(IPC.importJobCancel',
+      importAudioIpcSrc
     ).trim()
     // These mutations must break the actual connection, not leave a disconnected passing helper.
-    for (const [indexText, helperText] of [
+    for (const [indexText, audioText, helperText] of [
       [
         indexSrc.replace('import * as importJobsSnapshotIpc', 'import type * as importJobsSnapshotIpc'),
-        importSnapshotSrc
-      ],
-      [indexSrc.replace('import * as importJobsSnapshotIpc', 'import * as detachedSnapshotIpc'), importSnapshotSrc],
-      [
-        indexSrc.replace(registrationText, `function unusedImportRegistration() { ${registrationText} }`),
+        importAudioIpcSrc,
         importSnapshotSrc
       ],
       [
-        indexSrc.replace(
+        indexSrc.replace('import * as importJobsSnapshotIpc', 'import * as detachedSnapshotIpc'),
+        importAudioIpcSrc,
+        importSnapshotSrc
+      ],
+      [
+        indexSrc,
+        importAudioIpcSrc.replace('import * as importJobsSnapshotIpc', 'import type * as importJobsSnapshotIpc'),
+        importSnapshotSrc
+      ],
+      [
+        indexSrc,
+        importAudioIpcSrc.replace('import * as importJobsSnapshotIpc', 'import * as detachedSnapshotIpc'),
+        importSnapshotSrc
+      ],
+      [
+        indexSrc,
+        importAudioIpcSrc.replace(registrationText, `function unusedImportRegistration() { ${registrationText} }`),
+        importSnapshotSrc
+      ],
+      [
+        indexSrc,
+        importAudioIpcSrc.replace(
           'importJobsSnapshotIpc.listImportJobsSnapshot(',
           'detachedSnapshotIpc.listImportJobsSnapshot('
         ),
         importSnapshotSrc
       ],
-      [indexSrc.replace('() => getImportJobs().snapshot()', '() => getImportJobs().list()'), importSnapshotSrc],
-      [indexSrc, importSnapshotSrc.replace('    requireAuth,', '    () => true,')],
-      [indexSrc, importSnapshotSrc.replace('jobs: snapshot.jobs.map(toView)', 'jobs: snapshot.jobs')]
+      [
+        indexSrc,
+        importAudioIpcSrc.replace('() => getImportJobs().snapshot()', '() => getImportJobs().list()'),
+        importSnapshotSrc
+      ],
+      [indexSrc.replace('registerImportAudioIpc({', 'unusedImportAudioIpc({'), importAudioIpcSrc, importSnapshotSrc],
+      [indexSrc, importAudioIpcSrc, importSnapshotSrc.replace('    requireAuth,', '    () => true,')],
+      [indexSrc, importAudioIpcSrc, importSnapshotSrc.replace('jobs: snapshot.jobs.map(toView)', 'jobs: snapshot.jobs')]
     ])
-      expect(() => requireImportSnapshotConnection(indexText, helperText)).toThrow()
+      expect(() => requireImportSnapshotConnection(indexText, audioText, helperText)).toThrow()
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.cancel\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.resume\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.remove\(parsed\.jobId\)/)

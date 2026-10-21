@@ -13,6 +13,7 @@ import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { installSpeechReadPolicy } from './__fixtures__/speech-read-policy'
+import { ipcModuleSource } from '../../../scripts/lib/ipc-module-source'
 
 vi.mock('electron')
 
@@ -188,11 +189,14 @@ describe('Update Intelligence pass — never auto, never auto-send', () => {
     const ingest = readFileSync(join(__dirname, 'ingest.ts'), 'utf8')
     const consolidate = readFileSync(join(__dirname, 'consolidate.ts'), 'utf8')
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const brainIpc = ipcModuleSource('brain-ipc')
     expect(ingest).not.toMatch(/startIntelligencePass/)
     expect(consolidate).not.toMatch(/startIntelligencePass|intelligence-pass/)
-    expect(index).toMatch(/IPC\.brainIntelligencePass/)
-    expect([...index.matchAll(/startIntelligencePass\(/g)]).toHaveLength(1)
-    expect(index).toMatch(/return startIntelligencePass\(\)/)
+    // The explicit-click channel lives in the brain IPC module; the entry point no longer starts a pass.
+    expect(index).not.toMatch(/startIntelligencePass/)
+    expect(brainIpc).toMatch(/IPC\.brainIntelligencePass/)
+    expect([...brainIpc.matchAll(/startIntelligencePass\(/g)]).toHaveLength(1)
+    expect(brainIpc).toMatch(/return startIntelligencePass\(\)/)
   })
 
   it('never auto-sends mail or MCP from this pass', () => {

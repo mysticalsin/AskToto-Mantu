@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const brainIpcSrc = ipcModuleSource('brain-ipc')
 const brainView = readFileSync(join(__dirname, '../renderer/src/components/BrainView.tsx'), 'utf8')
 
 describe('hidden-window decoder stays a live singleton', () => {
@@ -32,9 +34,9 @@ describe('hidden-window decoder stays a live singleton', () => {
   })
 
   it('brain:backfill returns the sign-in copy instead of throwing, so the button cannot look dead', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.brainBackfill')
+    const start = brainIpcSrc.indexOf('ipcMain.handle(IPC.brainBackfill')
     expect(start).toBeGreaterThan(-1)
-    const body = indexSrc.slice(start, start + 500)
+    const body = brainIpcSrc.slice(start, start + 500)
     expect(body).toMatch(/SIGN_IN_INDEX_COPY/)
     expect(body).not.toMatch(/throw new Error\('Sign in with your Mantu account first\.'\)/)
     expect(body).toMatch(/runIntelligenceIndex\('click'\)/)

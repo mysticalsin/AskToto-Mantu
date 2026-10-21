@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 // Regression locks for the index.ts findings of the 2026-08 Windows audit (MQA-037, 038, 051, 054, 056,
 // 062, 064, 066, 070, 075, 081, 090). src/main/index.ts boots Electron at import time and every one of these
@@ -19,15 +20,16 @@ import { sourceIndexOf } from '../../scripts/lib/source-layout'
 // `providerReady`: the verifier flagged that as the riskier change, because ~10 renderer gates currently
 // succeed via failover and would start failing closed.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const recallIpcSrc = ipcModuleSource('recall-ipc')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
-function sliceBetween(from: string, to: string): string {
-  const start = sourceIndexOf(indexSrc, from)
+function sliceBetween(from: string, to: string, source = indexSrc): string {
+  const start = sourceIndexOf(source, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = sourceIndexOf(indexSrc, to, start)
+  const end = sourceIndexOf(source, to, start)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
-  return indexSrc.slice(start, end)
+  return source.slice(start, end)
 }
 
 describe('MQA-037 — the retry idle cap is a network diagnostic and must not shrink a local attempt', () => {
@@ -288,7 +290,7 @@ describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out
 
 describe('MQA-092 — the durable CRM-push marker is written behind the same gates as every recall write', () => {
   const handler = (): string =>
-    sliceBetween('ipcMain.handle(IPC.recallSetCrmPushed', 'ipcMain.handle(IPC.recallBackfillSpeakers')
+    sliceBetween('ipcMain.handle(IPC.recallSetCrmPushed', 'ipcMain.handle(IPC.recallBackfillSpeakers', recallIpcSrc)
 
   it('carries the main-window + requireAuth gate every settings/recall-WRITING handler carries (MQA-129)', () => {
     const body = handler()
@@ -336,7 +338,7 @@ describe('MQA-070 — turning encryption ON while publishing is on asks for the 
 
 describe('MQA-075 — the confidential flag reports the republish that actually enforces it', () => {
   const handler = (): string =>
-    sliceBetween('ipcMain.handle(IPC.recallSetConfidential', 'ipcMain.handle(IPC.recallBackfillSpeakers')
+    sliceBetween('ipcMain.handle(IPC.recallSetConfidential', 'ipcMain.handle(IPC.recallBackfillSpeakers', recallIpcSrc)
 
   it('awaits publishAll inside the handler instead of detaching it', () => {
     const body = handler()

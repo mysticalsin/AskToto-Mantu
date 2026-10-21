@@ -15,7 +15,7 @@ const preloadSrc = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'u
 function handler(): string {
   const start = indexSrc.indexOf('ipcMain.handle(IPC.diagnosticsExport')
   expect(start, 'diagnosticsExport handler must exist').toBeGreaterThan(-1)
-  return indexSrc.slice(start, indexSrc.indexOf('ipcMain.handle(', start + 1))
+  return indexSrc.slice(start, indexSrc.indexOf('registerDiscardSavedTranscriptIpc(', start + 1))
 }
 
 describe('diagnostics export — logs out, content never', () => {

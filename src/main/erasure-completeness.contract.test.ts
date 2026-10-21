@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
 /**
  * Erasure completeness — "Delete all Metis data" is a GDPR right-to-erasure promise ("This permanently
@@ -16,19 +17,28 @@ import { sourceIndexOf } from '../../scripts/lib/source-layout'
  * brain/publish.test.ts, purgeGraphArtifacts in graphify.test.ts, purgeBrain in brain/brain.test.ts.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const recallIpcSrc = ipcModuleSource('recall-ipc')
+const brainIpcSrc = ipcModuleSource('brain-ipc')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
-function sliceBetween(from: string, to: string): string {
-  const start = sourceIndexOf(indexSrc, from)
+function sliceBetween(from: string, to: string, source = indexSrc): string {
+  const start = sourceIndexOf(source, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = sourceIndexOf(indexSrc, to, start + 1)
+  const end = sourceIndexOf(source, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
-  return indexSrc.slice(start, end)
+  return source.slice(start, end)
+}
+
+/** Slice `source` from `from` to its end — for the last handler of a register function module. */
+function sliceToEnd(from: string, source: string): string {
+  const start = sourceIndexOf(source, from)
+  expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
+  return source.slice(start)
 }
 
 describe('MQA-149 — a full erasure takes the published wiki mirror with it', () => {
-  const deleteAll = (): string => sliceBetween('ipcMain.handle(IPC.recallDeleteAll', '// --- Parakeet ASR engine ---')
+  const deleteAll = (): string => sliceToEnd('ipcMain.handle(IPC.recallDeleteAll', recallIpcSrc)
 
   it('deletes the cleartext wiki/ mirror alongside the transcripts, the brain and the graph', () => {
     // A plain statement, never guarded: a mirror outlives publishBrainPages being turned off whenever
@@ -60,7 +70,7 @@ describe('MQA-149 — a full erasure takes the published wiki mirror with it', (
   it('removes the deleted meeting note card on the single-delete path', () => {
     // recallDelete only requested a source refresh, and maybeStartSourceRefresh bails on a busy queue /
     // pending replay / no usable provider — so the orphan card could outlive the transcript forever.
-    expect(sliceBetween('ipcMain.handle(IPC.recallDelete,', '// Recall rename:')).toMatch(
+    expect(sliceBetween('ipcMain.handle(IPC.recallDelete,', '// Recall rename:', recallIpcSrc)).toMatch(
       /publishMeetingCard\(getSettings\(\), safeName\)/
     )
   })
@@ -84,7 +94,7 @@ describe('MQA-170 — the graph purge covers the runner directory and only audit
 })
 
 describe('MQA-230 — single-meeting delete erases its derived data without waiting for a provider', () => {
-  const singleDelete = (): string => sliceBetween('ipcMain.handle(IPC.recallDelete,', '// Recall rename:')
+  const singleDelete = (): string => sliceBetween('ipcMain.handle(IPC.recallDelete,', '// Recall rename:', recallIpcSrc)
 
   it('excises the extraction + ledger row synchronously, before the deferred refresh', () => {
     // The deferred source refresh no-ops for as long as no provider is usable, so the meeting's own
@@ -114,7 +124,7 @@ describe('MQA-230 — single-meeting delete erases its derived data without wait
   })
 
   it('the pending entity residue is visible, not silent: brainStatus carries cleanupPending', () => {
-    const status = sliceBetween('ipcMain.handle(IPC.brainStatus', 'ipcMain.handle(IPC.brainRead')
+    const status = sliceBetween('ipcMain.handle(IPC.brainStatus', 'ipcMain.handle(IPC.brainRead', brainIpcSrc)
     expect(status).toMatch(/cleanupPending: idx\.sourceRefreshRequested === true/)
   })
 

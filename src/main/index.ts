@@ -9103,12 +9103,10 @@ function registerIpc(): void {
     return { ok: true as const, path: r.filePath }
   })
 
-
   // --- Recall (meeting history): list/search/open ---
   const history = createHistoryTracer({ audit: auditLog })
   registerHistoryIpc({ ipcMain, assertMainWindow, requireAuth, history, openPath: (path) => shell.openPath(path) })
   registerHistoryTraceIpc(assertMainWindow, requireAuth, history)
-
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   registerInputCaptureIpc({
