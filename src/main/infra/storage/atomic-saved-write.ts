@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, open, rename, unlink, writeFile } from 'node:fs/promises'
+import { lstat, open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { recordLocalWrite } from './local-writes'
 
@@ -344,16 +344,53 @@ export async function atomicSavedWriteStream(
 /** Replaces one saved file only after its current owner admits the exact rename attempt. */
 export async function atomicSavedWrite(file: string, data: Buffer, beforeReplace?: () => void): Promise<void> {
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
+  const expectedBytes = data.byteLength
+  const expectedDigest = createHash('sha256').update(data).digest()
+  let handle: FileHandle | undefined
+  let createdIdentity: CreatedIdentity | undefined
+  let tempIdentity: TempIdentity | undefined
+  let tempDigest: Buffer | undefined
+  let replaced = false
+  let failed = false
+  let failure: unknown
   try {
-    await writeFile(tmp, data, { mode: 0o600 })
+    handle = await open(tmp, 'wx', 0o600)
+    const opened = await handle.stat()
+    createdIdentity = { dev: opened.dev, ino: opened.ino }
+    await handle.writeFile(data)
+    tempDigest = expectedDigest
+    await handle.sync()
+    const synced = await handle.stat()
+    if (
+      !synced.isFile() ||
+      synced.nlink !== 1 ||
+      synced.size !== expectedBytes ||
+      synced.dev !== createdIdentity.dev ||
+      synced.ino !== createdIdentity.ino
+    ) {
+      const error = new Error('Saved write temporary file changed before promotion.')
+      error.name = 'TEMP_OWNERSHIP'
+      throw error
+    }
+    tempIdentity = synced
+    // A rejected close is not safe to retry: the descriptor may already have been released.
+    const closing = handle
+    handle = undefined
+    await closing.close()
     for (let attempt = 0; ; attempt++) {
+      if (!(await ownsTemp(tmp, tempIdentity, expectedBytes, expectedDigest))) {
+        const error = new Error('Saved write lost ownership of its temporary file.')
+        error.name = 'TEMP_OWNERSHIP'
+        throw error
+      }
       // Admission is synchronous and outside the rename retry handler so refusals propagate unchanged.
       beforeReplace?.()
       try {
         await rename(tmp, file)
+        replaced = true
         break
       } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
+        const code = (error as NodeJS.ErrnoException | null | undefined)?.code
         // OneDrive and real-time scanners can briefly hold a new file open on Windows.
         if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw error
         await new Promise((resolve) => setTimeout(resolve, 40 * 2 ** attempt))
@@ -361,7 +398,43 @@ export async function atomicSavedWrite(file: string, data: Buffer, beforeReplace
     }
     await recordLocalWrite(file)
   } catch (error) {
-    await unlink(tmp).catch(() => {})
-    throw error
+    failed = true
+    failure = error
+  } finally {
+    try {
+      // A failed write may leave partial bytes. Derive cleanup identity from our descriptor,
+      // never from a possibly substituted pathname alone.
+      if (!tempIdentity && handle && createdIdentity) {
+        const current = await handle.stat()
+        if (
+          current.isFile() &&
+          current.nlink === 1 &&
+          current.dev === createdIdentity.dev &&
+          current.ino === createdIdentity.ino
+        )
+          tempIdentity = current
+      }
+    } catch {
+      // Inability to establish ownership leaves the temp untouched.
+    } finally {
+      try {
+        await handle?.close()
+      } catch {
+        // Cleanup must not replace the original failure, including undefined/null.
+      }
+    }
+    try {
+      if (
+        !replaced &&
+        tempIdentity &&
+        tempIdentity.dev === createdIdentity?.dev &&
+        tempIdentity.ino === createdIdentity?.ino &&
+        (await ownsCleanupTemp(tmp, tempIdentity, tempDigest))
+      )
+        await unlink(tmp)
+    } catch {
+      // Ownership checks and cleanup cannot change the operation's result.
+    }
   }
+  if (failed) throw failure
 }
