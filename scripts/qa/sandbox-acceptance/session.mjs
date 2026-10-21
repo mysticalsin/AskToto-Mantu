@@ -25,6 +25,14 @@ import { buildChildEnv, checkSocketBudget, executableForApp, seedSettings } from
 
 const READY_POLL_MS = 250
 
+/**
+ * Chromium switches the harness adds on top of --remote-debugging-port. The macOS audio service runs sandboxed and cannot
+ * open the file behind --use-file-for-fake-audio-capture (the app's file-fed microphone), so the fake device streams
+ * silence and no speech ever reaches the recogniser. Turning that one sandbox feature off is confined to this QA-identity,
+ * sandbox-profile launch; the shipping build never receives it.
+ */
+export const HARNESS_CHROMIUM_SWITCHES = Object.freeze(['--disable-features=AudioServiceSandbox'])
+
 /** @param {{ layout: ReturnType<typeof import('./lib.mjs').sandboxLayout>, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, platform?: string, bundleId?: string | null }} args */
 export function planLaunch({
   layout,
@@ -117,7 +125,7 @@ export async function launchApp({
   const auditBaseline = readAudit(layout).length
   const installRoot = appPath
   // Loopback-only CDP: Chromium binds --remote-debugging-port to 127.0.0.1 unless an address is requested.
-  const child = spawn(executable, [`--remote-debugging-port=${port}`], {
+  const child = spawn(executable, [`--remote-debugging-port=${port}`, ...HARNESS_CHROMIUM_SWITCHES], {
     env: childEnv,
     stdio: 'ignore',
     detached: true

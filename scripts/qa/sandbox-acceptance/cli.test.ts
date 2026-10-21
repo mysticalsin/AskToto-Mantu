@@ -246,4 +246,11 @@ describe('forbidden launch routes stay out of the tooling', () => {
     expect(text).toContain('spawn(executable,')
     expect(text).toContain('executableForApp(appPath)')
   })
+
+  it('turns off only the macOS audio-service sandbox so the file-fed fake microphone is not silent', () => {
+    const text = readFileSync(join(dir, 'session.mjs'), 'utf8')
+    expect(text).toContain("HARNESS_CHROMIUM_SWITCHES = Object.freeze(['--disable-features=AudioServiceSandbox'])")
+    expect(text).toContain('...HARNESS_CHROMIUM_SWITCHES')
+    expect(text).not.toContain('no-sandbox')
+  })
 })
