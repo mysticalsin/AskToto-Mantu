@@ -78,6 +78,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.candidate_run_id }}
+          RESIDUALS: ${{ inputs.residuals }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           if ! [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::candidate_run_id must be a workflow run ID."; exit 1
@@ -91,9 +93,17 @@ jobs:
             (.run_attempt | type == "number") and (.run_attempt > 0)
           ' <<<"$run" > /dev/null \
             || { echo "::error::Run $RUN_ID is not a completed, successful qa-candidate dispatch on main or release/1.9.x."; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
-            | jq -e '.total_count > 0 and .total_count == (.jobs | length) and all(.jobs[]; .conclusion == "success")' > /dev/null \
-            || { echo "::error::Every job of run $RUN_ID must have succeeded; a skipped gate is not a pass."; exit 1; }
+          jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100") \
+            || { echo "::error::Could not read jobs for candidate run $RUN_ID."; exit 1; }
+          jq -e '.total_count > 0 and .total_count == (.jobs | length)' <<<"$jobs" > /dev/null \
+            || { echo "::error::The candidate jobs response is empty or incomplete."; exit 1; }
+          jq '{total_count, jobs: [.jobs[] | {name, conclusion}]}' <<<"$jobs" > "$RUNNER_TEMP/candidate-jobs.json"
+          printf '%s' "$RESIDUALS" > "$RUNNER_TEMP/residuals.md"
+          disclosure_flag=()
+          if [ "$PUBLISH" = true ]; then disclosure_flag+=(--require-disclosure); fi
+          node scripts/qa/candidate-jobs.mjs \
+            "$RUNNER_TEMP/candidate-jobs.json" "$RUNNER_TEMP/residuals.md" \
+            "${disclosure_flag[@]}"
           echo "commit=$(jq -r .head_sha <<<"$run")" >> "$GITHUB_OUTPUT"
           echo "branch=$(jq -r .head_branch <<<"$run")" >> "$GITHUB_OUTPUT"
           echo "attempt=$(jq -r .run_attempt <<<"$run")" >> "$GITHUB_OUTPUT"
