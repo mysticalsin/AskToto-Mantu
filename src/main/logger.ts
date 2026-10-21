@@ -376,6 +376,8 @@ export type AuditEvent =
   | 'meeting.speech.worker.degraded'
   // Metadata-only: the live meeting journal refused or lost a record (reason enum + count), never content.
   | 'meeting.journal.degraded'
+  // Metadata-only: launch recovery, purge and retention of the live meeting journal (outcome enum + counts), never content.
+  | 'meeting.journal.recovery'
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'

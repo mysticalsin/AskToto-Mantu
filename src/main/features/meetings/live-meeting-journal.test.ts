@@ -179,6 +179,30 @@ describe('liveMeetingJournalId', () => {
   })
 })
 
+describe('live meeting journal ids for recovery and retention', () => {
+  it('reports the live journal id while a session is open and remembers the id after it ends', async () => {
+    const journal = journalWith()
+    await journal.append(input(cloudLine(1)))
+    const id = liveMeetingJournalId(STARTED_AT, OWNER)
+    expect(journal.activeJournalIds()).toEqual([id])
+    expect(journal.journalIdsFor(STARTED_AT)).toEqual([id])
+    await journal.close(STARTED_AT)
+    expect(journal.activeJournalIds()).toEqual([])
+    expect(journal.journalIdsFor(STARTED_AT)).toEqual([id])
+    expect(journal.journalIdsFor(STARTED_AT + 1)).toEqual([])
+    await journal.dispose()
+  })
+
+  it('records the meeting start beside the key so a launch with no draft can verify the journal id', async () => {
+    const journal = journalWith()
+    await journal.append(input(cloudLine(1)))
+    const text = readFileSync(join(journalDir(), 'meeting.v1'), 'utf8')
+    expect(JSON.parse(text)).toEqual({ v: 1, startedAt: STARTED_AT })
+    expect(text).not.toContain(OWNER)
+    await journal.dispose()
+  })
+})
+
 describe('live meeting journal session', () => {
   it('appends a cloud final durably under the documented layout with key.v1 outside the records root', async () => {
     const journal = journalWith()
@@ -186,7 +210,11 @@ describe('live meeting journal session', () => {
     const directory = journalDir()
     const tree = files(directory).map(([name]) => name)
     expect(tree).toContain('key.v1')
-    expect(tree.filter((name) => !name.startsWith('records/') && name !== 'key.v1')).toEqual([])
+    // `meeting.v1` records the meeting start (not content) so a launch with no draft can verify and promote the journal.
+    expect(tree.filter((name) => !name.startsWith('records/') && name !== 'key.v1' && name !== 'meeting.v1')).toEqual(
+      []
+    )
+    expect(JSON.parse(readFileSync(join(directory, 'meeting.v1'), 'utf8'))).toEqual({ v: 1, startedAt: STARTED_AT })
     expect(tree.some((name) => name.startsWith('records/record-'))).toBe(true)
     expect(tree).toContain('records/manifest.v1')
     // POSIX permission bits only exist on macOS/Linux; Windows reports 0o666 for any writable file.

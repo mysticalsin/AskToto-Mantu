@@ -85,6 +85,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     userDataPath: () => app.getPath('userData'),
     authGeneration: authSessionGeneration,
     audit: (event, record) => auditLog(event, { ...record }),
+    auditRecovery: (record) => auditLog('meeting.journal.recovery', { ...record }),
+    currentOwnerKey: () => ownerSession.currentOwnerKey(),
     onWillQuit: (listener) => app.once('will-quit', listener)
   })
   return {

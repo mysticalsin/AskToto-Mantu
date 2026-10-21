@@ -21,6 +21,8 @@ export interface OwnerSessionAuthority {
   validate(ref: OwnerSessionRef, frame: FrameLike): OwnerSessionValidation
   /** Read-only: the live ref for the frame under the current auth, or null. Never mints, drops or revokes. */
   current(frame: FrameLike): OwnerSessionRef | null
+  /** Read-only: the signed-in owner's key right now, or null while signed out or before the salt has loaded. */
+  currentOwnerKey(): string | null
   revokeAll(reason: OwnerSessionRevokeReason): void
   revokeFrame(webContentsId: number, reason: OwnerSessionRevokeReason): void
   onRevoked(cb: (ref: OwnerSessionRef, reason: OwnerSessionRevokeReason) => void): () => void
@@ -126,6 +128,7 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
   }
 
   return {
+    currentOwnerKey,
     mint(frame, contextRevision) {
       const ownerKey = currentOwnerKey()
       if (!ownerKey) return null

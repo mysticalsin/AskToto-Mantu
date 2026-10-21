@@ -1,8 +1,23 @@
 import type { SaveMeeting } from '@shared/ipc'
+import type { TranscriptLine } from '@shared/transcript-line'
 import { speakerLabel } from './transcript-format'
 import { cleanTitle, pad, yamlSafeTitle } from './transcript-document-format'
 
 const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
+
+/**
+ * The `duration_min` and `participants` frontmatter values for a draft's lines. Same calc as saveMeeting: without
+ * them, a draft promoted by recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads
+ * back with durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
+ */
+export function draftSummaryFields(
+  lines: readonly TranscriptLine[],
+  started: number
+): { durMin: number; participants: string[] } {
+  const last = lines.length ? lines[lines.length - 1].t : started
+  const durMin = lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
+  return { durMin, participants: Array.from(new Set(lines.map((l) => speakerLabel(l.speaker)))) }
+}
 
 export function buildDraftTranscriptDocument(
   m: SaveMeeting,
@@ -10,12 +25,7 @@ export function buildDraftTranscriptDocument(
   title: string,
   transcript: string
 ): string {
-  // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
-  // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
-  // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
-  const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
-  const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
-  const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
+  const { durMin, participants } = draftSummaryFields(m.lines, started)
   const frontmatter = [
     '---',
     'type: meeting-transcript-draft',

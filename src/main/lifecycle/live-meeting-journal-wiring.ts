@@ -7,6 +7,8 @@ import {
   type LiveJournalKeyCustody,
   type LiveMeetingJournal
 } from '../features/meetings/live-meeting-journal'
+import { createJournalRecovery, type JournalRecoveryAuditRecord } from '../features/meetings/journal-recovery'
+import { bindLiveJournalLifecycle } from '../features/meetings/live-journal-lifecycle'
 import { getMeetingSpeechLimits } from '../features/meetings/meeting-speech'
 import type { TranscriptRevisionStore } from '../features/meetings/transcript-revision-store'
 import {
@@ -32,6 +34,10 @@ export interface LiveMeetingJournalWiringDeps {
   userDataPath(): string
   authGeneration(): number
   audit(event: 'meeting.journal.degraded', record: LiveJournalAuditRecord): void
+  /** Launch recovery, purge and retention outcomes (enums and counts only). */
+  auditRecovery(record: JournalRecoveryAuditRecord): void
+  /** The signed-in owner's key now, or null while signed out; a journal's id is scoped by it. */
+  currentOwnerKey(): string | null
   onWillQuit(listener: () => void): void
   /** Defaults to the real wrap/unwrap in `content-key-wrap.ts`; a test seam. */
   keys?: LiveJournalKeyCustody
@@ -65,12 +71,13 @@ const DEFAULT_KEYS: LiveJournalKeyCustody = {
  */
 export function bootstrapLiveMeetingJournal(deps: LiveMeetingJournalWiringDeps): LiveMeetingJournal {
   const policyInstalled = deps.policyInstalled ?? ((): boolean => getMeetingSpeechLimits() !== undefined)
+  const keys = deps.keys ?? DEFAULT_KEYS
   const journal = createLiveMeetingJournal({
     userDataPath: deps.userDataPath,
     enabled: () => liveMeetingJournalAllowed(deps.readSettings(), policyInstalled()),
     bindingOf: (startedAt) => deps.store.bindingOf(startedAt),
     authGeneration: deps.authGeneration,
-    keys: deps.keys ?? DEFAULT_KEYS,
+    keys,
     audit: deps.audit
   })
   registerMeetingJournalIpc({
@@ -79,6 +86,20 @@ export function bootstrapLiveMeetingJournal(deps: LiveMeetingJournalWiringDeps):
     requireAuth: deps.requireAuth,
     journal
   })
+  // Launch recovery (merge, journal-only promotion), purge and retention. Reads follow the same kill switch as writes;
+  // deleting a leftover journal never needs the switch on.
+  bindLiveJournalLifecycle(
+    createJournalRecovery({
+      userDataPath: deps.userDataPath,
+      keys,
+      readsAllowed: () => liveMeetingJournalAllowed(deps.readSettings(), policyInstalled()),
+      currentOwnerKey: deps.currentOwnerKey,
+      closeSession: (startedAt) => journal.close(startedAt),
+      journalIdsFor: (startedAt) => journal.journalIdsFor(startedAt),
+      liveJournalIds: () => journal.activeJournalIds(),
+      audit: deps.auditRecovery
+    })
+  )
   // The disposers are discarded on purpose: these bindings live for the app lifetime.
   deps.onMeetingEnd((startedAt) => {
     void journal.close(startedAt).catch(() => undefined)

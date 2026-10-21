@@ -204,6 +204,17 @@ describe('owner-session authority', () => {
     expect(first.ownerKey).toBe(deriveOwnerKey(Buffer.alloc(32, 9), 'person@example.com'))
   })
 
+  it('currentOwnerKey is the derived key for the signed-in identity, and null when signed out or unsalted', () => {
+    const { state, authority } = setup()
+    expect(authority.currentOwnerKey()).toBe(deriveOwnerKey(state.salt!, 'person@example.com'))
+    expect(authority.currentOwnerKey()).toBe(mustMint(authority).ownerKey)
+    state.identity = null
+    expect(authority.currentOwnerKey()).toBeNull()
+    state.identity = 'person@example.com'
+    state.salt = null
+    expect(authority.currentOwnerKey()).toBeNull()
+  })
+
   it('validate reports revoked after revokeAll and notifies listeners', () => {
     const { authority } = setup()
     const ref = mustMint(authority)

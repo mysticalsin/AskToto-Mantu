@@ -49,9 +49,15 @@ import {
   knownDraftPathsForMeeting,
   trackDraftWrite
 } from './infra/storage/draft-transcript-write-state'
+import { unlinkDraftFiles } from './infra/storage/draft-file-unlink'
 import { createWriteAdmissionGuard } from './infra/storage/write-with-admission'
 import type { FileClass } from './infra/storage/gateway'
 import { speakerLabel } from './features/meetings/transcript-format'
+import {
+  endLiveMeetingJournal,
+  purgeLiveMeetingJournal,
+  type DraftJournalHooks
+} from './features/meetings/live-journal-lifecycle'
 import {
   buildDraftTranscriptDocument,
   promoteDraftTranscript,
@@ -601,7 +607,7 @@ export function ensureMeetingsFolder(settings: Settings): string {
   return folder
 }
 
-function appendIndexRow(
+export function appendIndexRow(
   folder: string,
   dateStr: string,
   title: string,
@@ -815,47 +821,6 @@ export async function saveDraftTranscript(
   }
 }
 
-/**
- * Remove one meeting's autosave draft once it ends normally (its real saveMeeting() already succeeded).
- *
- * The unlink gets the same bounded retry writeSaved() uses for rename: the default meetings folder is
- * OneDrive-synced, which routinely holds a just-written file open for upload hashing, and AV/EDR
- * real-time scanning grabs it too — unlink then throws EPERM/EBUSY on Windows even though nothing is
- * wrong. A single best-effort attempt leaves the draft on disk, and recoverOrphanDrafts() promotes it
- * on the next launch, so the user sees their meeting twice with the second copy labelled
- * "(recovered)". Retrying rides out the transient lock; a genuinely stuck file still degrades to the
- * old behaviour rather than failing the meeting end.
- */
-async function unlinkDraftFiles(
-  files: readonly string[],
-  isCurrent: () => boolean = () => true
-): Promise<{ failed: string[]; pending: string[] }> {
-  const failed: string[] = []
-  for (let index = 0; index < files.length; index++) {
-    const file = files[index]
-    if (!isCurrent()) return { failed, pending: files.slice(index) }
-    try {
-      if (!existsSync(file)) continue
-      for (let attempt = 0; ; attempt++) {
-        // Auth may change during an unlink retry delay; check immediately before every filesystem mutation.
-        if (!isCurrent()) return { failed, pending: files.slice(index) }
-        try {
-          await unlink(file)
-          break
-        } catch (e) {
-          const code = (e as NodeJS.ErrnoException).code
-          if (code === 'ENOENT') break
-          if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
-          await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
-        }
-      }
-    } catch {
-      failed.push(file)
-    }
-  }
-  return { failed, pending: [] }
-}
-
 // Keep exact failed paths even after finalizeDraftMeeting drops its per-meeting registry. A normal
 // final-save cleanup is best-effort, but Review's later explicit Disregard must still be able to
 // retry every draft copy that cleanup could not unlink.
@@ -885,6 +850,9 @@ export async function discardDraftTranscript(
     failedDraftCleanupPaths.set(startedAt, new Set(files))
     return { ok: false, error: 'Sign-in changed before draft cleanup could finish. Try Disregard again.' }
   }
+  // The raw-speech journal is disregarded with the draft: sealed first so a crash between steps leaves a marked journal.
+  await endLiveMeetingJournal(startedAt, 'discarded')
+  await purgeLiveMeetingJournal(startedAt)
   const { failed, pending } = await unlinkDraftFiles(files, isCurrent)
   if (pending.length || !isCurrent()) {
     failedDraftCleanupPaths.set(startedAt, new Set([...failed, ...pending]))
@@ -908,9 +876,12 @@ export async function clearDraftTranscript(
     // folder this meeting used previously. It seals the startedAt identity before awaiting writes.
     const candidateFiles = draftCleanupCandidates(settings, startedAt, savedTranscriptPath)
     const files = await finalizeDraftMeeting(startedAt, candidateFiles)
+    // The save is durable: seal the journal first, so a crash before the purge can never promote it as a second copy.
+    await endLiveMeetingJournal(startedAt, 'finalized')
     const { failed } = await unlinkDraftFiles(files)
     if (failed.length) failedDraftCleanupPaths.set(startedAt, new Set(failed))
     else failedDraftCleanupPaths.delete(startedAt)
+    await purgeLiveMeetingJournal(startedAt)
   } catch {
     /* best-effort — a stuck draft is recovered on next launch, it must never fail the meeting end */
   }
@@ -936,7 +907,11 @@ function isFile(fileClass: FileClass | undefined): boolean {
  * successful write) is never re-promoted — only its stale source file is retried for cleanup — and,
  * in plaintext mode, the recovered meeting gets an index.md row exactly like a normally-saved one.
  */
-export async function recoverOrphanDrafts(settings: Settings, savedDrafts?: ReadonlySet<string>) {
+export async function recoverOrphanDrafts(
+  settings: Settings,
+  savedDrafts?: ReadonlySet<string>,
+  journal?: DraftJournalHooks | null
+) {
   let recovered = 0
   try {
     const folder = resolveMeetingsFolder(settings)
@@ -975,7 +950,8 @@ export async function recoverOrphanDrafts(settings: Settings, savedDrafts?: Read
         const decoded = await decodeSavedMeetingAsync(read.bytes, false, draftPath)
         const text = decoded.ok ? decoded.text : ''
         if (!text) continue // undecryptable on this device — leave it alone
-        const promoted = promoteDraftTranscript(text)
+        // The draft stays authoritative; a live-journal tail the last autosave missed is merged in (none when off).
+        const promoted = promoteDraftTranscript(journal ? await journal.merge(text) : text)
         let out = primaryOut
         for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
         await writeSaved(out, promoted, wasEncrypted)
@@ -987,6 +963,7 @@ export async function recoverOrphanDrafts(settings: Settings, savedDrafts?: Read
           // skip re-promoting this same stale draft (see the guard above), only retrying its cleanup.
         }
         recovered++
+        await journal?.promoted(text)
 
         // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same row shape) — a recovered
         // meeting should be just as discoverable from index.md as a normal one. Keyed on the file we

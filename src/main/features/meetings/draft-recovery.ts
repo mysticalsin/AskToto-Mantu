@@ -1,15 +1,27 @@
 import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
+import type { TranscriptLine } from '@shared/transcript-line'
+import { draftFilename } from '../../infra/storage/draft-transcript-write-state'
 import type { StorageGateway } from '../../infra/storage/gateway'
 import { storageAt } from '../../infra/storage/meetings-storage'
 import {
+  appendIndexRow,
   decodeSavedMeetingAsync,
+  ensureMeetingsFolder,
   recoverOrphanDrafts as promoteOrphanDrafts,
-  resolveMeetingsFolder
+  resolveMeetingsFolder,
+  writeSaved
 } from '../../transcripts'
+import {
+  buildDraftTranscriptDocument,
+  promoteDraftTranscript,
+  recoveredDraftIndexFields
+} from './draft-transcript-document'
+import { currentLiveJournalLifecycle, endLiveMeetingJournal, purgeLiveMeetingJournal } from './live-journal-lifecycle'
 import { readMeetingFields } from './meeting-document'
-import { getMeetingSpeechReadLimitBytes } from './meeting-speech'
+import { getMeetingSpeechReadLimitBytes, renderMeetingTranscriptAsync } from './meeting-speech'
+import { stamp } from './transcript-document-format'
 import { matchesSavedReceiptIdentity } from './saved-receipt-identity'
 import { readRevisionCheckpoint } from './transcript-checkpoint'
 
@@ -90,6 +102,9 @@ export async function removeSavedMeetingDrafts(
           savedDrafts.add(name)
           await unlink(join(folder, name))
           removed++
+          // The save this draft belonged to is verified: its live journal is obsolete (sealed first, then removed).
+          await endLiveMeetingJournal(draftIdentity.meetingStartedAt, 'finalized')
+          await purgeLiveMeetingJournal(draftIdentity.meetingStartedAt)
           break
         }
         if (preserveForUnverifiedCandidate) savedDrafts.add(name)
@@ -113,10 +128,90 @@ export function bindLaunchResume(resume: (settings: Settings) => Promise<void>):
   }
 }
 
+const RECOVERED_TITLE = 'Recovered meeting'
+
+/** True when a saved or recovered meeting already carries this canonical start instant (or one cannot be read). */
+async function meetingExistsFor(settings: Settings, startedAt: number): Promise<boolean> {
+  try {
+    const folder = resolveMeetingsFolder(settings)
+    const gateway = storageAt(folder)
+    const listing = await gateway.list('')
+    if (listing.status !== 'ok') return true
+    const prefix = `${stamp(startedAt)}-`
+    const date = new Date(startedAt).toISOString()
+    for (const name of listing.names) {
+      if (name.startsWith('.') || !name.startsWith(prefix) || !name.endsWith('.md')) continue
+      const candidate = await documentOf(gateway, folder, name)
+      // An unreadable same-stamp file might be this very meeting (another device, another key): never promote over it.
+      if (!candidate) return true
+      if (MEETING_TYPES.has(candidate.fields.type ?? '') && candidate.fields.date === date) return true
+    }
+    return false
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Writes the recovered meeting for a journal that has no draft (crash before the first autosave). Title and mode are
+ * defaults (the journal never saw them); the file is encrypted iff the user's `encryptTranscripts` is on, exactly
+ * as a normal save would be (ASSUMED default of decision E).
+ */
+async function promoteJournalOnlyMeeting(
+  settings: Settings,
+  startedAt: number,
+  lines: readonly TranscriptLine[]
+): Promise<boolean> {
+  try {
+    const folder = ensureMeetingsFolder(settings)
+    const listing = await storageAt(folder).list('')
+    if (listing.status !== 'ok') return false
+    const all = [...lines]
+    const transcript = await renderMeetingTranscriptAsync(all)
+    const document = promoteDraftTranscript(
+      buildDraftTranscriptDocument(
+        { title: RECOVERED_TITLE, mode: 'meeting', startedAt, lines: all, recap: '' },
+        startedAt,
+        RECOVERED_TITLE,
+        transcript
+      )
+    )
+    const stampPart = draftFilename(startedAt, stamp(startedAt)).slice('.autosave-draft-'.length, -'.md'.length)
+    const occupied = new Set(listing.names)
+    let name = `${stampPart}-recovered.md`
+    for (let n = 2; occupied.has(name); n++) name = `${stampPart}-recovered-${n}.md`
+    const encrypt = !!settings.encryptTranscripts
+    await writeSaved(join(folder, name), document, encrypt)
+    if (!encrypt) {
+      const { dateStr, title, mode } = recoveredDraftIndexFields(document)
+      appendIndexRow(folder, dateStr, title, mode, 0, name)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Launch recovery: finish journaled saves, drop drafts whose meeting was already saved, then promote true orphans. */
 export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
   await launchResume?.(settings).catch(() => undefined)
   const savedDrafts = new Set<string>()
   await removeSavedMeetingDrafts(settings, savedDrafts)
-  return promoteOrphanDrafts(settings, savedDrafts)
+  const journal = currentLiveJournalLifecycle()
+  const result = await promoteOrphanDrafts(settings, savedDrafts, journal?.draftHooks() ?? null)
+  if (!journal) return result
+  // The live meeting journal's remaining work: journals with no draft, then retention. Never blocks launch.
+  try {
+    const listing = await storageAt(resolveMeetingsFolder(settings)).list('')
+    // Without a readable folder listing no draft can be ruled out, so neither promotion nor the sweep may run.
+    if (listing.status !== 'ok') return result
+    const { promoted } = await journal.recoverRemaining({
+      draftNames: listing.names.filter((name) => DRAFT_NAME.test(name)),
+      meetingExists: (startedAt) => meetingExistsFor(settings, startedAt),
+      promote: (startedAt, lines) => promoteJournalOnlyMeeting(settings, startedAt, lines)
+    })
+    return { recovered: result.recovered + promoted }
+  } catch {
+    return result
+  }
 }

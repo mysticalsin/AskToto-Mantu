@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
@@ -8,7 +8,12 @@ import type { OwnerSessionRef, OwnerSessionRevokeReason } from '@shared/contract
 import { DEFAULT_SETTINGS, IPC, type Settings } from '@shared/ipc'
 import type { TranscriptLine } from '@shared/transcript-line'
 import { app, safeStorage } from 'electron'
-import type { LiveJournalKeyCustody } from '../features/meetings/live-meeting-journal'
+import { currentLiveJournalLifecycle } from '../features/meetings/live-journal-lifecycle'
+import {
+  liveMeetingJournalDirectory,
+  liveMeetingJournalId,
+  type LiveJournalKeyCustody
+} from '../features/meetings/live-meeting-journal'
 import type { AuthorizeSender } from '../ipc/sender-auth'
 import { resetSecretKeyCache } from '../secrets'
 import type { SettingsObservation } from '../settings-observation'
@@ -119,6 +124,8 @@ function wiring(options: { settings?: SettingsObservation | null } = {}) {
     userDataPath: () => userData,
     authGeneration: () => 1,
     audit: vi.fn(),
+    auditRecovery: vi.fn(),
+    currentOwnerKey: () => OWNER,
     onWillQuit: (listener) => {
       onWillQuit = listener
     },
@@ -153,6 +160,25 @@ describe('bootstrapLiveMeetingJournal', () => {
     expect(w.journal.activeMeetings()).toEqual([STARTED_AT])
     w.endMeeting()
     await vi.waitFor(() => expect(w.journal.activeMeetings()).toEqual([]))
+  })
+
+  it('binds the launch-recovery lifecycle: purging a meeting closes its live session and removes its journal', async () => {
+    const w = wiring()
+    await w.invoke({ startedAt: STARTED_AT, line: line(1) })
+    const directory = liveMeetingJournalDirectory(userData, liveMeetingJournalId(STARTED_AT, OWNER))
+    expect(existsSync(directory)).toBe(true)
+    const lifecycle = currentLiveJournalLifecycle()
+    expect(lifecycle).not.toBeNull()
+    await lifecycle!.purge(STARTED_AT)
+    expect(w.journal.activeMeetings()).toEqual([])
+    expect(existsSync(directory)).toBe(false)
+  })
+
+  it('hands launch recovery no merge hooks while the kill switch is off, but still purges', async () => {
+    const w = wiring({ settings: observe({ liveMeetingJournal: false }) })
+    expect(currentLiveJournalLifecycle()!.draftHooks()).toBeNull()
+    await expect(currentLiveJournalLifecycle()!.purge(STARTED_AT)).resolves.toBeUndefined()
+    expect(w.journal.activeJournalIds()).toEqual([])
   })
 
   it('ends only the revoked owner on owner-session revocation', async () => {

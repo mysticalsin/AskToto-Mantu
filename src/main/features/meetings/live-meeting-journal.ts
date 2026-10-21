@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstat, mkdir, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { TranscriptLine } from '@shared/transcript-line'
+import { atomicSavedWrite } from '../../infra/storage/atomic-saved-write'
 import { createStorageGateway } from '../../infra/storage/gateway'
 import type { ContentPresence, DatalessDetector } from '../../infra/storage/dataless'
 import { canonicalizeIncrementalMeetingRecord } from '../../infra/storage/incremental-record-canonical'
@@ -113,12 +114,17 @@ export interface LiveMeetingJournal {
   dispose(): Promise<void>
   /** Meetings with a live session, for diagnostics and tests. */
   activeMeetings(): number[]
+  /** Journal ids of the live sessions: a retention sweep never deletes one of these. */
+  activeJournalIds(): string[]
+  /** Every journal id this process opened for the meeting (any owner), so a purge finds them after the session ends. */
+  journalIdsFor(startedAt: number): string[]
 }
 
 /** Meetings whose first auth generation is remembered (the active one plus a few recent). */
 const GENERATION_MEMORY = 16
 const JOURNAL_DIR = 'meeting-journal'
 const KEY_FILE = 'key.v1'
+const START_FILE = 'meeting.v1'
 const RECORDS_DIR = 'records'
 const ID_PREFIX = 'metis-live-meeting-journal-v1'
 const AUDITED_REASONS: ReadonlySet<LiveJournalRefusal> = new Set<LiveJournalRefusal>([
@@ -130,7 +136,7 @@ const AUDITED_REASONS: ReadonlySet<LiveJournalRefusal> = new Set<LiveJournalRefu
 ])
 
 /** Everything under userData is on this device; probing every record file for cloud placeholders would be waste. */
-const LOCAL_DETECTOR: DatalessDetector = {
+export const LOCAL_JOURNAL_DETECTOR: DatalessDetector = {
   classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, 'local']))
 }
 
@@ -209,6 +215,8 @@ export function createLiveMeetingJournal(deps: LiveMeetingJournalDeps): LiveMeet
   const openFailedAt = new Map<number, number>()
   /** The auth generation each meeting first journaled under: a later change never re-admits that meeting. */
   const generationOf = new Map<number, number>()
+  /** Journal ids opened for each meeting by this process (the owner key is not recoverable from an id). */
+  const idsOf = new Map<number, Set<string>>()
   const closing = new Set<Promise<void>>()
 
   const enabled = (): boolean => {
@@ -301,6 +309,7 @@ export function createLiveMeetingJournal(deps: LiveMeetingJournalDeps): LiveMeet
       if (key.byteLength !== 32 || !current(session)) return false
       await mkdir(records, { recursive: true, mode: 0o700 })
       if (!current(session)) return false
+      await writeStartFile(directory, session.startedAt)
 
       const storage = createIncrementalMeetingJournalFileStorage({
         root: records,
@@ -309,7 +318,7 @@ export function createLiveMeetingJournal(deps: LiveMeetingJournalDeps): LiveMeet
         maxJournalBytes: limits.maxJournalBytes,
         ...LIVE_MEETING_JOURNAL_STORAGE_BUDGET,
         isCurrent: () => current(session),
-        gateway: createStorageGateway({ root: () => records, detector: LOCAL_DETECTOR })
+        gateway: createStorageGateway({ root: () => records, detector: LOCAL_JOURNAL_DETECTOR })
       })
       if (!storage) return false
       const initialized = await storage.initialize()
@@ -339,6 +348,26 @@ export function createLiveMeetingJournal(deps: LiveMeetingJournalDeps): LiveMeet
       return false
     } finally {
       key?.fill(0)
+    }
+  }
+
+  /**
+   * `meeting.v1` beside the key (never inside the records dir): the meeting start, so a launch with no draft can still
+   * recompute and verify this journal's id. The start time is not content (draft file names already carry it); it
+   * is verified against the directory name at recovery, so a wrong value is never trusted. Best effort.
+   */
+  const writeStartFile = async (directory: string, startedAt: number): Promise<void> => {
+    const path = join(directory, START_FILE)
+    try {
+      await lstat(path)
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') return
+    }
+    try {
+      await atomicSavedWrite(path, Buffer.from(JSON.stringify({ v: 1, startedAt }), 'utf8'))
+    } catch {
+      /* journal-only promotion needs it; the draft merge does not */
     }
   }
 
@@ -459,6 +488,14 @@ export function createLiveMeetingJournal(deps: LiveMeetingJournalDeps): LiveMeet
             refusals: new Map()
           }
           sessions.set(created.startedAt, created)
+          const known = idsOf.get(created.startedAt) ?? new Set<string>()
+          known.add(created.meetingId)
+          idsOf.set(created.startedAt, known)
+          while (idsOf.size > GENERATION_MEMORY) {
+            const oldest = idsOf.keys().next()
+            if (oldest.done) break
+            idsOf.delete(oldest.value)
+          }
           created.ready = open(created)
           session = created
         }
@@ -485,6 +522,12 @@ export function createLiveMeetingJournal(deps: LiveMeetingJournalDeps): LiveMeet
     },
     activeMeetings() {
       return [...sessions.keys()]
+    },
+    activeJournalIds() {
+      return [...sessions.values()].map((session) => session.meetingId)
+    },
+    journalIdsFor(startedAt) {
+      return [...(idsOf.get(startedAt) ?? [])]
     }
   }
 }
