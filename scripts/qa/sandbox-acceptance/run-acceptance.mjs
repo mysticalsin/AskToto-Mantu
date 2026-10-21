@@ -76,11 +76,11 @@ export function resolveConfig(argv, env = process.env) {
  * The dry-run result: every guard check plus the plan. Reads only the bundle id.
  * @param {ReturnType<typeof resolveConfig>} config
  * @param {Record<string, string | undefined>} [env]
- * @param {{ bundleId?: string | null }} [options]
+ * @param {{ bundleId?: string | null, platform?: string }} [options] platform defaults to the host (tests pin darwin)
  */
-export function dryRunPlan(config, env = process.env, { bundleId = undefined } = {}) {
+export function dryRunPlan(config, env = process.env, { bundleId = undefined, platform = process.platform } = {}) {
   const { layout, appPath, values } = config
-  const guards = guardReport({ layout, appPath, parentEnv: env, captureFile: layout.captureWav, bundleId })
+  const guards = guardReport({ layout, appPath, parentEnv: env, captureFile: layout.captureWav, bundleId, platform })
   return {
     ok: guards.ok,
     checks: guards.checks,

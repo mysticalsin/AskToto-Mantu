@@ -50,10 +50,17 @@ export function planLaunch({
 
 /**
  * Every launch guard plus the socket-path budget, as the list --dry-run prints. Reads only the bundle id; launches nothing.
- * @param {{ layout: any, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, bundleId?: string | null }} args
+ * @param {{ layout: any, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, bundleId?: string | null, platform?: string }} args
  */
-export function guardReport({ layout, appPath, parentEnv, captureFile = null, bundleId = undefined }) {
-  const { childEnv, guardConfig } = planLaunch({ layout, appPath, parentEnv, captureFile, bundleId })
+export function guardReport({
+  layout,
+  appPath,
+  parentEnv,
+  captureFile = null,
+  bundleId = undefined,
+  platform = process.platform
+}) {
+  const { childEnv, guardConfig } = planLaunch({ layout, appPath, parentEnv, captureFile, bundleId, platform })
   const result = evaluateGuards(guardConfig)
   result.checks.push(checkSocketBudget(layout.tmp))
   return {

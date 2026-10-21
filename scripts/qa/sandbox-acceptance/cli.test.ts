@@ -50,7 +50,7 @@ describe('run-acceptance configuration', () => {
 
   it('--dry-run validates every guard and lists the plan without touching disk', () => {
     const config = resolveConfig(['--run-id', 'r1', '--dry-run'], isolatedEnv())
-    const result = dryRunPlan(config, isolatedEnv(), { bundleId: QA_BUNDLE_ID })
+    const result = dryRunPlan(config, isolatedEnv(), { bundleId: QA_BUNDLE_ID, platform: 'darwin' })
     expect(result.ok).toBe(true)
     expect(result.checks.every((check) => check.ok)).toBe(true)
     expect(result.plan.steps).toEqual([
@@ -72,18 +72,21 @@ describe('run-acceptance configuration', () => {
 
   it('dry-run reports the real identity, a missing wrapper and an /Applications app as failures', () => {
     const real = dryRunPlan(resolveConfig(['--run-id', 'r1'], isolatedEnv()), isolatedEnv(), {
-      bundleId: 'com.mantu.asktoto'
+      bundleId: 'com.mantu.asktoto',
+      platform: 'darwin'
     })
     expect(real.ok).toBe(false)
     expect(real.checks.find((check) => check.id === 'bundle-id')?.ok).toBe(false)
     const { METIS_LOOP_ISOLATED: _drop, ...unwrapped } = isolatedEnv()
     expect(
-      dryRunPlan(resolveConfig(['--run-id', 'r1'], unwrapped), unwrapped, { bundleId: QA_BUNDLE_ID }).checks.find(
-        (check) => check.id === 'isolate-wrapper'
-      )?.ok
+      dryRunPlan(resolveConfig(['--run-id', 'r1'], unwrapped), unwrapped, {
+        bundleId: QA_BUNDLE_ID,
+        platform: 'darwin'
+      }).checks.find((check) => check.id === 'isolate-wrapper')?.ok
     ).toBe(false)
     const installed = dryRunPlan(resolveConfig(['--app', '/Applications/Metis.app'], isolatedEnv()), isolatedEnv(), {
-      bundleId: QA_BUNDLE_ID
+      bundleId: QA_BUNDLE_ID,
+      platform: 'darwin'
     })
     expect(installed.ok).toBe(false)
     expect(installed.checks.find((check) => check.id === 'app-path')?.detail).toContain('/Applications')
