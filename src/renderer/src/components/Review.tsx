@@ -8,7 +8,6 @@ import {
   Save,
   RotateCcw,
   Play,
-  ChevronDown,
   Download,
   Clock,
   Mail,
@@ -32,7 +31,6 @@ import { reviewDurationSeconds } from '@shared/meeting-duration'
 import { reviewSpeakerLabel } from '@shared/speaker-summary'
 import { talkStats } from '@shared/talkstats'
 import { Markdown } from './Markdown'
-import { ModeRecapView, modeRecapSections } from './ModeRecap'
 import { Chip, TextButton, Spinner } from './ui'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
@@ -48,6 +46,7 @@ import {
   friendlyDate,
   meetingTime
 } from './review/review-format'
+import { ReviewTranscript } from './review/ReviewTranscript'
 import {
   crmPushDone,
   crmPushKey,
@@ -71,54 +70,21 @@ export {
   type NextStepArgs
 } from '../lib/review-push-memory'
 
-export const INCOMPLETE_RECAP_COPY = 'This summary may be incomplete. Review it before using it, or retry.'
-
-/** An in-place recap edit that was saved, paired with the recap text it replaced. */
-export type EditedRecap = { base: string; text: string }
-
-/** The recap markdown every consumer reads (Markdown render, Copy Summary, Export JSON/PDF, CRM payload),
- *  so an edit reflects everywhere at once. The in-place copy of a saved edit stands only while App is
- *  still handing back the text that edit was made against: Regenerate re-runs the recap and OVERWRITES
- *  this meeting on disk, and a copy that outlived that write kept the old edited text on screen — and in
- *  every export and the CRM payload — while the file said something else, with no recovery short of
- *  leaving the screen and reopening. Comparing against `base` makes the override yield to the streaming
- *  regeneration and then to the regenerated recap the moment either arrives. */
-export function displayedRecapText(edited: EditedRecap | null, incoming: string | undefined): string {
-  const text = incoming ?? ''
-  return edited && edited.base === text ? edited.text : text
-}
-
-function RecapBody({ text, mode }: { text: string; mode: string }): JSX.Element {
-  const sections = modeRecapSections(text, mode)
-  if (sections.length >= 2) return <ModeRecapView mode={mode} sections={sections} />
-  return <Markdown>{text}</Markdown>
-}
-
-/** The line under a save-failure banner. It used to be an unconditional present-tense "Retrying… attempt
- *  N / M" gated on nothing but `attempts > 0`, so once App's backoff ladder stopped scheduling attempts
- *  the screen went on promising a retry that would never come — the user's only cue said "in progress"
- *  while the meeting sat unwritten. A status line may only claim work that is actually pending; when the
- *  ladder has given up it names the Save chip instead, which is armed in exactly this state. */
-export function saveStatusLine(attempts: number, max: number, gaveUp: boolean): string | null {
-  if (gaveUp) return 'Automatic retries have stopped. Press Save to try again.'
-  if (attempts > 0) return `Retrying… attempt ${Math.min(attempts, max)} / ${max}`
-  return null
-}
-
-/** Cold Calling Mode — whether the coaching notes' "People to invite or send to" section actually names
- *  anyone, so the "Book meetings" action is never offered against an empty section or a "None." verdict.
- *  Line-based (not a single regex): a blank line separating the heading from the next "## " section is
- *  itself whitespace, so a naive `\s*` boundary swallows it and misreads the FOLLOWING section as this
- *  one's body. */
-export function coldCallHasPeopleToFollowUp(coachingText: string): boolean {
-  const lines = coachingText.split(/\r?\n/)
-  const start = lines.findIndex((l) => /^##\s*People to invite or send to\s*:?\s*$/i.test(l.trim()))
-  if (start === -1) return false
-  const body: string[] = []
-  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]); i++) body.push(lines[i])
-  const text = body.join('\n').trim()
-  return text.length > 0 && !/^none\.?$/i.test(text)
-}
+import {
+  INCOMPLETE_RECAP_COPY,
+  RecapBody,
+  coldCallHasPeopleToFollowUp,
+  displayedRecapText,
+  saveStatusLine
+} from './review/review-recap'
+import type { EditedRecap } from './review/review-recap'
+export {
+  INCOMPLETE_RECAP_COPY,
+  coldCallHasPeopleToFollowUp,
+  displayedRecapText,
+  saveStatusLine
+} from './review/review-recap'
+export type { EditedRecap } from './review/review-recap'
 
 /**
  * MQA-092 — a push that landed before the meeting had a file yet.
@@ -1872,62 +1838,17 @@ export const Review = memo(function Review({
         </section>
       )}
 
-      {lines.length === 0 ? null : !transcriptOpen ? (
-        // Summary-first: the full transcript is hidden behind a one-click disclosure unless the user has
-        // opted in (Settings → showFullTranscriptInReview). The notes above are the payoff.
-        <button
-          type="button"
-          onClick={() => setTranscriptOpen(true)}
-          className="no-drag focus-ring flex w-fit items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink-2)]"
-        >
-          <FileText size={12} />
-          Show Transcript
-          <span className="text-[color:var(--color-ink-3)] opacity-60">· {speechLines.length} lines</span>
-          <ChevronDown size={12} className="-rotate-90" />
-        </button>
-      ) : (
-        <section>
-          <div className="mb-1.5 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setTranscriptOpen(false)}
-              className="no-drag focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-            >
-              <FileText size={12} /> Full transcript · {speechLines.length} lines <ChevronDown size={12} />
-            </button>
-            <TextButton onClick={copy}>
-              {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-              {copied ? 'Copied' : 'Copy'}
-            </TextButton>
-          </div>
-          {copyError && (
-            <div className="mb-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
-              {copyError}
-            </div>
-          )}
-          {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
-            whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
-          <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
-            {speechLines.length === 0 ? (
-              <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
-            ) : (
-              speechLines.map((l, i) => (
-                <div key={i} className="flex gap-2 text-[13px] leading-snug">
-                  <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">{clock(l.t)}</span>
-                  <span
-                    className={
-                      'shrink-0 text-[10px] font-semibold uppercase ' +
-                      (l.speaker === 'them' ? 'text-[color:var(--color-ink-2)]' : 'text-[color:var(--color-ink-3)]')
-                    }
-                  >
-                    {speakerDisplay(l)}
-                  </span>
-                  <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
+      {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
+        whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
+      {lines.length === 0 ? null : (
+        <ReviewTranscript
+          speechLines={speechLines}
+          open={transcriptOpen}
+          onOpenChange={setTranscriptOpen}
+          copied={copied}
+          copyError={copyError}
+          onCopy={copy}
+        />
       )}
 
       {/* Recent meetings list */}
