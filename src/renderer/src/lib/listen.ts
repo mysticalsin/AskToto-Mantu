@@ -222,7 +222,6 @@ function settleStopCallbacks(operation: StopDrainOperation, outcome: StopDrainOu
   }
 }
 
-
 export interface ListenApi {
   listening: boolean
   /** True only once capture is actually confirmed (mic and/or system audio channel open) — see the

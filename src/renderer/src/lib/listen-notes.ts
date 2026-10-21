@@ -9,7 +9,8 @@ export const THEM_SILENT_MSG = isWindows
 // lid-close sleep kills a capture track with no error anywhere — the UI kept saying "Listening" while
 // a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
 export const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep); reconnecting automatically…'
-export const THEM_LOST_MSG = 'System-audio capture stopped (display sleep or a device change); reconnecting automatically…'
+export const THEM_LOST_MSG =
+  'System-audio capture stopped (display sleep or a device change); reconnecting automatically…'
 // Backpressure became user-visible truncation: transcription fell behind capture long enough that
 // audio windows were discarded. Exact-string contract like the other sticky notes.
 export const DROPPED_MSG = 'Transcription fell behind, so some audio was skipped. The transcript may have gaps.'
