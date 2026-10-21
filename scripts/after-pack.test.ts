@@ -21,6 +21,9 @@ vi.mock('node:child_process', () => childProcess)
 import afterPack from './after-pack.mjs'
 import { ensureLeanPackageCoreDirectories } from './lib/lean-package-stage.mjs'
 
+// macOS hosted runners place tmpdir() under /var -> /private/var; the lean verifier rejects any link in the
+// resource path chain, so fixtures must live under the canonical temp root.
+const realTmpdir = () => realpathSync(tmpdir())
 const electronArchiveTools = createRequire(import.meta.url)('app-builder-lib/out/util/electronGet.js')
 
 describe('afterPack Windows runtime verification', () => {
@@ -36,7 +39,7 @@ describe('afterPack Windows runtime verification', () => {
   })
 
   it('forwards the configured executable name to the packaged runtime verifier', async () => {
-    const appOutDir = mkdtempSync(join(tmpdir(), 'metis-after-pack-'))
+    const appOutDir = mkdtempSync(join(realTmpdir(), 'metis-after-pack-'))
     temporaryDirectories.push(appOutDir)
     const resources = join(appOutDir, 'resources')
     mkdirSync(join(resources, 'ffmpeg', 'win32-x64'), { recursive: true })
@@ -67,7 +70,7 @@ describe('afterPack Windows runtime verification', () => {
   })
 
   it('creates empty lean key directories before the unchanged package verifier runs', async () => {
-    const appOutDir = mkdtempSync(join(tmpdir(), 'metis-after-pack-lean-'))
+    const appOutDir = mkdtempSync(join(realTmpdir(), 'metis-after-pack-lean-'))
     temporaryDirectories.push(appOutDir)
     const resources = join(appOutDir, 'resources')
     mkdirSync(join(resources, 'ffmpeg', 'win32-x64'), { recursive: true })
@@ -113,7 +116,7 @@ describe('afterPack Windows runtime verification', () => {
   })
 
   it('removes a staged app directory when runtime verification fails', async () => {
-    const appOutDir = mkdtempSync(join(tmpdir(), 'metis-after-pack-failure-'))
+    const appOutDir = mkdtempSync(join(realTmpdir(), 'metis-after-pack-failure-'))
     temporaryDirectories.push(appOutDir)
     const resources = join(appOutDir, 'resources')
     mkdirSync(join(resources, 'ffmpeg', 'win32-x64'), { recursive: true })
@@ -139,7 +142,7 @@ describe('afterPack Windows runtime verification', () => {
 describe('lean provisioned-key directory creation', () => {
   const roots: string[] = []
   function fixture(): string {
-    const root = mkdtempSync(join(tmpdir(), 'metis-lean-core-directories-'))
+    const root = mkdtempSync(join(realTmpdir(), 'metis-lean-core-directories-'))
     roots.push(root)
     return root
   }
@@ -200,7 +203,7 @@ describe('afterPack macOS signature', () => {
   })
 
   function macFixture(): string {
-    const appOutDir = mkdtempSync(join(tmpdir(), 'metis-after-pack-mac-'))
+    const appOutDir = mkdtempSync(join(realTmpdir(), 'metis-after-pack-mac-'))
     temporaryDirectories.push(appOutDir)
     const resources = join(appOutDir, 'Metis.app', 'Contents', 'Resources')
     mkdirSync(join(resources, 'ffmpeg', 'darwin-arm64'), { recursive: true })

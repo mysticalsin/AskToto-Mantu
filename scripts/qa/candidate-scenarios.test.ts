@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -1169,7 +1170,8 @@ describe('the fresh profile', () => {
 
   it('builds the idle-soak representative Hide profile with local LLM enabled', () => {
     const cwd = process.cwd()
-    const scratch = mkdtempSync(join(tmpdir(), 'candidate-scenarios-idle-profile-'))
+    // process.cwd() reports the canonical path; hosted macOS tmpdir() is /var -> /private/var.
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'candidate-scenarios-idle-profile-')))
     try {
       process.chdir(scratch)
       const manifest = prepareProfile({ scenario: 'idle-soak', platform: 'win', appDataDir: appData })

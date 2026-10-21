@@ -1,5 +1,14 @@
 import * as fs from 'node:fs'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -413,7 +422,8 @@ function reportFixture(skips = 2): {
   context: Parameters<typeof diagnoseRootReport>[0]
   report: Report
 } {
-  const folder = mkdtempSync(join(tmpdir(), 'metis-root-diagnostic-'))
+  // The producer pins the realpath of the workspace; hosted macOS tmpdir() is /var -> /private/var.
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), 'metis-root-diagnostic-')))
   const runnerTemp = join(folder, 'runner')
   const workspace = join(folder, 'workspace')
   mkdirSync(runnerTemp)
