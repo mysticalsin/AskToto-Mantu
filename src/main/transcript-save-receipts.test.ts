@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Settings } from '@shared/ipc'
 import type { ReceiptJournalPort, SaveReceiptRecord } from './infra/storage/transcript-receipt-journal'
-import { TranscriptSaveReceiptStore, type ReceiptJournalOptions } from './transcript-save-receipts'
+import {
+  TranscriptSaveReceiptStore,
+  type ReceiptJournalOptions,
+  type TranscriptSaveReceipt
+} from './transcript-save-receipts'
 
 const settings = { meetingsFolder: '/m' } as Settings
 const owner = (startedAt: number) => ({ startedAt, authGeneration: 7 })
@@ -48,6 +52,321 @@ const durable =
   }
 
 describe('TranscriptSaveReceiptStore', () => {
+  it('blocks save effects and success when receipt construction throws', async () => {
+    const journal = memoryJournal()
+    const failure = new Error('receipt ID unavailable')
+    const effect = vi.fn()
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => {
+        throw failure
+      }
+    })
+    const saved = store.run(key(1), owner(42), async (receipt) => {
+      receipt.normalizedStartedAt = 42
+      receipt.settings = settings
+      receipt.durablePath = '/m/a.md'
+      await store.journalIdle()
+      effect()
+      return receipt.durablePath
+    })
+    await expect(saved).rejects.toBe(failure)
+    expect(effect).not.toHaveBeenCalled()
+    expect(journal.records.size).toBe(0)
+  })
+
+  it.each([
+    'locate',
+    'newId',
+    'now'
+  ] as const)('retains a persistent %s failure until an explicit retry', async (boundary) => {
+    const journal = memoryJournal()
+    const failure = new Error(`${boundary} unavailable`)
+    let failing = true
+    const check = () => {
+      if (failing) throw failure
+    }
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => {
+        if (boundary === 'locate') check()
+        return { savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }
+      },
+      newId: () => {
+        if (boundary === 'newId') check()
+        return 'fixed'
+      },
+      now: () => {
+        if (boundary === 'now') check()
+        return 1000
+      }
+    })
+    const write = vi.fn(() => '/m/a.md')
+    const effect = vi.fn()
+    const work = vi.fn(async (receipt: TranscriptSaveReceipt) => {
+      receipt.normalizedStartedAt ??= 42
+      receipt.settings ??= settings
+      receipt.durablePath ??= write()
+      await store.journalIdle()
+      effect()
+      return receipt.durablePath
+    })
+    await expect(store.run(key(1), owner(42), work)).rejects.toBe(failure)
+    await expect(store.journalIdle()).rejects.toBe(failure)
+    await expect(store.run(key(1), owner(42), work)).rejects.toBe(failure)
+    expect(work).toHaveBeenCalledTimes(1)
+    expect(effect).not.toHaveBeenCalled()
+    expect(journal.writes).toBe(0)
+    failing = false
+    await expect(store.run(key(1), owner(42), work)).resolves.toBe('/m/a.md')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(effect).toHaveBeenCalledTimes(1)
+    expect(journal.records.get('fixed')).toMatchObject({ ownerKey: '7:42', revision: 3, savedBasename: 'a.md' })
+  })
+
+  it.each([
+    undefined,
+    null,
+    false,
+    0,
+    ''
+  ])('preserves a falsy construction error %s when logging throws', async (failure) => {
+    const journal = memoryJournal()
+    const newId = vi.fn(() => {
+      throw failure
+    })
+    const onError = vi.fn(() => {
+      throw new Error('logger failed')
+    })
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId,
+      onError
+    })
+    await expect(store.run(key(1), owner(42), durable(42))).rejects.toBe(failure)
+    expect(newId).toHaveBeenCalledTimes(1)
+    expect(onError).toHaveBeenCalledExactlyOnceWith(failure)
+    await expect(store.journalIdle()).rejects.toBe(failure)
+    expect(newId).toHaveBeenCalledTimes(2)
+    expect(journal.writes).toBe(0)
+  })
+
+  it('observes a transient failure before later retry, then holds retry work until the pinned record persists', async () => {
+    const journal = memoryJournal()
+    const put = journal.put
+    const failure = new Error('clock unavailable after credit')
+    let failNow = false
+    let holdPut = false
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let putting = false
+    const location = { savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 12 }
+    const locate = vi.fn(() => location)
+    const newId = vi.fn(() => 'original')
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate,
+      newId,
+      now: () => {
+        if (failNow) {
+          failNow = false
+          throw failure
+        }
+        return 1000
+      }
+    })
+    journal.put = async (record) => {
+      if (holdPut) {
+        putting = true
+        await held
+      }
+      await put(record)
+    }
+    const write = vi.fn(() => '/m/a.md')
+    const credit = vi.fn()
+    const nextEffect = vi.fn()
+    const work = vi.fn(async (receipt: TranscriptSaveReceipt) => {
+      receipt.normalizedStartedAt ??= 42
+      receipt.settings ??= settings
+      receipt.durablePath ??= write()
+      await store.journalIdle()
+      if (!receipt.completed.has('summary-credit')) {
+        credit()
+        failNow = true
+        receipt.completed.add('summary-credit')
+        await store.journalIdle()
+      }
+      nextEffect()
+      return receipt.durablePath
+    })
+    let retry: Promise<string> | undefined
+    try {
+      await expect(store.run(key(1), owner(42), work)).rejects.toBe(failure)
+      expect(nextEffect).not.toHaveBeenCalled()
+      location.revision = 0
+      location.savedBasename = 'later.md'
+      holdPut = true
+      retry = store.run(key(1), owner(42), work)
+      await vi.waitFor(() => expect(putting).toBe(true))
+      expect(work).toHaveBeenCalledTimes(1)
+      expect(write).toHaveBeenCalledTimes(1)
+      expect(credit).toHaveBeenCalledTimes(1)
+      release()
+      await expect(retry).resolves.toBe('/m/a.md')
+      expect(write).toHaveBeenCalledTimes(1)
+      expect(credit).toHaveBeenCalledTimes(1)
+      expect(nextEffect).toHaveBeenCalledTimes(1)
+      expect(locate).toHaveBeenCalledExactlyOnceWith('/m/a.md', settings, 42)
+      expect(newId).toHaveBeenCalledTimes(1)
+      expect(journal.records.get('original')).toMatchObject({
+        ownerKey: '7:42',
+        revision: 12,
+        savedBasename: 'a.md',
+        completed: ['summary-credit']
+      })
+    } finally {
+      release()
+      await Promise.allSettled(retry ? [retry] : [])
+    }
+  })
+
+  it('keeps the failed construction barrier bound while one logger-scheduled caller retries', async () => {
+    const journal = memoryJournal()
+    const put = journal.put
+    const failure = new Error('first ID failed')
+    let attempts = 0
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let putting = false
+    journal.put = async (record) => {
+      putting = true
+      await held
+      await put(record)
+    }
+    let retry: Promise<void> | undefined
+    const effect = vi.fn()
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => {
+        if (++attempts === 1) throw failure
+        return 'retry'
+      },
+      onError: () =>
+        queueMicrotask(() => {
+          retry = store.journalIdle()
+        })
+    })
+    const saved = store.run(key(1), owner(42), async (receipt) => {
+      receipt.normalizedStartedAt = 42
+      receipt.settings = settings
+      receipt.durablePath = '/m/a.md'
+      await store.journalIdle()
+      effect()
+      return receipt.durablePath
+    })
+    // Attach immediately so the deliberately rejected save is always observed.
+    const outcome = saved.then(
+      () => ({ ok: true }),
+      (error: unknown) => ({ ok: false, error })
+    )
+    try {
+      await vi.waitFor(() => expect(putting).toBe(true))
+      expect(await outcome).toEqual({ ok: false, error: failure })
+      expect(((await outcome) as { error: unknown }).error).toBe(failure)
+      expect(effect).not.toHaveBeenCalled()
+      expect(attempts).toBe(2)
+      release()
+      await retry
+      expect(journal.records.has('retry')).toBe(true)
+    } finally {
+      release()
+      await Promise.allSettled([outcome, ...(retry ? [retry] : [])])
+    }
+  })
+
+  it('pins the captured location and assigned ID when the first record clock fails', async () => {
+    const journal = memoryJournal()
+    const failure = new Error('first record clock failed')
+    const location = { savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 12 }
+    const locate = vi.fn(() => location)
+    const newId = vi.fn(() => 'first-id')
+    let failing = true
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate,
+      newId,
+      now: () => {
+        if (failing) throw failure
+        return 1000
+      }
+    })
+    await expect(store.run(key(1), owner(42), durable(42))).rejects.toBe(failure)
+    expect(journal.writes).toBe(0)
+    location.savedBasename = 'later.md'
+    location.folderIdSha256 = 'e'.repeat(64)
+    location.revision = 0
+    failing = false
+    await store.journalIdle()
+    expect(locate).toHaveBeenCalledTimes(1)
+    expect(newId).toHaveBeenCalledTimes(1)
+    expect(journal.records.get('first-id')).toMatchObject({
+      savedBasename: 'a.md',
+      folderIdSha256: 'f'.repeat(64),
+      revision: 12,
+      ownerKey: '7:42'
+    })
+  })
+
+  it.each([
+    ['meeting', 'newId'],
+    ['path', 'newId'],
+    ['complete', 'newId'],
+    ['meeting', 'now'],
+    ['path', 'now'],
+    ['complete', 'now']
+  ] as const)('never resurrects %s cleanup after a %s construction failure', async (cleanup, boundary) => {
+    const journal = memoryJournal()
+    const failure = new Error('construction failed')
+    let failing = true
+    let captured!: TranscriptSaveReceipt
+    const store = new TranscriptSaveReceiptStore(256, {
+      journal,
+      locate: () => ({ savedBasename: 'a.md', folderIdSha256: 'f'.repeat(64), revision: 3 }),
+      newId: () => {
+        if (failing && boundary === 'newId') throw failure
+        return 'pending'
+      },
+      now: () => {
+        if (failing && boundary === 'now') throw failure
+        return 1000
+      }
+    })
+    await expect(
+      store.run(key(1), owner(42), async (receipt) => {
+        captured = receipt
+        return durable(42)(receipt)
+      })
+    ).rejects.toBe(failure)
+    if (cleanup === 'meeting') store.markMeetingDiscarded(42, 7)
+    else if (cleanup === 'path') store.markDurablePathDiscarded('/m/meeting-42.md', 7)
+    else captured.completed.add('complete')
+    failing = false
+    captured.completed.add('audit')
+    captured.deferredIngest = true
+    await store.journalIdle()
+    await store.journalIdle()
+    expect(journal.records.size).toBe(0)
+    // An assigned ID may require removal, but no pending construction may ever put a record.
+    expect(journal.writes).toBe(boundary === 'now' ? 1 : 0)
+  })
+
   it('keeps each barrier bound to its failed drain while another caller retries', async () => {
     const journal = memoryJournal()
     let attempts = 0

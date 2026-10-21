@@ -35,6 +35,7 @@ interface ReceiptEntry {
   touched: number
   journalId?: string
   journalLocation?: NonNullable<ReturnType<ReceiptLocator>>
+  journalForgotten?: boolean
 }
 
 /** Where a durable save lives, P1 only. Null when the path cannot be named safely, so the receipt is not journaled. */
@@ -91,6 +92,11 @@ export class TranscriptSaveReceiptStore {
   readonly #journal: ReceiptJournalOptions | undefined
   /** Latest unwritten record (or removal) per journal id; one writer drains them in order. */
   readonly #journalQueue = new Map<string, SaveReceiptRecord | null>()
+  /** Construction failures have no queued record yet; the first barrier must observe them before retry. */
+  readonly #failedConstructions = new Map<
+    ReceiptEntry,
+    { key: string; failure: { error: unknown }; observed: boolean }
+  >()
   #journalDrain: Promise<{ error: unknown } | undefined> = Promise.resolve(undefined)
   #journalDraining = false
 
@@ -104,7 +110,21 @@ export class TranscriptSaveReceiptStore {
 
   /** Resolves after persistence, or rejects with this drain's failure even if another caller retries it. */
   async journalIdle(): Promise<void> {
+    let constructionFailure: { error: unknown } | undefined
+    for (const [entry, pending] of [...this.#failedConstructions]) {
+      if (this.#failedConstructions.get(entry) !== pending) continue
+      if (!pending.observed) {
+        pending.observed = true
+        constructionFailure ??= pending.failure
+      } else {
+        this.#failedConstructions.delete(entry)
+        const failure = this.journalChanged(pending.key, entry, true)
+        constructionFailure ??= failure
+      }
+    }
     this.drainJournal()
+    // Capture the construction outcome before a logger-scheduled caller can recover it.
+    if (constructionFailure) throw constructionFailure.error
     const result = await this.#journalDrain
     if (result) throw result.error
   }
@@ -257,22 +277,26 @@ export class TranscriptSaveReceiptStore {
   }
 
   /** A durable receipt's state changed: queue its record, or its removal once every stage completed. */
-  private journalChanged(key: string, entry: ReceiptEntry): void {
+  private journalChanged(key: string, entry: ReceiptEntry, retry = false): { error: unknown } | undefined {
     const journal = this.#journal
     const { receipt } = entry
-    if (!journal || receipt.discarded || receipt.durablePath === undefined || !receipt.settings) return
+    if (!journal || entry.journalForgotten) return
+    if (receipt.discarded || receipt.completed.has('complete')) {
+      this.journalForget(entry)
+      return
+    }
+    if (receipt.durablePath === undefined || !receipt.settings || this.#failedConstructions.has(entry)) return
     const separator = key.indexOf(':')
     const authGeneration = Number(key.slice(0, separator))
     const meetingStartedAt = receipt.normalizedStartedAt
     if (meetingStartedAt === undefined || !Number.isSafeInteger(authGeneration)) return
-    if (receipt.completed.has('complete')) {
-      this.journalForget(entry)
-      return
-    }
     try {
-      const where = entry.journalLocation ?? journal.locate(receipt.durablePath, receipt.settings, meetingStartedAt)
-      if (!where) return
-      entry.journalLocation ??= { ...where }
+      if (!entry.journalLocation) {
+        const located = journal.locate(receipt.durablePath, receipt.settings, meetingStartedAt)
+        if (!located) return
+        entry.journalLocation = { ...located }
+      }
+      const where = entry.journalLocation
       entry.journalId ??= journal.newId()
       const completed = [...receipt.completed]
       const has = (stage: TranscriptSaveSideEffect): boolean => receipt.completed.has(stage)
@@ -297,11 +321,20 @@ export class TranscriptSaveReceiptStore {
         updatedAt: Math.max(0, Math.trunc(journal.now?.() ?? Date.now()))
       })
     } catch (error) {
-      journal.onError?.(error)
+      const failure = { error }
+      this.#failedConstructions.set(entry, { key, failure, observed: retry })
+      try {
+        journal.onError?.(error)
+      } catch {
+        // Logging must not replace even a falsy construction error or abandon its retry.
+      }
+      return failure
     }
   }
 
   private journalForget(entry: ReceiptEntry): void {
+    entry.journalForgotten = true
+    this.#failedConstructions.delete(entry)
     if (entry.journalId === undefined) return
     this.journalEnqueue(entry.journalId, null)
   }
