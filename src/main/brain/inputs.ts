@@ -13,7 +13,7 @@ import type { BrainIndex } from '@shared/brain'
 import { fnv1a } from '@shared/hash'
 import { storageAt, classifyAll } from '../infra/storage/meetings-storage'
 import type { ContentVersion, StorageGateway } from '../infra/storage/gateway'
-import { canonicalPathSync, readStableRegularFileSync } from '../infra/storage/stable-read-sync'
+import { canonicalPath, readStableRegularFile } from '../infra/storage/stable-read'
 import { decodeSavedMeetingAsync, resolveMeetingsFolder } from '../transcripts'
 import { mainLog } from '../logger'
 import { brainDir, readIndex, slugify } from './store'
@@ -271,12 +271,12 @@ export async function readSourceDigest(s: Settings, sourceKey: string, expectedR
   return createHash('sha256').update(read.bytes).digest('hex')
 }
 
-/** Synchronous dispatch-time proof over a bounded raw file descriptor, after resolving only an
+/** Dispatch-time proof over one bounded file descriptor per source (see stable-read.ts), after resolving only an
  * authorized configured root. This keeps provider retries from dispatching stale/ambiguous sources. */
-export function areBrainContextSourcesCurrent(
+export async function areBrainContextSourcesCurrent(
   s: Settings,
   references: readonly { source: string; sourceRootId: string; sourceDigest: string }[] | undefined
-): boolean {
+): Promise<boolean> {
   if (!Array.isArray(references) || references.length < 1 || references.length > 64) return false
   const index = readIndex(s)
   const personalRoot = resolveMeetingsFolder(s)
@@ -301,8 +301,9 @@ export function areBrainContextSourcesCurrent(
     const receipt = index.ingested[ref.source]
     if (!receipt?.ok || receipt.sourceRootId !== ref.sourceRootId || receipt.sourceDigest !== ref.sourceDigest)
       return false
-    const matches = roots.filter(({ root, source }) => {
-      const canonical = canonicalPathSync(root)
+    const canonicals = await Promise.all(roots.map(({ root }) => canonicalPath(root)))
+    const matches = roots.filter(({ root, source }, i) => {
+      const canonical = canonicals[i]
       if (!canonical || createHash('sha256').update(canonical, 'utf8').digest('hex') !== ref.sourceRootId) return false
       if (source === 'meetings') return basename(ref.source) === ref.source && !ref.source.includes('\\')
       const key = ref.source.match(/^team\/([^/]+)\/([^/]+)$/)
@@ -320,7 +321,7 @@ export function areBrainContextSourcesCurrent(
     const root = uniqueRoots[0]!
     const maxBytes = getMeetingSpeechReadLimitBytes()
     if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 1) return false
-    const read = readStableRegularFileSync(root, name, maxBytes)
+    const read = await readStableRegularFile(root, name, maxBytes)
     if (read.status !== 'ok') return false
     if (createHash('sha256').update(read.canonicalRoot, 'utf8').digest('hex') !== ref.sourceRootId) return false
     totalBytes += read.bytes.length

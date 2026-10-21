@@ -4,6 +4,8 @@
  * contiguous region from its per-attempt state through createStream/handle registration. Transport,
  * persistence and IPC are replaced at their boundaries; ThinkStripper, retry classification and the
  * hedge state machine stay real. No application profile, native runtime or network is loaded.
+ * The attempt's brain-context refresh and cancel hold run before this region; they are covered by
+ * brain/context-dispatch.test.ts.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -116,7 +118,7 @@ function setup(
     IPC: { streamDelta: 'delta', streamError: 'error', streamDone: 'done', streamMeta: 'meta' },
     // The refresh closure is outside this extracted completion region. Keep its transport boundary explicit.
     createStream,
-    refreshBrainContextForProviderAttempt,
+    brain: { refresh: refreshBrainContextForProviderAttempt },
     auditLog: audit,
     recordOperatorAsk: record,
     pathTagForSeatProvider,

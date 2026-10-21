@@ -640,18 +640,11 @@ import {
   listEntities as listBrainEntities,
   brainDir as brainStoreDir
 } from './brain/store'
+import { areBrainContextSourcesCurrent, buildBrainContextWithSources } from './brain/context'
+import { createBrainContextDispatch } from './brain/context-dispatch'
 import {
-  areBrainContextRecordsCurrent,
-  areBrainContextSourcesCurrent,
-  buildBrainContextWithSources
-} from './brain/context'
-import {
-  brainContextForProvider,
   createBrainContextEnvelope,
-  isBrainContextEnvelopeCurrent,
-  staleBrainContextEnvelope,
   unavailableBrainContextEnvelope,
-  type BrainContextEnvelope,
   type BrainContextOwner
 } from './brain/context-envelope'
 import { buildSystem, buildSystemParts } from './personas'
@@ -7670,7 +7663,7 @@ function registerIpc(): void {
   // array (replayed verbatim into the model's message list) and the server-side Dust conversation (reused
   // for up to 2h regardless of topic) — and clearing only one leaks through the other. Enforced at main's
   // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
-  ipcMain.handle(IPC.askStart, (e, raw) => {
+  ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
     if (!requireAuth()) {
@@ -7680,12 +7673,28 @@ function registerIpc(): void {
       })
       return
     }
+    const failAskStart = (err: unknown): void => {
+      win?.webContents.send(IPC.streamError, {
+        id,
+        message: isModeSkillIntegrityError(err)
+          ? err instanceof Error
+            ? err.message
+            : String(err)
+          : 'Could not start the answer.'
+      })
+    }
     try {
       const req = AskStartSchema.parse(raw)
       // Brain context is main-only. Clear renderer input before any early return or mode gate so a
       // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
       req.brainContext = undefined
-      let brainContextEnvelope: BrainContextEnvelope | undefined
+      const brain = createBrainContextDispatch({
+        getSettings,
+        currentOwner: currentBrainContextOwner,
+        req,
+        streams,
+        onError: failAskStart
+      })
       // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
       // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
       // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
@@ -7750,7 +7759,7 @@ function registerIpc(): void {
       // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
       // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
       if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
-      // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
+      // Overlap local sidecar start with the brain stamp below — when local will serve (or hedge),
       // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it. This
       // overlap remains optional and defers under import pressure; the later user-requested route is ungated.
       if (
@@ -7770,17 +7779,21 @@ function registerIpc(): void {
       // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
       if (req.mode === 'answer' && req.kind !== 'factcheck') {
         let owner: BrainContextOwner | undefined
+        // The brain proofs are async; a cancel arriving meanwhile must still stop this ask before dispatch.
+        const hold = brain.hold()
         try {
           owner = currentBrainContextOwner(s)
-          const hit = buildBrainContextWithSources(s, `${req.prompt}\n${req.transcript ?? ''}`)
-          brainContextEnvelope =
-            !hit.matched || areBrainContextSourcesCurrent(s, hit.sourceReferences)
+          const hit = await buildBrainContextWithSources(s, `${req.prompt}\n${req.transcript ?? ''}`)
+          brain.set(
+            !hit.matched || (await areBrainContextSourcesCurrent(s, hit.sourceReferences))
               ? createBrainContextEnvelope(owner, hit)
               : unavailableBrainContextEnvelope(owner)
+          )
         } catch (err) {
-          if (owner) brainContextEnvelope = unavailableBrainContextEnvelope(owner)
+          if (owner) brain.set(unavailableBrainContextEnvelope(owner))
           console.warn('[brain] context assembly failed', err)
         }
+        if (hold.release()) return
       }
       // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
       // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
@@ -8028,34 +8041,17 @@ function registerIpc(): void {
       // entire retry/failover cascade stays gated behind the SAME race the whole way down: once the other
       // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
       // silently returns, so a losing leg's own cascading retries can never reach the renderer.
-      const refreshBrainContextForProviderAttempt = (): void => {
-        if (brainContextEnvelope) {
-          try {
-            const currentSettings = getSettings()
-            const current = currentBrainContextOwner(currentSettings)
-            if (
-              (brainContextEnvelope.status === 'ready' || brainContextEnvelope.status === 'empty') &&
-              (!isBrainContextEnvelopeCurrent(brainContextEnvelope, current) ||
-                (brainContextEnvelope.status === 'ready' &&
-                  (!areBrainContextRecordsCurrent(currentSettings, brainContextEnvelope.recordFingerprints) ||
-                    !areBrainContextSourcesCurrent(currentSettings, brainContextEnvelope.sourceReferences))))
-            ) {
-              brainContextEnvelope = staleBrainContextEnvelope(brainContextEnvelope)
-            }
-            req.brainContext = brainContextForProvider(brainContextEnvelope, current)
-          } catch {
-            brainContextEnvelope = staleBrainContextEnvelope(brainContextEnvelope)
-            req.brainContext = undefined
-          }
-        } else {
-          req.brainContext = undefined
-        }
-      }
-
-      const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
+      const attempt = (
+        provider: ProviderId,
+        attempted: ProviderId[],
+        retryCount = 0,
+        race?: AttemptRace,
+        refreshed = false
+      ): void => {
         // Retries, failovers and hedged legs may start after an account/profile/context boundary changed.
-        // Revalidate at every provider dispatch and fail closed by omitting anything no longer current.
-        refreshBrainContextForProviderAttempt()
+        // Revalidate at every provider dispatch and fail closed by omitting anything no longer current. The
+        // file proofs are async, so the attempt re-enters itself (`refreshed`) once they settle.
+        if (!refreshed) return brain.dispatch(race?.gate, () => attempt(provider, attempted, retryCount, race, true))
         // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
         // one the hedge must not duplicate.
         if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
@@ -8470,7 +8466,7 @@ function registerIpc(): void {
           // stream asks for fresh creds: re-mint via the CLI, persist them, and replay once — so an
           // expired token self-heals invisibly instead of surfacing an error.
           refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
-          beforeProviderAttempt: refreshBrainContextForProviderAttempt,
+          beforeProviderAttempt: brain.refresh,
           model,
           temperature: s.temperature,
           // Reasoning-by-default models (Kimi, DeepSeek V4) burn hidden tokens and stall a 15s live-suggest
@@ -8726,14 +8722,7 @@ function registerIpc(): void {
         attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
       }
     } catch (err) {
-      win?.webContents.send(IPC.streamError, {
-        id,
-        message: isModeSkillIntegrityError(err)
-          ? err instanceof Error
-            ? err.message
-            : String(err)
-          : 'Could not start the answer.'
-      })
+      failAskStart(err)
     }
   })
 

@@ -228,7 +228,7 @@ describe('brain', () => {
       ]
       await mergeExtraction(s, x, { file: 'm1.md', date: '2026-06-14', title: 'LATAM SAP pricing defense' })
 
-      const { block, matched } = buildBrainContext(s, 'what did Maria Silva promise on pricing?')
+      const { block, matched } = await buildBrainContext(s, 'what did Maria Silva promise on pricing?')
       expect(matched).toBe(true)
       expect(block).toContain('Maria Silva')
       expect(block).toContain('LATAM SAP pricing defense') // the source-meeting citation
@@ -238,18 +238,18 @@ describe('brain', () => {
 
     it('matches an account and a deal named in the question', async () => {
       await mergeExtraction(s, sampleExtraction(), { file: 'm1.md', date: '2026-06-14', title: 't' })
-      const acc = buildBrainContext(s, "how is the L'Oréal relationship going?")
+      const acc = await buildBrainContext(s, "how is the L'Oréal relationship going?")
       expect(acc.matched).toBe(true)
       expect(acc.block).toContain("L'Oréal")
 
-      const deal = buildBrainContext(s, 'give me the state of the LATAM SAP AMS deal')
+      const deal = await buildBrainContext(s, 'give me the state of the LATAM SAP AMS deal')
       expect(deal.matched).toBe(true)
       expect(deal.block.toLowerCase()).toContain('latam sap ams')
     })
 
     it('returns nothing when the question names no known entity (drives the "not in your meetings" line)', async () => {
       await mergeExtraction(s, sampleExtraction(), { file: 'm1.md', date: '', title: 't' })
-      const { block, matched } = buildBrainContext(s, 'what do you know about Globex Corporation?')
+      const { block, matched } = await buildBrainContext(s, 'what do you know about Globex Corporation?')
       expect(matched).toBe(false)
       expect(block).toBe('')
     })
@@ -261,7 +261,7 @@ describe('brain', () => {
       x.account = null
       x.deal = null
       await mergeExtraction(s, x, { file: 'm1.md', date: '', title: 't' })
-      expect(buildBrainContext(s, 'the concerns seem to disappear over time').matched).toBe(false)
+      expect((await buildBrainContext(s, 'the concerns seem to disappear over time')).matched).toBe(false)
     })
 
     // Task MI-5 — a question phrased with a corrected-away surface form still hits the canonical
@@ -280,7 +280,7 @@ describe('brain', () => {
         commitments: []
       }
       await writePerson(s, 'acme-co', person)
-      const { block, matched } = buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
+      const { block, matched } = await buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
       expect(matched).toBe(true)
       expect(block).toContain('Acme Co') // the CURRENT canonical name, not the alias itself
     })

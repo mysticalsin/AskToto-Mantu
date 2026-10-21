@@ -3,6 +3,7 @@ import { constants } from 'node:fs'
 import { lstat, open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { recordLocalWrite } from './local-writes'
+import { withPathLane } from './path-lane'
 
 export interface AtomicSavedWriteStreamBounds {
   /** Explicit finite caller-admitted limits are required; this writer supplies no defaults. */
@@ -283,18 +284,25 @@ export async function atomicSavedWriteStream(
         error.name = 'TEMP_OWNERSHIP'
         throw error
       }
-      // This synchronous policy check follows the final metadata await and stays outside the retry catch.
-      checkAdmission(limits.beforeReplace)
-      checkAdmission(limits.beforeChunk)
-      try {
-        await rename(tmp, file)
-        replaced = true
-        break
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw error
-        await new Promise((resolve) => setTimeout(resolve, 40 * 2 ** attempt))
-      }
+      // The synchronous policy checks follow the final metadata await and stay outside the retry catch. The
+      // lane orders the rename against in-process stable readers of this file (path-lane.ts); the checks run
+      // inside it so they stay immediately before the rename.
+      let renameError: unknown
+      replaced = await withPathLane(file, async () => {
+        checkAdmission(limits.beforeReplace)
+        checkAdmission(limits.beforeChunk)
+        try {
+          await rename(tmp, file)
+          return true
+        } catch (error) {
+          renameError = error
+          return false
+        }
+      })
+      if (replaced) break
+      const code = (renameError as NodeJS.ErrnoException).code
+      if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw renameError
+      await new Promise((resolve) => setTimeout(resolve, 40 * 2 ** attempt))
     }
     await recordLocalWrite(file)
     return { bytesWritten, chunksWritten, fileSyncCompleted: true }
@@ -383,18 +391,24 @@ export async function atomicSavedWrite(file: string, data: Buffer, beforeReplace
         error.name = 'TEMP_OWNERSHIP'
         throw error
       }
-      // Admission is synchronous and outside the rename retry handler so refusals propagate unchanged.
-      beforeReplace?.()
-      try {
-        await rename(tmp, file)
-        replaced = true
-        break
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException | null | undefined)?.code
-        // OneDrive and real-time scanners can briefly hold a new file open on Windows.
-        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw error
-        await new Promise((resolve) => setTimeout(resolve, 40 * 2 ** attempt))
-      }
+      // Admission is synchronous and outside the rename retry handler so refusals propagate unchanged. The
+      // lane orders the rename against in-process stable readers of this file (path-lane.ts).
+      let renameError: unknown
+      replaced = await withPathLane(file, async () => {
+        beforeReplace?.()
+        try {
+          await rename(tmp, file)
+          return true
+        } catch (error) {
+          renameError = error
+          return false
+        }
+      })
+      if (replaced) break
+      const code = (renameError as NodeJS.ErrnoException | null | undefined)?.code
+      // OneDrive and real-time scanners can briefly hold a new file open on Windows.
+      if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw renameError
+      await new Promise((resolve) => setTimeout(resolve, 40 * 2 ** attempt))
     }
     await recordLocalWrite(file)
   } catch (error) {

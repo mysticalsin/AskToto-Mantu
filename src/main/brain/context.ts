@@ -263,8 +263,8 @@ export function formatDeal(d: DealEntity): string {
  * has nothing on what was asked. `matched` is false when no named entity was recognized — the caller
  * still injects the header so the model knows the brain was consulted and can decline honestly.
  */
-export function buildBrainContext(s: Settings, text: string): { block: string; matched: boolean } {
-  const result = buildBrainContextWithSources(s, text)
+export async function buildBrainContext(s: Settings, text: string): Promise<{ block: string; matched: boolean }> {
+  const result = await buildBrainContextWithSources(s, text)
   return { block: result.block, matched: result.matched }
 }
 
@@ -302,20 +302,20 @@ export const MAX_CONTEXT_RECORDS = MAX_PEOPLE + MAX_ACCOUNTS + MAX_DEALS
 const MAX_CONTEXT_RECORD_TOTAL_BYTES = 1024 * 1024
 
 /** Read a stable raw-byte fingerprint for dispatch-time revalidation. */
-function fingerprintEntityRecord(
+async function fingerprintEntityRecord(
   s: Settings,
   kind: BrainContextRecordKind,
   slug: string
-): { fingerprint: BrainContextRecordFingerprint; size: number } | null {
-  const snapshot = readBrainEntityFingerprint(s, kind, slug)
+): Promise<{ fingerprint: BrainContextRecordFingerprint; size: number } | null> {
+  const snapshot = await readBrainEntityFingerprint(s, kind, slug)
   return snapshot ? { fingerprint: { kind, slug, digest: snapshot.digest }, size: snapshot.size } : null
 }
 
 /** Revalidate every selected entity file before each provider dispatch. */
-export function areBrainContextRecordsCurrent(
+export async function areBrainContextRecordsCurrent(
   s: Settings,
   fingerprints: readonly BrainContextRecordFingerprint[] | undefined
-): boolean {
+): Promise<boolean> {
   if (!Array.isArray(fingerprints) || fingerprints.length < 1 || fingerprints.length > MAX_CONTEXT_RECORDS) return false
   let totalBytes = 0
   const seen = new Set<string>()
@@ -332,7 +332,7 @@ export function areBrainContextRecordsCurrent(
     const key = `${expected.kind}/${expected.slug}`
     if (seen.has(key)) return false
     seen.add(key)
-    const actual = fingerprintEntityRecord(s, expected.kind, expected.slug)
+    const actual = await fingerprintEntityRecord(s, expected.kind, expected.slug)
     if (!actual || actual.fingerprint.digest !== expected.digest) return false
     totalBytes += actual.size
     if (totalBytes > MAX_CONTEXT_RECORD_TOTAL_BYTES) return false
@@ -353,12 +353,12 @@ function boundedSource(source: string): string | null {
 export function areBrainContextSourcesCurrent(
   s: Settings,
   references: readonly BrainContextSourceReference[] | undefined
-): boolean {
+): Promise<boolean> {
   return validateBrainContextSourcesCurrent(s, references)
 }
 
 /** Build the same cited context plus a bounded list of the source records represented in it. */
-export function buildBrainContextWithSources(s: Settings, text: string): BrainContextBuildResult {
+export async function buildBrainContextWithSources(s: Settings, text: string): Promise<BrainContextBuildResult> {
   const hay = tokenString(text)
   if (!hay) return { block: '', matched: false, sourceReferences: [], sourceReferencesComplete: true }
 
@@ -370,8 +370,11 @@ export function buildBrainContextWithSources(s: Settings, text: string): BrainCo
   let sourceReferencesComplete = true
   const ingestionReceipts = readIndex(s).ingested
   const sourceOwners = new Map<string, MeetingRef[]>()
-  const readStableRecord = <K extends BrainContextRecordKind>(kind: K, slug: string): BrainEntityByKind[K] | null => {
-    const snapshot = readBrainEntitySnapshot(s, kind, slug)
+  const readStableRecord = async <K extends BrainContextRecordKind>(
+    kind: K,
+    slug: string
+  ): Promise<BrainEntityByKind[K] | null> => {
+    const snapshot = await readBrainEntitySnapshot(s, kind, slug)
     if (!snapshot || totalRecordBytes + snapshot.size > MAX_CONTEXT_RECORD_TOTAL_BYTES) {
       recordFingerprintsComplete = false
       return null
@@ -476,7 +479,7 @@ export function buildBrainContextWithSources(s: Settings, text: string): BrainCo
   }
 
   for (const slug of matchedSlugs(s, 'person', hay).slice(0, MAX_PEOPLE)) {
-    const p = readStableRecord('person', slug)
+    const p = await readStableRecord('person', slug)
     if (p) {
       lines.push(formatPersonWithCommitments(p))
       addMeetingContributors(p.meetings)
@@ -491,7 +494,7 @@ export function buildBrainContextWithSources(s: Settings, text: string): BrainCo
   }
 
   for (const slug of matchedSlugs(s, 'account', hay).slice(0, MAX_ACCOUNTS)) {
-    const a = readStableRecord('account', slug)
+    const a = await readStableRecord('account', slug)
     if (a) {
       lines.push(formatAccount(a))
       addMeetingContributors(a.meetings)
@@ -506,7 +509,7 @@ export function buildBrainContextWithSources(s: Settings, text: string): BrainCo
   }
 
   for (const slug of matchedSlugs(s, 'deal', hay).slice(0, MAX_DEALS)) {
-    const d = readStableRecord('deal', slug)
+    const d = await readStableRecord('deal', slug)
     if (d) {
       lines.push(formatDeal(d))
       addMeetingContributors(d.meetings)

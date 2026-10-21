@@ -38,7 +38,7 @@ import {
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
-import { readStableSnapshotBytesSync } from '../infra/storage/stable-read-sync'
+import { readStableSnapshotBytes } from '../infra/storage/stable-read'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 import { cloneEntity } from './entity-values'
@@ -293,14 +293,14 @@ export const MAX_BRAIN_ENTITY_SNAPSHOT_BYTES = 256 * 1024
  * Uncached entity read for answer-context assembly. Decoding, parsing, migration, and digesting all use
  * the same bounded byte buffer, so a stale JSON cache entry can never be paired with a newer digest.
  */
-export function readBrainEntitySnapshot<K extends BrainEntityKind>(
+export async function readBrainEntitySnapshot<K extends BrainEntityKind>(
   settings: Settings,
   kind: K,
   slug: string
-): BrainEntitySnapshot<K> | null {
+): Promise<BrainEntitySnapshot<K> | null> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
   const rootPath = brainDir(settings)
-  const bytes = readStableSnapshotBytesSync(
+  const bytes = await readStableSnapshotBytes(
     rootPath,
     join(rootPath, 'entities', kind, `${slug}.json`),
     MAX_BRAIN_ENTITY_SNAPSHOT_BYTES
@@ -335,14 +335,14 @@ export function readBrainEntitySnapshot<K extends BrainEntityKind>(
 }
 
 /** Stable raw-byte digest for dispatch-time revalidation; no JSON cache or parse is involved. */
-export function readBrainEntityFingerprint(
+export async function readBrainEntityFingerprint(
   settings: Settings,
   kind: BrainEntityKind,
   slug: string
-): { digest: string; size: number } | null {
+): Promise<{ digest: string; size: number } | null> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
   const rootPath = brainDir(settings)
-  const bytes = readStableSnapshotBytesSync(
+  const bytes = await readStableSnapshotBytes(
     rootPath,
     join(rootPath, 'entities', kind, `${slug}.json`),
     MAX_BRAIN_ENTITY_SNAPSHOT_BYTES

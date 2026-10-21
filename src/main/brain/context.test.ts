@@ -112,29 +112,29 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
-  it('MQA-010 — a question that names no entity opens no entity file at all', () => {
-    buildBrainContext(s, 'what is the weather in Paris today') // first ask builds the match index
+  it('MQA-010 — a question that names no entity opens no entity file at all', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today') // first ask builds the match index
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'what is the weather in Paris today')
+    const { block, matched } = await buildBrainContext(s, 'what is the weather in Paris today')
     expect(matched).toBe(false)
     expect(block).toBe('')
     expect(opened).toEqual([])
   })
 
-  it('MQA-010 — a question naming one person opens only that person, not the corpus', () => {
-    buildBrainContext(s, 'what is the weather in Paris today')
+  it('MQA-010 — a question naming one person opens only that person, not the corpus', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today')
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'what did Maria Silva promise on pricing?')
+    const { block, matched } = await buildBrainContext(s, 'what did Maria Silva promise on pricing?')
     expect(matched).toBe(true)
     expect(block).toContain('Maria Silva')
     expect(opened).toEqual(['person/maria-silva'])
   })
 
-  it('returns bounded local source references alongside the existing cited context', () => {
-    buildBrainContext(s, 'what is the weather in Paris today')
-    const result = buildBrainContextWithSources(s, 'what did Maria Silva promise?')
+  it('returns bounded local source references alongside the existing cited context', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today')
+    const result = await buildBrainContextWithSources(s, 'what did Maria Silva promise?')
     expect(result.block).toContain('Renewal call')
     expect(result.sourceReferences).toContainEqual(refFor('meeting', MEETING.file, MEETING.date))
     expect(result.sourceReferencesComplete).toBe(true)
@@ -210,7 +210,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
 
     await seedReceipts(['person-role.md', 'account-sector.md', 'deal-outlook.md'])
 
-    const result = buildBrainContextWithSources(s, 'Summarize Provenance Person Provenance Account Provenance Deal.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Provenance Person Provenance Account Provenance Deal.')
     expect(result.block).toContain('Verified Role [person-role.md, 2026-05-20]')
     expect(result.block).toContain('Pinned Organization (edited by you)')
     expect(result.block).not.toContain('Legacy Role')
@@ -258,7 +258,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await writeAccount(s, account.id, account)
     await seedReceipts([source])
 
-    const result = buildBrainContextWithSources(s, 'Summarize Collision Person First and Collision Account Later.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Collision Person First and Collision Account Later.')
     expect(result.block).toContain('Verified role [' + source + ', ' + fieldDate + ']')
     expect(
       result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
@@ -292,7 +292,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await writeAccount(s, account.id, account)
     await seedReceipts([source, MEETING.file])
 
-    const result = buildBrainContextWithSources(s, 'Summarize Collision Person Generic and Collision Account Verified.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Collision Person Generic and Collision Account Verified.')
     expect(result.block).toContain('banking [' + source + ', ' + fieldDate + ']')
     expect(
       result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
@@ -324,7 +324,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await writePerson(s, person.id, person)
     await seedReceipts(meetings.map((meeting) => meeting.file))
 
-    const result = buildBrainContextWithSources(s, 'Summarize Budget Person 64.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Budget Person 64.')
     expect(result.block).toContain('Verified budget role [' + source + ', ' + fieldDate + ']')
     expect(result.sourceReferences).toHaveLength(64)
     expect(
@@ -357,7 +357,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await writePerson(s, person.id, person)
     await seedReceipts(meetings.map((meeting) => meeting.file))
 
-    const result = buildBrainContextWithSources(s, 'Summarize Budget Person 65.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Budget Person 65.')
     expect(result.block).toContain('Verified overflow role [' + source + ', ' + fieldDate + ']')
     expect(result.sourceReferences).toHaveLength(64)
     expect(result.sourceReferences.length).toBeLessThanOrEqual(64)
@@ -398,7 +398,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     })
     await writeDeal(s, deal.id, deal)
 
-    const result = buildBrainContextWithSources(s, 'Summarize Unproven Person Unproven Account Unproven Deal.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Unproven Person Unproven Account Unproven Deal.')
     expect(result.block).not.toContain('Unverified Role')
     expect(result.block).not.toContain('Unverified Org')
     expect(result.block).not.toContain('(retail)')
@@ -429,7 +429,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     })
     await writeDeal(s, deal.id, deal)
 
-    const result = buildBrainContextWithSources(s, 'Summarize Missing Source Deal.')
+    const result = await buildBrainContextWithSources(s, 'Summarize Missing Source Deal.')
     expect(result.block).not.toContain('Amount:')
     expect(result.block).not.toContain('Close date:')
     expect(result.sourceReferences).toEqual([])
@@ -453,7 +453,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     })
     await writeDeal(s, grounded.id, grounded)
 
-    const result = buildBrainContextWithSources(s, 'What is happening with the Velocity Deal?')
+    const result = await buildBrainContextWithSources(s, 'What is happening with the Velocity Deal?')
     expect(result.block).toContain(`Velocity ${value.signal}: ${value.evidence} [${MEETING.file}, ${MEETING.date}].`)
     expect(result.sourceReferences).toContainEqual(refFor('provenance', MEETING.file, MEETING.date))
     expect(result.sourceReferences.filter((r) => r.source === MEETING.file)).toHaveLength(1)
@@ -471,30 +471,30 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     // The pre-filter must not shrink what CAN match: aliases[] live inside the entity file, so a
     // slug-only filter would silently drop this hit (Task MI-5's corrected-away surface form).
     await writePerson(s, 'acme-co', personFor('acme-co', ['Acme Corp']))
-    buildBrainContext(s, 'what is the weather in Paris today')
+    await buildBrainContext(s, 'what is the weather in Paris today')
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
+    const { block, matched } = await buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
     expect(matched).toBe(true)
     expect(block).toContain('Acme Co') // the CURRENT canonical name, not the alias itself
     expect(opened).toEqual(['person/acme-co'])
   })
 
   it('MQA-010 — an alias added to an existing entity after the index was built still matches', async () => {
-    expect(buildBrainContext(s, 'what did Globex Holdings say?').matched).toBe(false)
+    expect((await buildBrainContext(s, 'what did Globex Holdings say?')).matched).toBe(false)
 
     await writePerson(s, 'nadia-haddad', personFor('nadia-haddad', ['Globex Holdings']))
 
-    const { block, matched } = buildBrainContext(s, 'what did Globex Holdings say?')
+    const { block, matched } = await buildBrainContext(s, 'what did Globex Holdings say?')
     expect(matched).toBe(true)
     expect(block).toContain('Nadia Haddad')
   })
 
-  it('MQA-010 — a question naming an account and a deal opens only those two files', () => {
-    buildBrainContext(s, 'what is the weather in Paris today')
+  it('MQA-010 — a question naming an account and a deal opens only those two files', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today')
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'where is the Initech Nordics Rollout heading?')
+    const { block, matched } = await buildBrainContext(s, 'where is the Initech Nordics Rollout heading?')
     expect(matched).toBe(true)
     expect(block).toContain('Initech')
     expect(block).toContain('Nordics Rollout')

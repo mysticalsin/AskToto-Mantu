@@ -774,7 +774,7 @@ describe('corrections engine', () => {
   // ── rejectCommitment excludes it from open-commitment surfaces ──────────
   it('a rejected commitment disappears from open-commitment surfaces (buildBrainContext) but the row survives with status rejected', async () => {
     await ingestThreeMeetings(s)
-    const before = buildBrainContext(s, 'What does Maria owe on Acme Core Banking?')
+    const before = await buildBrainContext(s, 'What does Maria owe on Acme Core Banking?')
     expect(before.block).toContain('intro the CISO')
 
     const r = await rejectCommitment(s, { personSlug: MARIA_SLUG, dealSlug: DEAL_SLUG, text: 'intro the CISO' })
@@ -787,7 +787,7 @@ describe('corrections engine', () => {
     const prow = person.commitments.find((c) => c.text === 'intro the CISO')!
     expect(prow.status).toBe('rejected')
 
-    const after = buildBrainContext(s, 'What does Maria owe on Acme Core Banking?')
+    const after = await buildBrainContext(s, 'What does Maria owe on Acme Core Banking?')
     expect(after.block).not.toContain('intro the CISO')
   })
 
