@@ -13,6 +13,7 @@ import type { PlatformPermissions } from '@shared/screen-permission'
 import { isWindows } from '../lib/keys'
 import { runLoopbackSelfTest } from '../lib/loopback-self-test'
 import { MEETING_AUDIO_SCREEN_WHY, runScreenRepair, screenPermissionCopy } from '../lib/screen-permission-copy'
+import { RELAUNCH_TITLE, openSettingsTitle, osSettingsWhere } from '../lib/os-settings-copy'
 
 /** The real loopback self-test behind the row (lib/loopback-self-test). */
 export type LoopbackCheck = 'idle' | 'running' | 'passed' | 'failed'
@@ -22,13 +23,18 @@ function diagnosisState(perms: Pick<PlatformPermissions, 'screenRecording' | 'sc
   return perms.screenDiagnosis?.state ?? (perms.screenRecording === 'granted' ? 'granted' : 'not-asked')
 }
 
-/** The row's state. Windows needs no grant (desktopCapturer captures without one), so it stays available. */
+/** The row's state. Windows needs no grant (desktopCapturer captures without one), so it stays available unless
+ *  a real capture probe was refused (Settings › Privacy & security can turn screen capture off for desktop apps). */
 export function screenRowStatus(
   perms: Pick<PlatformPermissions, 'screenRecording' | 'screenDiagnosis'> | null | undefined,
   check: LoopbackCheck,
   windows: boolean
 ): { state: ScreenRowState; detail: string } {
-  if (windows) return { state: 'ready', detail: 'available' }
+  if (windows) {
+    return perms?.screenRecording === 'denied'
+      ? { state: 'blocked', detail: 'screen capture is off' }
+      : { state: 'ready', detail: 'available' }
+  }
   if (!perms) return { state: 'checking', detail: '' }
   switch (diagnosisState(perms)) {
     case 'granted':
@@ -111,8 +117,8 @@ export function useScreenSetup(onSetup: boolean) {
     void runLoopbackSelfTest().then((ok) => setCheck(ok ? 'passed' : 'failed'))
   }, [onSetup, captureReady, check])
   const request = async (): Promise<void> => {
-    const next = await window.toto.requestPermissionsUpfront('screenRecording').catch(() => null)
-    if (next) setPerms(next)
+    // C32 Part D: the exact pane plus the guided helper (drag Métis into the list); the status poll follows.
+    await window.toto.openPermissionHelper('screenRecording').catch(() => false)
   }
   return { perms, setPerms, check, checkRef, recheck: () => setCheck('idle'), request }
 }
@@ -133,17 +139,37 @@ export function ScreenSetupActions({
   perms,
   check,
   onRequest,
-  onRecheck
+  onRecheck,
+  windows = isWindows
 }: {
   perms: PlatformPermissions | null
   check: LoopbackCheck
   onRequest: () => void
   onRecheck: () => void
+  /** The platform the row is for (tests render both on any host). */
+  windows?: boolean
 }): JSX.Element | null {
   const [repairBusy, setRepairBusy] = useState(false)
   const [repairGuidance, setRepairGuidance] = useState<string | null>(null)
   const whyId = useId()
-  if (isWindows || !perms) return null
+  if (!perms) return null
+  if (windows) {
+    if (perms.screenRecording !== 'denied') return null
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+          Windows is blocking screen capture. {osSettingsWhere('screenRecording', true)}
+        </span>
+        <button
+          type="button"
+          onClick={() => void window.toto.openPermissionHelper('screenRecording')}
+          className={SETUP_SOFT_BUTTON}
+        >
+          {openSettingsTitle(true)}
+        </button>
+      </div>
+    )
+  }
   const diagnosis = perms.screenDiagnosis
   const state = diagnosisState(perms)
   const note = (text: string): JSX.Element => (
@@ -194,10 +220,10 @@ export function ScreenSetupActions({
         {(copy.openSettings || repairGuidance) && (
           <button
             type="button"
-            onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+            onClick={() => void window.toto.openPermissionHelper('screenRecording')}
             className={SETUP_SOFT_BUTTON}
           >
-            Open Screen Recording Settings
+            {openSettingsTitle(false)}
           </button>
         )}
         {copy.attest && (
@@ -206,7 +232,7 @@ export function ScreenSetupActions({
             onClick={() => void window.toto.attestScreenPermission().catch(() => {})}
             className={SETUP_LINK_BUTTON}
           >
-            It’s already on
+            {RELAUNCH_TITLE}
           </button>
         )}
       </div>

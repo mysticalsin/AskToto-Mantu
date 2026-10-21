@@ -43,7 +43,8 @@ describe('C26 — onboarding microphone row', () => {
   it('denied: no prompt button, the "won\'t ask again" copy and the Privacy pane deep link', () => {
     const html = renderToStaticMarkup(createElement(MicSetupActions, { state: 'blocked', onContinue: noop }))
     expect(html).toContain('macOS won&#x27;t ask again once you&#x27;ve said no.')
-    expect(buttons(html)).toEqual(['Open Microphone Settings'])
+    expect(buttons(html)).toEqual(['Open System Settings'])
+    expect(html).toContain('Turn on Métis in System Settings › Privacy &amp; Security › Microphone.')
   })
 
   it('granted (or still checking): nothing to ask, so no actions', () => {
@@ -72,6 +73,32 @@ describe('C26 — onboarding meeting audio & screen row', () => {
   it('denied: never a prompt button, only the Screen Recording pane', () => {
     const html = render('denied')
     expect(buttons(html)).not.toContain('Continue')
-    expect(buttons(html)).toContain('Open Screen Recording Settings')
+    expect(buttons(html)).toEqual(['Open System Settings', 'Relaunch'])
+  })
+})
+
+describe('C32 — the same rows on Windows (platform injected, any host)', () => {
+  it('microphone denied: Windows copy with the exact click path and one "Open Settings"', () => {
+    const html = renderToStaticMarkup(
+      createElement(MicSetupActions, { state: 'blocked', onContinue: noop, windows: true })
+    )
+    expect(buttons(html)).toEqual(['Open Settings'])
+    expect(html).toContain('Settings › Privacy &amp; security › Microphone.')
+    expect(html).not.toMatch(/macOS/)
+  })
+
+  it('screen capture refused: one "Open Settings"; available or unknown: nothing to do', () => {
+    const perms = (screenRecording: PlatformPermissions['screenRecording']): PlatformPermissions => ({
+      microphone: 'granted',
+      screenRecording
+    })
+    const render = (p: PlatformPermissions): string =>
+      renderToStaticMarkup(
+        createElement(ScreenSetupActions, { perms: p, check: 'idle', onRequest: noop, onRecheck: noop, windows: true })
+      )
+    expect(buttons(render(perms('denied')))).toEqual(['Open Settings'])
+    expect(render(perms('denied'))).toContain('Windows is blocking screen capture.')
+    expect(render(perms('granted'))).toBe('')
+    expect(render(perms('unknown'))).toBe('')
   })
 })

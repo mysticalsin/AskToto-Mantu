@@ -20,10 +20,19 @@ const perms = (state: ScreenDiagnosisState): PlatformPermissions => ({
 
 describe('screenRowStatus', () => {
   it('granted is not green by itself: it tests, then goes green only when the self-test passed', () => {
-    expect(screenRowStatus(perms('granted'), 'idle', false)).toEqual({ state: 'checking', detail: 'testing meeting audio…' })
+    expect(screenRowStatus(perms('granted'), 'idle', false)).toEqual({
+      state: 'checking',
+      detail: 'testing meeting audio…'
+    })
     expect(screenRowStatus(perms('granted'), 'running', false).state).toBe('checking')
-    expect(screenRowStatus(perms('granted'), 'passed', false)).toEqual({ state: 'ready', detail: 'meeting audio works' })
-    expect(screenRowStatus(perms('granted'), 'failed', false)).toEqual({ state: 'action', detail: 'meeting audio test failed' })
+    expect(screenRowStatus(perms('granted'), 'passed', false)).toEqual({
+      state: 'ready',
+      detail: 'meeting audio works'
+    })
+    expect(screenRowStatus(perms('granted'), 'failed', false)).toEqual({
+      state: 'action',
+      detail: 'meeting audio test failed'
+    })
   })
 
   it('a self-test that passed earlier cannot turn a non-granted diagnosis green', () => {
@@ -51,6 +60,15 @@ describe('screenRowStatus', () => {
 
   it('Windows needs no grant and stays available', () => {
     expect(screenRowStatus(null, 'idle', true)).toEqual({ state: 'ready', detail: 'available' })
+  })
+
+  it('C32: Windows shows the row blocked only when a real capture probe was refused', () => {
+    expect(screenRowStatus({ screenRecording: 'denied' }, 'idle', true)).toEqual({
+      state: 'blocked',
+      detail: 'screen capture is off'
+    })
+    expect(screenRowStatus({ screenRecording: 'granted' }, 'idle', true).state).toBe('ready')
+    expect(screenRowStatus({ screenRecording: 'unknown' }, 'idle', true).state).toBe('ready')
   })
 
   it('the row is named for meeting audio and says why before it asks', () => {

@@ -12,8 +12,28 @@ import { auditLog } from '../logger'
 import { repairScreenPermission } from '../permission-repair'
 import { execFileNoShell } from '../infra/process/exec-file'
 import { APP_BUNDLE_ID, screenPermission } from '../capture-permissions/screen-permission-runtime'
+import { registerPermissionHelperIpc } from './permission-helper-ipc'
 
 type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
+
+/**
+ * The privacy pane for one permission, or null for any other kind or platform. macOS: the Privacy & Security
+ * pane's anchor. Windows: the per-capability page; programmatic graphics capture arrived in Windows 10 2004,
+ * and an older build opens the Settings home for an unknown ms-settings URI rather than failing.
+ */
+export function permissionSettingsUrl(platform: NodeJS.Platform, kind: unknown): string | null {
+  if (kind !== 'microphone' && kind !== 'screenRecording') return null
+  if (platform === 'darwin') {
+    const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
+    return `x-apple.systempreferences:com.apple.preference.security?${pane}`
+  }
+  if (platform === 'win32') {
+    return kind === 'screenRecording'
+      ? 'ms-settings:privacy-graphicscaptureprogrammatic'
+      : 'ms-settings:privacy-microphone'
+  }
+  return null
+}
 
 function relaunch(): void {
   app.relaunch()
@@ -21,25 +41,19 @@ function relaunch(): void {
 }
 
 export function registerScreenPermissionIpc(assertMainWindow: AssertMainWindow): void {
-  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
-  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
-  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
+  // Deep-link to the exact privacy pane once a permission has been denied: getUserMedia never re-prompts after
+  // a Deny, so without this a denied user has no in-app path back to granting it. Only the two allowlisted
+  // kinds open anything (permissionSettingsUrl).
   ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
     assertMainWindow(e)
-    if (process.platform === 'darwin') {
-      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
-      return
-    }
-    if (process.platform === 'win32') {
-      // Windows has no single TCC-style "Screen Recording" permission like macOS; the closest deep link
-      // is the App graphics capture privacy page (added in the Windows 10 2004 update). Picked over the
-      // generic 'ms-settings:privacy' page because it's the actual per-capability toggle; on Windows
-      // builds that predate it, an unrecognized ms-settings URI opens the Settings home instead of
-      // erroring, so no separate fallback URI is needed here.
-      const uri = kind === 'screenRecording' ? 'ms-settings:privacy-graphicscaptureprogrammatic' : 'ms-settings:privacy-microphone'
-      void shell.openExternal(uri)
-    }
+    const url = permissionSettingsUrl(process.platform, kind)
+    if (url) void shell.openExternal(url)
+  })
+  // C32 Part D: the guided grant helper beside the pane (drag Métis into the list, then turn it on).
+  registerPermissionHelperIpc({
+    assertMainWindow,
+    paneUrl: (kind) => permissionSettingsUrl(process.platform, kind),
+    relaunch
   })
   ipcMain.handle(IPC.permissionsRepairScreen, async (e) => {
     assertMainWindow(e)
@@ -66,7 +80,12 @@ export function registerScreenPermissionIpc(assertMainWindow: AssertMainWindow):
   ipcMain.handle(IPC.permissionsRevealCopy, (e, path: unknown) => {
     assertMainWindow(e)
     if (typeof path !== 'string') return
-    if (!screenPermission().diagnose().duplicates.some((copy) => copy.path === path)) return
+    if (
+      !screenPermission()
+        .diagnose()
+        .duplicates.some((copy) => copy.path === path)
+    )
+      return
     shell.showItemInFolder(path)
   })
 }

@@ -3,13 +3,14 @@
  *
  * Nothing asks when the Setup scene appears. The row first says why, then offers ONE button titled "Continue"
  * that raises the macOS prompt for the microphone only (a pre-alert never says "Allow" and never has a control
- * that skips the system alert). A denied microphone never re-prompts: macOS won't ask again, so the row opens
- * the Microphone privacy pane instead. A granted microphone needs no actions.
+ * that skips the system alert). A denied microphone never re-prompts: macOS won't ask again, so the row offers
+ * one "Open System Settings" (Windows: "Open Settings") to the Microphone privacy pane and says where to click. A granted microphone needs no actions.
  */
 import { useId, type MutableRefObject } from 'react'
 import type { PlatformPermissions } from '@shared/screen-permission'
 import { acquireInteractiveMic } from '../lib/input-mic-admission'
 import { isWindows } from '../lib/keys'
+import { openSettingsTitle, osSettingsWhere } from '../lib/os-settings-copy'
 import type { SetupRowState } from '../lib/onboarding-setup-rows'
 
 const NOTE = 'text-[11px] leading-snug text-[color:var(--color-ink-3)]'
@@ -18,10 +19,13 @@ const SOFT_BUTTON =
 
 export function MicSetupActions({
   state,
-  onContinue
+  onContinue,
+  windows = isWindows
 }: {
   state: SetupRowState
   onContinue: () => void
+  /** The platform the copy and the action title are for (tests render both on any host). */
+  windows?: boolean
 }): JSX.Element | null {
   const whyId = useId()
   if (state === 'action') {
@@ -40,16 +44,11 @@ export function MicSetupActions({
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-2">
       <span className={NOTE}>
-        {isWindows
-          ? 'Windows is blocking the microphone. Turn it back on in Privacy settings.'
-          : "macOS won't ask again once you've said no. Turn it back on in Privacy settings."}
+        {windows ? 'Windows is blocking the microphone.' : "macOS won't ask again once you've said no."}{' '}
+        {osSettingsWhere('microphone', windows)}
       </span>
-      <button
-        type="button"
-        onClick={() => void window.toto.openPermissionSettings('microphone')}
-        className={SOFT_BUTTON}
-      >
-        Open Microphone Settings
+      <button type="button" onClick={() => void window.toto.openPermissionHelper('microphone')} className={SOFT_BUTTON}>
+        {openSettingsTitle(windows)}
       </button>
     </div>
   )

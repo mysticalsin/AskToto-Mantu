@@ -10,6 +10,7 @@ import { useState } from 'react'
 import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { SCREEN_REPAIR_CONFIRMATION } from '../features/settings/settings-confirmations'
 import { useConfirm } from '../ui/confirm-context'
+import { RELAUNCH_TITLE, openSettingsTitle } from '../lib/os-settings-copy'
 import {
   MEETING_AUDIO_SCREEN_LABEL,
   MEETING_AUDIO_SCREEN_WHY,
@@ -52,7 +53,7 @@ export function screenDiagnosisLabel(d: ScreenDiagnosis): string {
     case 'denied':
       return 'Denied'
     case 'needs-relaunch':
-      return 'Restart needed'
+      return 'Relaunch needed'
     case 'not-effective':
       return 'Not in effect'
     case 'restricted':
@@ -98,8 +99,9 @@ function ScreenDiagnosisActions({
         {diagnosis.action === 'request' && (
           <button
             type="button"
-            // HIG P3 pre-alert: one button, titled Continue, that raises only this row's system prompt.
-            onClick={() => void window.toto.requestPermissionsUpfront('screenRecording').catch(() => null)}
+            // HIG P3: one button, titled Continue. Screen Recording has no prompt that can say yes, so it opens
+            // the pane and the guided helper (drag Métis into the list, then turn it on).
+            onClick={() => void window.toto.openPermissionHelper('screenRecording').catch(() => false)}
             className={primary}
           >
             Continue
@@ -107,25 +109,26 @@ function ScreenDiagnosisActions({
         )}
         {copy.relaunch && (
           <button type="button" onClick={onRestart} disabled={restarting} className={primary}>
-            {restarting ? 'Restarting…' : 'Restart Métis'}
+            {restarting ? 'Relaunching…' : RELAUNCH_TITLE}
           </button>
         )}
         {(copy.openSettings || repairGuidance) && (
           <button
             type="button"
-            onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+            onClick={() => void window.toto.openPermissionHelper('screenRecording')}
             className={link}
           >
-            Open System Settings
+            {openSettingsTitle(false)}
           </button>
         )}
+        {/* After turning Métis on in the pane: records that and relaunches, as the copy says to. */}
         {copy.attest && (
           <button
             type="button"
             onClick={() => void window.toto.attestScreenPermission().catch(() => {})}
             className={link}
           >
-            It’s already on
+            {RELAUNCH_TITLE}
           </button>
         )}
       </div>

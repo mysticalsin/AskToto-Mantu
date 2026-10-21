@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The guided grant helper (C32 Part D): bundled script and styles only; its one image is the app icon,
+         which main hands over as a data: URL. No network, no workers. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data:; media-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'none';"
+    />
+    <title>Métis</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/permission-helper/main.tsx"></script>
+  </body>
+</html>

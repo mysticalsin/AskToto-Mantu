@@ -30,6 +30,11 @@ window.toto = {
     if (state.microphone === 'unknown') state.microphone = state.answer
     return { microphone: state.microphone, screenRecording: 'granted' }
   },
+  // C32: the denied row opens the pane through the guided-helper channel (main opens the pane only on macOS).
+  openPermissionHelper: async (kind) => {
+    state.opened.push(kind)
+    return false
+  },
   openPermissionSettings: async (kind) => {
     state.opened.push(kind)
   }

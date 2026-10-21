@@ -1,0 +1,185 @@
+/* The guided grant helper (C32 Part D). The overlay's glass language at a small size: the strong glass card, ink
+   tiers, accent primary, pill buttons, the shared focus ring and the motion tokens. Compositor-only motion. */
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--color-ink, rgba(255, 255, 255, 0.96));
+  font-family: var(--font-ui, -apple-system, system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+.ph {
+  box-sizing: border-box;
+  margin: 8px;
+  height: calc(100vh - 16px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--color-hair, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-outer, 16px);
+  background:
+    linear-gradient(
+      var(--glass-tint-white, rgba(255, 255, 255, 0.04)),
+      var(--glass-tint-white, rgba(255, 255, 255, 0.04))
+    ), var(--glass-fill-strong, rgba(20, 8, 38, 0.94));
+  box-shadow: var(--shadow-float, 0 4px 16px rgba(0, 0, 0, 0.35));
+  animation: ph-in var(--duration-panel, 220ms) var(--ease-spring, ease-out) both;
+}
+.ph__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 0;
+}
+.ph__app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 6px 8px;
+  border-radius: var(--radius-md, 10px);
+  cursor: grab;
+}
+.ph__app:hover {
+  background: var(--color-accent-soft, rgba(127, 0, 218, 0.18));
+}
+.ph__app:active {
+  cursor: grabbing;
+}
+.ph__app--static {
+  cursor: default;
+}
+.ph__app--static:hover {
+  background: none;
+}
+.ph__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  pointer-events: none;
+}
+.ph__icon--blank {
+  display: block;
+  background: var(--color-accent, rgba(127, 0, 218, 1));
+}
+.ph__name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-ink-2, rgba(255, 255, 255, 0.82));
+}
+.ph__arrow {
+  flex: none;
+  display: inline-flex;
+  color: var(--color-accent-2, rgba(166, 77, 255, 1));
+  animation: ph-nudge 900ms var(--ease-spring, ease-out) 300ms 3 both;
+}
+.ph__arrow--right svg {
+  transform: rotate(180deg);
+}
+.ph__arrow--up svg {
+  transform: rotate(90deg);
+}
+.ph__arrow--down svg {
+  transform: rotate(-90deg);
+}
+.ph__text {
+  min-width: 0;
+}
+.ph__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.ph__sub {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-ink-3, rgba(255, 255, 255, 0.62));
+}
+.ph__done {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill, 9999px);
+  color: var(--color-success, rgba(52, 199, 89, 1));
+  background: var(--color-success-soft, rgba(52, 199, 89, 0.16));
+}
+.ph__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.ph__button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill, 9999px);
+  border: 1px solid var(--color-hair, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-ink, rgba(255, 255, 255, 0.96));
+  cursor: pointer;
+  transition: background-color var(--duration-hover, 150ms) var(--ease-spring, ease-out);
+}
+.ph__button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.ph__button--primary {
+  border-color: transparent;
+  background: var(--color-accent, rgba(127, 0, 218, 1));
+  color: white;
+}
+.ph__button--primary:hover {
+  filter: brightness(1.1);
+  background: var(--color-accent, rgba(127, 0, 218, 1));
+}
+.ph__button--link {
+  margin-right: auto;
+  padding-inline: 4px;
+  border-color: transparent;
+  background: none;
+  color: var(--color-accent-2, rgba(166, 77, 255, 1));
+}
+.ph__button--link:hover {
+  background: none;
+  text-decoration: underline;
+}
+.ph__button:focus-visible {
+  outline: 2px solid var(--color-focus, rgba(179, 136, 240, 1));
+  outline-offset: 2px;
+}
+@keyframes ph-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes ph-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-5px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ph,
+  .ph__arrow,
+  .ph__button {
+    animation: none;
+    transition: none;
+  }
+}

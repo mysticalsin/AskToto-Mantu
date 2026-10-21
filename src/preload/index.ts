@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createSpeechPackBridge } from './speech-pack'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
+import { PERMISSION_HELPER_IPC } from '../shared/permission-helper'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import { OWNER_SESSION_IPC, type OwnerSessionStatus } from '../shared/contracts/owner-session'
 import {
@@ -217,6 +218,9 @@ const api = {
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
+  /** C32: open the exact pane plus the guided helper beside it (pane only where there is no helper). */
+  openPermissionHelper: (kind: 'microphone' | 'screenRecording'): Promise<boolean> =>
+    ipcRenderer.invoke(PERMISSION_HELPER_IPC.open, kind),
   /** C26: pass the one permission a row's Continue asks for; no argument keeps the combined pass. */
   requestPermissionsUpfront: (kind?: 'microphone' | 'screenRecording'): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront, kind),

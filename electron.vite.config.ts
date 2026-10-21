@@ -90,7 +90,9 @@ export default defineConfig({
           // Minimal preload for the Mantu Intelligence dashboard window (see src/main/intelligence.ts).
           intelligence: resolve(__dirname, 'src/preload/intelligence.ts'),
           // Isolated Chromium audio decoder used by main-owned import jobs. It exposes no app APIs.
-          'import-decoder': resolve(__dirname, 'src/preload/import-decoder.ts')
+          'import-decoder': resolve(__dirname, 'src/preload/import-decoder.ts'),
+          // C32 Part D: the guided grant helper window (src/main/windows/permission-helper-window.ts).
+          'permission-helper': resolve(__dirname, 'src/preload/permission-helper.ts')
         }
       }
     },

@@ -1,0 +1,5 @@
+/* The helper window's stylesheet entry: the design tokens (Tailwind emits tokens.css' @theme as :root vars) and
+   the helper's own rules. No utilities are used here. */
+@import "tailwindcss";
+@import "../tokens.css";
+@import "./permission-helper.css";

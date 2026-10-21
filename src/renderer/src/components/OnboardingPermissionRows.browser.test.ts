@@ -27,7 +27,7 @@ import { onAppActive } from ${modulePath('lib/permission-ask.ts')}
 const state = window.__rowsState
 const snapshot = () => ({
   microphone: state.microphone,
-  screenRecording: state.screen === 'granted' ? 'granted' : 'unknown',
+  screenRecording: state.screen === 'granted' ? 'granted' : state.screen === 'denied' ? 'denied' : 'unknown',
   screenDiagnosis: { state: state.screen, reasons: [], action: 'none', duplicates: [], grantedFor: null, repairFailed: false }
 })
 window.toto = {
@@ -41,6 +41,11 @@ window.toto = {
   },
   openPermissionSettings: async (kind) => {
     state.opened.push(kind)
+  },
+  // C32 Part D: denied rows and the Screen Recording Continue open the pane plus the guided helper.
+  openPermissionHelper: async (kind) => {
+    state.opened.push(kind)
+    return kind === 'screenRecording'
   },
   attestScreenPermission: async () => {},
   revealAppCopy: async () => {}
@@ -154,15 +159,19 @@ describe('C26 — onboarding permission rows ask only from their own Continue', 
     await browser?.close()
   })
 
-  async function mount(microphone: RowsState['microphone'], screen: RowsState['screen']): Promise<void> {
+  async function mount(
+    microphone: RowsState['microphone'],
+    screen: RowsState['screen'],
+    platform: 'MacIntel' | 'Win32' = 'MacIntel'
+  ): Promise<void> {
     await page.setContent('<!doctype html><html><body><div id="root"></div></body></html>')
-    // macOS rows: pin the platform before the bundle evaluates lib/keys' isWindows.
+    // Pin the platform before the bundle evaluates lib/keys' isWindows, so both run on any host.
     await page.evaluate(
-      ({ mic, scr }) => {
-        Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
+      ({ mic, scr, plat }) => {
+        Object.defineProperty(navigator, 'platform', { get: () => plat })
         window.__rowsState = { microphone: mic, screen: scr, reads: 0, requests: [], opened: [] }
       },
-      { mic: microphone, scr: screen }
+      { mic: microphone, scr: screen, plat: platform }
     )
     await page.addScriptTag({ content: bundle })
     await page.waitForFunction(() => window.__rowsState.reads > 0)
@@ -188,26 +197,51 @@ describe('C26 — onboarding permission rows ask only from their own Continue', 
     expect((await state()).requests).toEqual(['microphone'])
   })
 
-  it('the meeting audio & screen Continue raises exactly one prompt, for screen recording only', async () => {
+  it('the meeting audio & screen Continue opens the pane and the guided helper, never a prompt (C32 Part D)', async () => {
     await mount('granted', 'not-asked')
     await row('Meeting audio & screen').getByRole('button', { name: 'Continue', exact: true }).click()
-    await page.waitForFunction(() => window.__rowsState.requests.length === 1)
-    expect((await state()).requests).toEqual(['screenRecording'])
+    await page.waitForFunction(() => window.__rowsState.opened.length === 1)
+    expect(await state()).toMatchObject({ requests: [], opened: ['screenRecording'] })
   })
 
   it('denied rows never ask: they say macOS won’t ask again and open the matching Privacy pane', async () => {
     await mount('denied', 'denied')
     await row('Microphone').getByText("macOS won't ask again once you've said no.", { exact: false }).waitFor()
     expect(await page.getByRole('button', { name: 'Continue', exact: true }).count()).toBe(0)
-    await row('Microphone').getByRole('button', { name: 'Open Microphone Settings' }).click()
-    await row('Meeting audio & screen').getByRole('button', { name: 'Open Screen Recording Settings' }).click()
+    await row('Microphone')
+      .getByText('Turn on Métis in System Settings › Privacy & Security › Microphone.', { exact: false })
+      .waitFor()
+    await row('Microphone').getByRole('button', { name: 'Open System Settings', exact: true }).click()
+    await row('Meeting audio & screen').getByRole('button', { name: 'Open System Settings', exact: true }).click()
     await page.waitForFunction(() => window.__rowsState.opened.length === 2)
     expect(await state()).toMatchObject({ requests: [], opened: ['microphone', 'screenRecording'] })
   })
 
+  it('C32 Windows: denied rows say where to click and offer one "Open Settings" to the exact page', async () => {
+    await mount('denied', 'denied', 'Win32')
+    await row('Microphone').getByText('Settings › Privacy & security › Microphone', { exact: false }).waitFor()
+    expect(await page.getByText(/macOS/).count()).toBe(0)
+    expect(await row('Microphone').getByRole('button').count()).toBe(1)
+    expect(await row('Meeting audio & screen').getByRole('button').count()).toBe(1)
+    await row('Microphone').getByRole('button', { name: 'Open Settings', exact: true }).click()
+    await row('Meeting audio & screen').getByRole('button', { name: 'Open Settings', exact: true }).click()
+    await page.waitForFunction(() => window.__rowsState.opened.length === 2)
+    expect(await state()).toMatchObject({ requests: [], opened: ['microphone', 'screenRecording'] })
+    const before = (await state()).reads
+    await page.evaluate(() => {
+      window.__rowsState.microphone = 'granted'
+      window.__rowsState.screen = 'granted'
+      document.dispatchEvent(new Event('visibilitychange'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await page.waitForFunction((n) => window.__rowsState.reads > n, before)
+    await row('Microphone').getByRole('button').waitFor({ state: 'detached' })
+    await row('Meeting audio & screen').getByRole('button').waitFor({ state: 'detached' })
+  })
+
   it('a grant made in System Settings shows when Métis becomes active again', async () => {
     await mount('denied', 'not-asked')
-    await row('Microphone').getByRole('button', { name: 'Open Microphone Settings' }).waitFor()
+    await row('Microphone').getByRole('button', { name: 'Open System Settings', exact: true }).waitFor()
     const before = (await state()).reads
     await page.evaluate(() => {
       window.__rowsState.microphone = 'granted'

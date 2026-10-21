@@ -5,6 +5,7 @@ import { acquireInteractiveMic, type InputMicAdmission } from '../../lib/input-m
 import { isWindows } from '../../lib/keys'
 import { micMeterMode } from '../../lib/permission-ask'
 import { usePermissions } from '../../state'
+import { openSettingsTitle, osSettingsWhere } from '../../lib/os-settings-copy'
 
 // Full-scale RMS for the level meter below. Well above the VAD's own "is speaking" threshold
 // (lib/vad.ts ON = 0.012) so normal close-mic speech visibly moves the bar without pegging it on
@@ -168,9 +169,7 @@ export function MicLevelMeter({
   }
 
   if (mode === 'denied') {
-    const hint = isWindows
-      ? 'Windows is blocking the microphone. Turn it back on in Privacy settings to test this device.'
-      : "Microphone access is off for Métis, and macOS won't ask again. Turn it on in System Settings to test this device."
+    const hint = `${isWindows ? 'Windows is blocking the microphone.' : "Microphone access is off for Métis, and macOS won't ask again."} ${osSettingsWhere('microphone')}`
     return (
       <span className="flex shrink-0 items-center gap-1.5">
         <FieldHint text={hint}>
@@ -180,10 +179,10 @@ export function MicLevelMeter({
         </FieldHint>
         <button
           type="button"
-          onClick={() => void window.toto.openPermissionSettings('microphone')}
+          onClick={() => void window.toto.openPermissionHelper('microphone')}
           className={LINK_BUTTON}
         >
-          {isWindows ? 'Open Windows Settings' : 'Open System Settings'}
+          {openSettingsTitle()}
         </button>
       </span>
     )
