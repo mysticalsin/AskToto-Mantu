@@ -98,14 +98,8 @@ function ScreenDiagnosisActions({
         {diagnosis.action === 'request' && (
           <button
             type="button"
-            // HIG P3 pre-alert: one button, titled Continue, that raises only this row's system prompt. The
-            // kind argument is honoured once the per-row ask (C26, permissionAskTargets) is merged; until then
-            // main ignores it and keeps the combined request, so this compiles and behaves on either base.
-            onClick={() =>
-              void (
-                window.toto.requestPermissionsUpfront as (kind?: 'microphone' | 'screenRecording') => Promise<unknown>
-              )('screenRecording').catch(() => null)
-            }
+            // HIG P3 pre-alert: one button, titled Continue, that raises only this row's system prompt.
+            onClick={() => void window.toto.requestPermissionsUpfront('screenRecording').catch(() => null)}
             className={primary}
           >
             Continue
