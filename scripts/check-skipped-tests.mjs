@@ -165,7 +165,10 @@ const REASONS = [
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
 // The six Dust CLI import cases now run against a mocked process boundary on every platform.
-const BASELINE = { win32: 40, darwin: 6, linux: hostedCi ? 25 : 29 }
+// Hosted macos-latest (quality matrix leg since 2e1e9b08) has no provisioned native binaries (ffmpeg sidecar,
+// mac-helper, llama-server, Apple speech), no Windows tooling and no candidate artifacts: 30 declared skips, all
+// listed in REASONS. A provisioned local Mac keeps the stricter 6.
+const BASELINE = { win32: 40, darwin: hostedCi ? 30 : 6, linux: hostedCi ? 25 : 29 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4
