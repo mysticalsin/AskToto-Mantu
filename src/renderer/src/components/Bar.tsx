@@ -424,7 +424,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
     () => (
       <div
         className={[
-          'flex items-center gap-3 px-5 transition-[padding,font-size] duration-[var(--duration-panel)] ease-[var(--ease-spring)]',
+          'flex items-center gap-3 px-5', // no padding/size tween: each frame would resize the window (C32)
           expanded ? 'border-b border-[var(--color-hair-soft)]' : ''
         ].join(' ')}
         style={{ paddingTop: expanded ? 11 : 5, paddingBottom: expanded ? 11 : 5 }}
@@ -552,7 +552,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           className={[
             // Brighter tier + a drop-shadow on the placeholder (same fix already applied to the
             // QuickActions hint) — "Ask anything…" pops clearly over any desktop, light or dark.
-            'no-drag focus-ring font-body min-w-0 flex-1 bg-transparent tracking-[-0.01em] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-2)] placeholder:[text-shadow:0_1px_3px_rgba(0,0,0,0.65)] caret-[var(--color-accent-2)] transition-[font-size] duration-[var(--duration-panel)] ease-[var(--ease-spring)]',
+            'no-drag focus-ring font-body min-w-0 flex-1 bg-transparent tracking-[-0.01em] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-2)] placeholder:[text-shadow:0_1px_3px_rgba(0,0,0,0.65)] caret-[var(--color-accent-2)]',
             expanded ? 'text-[18px] font-[450]' : 'text-[15px] font-[450]'
           ].join(' ')}
         />

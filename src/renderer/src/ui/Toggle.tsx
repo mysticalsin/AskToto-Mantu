@@ -41,8 +41,9 @@ export function Toggle({
     >
       <span
         className={[
-          'absolute top-[2px] h-[20px] w-[20px] rounded-full bg-white transition-all duration-[var(--duration-hover)]',
-          on ? 'left-[20px]' : 'left-[2px]'
+          // Slides on transform (compositor), not `left` (layout): same 18px travel, same 150ms.
+          'absolute left-[2px] top-[2px] h-[20px] w-[20px] rounded-full bg-white transition-transform duration-[var(--duration-hover)]',
+          on ? 'translate-x-[18px]' : 'translate-x-0'
         ].join(' ')}
       />
     </button>
