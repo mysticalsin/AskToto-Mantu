@@ -7,6 +7,7 @@ Each reference describes its own source version, not current hosted state or rel
 - [docs/ENTERPRISE-DEPLOY-WINDOWS.md](ENTERPRISE-DEPLOY-WINDOWS.md)
 - [docs/ENTERPRISE_RELEASE.md](ENTERPRISE_RELEASE.md)
 - [docs/MANTU-IT-REQUEST.md](MANTU-IT-REQUEST.md)
+- [docs/RELEASE-NOTES-2.12.md](RELEASE-NOTES-2.12.md)
 - [docs/license-platform-plan.md](license-platform-plan.md)
 - [license-server/HANDBOOK.md](../license-server/HANDBOOK.md)
 - [license-server/MIGRATION.md](../license-server/MIGRATION.md)
