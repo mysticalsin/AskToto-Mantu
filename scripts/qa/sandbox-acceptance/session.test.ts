@@ -87,7 +87,9 @@ describe.skipIf(process.platform === 'win32')('launchApp', () => {
       expect(env).not.toContain('OPENAI_API_KEY')
       expect(env).not.toContain('GITHUB_TOKEN')
       expect(env).not.toContain('OneDrive')
-      expect(readFileSync(join(layout.userData, 'args.txt'), 'utf8').trim()).toMatch(/^--remote-debugging-port=\d+$/)
+      expect(readFileSync(join(layout.userData, 'args.txt'), 'utf8').trim()).toMatch(
+        /^--remote-debugging-port=\d+ --disable-features=AudioServiceSandbox$/
+      )
       expect(JSON.parse(readFileSync(join(layout.userData, 'settings.json'), 'utf8'))).toMatchObject({
         onboardingDone: true,
         overlayLayout: 'bar'
