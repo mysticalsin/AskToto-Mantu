@@ -210,7 +210,8 @@ describe('content-key wrap: key file', () => {
     if (!wrapped.ok) throw new Error('wrap failed')
     const path = join(dir, 'key.v1')
     expect(await writeWrappedKeyFile(path, wrapped.wrapped)).toEqual({ ok: true })
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    // POSIX permission bits only exist on macOS/Linux; Windows reports 0o666 for any writable file.
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
     expect(readdirSync(dir)).toEqual(['key.v1'])
     const raw = readFileSync(path, 'utf8')
     expect(raw).not.toContain(key.toString('base64'))
