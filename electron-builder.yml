@@ -249,13 +249,22 @@ mac:
     # here: Electron resolves the helper bundle path from CFBundleName at runtime, so it must match the
     # ASCII "Metis Helper" dirs electron-builder creates. See the productName note at the top of this file.
     CFBundleDisplayName: Métis
-    NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
-    NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
-    NSAudioCaptureUsageDescription: Métis captures meeting audio from your screen so it can transcribe the other side of a call.
+    # Purpose strings (Apple HIG, C26): one brief, specific, active sentence ending with a period. They are the
+    # body of the system alert, so they say what Métis does with the access, never "to help". Pinned by
+    # scripts/macos-purpose-strings.test.ts; the mas block below and the helper's Info.plist use the same words.
+    NSMicrophoneUsageDescription: Métis uses the microphone to transcribe your side of the meetings you start.
+    # ScreenCaptureKit shows its own Screen Recording alert and Apple documents no Info.plist key for it, so this
+    # key is harmless; kept so any surface that does read it gets an accurate sentence (see native-app/project.yml).
+    NSScreenCaptureUsageDescription: Métis uses screen recording to hear meeting audio and to see your screen when you ask.
+    # macOS 14.4+ system audio capture (Core Audio process taps).
+    NSAudioCaptureUsageDescription: Métis uses system audio to transcribe the other side of the meetings you start.
     # Apple Speech ASR engine (opt-in, on-device via SFSpeechRecognizer) — required or the OS kills the
     # app the moment the mac-helper sidecar calls requestAuthorization. Only shown if the user picks
     # "Apple Speech" in Settings → Audio; Parakeet/Whisper never touch this permission.
-    NSSpeechRecognitionUsageDescription: Métis transcribes meeting audio on-device using Apple Speech so it can caption who said what.
+    NSSpeechRecognitionUsageDescription: Métis uses Apple Speech to transcribe meetings on this Mac when you choose it in Settings.
+    # Desktop commands (src/main/desktop-adapters.ts) drive Notes / Photo Booth through /usr/bin/osascript after
+    # the person confirms them; macOS attributes those Apple Events to Métis and shows this sentence.
+    NSAppleEventsUsageDescription: Métis uses Apple Events to carry out desktop commands you confirm, such as creating a note.
     LSUIElement: true
 mas:
   # Mac App Store builds are opt-in: run `npm run release:mas`.
@@ -266,10 +275,11 @@ mas:
   extendInfo:
     # See mac.extendInfo above: ASCII bundle/helper names, accented display name only.
     CFBundleDisplayName: Métis
-    NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
-    NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
-    NSAudioCaptureUsageDescription: Métis captures meeting audio from your screen so it can transcribe the other side of a call.
-    NSSpeechRecognitionUsageDescription: Métis transcribes meeting audio on-device using Apple Speech so it can caption who said what.
+    NSMicrophoneUsageDescription: Métis uses the microphone to transcribe your side of the meetings you start.
+    NSScreenCaptureUsageDescription: Métis uses screen recording to hear meeting audio and to see your screen when you ask.
+    NSAudioCaptureUsageDescription: Métis uses system audio to transcribe the other side of the meetings you start.
+    NSSpeechRecognitionUsageDescription: Métis uses Apple Speech to transcribe meetings on this Mac when you choose it in Settings.
+    NSAppleEventsUsageDescription: Métis uses Apple Events to carry out desktop commands you confirm, such as creating a note.
     LSUIElement: true
 masDev:
   entitlements: build/entitlements.mas.plist

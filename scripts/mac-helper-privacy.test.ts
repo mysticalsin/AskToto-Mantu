@@ -7,6 +7,8 @@ const helper = join(__dirname, '..', 'resources', 'mac-helper', 'metis-mac-helpe
 
 describe.skipIf(process.platform !== 'darwin' || !existsSync(helper))('MQA-347 packaged macOS Speech helper privacy metadata', () => {
   it.each(['arm64', 'x86_64'])('embeds a nonempty Speech Recognition usage description in the %s slice', (arch) => {
-    expect(macHelperSpeechUsage(helper, arch)).toMatch(/Métis transcribes meeting audio on-device/)
+    expect(macHelperSpeechUsage(helper, arch)).toBe(
+      'Métis uses Apple Speech to transcribe meetings on this Mac when you choose it in Settings.'
+    )
   })
 })

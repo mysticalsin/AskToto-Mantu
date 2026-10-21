@@ -51,11 +51,14 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_CFBundleDisplayName: "Métis"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Métis transcribes meeting audio on-device to give you live suggestions and summaries."
+        # Purpose strings (Apple HIG, C26): one brief, specific, active sentence ending with a period, in the same
+        # voice as the Electron app (electron-builder.yml); pinned by scripts/macos-purpose-strings.test.ts.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Métis uses the microphone to transcribe your side of the meetings you start."
         # Speech recognition drives the on-device live transcript. Screen Recording (system-audio loopback,
-        # the two-sided macOS copilot) is TCC-managed with no Info.plist usage key — the OS shows its own
-        # prompt when ScreenCaptureKit first runs; onboarding explains it before that happens.
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis converts meeting audio to text on-device so it can suggest what to say and summarize the call."
+        # the two-sided macOS copilot) needs no usage key here: ScreenCaptureKit shows the system's own alert
+        # when it first runs, and onboarding explains it before that happens. (The Electron app still declares
+        # NSScreenCaptureUsageDescription; Apple documents no such key for ScreenCaptureKit, so it is harmless there.)
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis uses speech recognition to transcribe your meetings on this Mac."
   MetisPersistenceTests:
     type: bundle.unit-test
     platform: macOS
