@@ -132,11 +132,16 @@ class FakeContents extends EventEmitter {
     return super.on(event, listener as (...args: unknown[]) => void)
   }
   count(): number {
-    return this.listenerCount('render-process-gone') + this.listenerCount('destroyed') + this.listenerCount('did-start-navigation')
+    return (
+      this.listenerCount('render-process-gone') +
+      this.listenerCount('destroyed') +
+      this.listenerCount('did-start-navigation')
+    )
   }
 }
 
-const asSource = (contents: FakeContents): OwnerSessionRendererSource => contents as unknown as OwnerSessionRendererSource
+const asSource = (contents: FakeContents): OwnerSessionRendererSource =>
+  contents as unknown as OwnerSessionRendererSource
 const frameOf = (webContentsId: number) => ({ processId: 10 + webContentsId, routingId: 1 })
 const frameOwnerOf = (webContentsId: number) => `${10 + webContentsId}:1` as const
 const mainNavigation = (contents: FakeContents) => contents.emit('did-start-navigation', {}, 'file:///x', false, true)
@@ -189,13 +194,16 @@ function world(identity: string | null = 'owner-a') {
   function openMeeting(webContentsId: number, startedAt = M) {
     const owner = authority.mint(frameOf(webContentsId), state.contextRevision)
     if (!owner) throw new Error('expected an owner session')
-    const binding: TranscriptStoreBinding = { meetingStartedAt: startedAt, frameOwner: frameOwnerOf(webContentsId), owner }
+    const binding: TranscriptStoreBinding = {
+      meetingStartedAt: startedAt,
+      frameOwner: frameOwnerOf(webContentsId),
+      owner
+    }
     expect(store.open(binding)).toEqual({ ok: true })
     expect(store.apply(binding, segmentEventToRevisionEvent(segment(1))).ok).toBe(true)
     return { owner, binding }
   }
-  const lateSegment = (binding: TranscriptStoreBinding) =>
-    store.apply(binding, segmentEventToRevisionEvent(segment(2)))
+  const lateSegment = (binding: TranscriptStoreBinding) => store.apply(binding, segmentEventToRevisionEvent(segment(2)))
   return { state, order, authority, store, checkpoint, controller, openMeeting, lateSegment }
 }
 

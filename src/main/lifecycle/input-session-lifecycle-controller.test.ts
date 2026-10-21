@@ -756,19 +756,19 @@ describe('InputSessionLifecycleController owner-session revocation', () => {
     expect(fixture.ownerRevokeAll.mock.calls).toEqual([['lock-screen'], ['sign-out']])
   })
 
-  it.each(['throws', 'getter-throws'] as const)(
-    'finishes the whole teardown when owner revocation fails (%s)',
-    (mode) => {
-      const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: mode })
-      const captureId = admitCapture(fixture, 654)
+  it.each([
+    'throws',
+    'getter-throws'
+  ] as const)('finishes the whole teardown when owner revocation fails (%s)', (mode) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: mode })
+    const captureId = admitCapture(fixture, 654)
 
-      expect(() => fixture.controller.hardStopInputSession('sign-out')).not.toThrow()
+    expect(() => fixture.controller.hardStopInputSession('sign-out')).not.toThrow()
 
-      expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
-      expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
-      expect(fixture.meetingMicCaptureAuthority.release(1, captureId)).toBe(false)
-    }
-  )
+    expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+    expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+    expect(fixture.meetingMicCaptureAuthority.release(1, captureId)).toBe(false)
+  })
 
   it('still revokes owner sessions when meeting teardown throws', () => {
     const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: 'live' })
