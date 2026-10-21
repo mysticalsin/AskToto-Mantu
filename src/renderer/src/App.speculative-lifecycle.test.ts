@@ -5,13 +5,7 @@ import { transcriptStateKey } from '@shared/hash'
 import { readModuleSource } from '../../test-helpers/module-source'
 
 const appModule = readModuleSource(__dirname, './App')
-const app = ts.createSourceFile(
-  appModule.path,
-  appModule.text,
-  ts.ScriptTarget.Latest,
-  true,
-  ts.ScriptKind.TSX
-)
+const app = ts.createSourceFile(appModule.path, appModule.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 
 const MEETING_A_TEXT = 'THEM: The launch is on Friday.\nTHEM: Please share the draft today.'
 const MEETING_A_LINES = [

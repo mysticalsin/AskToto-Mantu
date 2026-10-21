@@ -55,7 +55,8 @@ const REASONS = [
     why: 'Spawns a real mac llama-server against real weights. Its spawn-ARGUMENT contract is covered cross-platform by buildSpawnArgs tests in the same file, which is the part that regressed as `-c undefined`.'
   },
   {
-    match: 'local-runtime.concurrency.test.ts :: uses one real supervisor wrapper and waits for forwarded health and registry receipt',
+    match:
+      'local-runtime.concurrency.test.ts :: uses one real supervisor wrapper and waits for forwarded health and registry receipt',
     exact: true,
     why: 'Drives the macOS supervisor wrapper (macSupervisorHelperPath, resolveBinaryPath for mac) with its exact spawn argv and registry receipt ordering. The wrapper is a macOS-only helper and this describe is gated to darwin; the cross-platform start(), generation-guard and Windows-fallback cancellation cases in the same file run on every platform.'
   },

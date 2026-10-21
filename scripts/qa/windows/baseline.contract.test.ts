@@ -23,36 +23,42 @@ interface Row {
 }
 
 describe('M2-0415 Windows 1.9.6 baseline harness', () => {
-  it.skipIf(skipWithoutPwsh)('plan mode lists measured census rows and reports every external row BLOCKED_EXTERNAL with an unblock step', () => {
-    const out = mkdtempSync(join(tmpdir(), 'm2-0415-baseline-'))
-    try {
-      const result = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-OutDir', out, '-PlanOnly'], {
-        encoding: 'utf8',
-        timeout: 60_000
-      })
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
-      expect(result.stdout).toContain('managed-edr-overhead: BLOCKED_EXTERNAL')
+  it.skipIf(skipWithoutPwsh)(
+    'plan mode lists measured census rows and reports every external row BLOCKED_EXTERNAL with an unblock step',
+    () => {
+      const out = mkdtempSync(join(tmpdir(), 'm2-0415-baseline-'))
+      try {
+        const result = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-OutDir', out, '-PlanOnly'], {
+          encoding: 'utf8',
+          timeout: 60_000
+        })
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+        expect(result.stdout).toContain('managed-edr-overhead: BLOCKED_EXTERNAL')
 
-      const report = JSON.parse(readFileSync(join(out, 'baseline.json'), 'utf8')) as { rows: Row[]; planOnly: boolean }
-      expect(report.planOnly).toBe(true)
-      const byId = new Map(report.rows.map((row) => [row.id, row]))
-      expect(byId.get('census-cold-start')?.status).toBe('SUPPORTED_NOT_RUN')
-      expect(byId.get('census-settled-idle')?.status).toBe('SUPPORTED_NOT_RUN')
-      expect(byId.get('st-1-w-onedrive-placeholders-network-off')?.status).toBe('BLOCKED_EXTERNAL')
-      expect(byId.get('hk-w-end-task-owned-sidecars')?.status).toBe('BLOCKED_EXTERNAL')
-      expect(byId.get('managed-foreground-watcher-cost')?.status).toBe('BLOCKED_EXTERNAL')
-      expect(byId.get('managed-edr-interaction')?.status).toBe('BLOCKED_EXTERNAL')
-      for (const state of ['first-inference', 'active-transcription', 'post-meeting', 'post-recovery']) {
-        expect(byId.get(`census-${state}`)?.status).toBe('BLOCKED_EXTERNAL')
+        const report = JSON.parse(readFileSync(join(out, 'baseline.json'), 'utf8')) as {
+          rows: Row[]
+          planOnly: boolean
+        }
+        expect(report.planOnly).toBe(true)
+        const byId = new Map(report.rows.map((row) => [row.id, row]))
+        expect(byId.get('census-cold-start')?.status).toBe('SUPPORTED_NOT_RUN')
+        expect(byId.get('census-settled-idle')?.status).toBe('SUPPORTED_NOT_RUN')
+        expect(byId.get('st-1-w-onedrive-placeholders-network-off')?.status).toBe('BLOCKED_EXTERNAL')
+        expect(byId.get('hk-w-end-task-owned-sidecars')?.status).toBe('BLOCKED_EXTERNAL')
+        expect(byId.get('managed-foreground-watcher-cost')?.status).toBe('BLOCKED_EXTERNAL')
+        expect(byId.get('managed-edr-interaction')?.status).toBe('BLOCKED_EXTERNAL')
+        for (const state of ['first-inference', 'active-transcription', 'post-meeting', 'post-recovery']) {
+          expect(byId.get(`census-${state}`)?.status).toBe('BLOCKED_EXTERNAL')
+        }
+        expect(report.rows.filter((row) => row.id.startsWith('managed-')).length).toBeGreaterThanOrEqual(4)
+        for (const row of report.rows.filter((r) => r.status === 'BLOCKED_EXTERNAL')) {
+          expect(row.unblock?.length ?? 0).toBeGreaterThan(20)
+        }
+      } finally {
+        rmSync(out, { recursive: true, force: true })
       }
-      expect(report.rows.filter((row) => row.id.startsWith('managed-')).length).toBeGreaterThanOrEqual(4)
-      for (const row of report.rows.filter((r) => r.status === 'BLOCKED_EXTERNAL')) {
-        expect(row.unblock?.length ?? 0).toBeGreaterThan(20)
-      }
-    } finally {
-      rmSync(out, { recursive: true, force: true })
     }
-  })
+  )
 
   it.skipIf(skipWithoutPwsh)('records the artifact sha and release-note handoff without private program paths', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0195-baseline-'))

@@ -492,25 +492,25 @@ function expectNotPass(result: ReturnType<typeof diagnoseRootReport>, reason: st
 }
 
 describe('bounded root report diagnostic producer', () => {
-  it.each(['ubuntu-latest', 'windows-latest', 'macos-latest'])(
-    'accepts only the named hosted quality runner label: %s',
-    (matrixOs) =>
-      withReport((fixture) => {
-        fixture.context.matrixOs = matrixOs
-        fixture.context.reportPath = join(
-          fixture.context.runnerTemp,
-          `metis-ci-root-report-${fixture.context.runId}-${fixture.context.runAttempt}-${matrixOs}.json`
-        )
-        expect(diagnose(fixture).summary.status).toBe('DIAGNOSTIC_COMPLETE')
-      })
-  )
+  it.each([
+    'ubuntu-latest',
+    'windows-latest',
+    'macos-latest'
+  ])('accepts only the named hosted quality runner label: %s', (matrixOs) =>
+    withReport((fixture) => {
+      fixture.context.matrixOs = matrixOs
+      fixture.context.reportPath = join(
+        fixture.context.runnerTemp,
+        `metis-ci-root-report-${fixture.context.runId}-${fixture.context.runAttempt}-${matrixOs}.json`
+      )
+      expect(diagnose(fixture).summary.status).toBe('DIAGNOSTIC_COMPLETE')
+    }))
 
   it.each(['linux-latest', 'macos-15', 'self-hosted'])('rejects an untrusted runner label: %s', (matrixOs) =>
     withReport((fixture) => {
       fixture.context.matrixOs = matrixOs
       expectNotPass(diagnose(fixture), 'NOT_PASS_CONTEXT')
-    })
-  )
+    }))
 
   it('keeps a coherent failed 38-skip inventory without claiming PASS or equating suites with files', () =>
     withReport((fixture) => {
