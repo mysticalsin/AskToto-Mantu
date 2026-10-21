@@ -220,6 +220,7 @@ function reviewEditCallbacks(renderValues: Record<string, unknown>) {
       const recapDirty = ${namedExpression(review, 'recapDirty')};
       const startEditRecap = ${namedExpression(review, 'startEditRecap')};
       const cancelEditRecap = ${namedExpression(review, 'cancelEditRecap')};
+      const recapEditSnapshot = ${namedExpression(review, 'recapEditSnapshot')};
       const saveRecap = ${namedExpression(review, 'saveRecap')};
       const guardRecapEditNavigation = ${namedExpression(review, 'guardRecapEditNavigation')};
       const handleRecapDraftChange = ${optionalDraftHandler};
@@ -997,10 +998,11 @@ function reviewRecapHost() {
     onRecapSaved,
     render,
     async cleanup() {
+      navigationChoice.resolve('cancel')
+      await Promise.resolve()
       for (const write of writes) write.result.resolve({ ok: false, error: 'test cleanup' })
       await Promise.allSettled(writes.map((write) => write.result.promise))
-      await Promise.resolve()
-      await Promise.resolve()
+      await new Promise<void>((resolve) => setImmediate(resolve))
       vi.restoreAllMocks()
     }
   }
@@ -1179,6 +1181,81 @@ describe('actual Review recap edit callbacks', () => {
     }
   })
 
+  it.each([
+    { label: 'Done / newer draft', handler: 'doneOnClick', reopen: false },
+    { label: 'Resume / newer draft', handler: 'resumeOnClick', reopen: false },
+    { label: 'Recent meeting / newer draft', handler: 'recentOnClick', reopen: false },
+    { label: 'Done / same-text reopen', handler: 'doneOnClick', reopen: true },
+    { label: 'Resume / same-text reopen', handler: 'resumeOnClick', reopen: true },
+    { label: 'Recent meeting / same-text reopen', handler: 'recentOnClick', reopen: true }
+  ] as const)('refuses a stale Save choice after a deferred $label dialog', async ({ handler, reopen }) => {
+    const host = reviewRecapHost()
+    try {
+      const editorA = enterReviewDraft(host, 'Submitted A')
+      editorA[handler]()
+      expect(host.navigationGuard.request).toHaveBeenCalledTimes(1)
+      expect(host.updateRecap).not.toHaveBeenCalled()
+
+      const nextText = reopen ? 'Submitted A' : 'Newer B'
+      if (reopen) {
+        const escape = { key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() }
+        editorA.draftOnKeyDown(escape)
+        expect(escape.stopPropagation).toHaveBeenCalledExactlyOnceWith()
+        expect(host.state.editingRecap).toBe(false)
+        host.render().startEditRecap()
+        host.render().draftOnChange({ target: { value: nextText } })
+      } else {
+        editorA.draftOnChange({ target: { value: nextText } })
+      }
+      const current = host.render()
+      expect(current.recapDraft).toBe(nextText)
+      expect(current.recapDirty).toBe(true)
+
+      host.navigationChoice.resolve('save')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      // Settle even an incorrect stale submission so RED tests the actual data-loss outcome.
+      for (const write of host.writes) write.result.resolve({ ok: true })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.state.recapDraft).toBe(nextText)
+      expect(host.render().recapDirty).toBe(true)
+      expect(host.onDone).not.toHaveBeenCalled()
+      expect(host.onResume).not.toHaveBeenCalled()
+      expect(host.onOpenPastMeeting).not.toHaveBeenCalled()
+      expect(host.updateRecap).not.toHaveBeenCalled()
+      expect(host.onRecapSaved).not.toHaveBeenCalled()
+      expect(host.state.editedRecap).toBe(null)
+    } finally {
+      await host.cleanup()
+    }
+  })
+
+  it.each([
+    { label: 'Done', handler: 'doneOnClick', callback: 'onDone' },
+    { label: 'Resume', handler: 'resumeOnClick', callback: 'onResume' },
+    { label: 'Recent meeting', handler: 'recentOnClick', callback: 'onOpenPastMeeting' }
+  ] as const)('saves and navigates after an unchanged deferred $label dialog', async ({ handler, callback }) => {
+    const host = reviewRecapHost()
+    try {
+      const editor = enterReviewDraft(host, 'Submitted A')
+      editor[handler]()
+      expect(host.navigationGuard.request).toHaveBeenCalledTimes(1)
+      expect(host.updateRecap).not.toHaveBeenCalled()
+      host.render()
+      host.navigationChoice.resolve('save')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.updateRecap).toHaveBeenCalledExactlyOnceWith('a.md', 'Submitted A')
+      host.writes[0]!.result.resolve({ ok: true })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.state.editingRecap).toBe(false)
+      expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Submitted A' })
+      expect(host[callback]).toHaveBeenCalledTimes(1)
+    } finally {
+      await host.cleanup()
+    }
+  })
+
   it('does not paint a pending completion onto a different meeting', async () => {
     const host = reviewRecapHost()
     let save: Promise<boolean> | undefined
@@ -1310,6 +1387,7 @@ describe('actual App generated-write to Review manual-edit wiring', () => {
         }
       }
     })
+    editor.recapEditSnapshot = evaluate(namedExpression(review, 'recapEditSnapshot'), editor)
     generated()
     await Promise.resolve()
     const manual = callback<() => Promise<void>>('saveRecap', editor, review)()

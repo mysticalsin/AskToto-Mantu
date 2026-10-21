@@ -356,11 +356,21 @@ export const Review = memo(function Review({
     recapEditIdentityRef.current.draftRevision += 1
     setRecapDraft(draft)
   }
+  // The dialog may retain this render's save callback while the user edits or reopens the editor.
+  // Keep its draft and identity together; an older callback must not borrow the new edit's identity.
+  const recapEditSnapshot = { ...recapEditIdentityRef.current }
   const saveRecap = async (): Promise<boolean> => {
-    if (!savedPath || recapSaving) return false
+    if (
+      !savedPath ||
+      recapSaving ||
+      savedPathRef.current !== savedPath ||
+      recapEditIdentityRef.current.session !== recapEditSnapshot.session ||
+      recapEditIdentityRef.current.draftRevision !== recapEditSnapshot.draftRevision
+    )
+      return false
     const forPath = savedPath
-    const submittedSession = recapEditIdentityRef.current.session
-    const submittedDraftRevision = recapEditIdentityRef.current.draftRevision
+    const submittedSession = recapEditSnapshot.session
+    const submittedDraftRevision = recapEditSnapshot.draftRevision
     const submittedDraft = recapDraft
     const submittedText = submittedDraft.trim()
     setRecapSaving(true)
