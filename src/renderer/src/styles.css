@@ -14,6 +14,7 @@
 @import './styles/overlay-motion.css';
 @import './styles/identity-pass.css';
 @import './styles/orb.css';
+@import './styles/panel-loading.css';
 
 /* streamdown styles itself with Tailwind utilities — Tailwind v4 must scan its dist to emit them */
 @source "../../../node_modules/streamdown/dist";

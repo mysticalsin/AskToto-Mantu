@@ -1,0 +1,114 @@
+/* One loading state and one close transition for every code-split surface (ui/PanelLoading.tsx,
+   lib/surface-exit.ts). Compositor-only: opacity and transform, never a layout property. Durations and the
+   curve are the motion tokens (tokens.css): the panel spring in, its hover-length leg out. */
+.lazy-panel {
+  position: relative;
+}
+/* Settings fills the window: the placeholder and the content take the same box, so nothing moves on arrival. */
+.lazy-panel--sheet,
+.lazy-panel--sheet > .lazy-panel__placeholder,
+.lazy-panel--sheet > .lazy-panel__content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+/* The sheet fills the window, so it fades rather than springs: a scaled full-window surface would show its
+   transparent edges (Settings dropped panel-enter for that reason). */
+.lazy-panel--sheet {
+  animation: lazy-panel-content-in var(--duration-panel) var(--ease-spring) both;
+}
+/* Inside <Panel>: the panel's floor (PANEL_MIN_PX 320) less its py-3.5 padding. */
+.lazy-panel--panel > .lazy-panel__placeholder {
+  min-height: 292px;
+}
+/* The live region is read, never seen, and takes no space in either frame's flow. */
+.lazy-panel__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.lazy-panel__loader {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.lazy-panel__loader[data-state="in"] {
+  animation: lazy-panel-loader-in var(--duration-panel) var(--ease-spring) both;
+}
+.lazy-panel__loader[data-state="out"] {
+  animation: lazy-panel-loader-out var(--duration-hover) var(--ease-spring) reverse both;
+}
+.lazy-panel__content[data-content-enter] {
+  animation: lazy-panel-content-in var(--duration-hover) var(--ease-spring) both;
+}
+/* A hosted view's own root fade-up (Mantu Intelligence) would animate a second time inside the panel's enter
+   or the content cross-fade; the panel's transition is the only one. */
+.lazy-panel__content > .fade-up {
+  animation: none;
+}
+/* The close: the open played backwards (reverse mirrors the curve too), then the surface unmounts. */
+[data-surface-exiting] {
+  animation: surface-exit var(--duration-hover) var(--ease-spring) reverse both;
+  pointer-events: none;
+}
+.lazy-panel--sheet[data-surface-exiting] {
+  animation: lazy-panel-sheet-out var(--duration-hover) var(--ease-spring) reverse both;
+}
+@keyframes lazy-panel-loader-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes lazy-panel-loader-out {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes lazy-panel-content-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes lazy-panel-sheet-out {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes surface-exit {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lazy-panel--sheet,
+  .lazy-panel__loader[data-state],
+  .lazy-panel__content[data-content-enter],
+  [data-surface-exiting] {
+    animation: none;
+  }
+}

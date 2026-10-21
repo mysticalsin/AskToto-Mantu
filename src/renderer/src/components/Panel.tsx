@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { useSurfaceExitTarget, useSurfaceExiting } from '../lib/surface-exit'
 
 /** Idle Bar with the 64 thinking-orb in the toolbar: input row (~48) + orb toolbar (~72) + borders. */
 export const PANEL_BAR_PX = 124
@@ -52,9 +53,14 @@ export function Panel({ children }: { children: ReactNode }): JSX.Element {
   // setState to an unchanged value costs no re-render — so only a real display change moves the cap.
   const [maxHeight, setMaxHeight] = useState(panelMaxHeight)
   useEffect(() => subscribeMaxHeight(setMaxHeight), [])
+  // Opens with panel-enter; a close plays it in reverse before the panel unmounts (lib/surface-exit.ts).
+  const exitTarget = useSurfaceExitTarget()
+  const exiting = useSurfaceExiting()
   return (
     <div
       data-panel-scroll
+      {...exitTarget}
+      data-surface-exiting={exiting ? '' : undefined}
       className="glass-strong scroll-thin panel-enter min-h-0 overflow-y-auto overscroll-y-contain rounded-[var(--radius-outer)] px-4 py-3.5"
       style={{ maxHeight }}
     >

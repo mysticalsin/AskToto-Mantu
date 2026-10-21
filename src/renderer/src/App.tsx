@@ -1,15 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-  lazy,
-  Suspense,
-  startTransition
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, startTransition } from 'react'
 import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
@@ -32,16 +21,12 @@ import { FailoverChip } from './components/FailoverChip'
 import { startDraftAutosave } from './lib/draft-autosave'
 import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
-// Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
-// Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
-// the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
-const Settings = lazy(() => import('./components/Settings').then((m) => ({ default: m.Settings })))
-const Review = lazy(() => import('./components/Review').then((m) => ({ default: m.Review })))
-const RecallView = lazy(() => import('./components/RecallView').then((m) => ({ default: m.RecallView })))
-const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ default: m.AgendaView })))
-const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ default: m.BrainView })))
-const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
-const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
+// Code-split views, their intent preloads and idle warm-ups: lib/lazy-views.ts. Every lazy surface loads
+// through LazyPanel (ui/PanelLoading.tsx); a close plays its exit first (lib/surface-exit.ts).
+import { Answer, AgendaView, BrainView, Copilot, RecallView, Review, Settings } from './lib/lazy-views'
+import { surfaceLabel, useLazyViewWarmup, useViewIntentPreload } from './lib/lazy-views'
+import { LazyPanel, SettingsSheet } from './ui/PanelLoading'
+import { useSurfaceExitView } from './lib/surface-exit'
 import { AgentStatus } from './components/AgentStatus'
 import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
@@ -470,35 +455,16 @@ export function App(): JSX.Element {
   // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
   // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
   // chunk needs, then the new one mounts. setView keeps a stable identity and records History transitions.
-  const [view, setView, setViewRaw] = useTransitionView(initialViewFromLaunch)
+  const [view, setViewNow, setViewRaw] = useTransitionView(initialViewFromLaunch)
+  const [setView, afterSurfaceExit] = useSurfaceExitView(view, setViewNow)
   // See crash-context.ts for why this runs in render rather than an effect.
   noteCrashContext({ view, listening: listen.listening })
 
-  // Same #426 hazard as the view-switch fix above, but for the Answer/Copilot chunks themselves — see
-  // state.ts useAsk().run()/fail(), which now wrap their first-mount setAnswer in startTransition (the
-  // actual fix; React always suspends a lazy component's very first render attempt no matter how fast the
-  // chunk resolves, so a transition wrap — not just preloading — is what's required). Warm both chunks here
-  // too, purely so that first transition resolves on the very next tick instead of after a real parse/fetch
-  // wait: cheap (local bundled files, not a network fetch) and shortens the brief bail-to-old-UI window a
-  // transition shows while the chunk is still loading. Idle-scheduled (2s fallback) and staggered — Answer/
-  // Copilot first since they're reachable from the very first keystroke, Settings/RecallView ~1s later —
-  // so none of this warm-up competes with first paint on a cold launch.
-  useEffect(() => {
-    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
-    const idle = (cb: () => void, fallbackMs: number): void => {
-      if (ric) ric(cb)
-      else setTimeout(cb, fallbackMs)
-    }
-    idle(() => {
-      void import('./components/Answer')
-      void import('./components/Copilot')
-    }, 2000)
-    // MQA-270 (B10): the second warm (Settings 189 kB + RecallView 23 kB, ~1 s after mount, every
-    // launch) is retired. The Answer/Copilot warm above stays — it is load-bearing for the React #426
-    // transition documented above, and those views are reachable from the very first keystroke. Settings
-    // and Recall are behind a deliberate click; their first open pays one cold parse, and a user who only
-    // records a meeting no longer pays 212 kB of parse at every boot for views they never open.
-  }, [])
+  // Same #426 hazard as the view-switch fix above, for the Answer/Copilot chunks themselves: state.ts wraps
+  // their first-mount setAnswer in startTransition (the fix); the idle warm-up only makes that first transition
+  // resolve on the next tick. Settings/History load on intent, Review while a meeting is live.
+  useLazyViewWarmup(listen.listening)
+  useViewIntentPreload()
 
   const [collapsed, setCollapsed] = useState(false)
   const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
@@ -2991,10 +2957,10 @@ export function App(): JSX.Element {
         commitCircleRestMinimize()
         return
       }
-      setView((v) => (v === 'settings' ? 'answer' : v))
+      setViewNow((v) => (v === 'settings' ? 'answer' : v)) // the circle collapse is this close's transition
       setCircleRestSpring('collapse')
     })()
-  }, [overlayLayout, commitCircleRestMinimize, confirmReviewNavigation])
+  }, [overlayLayout, commitCircleRestMinimize, confirmReviewNavigation, setViewNow])
   // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
   // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
@@ -3014,15 +2980,18 @@ export function App(): JSX.Element {
       // Chevron Collapse with Settings open must leave Settings the same way Done/X do.
       // setView is startTransition; use setViewRaw so overlayShowsSettingsSheet clears this frame
       // and windowMode(bar) hugs immediately — otherwise the gray settings slab stays under the Bar.
+      // Collapsing plays the open surface's exit first, like every other close (lib/surface-exit.ts).
       if (!collapsed && view === 'settings') {
-        setViewRaw('answer')
-        setCollapsed(true)
-        void window.toto.windowMode('bar')
-        return
+        return afterSurfaceExit(() => {
+          setViewRaw('answer')
+          setCollapsed(true)
+          void window.toto.windowMode('bar')
+        })
       }
-      setCollapsed((c) => !c)
+      if (!collapsed) return afterSurfaceExit(() => setCollapsed(true))
+      setCollapsed(false)
     })()
-  }, [collapsed, view, confirmReviewNavigation])
+  }, [collapsed, view, confirmReviewNavigation, afterSurfaceExit])
 
   // recapGen.run()'s own state update lands via React's startTransition (state.ts run()), so for one
   // render it's possible for recapGenTarget to already point at a NEW file while recapGen.answer still
@@ -3981,15 +3950,7 @@ export function App(): JSX.Element {
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
-          <Suspense
-            fallback={
-              <div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6">
-                <AgentStatus kind="loading" size="hero" />
-              </div>
-            }
-          >
-            {settingsBody}
-          </Suspense>
+          <SettingsSheet>{settingsBody}</SettingsSheet>
         </div>
       )
     }
@@ -4050,15 +4011,7 @@ export function App(): JSX.Element {
     if (view === 'settings' && settings) {
       return (
         <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
-          <Suspense
-            fallback={
-              <div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6">
-                <AgentStatus kind="loading" size="hero" />
-              </div>
-            }
-          >
-            {settingsBody}
-          </Suspense>
+          <SettingsSheet>{settingsBody}</SettingsSheet>
         </div>
       )
     }
@@ -4469,7 +4422,9 @@ export function App(): JSX.Element {
               liveCount={listen.lines.length}
               scrollMemory={rightEdgeReaderScroll}
             >
-              <Suspense fallback={<AgentStatus kind="loading" size="hero" />}>{rightEdgeReaderBody}</Suspense>
+              <LazyPanel label={surfaceLabel(rightEdgeReaderKind)} frame="reader" contentKey={rightEdgeReaderKind}>
+                {rightEdgeReaderBody}
+              </LazyPanel>
             </RightEdgeReader>
           ) : null}
           {/* The parked right-edge window is its rail: nothing but the dock above renders in it; the Reader
@@ -4642,26 +4597,12 @@ export function App(): JSX.Element {
                   minimized
                 ) ? (
                   // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-                  <Suspense
-                    fallback={
-                      <div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6">
-                        <AgentStatus kind="loading" size="hero" />
-                      </div>
-                    }
-                  >
-                    <div className="flex min-h-0 flex-1 flex-col">{body}</div>
-                  </Suspense>
+                  <SettingsSheet className="flex min-h-0 flex-1 flex-col">{body}</SettingsSheet>
                 ) : (
                   <Panel>
-                    <Suspense
-                      fallback={
-                        <div className="p-4">
-                          <AgentStatus kind="loading" size="hero" />
-                        </div>
-                      }
-                    >
+                    <LazyPanel label={surfaceLabel(view)} frame="panel" contentKey={view}>
                       {body}
-                    </Suspense>
+                    </LazyPanel>
                   </Panel>
                 ))}
             </>

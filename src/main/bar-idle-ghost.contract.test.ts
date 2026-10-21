@@ -1,11 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import {
-  BAR_IDLE_HEIGHT_PX,
-  isBarIdleGhostPanel,
-  rememberBarContentHeight
-} from '@shared/overlay-chrome'
+import { BAR_IDLE_HEIGHT_PX, isBarIdleGhostPanel, rememberBarContentHeight } from '@shared/overlay-chrome'
 import { SETTINGS_SURFACE_BACKGROUND } from '@shared/settings-bounds'
 
 const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
@@ -72,7 +68,7 @@ describe('Bar idle must not keep a Settings-tall ghost slab', () => {
     expect(app).toMatch(/data-settings-surface=\{overlayShowsSettingsSheet\(view, minimized\) \|\| undefined\}/)
     expect(app).toMatch(/overlayShowsSettingsSheet\(view, minimized\) \? 'h-full min-h-0'/)
     expect(app).toMatch(/overlayShowsSettingsSheet/)
-    expect(app).toMatch(/setView\(\(v\) => \(v === 'settings' \? 'answer' : v\)\)/)
+    expect(app).toMatch(/setView(Now)?\(\(v\) => \(v === 'settings' \? 'answer' : v\)\)/)
     expect(app).toMatch(/onExpand=\{unminimize\}/)
     expect(app).not.toMatch(/onExpand=\{openSettings/)
     expect(app).not.toMatch(/onExpand=\{onBarSettings/)
