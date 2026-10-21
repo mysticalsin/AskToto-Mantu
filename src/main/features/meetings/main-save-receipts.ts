@@ -8,10 +8,12 @@ import { storageAt } from '../../infra/storage/meetings-storage'
 import { createReceiptJournal, type ReceiptJournalPort } from '../../infra/storage/transcript-receipt-journal'
 import { mainLog } from '../../logger'
 import { TranscriptSaveReceiptStore, type ReceiptLocator } from '../../transcript-save-receipts'
-import { clearDraftTranscript, resolveMeetingsFolder } from '../../transcripts'
+import { clearDraftTranscript, decodeSavedMeetingAsync, resolveMeetingsFolder } from '../../transcripts'
 import { bindLaunchResume } from './draft-recovery'
+import { getMeetingSpeechReadLimitBytes } from './meeting-speech'
 import { savedRevisionNumber } from './transcript-checkpoint-binding'
-import { resumeJournaledSaves, type ResumeOutcome } from './transcript-save-resume'
+import { matchesSavedReceiptIdentity } from './saved-receipt-identity'
+import { resumeJournaledSaves, type ResumeOutcome, type SavedReceiptIdentityCheck } from './transcript-save-resume'
 
 export type { TranscriptSaveSideEffect } from '../../transcript-save-receipts'
 
@@ -37,15 +39,33 @@ const locate: ReceiptLocator = (durablePath, settings, meetingStartedAt) => {
 
 /** Resumes the journaled post-save stages of saves a previous process did not finish. */
 export function resumeMainJournaledSaves(journal: ReceiptJournalPort, settings: Settings): Promise<ResumeOutcome> {
-  const folder = resolveMeetingsFolder(settings)
+  const folder = resolve(resolveMeetingsFolder(settings))
+  const gateway = storageAt(folder)
   return resumeJournaledSaves({
     journal,
     folder: {
       join: (name) => join(folder, name),
       idSha256: folderId(folder),
-      list: async () => {
-        const listing = await storageAt(folder).list('')
-        return listing.status === 'ok' ? listing.names : null
+      verifySavedIdentity: async (name, meetingStartedAt, revision): Promise<SavedReceiptIdentityCheck> => {
+        try {
+          const fileClass = (await gateway.classify([name])).get(name)
+          if (!fileClass) return 'unavailable'
+          if (fileClass.status === 'missing') return 'missing'
+          if (fileClass.status !== 'ok' || fileClass.isSymlink || !fileClass.isRegular) return 'unavailable'
+
+          const maxBytes = getMeetingSpeechReadLimitBytes()
+          if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) return 'unavailable'
+          const read = await gateway.read(name, { maxBytes })
+          if (read.status === 'missing') return 'missing'
+          if (read.status !== 'ok') return 'unavailable'
+
+          const path = join(folder, name)
+          const decoded = await decodeSavedMeetingAsync(read.bytes, false, path)
+          if (!decoded.ok) return 'unavailable'
+          return matchesSavedReceiptIdentity(decoded.text, meetingStartedAt, revision) ? 'match' : 'mismatch'
+        } catch {
+          return 'unavailable'
+        }
       }
     },
     stages: {

@@ -15,10 +15,16 @@ export interface ResumeStages {
   ingest(path: string, options: { deferred: boolean }): Promise<void>
 }
 
+export type SavedReceiptIdentityCheck = 'match' | 'missing' | 'mismatch' | 'unavailable'
+
 export interface ResumeDeps {
   journal: ReceiptJournalPort
-  /** The current meetings folder, its id hash, and its listing (null when it cannot be read). */
-  folder: { join(name: string): string; idSha256: string; list(): Promise<string[] | null> }
+  /** One captured meetings folder and its verifier. Only an authoritative read/classification may say `missing`. */
+  folder: {
+    join(name: string): string
+    idSha256: string
+    verifySavedIdentity(name: string, meetingStartedAt: number, revision: number): Promise<SavedReceiptIdentityCheck>
+  }
   stages: ResumeStages
   deferredDefault: boolean
   now(): number
@@ -53,37 +59,57 @@ function withStage(rec: SaveReceiptRecord, stage: SaveReceiptStage, now: number)
 }
 
 /**
- * Launch resumption of durable save receipts (WP03-S09/S11). Each incomplete stage runs at least once; a stage is
- * journaled as soon as it completes, so a kill during resumption never repeats a stage that finished. A corrupt or
- * unreadable journal fails closed: nothing runs and nothing is rewritten.
+ * Launch resumption of durable save receipts (WP03-S09/S11). Each incomplete stage is attempted at least once, after
+ * the current saved document is checked against its receipt. A durably recorded stage is skipped after restart, but
+ * a process can die after an external effect and before its completion marker, so that effect may be repeated. A
+ * corrupt or unreadable journal fails closed: nothing runs and nothing is rewritten.
  */
 export async function resumeJournaledSaves(deps: ResumeDeps): Promise<ResumeOutcome> {
   const outcome: ResumeOutcome = { finished: 0, kept: 0, dropped: 0, abandoned: 0 }
   const loaded = await deps.journal.load()
   if (!loaded.ok) return { ...outcome, error: loaded.error }
   if (loaded.records.length === 0) return outcome
-  const names = await deps.folder.list()
   for (const original of loaded.records) {
     let rec = original
     try {
-      if (!rec.stages.savedWritten || !rec.savedBasename || rec.folderIdSha256 !== deps.folder.idSha256 || !names) {
+      if (!rec.stages.savedWritten || !rec.savedBasename || rec.folderIdSha256 !== deps.folder.idSha256) {
         outcome.kept++
         continue
       }
-      if (!names.includes(rec.savedBasename)) {
-        await deps.journal.remove(rec.receiptId)
-        outcome.dropped++
-        continue
-      }
-      const path = deps.folder.join(rec.savedBasename)
+      const savedBasename = rec.savedBasename
+      const path = deps.folder.join(savedBasename)
+      let stopped = false
+      let completedDuringResume = false
       for (const stage of RESUMABLE_STAGES) {
         if (rec.completed.includes(stage)) continue
+        let identity: SavedReceiptIdentityCheck
+        try {
+          identity = await deps.folder.verifySavedIdentity(savedBasename, rec.meetingStartedAt, rec.revision)
+        } catch {
+          identity = 'unavailable'
+        }
+        if (identity === 'missing') {
+          if (completedDuringResume) outcome.kept++
+          else {
+            await deps.journal.remove(rec.receiptId)
+            outcome.dropped++
+          }
+          stopped = true
+          break
+        }
+        if (identity !== 'match') {
+          outcome.kept++
+          stopped = true
+          break
+        }
         if (stage === 'draft-cleanup') await deps.stages['draft-cleanup'](path, rec.meetingStartedAt)
         else if (stage === 'rebuild') await deps.stages.rebuild()
         else await deps.stages.ingest(path, { deferred: rec.deferredIngest ?? deps.deferredDefault })
         rec = withStage(rec, stage, deps.now())
         await deps.journal.put(rec)
+        completedDuringResume = true
       }
+      if (stopped) continue
       outcome.abandoned += SESSION_STAGES.filter((stage) => !rec.completed.includes(stage)).length
       await deps.journal.remove(rec.receiptId)
       outcome.finished++

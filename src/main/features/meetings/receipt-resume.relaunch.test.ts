@@ -6,10 +6,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRelaunchHarness, readRaw, type RelaunchHarness } from '../../../test-helpers/relaunch-harness'
 
 vi.mock('electron')
+const productionStages = vi.hoisted(() => ({
+  scheduleRebuild: vi.fn(async () => undefined),
+  enqueueIngest: vi.fn(async (_path: string, _options: { deferred: boolean }) => undefined)
+}))
+vi.mock('../../graphify', () => ({ scheduleRebuild: productionStages.scheduleRebuild }))
+vi.mock('../../brain/ingest', () => ({ enqueueIngest: productionStages.enqueueIngest }))
 
-/** Where the first process dies: after the durable write, or after a named post-save stage was journaled. */
-type Kill = 'after-saved-written' | 'after-draft-cleanup' | 'after-rebuild' | 'after-ingest'
-const KILLS: readonly Kill[] = ['after-saved-written', 'after-draft-cleanup', 'after-rebuild', 'after-ingest']
+/** Where this module-reset harness simulates a restart boundary; it does not kill an OS process. */
+type RestartBoundary = 'after-saved-written' | 'after-draft-cleanup' | 'after-rebuild' | 'after-ingest'
+const RESTART_BOUNDARIES: readonly RestartBoundary[] = [
+  'after-saved-written',
+  'after-draft-cleanup',
+  'after-rebuild',
+  'after-ingest'
+]
 
 let nextStartedAt = 1_700_000_500_123
 let harness: RelaunchHarness | undefined
@@ -26,17 +37,24 @@ const freshProcess = async () => {
   vi.resetModules()
   const storage = await import('../../infra/storage/meetings-storage')
   storage.useStorageForTests()
+  const speech = await import('./meeting-speech')
+  speech.configureMeetingSpeechLimits({
+    maxFieldBytes: 64 * 1024,
+    maxPayloadBytes: 1024 * 1024,
+    maxRecordBytes: 64 * 1024,
+    maxRecords: 100,
+    maxWords: 10_000
+  })
   return {
-    storage,
     transcripts: await import('../../transcripts'),
     receipts: await import('../../transcript-save-receipts'),
     journal: await import('../../infra/storage/transcript-receipt-journal'),
-    resume: await import('./transcript-save-resume'),
-    recovery: await import('./draft-recovery')
+    recovery: await import('./draft-recovery'),
+    mainReceipts: await import('./main-save-receipts')
   }
 }
 
-/** Side effects observed across every process of one test: at least once, and never twice. */
+/** Mock effects across module graphs; this is not a process-kill or exactly-once oracle. */
 interface Effects {
   credits: number
   rebuilds: number
@@ -52,21 +70,26 @@ async function setup() {
   const folderIdSha256 = createHash('sha256').update(resolve(h.folder)).digest('hex')
   const effects: Effects = { credits: 0, rebuilds: 0, ingests: [] }
   const startedAt = h.meeting.startedAt
+  productionStages.scheduleRebuild.mockReset()
+  productionStages.scheduleRebuild.mockImplementation(async () => {
+    effects.rebuilds++
+  })
+  productionStages.enqueueIngest.mockReset()
 
-  /** One process that saves the meeting through the journaled receipt store and dies at `kill`. */
-  const saveUntilKilled = async (kill: Kill): Promise<string> => {
+  /** One module graph saves through the receipt store and stops at the selected simulated boundary. */
+  const saveUntilBoundary = async (boundary: RestartBoundary): Promise<string> => {
     const p = await freshProcess()
     await p.transcripts.saveDraftTranscript(h.settings, h.meeting)
     const store = new p.receipts.TranscriptSaveReceiptStore(256, {
       journal: p.journal.createReceiptJournal(journalFile),
-      locate: (path) => ({ savedBasename: basename(path), folderIdSha256, revision: 2 }),
+      locate: (path) => ({ savedBasename: basename(path), folderIdSha256, revision: 0 }),
       newId: () => 'receipt-1'
     })
     let died!: (file: string) => void
     const death = new Promise<string>((r) => (died = r))
-    const die = (file: string): Promise<never> => {
+    const simulateBoundary = (file: string): Promise<never> => {
       died(file)
-      return new Promise<never>(() => {}) // the process is gone: nothing after this line ever runs
+      return new Promise<never>(() => {}) // leave the first module graph pending while the test opens another
     }
     void store.run(`1:${'c'.repeat(64)}`, { startedAt, authGeneration: 1 }, async (receipt) => {
       // The order and receipt fields of the IPC.saveTranscript handler.
@@ -74,21 +97,21 @@ async function setup() {
       receipt.settings = h.settings
       receipt.durablePath = await p.transcripts.saveMeeting(h.settings, h.meeting)
       const file = receipt.durablePath
-      if (kill === 'after-saved-written') return die(file)
+      if (boundary === 'after-saved-written') return simulateBoundary(file)
       effects.credits++
       receipt.completed.add('summary-credit')
       receipt.completed.add('time-saved-credit')
       await p.transcripts.clearDraftTranscript(h.settings, startedAt, file)
       receipt.completed.add('draft-cleanup')
-      if (kill === 'after-draft-cleanup') return die(file)
+      if (boundary === 'after-draft-cleanup') return simulateBoundary(file)
       receipt.completed.add('audit')
       effects.rebuilds++
       receipt.completed.add('rebuild')
-      if (kill === 'after-rebuild') return die(file)
+      if (boundary === 'after-rebuild') return simulateBoundary(file)
       receipt.deferredIngest = false
       effects.ingests.push(file)
       receipt.completed.add('ingest')
-      return die(file)
+      return simulateBoundary(file)
     })
     const file = await death
     // Journal writes already issued before the kill reached the disk.
@@ -96,60 +119,39 @@ async function setup() {
     return file
   }
 
-  /** A fresh process running launch recovery, with the receipt resumption bound as production binds it. */
+  /** A fresh module graph runs launch recovery through the production Main adapter. */
   const relaunch = async (failIngest = false) => {
     const p = await freshProcess()
     const journal = p.journal.createReceiptJournal(journalFile)
     const outcomes: unknown[] = []
+    productionStages.enqueueIngest.mockImplementation(async (path) => {
+      if (failIngest) throw new Error('brain busy')
+      effects.ingests.push(path)
+    })
     p.recovery.bindLaunchResume(async (settings) => {
-      const folder = p.transcripts.resolveMeetingsFolder(settings)
-      outcomes.push(
-        await p.resume.resumeJournaledSaves({
-          journal,
-          folder: {
-            join: (name) => join(folder, name),
-            idSha256: folderIdSha256,
-            list: async () => {
-              const listing = await p.storage.storageAt(folder).list('')
-              return listing.status === 'ok' ? listing.names : null
-            }
-          },
-          stages: {
-            'draft-cleanup': (path, at) => p.transcripts.clearDraftTranscript(settings, at, path),
-            rebuild: async () => {
-              effects.rebuilds++
-            },
-            ingest: async (path) => {
-              if (failIngest) throw new Error('brain busy')
-              effects.ingests.push(path)
-            }
-          },
-          deferredDefault: false,
-          now: Date.now
-        })
-      )
+      outcomes.push(await p.mainReceipts.resumeMainJournaledSaves(journal, settings))
     })
     const recovered = await p.recovery.recoverOrphanDrafts(h.settings)
     return { recovered, outcome: outcomes[0], records: await journal.load() }
   }
 
-  return { h, effects, journalFile, saveUntilKilled, relaunch }
+  return { h, effects, journalFile, saveUntilBoundary, relaunch }
 }
 
-describe('durable save receipts across a relaunch (WP03-S09, GATE-07)', () => {
-  it.each(KILLS)('relaunch resumes incomplete side effects without repeating completed stages (%s)', async (kill) => {
-    const { h, effects, saveUntilKilled, relaunch } = await setup()
-    const file = await saveUntilKilled(kill)
+describe('durable save receipts across a module-reset relaunch (WP03-S09, GATE-07)', () => {
+  it.each(RESTART_BOUNDARIES)('relaunch skips durably marked stages after %s', async (boundary) => {
+    const { h, effects, saveUntilBoundary, relaunch } = await setup()
+    const file = await saveUntilBoundary(boundary)
     const bytes = await readRaw(h.folder, basename(file))
 
     const first = await relaunch()
     expect(first.recovered).toEqual({ recovered: 0 })
     expect(first.outcome).toMatchObject({ finished: 1, kept: 0, dropped: 0 })
     expect(first.records).toEqual({ ok: true, records: [] })
-    // Each resumable stage ran exactly once over both processes, against the one durable file.
+    // The later module graph skips recorded stages; the fixture does not simulate a real process kill.
     expect(effects.rebuilds).toBe(1)
     expect(effects.ingests).toEqual([file])
-    expect(effects.credits).toBe(kill === 'after-saved-written' ? 0 : 1)
+    expect(effects.credits).toBe(boundary === 'after-saved-written' ? 0 : 1)
     expect(await h.drafts()).toEqual([])
     const meetings = await h.meetings()
     expect(meetings.map((m) => m.name)).toEqual([basename(file)])
@@ -165,8 +167,8 @@ describe('durable save receipts across a relaunch (WP03-S09, GATE-07)', () => {
   })
 
   it('a stage that fails during resumption is retried on the next launch, and only that stage', async () => {
-    const { h, effects, saveUntilKilled, relaunch } = await setup()
-    const file = await saveUntilKilled('after-saved-written')
+    const { h, effects, saveUntilBoundary, relaunch } = await setup()
+    const file = await saveUntilBoundary('after-saved-written')
     const first = await relaunch(true)
     expect(first.outcome).toMatchObject({ finished: 0, kept: 1 })
     expect(first.records.ok && first.records.records[0].completed).toEqual(['draft-cleanup', 'rebuild'])
@@ -184,8 +186,8 @@ describe('durable save receipts across a relaunch (WP03-S09, GATE-07)', () => {
   })
 
   it('a receipt whose saved meeting was deleted is dropped without running anything', async () => {
-    const { h, effects, saveUntilKilled, relaunch } = await setup()
-    const file = await saveUntilKilled('after-draft-cleanup')
+    const { h, effects, saveUntilBoundary, relaunch } = await setup()
+    const file = await saveUntilBoundary('after-draft-cleanup')
     await rm(file)
     const first = await relaunch()
     expect(first.outcome).toMatchObject({ finished: 0, dropped: 1 })
@@ -196,8 +198,8 @@ describe('durable save receipts across a relaunch (WP03-S09, GATE-07)', () => {
   })
 
   it('a corrupt journal fails closed: nothing is resumed and the journal is not rewritten', async () => {
-    const { h, effects, journalFile, saveUntilKilled, relaunch } = await setup()
-    await saveUntilKilled('after-draft-cleanup')
+    const { h, effects, journalFile, saveUntilBoundary, relaunch } = await setup()
+    await saveUntilBoundary('after-draft-cleanup')
     const future = JSON.stringify({ schema: 'metis.save-receipts.v2', records: [] })
     await writeFile(journalFile, future)
     const first = await relaunch()
@@ -208,8 +210,8 @@ describe('durable save receipts across a relaunch (WP03-S09, GATE-07)', () => {
   })
 
   it('the journal never holds transcript text or full paths', async () => {
-    const { h, journalFile, saveUntilKilled } = await setup()
-    await saveUntilKilled('after-rebuild')
+    const { h, journalFile, saveUntilBoundary } = await setup()
+    await saveUntilBoundary('after-rebuild')
     const text = await readFile(journalFile, 'utf8')
     for (const line of h.meeting.lines) expect(text).not.toContain(line.text)
     expect(text).not.toContain(h.meeting.title)
