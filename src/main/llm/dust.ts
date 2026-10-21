@@ -267,6 +267,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         } catch {
           /* --projectName is optional; never invent a name */
         }
+        if (controller.signal.aborted || settled) return
         const r = await runManagedDustChat({
           message: prompt,
           apiKey: opts.apiKey,

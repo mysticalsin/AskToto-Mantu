@@ -3,22 +3,25 @@ import { type AskStart, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import { streamDust, resetDustConversation } from './dust'
 import type { StreamHandlers } from './shared'
 import type { runManagedDustChat as runManagedDustChatFn } from '../dust-cli-chat'
+import type { DustProjectsResult, fetchDustProjects as fetchDustProjectsFn } from '../dust-projects'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
 type RunManagedDustChat = typeof runManagedDustChatFn
+type FetchDustProjects = typeof fetchDustProjectsFn
 
 const managedDustChat = vi.hoisted(() =>
   vi.fn<RunManagedDustChat>(async () => ({ ok: true, text: 'Data and AI, AI wiki' }))
 )
+const fetchDustProjectsMock = vi.hoisted(() => vi.fn<FetchDustProjects>(async () => ({ ok: false, error: 'test' })))
 vi.mock('../dust-cli-chat', () => ({
   runManagedDustChat: (...args: Parameters<RunManagedDustChat>) => managedDustChat(...args),
   projectNameForDataAndAiAsk: () => undefined
 }))
 vi.mock('../dust-projects', () => ({
-  fetchDustProjects: async () => ({ ok: false, error: 'test' }),
+  fetchDustProjects: (...args: Parameters<FetchDustProjects>) => fetchDustProjectsMock(...args),
   matchDataAndAiProjects: () => []
 }))
 
@@ -114,6 +117,24 @@ async function waitDone(handlers: {
   throw new Error(`timed out waiting for Dust stream to settle — calls=${JSON.stringify(calls)}`)
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason?: unknown) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+async function drainImmediate(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
 describe('Dust conversation continuity (one conversation per meeting)', () => {
   beforeEach(() => {
     resetDustConversation()
@@ -127,6 +148,8 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     streamEvents = [{ type: 'agent_message_success' }]
     managedDustChat.mockReset()
     managedDustChat.mockResolvedValue({ ok: true, text: 'Data and AI, AI wiki' })
+    fetchDustProjectsMock.mockReset()
+    fetchDustProjectsMock.mockResolvedValue({ ok: false, error: 'test' })
   })
 
   it('reuses the same conversation for a second sequential message in the same meeting', async () => {
@@ -155,9 +178,7 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
   })
 
   it('reports iterator EOF without agent success as an error after partial tokens', async () => {
-    streamEvents = [
-      { type: 'generation_tokens', classification: 'tokens', text: 'partial recap' }
-    ]
+    streamEvents = [{ type: 'generation_tokens', classification: 'tokens', text: 'partial recap' }]
     const opts = baseOpts()
     streamDust(opts)
 
@@ -312,6 +333,140 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
   })
 })
 
+describe('Spotlight cancellation before managed chat entry', () => {
+  beforeEach(() => {
+    resetDustConversation()
+    calls.create = 0
+    calls.post = 0
+    calls.get = 0
+    postedTo.length = 0
+    convCounter = 0
+    throwOnNextCreate = false
+    streamErrOnce = null
+    streamEvents = [{ type: 'agent_message_success' }]
+    managedDustChat.mockReset()
+    managedDustChat.mockResolvedValue({ ok: true, text: 'Data and AI, AI wiki' })
+    fetchDustProjectsMock.mockReset()
+    fetchDustProjectsMock.mockResolvedValue({ ok: false, error: 'test' })
+  })
+
+  it.each(['resolve', 'reject'] as const)('does not enter managed chat after abort and lookup %s', async (outcome) => {
+    const lookup = deferred<DustProjectsResult>()
+    fetchDustProjectsMock.mockReturnValueOnce(lookup.promise)
+    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    const handle = streamDust(opts)
+    let lookupSettled = false
+
+    try {
+      expect(fetchDustProjectsMock).toHaveBeenCalledTimes(1)
+      handle.abort()
+      if (outcome === 'resolve') lookup.resolve({ ok: false, error: 'optional lookup failure' })
+      else lookup.reject(new Error('optional lookup failure'))
+      lookupSettled = true
+      await drainImmediate()
+
+      expect(managedDustChat).not.toHaveBeenCalled()
+      expect(calls).toEqual({ create: 0, post: 0, get: 0 })
+      expect(opts.handlers.onDelta).not.toHaveBeenCalled()
+      expect(opts.handlers.onDone).not.toHaveBeenCalled()
+      expect(opts.handlers.onError).not.toHaveBeenCalled()
+    } finally {
+      handle.abort()
+      if (!lookupSettled) lookup.resolve({ ok: false, error: 'cleanup' })
+      await drainImmediate()
+    }
+  })
+
+  it.each([
+    'resolve',
+    'reject'
+  ] as const)('does not enter managed chat after idle timeout and lookup %s', async (outcome) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const lookup = deferred<DustProjectsResult>()
+    fetchDustProjectsMock.mockReturnValueOnce(lookup.promise)
+    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID, idleMs: 250 })
+    const handle = streamDust(opts)
+    let lookupSettled = false
+
+    try {
+      expect(fetchDustProjectsMock).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(250)
+      expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
+      expect(opts.handlers.onError).toHaveBeenCalledWith('Timed out — no response from the agent.')
+
+      if (outcome === 'resolve') lookup.resolve({ ok: false, error: 'optional lookup failure' })
+      else lookup.reject(new Error('optional lookup failure'))
+      lookupSettled = true
+      await drainImmediate()
+
+      expect(managedDustChat).not.toHaveBeenCalled()
+      expect(calls).toEqual({ create: 0, post: 0, get: 0 })
+      expect(opts.handlers.onDelta).not.toHaveBeenCalled()
+      expect(opts.handlers.onDone).not.toHaveBeenCalled()
+      expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
+    } finally {
+      handle.abort()
+      if (!lookupSettled) lookup.resolve({ ok: false, error: 'cleanup' })
+      await drainImmediate()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['success', 'empty', 'reject'] as const)('keeps optional project lookup %s healthy', async (outcome) => {
+    if (outcome === 'success') fetchDustProjectsMock.mockResolvedValueOnce({ ok: true, projects: [] })
+    else if (outcome === 'reject') fetchDustProjectsMock.mockRejectedValueOnce(new Error('optional lookup failure'))
+    else fetchDustProjectsMock.mockResolvedValueOnce({ ok: false, error: 'optional lookup failure' })
+
+    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    const handle = streamDust(opts)
+    try {
+      await waitDone(opts.handlers)
+      expect(fetchDustProjectsMock).toHaveBeenCalledTimes(1)
+      expect(managedDustChat).toHaveBeenCalledTimes(1)
+      expect(calls).toEqual({ create: 0, post: 0, get: 0 })
+      expect(opts.handlers.onDelta).toHaveBeenCalledWith('Data and AI, AI wiki')
+      expect(opts.handlers.onDone).toHaveBeenCalledTimes(1)
+      expect(opts.handlers.onError).not.toHaveBeenCalled()
+    } finally {
+      handle.abort()
+    }
+  })
+
+  it('allows a healthy Spotlight request after an earlier request was canceled', async () => {
+    const lookup = deferred<DustProjectsResult>()
+    fetchDustProjectsMock.mockReturnValueOnce(lookup.promise)
+    const canceled = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    const canceledHandle = streamDust(canceled)
+    let lookupSettled = false
+
+    try {
+      expect(fetchDustProjectsMock).toHaveBeenCalledTimes(1)
+      canceledHandle.abort()
+      lookup.resolve({ ok: false, error: 'optional lookup failure' })
+      lookupSettled = true
+      await drainImmediate()
+      expect(managedDustChat).not.toHaveBeenCalled()
+
+      const next = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+      const nextHandle = streamDust(next)
+      try {
+        await waitDone(next.handlers)
+        expect(fetchDustProjectsMock).toHaveBeenCalledTimes(2)
+        expect(managedDustChat).toHaveBeenCalledTimes(1)
+        expect(next.handlers.onDone).toHaveBeenCalledTimes(1)
+        expect(next.handlers.onError).not.toHaveBeenCalled()
+        expect(calls).toEqual({ create: 0, post: 0, get: 0 })
+      } finally {
+        nextHandle.abort()
+      }
+    } finally {
+      canceledHandle.abort()
+      if (!lookupSettled) lookup.resolve({ ok: false, error: 'cleanup' })
+      await drainImmediate()
+    }
+  })
+})
+
 describe('isDustAuthError — 401 phrasing drift across Dust API versions', async () => {
   const { isDustAuthError } = await import('./dust')
 
@@ -347,7 +502,9 @@ describe('isDustAgentUnavailableError — stale/removed agent sId (distinct from
 
   it('does NOT swallow auth errors (own refresh-and-retry self-heal) or generic failures', () => {
     expect(isDustAgentUnavailableError(null)).toBe(false)
-    expect(isDustAgentUnavailableError({ message: 'The user request does not have a valid authenticated credential.' })).toBe(false)
+    expect(
+      isDustAgentUnavailableError({ message: 'The user request does not have a valid authenticated credential.' })
+    ).toBe(false)
     expect(isDustAgentUnavailableError({ status: 401, message: 'Unauthorized' })).toBe(false)
     expect(isDustAgentUnavailableError({ message: 'rate limited, retry later' })).toBe(false)
   })
