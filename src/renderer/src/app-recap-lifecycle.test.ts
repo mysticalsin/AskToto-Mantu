@@ -89,6 +89,160 @@ function reviewProp<T>(name: string, context: vm.Context): T {
   return evaluate<T>(prop.initializer.expression.getText(app), context)
 }
 
+function reviewJsxHandler(
+  tagName: string,
+  attributeName: string,
+  options: { ariaLabel?: string; calls?: string } = {}
+): string {
+  const attribute = uniqueNode(review, (node) => {
+    if (!ts.isJsxAttribute(node) || node.name.getText(review) !== attributeName) return false
+    const attributes = node.parent
+    if (!ts.isJsxAttributes(attributes)) return false
+    const owner = attributes.parent
+    if (
+      (!ts.isJsxOpeningElement(owner) && !ts.isJsxSelfClosingElement(owner)) ||
+      owner.tagName.getText(review) !== tagName
+    )
+      return false
+    if (options.ariaLabel) {
+      const label = owner.attributes.properties.find(
+        (property): property is ts.JsxAttribute =>
+          ts.isJsxAttribute(property) && property.name.getText(review) === 'aria-label'
+      )
+      if (!label?.initializer || !ts.isStringLiteral(label.initializer) || label.initializer.text !== options.ariaLabel)
+        return false
+    }
+    if (options.calls) {
+      let foundCall = false
+      const visit = (candidate: ts.Node): void => {
+        if (
+          ts.isCallExpression(candidate) &&
+          ((ts.isIdentifier(candidate.expression) && candidate.expression.text === options.calls) ||
+            (ts.isPropertyAccessExpression(candidate.expression) && candidate.expression.name.text === options.calls))
+        )
+          foundCall = true
+        ts.forEachChild(candidate, visit)
+      }
+      visit(node)
+      if (!foundCall) return false
+    }
+    return true
+  }) as ts.JsxAttribute
+  if (!attribute.initializer || !ts.isJsxExpression(attribute.initializer) || !attribute.initializer.expression) {
+    throw new Error(`Review ${tagName}.${attributeName} is not an executable callback`)
+  }
+  return attribute.initializer.expression.getText(review)
+}
+
+function optionalReviewExpression(name: string): string | null {
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isVariableDeclaration(node) && node.name.getText(review) === name) ||
+      (ts.isFunctionDeclaration(node) && node.name?.text === name)
+    )
+      found = true
+    ts.forEachChild(node, visit)
+  }
+  visit(review)
+  return found ? namedExpression(review, name) : null
+}
+
+function reviewEffectExpression(predicate: (callback: ts.ArrowFunction) => boolean): string {
+  const effect = uniqueNode(
+    review,
+    (node) =>
+      ts.isCallExpression(node) &&
+      node.expression.getText(review) === 'useEffect' &&
+      node.arguments[0] !== undefined &&
+      ts.isArrowFunction(node.arguments[0]) &&
+      predicate(node.arguments[0])
+  ) as ts.CallExpression
+  return effect.arguments[0]!.getText(review)
+}
+
+function reviewUseRef(name: string, renderValues: Record<string, unknown>): { current: unknown } | undefined {
+  const initializer = optionalReviewExpression(name)
+  if (!initializer) return undefined
+  return evaluate<{ current: unknown }>(
+    initializer,
+    vm.createContext({ ...renderValues, useRef: (current: unknown) => ref(current) })
+  )
+}
+
+function reviewEditCallbacks(renderValues: Record<string, unknown>) {
+  const bindings = Object.keys(renderValues).join(', ')
+  const optionalDraftHandler = optionalReviewExpression('handleRecapDraftChange') ?? 'undefined'
+  const savedPathRefEffect = reviewEffectExpression((callback) => {
+    let matches = false
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(node.left) &&
+        node.left.expression.getText(review) === 'savedPathRef' &&
+        node.left.name.text === 'current' &&
+        node.right.getText(review) === 'savedPath'
+      )
+        matches = true
+      ts.forEachChild(node, visit)
+    }
+    visit(callback)
+    return matches
+  })
+  const savedPathResetEffect = reviewEffectExpression((callback) => {
+    const calls = new Set<string>()
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) calls.add(node.expression.text)
+      ts.forEachChild(node, visit)
+    }
+    visit(callback)
+    return calls.has('setEditingRecap') && calls.has('setEditedRecap') && calls.has('setRecapEditError')
+  })
+  const context = vm.createContext({ render: renderValues, Error, Promise })
+  return evaluate<{
+    recapDirty: boolean
+    recapDraft: string
+    startEditRecap: () => void
+    cancelEditRecap: () => void
+    saveRecap: () => Promise<boolean>
+    guardRecapEditNavigation: () => Promise<boolean>
+    draftOnChange: (event: { target: { value: string } }) => void
+    draftOnKeyDown: (event: Record<string, unknown>) => void
+    doneOnClick: () => void
+    resumeOnClick: () => void
+    recentOnClick: () => void
+    savedPathRefEffect: () => void
+    savedPathResetEffect: () => void
+  }>(
+    `(() => {
+      const { ${bindings} } = render;
+      const recapDirty = ${namedExpression(review, 'recapDirty')};
+      const startEditRecap = ${namedExpression(review, 'startEditRecap')};
+      const cancelEditRecap = ${namedExpression(review, 'cancelEditRecap')};
+      const saveRecap = ${namedExpression(review, 'saveRecap')};
+      const guardRecapEditNavigation = ${namedExpression(review, 'guardRecapEditNavigation')};
+      const handleRecapDraftChange = ${optionalDraftHandler};
+      return {
+        recapDirty,
+        recapDraft,
+        startEditRecap,
+        cancelEditRecap,
+        saveRecap,
+        guardRecapEditNavigation,
+        draftOnChange: ${reviewJsxHandler('textarea', 'onChange', { ariaLabel: 'Edit meeting notes' })},
+        draftOnKeyDown: ${reviewJsxHandler('textarea', 'onKeyDown', { ariaLabel: 'Edit meeting notes' })},
+        doneOnClick: ${reviewJsxHandler('Chip', 'onClick', { calls: 'onDone' })},
+        resumeOnClick: ${reviewJsxHandler('Chip', 'onClick', { calls: 'onResume' })},
+        recentOnClick: ${reviewJsxHandler('button', 'onClick', { calls: 'onOpenPastMeeting' })},
+        savedPathRefEffect: ${savedPathRefEffect},
+        savedPathResetEffect: ${savedPathResetEffect}
+      };
+    })()`,
+    context
+  )
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason: unknown) => void
@@ -738,6 +892,318 @@ describe('actual App live recap lifecycle', () => {
   })
 })
 
+type ReviewRecapResult = { ok: boolean; error?: string }
+
+function reviewRecapHost() {
+  const state: {
+    editingRecap: boolean
+    recapDraft: string
+    recapSaving: boolean
+    recapEditError: string | null
+    editedRecap: { base: string; text: string } | null
+  } = {
+    editingRecap: false,
+    recapDraft: '',
+    recapSaving: false,
+    recapEditError: null,
+    editedRecap: null
+  }
+  const writes: Array<{
+    file: string
+    text: string
+    result: ReturnType<typeof deferred<ReviewRecapResult>>
+  }> = []
+  const updateRecap = vi.fn((file: string, text: string) => {
+    const result = deferred<ReviewRecapResult>()
+    writes.push({ file, text, result })
+    return result.promise
+  })
+  const setEditingRecap = vi.fn((value: boolean) => {
+    state.editingRecap = value
+  })
+  const setRecapDraft = vi.fn((value: string) => {
+    state.recapDraft = value
+  })
+  const setRecapSaving = vi.fn((value: boolean) => {
+    state.recapSaving = value
+  })
+  const setRecapEditError = vi.fn((value: string | null) => {
+    state.recapEditError = value
+  })
+  const setEditedRecap = vi.fn((value: { base: string; text: string } | null) => {
+    state.editedRecap = value
+  })
+  const savedPathRef = reviewUseRef('savedPathRef', { savedPath: 'a.md' })!
+  const recapEditIdentityRef = reviewUseRef('recapEditIdentityRef', { savedPath: 'a.md' })
+  const navigationChoice = deferred<'save' | 'discard' | 'cancel'>()
+  const navigationGuard = { request: vi.fn(() => navigationChoice.promise) }
+  const onDone = vi.fn()
+  const onResume = vi.fn()
+  const onOpenPastMeeting = vi.fn()
+  const onRecapSaved = vi.fn()
+
+  const render = (options: { savedPath?: string; recapText?: string } = {}) => {
+    const savedPath = options.savedPath ?? 'a.md'
+    const recapText = options.recapText ?? state.editedRecap?.text ?? 'Saved recap.'
+    const renderValues = {
+      savedPath,
+      savedPathRef,
+      recapEditIdentityRef,
+      editingRecap: state.editingRecap,
+      recapDraft: state.recapDraft,
+      recapSaving: state.recapSaving,
+      recapEditError: state.recapEditError,
+      recapText,
+      recap: { text: 'Saved recap.' },
+      onUpdateRecap: updateRecap,
+      onRecapSaved,
+      setEditingRecap,
+      setRecapDraft,
+      setRecapSaving,
+      setRecapEditError,
+      setEditedRecap,
+      navigationGuard,
+      onDone,
+      onResume,
+      onOpenPastMeeting,
+      item: { file: 'b.md' },
+      window: {
+        toto: {
+          recallUpdateRecap: vi.fn(() => {
+            throw new Error('The Review test bypassed onUpdateRecap')
+          })
+        }
+      }
+    }
+    return reviewEditCallbacks(renderValues)
+  }
+
+  return {
+    state,
+    writes,
+    updateRecap,
+    setEditingRecap,
+    setRecapDraft,
+    setRecapSaving,
+    setRecapEditError,
+    setEditedRecap,
+    savedPathRef,
+    recapEditIdentityRef,
+    navigationChoice,
+    navigationGuard,
+    onDone,
+    onResume,
+    onOpenPastMeeting,
+    onRecapSaved,
+    render,
+    async cleanup() {
+      for (const write of writes) write.result.resolve({ ok: false, error: 'test cleanup' })
+      await Promise.allSettled(writes.map((write) => write.result.promise))
+      await Promise.resolve()
+      await Promise.resolve()
+      vi.restoreAllMocks()
+    }
+  }
+}
+
+function enterReviewDraft(host: ReturnType<typeof reviewRecapHost>, text: string) {
+  host.render().startEditRecap()
+  const editor = host.render()
+  editor.draftOnChange({ target: { value: text } })
+  return host.render()
+}
+
+describe('actual Review recap edit callbacks', () => {
+  it('preserves B when A resolves, reports false, and saves B only after an explicit retry', async () => {
+    const host = reviewRecapHost()
+    let saveA: Promise<boolean> | undefined
+    let saveB: Promise<boolean> | undefined
+    try {
+      const editorA = enterReviewDraft(host, 'Submitted A')
+      saveA = editorA.saveRecap()
+      expect(host.updateRecap).toHaveBeenCalledExactlyOnceWith('a.md', 'Submitted A')
+      const writeA = host.writes[0]!
+
+      editorA.draftOnChange({ target: { value: 'Newer B' } })
+      const editorB = host.render()
+      expect(editorB.recapDirty).toBe(true)
+      writeA.result.resolve({ ok: true })
+
+      await expect(saveA).resolves.toBe(false)
+      expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Submitted A' })
+      expect(host.state.recapDraft).toBe('Newer B')
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.render().recapDirty).toBe(true)
+      expect(host.writes).toHaveLength(1)
+
+      saveB = host.render().saveRecap()
+      expect(host.updateRecap).toHaveBeenNthCalledWith(2, 'a.md', 'Newer B')
+      host.writes[1]!.result.resolve({ ok: true })
+      await expect(saveB).resolves.toBe(true)
+      expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Newer B' })
+      expect(host.state.editingRecap).toBe(false)
+      expect(host.onRecapSaved.mock.calls).toEqual([['Submitted A'], ['Newer B']])
+    } finally {
+      await host.cleanup()
+      await Promise.allSettled([saveA, saveB].filter((save): save is Promise<boolean> => save !== undefined))
+    }
+  })
+
+  it('returns false from the actual navigation guard when save A leaves B unsaved', async () => {
+    const host = reviewRecapHost()
+    let guardedNavigation: Promise<boolean> | undefined
+    try {
+      const editorA = enterReviewDraft(host, 'Submitted A')
+      host.navigationChoice.resolve('save')
+      guardedNavigation = editorA.guardRecapEditNavigation()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.updateRecap).toHaveBeenCalledExactlyOnceWith('a.md', 'Submitted A')
+
+      editorA.draftOnChange({ target: { value: 'Newer B' } })
+      host.writes[0]!.result.resolve({ ok: true })
+      await expect(guardedNavigation).resolves.toBe(false)
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.render().recapDirty).toBe(true)
+    } finally {
+      await host.cleanup()
+      await Promise.allSettled(
+        [guardedNavigation].filter((pending): pending is Promise<boolean> => pending !== undefined)
+      )
+    }
+  })
+
+  it.each([
+    { label: 'different text', nextText: 'Reopened B' },
+    { label: 'identical text', nextText: 'Submitted A' }
+  ])('does not let a pending save close a canceled and reopened $label edit session', async ({ nextText }) => {
+    const host = reviewRecapHost()
+    let saveA: Promise<boolean> | undefined
+    try {
+      const editorA = enterReviewDraft(host, 'Submitted A')
+      saveA = editorA.saveRecap()
+      const writeA = host.writes[0]!
+      const escape = { key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() }
+      editorA.draftOnKeyDown(escape)
+      expect(escape.stopPropagation).toHaveBeenCalledExactlyOnceWith()
+      expect(host.state.editingRecap).toBe(false)
+
+      host.render().startEditRecap()
+      const reopened = host.render()
+      reopened.draftOnChange({ target: { value: nextText } })
+      const current = host.render()
+      writeA.result.resolve({ ok: true })
+
+      await expect(saveA).resolves.toBe(false)
+      expect(current.recapDraft).toBe(nextText)
+      expect(host.state.recapDraft).toBe(nextText)
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Submitted A' })
+      expect(host.onRecapSaved).toHaveBeenCalledExactlyOnceWith('Submitted A')
+    } finally {
+      await host.cleanup()
+      await Promise.allSettled([saveA].filter((save): save is Promise<boolean> => save !== undefined))
+    }
+  })
+
+  it.each([
+    { label: 'resolved refusal', reject: false },
+    { label: 'thrown rejection', reject: true }
+  ])('keeps the draft and retry path after a $label', async ({ reject }) => {
+    const host = reviewRecapHost()
+    let firstSave: Promise<boolean> | undefined
+    let retry: Promise<boolean> | undefined
+    try {
+      const editor = enterReviewDraft(host, 'Retry me')
+      firstSave = editor.saveRecap()
+      if (reject) host.writes[0]!.result.reject(new Error('offline'))
+      else host.writes[0]!.result.resolve({ ok: false, error: 'refused' })
+      await expect(firstSave).resolves.toBe(false)
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.state.recapDraft).toBe('Retry me')
+      expect(host.state.recapEditError).toContain(reject ? 'offline' : 'refused')
+
+      retry = host.render().saveRecap()
+      expect(host.updateRecap).toHaveBeenNthCalledWith(2, 'a.md', 'Retry me')
+      host.writes[1]!.result.resolve({ ok: true })
+      await expect(retry).resolves.toBe(true)
+      expect(host.state.editingRecap).toBe(false)
+      expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Retry me' })
+    } finally {
+      await host.cleanup()
+      await Promise.allSettled([firstSave, retry].filter((save): save is Promise<boolean> => save !== undefined))
+    }
+  })
+
+  it('closes an unchanged edit and returns true after the actual save callback succeeds', async () => {
+    const host = reviewRecapHost()
+    let save: Promise<boolean> | undefined
+    try {
+      const editor = enterReviewDraft(host, 'Unchanged')
+      save = editor.saveRecap()
+      host.writes[0]!.result.resolve({ ok: true })
+      await expect(save).resolves.toBe(true)
+      expect(host.state.editingRecap).toBe(false)
+      expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Unchanged' })
+    } finally {
+      await host.cleanup()
+      await Promise.allSettled([save].filter((pending): pending is Promise<boolean> => pending !== undefined))
+    }
+  })
+
+  it.each([
+    { label: 'Done', handler: 'doneOnClick', callback: 'onDone' },
+    { label: 'Resume', handler: 'resumeOnClick', callback: 'onResume' },
+    { label: 'Recent meeting', handler: 'recentOnClick', callback: 'onOpenPastMeeting' }
+  ] as const)('does not navigate from the actual $label callback when save A leaves B dirty', async ({
+    handler,
+    callback
+  }) => {
+    const host = reviewRecapHost()
+    try {
+      const editorA = enterReviewDraft(host, 'Submitted A')
+      host.navigationChoice.resolve('save')
+      editorA[handler]()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.updateRecap).toHaveBeenCalledExactlyOnceWith('a.md', 'Submitted A')
+
+      editorA.draftOnChange({ target: { value: 'Newer B' } })
+      expect(host.render().recapDirty).toBe(true)
+      host.writes[0]!.result.resolve({ ok: true })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.state.recapDraft).toBe('Newer B')
+      expect(host[callback]).not.toHaveBeenCalled()
+    } finally {
+      await host.cleanup()
+    }
+  })
+
+  it('does not paint a pending completion onto a different meeting', async () => {
+    const host = reviewRecapHost()
+    let save: Promise<boolean> | undefined
+    try {
+      const editorA = enterReviewDraft(host, 'Meeting A edit')
+      save = editorA.saveRecap()
+      const writeA = host.writes[0]!
+      const meetingB = host.render({ savedPath: 'b.md', recapText: 'Meeting B recap.' })
+      meetingB.savedPathRefEffect()
+      meetingB.savedPathResetEffect()
+      const publishedStateCalls = host.setEditedRecap.mock.calls.length
+
+      writeA.result.resolve({ ok: true })
+      await expect(save).resolves.toBe(false)
+      expect(host.setEditedRecap).toHaveBeenCalledTimes(publishedStateCalls)
+      expect(host.onRecapSaved).not.toHaveBeenCalled()
+      expect(host.state.editingRecap).toBe(false)
+      expect(host.state.editedRecap).toBe(null)
+    } finally {
+      await host.cleanup()
+      await Promise.allSettled([save].filter((pending): pending is Promise<boolean> => pending !== undefined))
+    }
+  })
+})
+
 describe('actual App generated-write to Review manual-edit wiring', () => {
   it.each([
     { lane: 'past', generatedPath: 'a.md' },
@@ -826,6 +1292,7 @@ describe('actual App generated-write to Review manual-edit wiring', () => {
       Error,
       savedPath: 'a.md',
       savedPathRef: ref('a.md'),
+      recapEditIdentityRef: reviewUseRef('recapEditIdentityRef', { savedPath: 'a.md' }),
       recapSaving: false,
       recapDraft: 'Human annotation.',
       recap: { text: '' },

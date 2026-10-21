@@ -311,8 +311,11 @@ export const Review = memo(function Review({
   const [recapSaving, setRecapSaving] = useState(false)
   const [recapEditError, setRecapEditError] = useState<string | null>(null)
   const [editedRecap, setEditedRecap] = useState<EditedRecap | null>(null)
+  const recapEditIdentityRef = useRef({ session: 0, draftRevision: 0 })
   // A different meeting loaded into this reused Review instance → drop any in-progress/edited state.
   useEffect(() => {
+    recapEditIdentityRef.current.session += 1
+    recapEditIdentityRef.current.draftRevision = 0
     setEditingRecap(false)
     setEditedRecap(null)
     setRecapEditError(null)
@@ -337,41 +340,56 @@ export const Review = memo(function Review({
   // comparing the two alone would still read "dirty" once editingRecap is already false.
   const recapDirty = editingRecap && recapDraft !== recapText
   const startEditRecap = (): void => {
+    recapEditIdentityRef.current.session += 1
+    recapEditIdentityRef.current.draftRevision = 0
     setRecapDraft(recapText)
     setRecapEditError(null)
     setEditingRecap(true)
   }
   const cancelEditRecap = (): void => {
+    recapEditIdentityRef.current.session += 1
+    recapEditIdentityRef.current.draftRevision = 0
     setEditingRecap(false)
     setRecapEditError(null)
+  }
+  const handleRecapDraftChange = (draft: string): void => {
+    recapEditIdentityRef.current.draftRevision += 1
+    setRecapDraft(draft)
   }
   const saveRecap = async (): Promise<boolean> => {
     if (!savedPath || recapSaving) return false
     const forPath = savedPath
+    const submittedSession = recapEditIdentityRef.current.session
+    const submittedDraftRevision = recapEditIdentityRef.current.draftRevision
+    const submittedDraft = recapDraft
+    const submittedText = submittedDraft.trim()
     setRecapSaving(true)
     setRecapEditError(null)
     try {
       const file = savedPath.split('/').pop() ?? savedPath
       const r = await (onUpdateRecap
-        ? onUpdateRecap(file, recapDraft)
-        : window.toto.recallUpdateRecap(file, recapDraft))
+        ? onUpdateRecap(file, submittedDraft)
+        : window.toto.recallUpdateRecap(file, submittedDraft))
       // The disk write already targeted the right file, but if the user navigated to a different meeting
       // while it was in flight, drop the result rather than paint meeting A's edit onto meeting B.
       if (savedPathRef.current !== forPath) return false
       if (r.ok) {
         // Store the trimmed value so the in-place copy matches exactly what a disk re-read would return
         // (updateMeetingRecap + recallRead both trim the recap section).
-        const saved = recapDraft.trim()
-        setEditedRecap({ base: recap?.text ?? '', text: saved })
-        onRecapSaved?.(saved)
-        setEditingRecap(false)
-        return true
+        setEditedRecap({ base: recap?.text ?? '', text: submittedText })
+        onRecapSaved?.(submittedText)
+        const editIsUnchanged =
+          recapEditIdentityRef.current.session === submittedSession &&
+          recapEditIdentityRef.current.draftRevision === submittedDraftRevision
+        if (editIsUnchanged) setEditingRecap(false)
+        return editIsUnchanged
       } else {
+        if (recapEditIdentityRef.current.session !== submittedSession) return false
         setRecapEditError(r.error || 'Could not save your changes.')
         return false
       }
     } catch (e) {
-      if (savedPathRef.current !== forPath) return false
+      if (savedPathRef.current !== forPath || recapEditIdentityRef.current.session !== submittedSession) return false
       setRecapEditError(`Could not save your changes: ${e instanceof Error ? e.message : String(e)}`)
       return false
     } finally {
@@ -1191,7 +1209,7 @@ export const Review = memo(function Review({
             <textarea
               value={recapDraft}
               autoFocus
-              onChange={(e) => setRecapDraft(e.target.value)}
+              onChange={(e) => handleRecapDraftChange(e.target.value)}
               onKeyDown={(e) => {
                 // Escape cancels; stopPropagation keeps it from bubbling to App's global Escape handler
                 // (which would otherwise act on the whole overlay). Cmd/Ctrl+Enter saves, matching the
