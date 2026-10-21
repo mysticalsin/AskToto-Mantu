@@ -6,6 +6,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { CaptureDegraded as CaptureStateDegraded } from './lib/listen-capture-state'
 import type { CaptureDegraded } from './lib/listen'
 import { sourceIndexOf } from '../../../scripts/lib/source-layout'
+import { readModuleSource } from '../../test-helpers/module-source'
 
 // Normalize CRLF → LF (same rationale as App.capture-permission.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
@@ -13,8 +14,9 @@ const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\
 const listenPath = join(__dirname, 'lib', 'listen.ts')
 const listen = readFileSync(listenPath, 'utf8').replace(/\r\n/g, '\n')
 // The recovery note literals moved out of listen.ts into listen-notes.ts (0a89199f); listen.ts imports them.
-const listenNotesPath = join(__dirname, 'lib', 'listen-notes.ts')
-const listenNotes = readFileSync(listenNotesPath, 'utf8').replace(/\r\n/g, '\n')
+const listenNotesModule = readModuleSource(__dirname, './lib/listen-notes')
+const listenNotesPath = listenNotesModule.path
+const listenNotes = listenNotesModule.text.replace(/\r\n/g, '\n')
 const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const pill = readFileSync(join(__dirname, 'components', 'ControlPill.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const settingsUi = readFileSync(join(__dirname, 'features', 'settings', 'AudioTab.tsx'), 'utf8').replace(/\r\n/g, '\n')

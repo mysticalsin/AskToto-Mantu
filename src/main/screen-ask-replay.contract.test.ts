@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { StreamMetaSchema } from '@shared/ipc'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * Source contract for the screen-ask REPLAY path — Retry / "Go deeper" on an answer that saw the screen.
@@ -22,18 +23,12 @@ import { StreamMetaSchema } from '@shared/ipc'
 // Windows checkout with core.autocrlf yields CRLF and every marker containing a literal \n stops
 // matching. The assertion is about the shipped expression, never about how git wrote the line ends.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
-const stateSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'state.ts'), 'utf8').replace(
+const stateSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'state.ts'), 'utf8').replace(/\r\n/g, '\n')
+const askContextSrc = readModuleSource(join(__dirname, '..', 'renderer', 'src'), './lib/ask-context').text.replace(
   /\r\n/g,
   '\n'
 )
-const askContextSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'lib', 'ask-context.ts'), 'utf8').replace(
-  /\r\n/g,
-  '\n'
-)
-const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8').replace(
-  /\r\n/g,
-  '\n'
-)
+const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 const askStartStart = indexSrc.indexOf('ipcMain.handle(IPC.askStart')
 const askStartBody = indexSrc.slice(

@@ -5,6 +5,7 @@ import { BaseSettingsSchema, DEFAULT_SETTINGS, ASK_MEMORY_IDLE_MS } from '@share
 import { isTransient } from './llm/retry'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { readModuleSource } from '../test-helpers/module-source'
 
 // Source-contract lock for Tony's 2026-08-04 requirement: a plain typed/screen question asked OUTSIDE a
 // live meeting must not inherit the previous question's Q&A ("it uses the old conversation info in the
@@ -17,10 +18,10 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
 // The follow-up-memory effects moved out of App.tsx into lib/conversation-memory.ts (c07eb166); App still
 // owns the refs and passes them in.
-const conversationMemorySrc = readFileSync(
-  join(__dirname, '..', 'renderer', 'src', 'lib', 'conversation-memory.ts'),
-  'utf8'
-)
+const conversationMemorySrc = readModuleSource(
+  join(__dirname, '..', 'renderer', 'src'),
+  './lib/conversation-memory'
+).text
 const onboardingSrc = readFileSync(
   join(__dirname, '..', 'renderer', 'src', 'components', 'OnboardingExperience.tsx'),
   'utf8'

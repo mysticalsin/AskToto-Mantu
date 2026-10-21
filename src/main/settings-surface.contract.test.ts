@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { settingsOpenRect } from './island/geometry'
+import { readModuleSource } from '../test-helpers/module-source'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -15,7 +16,7 @@ import {
 const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 // The Settings window-mode effect moved out of App.tsx into lib/overlay-window-effects.ts (c07eb166).
-const windowEffects = readFileSync(join(__dirname, '../renderer/src/lib/overlay-window-effects.ts'), 'utf8')
+const windowEffects = readModuleSource(join(__dirname, '../renderer/src'), './lib/overlay-window-effects').text
 
 const TOTOS_MAC = {
   bounds: { x: 0, y: 0, width: 1800, height: 1169 },

@@ -14,6 +14,7 @@ import {
   TranscriptLineSchema as PublicTranscriptLineSchema
 } from '../../src/shared/ipc'
 import { TranscriptLineSchema } from '../../src/shared/transcript-line'
+import { ipcModuleSource } from '../lib/ipc-module-source'
 
 /**
  * Wave 0–6 / QA approval — source contracts that the rebuild's critical seams stay wired.
@@ -486,7 +487,13 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
     expect(namedReExport(transcripts, './transcripts-recap', 'parseRecapMarkdown')).toBe(true)
     // The exportRecapJson handler moved out of the main entry into registerWorkspaceIpc (a35394c4); the entry
     // still owns the real ipcMain and hands it to that module.
-    const workspace = parseTypeScript('src/main/ipc/workspace-ipc.ts')
+    const workspace = ts.createSourceFile(
+      'workspace-ipc',
+      ipcModuleSource('workspace-ipc'),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS
+    )
     expect(namedBindings(workspace, '../transcripts', 'parseRecapMarkdown')).toBe(true)
     expect(namedBindings(workspace, '@shared/ipc', 'IPC')).toBe(true)
     expect(namedBindings(main, 'electron', 'ipcMain')).toBe(true)
