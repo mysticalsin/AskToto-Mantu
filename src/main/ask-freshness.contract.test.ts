@@ -203,19 +203,41 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
   })
 })
 
-describe('onboarding fires the real OS permission flow proactively (max legitimate automation)', () => {
-  it('macOS: setup-scene mount triggers the mic prompt + screen TCC registration without a button press', () => {
-    // Normalize CRLF so a 4k window is the same on Windows checkout as on Ubuntu.
-    const src = onboardingSrc.replace(/\r\n/g, '\n')
-    expect(src).toMatch(/if \(scene !== 'setup'\) return[\s\S]{0,5000}?window\.toto\.requestPermissionsUpfront\(\)/)
+describe("C26 (HIG P1/P3) — onboarding asks for a permission only from that row's Continue", () => {
+  // Reverses the earlier "fire the OS flow proactively on setup mount" contract (owner direction 2026-10-21,
+  // Apple HIG): the system alert must follow the row's why-copy and the person's Continue, never the scene
+  // appearing. Behaviour is covered by OnboardingPermissionRows.browser.test.ts; this pins the wiring.
+  const src = onboardingSrc.replace(/\r\n/g, '\n')
+  const mountScan = src.slice(
+    src.indexOf('// --- Setup scene: run the REAL checks the moment the scene mounts.'),
+    src.indexOf('// --- Live-poll while the scene stays mounted')
+  )
+
+  it('the setup-scene mount only reads status: no prompt, no microphone probe (macOS or Windows)', () => {
+    expect(mountScan).toContain('window.toto.getPermissions()')
+    expect(mountScan).not.toContain('requestPermissionsUpfront')
+    expect(mountScan).not.toContain('acquireInteractiveMic')
   })
 
-  it('Windows: mic consent resolves via a renderer getUserMedia probe (main has no ask API off darwin)', () => {
-    // The one-shot probe now goes through the main-admitted interactive mic lease, which performs the
-    // renderer getUserMedia with these constraints (covered behaviorally by the input-mic-admission suites).
-    const src = onboardingSrc.replace(/\r\n/g, '\n')
-    expect(src).toMatch(
-      /if \(isWindows && perms\?\.microphone !== 'granted'\) \{\s*void acquireInteractiveMic\(\{ audio: true \}, 'conversation', 'application-probe',/
+  it("the microphone row's Continue asks for the microphone only", () => {
+    expect(src).toMatch(/<MicSetupActions[\s\S]{0,200}?onContinue=\{\(\) => void requestMic\(\)\}/)
+    expect(src).toMatch(/const requestMic = async[\s\S]{0,200}?requestSetupMic\(manualMicRequestRef\)/)
+  })
+
+  it('the live poll re-checks the moment Métis becomes active again', () => {
+    const poll = src.slice(src.indexOf('// --- Live-poll while the scene stays mounted'), src.indexOf('const retryAsr'))
+    expect(poll).toMatch(/onAppActive\(\(\) => void poll\(\)\)/)
+  })
+
+  it('main raises only the prompts the call names', () => {
+    const handler = indexSrc.slice(
+      indexSrc.indexOf('ipcMain.handle(IPC.permissionsRequestUpfront'),
+      indexSrc.indexOf('ipcMain.handle(IPC.screenCaptureCheck')
     )
+    expect(handler).toContain('permissionAskTargets(kind)')
+    expect(handler).toMatch(
+      /ask\.microphone && systemPreferences\.getMediaAccessStatus\('microphone'\) === 'not-determined'/
+    )
+    expect(handler).toMatch(/ask\.screenRecording && systemPreferences\.getMediaAccessStatus\('screen'\) !== 'granted'/)
   })
 })

@@ -58,6 +58,7 @@ import type {
 } from '@shared/ipc'
 import type { CloudSpeechCapability } from '@shared/cloud-speech'
 import { ScreenSetupActions, resumeSetupAtLoad, screenRowStatus, useScreenSetup } from './OnboardingScreenSetup'
+import { MicSetupActions, requestSetupMic } from './OnboardingMicSetup'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
@@ -76,7 +77,7 @@ import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
-import { acquireInteractiveMic } from '../lib/input-mic-admission'
+import { onAppActive } from '../lib/permission-ask'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import {
   canMarkOnboardingDone,
@@ -1005,7 +1006,6 @@ export function OnboardingExperience({
   useEffect(() => {
     if (scene !== 'setup') return
     let live = true
-    const micProbeAbort = new AbortController()
     const base = setupRowsForSpeechPackPolicy(productPackageMode === 'lean' ? 'offered' : speechPackPolicy).map(
       (row) => (row.key === 'asr' && productPackageMode === 'lean' ? { ...row, label: 'Cloud speech' } : row)
     )
@@ -1075,24 +1075,8 @@ export function OnboardingExperience({
       if (live) screenSetup.setPerms(perms)
       const screenRow = screenRowStatus(perms, screenSetup.checkRef.current, isWindows)
       set('screen', screenRow.state, screenRow.detail)
-      // Proactively trigger the real OS consent flow the moment setup lands, instead of waiting for a
-      // button press: macOS pops the mic prompt and registers Métis in the Screen Recording TCC list
-      // (the pane doesn't even list an app until it has probed once); Windows resolves mic consent via a
-      // one-shot getUserMedia probe (there is no main-process ask API — requestPermissionsUpfront is a
-      // darwin no-op, which is why the old mic button never did anything on Windows). Fire-and-forget:
-      // the live poll below reflects the outcome, and macOS never re-prompts after an explicit Deny, so
-      // repeats are safe.
-      if (isWindows && perms?.microphone !== 'granted') {
-        void acquireInteractiveMic({ audio: true }, 'conversation', 'application-probe', micProbeAbort.signal)
-          .then(async ({ stream, admission }) => {
-            stream.getTracks().forEach((track) => track.stop())
-            await admission.release()
-          })
-          .catch(() => {})
-      }
-      if (!isWindows && perms && (perms.microphone !== 'granted' || perms.screenRecording !== 'granted')) {
-        void window.toto.requestPermissionsUpfront().catch(() => null)
-      }
+      // C26 (Apple HIG): landing here only READS status. Each row says why, then its own Continue raises the
+      // system prompt (MicSetupActions, ScreenSetupActions); nothing asks or opens the mic on entry.
       // AI readiness has no OS prompt to fire and no permission to live-poll — `providerReady` is
       // already a settled fact by the time this scene mounts (main seeds the embedded Cloudflare
       // credential, if any, before the first window even shows), so one staged resolution is enough.
@@ -1115,7 +1099,6 @@ export function OnboardingExperience({
     })()
     return () => {
       live = false
-      micProbeAbort.abort()
     }
   }, [scene, autoAsrSetup, productPackageMode, cloudCapability, speechPackManaged])
 
@@ -1173,6 +1156,7 @@ export function OnboardingExperience({
       )
     }
     const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
+    const offActive = onAppActive(() => void poll()) // back from System Settings or the system alert
     const unsub = autoAsrSetup
       ? window.toto.onImportAssetsProgress?.((d) => {
           if (!live) return
@@ -1187,6 +1171,7 @@ export function OnboardingExperience({
     return () => {
       live = false
       clearInterval(interval)
+      offActive()
       unsub?.()
     }
   }, [scene, settings?.localLlm.modelId, autoAsrSetup, productPackageMode, speechPackManaged])
@@ -1202,24 +1187,7 @@ export function OnboardingExperience({
   }
 
   const requestMic = async (): Promise<void> => {
-    // Windows: main's requestPermissionsUpfront is a darwin no-op — the only thing that resolves mic
-    // consent there is an actual getUserMedia call from the renderer (same probe the legacy onboarding
-    // used). A rejection just means blocked; the status poll + fix link handle that.
-    if (isWindows) {
-      const controller = new AbortController()
-      manualMicRequestRef.current?.abort()
-      manualMicRequestRef.current = controller
-      await acquireInteractiveMic({ audio: true }, 'conversation', 'deliberate-talk', controller.signal)
-        .then(async ({ stream, admission }) => {
-          stream.getTracks().forEach((track) => track.stop())
-          await admission.release()
-        })
-        .catch(() => {})
-        .finally(() => {
-          if (manualMicRequestRef.current === controller) manualMicRequestRef.current = null
-        })
-    }
-    const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
+    const perms = await requestSetupMic(manualMicRequestRef)
     const mic = micRowStatus(perms?.microphone)
     setRows((rs) => rs.map((r) => (r.key === 'mic' ? { ...r, state: mic.state, detail: mic.detail } : r)))
   }
@@ -1431,36 +1399,7 @@ export function OnboardingExperience({
                           </button>
                         </div>
                       )}
-                      {r.key === 'mic' && r.state === 'action' && (
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                            Lets Métis hear your side of the call.
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => void requestMic()}
-                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                          >
-                            Allow Microphone
-                          </button>
-                        </div>
-                      )}
-                      {r.key === 'mic' && r.state === 'blocked' && (
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                            {isWindows
-                              ? 'Windows is blocking the microphone. Turn it back on in Privacy settings.'
-                              : "macOS won't ask again once you've said no. Turn it back on in Privacy settings."}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => void window.toto.openPermissionSettings('microphone')}
-                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                          >
-                            Open Microphone Settings
-                          </button>
-                        </div>
-                      )}
+                      {r.key === 'mic' && <MicSetupActions state={r.state} onContinue={() => void requestMic()} />}
                       {r.key === 'screen' && (r.state === 'action' || r.state === 'blocked') && (
                         <ScreenSetupActions
                           perms={screenSetup.perms}

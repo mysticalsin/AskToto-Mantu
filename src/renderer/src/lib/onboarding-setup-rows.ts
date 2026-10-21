@@ -38,7 +38,7 @@ export function setupRowsForSpeechPackPolicy(policy: LocalSpeechPackSetting): Se
 
 /** The microphone row for an OS permission status. 'denied' MUST be its own state: getUserMedia never
  *  re-prompts after an explicit Deny and main's requestPermissionsUpfront only asks while the status is
- *  'not-determined', so in that state the "Allow Microphone" button produces no prompt, no error and no
+ *  'not-determined', so in that state the row's "Continue" would produce no prompt, no error and no
  *  change — the OS privacy pane is the only way back, exactly as the screen row already offers. */
 export function micRowStatus(status: PermissionStatus | undefined): { state: SetupRowState; detail: string } {
   if (status === 'granted') return { state: 'ready', detail: 'granted' }

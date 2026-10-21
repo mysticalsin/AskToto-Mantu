@@ -2,17 +2,28 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { FieldHint } from '../../components/ui'
 import { acquireInteractiveMic, type InputMicAdmission } from '../../lib/input-mic-admission'
+import { isWindows } from '../../lib/keys'
+import { micMeterMode } from '../../lib/permission-ask'
+import { usePermissions } from '../../state'
 
 // Full-scale RMS for the level meter below. Well above the VAD's own "is speaking" threshold
 // (lib/vad.ts ON = 0.012) so normal close-mic speech visibly moves the bar without pegging it on
 // every breath; this is a "do I have signal" indicator, not a calibrated VU meter.
 const MIC_METER_FULL_SCALE = 0.2
+// Same link style as the Settings permission rows (PermissionsSection), so the new controls add no new look.
+const LINK_BUTTON =
+  'no-drag cl-focus shrink-0 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline disabled:opacity-60'
 
 /** Live input-level meter for MicPicker: opens its own getUserMedia + AnalyserNode against whichever
  *  device is selected (or the system default) so a user can confirm a mic — especially a newly paired
  *  Bluetooth/iPhone mic — is actually delivering signal before a meeting, without starting a real
  *  capture. Entirely separate from the app's real capture pipeline (lib/listen.ts); it never touches
  *  settings or recording state, only visualizes.
+ *
+ *  C26 (Apple HIG, moment of need): it opens the microphone on mount ONLY when access is already granted.
+ *  A not-determined microphone shows "Test Microphone", which asks, then meters; a denied one shows the
+ *  System Settings deep link and never asks. The status re-reads when Métis becomes active again
+ *  (usePermissions), so a grant made in System Settings starts the meter without a click.
  *
  *  RMS math mirrors lib/vad.ts / whisper-worklet-src.ts (sum of squares over the buffer, then sqrt) so
  *  the bar reflects the same "how loud is this" signal the transcription pipeline itself computes.
@@ -24,20 +35,36 @@ const MIC_METER_FULL_SCALE = 0.2
  *  unmounts with it — see the `tab === 'audio'` guard around MicPicker) always fully releases the mic. */
 export function MicLevelMeter({
   deviceId,
-  permissionNonce
+  permissionNonce,
+  onPermissionGranted
 }: {
   deviceId: string
   /** Bumped by MicPicker's unlockLabels() after a fresh mic-permission grant. deviceId alone doesn't
    *  change when permission is granted in the same panel, so the meter would otherwise stay stuck on
    *  "No signal" until some unrelated device switch re-ran this effect. */
   permissionNonce?: number
+  /** Called once Test Microphone has obtained access, so the picker can show real device names. */
+  onPermissionGranted?: () => void
 }): JSX.Element {
+  const { permissions, refresh } = usePermissions()
+  const [tested, setTested] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const mode = micMeterMode(permissions?.microphone, { tested, windows: isWindows })
+  const metering = mode === 'meter'
   // null = not blocked. Otherwise the getUserMedia failure kind, so the hint below can name the actual
   // cause instead of always saying "allow microphone access" (wrong for a disconnected/OverconstrainedError device).
   const [blockedReason, setBlockedReason] = useState<'permission' | 'device' | 'other' | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
+  // Only the grant edge matters; a new callback identity must not report the same grant twice.
+  const onGrantedRef = useRef(onPermissionGranted)
+  onGrantedRef.current = onPermissionGranted
   useEffect(() => {
+    if (tested && permissions?.microphone === 'granted') onGrantedRef.current?.()
+  }, [tested, permissions?.microphone])
+
+  useEffect(() => {
+    if (!metering) return
     let cancelled = false
     const admissionAbort = new AbortController()
     let stream: MediaStream | null = null
@@ -121,9 +148,48 @@ export function MicLevelMeter({
       cancelled = true
       teardown()
     }
-  }, [deviceId, permissionNonce])
+  }, [deviceId, permissionNonce, metering])
 
-  if (blockedReason) {
+  // Moment of need: the macOS prompt follows this click, then the re-read status opens the meter.
+  const test = async (): Promise<void> => {
+    setTesting(true)
+    await window.toto.requestPermissionsUpfront('microphone').catch(() => null)
+    setTested(true)
+    await refresh().catch(() => {})
+    setTesting(false)
+  }
+
+  if (mode === 'test') {
+    return (
+      <button type="button" onClick={() => void test()} disabled={testing} className={LINK_BUTTON}>
+        Test Microphone
+      </button>
+    )
+  }
+
+  if (mode === 'denied') {
+    const hint = isWindows
+      ? 'Windows is blocking the microphone. Turn it back on in Privacy settings to test this device.'
+      : "Microphone access is off for Métis, and macOS won't ask again. Turn it on in System Settings to test this device."
+    return (
+      <span className="flex shrink-0 items-center gap-1.5">
+        <FieldHint text={hint}>
+          <span className="flex h-2 items-center text-[color:var(--cl-muted-foreground)]">
+            <AlertCircle size={12} />
+          </span>
+        </FieldHint>
+        <button
+          type="button"
+          onClick={() => void window.toto.openPermissionSettings('microphone')}
+          className={LINK_BUTTON}
+        >
+          {isWindows ? 'Open Windows Settings' : 'Open System Settings'}
+        </button>
+      </span>
+    )
+  }
+
+  if (metering && blockedReason) {
     const hint =
       blockedReason === 'permission'
         ? 'No signal. Allow microphone access to test this device.'

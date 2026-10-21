@@ -210,7 +210,9 @@ const api = {
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
-  requestPermissionsUpfront: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsRequestUpfront),
+  /** C26: pass the one permission a row's Continue asks for; no argument keeps the combined pass. */
+  requestPermissionsUpfront: (kind?: 'microphone' | 'screenRecording'): Promise<PlatformPermissions> =>
+    ipcRenderer.invoke(IPC.permissionsRequestUpfront, kind),
   /** M2-0429: reset only Métis's own Screen Recording entry, then relaunch (macOS). */
   repairScreenPermission: (): Promise<ScreenRepairResult> => ipcRenderer.invoke(IPC.permissionsRepairScreen),
   /** M2-0429: "It's already on" — record it and relaunch (macOS). */

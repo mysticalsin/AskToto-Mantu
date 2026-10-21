@@ -384,7 +384,11 @@ function MicPicker({
             </option>
           ))}
         </select>
-        <MicLevelMeter deviceId={settings.micDeviceId} permissionNonce={permNonce} />
+        <MicLevelMeter
+          deviceId={settings.micDeviceId}
+          permissionNonce={permNonce}
+          onPermissionGranted={() => void refresh()}
+        />
       </div>
       {needsPerm ? (
         <button

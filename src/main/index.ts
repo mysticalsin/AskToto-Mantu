@@ -845,7 +845,12 @@ import {
   ensureMeetingsFolder,
   sweepStaleTempFiles
 } from './transcripts'
-import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
+import {
+  getPlatformPermissions,
+  permissionAskTargets,
+  probeScreenCapture,
+  noteScreenCaptureOutcome
+} from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import { VISION_CHECK_PROMPT, VISION_CHECK_SYSTEM, isApiVisionCandidate } from '@shared/screen-capture-check'
 import {
@@ -5719,33 +5724,27 @@ function registerIpc(): void {
   // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
   registerScreenPermissionIpc(assertMainWindow)
   registerRightEdgeIpc(assertMainWindow, rightEdgeSession, currentRightEdgeSurface)
-  // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
-  // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
-  // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
-  // TCC and raises the system prompt. Accessibility is deliberately NOT requested — nothing in the
-  // app needs it since meeting-detect was removed, and an unexplained Accessibility prompt is
-  // exactly the kind of thing enterprise IT flags. Never re-prompts after an explicit Deny (macOS
-  // suppresses those anyway); the checklist's "Open System Settings" link stays the recovery path.
-  ipcMain.handle(IPC.permissionsRequestUpfront, async (e) => {
+  // OS permission prompts, only from a person's Continue on the row that explains them, never on scene entry
+  // (Apple HIG, C26); `kind` limits it to that row's prompt (permissionAskTargets). Screen Recording has no prompt
+  // API: a 1px desktopCapturer probe registers the app with TCC and raises it. Accessibility is never requested.
+  // Never re-prompts after an explicit Deny (macOS suppresses those); the row's deep link recovers.
+  ipcMain.handle(IPC.permissionsRequestUpfront, async (e, kind: unknown) => {
     assertMainWindow(e)
+    const ask = permissionAskTargets(kind)
     // Onboarding must never hang forever on an unanswered OS dialog. Race probes ≤2s then fail-open.
     const ONBOARD_ACCESS_FAIL_OPEN_MS = 2_000
     const run = async (): Promise<ReturnType<typeof getPlatformPermissions>> => {
       if (process.platform === 'darwin') {
-        if (systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
+        if (ask.microphone && systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
           await systemPreferences.askForMediaAccess('microphone').catch(() => false)
         }
-        if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+        if (ask.screenRecording && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
           await screenPerm.probeScreenWithHistory()
         }
       }
-      if (process.platform === 'win32') {
-        // Windows used to fall straight through to a bare status read, so onboarding "front-loads the
-        // permission prompts" was a macOS-only promise and a Windows user's first screenshot ask was the
-        // first time anyone discovered capture was blocked. The probe raises no prompt here — it just
-        // establishes the truth while the user is still in setup, where the checklist can act on it.
-        // Mic cannot be prompted from main on Windows (askForMediaAccess is macOS-only); the renderer's
-        // getUserMedia call is what raises that prompt, so this only reports what the OS already knows.
+      if (process.platform === 'win32' && ask.screenRecording) {
+        // No prompt: the probe only learns whether capture is blocked while setup can still act on it. Windows
+        // mic consent comes from the renderer's getUserMedia (askForMediaAccess is macOS-only).
         await probeScreenCapture()
       }
       // The grant just asked for here is part of the background screen reader's eligibility on macOS

@@ -1,13 +1,14 @@
 /**
  * OnboardingScreenSetup.tsx — onboarding's "Meeting audio & screen" row (M2-0429).
  *
- * Asked up front as a primary step, because it is what lets Métis hear the other side of a call. On macOS the
+ * Shown up front as a primary step, because it is what lets Métis hear the other side of a call, and asked only
+ * when the person presses the row's Continue (C26, Apple HIG: never on scene entry). On macOS the
  * row follows the Screen Recording diagnosis, and it is green ONLY when a real loopback self-test produced a
  * live system-audio track: a 'granted' status alone has shown green for builds that could not capture. A
  * relaunch while setup is showing (ours after a grant, or macOS's own "Quit & Reopen") resumes setup, where
  * the self-test then runs.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { PlatformPermissions } from '@shared/screen-permission'
 import { isWindows } from '../lib/keys'
 import { runLoopbackSelfTest } from '../lib/loopback-self-test'
@@ -87,8 +88,9 @@ export function resumeSetupAtLoad(): boolean {
 
 /**
  * The row's live state: the latest permission snapshot, the self-test (run once the diagnosis says this build
- * can capture, i.e. after the grant and relaunch), and the primary ask. On macOS main's probe registers this
- * build and raises the system prompt; the fresh snapshot then drives the row (usually needs-relaunch).
+ * can capture, i.e. after the grant and relaunch), and the row's ask. On macOS main's probe registers this
+ * build and raises the Screen Recording prompt only (never the microphone's); the fresh snapshot then drives
+ * the row (usually needs-relaunch).
  */
 export function useScreenSetup(onSetup: boolean) {
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
@@ -109,7 +111,7 @@ export function useScreenSetup(onSetup: boolean) {
     void runLoopbackSelfTest().then((ok) => setCheck(ok ? 'passed' : 'failed'))
   }, [onSetup, captureReady, check])
   const request = async (): Promise<void> => {
-    const next = await window.toto.requestPermissionsUpfront().catch(() => null)
+    const next = await window.toto.requestPermissionsUpfront('screenRecording').catch(() => null)
     if (next) setPerms(next)
   }
   return { perms, setPerms, check, checkRef, recheck: () => setCheck('idle'), request }
@@ -122,8 +124,8 @@ const SETUP_SOFT_BUTTON =
 const SETUP_LINK_BUTTON = 'no-drag focus-ring text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline'
 
 /**
- * The row's why-copy and actions, from the diagnosis. Why-before-prompt, a primary ask while macOS has not
- * asked yet, Repair (never "open Settings" alone) when the switch already shows on for another copy or build,
+ * The row's why-copy and actions, from the diagnosis. Why-before-prompt, then one "Continue" that raises the
+ * system alert while macOS has not asked yet (Apple HIG pre-alert: one button, never "Allow"), Repair (never "open Settings" alone) when the switch already shows on for another copy or build,
  * and a retry when the real self-test heard nothing.
  */
 export function ScreenSetupActions({
@@ -139,6 +141,7 @@ export function ScreenSetupActions({
 }): JSX.Element | null {
   const [repairBusy, setRepairBusy] = useState(false)
   const [repairGuidance, setRepairGuidance] = useState<string | null>(null)
+  const whyId = useId()
   if (isWindows || !perms) return null
   const diagnosis = perms.screenDiagnosis
   const state = diagnosisState(perms)
@@ -159,9 +162,11 @@ export function ScreenSetupActions({
   if (state === 'not-asked') {
     return (
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
-        {note(MEETING_AUDIO_SCREEN_WHY)}
-        <button type="button" onClick={onRequest} className={SETUP_PRIMARY_BUTTON}>
-          Allow meeting audio & screen
+        <span id={whyId} className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+          {MEETING_AUDIO_SCREEN_WHY}
+        </span>
+        <button type="button" onClick={onRequest} aria-describedby={whyId} className={SETUP_PRIMARY_BUTTON}>
+          Continue
         </button>
       </div>
     )

@@ -5,6 +5,7 @@ import {
   getNativeSpeechPermissions,
   getPlatformPermissions,
   noteScreenCaptureOutcome,
+  permissionAskTargets,
   probeScreenCapture,
   setScreenDiagnosisProvider,
   windowsScreenStatus
@@ -266,5 +267,22 @@ describe('screen diagnosis provider', () => {
     noteScreenCaptureOutcome(true)
     expect(windowsScreenStatus()).toBe('granted')
     expect(provider).not.toHaveBeenCalled()
+  })
+})
+
+describe('C26 (HIG) — one setup row raises only its own OS prompt', () => {
+  it('the microphone Continue asks only for the microphone, the screen Continue only for screen recording', () => {
+    expect(permissionAskTargets('microphone')).toEqual({ microphone: true, screenRecording: false })
+    expect(permissionAskTargets('screenRecording')).toEqual({ microphone: false, screenRecording: true })
+  })
+
+  it('no argument keeps the combined pass the Settings and QA callers already use', () => {
+    expect(permissionAskTargets(undefined)).toEqual({ microphone: true, screenRecording: true })
+  })
+
+  it('an unrecognised argument raises no prompt at all', () => {
+    for (const raw of ['camera', 'accessibility', '', 0, null, {}, ['microphone']]) {
+      expect(permissionAskTargets(raw)).toEqual({ microphone: false, screenRecording: false })
+    }
   })
 })

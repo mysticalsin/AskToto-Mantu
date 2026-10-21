@@ -166,6 +166,67 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
     }, 30_000)
   }
 
+  it('C26: landing on Setup raises no permission prompt; a row asks only from its Continue and re-checks on focus', async () => {
+    const page = await browser.newPage()
+    try {
+      await page.addInitScript(() => {
+        // Resume straight into Setup (the same marker a grant relaunch leaves) as a macOS build.
+        localStorage.setItem('metis.onboarding.resumeSetup', '1')
+        Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
+        const ready = { status: 'ready', ready: true, progress: 100, label: 'Ready' }
+        const calls = { requests: [] as (string | null)[], reads: 0, micOpens: 0 }
+        const perms = () => ({
+          microphone: 'unknown',
+          screenRecording: 'unknown',
+          screenDiagnosis: { state: 'not-asked', reasons: [], action: 'none', duplicates: [], grantedFor: null, repairFailed: false }
+        })
+        const base: Record<string, unknown> = {
+          asrAssetsEnsure: async () => ready,
+          asrAssetsStatus: async () => ready,
+          onImportAssetsProgress: () => () => {},
+          localModelsList: async () => [],
+          getPermissions: async () => {
+            calls.reads += 1
+            return perms()
+          },
+          requestPermissionsUpfront: async (kind?: string) => {
+            calls.requests.push(kind ?? null)
+            return perms()
+          },
+          // Every renderer microphone open goes through main's input-session admission first.
+          getInputSessionContext: async () => {
+            calls.micOpens += 1
+            return null
+          }
+        }
+        // Anything else the scene touches answers "nothing" (a callable promise covers both shapes).
+        const nothing = () => {
+          const done = Promise.resolve(undefined)
+          return Object.assign(() => {}, { then: done.then.bind(done), catch: done.catch.bind(done), finally: done.finally.bind(done) })
+        }
+        ;(window as unknown as { __c26: typeof calls }).__c26 = calls
+        ;(window as unknown as { toto: unknown }).toto = new Proxy(base, { get: (t, k: string) => (k in t ? t[k] : nothing) })
+      })
+      type Calls = { requests: (string | null)[]; reads: number; micOpens: number }
+      const calls = (): Promise<Calls> => page.evaluate(() => (window as unknown as { __c26: Calls }).__c26)
+      await page.goto(url)
+      const rowContinue = page.getByRole('button', { name: 'Continue', exact: true })
+      // Microphone, then Meeting audio & screen (the rows land staggered).
+      await rowContinue.nth(1).waitFor({ state: 'visible', timeout: 10_000 })
+      expect(await rowContinue.count()).toBe(2)
+      await page.waitForTimeout(2_500) // past the staged reveal and a couple of live polls
+      expect(await calls()).toMatchObject({ requests: [], micOpens: 0 })
+      await rowContinue.first().click()
+      await page.waitForFunction(() => (window as unknown as { __c26: Calls }).__c26.requests.length === 1)
+      expect((await calls()).requests).toEqual(['microphone'])
+      const before = (await calls()).reads
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+      await page.waitForFunction((n) => (window as unknown as { __c26: Calls }).__c26.reads > n, before, { timeout: 500 })
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
   it('a media playback exception cannot trap the demo Next button', async () => {
     const page = await browser.newPage({ viewport: { width: 1100, height: 768 }, reducedMotion: 'reduce' })
     try {

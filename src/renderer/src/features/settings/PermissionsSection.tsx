@@ -146,7 +146,7 @@ export function PermissionsSection(): JSX.Element {
                     type="button"
                     onClick={() =>
                       void (notYetAsked
-                        ? window.toto.requestPermissionsUpfront().catch(() => null)
+                        ? window.toto.requestPermissionsUpfront(r.kind).catch(() => null)
                         : window.toto.openPermissionSettings(r.kind))
                     }
                     className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
