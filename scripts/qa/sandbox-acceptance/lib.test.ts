@@ -144,6 +144,10 @@ describe('child environment', () => {
       autoHideOverlay: false
     })
   })
+
+  it('lets a scenario add to the seed without being able to un-onboard the profile by accident', () => {
+    expect(seedSettings(5, { provider: 'custom' })).toMatchObject({ onboardingDone: true, provider: 'custom' })
+  })
 })
 
 describe('synthetic WAV', () => {

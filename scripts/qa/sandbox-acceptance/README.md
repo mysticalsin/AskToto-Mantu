@@ -7,7 +7,8 @@ Nothing here touches `/Applications`, the Keychain, the real brain, OneDrive or 
 | Script | Does |
 |---|---|
 | `install.mjs` | Extracts the QA zip into `<sandbox>/Applications/`, proves bundle id and ad-hoc signature, records sha256 of zip and executable. |
-| `run-acceptance.mjs` | Launch, meeting with synthetic speech, save, review, clean quit, relaunch, data preserved, quit. JSON report with a PASS/FAIL/NOT_SUPPORTED/SKIPPED per step. |
+| `run-acceptance.mjs` | Launch, meeting with synthetic speech, save, review, clean quit, relaunch, data preserved, quit. JSON report with a PASS/FAIL/NOT_SUPPORTED/SKIPPED per step. `--scenario settings-hig` runs the Apple HIG Settings acceptance instead (below). |
+| `settings-hig.mjs` | The opt-in `settings-hig` scenario and its pure helpers (CDP key-event builders, observation classifiers). |
 | `soak.mjs` | Idle, then synthetic meeting, then post-meeting; CPU/RSS every 30 s; growth verdict SOAK-ACCEPT-1; JSON and markdown. |
 | `guard.mjs` | Pure refusal rules used by all three (see below). |
 
@@ -98,6 +99,34 @@ the preload requires). No QA-only hook is needed in app source.
 
 A step is recorded PASS only when it returns evidence; a step whose prerequisite did not PASS is SKIPPED, never PASS. Reports carry
 counts, flags, hashes and file names, never transcript text or titles.
+
+## Settings HIG scenario (`--scenario settings-hig`, C28)
+
+Opt-in; the default `--scenario meeting` is unchanged. It needs no speech, so `--audio` defaults to `tone` here (pass `--audio` to
+override). The profile is seeded once with `provider: custom` and a valid `https://` endpoint (`example.invalid`) so the Custom
+endpoint field renders. Keyboard input is real CDP `Input.dispatchKeyEvent`; clicks are trusted Playwright clicks.
+
+```bash
+$ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance.mjs --scenario settings-hig --dry-run"
+$ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance.mjs --scenario settings-hig"
+```
+
+| Step | What it observes (PASS only on this) |
+|---|---|
+| `settings-shortcut-opens` | Command-Comma (Control-Comma on Windows) as a CDP key event; `role=tablist` "Settings sections" becomes visible (it was not before). |
+| `settings-toggle-applies-without-save` | Settings > Privacy switch "Carry context into follow-up questions": `aria-checked` flips, `window.toto.getSettings()` reports the new value, and `.cl-root` holds no Save/Apply/OK button. NOT_SUPPORTED if the switch is absent or managed. |
+| `settings-confirm-escape-cancels` | "Replay onboarding" opens an `alertdialog` titled "Replay onboarding?" with buttons Cancel, Replay; focus is on Replay; a CDP Escape closes it; Settings stays open and `onboardingDone` is still true. |
+| `settings-audio-no-mic-request` | A `getUserMedia` counter is installed, then Settings > Speech opens: zero calls, no mic-capture audit record, and with the permission unknown the "Test Microphone" button is visible (denied: "Open System Settings" and no Test button). NOT_SUPPORTED when the sandbox profile already has the microphone granted. This build writes no dedicated mic-capture audit event, so the call count is the primary observation. |
+| `settings-endpoint-inline-validation` | `http://` typed into "Custom endpoint URL", then blur: the field is `aria-invalid`, its `aria-describedby` id is a visible `role=alert` with text, no `alertdialog` appears, and `getSettings().customBaseUrl` is unchanged. NOT_SUPPORTED if the field has no label (build predates it). |
+| `clean-quit`, `relaunch` | As in the meeting scenario. |
+| `settings-last-pane-restored` | After relaunch, Command-Comma opens Settings on the AI tab (last viewed, not the default Modes & Display). |
+| `settings-endpoint-unchanged-after-relaunch` | The field and the stored setting still hold the pre-input endpoint; the `http://` value was never saved. |
+| `settings-toggle-persisted-after-relaunch` | The toggled value survived the relaunch in both the switch and `getSettings()`. |
+| `final-quit` | As `clean-quit`. |
+
+A post-relaunch step whose pre-quit step was NOT_SUPPORTED is NOT_SUPPORTED too; if that step FAILED it is SKIPPED. The toggle is left
+in its new value (the profile is a throwaway sandbox). "Replay onboarding" is used for the confirmation, so a build without the
+confirmation sheet would start onboarding and the later steps would fail visibly rather than pass.
 
 ## Soak verdict SOAK-ACCEPT-1
 

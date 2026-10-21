@@ -6,6 +6,8 @@
 // Scenario (explicit PASS / FAIL / NOT_SUPPORTED / SKIPPED per step, each backed by something the run observed):
 //   launch -> renderer ready -> synthetic meeting live -> transcript segments -> stop and save -> meeting file in the sandbox
 //   meetings folder -> review opens it -> clean quit -> relaunch -> saved meeting still listed -> clean quit.
+// --scenario settings-hig swaps it for the Apple HIG Settings scenario (settings-hig.mjs): Command-Comma, instant-apply toggle,
+// confirmation sheet, no mic request, inline endpoint validation, persistence and last pane across a relaunch.
 // Exit codes: 0 PASS or PASS_WITH_GAPS, 1 FAIL or INCOMPLETE, 2 PRECONDITION (a guard refused, or a bad argument).
 // --dry-run validates arguments and every guard, prints the plan and touches nothing.
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -28,6 +30,7 @@ import {
   sandboxLayout
 } from './lib.mjs'
 import { guardReport, launchApp, prepareProfile } from './session.mjs'
+import { HIG_SEED_SETTINGS, SETTINGS_HIG_STEPS, runSettingsHigScenario } from './settings-hig.mjs'
 import {
   observeTranscriptDraft,
   reviewSavedMeeting,
@@ -36,7 +39,10 @@ import {
   verifyMeetingPreserved
 } from './scenario.mjs'
 
+export const SCENARIOS = Object.freeze(['meeting', 'settings-hig'])
+
 export const CLI_SPEC = Object.freeze({
+  scenario: { type: 'string', default: 'meeting' },
   app: { type: 'string' },
   'sandbox-root': { type: 'string' },
   'run-id': { type: 'string' },
@@ -53,6 +59,10 @@ export const CLI_SPEC = Object.freeze({
 /** Resolve everything the run needs from arguments and the environment; throws CliError on a bad argument. */
 export function resolveConfig(argv, env = process.env) {
   const values = parseCli(argv, CLI_SPEC)
+  if (!SCENARIOS.includes(values.scenario)) throw new CliError(`--scenario must be one of ${SCENARIOS.join(', ')}`)
+  // The Settings scenario never listens to anything, so it does not need synthesised speech (macOS say + afconvert).
+  if (values.scenario === 'settings-hig' && !argv.some((token) => token === '--audio' || token.startsWith('--audio=')))
+    values.audio = 'tone'
   if (!AUDIO_KINDS.includes(values.audio)) throw new CliError(`--audio must be one of ${AUDIO_KINDS.join(', ')}`)
   if (values.audio === 'file' && !values.wav) throw new CliError('--audio file needs --wav <path>')
   if (values.wav && values.audio !== 'file') throw new CliError('--wav is only valid with --audio file')
@@ -89,19 +99,23 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
       runRoot: layout.runRoot,
       userData: layout.userData,
       meetingsFolder: layout.meetingsFolder,
+      scenario: values.scenario,
       audio: values.audio,
       meetingSeconds: values['meeting-seconds'],
-      steps: [
-        'launch-and-renderer-ready',
-        'meeting-live',
-        'transcript-observed',
-        'stop-and-save',
-        'review-opens-meeting',
-        'clean-quit',
-        'relaunch',
-        'meeting-preserved-after-relaunch',
-        'final-quit'
-      ],
+      steps:
+        values.scenario === 'settings-hig'
+          ? [...SETTINGS_HIG_STEPS]
+          : [
+              'launch-and-renderer-ready',
+              'meeting-live',
+              'transcript-observed',
+              'stop-and-save',
+              'review-opens-meeting',
+              'clean-quit',
+              'relaunch',
+              'meeting-preserved-after-relaunch',
+              'final-quit'
+            ],
       childEnvKeys: guards.childEnvKeys
     }
   }
@@ -134,7 +148,7 @@ async function main(argv) {
     console.error(`[acceptance] ${error.message}`)
     return EXIT_CODES.PRECONDITION
   }
-  prepareProfile(layout)
+  prepareProfile(layout, values.scenario === 'settings-hig' ? HIG_SEED_SETTINGS : {})
   let audio
   try {
     audio = prepareAudio({ kind: values.audio, layout, wavSource: values.wav })
@@ -144,7 +158,12 @@ async function main(argv) {
   }
   const report = createReport({
     tool: 'run-acceptance',
-    config: { audio: values.audio, meetingSeconds: values['meeting-seconds'], runId: layout.runId },
+    config: {
+      scenario: values.scenario,
+      audio: values.audio,
+      meetingSeconds: values['meeting-seconds'],
+      runId: layout.runId
+    },
     meta: {
       bundleId: readBundleId(appPath),
       appVersion: readBundleVersion(appPath),
@@ -172,95 +191,105 @@ async function main(argv) {
   }
   process.once('SIGINT', () => void cleanup().finally(() => process.exit(130)))
   try {
-    await runStep(report, 'launch-and-renderer-ready', async () => {
-      session = await launchApp(launchArgs)
-      const ready = session.audit().find((record) => record.event === 'app.renderer.ready')
-      return {
-        evidence: {
-          pid: session.pid,
-          rendererReadyAudit: Boolean(ready),
-          cdpConnected: Boolean(session.page),
-          captureFileSourceAudit: session.audit().some((record) => record.event === 'qa.capture.file_source')
+    if (values.scenario === 'settings-hig') {
+      await runSettingsHigScenario({
+        report,
+        launch: () => launchApp(launchArgs),
+        onSession: (next) => {
+          session = next
         }
-      }
-    })
-    await runStep(report, 'meeting-live', () => startSyntheticMeeting(session), {
-      requires: ['launch-and-renderer-ready']
-    })
-    await runStep(
-      report,
-      'transcript-observed',
-      () => observeTranscriptDraft(session, { speech: audio.speech, waitSeconds: values['transcript-wait-seconds'] }),
-      { requires: ['meeting-live'] }
-    )
-    if (report.steps.find((step) => step.id === 'meeting-live')?.status === 'PASS') {
-      // Hold the meeting open for the requested length (the transcript step above already consumed part of it).
-      const heldMs = Math.max(
-        0,
-        values['meeting-seconds'] * 1000 - (report.steps.find((step) => step.id === 'transcript-observed')?.ms ?? 0)
-      )
-      await new Promise((resolve) => setTimeout(resolve, heldMs))
-    }
-    await runStep(
-      report,
-      'stop-and-save',
-      async () => {
-        const result = await stopAndSave(session, { waitSeconds: values['save-wait-seconds'] })
-        savedFile = result.file
-        return { evidence: result.evidence }
-      },
-      { requires: ['meeting-live'] }
-    )
-    await runStep(
-      report,
-      'review-opens-meeting',
-      () => reviewSavedMeeting(session, savedFile, { speech: audio.speech }),
-      { requires: ['stop-and-save'] }
-    )
-    await runStep(
-      report,
-      'clean-quit',
-      async () => {
-        const quit = await session.quit()
-        if (!quit.cleanShutdown)
-          throw new Error(`the app did not exit cleanly (request ${quit.request}, exit ${quit.exit})`)
-        if (!quit.cleanShutdownRecord) throw new Error('the app exited but wrote no app.shutdown.clean audit record')
-        if (quit.leftovers.length) throw new Error(`${quit.leftovers.length} owned process(es) survived the quit`)
-        return { evidence: { exit: quit.exit, appShutdownCleanAudit: true, leftoverProcesses: 0 } }
-      },
-      { requires: ['launch-and-renderer-ready'] }
-    )
-    await runStep(
-      report,
-      'relaunch',
-      async () => {
+      })
+    } else {
+      await runStep(report, 'launch-and-renderer-ready', async () => {
         session = await launchApp(launchArgs)
+        const ready = session.audit().find((record) => record.event === 'app.renderer.ready')
         return {
           evidence: {
             pid: session.pid,
-            rendererReadyAudit: session.audit().some((record) => record.event === 'app.renderer.ready')
+            rendererReadyAudit: Boolean(ready),
+            cdpConnected: Boolean(session.page),
+            captureFileSourceAudit: session.audit().some((record) => record.event === 'qa.capture.file_source')
           }
         }
-      },
-      { requires: ['clean-quit'] }
-    )
-    await runStep(report, 'meeting-preserved-after-relaunch', () => verifyMeetingPreserved(session, savedFile), {
-      requires: ['relaunch', 'stop-and-save']
-    })
-    await runStep(
-      report,
-      'final-quit',
-      async () => {
-        const quit = await session.quit()
-        if (!quit.cleanShutdown || !quit.cleanShutdownRecord)
-          throw new Error(
-            `the relaunched app did not shut down cleanly (request ${quit.request}, exit ${quit.exit}, audit ${quit.cleanShutdownRecord})`
-          )
-        if (quit.leftovers.length) throw new Error(`${quit.leftovers.length} owned process(es) survived the quit`)
-        return { evidence: { exit: quit.exit, appShutdownCleanAudit: true, leftoverProcesses: 0 } }
-      },
-      { requires: ['relaunch'] }
-    )
+      })
+      await runStep(report, 'meeting-live', () => startSyntheticMeeting(session), {
+        requires: ['launch-and-renderer-ready']
+      })
+      await runStep(
+        report,
+        'transcript-observed',
+        () => observeTranscriptDraft(session, { speech: audio.speech, waitSeconds: values['transcript-wait-seconds'] }),
+        { requires: ['meeting-live'] }
+      )
+      if (report.steps.find((step) => step.id === 'meeting-live')?.status === 'PASS') {
+        // Hold the meeting open for the requested length (the transcript step above already consumed part of it).
+        const heldMs = Math.max(
+          0,
+          values['meeting-seconds'] * 1000 - (report.steps.find((step) => step.id === 'transcript-observed')?.ms ?? 0)
+        )
+        await new Promise((resolve) => setTimeout(resolve, heldMs))
+      }
+      await runStep(
+        report,
+        'stop-and-save',
+        async () => {
+          const result = await stopAndSave(session, { waitSeconds: values['save-wait-seconds'] })
+          savedFile = result.file
+          return { evidence: result.evidence }
+        },
+        { requires: ['meeting-live'] }
+      )
+      await runStep(
+        report,
+        'review-opens-meeting',
+        () => reviewSavedMeeting(session, savedFile, { speech: audio.speech }),
+        { requires: ['stop-and-save'] }
+      )
+      await runStep(
+        report,
+        'clean-quit',
+        async () => {
+          const quit = await session.quit()
+          if (!quit.cleanShutdown)
+            throw new Error(`the app did not exit cleanly (request ${quit.request}, exit ${quit.exit})`)
+          if (!quit.cleanShutdownRecord) throw new Error('the app exited but wrote no app.shutdown.clean audit record')
+          if (quit.leftovers.length) throw new Error(`${quit.leftovers.length} owned process(es) survived the quit`)
+          return { evidence: { exit: quit.exit, appShutdownCleanAudit: true, leftoverProcesses: 0 } }
+        },
+        { requires: ['launch-and-renderer-ready'] }
+      )
+      await runStep(
+        report,
+        'relaunch',
+        async () => {
+          session = await launchApp(launchArgs)
+          return {
+            evidence: {
+              pid: session.pid,
+              rendererReadyAudit: session.audit().some((record) => record.event === 'app.renderer.ready')
+            }
+          }
+        },
+        { requires: ['clean-quit'] }
+      )
+      await runStep(report, 'meeting-preserved-after-relaunch', () => verifyMeetingPreserved(session, savedFile), {
+        requires: ['relaunch', 'stop-and-save']
+      })
+      await runStep(
+        report,
+        'final-quit',
+        async () => {
+          const quit = await session.quit()
+          if (!quit.cleanShutdown || !quit.cleanShutdownRecord)
+            throw new Error(
+              `the relaunched app did not shut down cleanly (request ${quit.request}, exit ${quit.exit}, audit ${quit.cleanShutdownRecord})`
+            )
+          if (quit.leftovers.length) throw new Error(`${quit.leftovers.length} owned process(es) survived the quit`)
+          return { evidence: { exit: quit.exit, appShutdownCleanAudit: true, leftoverProcesses: 0 } }
+        },
+        { requires: ['relaunch'] }
+      )
+    }
   } finally {
     await cleanup()
   }

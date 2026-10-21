@@ -147,8 +147,8 @@ export function buildChildEnv({ parentEnv, layout, captureFile = null, platform 
 }
 
 /** Settings seeded into a fresh profile so the overlay is on screen, not parked, and onboarding does not own the window. */
-export function seedSettings(now = Date.now()) {
-  return { onboardingDone: true, onboardingDoneAt: now, overlayLayout: 'bar', autoHideOverlay: false }
+export function seedSettings(now = Date.now(), extra = {}) {
+  return { onboardingDone: true, onboardingDoneAt: now, overlayLayout: 'bar', autoHideOverlay: false, ...extra }
 }
 
 /** The executable inside a .app bundle: electron-builder names it after the bundle. */

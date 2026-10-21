@@ -10,6 +10,7 @@ import { resolveInstallConfig, singleAppIn } from './install.mjs'
 import { CliError, parseWavInfo } from './lib.mjs'
 import { dryRunPlan, resolveConfig } from './run-acceptance.mjs'
 import { assertSyntheticCaptureActive } from './scenario.mjs'
+import { SETTINGS_HIG_STEPS } from './settings-hig.mjs'
 
 let base: string
 let sandboxRoot: string
@@ -35,7 +36,36 @@ describe('run-acceptance configuration', () => {
     const config = resolveConfig(['--run-id', 'r1'], isolatedEnv())
     expect(config.layout.sandboxRoot).toBe(sandboxRoot)
     expect(config.appPath).toBe(join(sandboxRoot, 'Applications', 'Metis QA.app'))
-    expect(config.values).toMatchObject({ audio: 'speech', 'meeting-seconds': 90, 'dry-run': false })
+    expect(config.values).toMatchObject({
+      scenario: 'meeting',
+      audio: 'speech',
+      'meeting-seconds': 90,
+      'dry-run': false
+    })
+  })
+
+  it('keeps the meeting scenario as the default and makes settings-hig opt-in, defaulting it to the tone input', () => {
+    const env = isolatedEnv()
+    expect(resolveConfig([], env).values.scenario).toBe('meeting')
+    expect(() => resolveConfig(['--scenario', 'soak'], env)).toThrow(/--scenario must be one of meeting, settings-hig/)
+    const hig = resolveConfig(['--run-id', 'r1', '--scenario', 'settings-hig'], env)
+    expect(hig.values).toMatchObject({ scenario: 'settings-hig', audio: 'tone' })
+    expect(resolveConfig(['--scenario=settings-hig', '--audio', 'speech'], env).values.audio).toBe('speech')
+  })
+
+  it('--dry-run lists the settings-hig steps for that scenario', () => {
+    const config = resolveConfig(['--run-id', 'r1', '--scenario', 'settings-hig', '--dry-run'], isolatedEnv())
+    const result = dryRunPlan(config, isolatedEnv(), { bundleId: QA_BUNDLE_ID, platform: 'darwin' })
+    expect(result.ok).toBe(true)
+    expect(result.plan.scenario).toBe('settings-hig')
+    expect(result.plan.steps).toEqual([...SETTINGS_HIG_STEPS])
+    expect(result.plan.steps).toEqual(
+      expect.arrayContaining([
+        'settings-shortcut-opens',
+        'settings-audio-no-mic-request',
+        'settings-last-pane-restored'
+      ])
+    )
   })
 
   it('rejects bad arguments', () => {

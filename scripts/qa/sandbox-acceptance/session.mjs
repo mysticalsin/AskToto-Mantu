@@ -78,13 +78,18 @@ export function guardReport({
   }
 }
 
-/** Create the run's directories and, on first launch, the onboarded settings. Idempotent so a relaunch reuses the profile. */
-export function prepareProfile(layout) {
+/**
+ * Create the run's directories and, on first launch, the onboarded settings (plus `extraSettings`, for a scenario that needs
+ * a specific profile). Idempotent so a relaunch reuses the profile.
+ */
+export function prepareProfile(layout, extraSettings = {}) {
   for (const dir of [layout.home, layout.tmp, layout.userData, layout.reportsDir, layout.appData, layout.localAppData])
     mkdirSync(dir, { recursive: true })
   const settingsFile = join(layout.userData, 'settings.json')
   if (!existsSync(settingsFile))
-    writeFileSync(settingsFile, `${JSON.stringify(seedSettings(), null, 2)}\n`, { mode: 0o600 })
+    writeFileSync(settingsFile, `${JSON.stringify(seedSettings(Date.now(), extraSettings), null, 2)}\n`, {
+      mode: 0o600
+    })
 }
 
 export const readAudit = (layout) => parseAuditLog(readAuditLog(layout.auditLog))
