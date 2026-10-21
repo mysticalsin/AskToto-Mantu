@@ -46,8 +46,19 @@ export function commandConfirmationPolicyAllows(input: CommandConfirmationPolicy
   )
 }
 
+/** What main knows about one confirmed proposal. The owner comes from the IPC sender, never the renderer payload. */
+export type CommandExecutionContext = {
+  proposalId: string
+  owner: { webContentsId: number; revision: number }
+}
+
+export type CommandExecutor = (
+  request: DesktopActionRequest,
+  context: CommandExecutionContext
+) => Promise<DesktopActionResult>
+
 type CommandControlDeps = {
-  execute: (request: DesktopActionRequest) => Promise<DesktopActionResult>
+  execute: CommandExecutor
   /** Main-process policy is required: omitting it must never turn confirmation into permission. */
   policyAllows: (request: DesktopActionRequest) => boolean
   audit?: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
@@ -128,7 +139,10 @@ export class CommandControl {
       return { ok: false, reason: 'policy_denied' }
     }
     try {
-      const result = await this.deps.execute(proposal.request)
+      const result = await this.deps.execute(proposal.request, {
+        proposalId: proposal.proposalId,
+        owner: { webContentsId: proposal.ownerWebContentsId, revision: proposal.revision }
+      })
       if (result.id !== proposal.request.id) {
         this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'failed' })
         return { ok: false, reason: 'adapter_failed' }
@@ -138,8 +152,10 @@ export class CommandControl {
       if (result.ok && result.outcome === 'verified') return { ok: true, outcome: result.outcome }
       return { ok: false, reason: 'adapter_failed' }
     } catch {
-      this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'failed' })
-      return { ok: false, reason: 'adapter_failed' }
+      // The adapter was already invoked: a rejection does not prove the effect did not happen (the app may have
+      // launched before the acknowledgement was lost). Report it as unverified, never as a clean failure.
+      this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'unknown' })
+      return { ok: false, reason: 'outcome_unverified' }
     }
   }
 

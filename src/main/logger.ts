@@ -371,6 +371,10 @@ export type AuditEvent =
   // rejected outright — the device keeps using its last known-good cached policy (or today's
   // defaults, if it never had one). Reason only, never the raw payload.
   | 'operator.model_policy.rejected'
+  // WP07: confirmed desktop commands run as tasks. Action id and reason only, never request arguments.
+  | 'task.recovered'
+  | 'task.effect_uncertain'
+  | 'task.dispatch_denied'
   // WP02 contract names (content-free by schema).
   | ContractAuditEventName
 

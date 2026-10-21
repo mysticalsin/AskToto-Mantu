@@ -687,7 +687,7 @@ import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandConfirmation } from './command-confirmation'
-import { executeDesktopAction } from './desktop-adapters'
+import { desktopActionTaskDeps } from './tasks/desktop-action-task-runtime'
 import { ensureMetisCommandRuntime, getMetisCommandRuntime } from './metis-command-register'
 import {
   consumeSecurityLimit,
@@ -1130,7 +1130,7 @@ let audioArmed = false // loopback capture only granted during an explicit user-
 const speechCaptureGrants = new SpeechCaptureGrantRegistry()
 let speechNavigationEpoch = 1
 const commandControl = new CommandConfirmation({
-  execute: executeDesktopAction,
+  ...desktopActionTaskDeps(),
   isAuthenticated: requireAuth,
   hasListenEntitlement: () => operatorGate('listen').allowed,
   getOwner: () => win,

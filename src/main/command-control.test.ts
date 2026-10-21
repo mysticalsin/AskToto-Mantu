@@ -142,6 +142,39 @@ describe('CommandControl', () => {
     })
   })
 
+  it('reports a dispatch that rejects as unverified, because the effect may already have happened', async () => {
+    const audit = vi.fn()
+    const controller = new CommandControl({
+      execute: async () => {
+        throw new Error('adapter connection lost after launch')
+      },
+      policyAllows: allowCommandPolicy,
+      audit
+    })
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'outcome_unverified'
+    })
+    expect(audit).toHaveBeenCalledWith('command.confirmed', {
+      actionId: 'desktop.open_notes',
+      outcome: 'unknown'
+    })
+  })
+
+  it('hands the executor the confirmed proposal identity and the sender-derived owner', async () => {
+    const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const }))
+    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
+
+    await controller.confirm({ ...proposal, webContentsId: 11 })
+    expect(execute).toHaveBeenCalledWith(
+      { id: 'desktop.open_notes', args: {} },
+      { proposalId: proposal.proposalId, owner: { webContentsId: 11, revision: 3 } }
+    )
+  })
+
   it('does not attribute a verified result for another action to the confirmed action', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({
@@ -261,6 +294,9 @@ describe('CommandControl', () => {
     request.args.title = 'changed after propose'
 
     expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({ ok: true, outcome: 'verified' })
-    expect(execute).toHaveBeenCalledWith({ id: 'desktop.create_note', args: { title: 'hello' } })
+    expect(execute).toHaveBeenCalledWith(
+      { id: 'desktop.create_note', args: { title: 'hello' } },
+      { proposalId: proposal.proposalId, owner: { webContentsId: 11, revision: 4 } }
+    )
   })
 })

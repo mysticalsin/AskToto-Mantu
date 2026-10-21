@@ -244,3 +244,34 @@ describe('CommandConfirmation lifecycle policy', () => {
     })
   })
 })
+
+describe('CommandConfirmation task recovery', () => {
+  function withRecovery(recoverTasks: () => Promise<unknown>) {
+    const logger = { warn: vi.fn(), error: vi.fn() }
+    const confirmation = new CommandConfirmation({
+      execute: vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const })),
+      recoverTasks,
+      isAuthenticated: () => true,
+      hasListenEntitlement: () => true,
+      getOwner: () => null,
+      isOnboardingExclusive: () => false,
+      audit: vi.fn()
+    })
+    return { confirmation, logger }
+  }
+
+  it('restores task history at boot without executing anything', () => {
+    const recoverTasks = vi.fn(async () => undefined)
+    const { confirmation, logger } = withRecovery(recoverTasks)
+    confirmation.initialize(new FakePowerMonitor(), vi.fn(), logger)
+    expect(recoverTasks).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs a recovery failure instead of crashing boot', async () => {
+    const { confirmation, logger } = withRecovery(async () => {
+      throw new Error('archive read failed')
+    })
+    confirmation.initialize(new FakePowerMonitor(), vi.fn(), logger)
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled())
+  })
+})
