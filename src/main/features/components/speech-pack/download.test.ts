@@ -598,16 +598,22 @@ describe('downloadVerified', () => {
 
   it('stops as a disk error without retrying when the disk fills mid-transfer, keeping the resumable prefix', async () => {
     server = await serve(rangeHandler(body))
-    let writes = 0
+    // The disk fills once half the body is on disk, whatever chunk sizes the socket delivers (a single 200 KB
+    // chunk on one host, many small ones on another): the write that crosses the limit lands its prefix, then fails.
+    const capacity = Math.floor(body.length / 2)
+    let written = 0
     const openFile = (async (path, flags) => {
       const handle = await openAsync(path, flags)
-      const actualWrite = handle.write.bind(handle) as (...args: unknown[]) => Promise<unknown>
-      handle.write = (async (...args: unknown[]) => {
-        if (++writes > 1)
-          throw Object.assign(new Error('no space left on device'), {
-            code: 'ENOSPC'
-          })
-        return actualWrite(...args)
+      const actualWrite = handle.write.bind(handle) as (chunk: Uint8Array) => Promise<unknown>
+      handle.write = (async (chunk: Uint8Array) => {
+        if (written + chunk.length > capacity) {
+          const room = capacity - written
+          if (room > 0) await actualWrite(chunk.subarray(0, room))
+          written = capacity
+          throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+        }
+        written += chunk.length
+        return actualWrite(chunk)
       }) as typeof handle.write
       return handle
     }) as typeof openAsync
