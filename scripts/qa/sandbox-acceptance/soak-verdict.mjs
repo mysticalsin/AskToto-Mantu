@@ -25,7 +25,10 @@ export const THRESHOLDS = Object.freeze({
     rssFloorBytes: 64 * MIB,
     rssFraction: 0.1,
     processAllowance: 2,
-    cpuAllowancePoints: 0.5
+    cpuAllowancePoints: 0.5,
+    absoluteCpu:
+      'PROPOSED, advisory (C30 / D10-9): mean one-core CPU% over the idle window <= 5% (target: the default hide layout); reported, not part of the outcome until accepted',
+    absoluteCpuBudgetPercent: 5
   }),
   meeting: Object.freeze({
     rssGrowth:
@@ -93,13 +96,15 @@ export function phaseFrame(samples, phase) {
 /**
  * Judge a soak. `samples` are { tMs (from soak start), mainAlive, processes[] }; `phases` are the ACTUAL phase
  * boundaries ({ id: 'idle' | 'meeting' | 'post', startMs, endMs }) measured from soak start.
- * @param {{ samples: any[], phases: { id: string, startMs: number, endMs: number }[], intervalMs: number, requestedMinutes: number }} args
+ * `layout` is the seeded overlay layout, recorded with the advisory absolute idle CPU budget (B1-idle).
+ * @param {{ samples: any[], phases: { id: string, startMs: number, endMs: number }[], intervalMs: number, requestedMinutes: number, layout?: string }} args
  */
-export function evaluateSoak({ samples, phases, intervalMs, requestedMinutes }) {
+export function evaluateSoak({ samples, phases, intervalMs, requestedMinutes, layout = 'unrecorded' }) {
   if (!phases.length) throw new Error('evaluateSoak needs at least one phase')
   const validity = []
   const checks = []
   const required = []
+  const budgets = []
   validity.push({
     id: 'V-MAIN',
     pass: samples.every((sample) => sample.mainAlive),
@@ -192,6 +197,20 @@ export function evaluateSoak({ samples, phases, intervalMs, requestedMinutes }) 
         'processes'
       )
     )
+    if (phase.id === 'idle') {
+      // The drift checks bound change only; this states the absolute idle cost against the proposed budget.
+      const mean = cpuMean(frame.window)
+      if (mean !== null)
+        budgets.push({
+          id: 'B1-idle',
+          status: 'PROPOSED',
+          layout,
+          measured: mean,
+          bound: THRESHOLDS.idle.absoluteCpuBudgetPercent,
+          unit: 'mean one-core CPU % over the idle window',
+          within: mean <= THRESHOLDS.idle.absoluteCpuBudgetPercent
+        })
+    }
     const third = Math.floor(frame.window.length / 3)
     const early = cpuMean(frame.window.slice(0, third))
     const late = cpuMean(frame.window.slice(-third))
@@ -218,6 +237,8 @@ export function evaluateSoak({ samples, phases, intervalMs, requestedMinutes }) 
     requestedMinutes,
     validity,
     checks,
+    budgets,
+    layout,
     failed: [
       ...validity.filter((clause) => !clause.pass).map((clause) => clause.id),
       ...checks.filter((check) => !check.pass).map((check) => check.id)
@@ -286,6 +307,13 @@ export function renderSummary({ verdict, queue, meta = {} }) {
       `- ${check.pass ? 'PASS' : 'FAIL'} ${check.id}: ${scale(check.measured)} (bound ${scale(check.bound)}; ${check.unit})`
     )
   }
+  lines.push('')
+  lines.push('## Absolute idle CPU budget (PROPOSED, advisory)')
+  lines.push(`- ${THRESHOLDS.idle.absoluteCpu}.`)
+  for (const budget of verdict.budgets ?? [])
+    lines.push(
+      `- ${budget.within ? 'WITHIN' : 'OVER'} ${budget.id}: ${Math.round(budget.measured * 100) / 100} (bound ${budget.bound}; ${budget.unit}; layout ${budget.layout})`
+    )
   lines.push('')
   lines.push('## Queue depth')
   lines.push(

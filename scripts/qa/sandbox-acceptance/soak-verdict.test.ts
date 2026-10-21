@@ -169,6 +169,41 @@ describe('evaluateSoak', () => {
   })
 })
 
+describe('absolute idle CPU budget (C30 / D10-9, PROPOSED, advisory)', () => {
+  it('reports the idle-window mean one-core CPU against the proposed 5% budget and records the layout', () => {
+    // cpu 0.2 per process and two processes: 40% of one core, the 2.12.0 bar-layout idle shape.
+    const hot = evaluateSoak({
+      samples: makeSamples({ minutes: 60, cpu: 0.2 }),
+      phases: phases(24, 30, 6),
+      intervalMs: 30_000,
+      requestedMinutes: 60,
+      layout: 'bar'
+    })
+    expect(THRESHOLDS.idle.absoluteCpuBudgetPercent).toBe(5)
+    expect(hot.budgets).toHaveLength(1)
+    const [budget] = hot.budgets
+    expect(budget).toMatchObject({ id: 'B1-idle', status: 'PROPOSED', layout: 'bar', bound: 5, within: false })
+    expect(budget.measured).toBeCloseTo(40, 1)
+    // Advisory until the owner accepts the threshold: it never changes the outcome or the failed list.
+    expect(hot.outcome).toBe('PASS')
+    expect(hot.failed).not.toContain('B1-idle')
+    const markdown = renderSummary({ verdict: hot, queue: summarizeQueue([]) })
+    expect(markdown).toContain('## Absolute idle CPU budget (PROPOSED, advisory)')
+    expect(markdown).toContain('OVER B1-idle: 40 (bound 5; mean one-core CPU % over the idle window; layout bar)')
+  })
+
+  it('is within the budget for a quiet idle, and says when the layout was not recorded', () => {
+    const quiet = evaluateSoak({
+      samples: makeSamples({ minutes: 60, cpu: 0.01 }),
+      phases: phases(24, 30, 6),
+      intervalMs: 30_000,
+      requestedMinutes: 60
+    })
+    expect(quiet.budgets[0]).toMatchObject({ within: true, layout: 'unrecorded' })
+    expect(renderSummary({ verdict: quiet, queue: summarizeQueue([]) })).toContain('WITHIN B1-idle: 2 (bound 5')
+  })
+})
+
 describe('summary', () => {
   it('states the thresholds, the outcome and the queue status', () => {
     const verdict = evaluateSoak({
@@ -310,6 +345,9 @@ describe('soak configuration', () => {
     const sandboxRoot = resolve('/x/_relay/goal-loop/sandbox-home')
     expect(config.appPath).toBe(join(sandboxRoot, 'Applications', 'Metis QA.app'))
     expect(config.layout.sandboxRoot).toBe(sandboxRoot)
+    // The soak has always seeded the 'bar' layout; the product default ('hide') is opt-in and recorded in the report.
+    expect(config.values.layout).toBe('bar')
+    expect(resolveSoakConfig(['--layout', 'hide'], env).values.layout).toBe('hide')
   })
 
   it('refuses a plan without a meeting or idle phase, and bad arguments', () => {
@@ -322,6 +360,7 @@ describe('soak configuration', () => {
     expect(() => resolveSoakConfig(['--minutes', '2'], env)).toThrow(/at least 4/)
     expect(() => resolveSoakConfig(['--audio', 'mic'], env)).toThrow(/--audio must be/)
     expect(() => resolveSoakConfig(['--audio', 'file'], env)).toThrow(/needs --wav/)
+    expect(() => resolveSoakConfig(['--layout', 'floating'], env)).toThrow(/--layout must be one of bar, hide, island/)
     expect(() => resolveSoakConfig([], { HOME: '/Users/real' })).toThrow(/cannot derive the sandbox root/)
   })
 })

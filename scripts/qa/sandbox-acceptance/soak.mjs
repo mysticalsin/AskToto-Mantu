@@ -32,6 +32,9 @@ import { guardReport, launchApp, prepareProfile, readAudit } from './session.mjs
 import { readQueue, startSyntheticMeeting, stopAndSave } from './scenario.mjs'
 import { MINUTE_MS, evaluateSoak, planPhases, renderSummary } from './soak-verdict.mjs'
 
+/** Overlay layouts a soak profile can be seeded with. The product default is 'hide'; the soak has always seeded 'bar'. */
+export const OVERLAY_LAYOUTS = Object.freeze(['bar', 'hide', 'island'])
+
 export const CLI_SPEC = Object.freeze({
   app: { type: 'string' },
   'sandbox-root': { type: 'string' },
@@ -47,6 +50,7 @@ export const CLI_SPEC = Object.freeze({
   'poll-queue': { type: 'boolean', default: true },
   'ready-timeout-seconds': { type: 'number', default: 120, min: 10 },
   'save-wait-seconds': { type: 'number', default: 180, min: 10 },
+  layout: { type: 'string', default: 'bar' },
   'dry-run': { type: 'boolean', default: false }
 })
 
@@ -55,6 +59,8 @@ export function resolveSoakConfig(argv, env = process.env) {
   if (!AUDIO_KINDS.includes(values.audio)) throw new CliError(`--audio must be one of ${AUDIO_KINDS.join(', ')}`)
   if (values.audio === 'file' && !values.wav) throw new CliError('--audio file needs --wav <path>')
   if (values.wav && values.audio !== 'file') throw new CliError('--wav is only valid with --audio file')
+  if (!OVERLAY_LAYOUTS.includes(values.layout))
+    throw new CliError(`--layout must be one of ${OVERLAY_LAYOUTS.join(', ')}`)
   const sandboxRoot =
     values['sandbox-root'] ??
     env.METIS_SANDBOX_ROOT ??
@@ -148,7 +154,8 @@ async function main(argv) {
     console.error(`[soak] ${error.message}`)
     return EXIT_CODES.PRECONDITION
   }
-  prepareProfile(layout)
+  // Seeds the overlay layout on the run's first launch (prepareProfile never rewrites an existing profile).
+  prepareProfile(layout, { overlayLayout: values.layout })
   let audio
   try {
     audio = prepareAudio({ kind: values.audio, layout, wavSource: values.wav })
@@ -170,7 +177,8 @@ async function main(argv) {
       intervalSeconds: values['interval-seconds'],
       audio: values.audio,
       runId: layout.runId,
-      footprint: values.footprint
+      footprint: values.footprint,
+      overlayLayout: values.layout
     },
     meta: {
       bundleId: readBundleId(appPath),
@@ -316,7 +324,8 @@ async function main(argv) {
       samples,
       phases: actualPhases,
       intervalMs,
-      requestedMinutes: aborted ? 0 : values.minutes
+      requestedMinutes: aborted ? 0 : values.minutes,
+      layout: values.layout
     })
   } catch (error) {
     verdict = {
