@@ -110,7 +110,11 @@ export async function readStableRegularFile(root: string, name: string, maxBytes
 }
 
 /** Read a bounded, stable byte snapshot without consulting or populating the stat-keyed JSON cache. */
-export async function readStableSnapshotBytes(rootPath: string, path: string, maxBytes: number): Promise<Buffer | null> {
+export async function readStableSnapshotBytes(
+  rootPath: string,
+  path: string,
+  maxBytes: number
+): Promise<Buffer | null> {
   return withPathLane(path, async (): Promise<Buffer | null> => {
     let handle: FileHandle | undefined
     try {

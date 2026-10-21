@@ -163,7 +163,8 @@ describe('stable-read refusals', () => {
       hooks.afterFirstStat = async () => {
         await appendFile(file, 'external writer\n')
       }
-      if (reader === 'regular') expect(await readStableRegularFile(dir, 'fixture.txt', 1024)).toEqual({ status: 'refused' })
+      if (reader === 'regular')
+        expect(await readStableRegularFile(dir, 'fixture.txt', 1024)).toEqual({ status: 'refused' })
       else expect(await readStableSnapshotBytes(dir, file, 1024)).toBeNull()
     })
   }

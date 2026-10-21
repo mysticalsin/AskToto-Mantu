@@ -4,7 +4,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction, type DealEntity, type PersonEntity } from '@shared/brain'
+import {
+  MeetingExtractionSchema,
+  BRAIN_EXTRACTION_PROMPT,
+  type MeetingExtraction,
+  type DealEntity,
+  type PersonEntity
+} from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import {
   extractJsonObject,
@@ -13,7 +19,8 @@ import {
   commitmentKey,
   buildExtractionSystem,
   updateIndex,
-  readMeetingSourceMode } from './ingest'
+  readMeetingSourceMode
+} from './ingest'
 import { buildBrainContext } from './context'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
@@ -39,9 +46,7 @@ function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     const mapped = value.map(canonicalize)
     const allPlainObjects = mapped.every((v) => v !== null && typeof v === 'object' && !Array.isArray(v))
-    return allPlainObjects
-      ? [...mapped].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-      : mapped
+    return allPlainObjects ? [...mapped].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : mapped
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {}
@@ -55,7 +60,7 @@ function canonicalize(value: unknown): unknown {
 
 vi.mock('electron')
 
-const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder } as Settings)
+const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder }) as Settings
 
 describe('brain', () => {
   let folder: string
@@ -95,10 +100,17 @@ describe('brain', () => {
         velocity: { signal: 'hard-calendar-gate', evidence: 'go/no-go week of June 15' }
       },
       signals: [
-        { kind: 'objection', statement: 'Price is above competitors', quote: 'the price isn’t competitive', confidence: 'EXTRACTED' },
+        {
+          kind: 'objection',
+          statement: 'Price is above competitors',
+          quote: 'the price isn’t competitive',
+          confidence: 'EXTRACTED'
+        },
         { kind: 'positive', statement: 'Happy with delivery team', quote: '', confidence: 'INFERRED' }
       ],
-      missed_signals: [{ statement: 'Did not probe the competitor bid details', why_it_matters: 'unknown pricing anchor' }],
+      missed_signals: [
+        { statement: 'Did not probe the competitor bid details', why_it_matters: 'unknown pricing anchor' }
+      ],
       feedback: ['Ask sharper discovery questions on budget']
     })
 
@@ -198,7 +210,9 @@ describe('brain', () => {
     it('a second meeting compounds onto existing entities instead of overwriting them', async () => {
       await mergeExtraction(s, sampleExtraction(), { file: 'm1.md', date: '', title: 't1' })
       const second = sampleExtraction()
-      second.signals = [{ kind: 'positive', statement: 'Budget approved', quote: 'finance signed off', confidence: 'EXTRACTED' }]
+      second.signals = [
+        { kind: 'positive', statement: 'Budget approved', quote: 'finance signed off', confidence: 'EXTRACTED' }
+      ]
       second.deal!.win_likelihood_band = 'good'
       await mergeExtraction(s, second, { file: 'm2.md', date: '', title: 't2' })
       const acc = readAccount(s, slugify("L'Oréal"))!
@@ -224,7 +238,13 @@ describe('brain', () => {
     it('returns the relevant, meeting-cited slice when the question names a known entity', async () => {
       const x = sampleExtraction()
       x.commitments = [
-        { text: 'send the ROI deck', by: 'Maria Silva', due_hint: 'by Friday', quote: "I'll get you the ROI deck", confidence: 'EXTRACTED' }
+        {
+          text: 'send the ROI deck',
+          by: 'Maria Silva',
+          due_hint: 'by Friday',
+          quote: "I'll get you the ROI deck",
+          confidence: 'EXTRACTED'
+        }
       ]
       await mergeExtraction(s, x, { file: 'm1.md', date: '2026-06-14', title: 'LATAM SAP pricing defense' })
 
@@ -320,7 +340,12 @@ describe('brain', () => {
 
     it('two Chinese-named accounts stay fully separate through the real merge pipeline', async () => {
       const beijing = sampleExtraction()
-      beijing.account = { name: '北京公司', sector: 'technology', sector_confidence: 'INFERRED', confidence: 'EXTRACTED' }
+      beijing.account = {
+        name: '北京公司',
+        sector: 'technology',
+        sector_confidence: 'INFERRED',
+        confidence: 'EXTRACTED'
+      }
       beijing.deal = null
       beijing.people = []
       const shanghai = sampleExtraction()
@@ -425,7 +450,11 @@ describe('brain', () => {
 
   it('updateIndex serializes concurrent mutations — no lost writes (production bug: idx.ingested went empty despite every extraction succeeding, because index.json has several independent writers — job completions, the queue-drained cleanup, a re-entrant startBackfill() call — and an unserialized read-mutate-write on each silently dropped whichever wrote last with a stale snapshot)', async () => {
     await Promise.all(
-      Array.from({ length: 10 }, (_, i) => updateIndex(s, (idx) => { idx.ingested[`m${i}.md`] = { at: i, ok: true } }))
+      Array.from({ length: 10 }, (_, i) =>
+        updateIndex(s, (idx) => {
+          idx.ingested[`m${i}.md`] = { at: i, ok: true }
+        })
+      )
     )
     const idx = readIndex(s)
     expect(Object.keys(idx.ingested)).toHaveLength(10)
@@ -510,7 +539,7 @@ describe('brain', () => {
         }
       })
 
-    const permutations = <T,>(items: T[]): T[][] =>
+    const permutations = <T>(items: T[]): T[][] =>
       items.length <= 1
         ? [[...items]]
         : items.flatMap((item, i) =>
@@ -601,8 +630,14 @@ describe('brain', () => {
         }
       }
 
-      const a = await run([[sectorX('banking', 'EXTRACTED'), firmRef], [sectorX('technology', 'INFERRED'), weakRef]])
-      const b = await run([[sectorX('technology', 'INFERRED'), weakRef], [sectorX('banking', 'EXTRACTED'), firmRef]])
+      const a = await run([
+        [sectorX('banking', 'EXTRACTED'), firmRef],
+        [sectorX('technology', 'INFERRED'), weakRef]
+      ])
+      const b = await run([
+        [sectorX('technology', 'INFERRED'), weakRef],
+        [sectorX('banking', 'EXTRACTED'), firmRef]
+      ])
       expect(a.canon).toBe(b.canon)
       expect(a.acc.sector).toBe('banking') // the EXTRACTED classification wins in both orders
       expect(a.acc.sector_confidence).toBe('EXTRACTED')
@@ -622,7 +657,10 @@ describe('brain', () => {
           account: { name: 'MixCo', sector, sector_confidence: conf, confidence: 'EXTRACTED' }
         })
       const weakerNewerV = { x: sectorX('retail', 'INFERRED'), ref: { file: 'z.md', date: '2026-03-01', title: 't' } }
-      const strongerOlderV = { x: sectorX('retail', 'EXTRACTED'), ref: { file: 'a.md', date: '2026-01-01', title: 't' } }
+      const strongerOlderV = {
+        x: sectorX('retail', 'EXTRACTED'),
+        ref: { file: 'a.md', date: '2026-01-01', title: 't' }
+      }
       const winnerW = { x: sectorX('banking', 'EXTRACTED'), ref: { file: 'w.md', date: '2026-06-01', title: 't' } }
       const sightings = [weakerNewerV, strongerOlderV, winnerW]
 
@@ -893,10 +931,18 @@ describe('brain', () => {
       expect(d.id).toBe('acme-core-banking')
       expect(d.stage).toBe('defense')
       expect(d.stage_provenance).toEqual({
-        value: 'defense', source_file: '', date: '2026-03-01', confidence: 'INFERRED', state: 'extracted', superseded: []
+        value: 'defense',
+        source_file: '',
+        date: '2026-03-01',
+        confidence: 'INFERRED',
+        state: 'extracted',
+        superseded: []
       })
       expect(d.win_likelihood_band_provenance!.quote).toBe('price pressure but strong relationship')
-      expect(d.velocity_provenance!.value).toEqual({ signal: 'hard-calendar-gate', evidence: 'go/no-go week of June 15' })
+      expect(d.velocity_provenance!.value).toEqual({
+        signal: 'hard-calendar-gate',
+        evidence: 'go/no-go week of June 15'
+      })
     })
 
     it('write path always emits schema_version 2, and a migrated-then-written file round-trips stably', async () => {
@@ -905,8 +951,13 @@ describe('brain', () => {
       writeFileSync(
         join(dir, 'v1-roundtrip.json'),
         JSON.stringify({
-          name: 'V1 Person', role: 'Buyer', account: 'Acme',
-          meetings: [], quotes: [], stance_trail: [], commitments: []
+          name: 'V1 Person',
+          role: 'Buyer',
+          account: 'Acme',
+          meetings: [],
+          quotes: [],
+          stance_trail: [],
+          commitments: []
         }),
         'utf8'
       )
@@ -924,8 +975,13 @@ describe('brain', () => {
       const dir = join(brainDir(s), 'entities', 'person')
       mkdirSync(dir, { recursive: true })
       const v1Raw = JSON.stringify({
-        name: 'Backup Test', role: null, account: null,
-        meetings: [], quotes: [], stance_trail: [], commitments: []
+        name: 'Backup Test',
+        role: null,
+        account: null,
+        meetings: [],
+        quotes: [],
+        stance_trail: [],
+        commitments: []
       })
       writeFileSync(join(dir, 'backup-test.json'), v1Raw, 'utf8')
 

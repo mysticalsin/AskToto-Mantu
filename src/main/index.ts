@@ -8048,13 +8048,13 @@ function registerIpc(): void {
         race?: AttemptRace,
         refreshed = false
       ): void => {
+        // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
+        // one the hedge must not duplicate. It precedes the brain-context refresh so a proof in flight counts.
+        if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
         // Retries, failovers and hedged legs may start after an account/profile/context boundary changed.
         // Revalidate at every provider dispatch and fail closed by omitting anything no longer current. The
         // file proofs are async, so the attempt re-enters itself (`refreshed`) once they settle.
         if (!refreshed) return brain.dispatch(race?.gate, () => attempt(provider, attempted, retryCount, race, true))
-        // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
-        // one the hedge must not duplicate.
-        if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
         const def = PROVIDERS[provider]
         if (allowed && !allowed.includes(provider)) {
           auditLog('provider.blocked', { provider })

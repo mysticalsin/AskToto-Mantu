@@ -210,7 +210,10 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
 
     await seedReceipts(['person-role.md', 'account-sector.md', 'deal-outlook.md'])
 
-    const result = await buildBrainContextWithSources(s, 'Summarize Provenance Person Provenance Account Provenance Deal.')
+    const result = await buildBrainContextWithSources(
+      s,
+      'Summarize Provenance Person Provenance Account Provenance Deal.'
+    )
     expect(result.block).toContain('Verified Role [person-role.md, 2026-05-20]')
     expect(result.block).toContain('Pinned Organization (edited by you)')
     expect(result.block).not.toContain('Legacy Role')
@@ -258,7 +261,10 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await writeAccount(s, account.id, account)
     await seedReceipts([source])
 
-    const result = await buildBrainContextWithSources(s, 'Summarize Collision Person First and Collision Account Later.')
+    const result = await buildBrainContextWithSources(
+      s,
+      'Summarize Collision Person First and Collision Account Later.'
+    )
     expect(result.block).toContain('Verified role [' + source + ', ' + fieldDate + ']')
     expect(
       result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)
@@ -292,7 +298,10 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await writeAccount(s, account.id, account)
     await seedReceipts([source, MEETING.file])
 
-    const result = await buildBrainContextWithSources(s, 'Summarize Collision Person Generic and Collision Account Verified.')
+    const result = await buildBrainContextWithSources(
+      s,
+      'Summarize Collision Person Generic and Collision Account Verified.'
+    )
     expect(result.block).toContain('banking [' + source + ', ' + fieldDate + ']')
     expect(
       result.sourceReferences.filter((reference) => reference.source === source && reference.sourceRootId === ROOT)

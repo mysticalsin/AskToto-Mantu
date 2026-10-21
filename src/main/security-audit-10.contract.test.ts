@@ -260,7 +260,10 @@ describe('AUDIT-10 — askStart never forwards Error.message to the overlay', ()
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
     const body = indexSrc.slice(start, end)
-    const catchBlock = body.slice(body.lastIndexOf('} catch (err)'))
+    // The outer catch and the deferred (async brain-proof) dispatch share one failure sender, so the
+    // constant-sentence rule is asserted on that sender and the catch must delegate to it unchanged.
+    expect(body.slice(body.lastIndexOf('} catch (err)'))).toMatch(/^\} catch \(err\) \{\s*failAskStart\(err\)\s*\}/)
+    const catchBlock = sliceBetween('const failAskStart = (err: unknown): void => {', '    try {', body)
     expect(catchBlock).toMatch(/isModeSkillIntegrityError\(err\)/)
     expect(catchBlock).toMatch(/'Could not start the answer\.'/)
     expect(catchBlock).not.toMatch(/e\.message/)

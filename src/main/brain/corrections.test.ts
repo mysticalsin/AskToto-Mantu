@@ -47,9 +47,7 @@ function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     const mapped = value.map(canonicalize)
     const allPlainObjects = mapped.every((v) => v !== null && typeof v === 'object' && !Array.isArray(v))
-    return allPlainObjects
-      ? [...mapped].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-      : mapped
+    return allPlainObjects ? [...mapped].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : mapped
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {}
@@ -443,7 +441,7 @@ describe('corrections engine', () => {
   // rename ever happened in real time, keeps the PRE-rename name. This is a deliberate, accepted
   // asymmetry (entity files are the corrected view; extraction files are the historical record), not a
   // defect this task fixes — task MI-4 (verified numbers / windowed extraction) should be aware of it.
-  it('[documented] a PRE-rename meeting\'s stored extraction file does NOT converge live vs rebuilt', async () => {
+  it("[documented] a PRE-rename meeting's stored extraction file does NOT converge live vs rebuilt", async () => {
     const preRename = MeetingExtractionSchema.parse({
       account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' }
     })
@@ -623,7 +621,9 @@ describe('corrections engine', () => {
     await ingestExtraction(s, personY, transcriptMd('2026-06-02'), join(folder, 'p2.md'))
     const FROM = slugify('Pat Winner')
     const INTO = slugify('P Winner')
-    expect((await updateEntityField(s, { kind: 'person', id: FROM, field: 'role', value: 'VP Engineering' })).ok).toBe(true)
+    expect((await updateEntityField(s, { kind: 'person', id: FROM, field: 'role', value: 'VP Engineering' })).ok).toBe(
+      true
+    )
     expect((await updateEntityField(s, { kind: 'person', id: INTO, field: 'role', value: 'CTO' })).ok).toBe(true)
 
     expect((await mergeEntities(s, { kind: 'person', fromId: FROM, intoId: INTO })).ok).toBe(true)
@@ -667,7 +667,7 @@ describe('corrections engine', () => {
     const renamedAccent = await renameEntity(s, { kind: 'account', id: slugify("L'Oréal"), newName: "L'Oréal Group" })
     expect(renamedAccent.ok).toBe(true)
     const accentMap = readAliasMap(s)
-    const accentExtraction = MeetingExtractionSchema.parse({ account: { name: 'L\'Oreal', sector: 'retail' } })
+    const accentExtraction = MeetingExtractionSchema.parse({ account: { name: "L'Oreal", sector: 'retail' } })
     applyCorrections(accentExtraction, accentMap)
     expect(accentExtraction.account!.name).toBe("L'Oréal Group")
   })
@@ -934,7 +934,18 @@ describe('corrections engine', () => {
       const decoyPath = join(folder, '..', `${basename(folder)}-evil.json`)
       writeFileSync(
         decoyPath,
-        JSON.stringify({ schema_version: 2, id: 'evil', name: 'PWNED', role: null, account: null, meetings: [], quotes: [], stance_trail: [], commitments: [], aliases: [] }),
+        JSON.stringify({
+          schema_version: 2,
+          id: 'evil',
+          name: 'PWNED',
+          role: null,
+          account: null,
+          meetings: [],
+          quotes: [],
+          stance_trail: [],
+          commitments: [],
+          aliases: []
+        }),
         'utf8'
       )
       try {
@@ -1115,7 +1126,12 @@ describe('corrections engine', () => {
         seq: 0,
         at: '2026-05-30T00:00:00.000Z',
         kind: 'field_update',
-        payload: { kind: 'deal', id: DEAL_SLUG, field: 'velocity', value: { signal: 'hard-calendar-gate', evidence: 'x' } }
+        payload: {
+          kind: 'deal',
+          id: DEAL_SLUG,
+          field: 'velocity',
+          value: { signal: 'hard-calendar-gate', evidence: 'x' }
+        }
       }
       await writeJson(s, 'corrections-LAPTOP.json', [conflictEntry])
 
@@ -1129,7 +1145,7 @@ describe('corrections engine', () => {
 
   // ── MI-2.5 Fix H — minor bundle ────────────────────────────────────────────────────────────
   describe('minor hardening bundle (Fix H)', () => {
-    it('a rename to the entity\'s own current name is a no-op — never appends (unbounded-journal guard)', async () => {
+    it("a rename to the entity's own current name is a no-op — never appends (unbounded-journal guard)", async () => {
       await ingestThreeMeetings(s)
       const r1 = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme Corp' }) // same as current name
       expect(r1.ok).toBe(true)
@@ -1155,10 +1171,34 @@ describe('corrections engine', () => {
 
     it('aliasMapFromJournal still resolves correctly through a longer rename+merge chain (reverse-index correctness)', () => {
       const entries: CorrectionEntry[] = [
-        { seq: 0, at: 't0', kind: 'entity_rename', payload: { kind: 'account', id: 'acme', newName: 'Acme One' }, snapshot: { oldName: 'Acme' } },
-        { seq: 1, at: 't1', kind: 'entity_rename', payload: { kind: 'account', id: 'acme', newName: 'Acme Two' }, snapshot: { oldName: 'Acme One' } },
-        { seq: 2, at: 't2', kind: 'entity_rename', payload: { kind: 'account', id: 'acme', newName: 'Acme Three' }, snapshot: { oldName: 'Acme Two' } },
-        { seq: 3, at: 't3', kind: 'entity_rename', payload: { kind: 'person', id: 'bob', newName: 'Bobby' }, snapshot: { oldName: 'Bob' } }
+        {
+          seq: 0,
+          at: 't0',
+          kind: 'entity_rename',
+          payload: { kind: 'account', id: 'acme', newName: 'Acme One' },
+          snapshot: { oldName: 'Acme' }
+        },
+        {
+          seq: 1,
+          at: 't1',
+          kind: 'entity_rename',
+          payload: { kind: 'account', id: 'acme', newName: 'Acme Two' },
+          snapshot: { oldName: 'Acme One' }
+        },
+        {
+          seq: 2,
+          at: 't2',
+          kind: 'entity_rename',
+          payload: { kind: 'account', id: 'acme', newName: 'Acme Three' },
+          snapshot: { oldName: 'Acme Two' }
+        },
+        {
+          seq: 3,
+          at: 't3',
+          kind: 'entity_rename',
+          payload: { kind: 'person', id: 'bob', newName: 'Bobby' },
+          snapshot: { oldName: 'Bob' }
+        }
       ]
       const map = aliasMapFromJournal(entries)
       // Every historical surface form of the account resolves to the FINAL name, transitively.
@@ -1261,9 +1301,9 @@ describe('corrections engine', () => {
       })
 
       // The real write throws — but the dry-run precheck + journal append already ran first.
-      await expect(updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).rejects.toThrow(
-        /simulated crash/
-      )
+      await expect(
+        updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      ).rejects.toThrow(/simulated crash/)
       spy.mockRestore()
 
       // The journal entry IS present (committed before the write) and the entity is NOT yet pinned.
@@ -1281,11 +1321,17 @@ describe('corrections engine', () => {
 
     it('field_update replay after a SUCCESSFUL live pin is idempotent (crash-after-write case)', async () => {
       await ingestThreeMeetings(s)
-      expect((await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).ok).toBe(true)
-      const afterLive = canonicalize(JSON.parse(readFileSync(join(brainDir(s), 'entities', 'deal', `${DEAL_SLUG}.json`), 'utf8')))
+      expect((await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).ok).toBe(
+        true
+      )
+      const afterLive = canonicalize(
+        JSON.parse(readFileSync(join(brainDir(s), 'entities', 'deal', `${DEAL_SLUG}.json`), 'utf8'))
+      )
       const replay = await replayCorrections(s)
       expect(replay.warnings).toHaveLength(0)
-      const afterReplay = canonicalize(JSON.parse(readFileSync(join(brainDir(s), 'entities', 'deal', `${DEAL_SLUG}.json`), 'utf8')))
+      const afterReplay = canonicalize(
+        JSON.parse(readFileSync(join(brainDir(s), 'entities', 'deal', `${DEAL_SLUG}.json`), 'utf8'))
+      )
       expect(afterReplay).toEqual(afterLive) // byte-equal — replay is a pure no-op over the applied pin
     })
 
@@ -1322,8 +1368,19 @@ describe('corrections engine', () => {
   describe('conflict-copy resolution is idempotent + robust (review minors a/c)', () => {
     it('resolving a conflict copy is idempotent — a second gate call does not re-detect the renamed .merged- copy', async () => {
       await ingestThreeMeetings(s)
-      const shared = { seq: 0, at: '2026-06-01T00:00:00.000Z', kind: 'entity_rename', payload: { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' }, snapshot: { oldName: 'Acme Corp' } }
-      const conflictOnly = { seq: 1, at: '2026-06-03T00:00:00.000Z', kind: 'field_update', payload: { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' } }
+      const shared = {
+        seq: 0,
+        at: '2026-06-01T00:00:00.000Z',
+        kind: 'entity_rename',
+        payload: { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' },
+        snapshot: { oldName: 'Acme Corp' }
+      }
+      const conflictOnly = {
+        seq: 1,
+        at: '2026-06-03T00:00:00.000Z',
+        kind: 'field_update',
+        payload: { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' }
+      }
       await writeJson(s, 'corrections.json', [shared])
       await writeJson(s, 'corrections-DESKTOP.json', [shared, conflictOnly])
 
@@ -1357,12 +1414,24 @@ describe('corrections engine', () => {
       await ingestThreeMeetings(s)
       // Primary device: merge(person p-a→p-b) at local seq0, then unmerge(targetSeq:0) at 'tX'.
       await writeJson(s, 'corrections.json', [
-        { seq: 0, at: '2026-06-01T00:00:00.000Z', kind: 'entity_merge', payload: { kind: 'person', fromId: 'p-a', intoId: 'p-b' }, snapshot: { fromEntity: {}, intoEntity: {} } },
+        {
+          seq: 0,
+          at: '2026-06-01T00:00:00.000Z',
+          kind: 'entity_merge',
+          payload: { kind: 'person', fromId: 'p-a', intoId: 'p-b' },
+          snapshot: { fromEntity: {}, intoEntity: {} }
+        },
         { seq: 1, at: 'tX', kind: 'entity_unmerge', payload: { targetSeq: 0 } }
       ])
       // Conflict device: a DIFFERENT merge (deal d-c→d-d) at local seq0, unmerge with the SAME at+targetSeq.
       await writeJson(s, 'corrections-DEVICE2.json', [
-        { seq: 0, at: '2026-06-02T00:00:00.000Z', kind: 'entity_merge', payload: { kind: 'deal', fromId: 'd-c', intoId: 'd-d' }, snapshot: { fromEntity: {}, intoEntity: {} } },
+        {
+          seq: 0,
+          at: '2026-06-02T00:00:00.000Z',
+          kind: 'entity_merge',
+          payload: { kind: 'deal', fromId: 'd-c', intoId: 'd-d' },
+          snapshot: { fromEntity: {}, intoEntity: {} }
+        },
         { seq: 1, at: 'tX', kind: 'entity_unmerge', payload: { targetSeq: 0 } }
       ])
 
@@ -1387,7 +1456,14 @@ describe('corrections engine', () => {
       const SURVIVOR = slugify('Alice A. Adams')
       const alice = MeetingExtractionSchema.parse({
         people: [{ name: 'Alice Adams', role: null, org: null, confidence: 'EXTRACTED' }],
-        commitments: [{ text: 'send the pricing sheet', by: 'Alice Adams', quote: '"send the pricing sheet"', confidence: 'EXTRACTED' }]
+        commitments: [
+          {
+            text: 'send the pricing sheet',
+            by: 'Alice Adams',
+            quote: '"send the pricing sheet"',
+            confidence: 'EXTRACTED'
+          }
+        ]
       })
       const survivor = MeetingExtractionSchema.parse({
         people: [{ name: 'Alice A. Adams', role: null, org: null, confidence: 'EXTRACTED' }]
@@ -1441,8 +1517,14 @@ describe('corrections engine', () => {
       await ingestBoth()
       const pins: Array<[string, string]> =
         first === 'survivor'
-          ? [[BOB, 'Survivor Pin'], [ALICE, 'Source Pin']]
-          : [[ALICE, 'Source Pin'], [BOB, 'Survivor Pin']]
+          ? [
+              [BOB, 'Survivor Pin'],
+              [ALICE, 'Source Pin']
+            ]
+          : [
+              [ALICE, 'Source Pin'],
+              [BOB, 'Survivor Pin']
+            ]
       for (const [id, value] of pins) {
         expect((await updateEntityField(s, { kind: 'person', id, field: 'role', value })).ok).toBe(true)
       }
@@ -1457,7 +1539,7 @@ describe('corrections engine', () => {
       return liveSnapshot
     }
 
-    it('MQA-015: a rebuild keeps the survivor\'s own pin when the merged-away duplicate was pinned later', async () => {
+    it("MQA-015: a rebuild keeps the survivor's own pin when the merged-away duplicate was pinned later", async () => {
       const BOB = slugify('Bob Baker')
       const liveSnapshot = await pinBothThenMerge('survivor')
 
@@ -1492,13 +1574,22 @@ describe('corrections engine', () => {
 
     it('MQA-016: an unrecognized entry survives the next append, and that append gets a free seq so Undo hits the merge it names', async () => {
       await ingestThreeMeetings(s)
-      await ingestExtraction(s, accountOnly('Acme Corportation'), transcriptMd('2026-06-04'), join(folder, 'mqa016a.md'))
+      await ingestExtraction(
+        s,
+        accountOnly('Acme Corportation'),
+        transcriptMd('2026-06-04'),
+        join(folder, 'mqa016a.md')
+      )
       const DUP_ACCOUNT = slugify('Acme Corportation')
 
       const personMerge = await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })
       expect(personMerge.ok).toBe(true)
       // The shared journal as machine B left it: the newer build's entry FIRST, our merge at seq 1.
-      writeFileSync(journalPath(), JSON.stringify([futureEntry, { ...(readJournalFile()[0] as object), seq: 1 }]), 'utf8')
+      writeFileSync(
+        journalPath(),
+        JSON.stringify([futureEntry, { ...(readJournalFile()[0] as object), seq: 1 }]),
+        'utf8'
+      )
 
       const accountMerge = await mergeEntities(s, { kind: 'account', fromId: DUP_ACCOUNT, intoId: ACCOUNT_SLUG })
       expect(accountMerge.ok).toBe(true)
@@ -1517,7 +1608,12 @@ describe('corrections engine', () => {
 
     it('MQA-016: refuses an ambiguous Undo when two merges share a seq, instead of restoring an arbitrary pair', async () => {
       await ingestThreeMeetings(s)
-      await ingestExtraction(s, accountOnly('Acme Corportation'), transcriptMd('2026-06-04'), join(folder, 'mqa016b.md'))
+      await ingestExtraction(
+        s,
+        accountOnly('Acme Corportation'),
+        transcriptMd('2026-06-04'),
+        join(folder, 'mqa016b.md')
+      )
       const DUP_ACCOUNT = slugify('Acme Corportation')
       expect((await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })).ok).toBe(true)
       expect((await mergeEntities(s, { kind: 'account', fromId: DUP_ACCOUNT, intoId: ACCOUNT_SLUG })).ok).toBe(true)
