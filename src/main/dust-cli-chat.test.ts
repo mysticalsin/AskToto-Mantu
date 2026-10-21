@@ -81,17 +81,23 @@ describe('managed Dust preparation cancellation', () => {
   })
 
   afterEach(async () => {
-    releaseReadiness?.()
-    await barrier()
-    // Settle any child the unchanged RED implementation started, including a late chat.
-    for (let i = 0; i < children.length; i++) {
-      children[i].emit('close', 0)
+    try {
+      releaseReadiness?.()
       await barrier()
+      // Settle any child the unchanged RED implementation started, including a late chat.
+      for (let i = 0; i < children.length; i++) {
+        children[i].emit('close', 0)
+        await barrier()
+      }
+      await pending
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      try {
+        vi.useRealTimers()
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
     }
-    await pending
-    expect(vi.getTimerCount()).toBe(0)
-    vi.useRealTimers()
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('refuses a pre-aborted signal before readiness or seed effects', async () => {

@@ -502,11 +502,14 @@ describe('Spotlight cancellation after managed helper entry', () => {
       if (mode === 'watchdog')
         expect(opts.handlers.onError).toHaveBeenCalledWith('Timed out — no response from the agent.')
     } finally {
-      handle.abort()
-      result.resolve({ ok: false, kind: 'error', error: 'cleanup' })
-      await drainImmediate()
-      expect(vi.getTimerCount()).toBe(0)
-      vi.useRealTimers()
+      try {
+        handle.abort()
+        result.resolve({ ok: false, kind: 'error', error: 'cleanup' })
+        await drainImmediate()
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
     }
   })
 })
