@@ -1,3 +1,4 @@
+import type { OwnerSessionRevokeReason } from '@shared/contracts/owner-session'
 import type { InputSessionStopReason } from '@shared/input-session'
 import type { InputSessionAuthority } from '../input-session-authority'
 import type { MeetingMicCaptureAuthority } from '../meeting-mic-capture-authority'
@@ -11,7 +12,26 @@ interface InputSessionLifecycleWindow {
   }
 }
 
+/**
+ * The stop reasons that end every owner session, and the revocation reason each records. Window-hidden,
+ * cancelled, user-stop, device-change, renderer-reset, arbitration-preempted and owner-replaced are deliberately
+ * absent: they end one capture or one renderer, never the signed-in owner's sessions globally.
+ */
+const GLOBAL_OWNER_REVOCATION: Readonly<Partial<Record<InputSessionStopReason, OwnerSessionRevokeReason>>> =
+  Object.freeze({
+    'sign-out': 'sign-out',
+    'auth-revoked': 'auth-changed',
+    'system-suspend': 'suspend',
+    'screen-locked': 'lock-screen',
+    shutdown: 'quit'
+  })
+
 export interface InputSessionLifecycleControllerDependencies {
+  /**
+   * Lazy lookup of the one owner-session authority. Main creates it inside registerIpc, after this controller,
+   * so it is resolved on every global boundary rather than captured. Null until it exists.
+   */
+  ownerSession?: () => { revokeAll(reason: OwnerSessionRevokeReason): void } | null
   inputSessionAuthority: Pick<
     InputSessionAuthority,
     'hardStop' | 'hasMeetingReservation' | 'meetingStartedAt' | 'releaseMeeting'
@@ -64,6 +84,26 @@ export class InputSessionLifecycleController {
   }
 
   hardStopInputSession(reason: InputSessionStopReason): void {
+    try {
+      this.stopInputAuthorities(reason)
+    } finally {
+      // Same synchronous turn as the teardown above, so no segment can slip in between. Runs even when a
+      // teardown step throws: a failed native release must not leave owner sessions open.
+      this.revokeOwnerSessions(reason)
+    }
+  }
+
+  private revokeOwnerSessions(reason: InputSessionStopReason): void {
+    const ownerReason = GLOBAL_OWNER_REVOCATION[reason]
+    if (ownerReason === undefined) return
+    try {
+      this.deps.ownerSession?.()?.revokeAll(ownerReason)
+    } catch {
+      /* owner revocation is best effort and must never reach a caller mid-teardown */
+    }
+  }
+
+  private stopInputAuthorities(reason: InputSessionStopReason): void {
     this.deps.meetingStartActivationAuthority.revokeAll()
     this.deps.incrementInputSessionContextRevision()
     this.deps.inputSessionAuthority.hardStop(reason)

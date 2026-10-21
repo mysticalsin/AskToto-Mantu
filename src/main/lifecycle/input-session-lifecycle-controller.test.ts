@@ -47,7 +47,11 @@ interface FixtureOptions {
   windowMode?: 'live' | 'missing' | 'destroyed' | 'mismatched'
   throwOnSend?: boolean
   rejectNativeReleases?: boolean
+  /** Enables the owner-session dependency; 'throws' makes revokeAll throw, 'getter-throws' makes the getter throw. */
+  ownerSession?: 'live' | 'throws' | 'getter-throws'
 }
+
+type OwnerRevokeReason = import('@shared/contracts/owner-session').OwnerSessionRevokeReason
 
 function setup(options: FixtureOptions = {}) {
   const events: string[] = []
@@ -146,7 +150,20 @@ function setup(options: FixtureOptions = {}) {
     setLegacyListeningActive(false)
   })
 
+  const ownerRevokeAll = vi.fn((reason: OwnerRevokeReason) => {
+    events.push(`owner-revoke-all:${reason}`)
+    if (options.ownerSession === 'throws') throw new Error('synthetic owner revocation failure')
+  })
+  let ownerAuthority: { revokeAll: typeof ownerRevokeAll } | null = { revokeAll: ownerRevokeAll }
   const controller = new InputSessionLifecycleController({
+    ...(options.ownerSession
+      ? {
+          ownerSession: () => {
+            if (options.ownerSession === 'getter-throws') throw new Error('synthetic owner lookup failure')
+            return ownerAuthority
+          }
+        }
+      : {}),
     inputSessionAuthority,
     meetingStartActivationAuthority,
     meetingMicCaptureAuthority,
@@ -179,6 +196,10 @@ function setup(options: FixtureOptions = {}) {
   return {
     controller,
     events,
+    ownerRevokeAll,
+    setOwnerAuthority(next: { revokeAll: typeof ownerRevokeAll } | null) {
+      ownerAuthority = next
+    },
     inputSessionAuthority,
     meetingStartActivationAuthority,
     meetingMicCaptureAuthority,
@@ -644,5 +665,123 @@ describe('InputSessionLifecycleController', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
+  })
+})
+
+describe('InputSessionLifecycleController owner-session revocation', () => {
+  const GLOBAL_BOUNDARIES = [
+    ['sign-out', 'sign-out'],
+    ['auth-revoked', 'auth-changed'],
+    ['system-suspend', 'suspend'],
+    ['screen-locked', 'lock-screen'],
+    ['shutdown', 'quit']
+  ] as const satisfies ReadonlyArray<readonly [InputSessionStopReason, OwnerRevokeReason]>
+
+  it.each(GLOBAL_BOUNDARIES)('%s revokes every owner session as %s exactly once, after teardown', (reason, owner) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: 'live' })
+    admitCapture(fixture, 654)
+
+    fixture.controller.hardStopInputSession(reason)
+
+    expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith(owner)
+    expect(fixture.events.at(-1)).toBe(`owner-revoke-all:${owner}`)
+    expect(fixture.events.indexOf(`owner-revoke-all:${owner}`)).toBeGreaterThan(
+      fixture.events.indexOf('release-speaker-embedding')
+    )
+    expect(fixture.events.filter((event) => event.startsWith('owner-revoke-all'))).toHaveLength(1)
+  })
+
+  it.each(GLOBAL_BOUNDARIES)('%s revokes owner sessions even with no meeting reservation', (reason, owner) => {
+    const fixture = setup({ ownerSession: 'live' })
+    fixture.controller.hardStopInputSession(reason)
+    expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith(owner)
+  })
+
+  it.each([
+    'user-stop',
+    'cancelled',
+    'window-hidden',
+    'device-change',
+    'renderer-reset',
+    'arbitration-preempted',
+    'owner-replaced'
+  ] as const satisfies readonly InputSessionStopReason[])('%s never revokes owner sessions globally', (reason) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: 'live' })
+    fixture.controller.hardStopInputSession(reason)
+    expect(fixture.ownerRevokeAll).not.toHaveBeenCalled()
+  })
+
+  it('does not revoke owner sessions when only the meeting capture stops', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: 'live' })
+    fixture.controller.hardStopMeetingCapture('sign-out')
+    expect(fixture.ownerRevokeAll).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['suspend', 'suspend'],
+    ['lock-screen', 'lock-screen']
+  ] as const)('the registered %s power callback revokes owner sessions as %s', (event, owner) => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: 'live' })
+    const hooks = installPowerHooks(fixture)
+    hooks.callbacks.get(event)?.()
+    expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith(owner)
+  })
+
+  it.each([
+    ['suspend', 'lock-screen', 'lock-screen'],
+    ['lock-screen', 'suspend', 'suspend']
+  ] as const)('the surviving %s-failed %s listener still revokes owner sessions', (failed, live, owner) => {
+    const fixture = setup({ ownerSession: 'live' })
+    const hooks = installPowerHooks(fixture, { [failed]: new Error('registration failed') })
+    expect(hooks.callbacks.has(failed)).toBe(false)
+    hooks.callbacks.get(live)?.()
+    expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith(owner)
+  })
+
+  it('resolves the authority lazily on each stop, so a later-created authority is covered', () => {
+    const fixture = setup({ ownerSession: 'live' })
+    fixture.setOwnerAuthority(null)
+    expect(() => fixture.controller.hardStopInputSession('sign-out')).not.toThrow()
+    expect(fixture.ownerRevokeAll).not.toHaveBeenCalled()
+
+    fixture.setOwnerAuthority({ revokeAll: fixture.ownerRevokeAll })
+    fixture.controller.hardStopInputSession('sign-out')
+    expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith('sign-out')
+  })
+
+  it('a later boundary revokes again after an earlier one (no stale once-only latch)', () => {
+    const fixture = setup({ ownerSession: 'live' })
+    fixture.controller.hardStopInputSession('screen-locked')
+    fixture.controller.hardStopInputSession('sign-out')
+    expect(fixture.ownerRevokeAll.mock.calls).toEqual([['lock-screen'], ['sign-out']])
+  })
+
+  it.each(['throws', 'getter-throws'] as const)(
+    'finishes the whole teardown when owner revocation fails (%s)',
+    (mode) => {
+      const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: mode })
+      const captureId = admitCapture(fixture, 654)
+
+      expect(() => fixture.controller.hardStopInputSession('sign-out')).not.toThrow()
+
+      expect(fixture.nativeReleases.releaseSpeakerEmbedding).toHaveBeenCalledTimes(1)
+      expect(fixture.inputSessionAuthority.hasMeetingReservation).toBe(false)
+      expect(fixture.meetingMicCaptureAuthority.release(1, captureId)).toBe(false)
+    }
+  )
+
+  it('still revokes owner sessions when meeting teardown throws', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654, ownerSession: 'live' })
+    fixture.nativeReleases.parakeetRelease.mockImplementationOnce(() => {
+      throw new Error('synthetic native release failure')
+    })
+    expect(() => fixture.controller.hardStopInputSession('shutdown')).toThrow('synthetic native release failure')
+    expect(fixture.ownerRevokeAll).toHaveBeenCalledExactlyOnceWith('quit')
+  })
+
+  it('keeps existing construction without an owner-session dependency working', () => {
+    const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
+    expect(() => fixture.controller.hardStopInputSession('sign-out')).not.toThrow()
+    expect(fixture.ownerRevokeAll).not.toHaveBeenCalled()
   })
 })

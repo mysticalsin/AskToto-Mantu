@@ -170,6 +170,7 @@ function sessionApi(options: {
   backfill?: (file: string, snapshot?: SpeakerEnrollmentSnapshot) => Promise<unknown>
   powerHooksReady?: boolean
   authSessionGeneration?: number
+  ownerSession?: { revokeAll(reason: string): void } | null
 }): SessionApi {
   const start = indexText.indexOf('// --- Speaker session ownership (Task 7-P2b) ---')
   const end = indexText.indexOf('// --- End speaker session ownership ---')
@@ -265,6 +266,7 @@ function sessionApi(options: {
     actualFunctionSource('hardStopMeetingCapture'),
     region,
     'const inputSessionLifecycleController = new InputSessionLifecycleController({',
+    '  ownerSession: currentOwnerSession,',
     '  inputSessionAuthority,',
     '  meetingStartActivationAuthority,',
     '  meetingMicCaptureAuthority,',
@@ -305,6 +307,7 @@ function sessionApi(options: {
     meetingStartActivationAuthority,
     meetingMicCaptureAuthority,
     InputSessionLifecycleController,
+    currentOwnerSession: () => options.ownerSession ?? null,
     revokeMeetingMicCaptureGrants: lifecycle.revokeMeetingMicCaptureGrants,
     setListeningActive: lifecycle.setListeningActive,
     setTrayRecording: lifecycle.setTrayRecording,
@@ -1404,5 +1407,45 @@ describe('exact import attempt integration', () => {
     expect(api.captureImportSpeakerKey(attempt)).toBeNull()
     expect(api.finalizeImportSpeakers(attempt)).toBeNull()
     api.disposeImportSpeakers(attempt)
+  })
+})
+
+describe('owner-session revocation at the sign-out boundary', () => {
+  function signOutHandler(api: SessionApi, order: string[]): (...args: any[]) => Promise<void> {
+    return actualIpcHandler('authSignOut', {
+      assertMainWindow: vi.fn(),
+      hardStopInputSession: api.hardStopInputSession,
+      speechDesktop: { invalidate: () => order.push('speech-invalidate') },
+      authSignOut: () => order.push('auth-sign-out'),
+      importJobs: {
+        cancelAll: async () => {
+          order.push('import-cancel-all')
+        }
+      }
+    })
+  }
+
+  it('revokes owner sessions synchronously, before authSignOut and before any await', async () => {
+    const order: string[] = []
+    const api = sessionApi({
+      id: createSpeakerId(),
+      ownerSession: { revokeAll: (reason) => order.push(`owner-revoke-all:${reason}`) }
+    })
+    const handler = signOutHandler(api, order)
+
+    const pending = handler({})
+
+    // Nothing has been awaited yet: the revocation already ran, ahead of the auth mutation.
+    expect(order.slice(0, 2)).toEqual(['owner-revoke-all:sign-out', 'speech-invalidate'])
+    expect(order.indexOf('owner-revoke-all:sign-out')).toBeLessThan(order.indexOf('auth-sign-out'))
+    await pending
+    expect(order.filter((line) => line.startsWith('owner-revoke-all'))).toHaveLength(1)
+  })
+
+  it('still signs out when the owner-session authority is not created yet', async () => {
+    const order: string[] = []
+    const api = sessionApi({ id: createSpeakerId(), ownerSession: null })
+    await signOutHandler(api, order)({})
+    expect(order).toEqual(['speech-invalidate', 'auth-sign-out', 'import-cancel-all'])
   })
 })

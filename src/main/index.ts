@@ -54,7 +54,7 @@ import { operatorVisionModel } from '@shared/operator-vision'
 import { createMainTranscriptSaveReceipts, type TranscriptSaveSideEffect } from './features/meetings/main-save-receipts'
 import { InputSessionAuthority } from './input-session-authority'
 import { installInputMicPermissionHandlers } from './input-mic-permissions'
-import { MeetingMicCaptureAuthority, bindMeetingMicRendererReset } from './meeting-mic-capture-authority'
+import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
 import {
   MEETING_START_ACTION,
   MeetingStartActivationAuthority,
@@ -735,7 +735,7 @@ import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
-import { createOwnerSessionWiring } from './lifecycle/owner-session-wiring'
+import { bindRendererResets, createOwnerSessionWiring, currentOwnerSession } from './lifecycle/owner-session-wiring'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -1546,6 +1546,7 @@ const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
   }
 })
 const inputSessionLifecycleController = new InputSessionLifecycleController({
+  ownerSession: currentOwnerSession,
   inputSessionAuthority,
   meetingStartActivationAuthority,
   meetingMicCaptureAuthority,
@@ -3284,7 +3285,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
     if (win === self && isMainFrame && !isInPlace) hardStopInputSession('owner-replaced')
   })
-  bindMeetingMicRendererReset(win.webContents, meetingMicCaptureAuthority)
+  bindRendererResets(win.webContents, meetingMicCaptureAuthority)
   // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer console warnings/errors into the
   // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
   if (process.env.ASKTOTO_DEBUG_RENDERER) {
@@ -10024,8 +10025,7 @@ installAppQuitLifecycle(app, {
   speechDesktop: () => speechDesktop,
   invalidateCloudSttOwner,
   shutdownInputSessions: () => {
-    // This runs from will-quit, after any prevented before-quit meeting flush has resumed final shutdown.
-    // Revoke exact grants/renderer captures first, then permanently close admission for this process.
+    // Final will-quit, after any prevented before-quit flush: revoke grants, captures, owner sessions; close admission.
     hardStopInputSession('shutdown')
     inputSessionAuthority.shutdown()
   },

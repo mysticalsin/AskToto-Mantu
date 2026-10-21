@@ -6,8 +6,10 @@ import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-writ
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
-import { auditLog } from '../logger'
+import { auditLog, mainLog } from '../logger'
+import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
+import type { RendererResetSource } from '../features/meetings/session-closure'
 import { createMainOwnerSessionAuthority, type OwnerSessionAuthority } from './owner-session-authority'
 
 export interface OwnerSessionWiringDeps {
@@ -33,6 +35,7 @@ export interface OwnerSessionWiring {
 export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSessionWiring {
   const { ipcMain, assertMainWindow, currentInputSessionContext } = deps
   const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
+  activeOwnerSession = ownerSession
   const authorizeSender = registerOwnerSessionIpc({
     ipcMain,
     assertMainWindow,
@@ -59,4 +62,114 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
       })
     }
   }
+}
+
+/** Process-wide handle on the one authority `createOwnerSessionWiring` built, so earlier-constructed Main objects can
+ *  resolve it lazily. Null before registerIpc runs. */
+let activeOwnerSession: OwnerSessionAuthority | null = null
+
+/** The owner-session authority, or null until `createOwnerSessionWiring` has run. Resolve it on every use. */
+export function currentOwnerSession(): OwnerSessionAuthority | null {
+  return activeOwnerSession
+}
+
+type ResetListener = (...args: never[]) => void
+
+/** The WebContents surface the owner-session renderer binding needs. `removeListener` lets it undo only its own listeners. */
+export interface OwnerSessionRendererSource extends RendererResetSource {
+  readonly id: number
+  removeListener?(event: string, listener: ResetListener): unknown
+}
+
+export interface OwnerSessionRendererBinder {
+  /**
+   * Revokes this WebContents' owner sessions when its renderer crashes, is destroyed or replaces its main frame.
+   * Returns true when the listeners are installed (or already were), false when binding failed and nothing is left
+   * behind. Idempotent per object: the same WebContents never gets a second listener set.
+   */
+  attach(contents: OwnerSessionRendererSource): boolean
+}
+
+/**
+ * Per-WebContents `revokeFrame(id, 'renderer-reset')` adapter. The authority is resolved lazily on each event, so a
+ * window created before the authority exists is covered once it does. The id is captured at attach time, because
+ * `webContents.id` throws after destruction and a replaced window's late events must never consult the current one.
+ * Listeners survive crashes and navigations so later sessions on the same surviving WebContents are still reset; the
+ * adapter removes only its own listeners when the WebContents is destroyed.
+ */
+export function createOwnerSessionRendererBinder(
+  authority: () => Pick<OwnerSessionAuthority, 'revokeFrame'> | null,
+  onError: (message: string, error: unknown) => void = () => undefined
+): OwnerSessionRendererBinder {
+  const attached = new WeakSet<object>()
+  return {
+    attach(contents) {
+      if (attached.has(contents)) return true
+      let id: number
+      try {
+        id = contents.id
+      } catch (error) {
+        onError('[owner-session] renderer reset binding skipped: webContents id unavailable', error)
+        return false
+      }
+      const reset = (): void => {
+        try {
+          authority()?.revokeFrame(id, 'renderer-reset')
+        } catch {
+          /* a reset never throws into the emitter */
+        }
+      }
+      const installed: Array<readonly [string, ResetListener]> = []
+      const listeners: Array<readonly [string, ResetListener]> = [
+        ['render-process-gone', reset],
+        [
+          'destroyed',
+          () => {
+            reset()
+            for (const [event, listener] of installed) contents.removeListener?.(event, listener)
+          }
+        ],
+        [
+          'did-start-navigation',
+          (_event: unknown, _url: unknown, isInPlace: unknown, isMainFrame: unknown) => {
+            if (isMainFrame === true && isInPlace === false) reset()
+          }
+        ]
+      ]
+      try {
+        for (const [event, listener] of listeners) {
+          ;(contents.on as (event: string, listener: ResetListener) => unknown)(event, listener)
+          installed.push([event, listener])
+        }
+      } catch (error) {
+        for (const [event, listener] of installed) {
+          try {
+            contents.removeListener?.(event, listener)
+          } catch {
+            /* best effort: only our own listeners are touched */
+          }
+        }
+        onError('[owner-session] renderer reset binding failed', error)
+        return false
+      }
+      attached.add(contents)
+      return true
+    }
+  }
+}
+
+const rendererBinder = createOwnerSessionRendererBinder(currentOwnerSession, (message, error) =>
+  mainLog.error(message, error)
+)
+
+/**
+ * Binds a main window's WebContents to the renderer-reset boundary: its meeting-mic grants and its owner sessions end
+ * together when the renderer crashes, is destroyed or replaces its main frame.
+ */
+export function bindRendererResets(
+  contents: Parameters<typeof bindMeetingMicRendererReset>[0] & OwnerSessionRendererSource,
+  meetingMicCaptureAuthority: Parameters<typeof bindMeetingMicRendererReset>[1]
+): void {
+  bindMeetingMicRendererReset(contents, meetingMicCaptureAuthority)
+  rendererBinder.attach(contents)
 }
