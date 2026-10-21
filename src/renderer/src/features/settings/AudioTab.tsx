@@ -245,7 +245,7 @@ function getAudioChoices(): {
   perm: string
   icon: typeof Mic
 }[] {
-  const isWin = window.navigator.platform.toLowerCase().includes('win')
+  const isWin = isWindows
   return [
     {
       id: 'both',
@@ -479,7 +479,7 @@ export function AudioTab({
             <span className="flex shrink-0 items-center gap-2">
               {!isWindows && (
                 <TextButton onClick={() => void window.toto.openPermissionSettings('screenRecording')}>
-                  Open Screen Recording settings
+                  Open System Settings
                 </TextButton>
               )}
               <TextButton onClick={() => patch({ micOnlyFallbackAt: null })}>Dismiss</TextButton>

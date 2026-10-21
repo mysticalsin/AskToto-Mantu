@@ -21,7 +21,8 @@ export type LoginItemOsState = {
   supported: boolean
   /** What the OS will do at the next login. */
   enabled: boolean
-  /** macOS 13+: registered, but the person must allow it in System Settings → General → Login Items. */
+  /** Registered, but the person must allow it: macOS 13+ System Settings › General › Login Items, or Windows
+   *  Settings › Apps › Startup (turned off there or in Task Manager). */
   requiresApproval: boolean
 }
 

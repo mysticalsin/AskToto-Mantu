@@ -1,5 +1,5 @@
 import type { SystemSettingsPane } from '@shared/contracts/settings-os-state'
-import { isWindows } from '../../lib/keys'
+import { openSettingsTitle } from '../../lib/os-settings-copy'
 
 /** One line under an OS-dependent toggle: why the OS refused, and the one action that fixes it. */
 export function OsSettingsHint({
@@ -21,7 +21,7 @@ export function OsSettingsHint({
         onClick={() => void window.toto.openSystemSettings(pane).catch(() => undefined)}
         className="no-drag cl-focus text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
       >
-        {isWindows ? 'Open Settings' : 'Open System Settings'}
+        {openSettingsTitle()}
       </button>
     </div>
   )

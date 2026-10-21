@@ -1070,8 +1070,8 @@ export function OnboardingExperience({
       const mic = micRowStatus(perms?.microphone)
       set('mic', mic.state, mic.detail)
       await delay(350)
-      // Windows has no per-app Screen Recording permission, so screenRowStatus treats it as available (matches
-      // Onboarding.tsx and listen.ts). On macOS the row follows the diagnosis and the loopback self-test.
+      // Windows has no per-app Screen Recording permission: the row is available unless a capture probe was
+      // refused (then it offers Open Settings). On macOS it follows the diagnosis and the loopback self-test.
       if (live) screenSetup.setPerms(perms)
       const screenRow = screenRowStatus(perms, screenSetup.checkRef.current, isWindows)
       set('screen', screenRow.state, screenRow.detail)
@@ -1411,7 +1411,7 @@ export function OnboardingExperience({
                       {r.key === 'screen' && r.state === 'restart' && (
                         <div className="mt-1.5 flex flex-wrap items-center gap-2">
                           <span className="text-[11px] leading-snug text-[color:var(--color-accent-2)]">
-                            Granted. Restart Métis to finish enabling it.
+                            Granted. macOS turns it on when Métis relaunches.
                           </span>
                           <button
                             type="button"
@@ -1419,7 +1419,7 @@ export function OnboardingExperience({
                             disabled={restarting}
                             className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60"
                           >
-                            {restarting ? 'Restarting…' : 'Restart Métis'}
+                            {restarting ? 'Relaunching…' : 'Relaunch'}
                           </button>
                         </div>
                       )}

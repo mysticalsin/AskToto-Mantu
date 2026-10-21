@@ -15,19 +15,20 @@ export interface ScreenPermissionCopy {
   text: string
   /** Offer the one-click Repair (reset only Métis's own entry, then relaunch). */
   repair: boolean
-  /** Offer "It's already on" (the user sees the switch on; record it and relaunch). */
+  /** Offer Relaunch for a switch the user turned on (records the attestation, then relaunches). */
   attest: boolean
   /** Offer a trip to the Screen Recording pane. */
   openSettings: boolean
-  /** Offer a restart. */
+  /** Offer Relaunch: the grant applies to the next process. */
   relaunch: boolean
 }
 
-const PANE = 'System Settings → Privacy & Security → Screen & System Audio Recording'
+const PANE = 'System Settings › Privacy & Security › Screen & System Audio Recording'
 
 /** Why the permission is asked for, in the words onboarding and Settings both use. */
 export const MEETING_AUDIO_SCREEN_LABEL = 'Meeting audio & screen'
-export const MEETING_AUDIO_SCREEN_WHY = 'Needed to hear the other people in your calls, and to see your screen when you ask.'
+export const MEETING_AUDIO_SCREEN_WHY =
+  'Needed to hear the other people in your calls, and to see your screen when you ask.'
 
 /** Which build or copy the switch belongs to, as specifically as the diagnosis knows. */
 export function screenGrantHolder(d: ScreenDiagnosis): string {
@@ -55,10 +56,14 @@ export function screenPermissionCopy(d: ScreenDiagnosis | null | undefined): Scr
         ...none,
         openSettings: true,
         attest: true,
-        text: `Screen Recording is off for Métis. Switch it on in ${PANE} (the top list), then restart Métis.`
+        text: `Screen Recording is off for Métis. Turn on Métis in ${PANE} (the top list), then relaunch Métis.`
       }
     case 'needs-relaunch':
-      return { ...none, relaunch: true, text: 'Screen Recording is on. macOS applies it the next time Métis starts, so restart Métis.' }
+      return {
+        ...none,
+        relaunch: true,
+        text: 'Screen Recording is on. macOS applies it the next time Métis starts, so relaunch Métis.'
+      }
     case 'restricted':
       return {
         ...none,
@@ -73,22 +78,31 @@ export function screenPermissionCopy(d: ScreenDiagnosis | null | undefined): Scr
       }
       const holder = screenGrantHolder(d)
       if (d.repairFailed) {
-        return { ...none, openSettings: true, text: `macOS shows Métis as allowed, but that switch belongs to ${holder}. ${SCREEN_REPAIR_MANUAL_GUIDANCE}` }
+        return {
+          ...none,
+          openSettings: true,
+          text: `macOS shows Métis as allowed, but that switch belongs to ${holder}. ${SCREEN_REPAIR_MANUAL_GUIDANCE}`
+        }
       }
       return {
         ...none,
         repair: true,
-        text: `macOS shows Métis as allowed, but that switch belongs to ${holder}. Repair resets only Métis’s Screen Recording entry and restarts Métis; then switch it on once more.`
+        text: `macOS shows Métis as allowed, but that switch belongs to ${holder}. Repair resets only Métis’s Screen Recording entry and relaunches Métis; then turn it on once more.`
       }
     }
   }
 }
 
 /** The Listen note when the other side of the call could not be captured on macOS. */
-export function listenScreenNote(d: ScreenDiagnosis | null | undefined, micOnly: boolean): { note: string; repair: boolean } | null {
+export function listenScreenNote(
+  d: ScreenDiagnosis | null | undefined,
+  micOnly: boolean
+): { note: string; repair: boolean } | null {
   const copy = screenPermissionCopy(d)
   if (!copy) return null
-  const lead = micOnly ? 'Listening to your microphone only: the other side of the call needs Screen Recording.' : 'Could not capture the other side of the call.'
+  const lead = micOnly
+    ? 'Listening to your microphone only: the other side of the call needs Screen Recording.'
+    : 'Could not capture the other side of the call.'
   return { note: `${lead} ${copy.text}`, repair: copy.repair }
 }
 
@@ -121,7 +135,12 @@ export function withDiagnosedThemNote<S extends { error: string | null; captureD
 /** Run Repair. On success main relaunches; on failure open the pane and hand back the manual guidance. */
 export async function runScreenRepair(): Promise<ScreenRepairResult> {
   const result = await window.toto.repairScreenPermission().catch(
-    (): ScreenRepairResult => ({ ok: false, reason: 'tccutil-failed', exitCode: null, guidance: SCREEN_REPAIR_MANUAL_GUIDANCE })
+    (): ScreenRepairResult => ({
+      ok: false,
+      reason: 'tccutil-failed',
+      exitCode: null,
+      guidance: SCREEN_REPAIR_MANUAL_GUIDANCE
+    })
   )
   if (!result.ok && result.reason !== 'unsupported-platform') {
     void window.toto.openPermissionSettings('screenRecording').catch(() => {})

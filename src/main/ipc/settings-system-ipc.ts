@@ -21,7 +21,9 @@ import { countExpiredMeetings } from '../recall'
 
 type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
 
-type LoginItemSettings = { openAtLogin: boolean; status?: string }
+/** Electron's getLoginItemSettings: `status` is macOS 13+; `executableWillLaunchAtLogin` is Windows, false when
+ *  the person turned Métis off in Settings › Apps › Startup (or Task Manager) even though it is registered. */
+type LoginItemSettings = { openAtLogin: boolean; status?: string; executableWillLaunchAtLogin?: boolean }
 
 /** The OS calls this module makes, injectable so the handlers are testable without Electron. */
 export interface SettingsSystemOs {
@@ -56,13 +58,19 @@ export function readSettingsOsState(os: SettingsSystemOs, refreshLoginItem: () =
   let loginItem: SettingsOsState['loginItem'] = { supported: false, enabled: false, requiresApproval: false }
   const openAtLogin = refreshLoginItem()
   if (openAtLogin !== null) {
-    let status: string | undefined
+    let read: LoginItemSettings | undefined
     try {
-      status = os.getLoginItemSettings().status
+      read = os.getLoginItemSettings()
     } catch {
-      status = undefined
+      read = undefined
     }
-    loginItem = { supported: true, enabled: openAtLogin, requiresApproval: status === 'requires-approval' }
+    // Either way the person must allow Métis in the OS pane: macOS Login Items approval, or Windows Startup apps.
+    const blockedOnWindows = os.platform === 'win32' && openAtLogin && read?.executableWillLaunchAtLogin === false
+    loginItem = {
+      supported: true,
+      enabled: openAtLogin,
+      requiresApproval: read?.status === 'requires-approval' || blockedOnWindows
+    }
   }
   let notificationsSupported = false
   try {

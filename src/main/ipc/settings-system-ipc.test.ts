@@ -104,6 +104,50 @@ describe('settings system IPC', () => {
   })
 })
 
+describe('C32: Windows panes and Startup apps', () => {
+  it('opens the Windows Settings pages for login items and notifications', async () => {
+    const { os, call } = setup({ os: { platform: 'win32' } })
+    await call(SETTINGS_OS_STATE_IPC.openSystemSettings, 'loginItems')
+    await call(SETTINGS_OS_STATE_IPC.openSystemSettings, 'notifications')
+    await call(SETTINGS_OS_STATE_IPC.openSystemSettings, 'https://example.com')
+    expect(os.openExternal).toHaveBeenNthCalledWith(1, 'ms-settings:startupapps')
+    expect(os.openExternal).toHaveBeenNthCalledWith(2, 'ms-settings:notifications')
+    expect(os.openExternal).toHaveBeenCalledTimes(2)
+  })
+
+  it('a login item turned off in Startup apps needs the person, like macOS approval', async () => {
+    const blocked = setup({
+      os: {
+        platform: 'win32',
+        getLoginItemSettings: vi.fn(() => ({ openAtLogin: true, executableWillLaunchAtLogin: false }))
+      }
+    })
+    expect((await blocked.call(SETTINGS_OS_STATE_IPC.osState)) as { loginItem: unknown }).toMatchObject({
+      loginItem: { supported: true, enabled: true, requiresApproval: true }
+    })
+    const allowed = setup({
+      os: {
+        platform: 'win32',
+        getLoginItemSettings: vi.fn(() => ({ openAtLogin: true, executableWillLaunchAtLogin: true }))
+      }
+    })
+    expect((await allowed.call(SETTINGS_OS_STATE_IPC.osState)) as { loginItem: unknown }).toMatchObject({
+      loginItem: { requiresApproval: false }
+    })
+    // Not wanted: Windows reporting it will not launch is just the off state, nothing to approve.
+    const off = setup({
+      refresh: () => false,
+      os: {
+        platform: 'win32',
+        getLoginItemSettings: vi.fn(() => ({ openAtLogin: false, executableWillLaunchAtLogin: false }))
+      }
+    })
+    expect((await off.call(SETTINGS_OS_STATE_IPC.osState)) as { loginItem: unknown }).toMatchObject({
+      loginItem: { enabled: false, requiresApproval: false }
+    })
+  })
+})
+
 describe('applyLoginItem', () => {
   it('re-reads the OS after writing, so a refused login item is never cached as on', () => {
     const refresh = vi.fn(() => false)
