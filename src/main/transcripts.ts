@@ -67,7 +67,6 @@ import {
 import {
   decryptMeetingEnvelopeAsync,
   encryptMeetingEnvelopeAsync,
-  getMeetingSpeechLimits,
   getMeetingSpeechReadLimitBytes,
   isMeetingSpeechPersistenceConfigured,
   reportMeetingSpeechTiming,
@@ -438,8 +437,7 @@ export async function decodeSavedMeetingAsync(
   if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
     if (!isMeetingSpeechPersistenceConfigured()) {
       const legacy = tryDecodeSaved(buf, allowKeychainRecovery, filePath)
-      // With the trusted budget installed the inline codec is bounded, so speech-framed text is readable without the worker.
-      if (legacy.ok && legacy.text.includes('metis-speech-') && !getMeetingSpeechLimits())
+      if (legacy.ok && legacy.text.includes('metis-speech-') && getMeetingSpeechReadLimitBytes() === undefined)
         return { ok: false, reason: 'Speech metadata is unavailable until its read budget is configured.' }
       return legacy
     }

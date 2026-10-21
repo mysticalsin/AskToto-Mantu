@@ -1059,6 +1059,7 @@ export const BaseSettingsSchema = z.object({
   // at the meetings folder) needs to read the raw markdown — Métis's own recall/search already decrypts
   // transparently either way. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(true),
+  meetingSpeechWorker: z.boolean().default(true), // WP03 kill switch: off runs speech codecs inline, same output
   // Task MI-5 — publish a plaintext markdown mirror (entity pages + per-meeting note cards + an
   // llms.txt-shaped index) under `<meetingsFolder>/wiki/` so Dust/graphify/any agent can read the
   // CRM-corrected brain even while encryptTranscripts keeps the raw transcripts locked. First-run
@@ -1672,6 +1673,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputLanguage: 'auto',
   summaryLanguage: 'auto',
   encryptTranscripts: true,
+  meetingSpeechWorker: true,
   publishBrainPages: false,
   transcriptRetentionDays: 0,
   systemPrompt:

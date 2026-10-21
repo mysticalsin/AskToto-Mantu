@@ -372,6 +372,8 @@ export type AuditEvent =
   // defaults, if it never had one). Reason only, never the raw payload.
   | 'operator.model_policy.rejected'
   // WP07: confirmed desktop commands run as tasks. Action id and reason only, never request arguments.
+  // Metadata-only: the meeting speech worker thread was disabled for this launch (circuit breaker or load failure).
+  | 'meeting.speech.worker.degraded'
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'

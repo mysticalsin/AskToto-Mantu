@@ -5,7 +5,7 @@ import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import type { InputSessionStopReason } from '@shared/input-session'
 
 vi.mock('electron', () => ({
-  app: { getPath: () => '/nonexistent/user-data', isPackaged: false },
+  app: { getPath: () => '/nonexistent/user-data', isPackaged: false, once: vi.fn(), on: vi.fn() },
   safeStorage: { isEncryptionAvailable: () => false },
   webContents: {},
   webFrameMain: { fromId: vi.fn(() => null) }

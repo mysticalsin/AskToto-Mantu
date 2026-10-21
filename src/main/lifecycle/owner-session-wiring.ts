@@ -1,5 +1,4 @@
-import type { IpcMain, IpcMainInvokeEvent } from 'electron'
-import { installMeetingSpeechPolicy } from '../features/meetings/meeting-speech-policy'
+import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
 import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
@@ -7,10 +6,13 @@ import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-writ
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
+import { authSessionGeneration } from '../auth'
 import { auditLog, mainLog } from '../logger'
 import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
+import { getPublishedSettingsObservation } from '../settings-observation'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
+import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { createMainOwnerSessionAuthority, type OwnerSessionAuthority } from './owner-session-authority'
 
 export interface OwnerSessionWiringDeps {
@@ -26,6 +28,14 @@ export interface OwnerSessionWiring {
   readonly inputCapture: { ownerSession: OwnerSessionAuthority; authorizeSender: AuthorizeSender }
   /** Passed to `speechDesktopBoundaryOptions`: delivered speech feeds the transcript store; language changes are audited. */
   readonly speechHooks: SpeechDesktopHooks
+  /** The meeting speech policy + worker facade (kill switch, circuit breaker, invalidation, disposal). */
+  readonly meetingSpeech: ReturnType<typeof bootstrapMeetingSpeech>
+}
+
+/** The `meetingSpeechWorker` kill switch from the last published settings (managed policy is already merged in). */
+function meetingSpeechWorkerEnabled(): boolean {
+  const published = getPublishedSettingsObservation()
+  return published ? published.readable && published.settings.meetingSpeechWorker !== false : true
 }
 
 /**
@@ -38,7 +48,13 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   // The trusted speech budget must exist before any handler can save, autosave or read a meeting: without it a
   // broker-speech line is refused (fail closed). registerIpc runs before the first window shows and before any
   // boot-work job (draft recovery, retention, brain reads), so this is the earliest main seam that covers them all.
-  installMeetingSpeechPolicy()
+  // The bootstrap also configures the optional worker thread behind the `meetingSpeechWorker` kill switch.
+  const meetingSpeech = bootstrapMeetingSpeech({
+    readWorkerEnabled: meetingSpeechWorkerEnabled,
+    authGeneration: authSessionGeneration,
+    audit: (event, record) => auditLog(event, record),
+    onWillQuit: (listener) => app.once('will-quit', listener)
+  })
   const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
   activeOwnerSession = ownerSession
   const authorizeSender = registerOwnerSessionIpc({
@@ -53,12 +69,14 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   )
   // The disposers are discarded on purpose: these bindings live for the app lifetime.
   bindOwnerRevocationClosure(ownerSession, transcriptRevision.store)
+  bindMeetingSpeechInvalidation(ownerSession, meetingSpeech)
   bindTranscriptCheckpointStore(transcriptRevision.store)
   bindMeetingEndClosure(onDraftMeetingFinalizing, transcriptRevision.store)
   return {
     ownerSession,
     authorizeSender,
     inputCapture: { ownerSession, authorizeSender },
+    meetingSpeech,
     speechHooks: {
       onSegmentDelivered: transcriptRevision.onSegmentDelivered,
       onLanguageChange: createLanguageChangeAudit({

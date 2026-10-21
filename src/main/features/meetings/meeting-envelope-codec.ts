@@ -60,11 +60,7 @@ export function encryptMeetingEnvelopeInline(
   return Buffer.concat([MARKER, Buffer.from(JSON.stringify(envelope), 'utf8')])
 }
 
-export function decryptMeetingEnvelopeInline(
-  envelopeJson: Uint8Array,
-  contentKey: Uint8Array,
-  kLocal: string
-): string {
+export function decryptMeetingEnvelopeInline(envelopeJson: Uint8Array, contentKey: Uint8Array, kLocal: string): string {
   if (contentKey.byteLength !== 32) throw new Error('Envelope key material is invalid.')
   const envelope = parseEnvelope(envelopeJson)
   if (envelope.kLocal !== kLocal) throw new Error('Envelope key field does not match.')

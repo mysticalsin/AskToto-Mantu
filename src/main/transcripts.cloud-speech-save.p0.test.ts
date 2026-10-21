@@ -5,10 +5,13 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import { SaveMeetingSchema, stripProvisionalLines, type Settings, type SaveMeeting } from '@shared/ipc'
 import type { CloudSpeechEvent } from '@shared/cloud-speech'
-import { saveMeeting, saveDraftTranscript } from './transcripts'
+import { isEncryptedFile, saveMeeting, saveDraftTranscript } from './transcripts'
 import { recallRead } from './recall'
 import { configureMeetingSpeechLimits, configureMeetingSpeechPersistence } from './features/meetings/meeting-speech'
 import { installMeetingSpeechPolicy } from './features/meetings/meeting-speech-policy'
+import { bootstrapMeetingSpeech } from './lifecycle/meeting-speech-persistence-wiring'
+import type { MeetingSpeechWorkerPort } from './infra/process/meeting-speech-host'
+import { EventEmitter } from 'node:events'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
 vi.mock('electron')
@@ -113,5 +116,55 @@ describe('P0: cloud-speech meeting save in default production configuration', ()
 
     expect(result).toEqual({ status: 'saved' })
     expect(readdirSync(folder).some((name) => name.startsWith('.autosave-draft-'))).toBe(true)
+  })
+})
+
+/** A worker that loads and then dies on its first request, the shape of an unproven bytecode/asar load failure. */
+class CrashingWorker extends EventEmitter implements MeetingSpeechWorkerPort {
+  postMessage(): void {
+    setImmediate(() => this.emit('error', new Error('synthetic worker crash')))
+  }
+  async terminate(): Promise<number> {
+    this.emit('exit', 1)
+    return 1
+  }
+}
+
+describe('P0: the production bootstrap keeps cloud-speech saves working whatever the worker does', () => {
+  let folder: string
+  let speech: ReturnType<typeof bootstrapMeetingSpeech> | undefined
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'metis-cloud-speech-p0-boot-'))
+    vi.mocked(app.getPath).mockReturnValue(folder)
+    settings = { meetingsFolder: folder, encryptTranscripts: true } as Settings
+    useStorageForTests()
+    configureMeetingSpeechLimits(undefined)
+    configureMeetingSpeechPersistence(undefined)
+  })
+
+  afterEach(async () => {
+    await speech?.dispose()
+    speech = undefined
+    configureMeetingSpeechLimits(undefined)
+    configureMeetingSpeechPersistence(undefined)
+    useStorageForTests()
+    rmSync(folder, { recursive: true, force: true })
+  })
+
+  it.each([
+    ['the worker switched off', false, () => new CrashingWorker()],
+    ['a worker that crashes on every request', true, () => new CrashingWorker()]
+  ])('saves, autosaves and reads back an encrypted broker-v1 meeting with %s', async (_name, enabled, workerFactory) => {
+    speech = bootstrapMeetingSpeech({ readWorkerEnabled: () => enabled, audit: () => undefined, workerFactory })
+    const meeting = rendererCommittedMeeting()
+    meeting.lines = stripProvisionalLines(meeting.lines)
+
+    const file = await saveMeeting(settings, meeting)
+    expect(isEncryptedFile(file)).toBe(true)
+    const read = await recallRead(basename(file))
+    expect(read.ok).toBe(true)
+    expect(read.lines?.[0]?.text).toBe(SYNTHETIC_TEXT)
+    expect(await saveDraftTranscript(settings, meeting)).toEqual({ status: 'saved' })
   })
 })

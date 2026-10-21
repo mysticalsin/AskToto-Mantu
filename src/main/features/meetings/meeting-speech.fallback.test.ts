@@ -136,7 +136,9 @@ describe('inline fallback of the async meeting speech wrappers', () => {
     const out = await runAll()
     expect(out.render).toBe(renderMeetingTranscript(lines))
     expect(out.decode).toEqual(decodeStoredMeetingSpeech(out.render))
-    expect(out.rewrite).toBe(rewriteStoredSpeechTranscript(out.render, [{ ...lines[0]!, name: 'Renamed speaker' }, lines[1]!]))
+    expect(out.rewrite).toBe(
+      rewriteStoredSpeechTranscript(out.render, [{ ...lines[0]!, name: 'Renamed speaker' }, lines[1]!])
+    )
     expect(out.project).toBe(publicMeetingText(out.render))
     expect(out.decrypted).toBe('synthetic content')
     expect(out.decode).toMatchObject({ ok: true, status: 'valid' })

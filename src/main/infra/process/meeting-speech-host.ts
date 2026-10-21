@@ -179,6 +179,11 @@ function estimatedBytes(root: unknown, limit: number, limits: SpeechProvenanceLi
   return size
 }
 
+/** Where the bundled worker entry lives next to the main bundle. */
+export function defaultMeetingSpeechWorkerEntry(): string {
+  return join(__dirname, 'meeting-speech-worker.js')
+}
+
 function defaultWorker(entryPath: string): Worker {
   return new Worker(entryPath)
 }
@@ -290,7 +295,7 @@ export function createMeetingSpeechPersistenceService(
   let active: Pending | null = null
   let queued: Pending | null = null
   const workerFactory = options.workerFactory ?? defaultWorker
-  const entryPath = options.entryPath ?? join(__dirname, 'meeting-speech-worker.js')
+  const entryPath = options.entryPath ?? defaultMeetingSpeechWorkerEntry()
 
   const settle = (pending: Pending, error?: Error, value?: unknown): void => {
     if (pending.settled) return
