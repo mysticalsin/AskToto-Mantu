@@ -82,6 +82,66 @@ describe('CommandControl', () => {
     })
   })
 
+  it('preserves an unknown result with ok false as outcome_unverified after auditing', async () => {
+    const audit = vi.fn()
+    const controller = new CommandControl({
+      execute: async () => ({
+        id: 'desktop.open_notes',
+        ok: false,
+        outcome: 'unknown',
+        detail: 'The launch acknowledgment is uncertain.'
+      }),
+      policyAllows: allowCommandPolicy,
+      audit
+    })
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'outcome_unverified'
+    })
+    expect(audit).toHaveBeenCalledWith('command.confirmed', {
+      actionId: 'desktop.open_notes',
+      outcome: 'unknown'
+    })
+  })
+
+  it('keeps a mismatched unknown result id as adapter_failed before uncertainty mapping', async () => {
+    const audit = vi.fn()
+    const controller = new CommandControl({
+      execute: async () => ({ id: 'desktop.open_arc', ok: false, outcome: 'unknown' }),
+      policyAllows: allowCommandPolicy,
+      audit
+    })
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'adapter_failed'
+    })
+    expect(audit).toHaveBeenCalledWith('command.confirmed', {
+      actionId: 'desktop.open_notes',
+      outcome: 'failed'
+    })
+  })
+
+  it.each([
+    'failed',
+    'cancelled',
+    'unsupported'
+  ] as const)('keeps a matching known %s result as adapter_failed', async (outcome) => {
+    const controller = new CommandControl({
+      execute: async () => ({ id: 'desktop.open_notes', ok: false, outcome }),
+      policyAllows: allowCommandPolicy
+    })
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'adapter_failed'
+    })
+  })
+
   it('does not attribute a verified result for another action to the confirmed action', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({

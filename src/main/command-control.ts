@@ -134,8 +134,8 @@ export class CommandControl {
         return { ok: false, reason: 'adapter_failed' }
       }
       this.audit('command.confirmed', { actionId: proposal.request.id, outcome: result.outcome })
+      if (result.outcome === 'unknown') return { ok: false, reason: 'outcome_unverified' }
       if (result.ok && result.outcome === 'verified') return { ok: true, outcome: result.outcome }
-      if (result.ok && result.outcome === 'unknown') return { ok: false, reason: 'outcome_unverified' }
       return { ok: false, reason: 'adapter_failed' }
     } catch {
       this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'failed' })
