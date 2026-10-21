@@ -30,20 +30,18 @@ export function indexDateString(ms: number): string {
 }
 
 /** One index.md table row (pipes in title/mode are neutralised so they cannot break the table). */
-export function formatIndexRow(
-  dateStr: string,
-  title: string,
-  mode: string,
-  durMin: number,
-  fileName: string
-): string {
+export function formatIndexRow(dateStr: string, title: string, mode: string, durMin: number, fileName: string): string {
   const safeTitle = title.replace(/\|/g, '/')
   const safeMode = mode.replace(/\|/g, '/').replace(/[\r\n]/g, ' ')
   return `| ${dateStr} | ${safeTitle} | ${safeMode} | ${durMin} min | [open](${fileName}) |\n`
 }
 
 /** The markdown document (frontmatter + body) for a saved Q&A note. */
-export function buildNoteDocument(n: { mode: string; question?: string; answer: string }, title: string, started: number): string {
+export function buildNoteDocument(
+  n: { mode: string; question?: string; answer: string },
+  title: string,
+  started: number
+): string {
   const frontmatter = [
     '---',
     'type: note',

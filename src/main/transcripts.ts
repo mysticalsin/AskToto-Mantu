@@ -50,7 +50,13 @@ import {
   promoteDraftTranscript,
   recoveredDraftIndexFields
 } from './features/meetings/draft-transcript-document'
-import { cleanTitle, escapeHeadingLines, opaqueNamePart, slug, stamp } from './features/meetings/transcript-document-format'
+import {
+  cleanTitle,
+  escapeHeadingLines,
+  opaqueNamePart,
+  slug,
+  stamp
+} from './features/meetings/transcript-document-format'
 import {
   decryptMeetingEnvelopeAsync,
   encryptMeetingEnvelopeAsync,
