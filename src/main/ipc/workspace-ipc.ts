@@ -8,11 +8,13 @@
  */
 import type { IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from 'electron'
 import { IPC, type PublicSettings } from '@shared/ipc'
+import type { MeetingsFolderPickResult } from '@shared/contracts/settings-os-state'
 import { getSettings, setSettings } from '../store'
 import { readEvalMetrics, aggregateMetrics } from '../metrics'
 import { parseRecapMarkdown, resolveMeetingsFolder } from '../transcripts'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml } from '../graphify'
 import { wikiDir } from '../brain/publish'
+import { probeFolderWritable } from '../infra/storage/folder-writable'
 
 export interface WorkspaceIpcDependencies {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -25,10 +27,13 @@ export interface WorkspaceIpcDependencies {
   /** OS open of a file or folder; resolves to an error string, or '' on success. */
   openPath: (path: string) => Promise<string>
   pathExists: (path: string) => boolean
+  /** Async write probe for a chosen meetings folder (defaults to a create-and-remove of one empty file). */
+  probeWritable?: (dir: string) => Promise<boolean>
 }
 
 export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
   const { ipcMain, assertMainWindow, requireAuth, publicSettings, showOpenDialog, openPath, pathExists } = deps
+  const probeWritable = deps.probeWritable ?? probeFolderWritable
   // --- Metrics, export & PDF ---
   // On-device eval metrics from the local audit log (latency p50/p95, acceptance, failures). Read-only,
   // metadata-only — nothing leaves the device. Surfaced in Settings → About → Diagnostics.
@@ -75,12 +80,12 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
   })
 
   // --- Filesystem pickers ---
-  ipcMain.handle(IPC.pickFolder, async (e) => {
+  ipcMain.handle(IPC.pickFolder, async (e): Promise<MeetingsFolderPickResult<PublicSettings>> => {
     assertMainWindow(e)
     // Trust boundary is main, not the renderer — this persists a settings write (meetingsFolder), so it
     // must be gated the same as every other settings-writer. Without this, a DevTools/compromised-renderer
     // caller could silently redirect where transcripts are written even with auth enforced.
-    if (!requireAuth()) return { cancelled: true }
+    if (!requireAuth()) return { ok: false, reason: 'signed-out' }
     // Same LSUIElement-accessory-app reasoning as recapPdf above: anchor to `win` so the dialog actually
     // surfaces instead of silently hanging with nothing to attach to.
     const openDialogOpts: Electron.OpenDialogOptions = {
@@ -88,8 +93,13 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
       message: 'Choose where Métis saves meeting transcripts'
     }
     const r = await showOpenDialog(openDialogOpts)
-    if (!r.canceled && r.filePaths[0]) setSettings({ meetingsFolder: r.filePaths[0] })
-    return publicSettings()
+    const picked = !r.canceled ? r.filePaths[0] : undefined
+    if (!picked) return { ok: false, reason: 'cancelled' }
+    // HIG (Settings): invalid input is refused inline, and the last valid value stays. A folder Métis cannot
+    // write to would make every meeting save fail later, so it is never saved.
+    if (!(await probeWritable(picked))) return { ok: false, reason: 'not-writable' }
+    setSettings({ meetingsFolder: picked })
+    return { ok: true, settings: publicSettings() }
   })
 
   // Team transcripts: pick a shared folder whose meeting transcripts are ALSO ingested into this brain

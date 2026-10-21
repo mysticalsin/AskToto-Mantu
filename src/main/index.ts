@@ -205,6 +205,7 @@ import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
+import { applyLoginItem, registerSettingsSystemIpc } from './ipc/settings-system-ipc'
 import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
@@ -5397,6 +5398,9 @@ function buildTrayMenu(): Menu {
     // when it isn't visible, so no separate show call is needed (or wanted) here.
     {
       label: 'Settings…',
+      // Shown as the platform's Settings shortcut; the overlay itself handles Command-Comma while it has focus.
+      accelerator: 'CommandOrControl+,',
+      registerAccelerator: false,
       click: () => {
         sendHotkey('settings')
       }
@@ -5723,6 +5727,7 @@ function registerIpc(): void {
   })
   // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
   registerScreenPermissionIpc(assertMainWindow)
+  registerSettingsSystemIpc({ assertMainWindow, requireAuth, refreshLoginItem: refreshLoginItemOpenAtLoginCache })
   registerRightEdgeIpc(assertMainWindow, rightEdgeSession, currentRightEdgeSurface)
   // OS permission prompts, only from a person's Continue on the row that explains them, never on scene entry
   // (Apple HIG, C26); `kind` limits it to that row's prompt (permissionAskTargets). Screen Recording has no prompt
@@ -6077,14 +6082,8 @@ function registerIpc(): void {
     syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
     // Only reconfigure the OS login item when that setting actually changed. Calling it on every
     // unrelated save is wasteful and, on unsigned/dev builds, logs a noisy "Operation not permitted".
-    if ('launchAtLogin' in p) {
-      try {
-        app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
-        loginItemOpenAtLoginCache = next.launchAtLogin
-      } catch {
-        /* not supported on this platform */
-      }
-    }
+    // The cache is re-read from the OS after the write, so a refused login item never shows as on (HIG).
+    if ('launchAtLogin' in p) applyLoginItem(next.launchAtLogin, refreshLoginItemOpenAtLoginCache)
     // Shortcuts may have changed — re-register from the new settings, then rebuild the tray menu so its
     // accelerator labels reflect the new bindings instead of the ones baked in at createTray() boot time.
     registerShortcuts()

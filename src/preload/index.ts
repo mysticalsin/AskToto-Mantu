@@ -5,6 +5,13 @@ import { createTranscriptRevisionPreloadApi } from './transcript-revision'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import { OWNER_SESSION_IPC, type OwnerSessionStatus } from '../shared/contracts/owner-session'
 import {
+  SETTINGS_OS_STATE_IPC,
+  type MeetingsFolderPickResult,
+  type RetentionPreviewResult,
+  type SettingsOsState,
+  type SystemSettingsPane
+} from '../shared/contracts/settings-os-state'
+import {
   IPC,
   type InputSessionStart,
   type InputSessionContext,
@@ -213,6 +220,13 @@ const api = {
   /** C26: pass the one permission a row's Continue asks for; no argument keeps the combined pass. */
   requestPermissionsUpfront: (kind?: 'microphone' | 'screenRecording'): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront, kind),
+  /** HIG: Settings shows the OS login-item and notification state, and opens the pane when the OS refuses. */
+  settingsOsState: (): Promise<SettingsOsState> => ipcRenderer.invoke(SETTINGS_OS_STATE_IPC.osState),
+  openSystemSettings: (pane: SystemSettingsPane): Promise<void> =>
+    ipcRenderer.invoke(SETTINGS_OS_STATE_IPC.openSystemSettings, pane),
+  /** How many saved meetings a retention window would delete, so Settings can ask before shortening it. */
+  retentionPreview: (retentionDays: number): Promise<RetentionPreviewResult> =>
+    ipcRenderer.invoke(SETTINGS_OS_STATE_IPC.retentionPreview, retentionDays),
   /** M2-0429: reset only Métis's own Screen Recording entry, then relaunch (macOS). */
   repairScreenPermission: (): Promise<ScreenRepairResult> => ipcRenderer.invoke(IPC.permissionsRepairScreen),
   /** M2-0429: "It's already on" — record it and relaunch (macOS). */
@@ -439,7 +453,8 @@ const api = {
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
   readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
   exportRecapJson: (markdown: string): Promise<RecapExport> => ipcRenderer.invoke(IPC.exportRecapJson, markdown),
-  pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
+  /** Never saves a folder Métis cannot write to: the reason comes back for Settings to show inline. */
+  pickFolder: (): Promise<MeetingsFolderPickResult<PublicSettings>> => ipcRenderer.invoke(IPC.pickFolder),
   addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
   removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),

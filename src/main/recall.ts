@@ -720,6 +720,25 @@ export async function deleteAllMeetings(): Promise<{
 // Filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see transcripts.ts) — parsed here rather than
 // trusting file mtime, since mtime changes on copy/sync (this folder is often OneDrive-synced) and
 // would silently corrupt age-based retention.
+/** The saved meetings a `retentionDays` window would delete, by the age in their filename; none when off. */
+async function expiredMeetingFiles(retentionDays: number): Promise<string[]> {
+  if (!retentionDays || retentionDays <= 0) return []
+  const files = await meetingFiles(resolveMeetingsFolder(getSettings()))
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
+  return files.filter((file) => {
+    const m = file.match(FILENAME_TIMESTAMP)
+    if (!m) return false // unrecognized filename shape — never guess an age, skip rather than risk deleting the wrong file
+    const [, y, mo, d, h, mi, s] = m
+    const t = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime()
+    return Number.isFinite(t) && t < cutoff
+  })
+}
+
+/** How many saved meetings a retention window would delete at its next sweep (Settings asks before shortening). */
+export async function countExpiredMeetings(retentionDays: number): Promise<number> {
+  return (await expiredMeetingFiles(retentionDays)).length
+}
+
 /**
  * Auto-delete meetings older than `retentionDays` (storage-limitation control for recorded third-party
  * speech). `retentionDays <= 0` means retention is off — keep everything, the historical default. Swept
@@ -727,17 +746,8 @@ export async function deleteAllMeetings(): Promise<{
  * unlike the wholesale deleteAllMeetings wipe.
  */
 export async function sweepExpiredMeetings(retentionDays: number): Promise<{ deleted: number }> {
-  if (!retentionDays || retentionDays <= 0) return { deleted: 0 }
-  const folder = resolveMeetingsFolder(getSettings())
-  const files = await meetingFiles(folder)
-  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
   let deleted = 0
-  for (const file of files) {
-    const m = file.match(FILENAME_TIMESTAMP)
-    if (!m) continue // unrecognized filename shape — never guess an age, skip rather than risk deleting the wrong file
-    const [, y, mo, d, h, mi, s] = m
-    const t = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime()
-    if (!Number.isFinite(t) || t >= cutoff) continue
+  for (const file of await expiredMeetingFiles(retentionDays)) {
     const r = await deleteMeeting(file)
     if (r.ok) {
       deleted++
