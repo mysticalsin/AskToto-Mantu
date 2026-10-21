@@ -121,7 +121,7 @@ import { useAppSoundCues } from './lib/app-sound-cues'
 import { useAddKeyNudgeExpired } from './lib/add-key-nudge'
 import { resolveReviewRecap } from './lib/review-recap'
 import { useWebgpuFallbackNote } from './lib/asr-fallback-notes'
-import { useEscapeKeyListener, useSettingsWindowMode } from './lib/overlay-window-effects'
+import { useEscapeKeyListener, useSettingsShortcut, useSettingsWindowMode } from './lib/overlay-window-effects'
 import { useUpdateReadySubscription, type UpdateReadyState } from './lib/update-ready'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
@@ -3352,12 +3352,8 @@ export function App(): JSX.Element {
   const escapeRef = useRef<() => void>(() => {})
   escapeRef.current = (): void => {
     void (async () => {
-      // The Reader's ladder: an open confirm sheet closes first, then a stream stops, then a field drops focus,
-      // then the Reader parks (the next explicit reveal restores it at its scroll position).
-      if (rightEdgeReaderShown && navigationGuardRequest) {
-        navigationGuard.choose('cancel', navigationGuardRequest.id)
-        return
-      }
+      // An open ConfirmSheet owns Escape (capture phase) and cancels itself first. The Reader's ladder: a stream
+      // stops, then a field drops focus, then the Reader parks (the next explicit reveal restores its scroll).
       // A live stream takes top priority (see the precedence comment above) — checked BEFORE the typing-blur
       // branch below, because the ask input keeps focus after Enter-submit (submit clears its value but never
       // blurs). Without this ordering the first Esc during a stream only drops focus/the caret and the answer
@@ -3421,6 +3417,7 @@ export function App(): JSX.Element {
     })()
   }
   useEscapeKeyListener(escapeRef)
+  useSettingsShortcut(() => viewRef.current !== 'settings' && handlersRef.current('settings'))
   useSettingsWindowMode(view)
 
   useUpdateReadySubscription(setUpdateReady)
@@ -4265,7 +4262,7 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
-      <ConfirmSheet request={navigationGuardRequest} onChoose={(choice, id) => navigationGuard.choose(choice, id)} />
+      <ConfirmSheet guard={navigationGuard} request={navigationGuardRequest} />
       <CloudSpeechConsentPrompt flow={cloudConsentFlow} onStart={startListen} />
       <OverlayToasts
         minimized={minimized}

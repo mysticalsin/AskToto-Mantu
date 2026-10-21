@@ -4,9 +4,22 @@ export type NavigationGuardRequest = {
   id: number
   title: string
   message: string
+  /** 'confirm' is a two-button alert (Cancel + one verb action, resolved as 'save'); the default is the
+   *  three-way save/discard/cancel sheet. */
+  kind?: 'save-discard' | 'confirm'
   saveLabel?: string
   discardLabel?: string
   cancelLabel?: string
+  /** Three-way: styles Discard as destructive. Confirm: styles the action as destructive and focuses Cancel,
+   *  so Return never confirms a destructive consequence the person did not deliberately choose. */
+  destructive?: boolean
+}
+
+/** Input for a two-button confirmation: a one- or two-word verb title for the action, Cancel for the other. */
+export type ConfirmActionInput = {
+  title: string
+  message: string
+  confirmLabel: string
   destructive?: boolean
 }
 
@@ -85,4 +98,17 @@ export async function confirmNavigation(
   input: Omit<NavigationGuardRequest, 'id'>
 ): Promise<NavigationGuardChoice> {
   return service.request(input)
+}
+
+/** Ask a two-button confirmation through the shared sheet; true only when the person chose the action. */
+export async function confirmAction(service: NavigationGuardService, input: ConfirmActionInput): Promise<boolean> {
+  const choice = await service.request({
+    kind: 'confirm',
+    title: input.title,
+    message: input.message,
+    saveLabel: input.confirmLabel,
+    cancelLabel: 'Cancel',
+    destructive: input.destructive
+  })
+  return choice === 'save'
 }
