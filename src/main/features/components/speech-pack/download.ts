@@ -67,6 +67,11 @@ export interface DownloadRequest {
 
 const MAX_REDIRECTS = 5
 
+function isDiskFullError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOSPC' || code === 'EDQUOT'
+}
+
 export async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path)
@@ -609,6 +614,9 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       throw err
     }
     if (err instanceof SpeechPackError || err instanceof Transient) throw err
+    // A full disk or exhausted quota is a local, terminal condition: retrying only burns the attempt budget and
+    // would be reported as a network failure. The written prefix stays, so an explicit retry can resume it.
+    if (isDiskFullError(err)) throw new SpeechPackError('disk', 'disk is full')
     // Timeouts and network errors alike are transient; the caller's own abort is not.
     if (req.signal.aborted) throw req.signal.reason
     throw new Transient('offline')

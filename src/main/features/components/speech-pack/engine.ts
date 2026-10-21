@@ -103,6 +103,8 @@ export interface SpeechPackEngineOptions {
   sleep?: (ms: number) => Promise<void>
   random?: () => number
   timing?: Partial<DownloadTiming>
+  /** Test seam: opens the partial download file, so a test can fail a write the way a full disk would. */
+  openFile?: DownloadDeps['openFile']
   freeBytes?: (path: string) => number | Promise<number>
   emitIntervalMs?: number
   /** Test seam: called after each activation step, so a test can stop the process there. */
@@ -155,7 +157,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     fetch: options.fetch ?? globalThis.fetch,
     sleep: options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     random: options.random ?? Math.random,
-    timing: { ...DEFAULT_TIMING, ...options.timing }
+    timing: { ...DEFAULT_TIMING, ...options.timing },
+    openFile: options.openFile
   }
   const freeBytes = options.freeBytes ?? availableBytesAtPath
   const interval = options.emitIntervalMs ?? EMIT_INTERVAL_MS

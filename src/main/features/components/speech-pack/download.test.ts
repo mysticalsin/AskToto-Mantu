@@ -596,6 +596,35 @@ describe('downloadVerified', () => {
     expect(existsSync(join(dir, 'model.bin'))).toBe(false)
   })
 
+  it('stops as a disk error without retrying when the disk fills mid-transfer, keeping the resumable prefix', async () => {
+    server = await serve(rangeHandler(body))
+    let writes = 0
+    const openFile = (async (path, flags) => {
+      const handle = await openAsync(path, flags)
+      const actualWrite = handle.write.bind(handle) as (...args: unknown[]) => Promise<unknown>
+      handle.write = (async (...args: unknown[]) => {
+        if (++writes > 1)
+          throw Object.assign(new Error('no space left on device'), {
+            code: 'ENOSPC'
+          })
+        return actualWrite(...args)
+      }) as typeof handle.write
+      return handle
+    }) as typeof openAsync
+    const err = await failure(downloadVerified(request(`${server.base}/pin/model.bin`), deps({ openFile })))
+    expect(err).toBeInstanceOf(SpeechPackError)
+    expect(err.kind).toBe('disk')
+    // A full disk is not a flaky network: the transfer is not retried and the budget is not slept away.
+    expect(server.requests).toHaveLength(1)
+    expect(sleeps).toEqual([])
+    expect(existsSync(join(dir, 'model.bin'))).toBe(false)
+    // The bytes already written are a correct prefix and stay for an explicit resume once space is freed.
+    const partial = readFileSync(join(dir, 'model.bin.partial'))
+    expect(partial.length).toBeGreaterThan(0)
+    expect(partial.length).toBeLessThan(body.length)
+    expect(partial.equals(body.subarray(0, partial.length))).toBe(true)
+  })
+
   it('refuses a URL that names a branch before touching the network', async () => {
     server = await serve(rangeHandler(body))
     const err = await failure(downloadVerified(request(`${server.base}/x/resolve/main/model.bin`), deps()))

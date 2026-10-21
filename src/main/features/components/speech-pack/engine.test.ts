@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync
 } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -837,6 +838,135 @@ describe('speech-pack engine', () => {
         expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
         expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
         expect(server.requests.length).toBe(before)
+      })
+
+      it('refuses a tampered update and leaves the prior verified version active and byte-identical', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
+        const priorBytes = previous.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))
+        await server.close()
+
+        const flipped = Buffer.from(contents['sub/b.bin'])
+        flipped[7] ^= 0xff
+        server = await serve((req, res, i) => {
+          const key = decodeURIComponent((req.url ?? '').replace(/^\/pin\//, ''))
+          rangeHandler(key === 'sub/b.bin' ? flipped : contents[key])(req, res, i)
+        })
+        const nextVersion = { ...whisper(server.base), version: '2' }
+        const selfTest = vi.fn(async () => 'hello world')
+        const next = make([nextVersion], { selfTest })
+        next.enqueue([WHISPER])
+        await next.whenIdle()
+        expect(next.getState(WHISPER)).toEqual({
+          status: 'error',
+          kind: 'tamper'
+        })
+        expect(selfTest).not.toHaveBeenCalled()
+        expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(previous.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))).toEqual(priorBytes)
+
+        // The tampered attempt does not disturb the previous manifest's activation after a restart.
+        const restarted = make([previous])
+        await restarted.initialise()
+        expect(restarted.getState(WHISPER)).toEqual({ status: 'ready' })
+      })
+
+      it('keeps the prior version active when the disk fills mid-update, and only an explicit retry resumes', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
+        const nextVersion = { ...previous, version: '2' }
+        const before = server.requests.length
+
+        let diskFull = true
+        let writes = 0
+        const openFile = (async (path, flags) => {
+          const handle = await open(path, flags)
+          const actualWrite = handle.write.bind(handle) as (...args: unknown[]) => Promise<unknown>
+          handle.write = (async (...args: unknown[]) => {
+            if (diskFull && ++writes > 1)
+              throw Object.assign(new Error('no space left on device'), {
+                code: 'ENOSPC'
+              })
+            return actualWrite(...args)
+          }) as typeof handle.write
+          return handle
+        }) as typeof open
+        const selfTest = vi.fn(async () => 'hello world')
+        const next = make([nextVersion], { openFile, selfTest })
+        next.enqueue([WHISPER])
+        await next.whenIdle()
+        expect(next.getState(WHISPER)).toMatchObject({
+          status: 'error',
+          kind: 'disk'
+        })
+        expect(selfTest).not.toHaveBeenCalled()
+        expect(existsSync(join(root, WHISPER, '2'))).toBe(false)
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        // A full disk is terminal for this attempt: no automatic retry hammered the server.
+        expect(server.requests.length - before).toBeLessThanOrEqual(nextVersion.files.length)
+
+        const restarted = make([previous])
+        await restarted.initialise()
+        expect(restarted.getState(WHISPER)).toEqual({ status: 'ready' })
+
+        // Space is freed; only an explicit enqueue activates the update.
+        diskFull = false
+        const idleRequests = server.requests.length
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        expect(server.requests.length).toBe(idleRequests)
+        expect(next.getState(WHISPER)).toMatchObject({
+          status: 'error',
+          kind: 'disk'
+        })
+        next.enqueue([WHISPER])
+        await next.whenIdle()
+        expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+        expect(JSON.parse(readFileSync(marker(WHISPER), 'utf8')).version).toBe('2')
+        expect(packMatches(nextVersion, join(root, WHISPER, '2'))).toBe(true)
+      })
+
+      it('restores the prior version when the replacement rename fails after the old pack was moved aside', async () => {
+        server = await serveFiles()
+        const previous = whisper(server.base)
+        const first = make([previous])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        const previousMarker = readFileSync(marker(WHISPER))
+        const priorBytes = previous.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))
+
+        // Occupying the destination with a non-empty directory makes the staging-to-final rename fail.
+        const replacing = make([previous], {
+          onActivationStep: (step) => {
+            if (step === 'old-moved-aside') {
+              mkdirSync(join(root, WHISPER, '1'), { recursive: true })
+              writeFileSync(join(root, WHISPER, '1', 'squatter.bin'), 'x')
+            }
+          }
+        })
+        replacing.repair(WHISPER)
+        await replacing.whenIdle()
+        expect(replacing.getState(WHISPER)).toMatchObject({ status: 'error' })
+        expect(replacing.getState(WHISPER)).not.toEqual({ status: 'ready' })
+        expect(readFileSync(marker(WHISPER))).toEqual(previousMarker)
+        expect(packMatches(previous, join(root, WHISPER, '1'))).toBe(true)
+        expect(existsSync(join(root, WHISPER, '1', 'squatter.bin'))).toBe(false)
+        expect(previous.files.map((file) => readFileSync(join(root, WHISPER, '1', file.path)))).toEqual(priorBytes)
+        expect(asideDirs()).toEqual([])
+
+        const restarted = make([previous])
+        await restarted.initialise()
+        expect(restarted.getState(WHISPER)).toEqual({ status: 'ready' })
       })
     })
 

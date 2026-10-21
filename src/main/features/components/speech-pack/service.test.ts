@@ -189,6 +189,31 @@ describe('explicit speech-pack service boundary', () => {
     expect(createEngine).not.toHaveBeenCalled()
   })
 
+  it('refuses a package built for another target: engine incompatible, no plan, and no engine or download is created', async () => {
+    const { service, createEngine } = setup({
+      packageRuntimeContract: async () => ({
+        status: 'invalid' as const,
+        reason: 'target-mismatch' as const,
+        profile: null,
+        inventory: null
+      })
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.engineReadiness.state).toBe('incompatible')
+    expect(snapshot.packageProfile).toMatchObject({
+      status: 'invalid',
+      reason: 'target-mismatch'
+    })
+    await expect(
+      service.planPreview({
+        componentId: WHISPER_BASE_Q8.id,
+        action: 'install',
+        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+      })
+    ).resolves.toEqual({ ok: false, reason: 'profile-invalid' })
+    expect(createEngine).not.toHaveBeenCalled()
+  })
+
   it('starts exactly the selected component only after explicit plan preview and affirmative execution', async () => {
     const { service, engine, createEngine } = setup()
     const preview = await service.planPreview({
