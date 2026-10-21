@@ -125,7 +125,7 @@ const REASONS = [
     why: 'Drives the real PowerShell 7 `pwsh` against scripts/qa/windows/baseline.ps1. Hosted CI runners all ship pwsh and always run these four cases (a missing pwsh fails them there); only an off-CI host without PowerShell skips them, and the baseline below is raised by exactly four for that host so the allowance cannot hide a skip on CI. The workflow-lane cases in the same file run everywhere.'
   },
   {
-    match: 'qa/sandbox-acceptance/session.test.ts',
+    match: 'sandbox-acceptance/session.test.ts',
     why: 'Direct-spawns a fake macOS bundle executable (an extension-less bash script at Contents/MacOS/<name>) to exercise the sandbox launch path. Windows cannot execute that script and the harness launches only the macOS QA bundle; the guard, layout, environment and dry-run logic in the same directory run on every platform.'
   },
   {
