@@ -993,6 +993,7 @@ describe('runRevealRow', () => {
       const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as
         | { diagnostics?: unknown }
         | undefined
+      expect(row).toMatchObject({ status: 'FAIL', evidence: null })
       expect(row?.diagnostics).toMatchObject({
         stage: 'prepare',
         prepare: { code: 1, signal: null, error: false, reason: 'nonzero-exit' },
