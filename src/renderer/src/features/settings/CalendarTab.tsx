@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Bell, Calendar, CircleCheck, ExternalLink, ShieldCheck } from 'lucide-react'
 import type { AuthStatus, PublicSettings } from '@shared/ipc'
 import { AgendaView } from '../../components/AgendaView'
@@ -7,6 +7,10 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { ctl } from '../../ui/ctl'
+import { useConfirm } from '../../ui/confirm-context'
+import { notificationsView, useSettingsOsState } from './os-state'
+import { OsSettingsHint } from './OsSettingsHint'
+import { OUTLOOK_SIGN_OUT_CONFIRMATION } from './settings-confirmations'
 
 // ---------------------------------------------------------------------------
 // Calendar tab
@@ -44,7 +48,8 @@ export function CalendarTab({
   }, [])
 
   const refreshOutlook = (): void => {
-    void window.toto.authStatus()
+    void window.toto
+      .authStatus()
       .then((v) => {
         if (!mountedRef.current) return
         setAuthStatus(v)
@@ -86,7 +91,10 @@ export function CalendarTab({
     const ci = clientId.trim()
     const ti = tenantId.trim()
     const dom = domain.trim().replace(/^@/, '')
-    if (!ci || !ti || !dom) { setOutlookErr('All three fields are required.'); return }
+    if (!ci || !ti || !dom) {
+      setOutlookErr('All three fields are required.')
+      return
+    }
     setSavingOutlook(true)
     setOutlookErr(null)
     await patch({ azureClientId: ci, azureTenantId: ti, azureAllowedDomain: dom })
@@ -105,7 +113,10 @@ export function CalendarTab({
     refreshOutlook()
   }
 
+  // Signing out is uncommon and not undoable from here (sign-in is a full OAuth round trip): ask first (HIG A2).
+  const askToConfirm = useConfirm()
   const signOutOutlook = async (): Promise<void> => {
+    if (!(await askToConfirm(OUTLOOK_SIGN_OUT_CONFIRMATION))) return
     await window.toto.signOut()
     if (!mountedRef.current) return
     refreshOutlook()
@@ -148,27 +159,34 @@ export function CalendarTab({
   }
 
   const isOutlookConnected = !!authStatus?.signedIn
+  // Meeting alerts show what the OS allows, with a way to fix it when it refuses (HIG).
+  const { osState } = useSettingsOsState()
+  const alerts = notificationsView(settings.meetingNotifications ?? false, osState?.notifications)
+  const alertsHintId = useId()
 
   return (
     <div className="flex flex-col gap-6">
-
       {/* Notifications — merged from former Notifications tab */}
       <Section title="Notifications" icon={Bell}>
         <ToggleRow
           label="Meeting alerts"
           desc="Notify 1 minute before a scheduled meeting starts."
-          on={settings.meetingNotifications ?? false}
+          on={alerts.on}
           onChange={(v) => patch({ meetingNotifications: v })}
           icon={Bell}
+          describedBy={alerts.hint ? alertsHintId : undefined}
         />
+        {alerts.hint && <OsSettingsHint id={alertsHintId} text={alerts.hint} pane="notifications" />}
       </Section>
 
       {/* Microsoft / Outlook */}
-      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events." icon={Calendar}>
+      <Section
+        title="Microsoft / Outlook"
+        desc="Connect your work Microsoft account to see Outlook calendar events."
+        icon={Calendar}
+      >
         <div className="flex flex-col gap-2">
-          {authStatus === null && (
-            <InlineOrb kind="connecting" />
-          )}
+          {authStatus === null && <InlineOrb kind="connecting" />}
 
           {isOutlookConnected && (
             <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
@@ -227,22 +245,34 @@ export function CalendarTab({
                   >
                     Microsoft Entra <ExternalLink size={10} />
                   </a>{' '}
-                  (platform: Mobile &amp; desktop, redirect: <code className="rounded bg-white/[0.06] px-1">http://localhost</code>).
-                  These are public IDs. No secret needed.
+                  (platform: Mobile &amp; desktop, redirect:{' '}
+                  <code className="rounded bg-white/[0.06] px-1">http://localhost</code>). These are public IDs. No
+                  secret needed.
                 </p>
               </div>
               {azureLocked && (
                 <p className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-accent-text)]">
                   <ShieldCheck size={11} className="shrink-0" />
-                  Microsoft sign-in is already configured for this app. These IDs are locked here. Contact your admin to change them.
+                  Microsoft sign-in is already configured for this app. These IDs are locked here. Contact your admin to
+                  change them.
                 </p>
               )}
-              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000', 'azureClientId')}
-              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000', 'azureTenantId')}
-              {idField('Allowed email domain', domain, setDomain, 'mantu.com', 'azureAllowedDomain')}
-              {outlookErr && (
-                <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
+              {idField(
+                'Application (client) ID',
+                clientId,
+                setClientId,
+                '00000000-0000-0000-0000-000000000000',
+                'azureClientId'
               )}
+              {idField(
+                'Directory (tenant) ID',
+                tenantId,
+                setTenantId,
+                '00000000-0000-0000-0000-000000000000',
+                'azureTenantId'
+              )}
+              {idField('Allowed email domain', domain, setDomain, 'mantu.com', 'azureAllowedDomain')}
+              {outlookErr && <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -256,7 +286,10 @@ export function CalendarTab({
                 {showOutlookSetup && (
                   <button
                     type="button"
-                    onClick={() => { setShowOutlookSetup(false); setOutlookErr(null) }}
+                    onClick={() => {
+                      setShowOutlookSetup(false)
+                      setOutlookErr(null)
+                    }}
                     className="no-drag cl-focus rounded-[8px] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
                   >
                     Cancel

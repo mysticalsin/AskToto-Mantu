@@ -11,7 +11,6 @@ import {
   Lightbulb,
   Lock,
   Network,
-  RefreshCw,
   RotateCcw,
   Route,
   Search,
@@ -20,9 +19,14 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import type { AsrAssetsStatus, AppleEngineStatus, LocalModelSummary, ProfileRecoveryResult, PublicSettings, TestKeyResponse } from '@shared/ipc'
+import type {
+  AppleEngineStatus,
+  LocalModelSummary,
+  ProfileRecoveryResult,
+  PublicSettings,
+  TestKeyResponse
+} from '@shared/ipc'
 import { formatResetPhrase } from '@shared/reset-time'
-import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
 import {
   PROVIDERS,
@@ -43,6 +47,7 @@ import { LazyInput } from '../../ui/LazyText'
 import { ManagedChip, managedChipCls } from '../../ui/ManagedChip'
 import { ExpandableSection, Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
+import { CustomEndpointField } from './CustomEndpointField'
 import { DustSetup } from './DustSetup'
 import { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
 import { pickReadyProvider } from './provider-readiness'
@@ -51,16 +56,13 @@ import { pickReadyProvider } from './provider-readiness'
 // Métis Local is also excluded wherever `selectable`/`keyEntrySection` is computed.
 const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 
-/** Public release page used only when a signed package reports damaged built-in transcription assets. */
-export const OFFICIAL_METIS_INSTALLER_URL = 'https://github.com/mysticalsin/Metis-Releases/releases/latest'
-
 /** Drives the small "Best pick" badge on a provider tile. */
 function recommendedProvider(settings: PublicSettings): ProviderId {
   if (settings.hasKeys['anthropic']) return 'anthropic'
   if (isDustReady(settings.hasKeys, settings.dustWorkspaceId, settings.providerModels)) return 'dust'
   // Exclude saved-but-unready Dust so it cannot fall through as "ready".
-  const ready = PROVIDER_IDS.find((p) =>
-    p !== 'dust' && (PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p])
+  const ready = PROVIDER_IDS.find(
+    (p) => p !== 'dust' && (PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p])
   )
   return ready ?? 'anthropic'
 }
@@ -123,7 +125,9 @@ function ProviderTile({
           {hasKey && <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />}
         </span>
       </span>
-      <span className="w-full min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{PROVIDERS[id].blurb}</span>
+      <span className="w-full min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+        {PROVIDERS[id].blurb}
+      </span>
     </button>
   )
 }
@@ -217,7 +221,6 @@ export function AiSection({
   const guardedThinkModelName = applyInteractiveGuardrail(provider, 'think', thinkModelName)
   const keyInputId = useId()
   const modelInputId = useId()
-  const baseUrlInputId = useId()
   const locked = settings.managedKeys.includes('provider')
   // M2-0412: the fleet model policy's effective askChat provider/model is computed in main from the
   // verified Operator policy. While present, local provider/model choices are informational only.
@@ -306,7 +309,11 @@ export function AiSection({
     try {
       const result = await recoverEncryptedProfile()
       if (!result.ok) {
-        setRecoveryMessage(result.canceled ? 'Recovery canceled. Your encrypted profile was not changed.' : result.error || 'Could not create a new local profile.')
+        setRecoveryMessage(
+          result.canceled
+            ? 'Recovery canceled. Your encrypted profile was not changed.'
+            : result.error || 'Could not create a new local profile.'
+        )
         return
       }
       setRecoveryAvailable(false)
@@ -414,276 +421,290 @@ export function AiSection({
 
   const keyEntrySection =
     !CLI_PROVIDERS.has(provider) && provider !== 'cloudflare' && PROVIDERS[provider].kind !== 'local' ? (
-    <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <label htmlFor={keyInputId} className="sr-only">
-          {def.label} API key
-        </label>
-        <input
-          id={keyInputId}
-          type="password"
-          value={key}
-          disabled={envKeyActive}
-          onChange={(e) => onKeyChange(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
-          placeholder={
-            envKeyActive
-              ? 'Set via environment variable, takes precedence over any in-app key'
-              : settings.hasKeys[provider]
-                ? '•••••• saved (paste to replace)'
-                : `Paste your ${def.label} key`
-          }
-          className={'min-w-0 flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
-        />
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={test.status === 'loading' || envKeyActive}
-          className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-        >
-          {saved ? <Check size={14} /> : null}
-          {saved ? 'Saved' : 'Save'}
-        </button>
-        {/* MQA-060: Test can only ever check the key in the box above — the stored secret is never sent
+      <Section
+        title={`${def.label} key`}
+        desc="Stored encrypted on this device. Never sent anywhere except the provider."
+        icon={Lock}
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <label htmlFor={keyInputId} className="sr-only">
+            {def.label} API key
+          </label>
+          <input
+            id={keyInputId}
+            type="password"
+            value={key}
+            disabled={envKeyActive}
+            onChange={(e) => onKeyChange(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
+            placeholder={
+              envKeyActive
+                ? 'Set via environment variable, takes precedence over any in-app key'
+                : settings.hasKeys[provider]
+                  ? '•••••• saved (paste to replace)'
+                  : `Paste your ${def.label} key`
+            }
+            className={'min-w-0 flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
+          />
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={test.status === 'loading' || envKeyActive}
+            className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {saved ? <Check size={14} /> : null}
+            {saved ? 'Saved' : 'Save'}
+          </button>
+          {/* MQA-060: Test can only ever check the key in the box above — the stored secret is never sent
             back to the renderer, so with an empty box this button could only produce "Paste a key above
             to test it.". Disable it there and say why in the tooltip, instead of offering a "verify my
             key" affordance in the one state where it is guaranteed to fail. */}
-        <button
-          type="button"
-          onClick={onTest}
-          disabled={test.status === 'loading' || envKeyActive || !key.trim()}
-          title={
-            !key.trim() && !envKeyActive
-              ? settings.hasKeys[provider]
-                ? 'The saved key is never shown here, so it can’t be re-tested. Paste a key to test it.'
-                : 'Paste a key above to test it.'
-              : undefined
-          }
-          className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
-        >
-          {test.status === 'loading' ? <InlineOrb kind="connecting" /> : null}
-          Test
-        </button>
-        {envKeyActive ? (
-          <span
-            title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
-            className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
-          >
-            Set via environment variable
-          </span>
-        ) : settings.hasKeys[provider] ? (
-          confirmRemove ? (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmRemove(false)
-                  void onRemove()
-                }}
-                className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-destructive)]/40 bg-[var(--cl-destructive)]/20 px-3 py-2.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/30"
-              >
-                Remove key
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmRemove(false)}
-                className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.08]"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmRemove(true)}
-              title="Remove saved key"
-              className="no-drag cl-focus flex items-center justify-center rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-2.5 text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
-            >
-              <Trash2 size={14} />
-            </button>
-          )
-        ) : null}
-      </div>
-      {restoreMsg && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
-      )}
-
-      {hint && (
-        <div
-          className={[
-            'mt-2 flex items-start gap-1.5 text-[12px]',
-            hint.kind === 'ok'
-              ? 'text-[color:var(--cl-primary)]'
-              : 'text-[color:var(--cl-muted-foreground)]'
-          ].join(' ')}
-        >
-          <Sparkles size={13} /> {hint.text}
-        </div>
-      )}
-
-      {test.status !== 'idle' && test.status !== 'loading' && (
-        <div
-          className={[
-            'mt-2 flex items-start gap-1.5 text-[12px]',
-            test.status === 'ok'
-              ? 'text-[color:var(--cl-success)]'
-              : 'text-[color:var(--cl-destructive)]'
-          ].join(' ')}
-        >
-          {test.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />}
-          {test.message}
-        </div>
-      )}
-
-      {recoveryAvailable && (
-        <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-primary)]/35 bg-[var(--cl-primary-soft)]/40 p-3 text-[12px]">
-          <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
-            <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
-            <span>
-              This install cannot unlock the existing encrypted profile. You can restore {PROFILE_CREDENTIAL_STORE} access
-              and try again, or create a fresh local profile while Métis preserves the old encrypted data.
-            </span>
-          </div>
           <button
             type="button"
-            onClick={() => void recoverProfileAndRetry()}
-            disabled={recoveryBusy}
-            className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            onClick={onTest}
+            disabled={test.status === 'loading' || envKeyActive || !key.trim()}
+            title={
+              !key.trim() && !envKeyActive
+                ? settings.hasKeys[provider]
+                  ? 'The saved key is never shown here, so it can’t be re-tested. Paste a key to test it.'
+                  : 'Paste a key above to test it.'
+                : undefined
+            }
+            className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
           >
-            {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
-            {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
+            {test.status === 'loading' ? <InlineOrb kind="connecting" /> : null}
+            Test
           </button>
-          {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
+          {envKeyActive ? (
+            <span
+              title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
+              className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
+            >
+              Set via environment variable
+            </span>
+          ) : settings.hasKeys[provider] ? (
+            confirmRemove ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmRemove(false)
+                    void onRemove()
+                  }}
+                  className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-destructive)]/40 bg-[var(--cl-destructive)]/20 px-3 py-2.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/30"
+                >
+                  Remove key
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemove(false)}
+                  className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.08]"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmRemove(true)}
+                title="Remove saved key"
+                aria-label="Remove saved key"
+                className="no-drag cl-focus flex items-center justify-center rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-2.5 text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </button>
+            )
+          ) : null}
         </div>
-      )}
+        {restoreMsg && <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>}
 
-      <div className="mt-2 flex items-center justify-between text-[12px]">
-        <span className="text-[color:var(--cl-muted-foreground)]">
-          {settings.hasEncryption
-            ? 'Stored encrypted on this device.'
-            : 'Stored locally (encryption unavailable).'}
-        </span>
-        {def.keyUrl && (
-          <a
-            href={def.keyUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
+        {hint && (
+          <div
+            className={[
+              'mt-2 flex items-start gap-1.5 text-[12px]',
+              hint.kind === 'ok' ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'
+            ].join(' ')}
           >
-            Get a key <ExternalLink size={11} />
-          </a>
+            <Sparkles size={13} /> {hint.text}
+          </div>
         )}
-      </div>
 
-      <button
-        type="button"
-        onClick={() => setAdv((a) => !a)}
-        className="no-drag mt-2 flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-      >
-        <ChevronDown size={12} className={adv ? 'rotate-180 transition-transform' : 'transition-transform'} />
-        Advanced
-      </button>
-      {adv && (
-        <div className="mt-2 flex flex-col gap-2">
-          <div className="flex flex-col gap-1">
-            <label htmlFor={modelInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-              Base model · fast, cheap
-            </label>
-            <div className="flex items-center gap-2">
-              {/* MQA-069: debounced like customBaseUrl below. A plain controlled input here commits
+        {test.status !== 'idle' && test.status !== 'loading' && (
+          <div
+            className={[
+              'mt-2 flex items-start gap-1.5 text-[12px]',
+              test.status === 'ok' ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-destructive)]'
+            ].join(' ')}
+          >
+            {test.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />}
+            {test.message}
+          </div>
+        )}
+
+        {recoveryAvailable && (
+          <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-primary)]/35 bg-[var(--cl-primary-soft)]/40 p-3 text-[12px]">
+            <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
+              <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+              <span>
+                This install cannot unlock the existing encrypted profile. You can restore {PROFILE_CREDENTIAL_STORE}{' '}
+                access and try again, or create a fresh local profile while Métis preserves the old encrypted data.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void recoverProfileAndRetry()}
+              disabled={recoveryBusy}
+              className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
+              {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
+            </button>
+            {recoveryMessage && (
+              <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>
+            )}
+          </div>
+        )}
+
+        <div className="mt-2 flex items-center justify-between text-[12px]">
+          <span className="text-[color:var(--cl-muted-foreground)]">
+            {settings.hasEncryption ? 'Stored encrypted on this device.' : 'Stored locally (encryption unavailable).'}
+          </span>
+          {def.keyUrl && (
+            <a
+              href={def.keyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
+            >
+              Get a key <ExternalLink size={11} />
+            </a>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setAdv((a) => !a)}
+          className="no-drag mt-2 flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+        >
+          <ChevronDown size={12} className={adv ? 'rotate-180 transition-transform' : 'transition-transform'} />
+          Advanced
+        </button>
+        {adv && (
+          <div className="mt-2 flex flex-col gap-2">
+            <div className="flex flex-col gap-1">
+              <label htmlFor={modelInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                Base model · fast, cheap
+              </label>
+              <div className="flex items-center gap-2">
+                {/* MQA-069: debounced like customBaseUrl below. A plain controlled input here commits
                   through the settings IPC round-trip on every keystroke, and the re-render then resets
                   the DOM to the value of an already-resolved earlier patch — fast typing drops
                   characters and persists a garbled model id that every later request 400s on. */}
-            <LazyInput
-                id={modelInputId}
+                <LazyInput
+                  id={modelInputId}
+                  list={`m-${provider}`}
+                  // Bind to the RAW stored value (not baseModelName, which resolves through the provider's
+                  // fallback default) — same pattern as the Thinking model field below. baseModelName's
+                  // fallback is right for DISPLAY text elsewhere on this page, but here it would make the
+                  // field re-populate with the default the instant it's cleared, so backspacing to empty
+                  // (→ "use default") was never actually possible.
+                  value={settings.providerModels[provider] ?? ''}
+                  disabled={
+                    provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModels')
+                  }
+                  onCommit={(v) => patch({ providerModels: { ...settings.providerModels, [provider]: v } })}
+                  placeholder={def.fastModel || 'base model id'}
+                  className={[
+                    'flex-1 min-w-0',
+                    ctl,
+                    provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModels')
+                      ? 'opacity-60'
+                      : ''
+                  ].join(' ')}
+                />
+                <ManagedChip keys={settings.managedKeys} k="providerModels" />
+                {modelPolicyLocked && <span className={managedChipCls}>Managed by the Operator portal</span>}
+              </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label
+                htmlFor={`think-${provider}`}
+                className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]"
+              >
+                Thinking model · hard, coding questions
+              </label>
+              {/* MQA-069: debounced for the same reason as the Base model field above. */}
+              <LazyInput
+                id={`think-${provider}`}
                 list={`m-${provider}`}
-                // Bind to the RAW stored value (not baseModelName, which resolves through the provider's
-                // fallback default) — same pattern as the Thinking model field below. baseModelName's
-                // fallback is right for DISPLAY text elsewhere on this page, but here it would make the
-                // field re-populate with the default the instant it's cleared, so backspacing to empty
-                // (→ "use default") was never actually possible.
-                value={settings.providerModels[provider] ?? ''}
-                disabled={provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModels')}
-                onCommit={(v) => patch({ providerModels: { ...settings.providerModels, [provider]: v } })}
-                placeholder={def.fastModel || 'base model id'}
+                value={settings.providerModelsThinking[provider] ?? ''}
+                disabled={
+                  provider === 'anthropic' ||
+                  modelPolicyLocked ||
+                  settings.managedKeys.includes('providerModelsThinking')
+                }
+                onCommit={(v) =>
+                  patch({
+                    providerModelsThinking: { ...settings.providerModelsThinking, [provider]: v }
+                  })
+                }
+                placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
                 className={[
-                  'flex-1 min-w-0', ctl,
-                  provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
+                  'w-full',
+                  ctl,
+                  provider === 'anthropic' ||
+                  modelPolicyLocked ||
+                  settings.managedKeys.includes('providerModelsThinking')
+                    ? 'opacity-60'
+                    : ''
                 ].join(' ')}
               />
-              <ManagedChip keys={settings.managedKeys} k="providerModels" />
-              {modelPolicyLocked && <span className={managedChipCls}>Managed by the Operator portal</span>}
             </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`think-${provider}`} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-              Thinking model · hard, coding questions
-            </label>
-            {/* MQA-069: debounced for the same reason as the Base model field above. */}
-            <LazyInput
-              id={`think-${provider}`}
-              list={`m-${provider}`}
-              value={settings.providerModelsThinking[provider] ?? ''}
-              disabled={provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModelsThinking')}
-              onCommit={(v) =>
-                patch({
-                  providerModelsThinking: { ...settings.providerModelsThinking, [provider]: v }
-                })
-              }
-              placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
-              className={[
-                'w-full', ctl,
-                provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
-              ].join(' ')}
-            />
-          </div>
-          {provider === 'anthropic' && (
-            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Locked: base always answers as Haiku, thinking as Sonnet, a cost guardrail. Hard/coding
-              questions still escalate to Opus automatically; that tier isn't shown here.
-            </p>
-          )}
-          <datalist id={`m-${provider}`}>
-            {def.models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          {provider === 'custom' && (
-            <div className="flex items-center gap-2">
-              <label htmlFor={baseUrlInputId} className="sr-only">
-                Custom endpoint URL
-              </label>
-              <LazyInput
-                id={baseUrlInputId}
-                value={settings.customBaseUrl}
-                disabled={settings.managedKeys.includes('customBaseUrl')}
-                onCommit={(v) => patch({ customBaseUrl: v })}
-                placeholder="https://your-endpoint/v1"
-                className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('customBaseUrl') ? 'opacity-60' : ''].join(' ')}
+            {provider === 'anthropic' && (
+              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Locked: base always answers as Haiku, thinking as Sonnet, a cost guardrail. Hard/coding questions still
+                escalate to Opus automatically; that tier isn't shown here.
+              </p>
+            )}
+            <datalist id={`m-${provider}`}>
+              {def.models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+            {provider === 'custom' && (
+              <div className="flex items-start gap-2">
+                <CustomEndpointField
+                  value={settings.customBaseUrl}
+                  required={settings.provider === 'custom'}
+                  disabled={settings.managedKeys.includes('customBaseUrl')}
+                  patch={patch}
+                />
+                <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
+              </div>
+            )}
+            <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              <span className="flex items-center gap-2">
+                Creativity · {settings.temperature.toFixed(1)}
+                <ManagedChip keys={settings.managedKeys} k="temperature" />
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.1}
+                value={settings.temperature}
+                disabled={settings.managedKeys.includes('temperature')}
+                onChange={(e) => patch({ temperature: Number(e.target.value) })}
+                className={[
+                  'no-drag accent-[var(--cl-primary)]',
+                  settings.managedKeys.includes('temperature') ? 'opacity-60' : ''
+                ].join(' ')}
               />
-              <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
-            </div>
-          )}
-          <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
-            <span className="flex items-center gap-2">
-              Creativity · {settings.temperature.toFixed(1)}
-              <ManagedChip keys={settings.managedKeys} k="temperature" />
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.1}
-              value={settings.temperature}
-              disabled={settings.managedKeys.includes('temperature')}
-              onChange={(e) => patch({ temperature: Number(e.target.value) })}
-              className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('temperature') ? 'opacity-60' : ''].join(' ')}
-            />
-          </label>
-        </div>
-      )}
-    </Section>
-  ) : null
+            </label>
+          </div>
+        )}
+      </Section>
+    ) : null
 
   const localModelPolicy = settings.modelPolicyCapabilities.localModel
 
@@ -692,7 +713,10 @@ export function AiSection({
       {Object.keys(settings.modelPolicyCapabilities).length === 0 && (
         <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3 text-[12px] text-[color:var(--cl-muted-foreground)]">
           <ShieldCheck size={14} className="shrink-0" />
-          <span>Models: not managed. This device uses its own model settings until the owner sets a policy on the Operator portal.</span>
+          <span>
+            Models: not managed. This device uses its own model settings until the owner sets a policy on the Operator
+            portal.
+          </span>
         </div>
       )}
       {askChatPolicy && (
@@ -700,7 +724,8 @@ export function AiSection({
           <ShieldCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
           <span>
             Managed by your organization: Ask/chat uses{' '}
-            <strong>{PROVIDERS[askChatPolicy.provider as ProviderId]?.label ?? askChatPolicy.provider}</strong> ({askChatPolicy.model}
+            <strong>{PROVIDERS[askChatPolicy.provider as ProviderId]?.label ?? askChatPolicy.provider}</strong> (
+            {askChatPolicy.model}
             ), set on the Operator portal.
           </span>
         </div>
@@ -709,8 +734,8 @@ export function AiSection({
         <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
           <ShieldCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
           <span>
-            Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.localModel} uses <strong>{localModelPolicy.provider}</strong>{' '}
-            ({localModelPolicy.model}), set on the Operator portal.
+            Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.localModel} uses{' '}
+            <strong>{localModelPolicy.provider}</strong> ({localModelPolicy.model}), set on the Operator portal.
           </span>
         </div>
       )}
@@ -761,8 +786,8 @@ export function AiSection({
         ) : (
           <button
             type="button"
-          onClick={() => patch({ provider: 'anthropic' })}
-          disabled={providerLocked}
+            onClick={() => patch({ provider: 'anthropic' })}
+            disabled={providerLocked}
             className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
           >
             Use this
@@ -819,8 +844,8 @@ export function AiSection({
             Log in to Cloudflare
           </button>
           <p className="mt-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Finish in your default browser. Then this seat uses Operator platform keys. No Worker URL
-            or METIS_PROXY_KEY paste.
+            Finish in your default browser. Then this seat uses Operator platform keys. No Worker URL or METIS_PROXY_KEY
+            paste.
           </p>
           {/* MQA-261 lives on this card now. The generic key box is `provider !== 'cloudflare'`, so a
               `provider === 'cloudflare'` compare there is TS2367 (no overlap) and the restore never
@@ -842,18 +867,16 @@ export function AiSection({
             </>
           ) : settings.embeddedCloudflareKeyAvailable ? (
             <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-              This key came with Metis rather than from you, so you have no copy of it. You can put it back
-              from this card afterwards.
+              This key came with Metis rather than from you, so you have no copy of it. You can put it back from this
+              card afterwards.
             </div>
           ) : null}
-          {restoreMsg && (
-            <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
-          )}
+          {restoreMsg && <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>}
           <div className="mt-3 flex flex-col gap-2 border-t border-[var(--cl-input)] pt-3">
             <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Nova live speech uses the same vault shape as Operator Keys: a Cloudflare account API token
-              (seated above or via Operator), an account id, and an optional AI Gateway id. Blank gateway
-              uses default (same as Operator verifyDefaultGatewayPrivacy).
+              Nova live speech uses the same vault shape as Operator Keys: a Cloudflare account API token (seated above
+              or via Operator), an account id, and an optional AI Gateway id. Blank gateway uses default (same as
+              Operator verifyDefaultGatewayPrivacy).
             </p>
             <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
               Cloudflare account id
@@ -864,7 +887,11 @@ export function AiSection({
                 onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
                 placeholder="32 hex characters"
                 aria-label="Cloudflare account id"
-                className={['w-full', ctl, settings.managedKeys.includes('cloudflareAccountId') ? 'opacity-60' : ''].join(' ')}
+                className={[
+                  'w-full',
+                  ctl,
+                  settings.managedKeys.includes('cloudflareAccountId') ? 'opacity-60' : ''
+                ].join(' ')}
               />
             </label>
             <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
@@ -876,12 +903,14 @@ export function AiSection({
                 onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
                 placeholder="default"
                 aria-label="CF AI Gateway id"
-                className={['w-full', ctl, settings.managedKeys.includes('cfAiGatewayId') ? 'opacity-60' : ''].join(' ')}
+                className={['w-full', ctl, settings.managedKeys.includes('cfAiGatewayId') ? 'opacity-60' : ''].join(
+                  ' '
+                )}
               />
             </label>
             <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Account-scoped base URL (.../accounts/&lt;id&gt;/ai/v1) also works; when the Worker proxy URL has
-              no account path, set the account id here.
+              Account-scoped base URL (.../accounts/&lt;id&gt;/ai/v1) also works; when the Worker proxy URL has no
+              account path, set the account id here.
             </p>
           </div>
         </Section>
@@ -893,7 +922,11 @@ export function AiSection({
         title="Experience: more models"
         desc="More providers, including a raw OpenAI-compatible endpoint. Closed by default; most people find what they need above."
       >
-        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider." icon={Cpu}>
+        <Section
+          title="Model provider"
+          desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider."
+          icon={Cpu}
+        >
           {orgAllowed && (
             <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[var(--cl-primary-soft)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
               <ShieldCheck size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
@@ -950,7 +983,11 @@ export function AiSection({
       </ExpandableSection>
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
-      <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions." icon={Lightbulb}>
+      <Section
+        title="Thinking mode"
+        desc="When to use a fast model vs. a deeper one for harder questions."
+        icon={Lightbulb}
+      >
         <div className="flex min-w-0 flex-wrap gap-1.5">
           {(
             [
@@ -1003,12 +1040,7 @@ export function AiSection({
 /** Human phrase for a currently-demoted provider, from its cooldown reason + reset instant. */
 function providerLimitLabel(u: { reason: string; until: number }): string {
   const mins = Math.max(0, Math.round((u.until - Date.now()) / 60000))
-  const when =
-    mins >= 60
-      ? formatResetPhrase(u.until)
-      : mins >= 1
-        ? `retry in ${mins}m`
-        : 'retry shortly'
+  const when = mins >= 60 ? formatResetPhrase(u.until) : mins >= 1 ? `retry in ${mins}m` : 'retry shortly'
   switch (u.reason) {
     case 'rate-limit':
       return `rate-limited, ${when}`
@@ -1131,8 +1163,8 @@ function ResilienceSection({
         <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="mt-0.5 shrink-0" />
           <span>
-            Worst case, the on-device model answers with no API at all, controlled by <b>Local AI → use as a
-            safety net</b> above.
+            Worst case, the on-device model answers with no API at all, controlled by{' '}
+            <b>Local AI → use as a safety net</b> above.
           </span>
         </div>
       </div>
@@ -1198,19 +1230,36 @@ function FallbackOrderEditor({
       {chain.length > 0 && (
         <ul className="mb-2 flex flex-col gap-1">
           {chain.map((p, i) => (
-            <li key={p} className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-2.5 py-1.5">
+            <li
+              key={p}
+              className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-2.5 py-1.5"
+            >
               <span className="w-4 text-[11px] tabular-nums text-[color:var(--cl-muted-foreground)]">{i + 1}</span>
               <span className="flex-1 text-[12px] text-[color:var(--cl-foreground)]">{PROVIDERS[p].label}</span>
-              <button type="button" aria-label={`Move ${PROVIDERS[p].label} up`} disabled={i === 0} onClick={() => move(i, -1)}
-                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] disabled:opacity-30">
+              <button
+                type="button"
+                aria-label={`Move ${PROVIDERS[p].label} up`}
+                disabled={i === 0}
+                onClick={() => move(i, -1)}
+                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] disabled:opacity-30"
+              >
                 <ChevronUp size={12} />
               </button>
-              <button type="button" aria-label={`Move ${PROVIDERS[p].label} down`} disabled={i === chain.length - 1} onClick={() => move(i, 1)}
-                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] disabled:opacity-30">
+              <button
+                type="button"
+                aria-label={`Move ${PROVIDERS[p].label} down`}
+                disabled={i === chain.length - 1}
+                onClick={() => move(i, 1)}
+                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] disabled:opacity-30"
+              >
                 <ChevronDown size={12} />
               </button>
-              <button type="button" aria-label={`Remove ${PROVIDERS[p].label} from the order`} onClick={() => commit(chain.filter((x) => x !== p))}
-                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06]">
+              <button
+                type="button"
+                aria-label={`Remove ${PROVIDERS[p].label} from the order`}
+                onClick={() => commit(chain.filter((x) => x !== p))}
+                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06]"
+              >
                 <X size={12} />
               </button>
             </li>
@@ -1220,8 +1269,12 @@ function FallbackOrderEditor({
       {rest.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {rest.map((p) => (
-            <button key={p} type="button" onClick={() => commit([...chain, p])}
-              className="no-drag cl-focus rounded-[8px] border border-[var(--cl-border)] px-2.5 py-1 text-[11.5px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)] hover:text-[color:var(--cl-foreground)]">
+            <button
+              key={p}
+              type="button"
+              onClick={() => commit([...chain, p])}
+              className="no-drag cl-focus rounded-[8px] border border-[var(--cl-border)] px-2.5 py-1 text-[11.5px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)] hover:text-[color:var(--cl-foreground)]"
+            >
               + {PROVIDERS[p].label}
             </button>
           ))}
@@ -1255,8 +1308,8 @@ export function WhisperQualityRow({
   }
   return (
     <p className="m-0 px-1 py-2 text-[12px] leading-snug text-[color:var(--cl-muted-foreground)]">
-      Live Whisper uses the compact Whisper base model in this build. The optional larger model
-      applies to imported recordings, not live transcription.
+      Live Whisper uses the compact Whisper base model in this build. The optional larger model applies to imported
+      recordings, not live transcription.
     </p>
   )
 }
@@ -1272,15 +1325,22 @@ export function asrImportModelDescription(state: AsrImportModelState, engine: Pu
   const availability = state.ready
     ? `Whisper large-v3-turbo import model installed (${gb} GB).`
     : `Optional Whisper large-v3-turbo import model: ${gb} GB download. Whisper imports use the compact base model until it is available.`
-  const selection = engine === 'parakeet'
-    ? ' Parakeet is selected, so imports still use Parakeet. Select Whisper to use this model for imports.'
-    : ' Available larger models are used for Whisper imports.'
+  const selection =
+    engine === 'parakeet'
+      ? ' Parakeet is selected, so imports still use Parakeet. Select Whisper to use this model for imports.'
+      : ' Available larger models are used for Whisper imports.'
   return `${availability}${selection} This does not upgrade live transcription.`
 }
 
 /** Optional import-only model; state its download size before the user starts the transfer. */
 export function AsrModelRow({ engine }: { engine: PublicSettings['asrEngine'] }): JSX.Element | null {
-  const [state, setState] = useState<{ status: string; progress: number; error?: string; ready: boolean; bytes: number } | null>(null)
+  const [state, setState] = useState<{
+    status: string
+    progress: number
+    error?: string
+    ready: boolean
+    bytes: number
+  } | null>(null)
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -1332,173 +1392,6 @@ export function AsrModelRow({ engine }: { engine: PublicSettings['asrEngine'] })
   )
 }
 
-export type CoreAsrAssetsView = {
-  state: 'checking' | 'ready' | 'downloading' | 'retry' | 'repair' | 'error'
-  detail: string
-  progress?: number
-}
-
-/** Settings must never remain on “Checking” when an IPC renderer round-trip is lost. */
-export const CORE_ASR_STATUS_TIMEOUT_MS = 5_000
-
-/**
- * Core Parakeet + Whisper-floor assets are distinct from the optional import-only Whisper model.
- * This derives the only honest recovery action for the immutable packaged payload versus a retryable
- * development/download failure.
- */
-export function coreAsrAssetsView(status: AsrAssetsStatus | null | undefined): CoreAsrAssetsView {
-  if (!status) return { state: 'checking', detail: 'Checking transcription files…' }
-  if (status.ready || status.status === 'ready') return { state: 'ready', detail: 'Transcription files ready.' }
-
-  const detail = bundleFailureUserMessage(status.error || status.label)
-  if (isRepairRequiredBundleMessage(detail)) return { state: 'repair', detail }
-  if (status.status === 'downloading') {
-    return { state: 'downloading', detail: status.label || 'Getting transcription files…', progress: status.progress }
-  }
-  if (status.status === 'idle') {
-    return {
-      state: 'retry',
-      detail: 'Transcription files are not ready. Select Try again to finish setup on this device.'
-    }
-  }
-  if (status.status === 'error' && isRetryableBundleMessage(detail)) return { state: 'retry', detail }
-  return { state: 'error', detail: detail || 'Métis could not read transcription-file status. Check again.' }
-}
-
-export function coreAsrAssetsFailureStatus(error: unknown): AsrAssetsStatus {
-  const message = bundleFailureUserMessage(error)
-  return { ready: false, status: 'error', progress: 0, label: message, error: message }
-}
-
-/** Bound an IPC status read so Settings always reaches an actionable state. */
-export async function readCoreAsrAssetsStatus(
-  read: () => Promise<AsrAssetsStatus>,
-  timeoutMs = CORE_ASR_STATUS_TIMEOUT_MS
-): Promise<AsrAssetsStatus> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      read(),
-      new Promise<AsrAssetsStatus>((resolve) => {
-        timer = setTimeout(
-          () => resolve(coreAsrAssetsFailureStatus(new Error('Transcription-file status timeout. Try again.'))),
-          timeoutMs
-        )
-      })
-    ])
-  } catch (error) {
-    return coreAsrAssetsFailureStatus(error)
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
-/** Kept separate for a focused retry test and so the UI never swallows a failed ensure into a spinner. */
-export async function retryCoreAsrAssets(
-  ensure: () => Promise<AsrAssetsStatus>
-): Promise<AsrAssetsStatus> {
-  try {
-    return await ensure()
-  } catch (error) {
-    return coreAsrAssetsFailureStatus(error)
-  }
-}
-
-/**
- * Settings-side recovery route for the required transcription assets. The onboarding view can safely
- * finish while these are deferred only because this route remains available afterwards.
- */
-export function CoreAsrAssetsRow({ initialStatus }: { initialStatus?: AsrAssetsStatus | null } = {}): JSX.Element {
-  const [status, setStatus] = useState<AsrAssetsStatus | null>(initialStatus ?? null)
-  const [retrying, setRetrying] = useState(false)
-  const live = useRef(true)
-
-  useEffect(() => {
-    live.current = true
-    return () => {
-      live.current = false
-    }
-  }, [])
-
-  const refresh = useCallback(async (): Promise<void> => {
-    const next = await readCoreAsrAssetsStatus(() => window.toto.asrAssetsStatus())
-    if (live.current) setStatus(next)
-  }, [])
-
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
-
-  // A transfer may have begun during onboarding before Settings opened. Observe its progress here as
-  // well, and poll only while active so a dropped event cannot leave a static percentage behind.
-  useEffect(() => {
-    if (status?.status !== 'downloading') return
-    const unsubscribe = window.toto.onImportAssetsProgress?.((progress) => {
-      if (live.current) setStatus({ ...progress, ready: progress.status === 'ready' })
-    })
-    const timer = window.setInterval(() => void refresh(), 1_000)
-    return () => {
-      unsubscribe?.()
-      window.clearInterval(timer)
-    }
-  }, [refresh, status?.status])
-
-  const retry = (): void => {
-    if (retrying) return
-    setRetrying(true)
-    void retryCoreAsrAssets(window.toto.asrAssetsEnsure)
-      .then((next) => {
-        if (live.current) setStatus(next)
-      })
-      .finally(() => {
-        if (live.current) setRetrying(false)
-      })
-  }
-
-  const view = coreAsrAssetsView(status)
-  const percent = Math.round(Math.max(0, Math.min(1, view.progress ?? 0)) * 100)
-
-  return (
-    <div className="flex flex-col gap-1.5 px-1 py-1" aria-live="polite">
-      <div className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-        <span>Transcription files</span>
-        {view.state === 'ready' && <Check size={13} className="text-[var(--cl-primary)]" aria-label="Ready" />}
-        {view.state === 'checking' || view.state === 'downloading' ? <InlineOrb kind="loading" /> : null}
-      </div>
-      <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{view.detail}</p>
-      {view.state === 'downloading' && (
-        <div
-          role="progressbar"
-          aria-label="Transcription file download"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-[color:var(--cl-border)]"
-        >
-          <div className="h-full rounded-full bg-[color:var(--cl-primary)] transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
-        </div>
-      )}
-      {view.state === 'retry' && (
-        <TextButton icon={RotateCcw} onClick={retry} disabled={retrying}>
-          {retrying ? 'Retrying…' : 'Try again'}
-        </TextButton>
-      )}
-      {view.state === 'error' && <TextButton icon={RefreshCw} onClick={() => void refresh()}>Check again</TextButton>}
-      {view.state === 'repair' && (
-        <a
-          href={OFFICIAL_METIS_INSTALLER_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="no-drag focus-ring inline-flex w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-        >
-          <ExternalLink size={11} />
-          Open official installer
-        </a>
-      )}
-    </div>
-  )
-}
-
 /** M2-0430: Apple's on-device model is present but unusable until the owner accepts the Foundation Models
  *  CLI terms. Only that state renders: every other status needs no action, or none the user can take. */
 export function AppleEngineNotice({ status }: { status: AppleEngineStatus }): JSX.Element | null {
@@ -1507,9 +1400,9 @@ export function AppleEngineNotice({ status }: { status: AppleEngineStatus }): JS
     <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
       <Cpu size={13} className="mt-[1px] shrink-0" />
       <span>
-        Apple Intelligence is available on this Mac, but its Foundation Models tool is waiting for a one-time
-        license acceptance. To enable it, open Terminal, run <code>sudo fm license</code> and accept the terms,
-        then restart Métis. Métis then prefers Apple&apos;s model for suggestions and summaries that fit it.
+        Apple Intelligence is available on this Mac, but its Foundation Models tool is waiting for a one-time license
+        acceptance. To enable it, open Terminal, run <code>sudo fm license</code> and accept the terms, then restart
+        Métis. Métis then prefers Apple&apos;s model for suggestions and summaries that fit it.
       </span>
     </div>
   )
@@ -1528,10 +1421,14 @@ export function LocalAiSection({
   useEffect(() => {
     let mounted = true
     void window.toto.localAppleEngineStatus().then(
-      (status) => { if (mounted) setAppleEngine(status) },
+      (status) => {
+        if (mounted) setAppleEngine(status)
+      },
       () => {}
     )
-    return () => { mounted = false }
+    return () => {
+      mounted = false
+    }
   }, [])
   // Optional models may still be downloading when this card opens. Poll while one is running OR has not
   // started yet so a late boot fetch (or a fetch that failed before the first read) cannot freeze the
@@ -1593,7 +1490,8 @@ export function LocalAiSection({
     'Could not download the on-device model. Select Retry, or Métis retries on the next launch while Local AI is enabled. Check that huggingface.co is reachable from this network.'
   const notDownloadedText =
     'Not downloaded yet. Enable Local AI to start, or select Retry to download without enabling it.'
-  const invalidBundleText = model?.downloadError ??
+  const invalidBundleText =
+    model?.downloadError ??
     'The included local model is missing or damaged. Repair or reinstall Métis from the latest official installer.'
 
   return (
@@ -1627,30 +1525,30 @@ export function LocalAiSection({
             : model?.unavailableReason === 'invalid-bundle'
               ? invalidBundleText
               : model?.unavailableReason === 'insufficient-ram'
-              ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
-              : model?.unavailableReason === 'insufficient-disk'
-                ? model.downloadError
-                  ? `Could not download the on-device model: ${model.downloadError}`
-                  : 'Unavailable: not enough free disk space for the on-device model. Free up space and tap Retry.'
-              : model?.unavailableReason === 'downloading'
-                ? `Downloading the on-device model... ${percent}%`
-                : model?.unavailableReason === 'download-failed'
+                ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
+                : model?.unavailableReason === 'insufficient-disk'
                   ? model.downloadError
                     ? `Could not download the on-device model: ${model.downloadError}`
-                    : downloadFailedText
-                  : model?.unavailableReason === 'not-downloaded'
-                    ? notDownloadedText
-                    : !model?.ready
-                      ? 'Unavailable: Métis could not read the on-device model status.'
-                      : !settings.localLlm.enabled
-                        ? 'Available on this device. Local AI is off. Enable it to use this model.'
-                        : settings.localRuntimeState === 'running'
-                        ? `Running: ${model?.label ?? settings.localLlm.modelId}`
-                        : settings.localRuntimeState === 'starting'
-                          ? 'Starting the on-device model...'
-                          : settings.localRuntimeState === 'unavailable'
-                            ? 'Unavailable: the on-device model stopped responding this session. Restart Métis to re-enable it.'
-                            : 'Ready: starts automatically on the next local request.'}
+                    : 'Unavailable: not enough free disk space for the on-device model. Free up space and tap Retry.'
+                  : model?.unavailableReason === 'downloading'
+                    ? `Downloading the on-device model... ${percent}%`
+                    : model?.unavailableReason === 'download-failed'
+                      ? model.downloadError
+                        ? `Could not download the on-device model: ${model.downloadError}`
+                        : downloadFailedText
+                      : model?.unavailableReason === 'not-downloaded'
+                        ? notDownloadedText
+                        : !model?.ready
+                          ? 'Unavailable: Métis could not read the on-device model status.'
+                          : !settings.localLlm.enabled
+                            ? 'Available on this device. Local AI is off. Enable it to use this model.'
+                            : settings.localRuntimeState === 'running'
+                              ? `Running: ${model?.label ?? settings.localLlm.modelId}`
+                              : settings.localRuntimeState === 'starting'
+                                ? 'Starting the on-device model...'
+                                : settings.localRuntimeState === 'unavailable'
+                                  ? 'Unavailable: the on-device model stopped responding this session. Restart Métis to re-enable it.'
+                                  : 'Ready: starts automatically on the next local request.'}
         </div>
 
         <AppleEngineNotice status={appleEngine} />
@@ -1676,7 +1574,10 @@ export function LocalAiSection({
               <div className="flex flex-col gap-0.5">
                 <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{model.label}</span>
                 <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                  {model.source === 'bundled' ? 'Included with Métis.' : 'Optional download after enabling Local AI or selecting Retry.'} Needs {model.minTotalRamGB} GB RAM.
+                  {model.source === 'bundled'
+                    ? 'Included with Métis.'
+                    : 'Optional download after enabling Local AI or selecting Retry.'}{' '}
+                  Needs {model.minTotalRamGB} GB RAM.
                 </span>
               </div>
               <span
@@ -1689,7 +1590,13 @@ export function LocalAiSection({
                       : 'bg-[var(--cl-destructive)]/10 text-[color:var(--cl-destructive)]'
                 ].join(' ')}
               >
-                {model.ready ? <CircleCheck size={12} /> : downloading ? <InlineOrb kind="loading-model" /> : <AlertCircle size={12} />}
+                {model.ready ? (
+                  <CircleCheck size={12} />
+                ) : downloading ? (
+                  <InlineOrb kind="loading-model" />
+                ) : (
+                  <AlertCircle size={12} />
+                )}
                 {model.ready ? 'Ready' : downloading ? `Downloading ${percent}%` : 'Unavailable'}
               </span>
             </div>
@@ -1706,16 +1613,16 @@ export function LocalAiSection({
                 {model.unavailableReason === 'invalid-bundle'
                   ? invalidBundleText
                   : model.unavailableReason === 'insufficient-ram'
-                  ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
-                  : model.unavailableReason === 'insufficient-disk'
-                    ? model.downloadError
-                      ? `Could not download the on-device model: ${model.downloadError}`
-                      : 'Not enough free disk space for the on-device model. Free up space and tap Retry.'
-                  : model.unavailableReason === 'download-failed'
-                    ? model.downloadError
-                      ? `Could not download the on-device model: ${model.downloadError}`
-                      : downloadFailedText
-                    : notDownloadedText}
+                    ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
+                    : model.unavailableReason === 'insufficient-disk'
+                      ? model.downloadError
+                        ? `Could not download the on-device model: ${model.downloadError}`
+                        : 'Not enough free disk space for the on-device model. Free up space and tap Retry.'
+                      : model.unavailableReason === 'download-failed'
+                        ? model.downloadError
+                          ? `Could not download the on-device model: ${model.downloadError}`
+                          : downloadFailedText
+                        : notDownloadedText}
               </p>
             )}
             {canRetry && (
@@ -1867,17 +1774,14 @@ function CliIntegration({
   // One-time notice: show when cliNoticeAck is false and any CLI was just connected
   const [noticeDismissed, setNoticeDismissed] = useState(false)
   const showNotice =
-    !settings.cliNoticeAck &&
-    !noticeDismissed &&
-    (!!cliConnected['claude-cli'] || !!cliConnected['codex-cli'])
+    !settings.cliNoticeAck && !noticeDismissed && (!!cliConnected['claude-cli'] || !!cliConnected['codex-cli'])
 
   const dismissNotice = (): void => {
     setNoticeDismissed(true)
     patch({ cliNoticeAck: true })
   }
 
-  const getState = (id: 'claude-cli' | 'codex-cli'): CliCardState =>
-    id === 'claude-cli' ? claudeState : codexState
+  const getState = (id: 'claude-cli' | 'codex-cli'): CliCardState => (id === 'claude-cli' ? claudeState : codexState)
   // Single choke point for all card-state writes — guarding here covers every setState call in
   // runInstall/connect/cancel/disconnectCli without needing a check at each await site.
   const setState = (id: 'claude-cli' | 'codex-cli', s: CliCardState): void => {
@@ -2168,7 +2072,9 @@ function CliIntegration({
         <div className="flex min-w-0 items-center justify-between gap-2">
           <div className="min-w-0 flex flex-col gap-0.5">
             <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{def.label}</span>
-            <span className="min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
+            <span className="min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              {desc}
+            </span>
           </div>
           {isActive ? (
             <span className={activePill}>
@@ -2223,9 +2129,11 @@ function CliIntegration({
         )}
 
         {/* After setup opened in Terminal */}
-        {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login') && st.msg && chip.kind !== 'waiting-for-login' && (
-          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
-        )}
+        {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login') &&
+          st.msg &&
+          chip.kind !== 'waiting-for-login' && (
+            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
+          )}
 
         {/* Error */}
         {(st.phase === 'error' || st.phase === 'install-error') && st.msg && (
@@ -2236,9 +2144,7 @@ function CliIntegration({
         )}
 
         {/* Connecting spinner */}
-        {st.phase === 'connecting' && (
-          <AgentStatus kind="connecting" size="inline" caption />
-        )}
+        {st.phase === 'connecting' && <AgentStatus kind="connecting" size="inline" caption />}
 
         {/* Connected version info */}
         {st.phase === 'done' && (st.version || st.msg) && (
@@ -2251,12 +2157,7 @@ function CliIntegration({
         {/* Primary action button — idle state only */}
         {st.phase === 'idle' && (
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => startSetup(id)}
-              disabled={cardLocked}
-              className={primaryBtn}
-            >
+            <button type="button" onClick={() => startSetup(id)} disabled={cardLocked} className={primaryBtn}>
               <Link2 size={12} />
               {isConnected ? 'Reconnect' : 'Set up automatically'}
             </button>
@@ -2278,12 +2179,7 @@ function CliIntegration({
         {/* Connect button — visible in setup-opened, waiting-for-login, or error phases */}
         {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login' || st.phase === 'error') && (
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => void connect(id)}
-              disabled={cardLocked}
-              className={primaryBtn}
-            >
+            <button type="button" onClick={() => void connect(id)} disabled={cardLocked} className={primaryBtn}>
               <Link2 size={12} />
               Connect
             </button>
@@ -2296,12 +2192,7 @@ function CliIntegration({
         {/* Retry button — visible when the install itself failed (never got as far as a connect test) */}
         {st.phase === 'install-error' && (
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => void runInstall(id)}
-              disabled={cardLocked}
-              className={primaryBtn}
-            >
+            <button type="button" onClick={() => void runInstall(id)} disabled={cardLocked} className={primaryBtn}>
               <Link2 size={12} />
               Retry install
             </button>
@@ -2343,7 +2234,6 @@ function CliIntegration({
       icon={Link2}
     >
       <div className="flex flex-col gap-3">
-
         {/* One-time notice */}
         {showNotice && (
           <div className="flex items-start justify-between gap-2 rounded-[8px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/50 px-3 py-2.5">
@@ -2403,7 +2293,6 @@ function CliIntegration({
             </div>
           </div>
         )}
-
       </div>
     </Section>
   )

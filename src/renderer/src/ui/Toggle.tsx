@@ -8,13 +8,16 @@ export function Toggle({
   on,
   onChange,
   label,
-  disabled = false
+  disabled = false,
+  describedBy
 }: {
   id?: string
   on: boolean
   onChange: (v: boolean) => void
   label: string
   disabled?: boolean
+  /** Id of a hint or error about this switch (for example, why the OS refused it). */
+  describedBy?: string
 }): JSX.Element {
   return (
     <button
@@ -23,6 +26,7 @@ export function Toggle({
       role="switch"
       aria-checked={on}
       aria-label={label}
+      aria-describedby={describedBy}
       disabled={disabled}
       onClick={(e) => {
         if (disabled) return
@@ -52,7 +56,8 @@ export function ToggleRow({
   onChange,
   children,
   disabled = false,
-  icon: Icon
+  icon: Icon,
+  describedBy
 }: {
   label: string
   desc: string
@@ -61,6 +66,7 @@ export function ToggleRow({
   children?: ReactNode
   disabled?: boolean
   icon?: LucideIcon
+  describedBy?: string
 }): JSX.Element {
   const id = useId()
   const toggleId = `${id}-toggle`
@@ -78,14 +84,17 @@ export function ToggleRow({
           {label}
           {desc && (
             <FieldHint text={desc}>
-              <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+              <Info
+                size={12}
+                className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+              />
             </FieldHint>
           )}
           {disabled && <span className={managedChipCls}>Managed by your organization</span>}
         </div>
         {children}
       </div>
-      <Toggle id={toggleId} on={on} onChange={onChange} label={label} disabled={disabled} />
+      <Toggle id={toggleId} on={on} onChange={onChange} label={label} disabled={disabled} describedBy={describedBy} />
     </label>
   )
 }

@@ -43,16 +43,14 @@ describe('Settings Bar rest orb cards', () => {
     expect(settings).toMatch(/<OverlayOrbPicker/)
     expect(settings).toMatch(/overlayOrbStyle: id/)
     expect(settings).toMatch(/Applies when Overlay chrome is Bar/)
-    expect(settings).toMatch(/overlayShowsBarRestPicker\(resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout\)/)
+    expect(settings).toMatch(
+      /overlayShowsBarRestPicker\(\s*resolveOverlayPresentation\(\{\s*layout: settings\.overlayLayout,\s*placement: settings\.overlayPlacement\s*\}\)\.layout\s*\)/
+    )
     expect(css).toMatch(/\.overlay-chrome-grid--two/)
     expect(css).toMatch(/\.overlay-orb-diagram--jakub/)
     expect(css).toMatch(/\.overlay-orb-diagram,\r?\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*72px/)
-    expect(css).toMatch(
-      /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?width:\s*41px/
-    )
-    expect(css).toMatch(
-      /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?overflow:\s*visible/
-    )
+    expect(css).toMatch(/\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?width:\s*41px/)
+    expect(css).toMatch(/\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?overflow:\s*visible/)
     expect(css).toMatch(
       /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?background:\s*transparent/
     )

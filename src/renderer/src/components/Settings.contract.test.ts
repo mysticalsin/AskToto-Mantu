@@ -90,7 +90,7 @@ describe('Local AI distinguishes bundled compact weights from optional downloads
 
   it('MQA-188 — describes the included compact model separately from optional downloads', () => {
     expect(copy).toMatch(/The installer includes Qwen3\.5 0\.8B and its screenshot projector/)
-    expect(copy).toMatch(/model\.source === 'bundled' \? 'Included with Métis\.'/)
+    expect(copy).toMatch(/model\.source === 'bundled'\s*\?\s*'Included with Métis\.'/)
     expect(copy).toMatch(/optional 4B model downloads only after selecting it and enabling Local AI or choosing Retry/i)
     expect(copy).toMatch(/Retry to download without enabling/i)
     expect(copy).not.toMatch(/when the app opens|when Métis opens|once on first run|~730 MB/i)
@@ -588,7 +588,7 @@ describe('Settings placement-aware overlay controls', () => {
   it('places position first and resolves Bar rest from the normalized placement', () => {
     expect(source).toMatch(/overlayShowsBarRestPicker/)
     expect(source).toMatch(
-      /resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout/
+      /resolveOverlayPresentation\(\{\s*layout: settings\.overlayLayout,\s*placement: settings\.overlayPlacement\s*\}\)\.layout/
     )
     expect(source).toMatch(/persistOverlayPlacement\(id, settings\.overlayLayout, patch\)/)
     expect(source).toMatch(/OverlayOrbPicker/)
@@ -596,8 +596,8 @@ describe('Settings placement-aware overlay controls', () => {
     expect(source).toMatch(/Applies when Overlay chrome is Bar/)
     const appearance = source.slice(source.indexOf('title="Appearance"'), source.indexOf('title="Language"'))
     expect(appearance.indexOf('<OverlayPlacementPicker')).toBeLessThan(appearance.indexOf('<OverlayChromePicker'))
-    expect(appearance).toMatch(/overlayShowsBarRestPicker\(resolveOverlayPresentation/)
-    const barRestStart = appearance.indexOf('overlayShowsBarRestPicker(resolveOverlayPresentation')
+    expect(appearance).toMatch(/overlayShowsBarRestPicker\(\s*resolveOverlayPresentation/)
+    const barRestStart = appearance.search(/overlayShowsBarRestPicker\(\s*resolveOverlayPresentation/)
     const orbStart = appearance.indexOf('<OverlayOrbPicker', barRestStart)
     const gated = appearance.slice(barRestStart, appearance.indexOf(') : null}', orbStart))
     expect(gated).toMatch(/<OverlayOrbPicker/)
@@ -670,7 +670,7 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).toMatch(/operatorUrlConfigured/)
     expect(source).toMatch(/operatorUrlConfigured\(settings\) && <OperatorLicenseCard/)
     expect(source).toMatch(/Leave empty to use \{DEFAULT_OPERATOR_URL\}/)
-    expect(source).toMatch(/Changing this address disconnects your licence; activate it again for the new service/)
+    expect(source).toMatch(/Changing this address disconnects your licence;\s+activate it again for the new service/)
     expect(source).not.toMatch(/Empty means no fleet heartbeat/)
     expect(source).not.toMatch(/metis-operator\.example\.workers\.dev/)
   })
@@ -692,7 +692,7 @@ describe('locked mode skills — Settings has no editor for shipped skill files'
 
   it('shows a read-only locked line and never edits skill files', () => {
     expect(personalize).toMatch(/Operator skill v/)
-    expect(personalize).toMatch(/cannot be\s+edited, deleted, or overridden here/)
+    expect(personalize).toMatch(/cannot be\s+edited, deleted, or overridden\s+here/)
     expect(personalize).toMatch(/modeSkillLock\(\)/)
     expect(personalize).not.toMatch(/writeFileSync/)
     expect(personalize).not.toMatch(/skills\/modes/)
@@ -738,16 +738,16 @@ describe('M2-0412 fleet model policy — "managed by your organization" banner',
     const banners = blockAfter('{Object.keys(settings.modelPolicyCapabilities).length === 0 &&', '{askChatPolicy &&')
     expect(banners).toMatch(/Object\.keys\(settings\.modelPolicyCapabilities\)\.length === 0/)
     expect(banners).toMatch(/Models: not managed/)
-    expect(banners).toMatch(/Operator portal/)
+    expect(banners).toMatch(/Operator\s+portal/)
   })
 
   it('locks the base and thinking model fields while a policy governs askChat, naming the portal as the source', () => {
     expect(source).toContain('const modelPolicyLocked = !!askChatPolicy')
     const base = blockAfter('Base model · fast, cheap', 'Thinking model · hard, coding questions')
-    expect(base).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModels'\)/)
+    expect(base).toMatch(/modelPolicyLocked\s*\|\|\s*settings\.managedKeys\.includes\('providerModels'\)/)
     expect(base).toMatch(/modelPolicyLocked && <span className=\{managedChipCls\}>Managed by the Operator portal/)
     const thinking = blockAfter('Thinking model · hard, coding questions', 'datalist id')
-    expect(thinking).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModelsThinking'\)/)
+    expect(thinking).toMatch(/modelPolicyLocked\s*\|\|\s*settings\.managedKeys\.includes\('providerModelsThinking'\)/)
   })
 
   it('also surfaces the stt and localModel capabilities as managed banners in their split settings sections', () => {

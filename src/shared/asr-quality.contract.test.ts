@@ -31,7 +31,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
     expect(settings).toMatch(/if \(!shouldUseBundledAsr\(import\.meta\.env\.PROD, bundled\)\)/)
     expect(settings).toMatch(/label="Prefer large live Whisper \(development\)"/)
     expect(settings).toMatch(/Live Whisper uses the compact Whisper base model in this build\./)
-    expect(settings).toMatch(/The optional larger model\s+applies to imported recordings, not live transcription\./)
+    expect(settings).toMatch(/The optional larger model\s+applies to imported\s+recordings, not live transcription\./)
     expect(settings).not.toMatch(/label="Best transcription quality"/)
   })
 

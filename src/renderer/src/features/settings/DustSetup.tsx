@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import {
   AlertCircle,
   ChevronDown,
@@ -22,13 +22,20 @@ import {
   type DustInstantValidateResult
 } from '@shared/dust-validate'
 import { AgentStatus, InlineOrb } from '../../components/AgentStatus'
-import { decideDustLiveCheck } from '../../lib/dust-live-check'
 import { ctl } from '../../ui/ctl'
 import { ManagedChip, managedChipCls } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { StepBadge } from '../../ui/StepBadge'
+import { useConfirm } from '../../ui/confirm-context'
+import {
+  DUST_OAUTH_IDLE,
+  type DustOAuthState,
+  useDustLiveSessionCheck,
+  useDustOAuthPolling
+} from './dust-setup-effects'
 import { AgentPicker } from './AgentPicker'
 import { DUST_CREDENTIAL_STORE, PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
+import { DUST_DISCONNECT_CONFIRMATION, DUST_REMOVE_KEY_CONFIRMATION } from './settings-confirmations'
 import { pickReadyProvider } from './provider-readiness'
 
 export function DustSetup({
@@ -60,26 +67,9 @@ export function DustSetup({
     msg: null,
     ok: false
   })
-  // Native OAuth sign-in after the managed Dust CLI is installed. 'starting' covers CLI install +
-  // device-code mint. 'waiting' polls dustLoginPoll until the browser consent finishes.
-  type DustOAuthPhase = 'idle' | 'starting' | 'waiting' | 'picking' | 'finishing' | 'error'
-  const [oauth, setOauth] = useState<{
-    phase: DustOAuthPhase
-    userCode: string | null
-    verificationUri: string | null
-    intervalSec: number
-    expiresAt: number
-    workspaces: Array<{ sId: string; name: string; role?: string }> | null
-    error: string | null
-  }>({
-    phase: 'idle',
-    userCode: null,
-    verificationUri: null,
-    intervalSec: 5,
-    expiresAt: 0,
-    workspaces: null,
-    error: null
-  })
+  // Native OAuth sign-in after the managed Dust CLI is installed (phases: see DustOAuthState).
+  const [oauth, setOauth] = useState<DustOAuthState>(DUST_OAUTH_IDLE)
+  const askToConfirm = useConfirm()
   const linkId = useId()
   const wsId = useId()
   const thinkSel = useId()
@@ -116,7 +106,8 @@ export function DustSetup({
   // "Failed to retrieve agent message" ask failure. Warn + guide a one-click re-pick right at the picker.
   const storedAgentMissing = dustStoredAgentMissing(agent, agents)
   const spotlightAgentMissing = dustStoredAgentMissing(spotlightAgent, agents)
-  const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
+  const selectedAgentRunsSonnet =
+    !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
 
   const applyDustValidate = (verdict: DustInstantValidateResult): void => {
     if (verdict.ok) {
@@ -130,7 +121,10 @@ export function DustSetup({
 
   // Live-ping after OAuth finish / CLI import (key already persisted in main). testApiKey + listDustAgents
   // (view:'list'); empty/restricted/401/dead session is not Connected. Never auto-sends a chat.
-  const proveAfterConnect = async (workspaceId: string, selectedAgentId = agent): Promise<DustInstantValidateResult> => {
+  const proveAfterConnect = async (
+    workspaceId: string,
+    selectedAgentId = agent
+  ): Promise<DustInstantValidateResult> => {
     const verdict = await proveDustConnection({
       workspaceId,
       selectedAgentId,
@@ -171,7 +165,9 @@ export function DustSetup({
       setCli({
         busy: false,
         ok: false,
-        msg: r.error || 'No Dust CLI session found. Run `dust login` in a terminal first, or use the automatic sign-in above.'
+        msg:
+          r.error ||
+          'No Dust CLI session found. Run `dust login` in a terminal first, or use the automatic sign-in above.'
       })
       return
     }
@@ -194,7 +190,7 @@ export function DustSetup({
     await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? DUST_BASE_AGENT_ID : agent)
   }
 
-  const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
+  const oauthIdle = DUST_OAUTH_IDLE
 
   // Step 1: mint a device code, open the browser consent page. Step 2 (polling) is the effect below.
   const startDustOAuth = async (): Promise<void> => {
@@ -226,39 +222,8 @@ export function DustSetup({
     })
   }
 
-  // Poll at the server-given cadence while waiting for the user to finish the browser step. RFC 8628:
-  // 'pending' keeps the same interval, 'slow_down' adds 5s, anything else ends the loop.
-  useEffect(() => {
-    if (oauth.phase !== 'waiting') return
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout>
-    const tick = async (intervalSec: number): Promise<void> => {
-      if (cancelled) return
-      if (Date.now() > oauth.expiresAt) {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired. Try again.' } : o))
-        return
-      }
-      const r = await window.toto.dustLoginPoll()
-      if (cancelled) return
-      if (r.status === 'pending') {
-        timer = setTimeout(() => void tick(intervalSec), intervalSec * 1000)
-      } else if (r.status === 'slow_down') {
-        timer = setTimeout(() => void tick(intervalSec), (intervalSec + 5) * 1000)
-      } else if (r.status === 'ok') {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'picking', workspaces: r.workspaces ?? [] } : o))
-      } else {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: r.error || 'Dust sign-in failed.' } : o))
-      }
-    }
-    timer = setTimeout(() => void tick(oauth.intervalSec), oauth.intervalSec * 1000)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-    // Re-armed only when the phase enters 'waiting' — not on every render. (The device code that used to
-    // key this lives in main now and never reaches the renderer.)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oauth.phase])
+  // Poll at the server-given cadence while waiting for the user to finish the browser step (RFC 8628).
+  useDustOAuthPolling(oauth, setOauth)
 
   // Step 3: the user picked a workspace — finish the login and load its agents.
   const pickDustWorkspace = async (sId: string): Promise<void> => {
@@ -321,7 +286,11 @@ export function DustSetup({
     try {
       const result = await recoverEncryptedProfile()
       if (!result.ok) {
-        setRecoveryMessage(result.canceled ? 'Recovery canceled. Your encrypted profile was not changed.' : result.error || 'Could not create a new local profile.')
+        setRecoveryMessage(
+          result.canceled
+            ? 'Recovery canceled. Your encrypted profile was not changed.'
+            : result.error || 'Could not create a new local profile.'
+        )
         return
       }
       setRecoveryAvailable(false)
@@ -338,7 +307,9 @@ export function DustSetup({
   // Dust if it's active, and reset the local CLI/agents UI so the card returns to its "connect" state.
   // Used by the CLI card's Disconnect button only — the manual key's Remove uses the narrower
   // removeDustKey below, which doesn't touch workspace/region/base/thinking agent.
+  // Both removals are uncommon and not undoable from here (reconnecting is a full sign-in): ask first (HIG A2).
   const disconnectDust = async (): Promise<void> => {
+    if (!(await askToConfirm(DUST_DISCONNECT_CONFIRMATION))) return
     await clearKey('dust')
     const nextThinking = { ...settings.providerModelsThinking }
     delete nextThinking.dust
@@ -372,6 +343,7 @@ export function DustSetup({
   // Remove just the saved Dust API key (Step 3's "Remove") — mirrors AiSection.onRemove. Leaves the
   // workspace, region, and thinking-agent choice untouched, unlike the full disconnectDust reset above.
   const removeDustKey = async (): Promise<void> => {
+    if (!(await askToConfirm(DUST_REMOVE_KEY_CONFIRMATION))) return
     await clearKey('dust')
     if (settings.provider === 'dust')
       await patch({
@@ -411,7 +383,8 @@ export function DustSetup({
       setAgents(r.agents)
       return r
     }
-    const error = r.error || (r.ok ? DUST_EMPTY_AGENTS_ERROR : 'Could not load your agents. Check the key + workspace, then retry.')
+    const error =
+      r.error || (r.ok ? DUST_EMPTY_AGENTS_ERROR : 'Could not load your agents. Check the key + workspace, then retry.')
     setAgents(r.ok && r.agents ? r.agents : null)
     setErr(error)
     return { ok: false, error, agents: r.agents }
@@ -426,50 +399,8 @@ export function DustSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySaved, hasWs])
 
-  // Live session probe on open. When the settings look connected VIA THE CLI, don't take that at face
-  // value — the underlying Dust CLI session can be gone (the user ran `dust logout`, the keychain was
-  // cleared, or the token is unrecoverable). Probe once per mount with the READ-ONLY dustProbeSession —
-  // NOT dustImportCli, which runs `dust status` and would rotate the OAuth token in a race with the
-  // concurrent loadAgents() above, 401-ing the agent list. Then act on decideDustLiveCheck:
-  //   • connected             → nothing to do.
-  //   • needs-access          → the keychain read was blocked; ask to allow it, DON'T relaunch setup.
-  //   • finish-workspace-pick → the browser OAuth step finished but the separate terminal
-  //                             workspace-picker step didn't; point back at that Terminal, DON'T relaunch.
-  //   • run-setup             → no live session behind the saved connection → auto-run install +
-  //                             `dust login` (Terminal), so the user is prompted to reconnect instead of
-  //                             silently assuming done.
-  // Gated to CLI-origin connections (dustSessionOrigin, set only by the CLI import/refresh — the OAuth
-  // login sets 'oauth'): a MANUAL API-key or native-OAuth connection legitimately has NO `dust-cli`
-  // keychain item, so probing it would misread as "dead" for no reason. The OAuth path's own on-401
-  // self-heal (main/index.ts's makeRefreshDustAuth) covers its equivalent case on next use.
-  const liveCheckedRef = useRef(false)
-  useEffect(() => {
-    if (liveCheckedRef.current || !keySaved || !hasWs || !settings.dustTokenMintedAt || settings.dustSessionOrigin !== 'cli') return
-    liveCheckedRef.current = true
-    void (async () => {
-      const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
-      if (decision === 'connected') return
-      if (decision === 'needs-access') {
-        const msg = `Allow Métis to read your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then Reconnect.`
-        setCli({ busy: false, ok: false, msg })
-        setErr(msg)
-        return
-      }
-      if (decision === 'finish-workspace-pick') {
-        const msg = 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter), then Reconnect.'
-        setCli({ busy: false, ok: false, msg })
-        setErr(msg)
-        return
-      }
-      // decision === 'run-setup' — the saved CLI session is dead. Nudge toward a fix rather than silently
-      // relaunching anything: there is no more in-app installer/terminal step for the CLI path to reopen.
-      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect, or use the automatic sign-in above.'
-      setCli({ busy: false, ok: false, msg })
-      setErr(msg)
-    })()
-    // Probe once on mount for the already-connected case only; connectCli / disconnect handle the rest.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Live session probe on open, for CLI-origin connections only (see useDustLiveSessionCheck).
+  useDustLiveSessionCheck({ keySaved, hasWs, settings, setCli, setErr })
 
   // Editing the workspace ID string doesn't flip keySaved/hasWs (both stay true switching workspace A → B),
   // so the effect above never re-fires — without this, the Thinking-agent dropdown keeps showing workspace
@@ -562,7 +493,7 @@ export function DustSetup({
                 </button>
                 <button
                   type="button"
-                  onClick={disconnectDust}
+                  onClick={() => void disconnectDust()}
                   disabled={oauth.phase !== 'idle' || (locked && active)}
                   title="Disconnect Dust from Métis"
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
@@ -577,7 +508,9 @@ export function DustSetup({
             // and a way out in case the user closed the tab or the browser never opened.
             <div className="flex flex-col items-center gap-2 text-center">
               <AgentStatus kind="connecting" size="hero" />
-              <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Waiting for you to finish in your browser…</span>
+              <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">
+                Waiting for you to finish in your browser…
+              </span>
               {oauth.userCode && (
                 <span className="rounded-[8px] bg-black/20 px-3 py-1 font-mono text-[15px] tracking-widest text-[color:var(--cl-foreground)]">
                   {oauth.userCode}
@@ -605,7 +538,9 @@ export function DustSetup({
             // Workspace list from the just-finished sign-in — Métis's own picker replaces dust-cli's
             // arrow-key terminal UI.
             <div className="flex flex-col gap-2">
-              <span className="text-center text-[12px] font-medium text-[color:var(--cl-foreground)]">Pick your workspace</span>
+              <span className="text-center text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                Pick your workspace
+              </span>
               {(oauth.workspaces ?? []).map((w) => (
                 <button
                   key={w.sId}
@@ -668,8 +603,8 @@ export function DustSetup({
             <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
               <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
               <span>
-                Métis cannot unlock the existing encrypted profile. Restore {PROFILE_CREDENTIAL_STORE} access and
-                retry, or create a fresh local profile while the old encrypted data is preserved.
+                Métis cannot unlock the existing encrypted profile. Restore {PROFILE_CREDENTIAL_STORE} access and retry,
+                or create a fresh local profile while the old encrypted data is preserved.
               </span>
             </div>
             <button
@@ -681,7 +616,9 @@ export function DustSetup({
               {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
               {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
             </button>
-            {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
+            {recoveryMessage && (
+              <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>
+            )}
           </div>
         )}
 
@@ -697,122 +634,128 @@ export function DustSetup({
           I already have an API key
         </button>
         {showKeyPath && (
-        <div className="flex flex-col gap-4">
-        {/* Step 1 — paste a link, everything auto-fills */}
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
-            <StepBadge n={1} done={hasWs} /> Paste any Dust link
-          </div>
-          <div className="relative">
-            <Link2
-              size={14}
-              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]"
-            />
-            <input
-              id={linkId}
-              value={link}
-              onChange={(e) => onLink(e.target.value)}
-              placeholder="Paste your Dust workspace or agent URL (fills the fields below)"
-              className={'w-full min-w-0 max-w-full pl-7 ' + ctl}
-            />
-          </div>
-          <span className="pl-7 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            e.g. https://dust.tt/w/<b>abc123</b>/builder/agents/<b>myAgent</b>, or fill the fields below.
-          </span>
-        </div>
-
-        {/* Step 2 — workspace + region (auto, but editable) */}
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
-            <StepBadge n={2} done={hasWs} /> Workspace &amp; region
-          </div>
-          <label htmlFor={wsId} className="sr-only">
-            Workspace ID
-          </label>
-          <div className="flex items-center gap-2">
-            <input
-              id={wsId}
-              value={settings.dustWorkspaceId}
-              onChange={(e) => patch({ dustWorkspaceId: e.target.value })}
-              placeholder="Workspace ID (e.g. abc123)"
-              disabled={settings.managedKeys.includes('dustWorkspaceId')}
-              className={
-                'flex-1 min-w-0 ' + ctl + (settings.managedKeys.includes('dustWorkspaceId') ? ' opacity-60' : '')
-              }
-            />
-            <ManagedChip keys={settings.managedKeys} k="dustWorkspaceId" />
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => patch({ dustBaseUrl: 'https://dust.tt' })}
-              disabled={settings.managedKeys.includes('dustBaseUrl')}
-              className={regionBtn(false) + (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')}
-            >
-              US · dust.tt
-            </button>
-            <button
-              type="button"
-              onClick={() => patch({ dustBaseUrl: 'https://eu.dust.tt' })}
-              disabled={settings.managedKeys.includes('dustBaseUrl')}
-              className={regionBtn(true) + (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')}
-            >
-              EU · eu.dust.tt
-            </button>
-          </div>
-          <ManagedChip keys={settings.managedKeys} k="dustBaseUrl" />
-        </div>
-
-        {/* Step 3 — Dust API key (self-contained — only needed if you didn't use the CLI above) */}
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
-            <StepBadge n={3} done={keySaved} /> Dust API key
-          </div>
-          {keySaved ? (
-            <div className="flex items-center justify-between gap-2 pl-7">
-              <span className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-success)]">
-                <CircleCheck size={13} /> Saved on this device.
+          <div className="flex flex-col gap-4">
+            {/* Step 1 — paste a link, everything auto-fills */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                <StepBadge n={1} done={hasWs} /> Paste any Dust link
+              </div>
+              <div className="relative">
+                <Link2
+                  size={14}
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]"
+                />
+                <input
+                  id={linkId}
+                  value={link}
+                  onChange={(e) => onLink(e.target.value)}
+                  placeholder="Paste your Dust workspace or agent URL (fills the fields below)"
+                  className={'w-full min-w-0 max-w-full pl-7 ' + ctl}
+                />
+              </div>
+              <span className="pl-7 text-[11px] text-[color:var(--cl-muted-foreground)]">
+                e.g. https://dust.tt/w/<b>abc123</b>/builder/agents/<b>myAgent</b>, or fill the fields below.
               </span>
-              <button
-                type="button"
-                onClick={removeDustKey}
-                disabled={locked && active}
-                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1 text-[11px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
-              >
-                Remove
-              </button>
             </div>
-          ) : (
-            <div className="flex items-center gap-2 pl-7">
-              <input
-                type="password"
-                value={dustKey}
-                onChange={(e) => setDustKey(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && saveDustKey()}
-                placeholder="Paste your Dust API key (sk-…)"
-                className={'flex-1 ' + ctl}
-              />
-              <button
-                type="button"
-                onClick={saveDustKey}
-                disabled={keySaving || !dustKey.trim() || (locked && active)}
-                className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-              >
-                {keySaving ? <InlineOrb kind="loading" /> : null} Save
-              </button>
-              {locked ? (
-                <span className={managedChipCls}>Managed by your organization</span>
+
+            {/* Step 2 — workspace + region (auto, but editable) */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                <StepBadge n={2} done={hasWs} /> Workspace &amp; region
+              </div>
+              <label htmlFor={wsId} className="sr-only">
+                Workspace ID
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id={wsId}
+                  value={settings.dustWorkspaceId}
+                  onChange={(e) => patch({ dustWorkspaceId: e.target.value })}
+                  placeholder="Workspace ID (e.g. abc123)"
+                  disabled={settings.managedKeys.includes('dustWorkspaceId')}
+                  className={
+                    'flex-1 min-w-0 ' + ctl + (settings.managedKeys.includes('dustWorkspaceId') ? ' opacity-60' : '')
+                  }
+                />
+                <ManagedChip keys={settings.managedKeys} k="dustWorkspaceId" />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => patch({ dustBaseUrl: 'https://dust.tt' })}
+                  disabled={settings.managedKeys.includes('dustBaseUrl')}
+                  className={
+                    regionBtn(false) +
+                    (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')
+                  }
+                >
+                  US · dust.tt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => patch({ dustBaseUrl: 'https://eu.dust.tt' })}
+                  disabled={settings.managedKeys.includes('dustBaseUrl')}
+                  className={
+                    regionBtn(true) +
+                    (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')
+                  }
+                >
+                  EU · eu.dust.tt
+                </button>
+              </div>
+              <ManagedChip keys={settings.managedKeys} k="dustBaseUrl" />
+            </div>
+
+            {/* Step 3 — Dust API key (self-contained — only needed if you didn't use the CLI above) */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                <StepBadge n={3} done={keySaved} /> Dust API key
+              </div>
+              {keySaved ? (
+                <div className="flex items-center justify-between gap-2 pl-7">
+                  <span className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+                    <CircleCheck size={13} /> Saved on this device.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void removeDustKey()}
+                    disabled={locked && active}
+                    className="no-drag cl-focus rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1 text-[11px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
               ) : (
-                !dustAllowed && <span className={managedChipCls}>Restricted by your organization</span>
+                <div className="flex items-center gap-2 pl-7">
+                  <input
+                    type="password"
+                    value={dustKey}
+                    onChange={(e) => setDustKey(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && saveDustKey()}
+                    placeholder="Paste your Dust API key (sk-…)"
+                    className={'flex-1 ' + ctl}
+                  />
+                  <button
+                    type="button"
+                    onClick={saveDustKey}
+                    disabled={keySaving || !dustKey.trim() || (locked && active)}
+                    className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  >
+                    {keySaving ? <InlineOrb kind="loading" /> : null} Save
+                  </button>
+                  {locked ? (
+                    <span className={managedChipCls}>Managed by your organization</span>
+                  ) : (
+                    !dustAllowed && <span className={managedChipCls}>Restricted by your organization</span>
+                  )}
+                </div>
               )}
+              <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above, no key
+                needed.
+              </span>
             </div>
-          )}
-          <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above,
-            no key needed.
-          </span>
-        </div>
-        </div>
+          </div>
         )}
 
         {/* Step 4 — pick the agent from a live list (no ids to copy) */}
@@ -827,7 +770,9 @@ export function DustSetup({
                 void (async () => {
                   const list = await loadAgents()
                   const test = await window.toto.testApiKey('dust', '')
-                  applyDustValidate(decideDustInstantValidate({ workspaceId: settings.dustWorkspaceId, test, list }, agent))
+                  applyDustValidate(
+                    decideDustInstantValidate({ workspaceId: settings.dustWorkspaceId, test, list }, agent)
+                  )
                 })()
               }
               disabled={loading || !keySaved || !hasWs}
@@ -865,7 +810,10 @@ export function DustSetup({
             {storedAgentMissing && (
               <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 <Info size={13} className="mt-0.5 shrink-0" />
-                <span>Your saved agent is not in this workspace anymore. Pick one below so asks and Spotlight Ref work again.</span>
+                <span>
+                  Your saved agent is not in this workspace anymore. Pick one below so asks and Spotlight Ref work
+                  again.
+                </span>
               </div>
             )}
             <AgentPicker
@@ -881,7 +829,13 @@ export function DustSetup({
               onEmptyBlur={() => setBaseAgent(DUST_BASE_AGENT_ID)}
             />
             {selectedAgent && (
-              <div className={selectedAgentRunsSonnet ? 'text-[11px] text-[var(--cl-success)]' : 'text-[11px] text-[color:var(--cl-muted-foreground)]'}>
+              <div
+                className={
+                  selectedAgentRunsSonnet
+                    ? 'text-[11px] text-[var(--cl-success)]'
+                    : 'text-[11px] text-[color:var(--cl-muted-foreground)]'
+                }
+              >
                 {selectedAgentRunsSonnet
                   ? `Agent reports model: Anthropic ${selectedAgent.modelId}`
                   : `This agent reports ${selectedAgent.modelProviderId || 'an unknown provider'} ${selectedAgent.modelId || 'with no model id'}, not Anthropic Sonnet. It will still work, replies may just differ in tone or quality.`}
@@ -918,7 +872,9 @@ export function DustSetup({
               </div>
             )}
             <div className={'w-full opacity-60 ' + ctl}>
-              {spotlightAgent ? agents?.find((a) => a.sId === spotlightAgent)?.name ?? spotlightAgent : 'Not configured yet'}
+              {spotlightAgent
+                ? (agents?.find((a) => a.sId === spotlightAgent)?.name ?? spotlightAgent)
+                : 'Not configured yet'}
             </div>
           </div>
         </div>
@@ -948,7 +904,9 @@ export function DustSetup({
                 ? err
                 : connected
                   ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
-                      thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
+                      thinkAgent
+                        ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}`
+                        : ' (thinking → same as base)'
                     }.`
                   : loading && keySaved && hasWs
                     ? 'Checking Dust connection…'

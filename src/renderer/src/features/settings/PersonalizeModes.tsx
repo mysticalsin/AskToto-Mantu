@@ -23,7 +23,7 @@ function ModePromptEditor({
 }): JSX.Element {
   const isBuiltin = mode in BUILTIN_MODE_LABELS
   const override = settings.modePrompts[mode]
-  const defaultPrompt = isBuiltin ? DEFAULT_MODE_PROMPTS[mode as keyof typeof DEFAULT_MODE_PROMPTS] ?? '' : ''
+  const defaultPrompt = isBuiltin ? (DEFAULT_MODE_PROMPTS[mode as keyof typeof DEFAULT_MODE_PROMPTS] ?? '') : ''
   const value = override && override.trim() !== '' ? override : defaultPrompt
   const isModified = !!override && override.trim() !== '' && override !== defaultPrompt
   const locked = settings.managedKeys.includes('modePrompts')
@@ -45,8 +45,8 @@ function ModePromptEditor({
         className={[ctl, 'h-44 w-full resize-none text-[12px] leading-relaxed', locked ? 'opacity-60' : ''].join(' ')}
       />
       <div className="flex items-center gap-3">
-        {isBuiltin && (
-          isModified ? (
+        {isBuiltin &&
+          (isModified ? (
             <button
               type="button"
               onClick={reset}
@@ -57,18 +57,16 @@ function ModePromptEditor({
             </button>
           ) : (
             <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Using the built-in default.</span>
-          )
-        )}
+          ))}
         <ManagedChip keys={settings.managedKeys} k="modePrompts" />
       </div>
       {isBuiltin && (
         <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-          Operator skill v{modeSkillLock().skills[mode]?.version ?? 'unknown'} is locked to this Métis
-          build. Your prompt above still applies. The skill runs in the background and cannot be
-          edited, deleted, or overridden here. Ask answers also run locked caveman v
-          {modeSkillLock().skills.caveman?.version ?? 'unknown'} (default full). Say stop caveman or
-          normal mode to drop it. /caveman lite|full|ultra switches intensity. That skill cannot be
-          edited here.
+          Operator skill v{modeSkillLock().skills[mode]?.version ?? 'unknown'} is locked to this Métis build. Your
+          prompt above still applies. The skill runs in the background and cannot be edited, deleted, or overridden
+          here. Ask answers also run locked caveman v{modeSkillLock().skills.caveman?.version ?? 'unknown'} (default
+          full). Say stop caveman or normal mode to drop it. /caveman lite|full|ultra switches intensity. That skill
+          cannot be edited here.
         </p>
       )}
     </div>
@@ -156,9 +154,7 @@ function ContextDocs({
         ].join(' ')}
       >
         <Upload size={18} className="text-[color:var(--cl-primary)]" />
-        <span className="text-[13px] text-[color:var(--cl-foreground)]">
-          Add files for context
-        </span>
+        <span className="text-[13px] text-[color:var(--cl-foreground)]">Add files for context</span>
         <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
           Drag &amp; drop files here to add them, or{' '}
           <button
@@ -204,9 +200,10 @@ function ContextDocs({
                 type="button"
                 onClick={() => remove(i)}
                 title="Remove"
+                aria-label={`Remove ${d.name}`}
                 className="no-drag cl-focus shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
               >
-                <Trash size={13} />
+                <Trash size={13} aria-hidden="true" />
               </button>
             </div>
           ))}
@@ -271,10 +268,7 @@ export function PersonalizeModes({
   }, [overflowOpen])
 
   // Ensure selected still exists (could be deleted)
-  const allIds = [
-    ...MODE_GROUPS.flatMap((g) => g.modes as string[]),
-    ...customModes.map((c) => c.id)
-  ]
+  const allIds = [...MODE_GROUPS.flatMap((g) => g.modes as string[]), ...customModes.map((c) => c.id)]
   const safeSelected = allIds.includes(selected) ? selected : (MODE_GROUPS[0]?.modes[0] ?? 'general')
   const selectedLabel = modeLabel(safeSelected, customModes)
   const isBuiltinSelected = safeSelected in BUILTIN_MODE_LABELS
@@ -287,7 +281,11 @@ export function PersonalizeModes({
   }, [overflowOpen, safeSelected])
 
   const createNewMode = (): void => {
-    if (customModesLocked) { setCreatingNew(false); setNewLabel(''); return }
+    if (customModesLocked) {
+      setCreatingNew(false)
+      setNewLabel('')
+      return
+    }
     const label = newLabel.trim()
     // Fires on both Enter and the input's onBlur (clicking away) — an empty/whitespace-only label must
     // cancel instead of silently persisting a junk "New Mode" entry.
@@ -320,16 +318,23 @@ export function PersonalizeModes({
   }
 
   const commitRename = (): void => {
-    if (customModesLocked) { setRenaming(false); return }
+    if (customModesLocked) {
+      setRenaming(false)
+      return
+    }
     const label = renameValue.trim()
     if (label && !isBuiltinSelected) {
-      patch({ customModes: customModes.map((c) => c.id === safeSelected ? { ...c, label } : c) })
+      patch({ customModes: customModes.map((c) => (c.id === safeSelected ? { ...c, label } : c)) })
     }
     setRenaming(false)
   }
 
   const deleteCustomMode = (): void => {
-    if (customModesLocked) { setOverflowOpen(false); setConfirmDelete(false); return }
+    if (customModesLocked) {
+      setOverflowOpen(false)
+      setConfirmDelete(false)
+      return
+    }
     setOverflowOpen(false)
     const nextModes = customModes.filter((c) => c.id !== safeSelected)
     const nextPrompts = { ...settings.modePrompts }
@@ -367,7 +372,10 @@ export function PersonalizeModes({
       <button
         key={m}
         type="button"
-        onClick={() => { setSelected(m); setOverflowOpen(false) }}
+        onClick={() => {
+          setSelected(m)
+          setOverflowOpen(false)
+        }}
         aria-pressed={isSel}
         className={[
           'no-drag cl-focus flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-left transition-colors',
@@ -384,9 +392,7 @@ export function PersonalizeModes({
         >
           {label[0]?.toUpperCase() ?? '?'}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">
-          {label}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{label}</span>
         {isActive && <CircleCheck size={13} className="shrink-0 text-[color:var(--cl-primary)]" />}
       </button>
     )
@@ -409,7 +415,11 @@ export function PersonalizeModes({
                 if (e.key === 'Enter') createNewMode()
                 // stopPropagation: App.tsx's global Escape handler blur()s the focused input, which
                 // would fire onBlur={createNewMode} and create the mode the user is cancelling.
-                if (e.key === 'Escape') { e.stopPropagation(); setCreatingNew(false); setNewLabel('') }
+                if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  setCreatingNew(false)
+                  setNewLabel('')
+                }
               }}
               onBlur={createNewMode}
               placeholder="Mode name…"
@@ -419,7 +429,10 @@ export function PersonalizeModes({
         ) : (
           <button
             type="button"
-            onClick={() => { setCreatingNew(true); setModeErr(null) }}
+            onClick={() => {
+              setCreatingNew(true)
+              setModeErr(null)
+            }}
             disabled={customModesLocked}
             className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--color-accent-text)] transition-colors disabled:opacity-50 disabled:hover:border-[var(--cl-border)] disabled:hover:text-[color:var(--cl-muted-foreground)]"
           >
@@ -427,9 +440,7 @@ export function PersonalizeModes({
           </button>
         )}
 
-        {modeErr && (
-          <div className="mb-1.5 px-1 text-[11px] text-[color:var(--color-danger)]">{modeErr}</div>
-        )}
+        {modeErr && <div className="mb-1.5 px-1 text-[11px] text-[color:var(--color-danger)]">{modeErr}</div>}
 
         {/* Built-in groups */}
         {MODE_GROUPS.map((group) => (
@@ -466,7 +477,10 @@ export function PersonalizeModes({
                   if (e.key === 'Enter') commitRename()
                   // stopPropagation: App.tsx's global Escape handler blur()s the focused input, which
                   // would fire onBlur={commitRename} and save the rename the user is cancelling.
-                  if (e.key === 'Escape') { e.stopPropagation(); setRenaming(false) }
+                  if (e.key === 'Escape') {
+                    e.stopPropagation()
+                    setRenaming(false)
+                  }
                 }}
                 onBlur={commitRename}
                 className={`text-[18px] font-semibold bg-transparent border-b border-[var(--cl-primary)] outline-none text-[color:var(--cl-foreground)] w-full max-w-[200px]`}

@@ -4,7 +4,8 @@ import { isWindows } from '../../lib/keys'
 import { FieldHint } from '../../components/ui'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { ctl } from '../../ui/ctl'
-import { CoreAsrAssetsRow, WhisperQualityRow } from './AiSection'
+import { WhisperQualityRow } from './AiSection'
+import { CoreAsrAssetsRow } from './CoreAsrAssetsRow'
 import { SpeechPackSection, type SpeechPackBridge } from './SpeechPackSection'
 
 type SpeechSettings = Pick<PublicSettings, 'asrEngine' | 'asrQuality' | 'managedKeys'>

@@ -3,6 +3,8 @@ import { AlertCircle, RotateCcw, Trash2 } from 'lucide-react'
 import type { PreservedBrainIndexCopy, PublicSettings } from '@shared/ipc'
 import { Section } from '../../ui/Section'
 import { ctl } from '../../ui/ctl'
+import { useConfirm, type ConfirmFn } from '../../ui/confirm-context'
+import { retentionDeleteConfirmation, retentionDeleteUnknownConfirmation } from './settings-confirmations'
 
 const RETENTION_OPTIONS: { days: number; label: string }[] = [
   { days: 0, label: 'Keep forever (default)' },
@@ -11,6 +13,26 @@ const RETENTION_OPTIONS: { days: number; label: string }[] = [
   { days: 180, label: '180 days' },
   { days: 365, label: '1 year' }
 ]
+
+/**
+ * Whether moving the retention window from `current` to `next` days needs the person's go-ahead, and asks it:
+ * only a shorter window (or turning retention on) can delete meetings, and only when some saved meeting is older
+ * than the new window. Increasing retention or turning it off never asks (HIG A2: no alert for safe changes).
+ */
+export async function confirmRetentionChange(
+  current: number,
+  next: number,
+  askToConfirm: ConfirmFn,
+  preview: (days: number) => Promise<{ ok: true; expired: number } | { ok: false; error: string }>
+): Promise<boolean> {
+  const shortens = next > 0 && (current <= 0 || next < current)
+  if (!shortens) return true
+  const label = RETENTION_OPTIONS.find((o) => o.days === next)?.label ?? `${next} days`
+  const counted = await preview(next).catch(() => null)
+  if (!counted?.ok) return askToConfirm(retentionDeleteUnknownConfirmation(label))
+  if (counted.expired === 0) return true
+  return askToConfirm(retentionDeleteConfirmation(counted.expired, label))
+}
 
 function formatPreservedIndexSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -35,6 +57,15 @@ export function DangerZoneSection({
   const [preservedBusy, setPreservedBusy] = useState<string | null>(null)
   const [preservedMsg, setPreservedMsg] = useState<string | null>(null)
   const [preservedCopies, setPreservedCopies] = useState<PreservedBrainIndexCopy[]>([])
+  const askToConfirm = useConfirm()
+  // A shorter window deletes saved meetings at the next sweep: say how many and ask first. Cancel leaves the
+  // controlled select on the current window.
+  const changeRetention = async (days: number): Promise<void> => {
+    const current = settings.transcriptRetentionDays
+    if (await confirmRetentionChange(current, days, askToConfirm, (d) => window.toto.retentionPreview(d))) {
+      patch({ transcriptRetentionDays: days })
+    }
+  }
 
   const refreshPreservedCopies = useCallback(async (): Promise<void> => {
     const r = await window.toto.preservedBrainIndexesList()
@@ -57,7 +88,13 @@ export function DangerZoneSection({
     setPreservedBusy(id)
     setPreservedMsg(null)
     const r = await window.toto.preservedBrainIndexRestore(id)
-    setPreservedMsg(r.ok ? 'Restored the preserved brain index.' : r.error === 'cancelled' ? 'Cancelled. Nothing was changed.' : r.error || 'Could not restore that preserved copy.')
+    setPreservedMsg(
+      r.ok
+        ? 'Restored the preserved brain index.'
+        : r.error === 'cancelled'
+          ? 'Cancelled. Nothing was changed.'
+          : r.error || 'Could not restore that preserved copy.'
+    )
     await refreshPreservedCopies()
     setPreservedBusy(null)
   }
@@ -66,7 +103,13 @@ export function DangerZoneSection({
     setPreservedBusy(id)
     setPreservedMsg(null)
     const r = await window.toto.preservedBrainIndexDelete(id)
-    setPreservedMsg(r.ok ? 'Deleted the preserved brain index copy.' : r.error === 'cancelled' ? 'Cancelled. Nothing was deleted.' : r.error || 'Could not delete that preserved copy.')
+    setPreservedMsg(
+      r.ok
+        ? 'Deleted the preserved brain index copy.'
+        : r.error === 'cancelled'
+          ? 'Cancelled. Nothing was deleted.'
+          : r.error || 'Could not delete that preserved copy.'
+    )
     await refreshPreservedCopies()
     setPreservedBusy(null)
   }
@@ -82,7 +125,7 @@ export function DangerZoneSection({
       </label>
       <select
         value={settings.transcriptRetentionDays}
-        onChange={(e) => patch({ transcriptRetentionDays: Number(e.target.value) })}
+        onChange={(e) => void changeRetention(Number(e.target.value))}
         disabled={settings.managedKeys.includes('transcriptRetentionDays')}
         aria-label="Auto-delete meetings older than"
         className={'w-full ' + ctl}
@@ -114,7 +157,8 @@ export function DangerZoneSection({
           <div>
             <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Preserved brain indexes</div>
             <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Copies kept after rebuilds or restores. Settings shows only date, size, and whether this install can unlock them.
+              Copies kept after rebuilds or restores. Settings shows only date, size, and whether this install can
+              unlock them.
             </div>
           </div>
           {preservedCopies.map((copy) => (
@@ -127,7 +171,8 @@ export function DangerZoneSection({
                   {new Date(copy.createdAt).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                  {formatPreservedIndexSize(copy.size)} · {copy.restorable ? 'Can restore on this install' : 'Locked on this install'}
+                  {formatPreservedIndexSize(copy.size)} ·{' '}
+                  {copy.restorable ? 'Can restore on this install' : 'Locked on this install'}
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">

@@ -8,6 +8,8 @@
  */
 import { useState } from 'react'
 import type { ScreenDiagnosis } from '@shared/screen-permission'
+import { SCREEN_REPAIR_CONFIRMATION } from '../features/settings/settings-confirmations'
+import { useConfirm } from '../ui/confirm-context'
 import {
   MEETING_AUDIO_SCREEN_LABEL,
   MEETING_AUDIO_SCREEN_WHY,
@@ -17,23 +19,21 @@ import {
 
 export function PermissionDot({ status }: { status: string }): JSX.Element {
   const color =
-    status === 'granted'
-      ? 'bg-[var(--cl-success)]'
-      : status === 'denied'
-        ? 'bg-[var(--cl-destructive)]'
-        : 'bg-white/30'
+    status === 'granted' ? 'bg-[var(--cl-success)]' : status === 'denied' ? 'bg-[var(--cl-destructive)]' : 'bg-white/30'
   return <span className={`inline-block h-2 w-2 rounded-full ${color}`} aria-hidden="true" />
 }
 
 /** The Bar's "Mic only" chip, when the grant belongs to another build or copy (the tooltip names it): the
  *  switch in System Settings already shows on, so the one useful action is Repair. */
 export function ScreenRepairButton(): JSX.Element {
+  // Repair resets a system permission and relaunches Métis: uncommon and not undoable, so it asks (HIG A2).
+  const askToConfirm = useConfirm()
   return (
     <button
       type="button"
       onClick={(e) => {
         e.stopPropagation()
-        void runScreenRepair()
+        void askToConfirm(SCREEN_REPAIR_CONFIRMATION).then((go) => (go ? runScreenRepair() : undefined))
       }}
       className="no-drag focus-ring ml-1 rounded-full bg-white/10 px-1.5 text-[10px] font-semibold hover:bg-white/20"
     >
@@ -72,30 +72,35 @@ function ScreenDiagnosisActions({
 }): JSX.Element | null {
   const [repairBusy, setRepairBusy] = useState(false)
   const [repairGuidance, setRepairGuidance] = useState<string | null>(null)
+  const askToConfirm = useConfirm()
   const copy = screenPermissionCopy(diagnosis)
   if (!copy) return null
   const primary =
     'no-drag cl-focus rounded-full bg-[var(--cl-primary)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--cl-primary)] hover:bg-[var(--cl-primary)]/25 disabled:opacity-60'
   const link = 'no-drag cl-focus text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline'
-  const repair = (): void => {
+  const repair = async (): Promise<void> => {
+    if (!(await askToConfirm(SCREEN_REPAIR_CONFIRMATION))) return
     setRepairBusy(true)
-    void runScreenRepair().then((result) => {
-      // Success relaunches the app from main; only a failure comes back here.
-      if (!result.ok) setRepairGuidance(result.guidance || null)
-      setRepairBusy(false)
-    })
+    const result = await runScreenRepair()
+    // Success relaunches the app from main; only a failure comes back here.
+    if (!result.ok) setRepairGuidance(result.guidance || null)
+    setRepairBusy(false)
   }
   return (
     <div className="mt-1 flex flex-col gap-1">
       <div className="text-[11px] leading-snug text-[color:var(--cl-foreground)]">{repairGuidance ?? copy.text}</div>
       <div className="flex flex-wrap items-center gap-2">
         {copy.repair && !repairGuidance && (
-          <button type="button" onClick={repair} disabled={repairBusy} className={primary}>
+          <button type="button" onClick={() => void repair()} disabled={repairBusy} className={primary}>
             {repairBusy ? 'Repairing…' : 'Repair'}
           </button>
         )}
         {diagnosis.action === 'request' && (
-          <button type="button" onClick={() => void window.toto.requestPermissionsUpfront().catch(() => null)} className={primary}>
+          <button
+            type="button"
+            onClick={() => void window.toto.requestPermissionsUpfront().catch(() => null)}
+            className={primary}
+          >
             Allow meeting audio & screen
           </button>
         )}
@@ -105,12 +110,20 @@ function ScreenDiagnosisActions({
           </button>
         )}
         {(copy.openSettings || repairGuidance) && (
-          <button type="button" onClick={() => void window.toto.openPermissionSettings('screenRecording')} className={link}>
+          <button
+            type="button"
+            onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+            className={link}
+          >
             Open System Settings
           </button>
         )}
         {copy.attest && (
-          <button type="button" onClick={() => void window.toto.attestScreenPermission().catch(() => {})} className={link}>
+          <button
+            type="button"
+            onClick={() => void window.toto.attestScreenPermission().catch(() => {})}
+            className={link}
+          >
             It’s already on
           </button>
         )}
@@ -118,12 +131,19 @@ function ScreenDiagnosisActions({
       {diagnosis.duplicates.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
           {diagnosis.duplicates.map((copyOnDisk) => (
-            <li key={copyOnDisk.path} className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <li
+              key={copyOnDisk.path}
+              className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]"
+            >
               <span className="min-w-0 truncate" title={copyOnDisk.path}>
                 {copyOnDisk.path}
                 {copyOnDisk.version ? ` (${copyOnDisk.version})` : ''}
               </span>
-              <button type="button" onClick={() => void window.toto.revealAppCopy(copyOnDisk.path).catch(() => {})} className={link}>
+              <button
+                type="button"
+                onClick={() => void window.toto.revealAppCopy(copyOnDisk.path).catch(() => {})}
+                className={link}
+              >
                 Show in Finder
               </button>
             </li>
@@ -150,10 +170,14 @@ export function ScreenPermissionRow({
       <PermissionDot status={status} />
       <div className="flex-1">
         <div className="flex items-center justify-between">
-          <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{MEETING_AUDIO_SCREEN_LABEL}</span>
+          <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">
+            {MEETING_AUDIO_SCREEN_LABEL}
+          </span>
           <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{screenDiagnosisLabel(diagnosis)}</span>
         </div>
-        <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{MEETING_AUDIO_SCREEN_WHY}</div>
+        <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          {MEETING_AUDIO_SCREEN_WHY}
+        </div>
         <ScreenDiagnosisActions diagnosis={diagnosis} restarting={restarting} onRestart={onRestart} />
       </div>
     </div>

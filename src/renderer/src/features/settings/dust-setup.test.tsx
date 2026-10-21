@@ -6,12 +6,24 @@
  */
 import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS, DUST_BASE_AGENT_ID, PublicSettingsSchema, type DustAgent, type PublicSettings } from '@shared/ipc'
+import {
+  DEFAULT_SETTINGS,
+  DUST_BASE_AGENT_ID,
+  PublicSettingsSchema,
+  type DustAgent,
+  type PublicSettings
+} from '@shared/ipc'
 import { DUST_WORKSPACE_MISSING_SETUP_ERROR } from '@shared/dust-validate'
 import { AgentPicker } from './AgentPicker'
 import { DustSetup } from './DustSetup'
+import { DUST_DISCONNECT_CONFIRMATION, DUST_REMOVE_KEY_CONFIRMATION } from './settings-confirmations'
 
-const hooks = vi.hoisted(() => ({ slots: new Map<number, { current: unknown }>(), next: 0 }))
+const hooks = vi.hoisted(() => ({
+  slots: new Map<number, { current: unknown }>(),
+  next: 0,
+  // The confirmation a card asks for (useConfirm → useContext); each test decides the answer.
+  confirm: (async () => true) as (input: { title: string; confirmLabel: string }) => Promise<boolean>
+}))
 
 vi.mock('react', async (importOriginal) => {
   const react = await importOriginal<typeof import('react')>()
@@ -23,6 +35,7 @@ vi.mock('react', async (importOriginal) => {
   return {
     ...react,
     useEffect: () => {},
+    useContext: () => hooks.confirm,
     useLayoutEffect: () => {},
     useId: () => `id${hooks.next++}`,
     useRef: (init: unknown) => slot(() => init),
@@ -119,6 +132,7 @@ beforeEach(() => {
     }))
   }
   vi.stubGlobal('window', { toto, navigator: { platform: 'MacIntel' } })
+  hooks.confirm = async () => true
 })
 afterEach(() => vi.unstubAllGlobals())
 
@@ -173,7 +187,10 @@ describe('AgentPicker', () => {
     const filter = picker.input((p) => p.placeholder === 'Filter agents…')
     typeInto(filter, 'nothing-like-this')
     expect(picker.view().text).toContain('No matching agents.')
-    typeInto(picker.input((p) => p.placeholder === 'Filter agents…'), 'default agent')
+    typeInto(
+      picker.input((p) => p.placeholder === 'Filter agents…'),
+      'default agent'
+    )
     picker.input((p) => p.placeholder === 'Filter agents…').props.onKeyDown({ key: 'Enter', stopPropagation: vi.fn() })
     expect(onSelect).toHaveBeenCalledWith(DUST_BASE_AGENT_ID)
   })
@@ -190,7 +207,9 @@ describe('AgentPicker', () => {
     const picker = mount(AgentPicker, { ...base, emptyOption: 'Same as base agent', onSelect })
     // The empty row is the current selection, so the trigger already reads as the empty option.
     picker.button(/Same as base agent/).props.onClick()
-    const rows = picker.view().all.filter((e) => e.type === 'button' && /Same as base agent/.test(textOf(e.props.children)))
+    const rows = picker
+      .view()
+      .all.filter((e) => e.type === 'button' && /Same as base agent/.test(textOf(e.props.children)))
     expect(rows).toHaveLength(2)
     rows[1].props.onClick()
     expect(onSelect).toHaveBeenCalledWith('')
@@ -224,7 +243,9 @@ describe('DustSetup', () => {
     expect(text).toContain('Set up Dust automatically')
     expect(card.view().all.some((e) => e.type === 'input')).toBe(false)
     card.button(/I already have an API key/).props.onClick()
-    expect(card.view().all.some((e) => e.type === 'input' && e.props.placeholder?.startsWith('Paste your Dust API key'))).toBe(true)
+    expect(
+      card.view().all.some((e) => e.type === 'input' && e.props.placeholder?.startsWith('Paste your Dust API key'))
+    ).toBe(true)
   })
 
   it('a pasted assistant link fills workspace, region and base agent', () => {
@@ -253,7 +274,10 @@ describe('DustSetup', () => {
   it('proves a pasted key before saving it, then activates Dust and loads agents', async () => {
     const { card, patch, saveKey } = setup({ dustWorkspaceId: 'ws123' })
     card.button(/I already have an API key/).props.onClick()
-    typeInto(card.input((p) => p.placeholder?.startsWith('Paste your Dust API key')), 'sk-test')
+    typeInto(
+      card.input((p) => p.placeholder?.startsWith('Paste your Dust API key')),
+      'sk-test'
+    )
     card.button(/^\s*Save\s*$/).props.onClick()
     await flush()
     expect(toto.testApiKey).toHaveBeenCalledWith('dust', 'sk-test')
@@ -268,7 +292,10 @@ describe('DustSetup', () => {
     toto.testApiKey.mockResolvedValue({ ok: false, error: 'Dust rejected the key (401)' })
     const { card, patch, saveKey } = setup({ dustWorkspaceId: 'ws123' })
     card.button(/I already have an API key/).props.onClick()
-    typeInto(card.input((p) => p.placeholder?.startsWith('Paste your Dust API key')), 'sk-bad')
+    typeInto(
+      card.input((p) => p.placeholder?.startsWith('Paste your Dust API key')),
+      'sk-bad'
+    )
     card.button(/^\s*Save\s*$/).props.onClick()
     await flush()
     expect(saveKey).not.toHaveBeenCalled()
@@ -280,7 +307,10 @@ describe('DustSetup', () => {
   it('refuses to test a key without a workspace id', async () => {
     const { card, saveKey } = setup({ dustWorkspaceId: '' })
     card.button(/I already have an API key/).props.onClick()
-    typeInto(card.input((p) => p.placeholder?.startsWith('Paste your Dust API key')), 'sk-test')
+    typeInto(
+      card.input((p) => p.placeholder?.startsWith('Paste your Dust API key')),
+      'sk-test'
+    )
     card.button(/^\s*Save\s*$/).props.onClick()
     await flush()
     expect(toto.testApiKey).not.toHaveBeenCalled()
@@ -288,7 +318,35 @@ describe('DustSetup', () => {
     expect(card.view().text).toContain(DUST_WORKSPACE_MISSING_SETUP_ERROR)
   })
 
+  it('Disconnect asks first, and Cancel leaves the connection untouched (HIG A2)', async () => {
+    const confirm = vi.fn(async () => false)
+    hooks.confirm = confirm
+    const { card, patch, clearKey } = setup({ ...connected, provider: 'dust' })
+    card.button(/Disconnect/).props.onClick()
+    await flush()
+    expect(confirm).toHaveBeenCalledWith(DUST_DISCONNECT_CONFIRMATION)
+    expect(clearKey).not.toHaveBeenCalled()
+    expect(patch).not.toHaveBeenCalled()
+  })
+
+  it('Remove asks first; Cancel keeps the key, Remove Key deletes it', async () => {
+    const confirm = vi.fn(async () => false)
+    hooks.confirm = confirm
+    const { card, clearKey } = setup({ ...connected })
+    card.button(/I already have an API key/).props.onClick()
+    card.button(/^\s*Remove\s*$/).props.onClick()
+    await flush()
+    expect(confirm).toHaveBeenCalledWith(DUST_REMOVE_KEY_CONFIRMATION)
+    expect(clearKey).not.toHaveBeenCalled()
+    confirm.mockResolvedValue(true)
+    card.button(/^\s*Remove\s*$/).props.onClick()
+    await flush()
+    expect(clearKey).toHaveBeenCalledWith('dust')
+  })
+
   it('Disconnect clears the key and resets workspace, region and base agent', async () => {
+    const confirm = vi.fn(async () => true)
+    hooks.confirm = confirm
     const { card, patch, clearKey, settings } = setup({
       ...connected,
       provider: 'dust',
@@ -297,6 +355,7 @@ describe('DustSetup', () => {
     })
     card.button(/Disconnect/).props.onClick()
     await flush()
+    expect(confirm).toHaveBeenCalledWith(DUST_DISCONNECT_CONFIRMATION)
     expect(clearKey).toHaveBeenCalledWith('dust')
     expect(patch).toHaveBeenCalledWith(
       expect.objectContaining({
