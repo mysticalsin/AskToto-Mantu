@@ -23,7 +23,14 @@ import type {
 } from '@shared/ipc'
 import { LiveMeetingStartedAtSchema } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
-import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
+import { useFileBackend } from './secrets'
+import {
+  generateContentKey,
+  unwrapContentKey,
+  unwrapWithKeychain,
+  wrapContentKey,
+  wrapContentKeyWithFileBackend
+} from './infra/security/content-key-wrap'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
 import { resolveMeetingsFolder } from './infra/storage/paths'
@@ -182,36 +189,17 @@ function readEscrowPubKey(): string | null {
   return null
 }
 
-// The ONE native boundary in this file, and the one place a read can die in a way no JS can observe.
-//
-// safeStorage.decryptString drops into Chromium's OSCrypt. Its Windows implementation
-// (components/os_crypt/sync/os_crypt_win.cc) reads a 'v10'-prefixed blob as 'v10' + 12-byte nonce +
-// AES-GCM ciphertext + tag, and slices out the body with `ciphertext.substr(15)` — no length check
-// first. std::string::substr throws std::out_of_range when the position is past the end, and that is a
-// native C++ exception (0xE06D7363): it unwinds straight past V8, so `uncaughtException`, the
-// surrounding try/catch, and every fatal handler this app installs are all blind to it. The process
-// simply vanishes — no window, no dialog, no crash-*.log, no audit line. That is MQA-175, observed on
-// six consecutive launches of the shipped 1.5.4 Windows build against a sync-mangled
-// `.brain/index.json`. A bad blob that is merely WRONG (right length, wrong bytes) is fine — OSCrypt
-// returns false and Electron throws an ordinary JS error. Only a SHORT one kills the process.
-//
-// So the length is checked here, on the JS side, before the boundary is crossed. The bound is exactly
-// the position os_crypt_win.cc indexes to, not the size of a well-formed blob: a real Windows envelope
-// is at least 31 bytes (3 + 12 + 16) and macOS's AES-128-CBC form at least 19, so anything legitimate
-// clears this by a wide margin while every blob that could throw is refused as a normal JS Error — which
-// tryDecodeSaved below already turns into a typed "undecryptable" outcome.
-const OSCRYPT_V10_PREFIX = Buffer.from('v10', 'utf8')
-const OSCRYPT_V10_MIN_INDEXABLE = OSCRYPT_V10_PREFIX.length + 12 // the substr(15) os_crypt_win.cc does
+/** Envelope paths are fail-closed and throw: the typed wrap/unwrap results are re-raised as the original Error. */
+function wrapContentKeyOrThrow(key: Buffer): string {
+  const wrapped = wrapContentKey(key)
+  if (!wrapped.ok) throw wrapped.error
+  return wrapped.wrapped
+}
 
-function unwrapWithKeychain(blob: Buffer): string {
-  if (blob.length === 0) throw new Error('wrapped key is empty')
-  if (
-    blob.subarray(0, OSCRYPT_V10_PREFIX.length).equals(OSCRYPT_V10_PREFIX) &&
-    blob.length < OSCRYPT_V10_MIN_INDEXABLE
-  ) {
-    throw new Error('wrapped key is a truncated OSCrypt v10 blob')
-  }
-  return safeStorage.decryptString(blob)
+function unwrapContentKeyOrThrow(kLocal: string, allowKeychainRecovery: boolean) {
+  const unwrapped = unwrapContentKey(kLocal, { allowKeychainRecovery })
+  if (!unwrapped.ok) throw unwrapped.error
+  return unwrapped
 }
 
 /**
@@ -227,7 +215,7 @@ function unwrapWithKeychain(blob: Buffer): string {
  * callers should let any error propagate (fail-closed).
  */
 function encryptEnvelopeV2(content: string): Buffer {
-  const contentKey = randomBytes(32)
+  const contentKey = generateContentKey()
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', contentKey, iv)
   const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()])
@@ -236,12 +224,7 @@ function encryptEnvelopeV2(content: string): Buffer {
   // build — see the keystore note in index.ts) or safeStorage is unavailable (Linux / CI / no
   // secret-service), wrap with the AES-GCM file-backend key from secrets.ts instead so recording never
   // triggers a Keychain prompt mid-meeting. Either way the content key is always encrypted at rest.
-  let kLocalField: string
-  if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-    kLocalField = 'S:' + safeStorage.encryptString(contentKey.toString('base64')).toString('base64')
-  } else {
-    kLocalField = 'F:' + encryptSecret(contentKey.toString('base64')).toString('base64')
-  }
+  const kLocalField = wrapContentKeyOrThrow(contentKey)
   const env: EnvelopeV2 = {
     v: 2,
     iv: iv.toString('base64'),
@@ -272,18 +255,14 @@ function encryptEnvelopeV2(content: string): Buffer {
 
 /** Meeting-framed documents offload bulk AES and envelope serialization after native key wrapping in main. */
 async function encryptSpeechEnvelopeV2(content: string): Promise<Buffer> {
-  const contentKey = randomBytes(32)
+  const contentKey = generateContentKey()
   const iv = randomBytes(12)
   let kLocalField: string
   let kEscrow: string | undefined
   const wrapStartedAt = performance.now()
   try {
     try {
-      if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-        kLocalField = 'S:' + safeStorage.encryptString(contentKey.toString('base64')).toString('base64')
-      } else {
-        kLocalField = 'F:' + encryptSecret(contentKey.toString('base64')).toString('base64')
-      }
+      kLocalField = wrapContentKeyOrThrow(contentKey)
       const pem = readEscrowPubKey()
       if (pem) {
         try {
@@ -319,49 +298,37 @@ async function encryptSpeechEnvelopeV2(content: string): Promise<Buffer> {
  *  `filePath`, when given, lets a successful recovery self-heal (see the rewrap below). */
 function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?: string): string {
   const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
-  let contentKeyB64: string
-  if (env.kLocal.startsWith('F:')) {
-    // File-backend path: content key was wrapped by secrets.ts AES-GCM (no keychain required).
-    contentKeyB64 = decryptSecret(Buffer.from(env.kLocal.slice(2), 'base64'))
-  } else {
-    // safeStorage path: 'S:' prefix (new) or legacy bare base64 (no prefix, backward compat).
-    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
-    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) {
-      throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
-    }
-    const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
-    contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
-    // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
-    // rewrap it under the current file-backend key so every later read (bulk list/search included)
-    // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
-    // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
-    // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
-    // rewrap failure must never fail this read — the caller already has the decrypted content either way.
-    //
-    // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
-    // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
-    // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
-    // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
-    // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
-    // and makes it a no-op wherever safeStorage is the writer.
-    if (canRecover && filePath && useFileBackend()) {
-      const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
+  const unwrapped = unwrapContentKeyOrThrow(env.kLocal, allowKeychainRecovery)
+  const contentKey = unwrapped.key
+  // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
+  // rewrap it under the current file-backend key so every later read (bulk list/search included)
+  // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
+  // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
+  // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
+  // rewrap failure must never fail this read — the caller already has the decrypted content either way.
+  //
+  // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
+  // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
+  // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
+  // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
+  // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
+  // and makes it a no-op wherever safeStorage is the writer.
+  if (unwrapped.keychainRecovery && filePath && useFileBackend()) {
+    const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
+    try {
+      const updated: EnvelopeV2 = { ...env, kLocal: wrapContentKeyWithFileBackend(contentKey) }
+      writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), {
+        mode: 0o600
+      })
+      renameSync(tmp, filePath)
+    } catch {
       try {
-        const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
-        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), {
-          mode: 0o600
-        })
-        renameSync(tmp, filePath)
+        if (existsSync(tmp)) unlinkSync(tmp) // don't leave an orphaned .tmp behind on a failed rewrap
       } catch {
-        try {
-          if (existsSync(tmp)) unlinkSync(tmp) // don't leave an orphaned .tmp behind on a failed rewrap
-        } catch {
-          /* best-effort cleanup */
-        }
+        /* best-effort cleanup */
       }
     }
   }
-  const contentKey = Buffer.from(contentKeyB64, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
   decipher.setAuthTag(Buffer.from(env.tag, 'base64'))
   return Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString('utf8')
@@ -370,20 +337,10 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
 /** Main unwraps only the small local key field; the child parses/base64-decodes/decrypts the bulk envelope. */
 async function decryptEnvelopeV2Async(buf: Buffer, allowKeychainRecovery = false, filePath?: string): Promise<string> {
   const kLocal = readEnvelopeLocalKey(buf.subarray(MARKER_LEN))
-  let contentKeyB64: string
-  let recoveredLocalKey: string | undefined
-  if (kLocal.startsWith('F:')) {
-    contentKeyB64 = decryptSecret(Buffer.from(kLocal.slice(2), 'base64'))
-  } else {
-    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
-    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover)
-      throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
-    const raw = kLocal.startsWith('S:') ? kLocal.slice(2) : kLocal
-    contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
-    if (canRecover && filePath && useFileBackend())
-      recoveredLocalKey = 'F:' + encryptSecret(contentKeyB64).toString('base64')
-  }
-  const contentKey = Buffer.from(contentKeyB64, 'base64')
+  const unwrapped = unwrapContentKeyOrThrow(kLocal, allowKeychainRecovery)
+  const contentKey = unwrapped.key
+  const recoveredLocalKey =
+    unwrapped.keychainRecovery && filePath && useFileBackend() ? wrapContentKeyWithFileBackend(contentKey) : undefined
   try {
     const text = await decryptMeetingEnvelopeAsync(buf.subarray(MARKER_LEN), contentKey, kLocal)
     if (recoveredLocalKey && filePath) {
