@@ -467,6 +467,50 @@ describe('Spotlight cancellation before managed chat entry', () => {
   })
 })
 
+describe('Spotlight cancellation after managed helper entry', () => {
+  it.each([
+    ['abort', 'success'],
+    ['abort', 'failure'],
+    ['abort', 'reject'],
+    ['watchdog', 'success'],
+    ['watchdog', 'failure'],
+    ['watchdog', 'reject']
+  ] as const)('forwards the exact request signal through %s and suppresses late %s callbacks', async (mode, outcome) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const result = deferred<Awaited<ReturnType<RunManagedDustChat>>>()
+    managedDustChat.mockReset().mockReturnValueOnce(result.promise)
+    fetchDustProjectsMock.mockReset().mockResolvedValue({ ok: false, error: 'optional lookup failure' })
+    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID, idleMs: 250 })
+    const handle = streamDust(opts)
+    try {
+      await drainImmediate()
+      expect(managedDustChat).toHaveBeenCalledTimes(1)
+      const signal = managedDustChat.mock.calls[0][0].signal
+      expect(signal).toBeInstanceOf(AbortSignal)
+      expect(signal?.aborted).toBe(false)
+      if (mode === 'abort') handle.abort()
+      else vi.advanceTimersByTime(250)
+      expect(signal?.aborted).toBe(true)
+      if (outcome === 'success') result.resolve({ ok: true, text: 'late synthetic answer' })
+      else if (outcome === 'failure') result.resolve({ ok: false, kind: 'error', error: 'late failure' })
+      else result.reject(new Error('late rejection'))
+      await drainImmediate()
+      expect(managedDustChat.mock.calls[0][0].signal).toBe(signal)
+      expect(opts.handlers.onDelta).not.toHaveBeenCalled()
+      expect(opts.handlers.onDone).not.toHaveBeenCalled()
+      expect(opts.handlers.onError).toHaveBeenCalledTimes(mode === 'abort' ? 0 : 1)
+      if (mode === 'watchdog')
+        expect(opts.handlers.onError).toHaveBeenCalledWith('Timed out — no response from the agent.')
+    } finally {
+      handle.abort()
+      result.resolve({ ok: false, kind: 'error', error: 'cleanup' })
+      await drainImmediate()
+      expect(vi.getTimerCount()).toBe(0)
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('isDustAuthError — 401 phrasing drift across Dust API versions', async () => {
   const { isDustAuthError } = await import('./dust')
 

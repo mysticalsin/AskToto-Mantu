@@ -1,10 +1,30 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 
 vi.mock('electron')
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  spawn: vi.fn()
+}))
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  return { ...fs, writeFileSync: vi.fn(fs.writeFileSync) }
+})
+vi.mock('./managed-node', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./managed-node')>()),
+  ensureManagedNode: vi.fn(),
+  resolveManagedNode: vi.fn(),
+  vcredistExePath: vi.fn(() => null)
+}))
+vi.mock('./cli-installer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./cli-installer')>()),
+  managedCliEntry: vi.fn(),
+  installManagedCli: vi.fn()
+}))
 
 import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import {
@@ -15,11 +35,149 @@ import {
   messageForDustCliKind,
   parseDustChatStdout,
   projectNameForDataAndAiAsk,
+  runManagedDustChat,
   spotlightRefMissingAgentMessage,
   spotlightRefMissingCliMessage,
   writeDustKeytarSeedScript
 } from './dust-cli-chat'
-import { MANAGED_CLIS } from './cli-installer'
+import { MANAGED_CLIS, installManagedCli, managedCliEntry } from './cli-installer'
+import { ensureManagedNode, resolveManagedNode } from './managed-node'
+
+describe('managed Dust preparation cancellation', () => {
+  let dir: string
+  let children: ChildProcess[]
+  let releaseReadiness: (() => void) | undefined
+  let pending: Promise<unknown> | undefined
+  const opts = { message: 'Synthetic request', apiKey: 'qa-only-invalid-token', workspaceId: 'qa-workspace' }
+  const barrier = async (): Promise<void> => {
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  const canceled = { ok: false, kind: 'error', error: 'Dust chat canceled.' }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    dir = mkdtempSync(join(tmpdir(), 'metis-dust-cancel-'))
+    children = []
+    pending = undefined
+    releaseReadiness = undefined
+    vi.mocked(writeFileSync).mockClear()
+    vi.mocked(ensureManagedNode).mockReset().mockResolvedValue(null)
+    vi.mocked(resolveManagedNode).mockReset().mockReturnValue(null)
+    vi.mocked(managedCliEntry)
+      .mockReset()
+      .mockReturnValue({ entry: join(dir, 'index.js'), version: '0.4.5' })
+    vi.mocked(installManagedCli).mockReset()
+    vi.mocked(spawn)
+      .mockReset()
+      .mockImplementation(() => {
+        const child = Object.assign(new EventEmitter(), {
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+          kill: vi.fn()
+        }) as unknown as ChildProcess
+        children.push(child)
+        return child
+      })
+  })
+
+  afterEach(async () => {
+    releaseReadiness?.()
+    await barrier()
+    // Settle any child the unchanged RED implementation started, including a late chat.
+    for (let i = 0; i < children.length; i++) {
+      children[i].emit('close', 0)
+      await barrier()
+    }
+    await pending
+    expect(vi.getTimerCount()).toBe(0)
+    vi.useRealTimers()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('refuses a pre-aborted signal before readiness or seed effects', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    pending = runManagedDustChat({ ...opts, signal: controller.signal })
+    await barrier()
+    expect(ensureManagedNode).not.toHaveBeenCalled()
+    expect(installManagedCli).not.toHaveBeenCalled()
+    expect(writeFileSync).not.toHaveBeenCalled()
+    expect(spawn).not.toHaveBeenCalled()
+    await expect(pending).resolves.toEqual(canceled)
+  })
+
+  it.each(['success', 'failure'] as const)('refuses seed effects after canceled readiness %s', async (outcome) => {
+    let resolve!: (value: null) => void
+    let reject!: (error: Error) => void
+    vi.mocked(ensureManagedNode).mockReturnValueOnce(
+      new Promise((yes, no) => {
+        resolve = yes
+        reject = no
+      })
+    )
+    releaseReadiness = () => resolve(null)
+    const controller = new AbortController()
+    let settled = false
+    pending = runManagedDustChat({ ...opts, signal: controller.signal }).then((result) => {
+      settled = true
+      return result
+    })
+    expect(ensureManagedNode).toHaveBeenCalledTimes(1)
+    controller.abort()
+    await barrier()
+    expect(settled).toBe(false)
+    if (outcome === 'success') resolve(null)
+    else reject(new Error('synthetic readiness failure'))
+    await barrier()
+    expect(writeFileSync).not.toHaveBeenCalled()
+    expect(spawn).not.toHaveBeenCalled()
+    expect(installManagedCli).not.toHaveBeenCalled()
+    await expect(pending).resolves.toEqual(canceled)
+  })
+
+  it.each([
+    'close',
+    'error'
+  ] as const)('awaits the started seeder %s and refuses a new chat after abort', async (event) => {
+    const controller = new AbortController()
+    let settled = false
+    pending = runManagedDustChat({ ...opts, signal: controller.signal }).then((result) => {
+      settled = true
+      return result
+    })
+    await barrier()
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(writeFileSync).toHaveBeenCalledTimes(1)
+    controller.abort()
+    await barrier()
+    expect(settled).toBe(false)
+    children[0].emit(event, event === 'close' ? 0 : new Error('synthetic seeder failure'))
+    await barrier()
+    expect(spawn).toHaveBeenCalledTimes(1)
+    await expect(pending).resolves.toEqual(canceled)
+  })
+
+  it.each(['omitted', 'active'] as const)('preserves healthy %s signal, credentials and argv', async (mode) => {
+    pending = runManagedDustChat({ ...opts, ...(mode === 'active' ? { signal: new AbortController().signal } : {}) })
+    await barrier()
+    expect(spawn).toHaveBeenCalledTimes(1)
+    children[0].emit('close', 0)
+    await barrier()
+    expect(spawn).toHaveBeenCalledTimes(2)
+    const [seed, chat] = vi.mocked(spawn).mock.calls
+    expect(seed[1]).toEqual([join(dir, '.metis-seed-session.mjs'), 'us-central1'])
+    expect(chat[1]).toEqual([join(dir, 'index.js'), ...buildDustSpotlightChatArgv({ message: opts.message })])
+    for (const call of [seed, chat]) {
+      expect(call[1]).not.toContain(opts.apiKey)
+      expect(call[1]).not.toContain(opts.workspaceId)
+      expect(call[2]?.env).toMatchObject({ DUST_API_KEY: opts.apiKey, DUST_WORKSPACE_ID: opts.workspaceId })
+    }
+    expect(readFileSync(join(dir, '.metis-seed-session.mjs'), 'utf8')).not.toContain(opts.apiKey)
+    children[1].stdout?.emit('data', Buffer.from('{"agentAnswer":"synthetic answer"}'))
+    children[1].emit('close', 0)
+    await expect(pending).resolves.toEqual({ ok: true, text: 'synthetic answer' })
+  })
+})
 
 describe('managed Dust CLI install id', () => {
   it('exists on MANAGED_CLIS with the published package and entry', () => {
@@ -31,7 +189,12 @@ describe('managed Dust CLI install id', () => {
 
 describe('Spotlight Ref dust chat argv', () => {
   it('MQA-315 cannot opt credentials into a process command line', () => {
-    const opts = { message: 'Synthetic request', passKeyOnArgv: true, apiKey: 'qa-only-invalid-token', workspaceId: 'qa-workspace' }
+    const opts = {
+      message: 'Synthetic request',
+      passKeyOnArgv: true,
+      apiKey: 'qa-only-invalid-token',
+      workspaceId: 'qa-workspace'
+    }
     const args = buildDustSpotlightChatArgv(opts)
     expect(args).not.toContain(opts.apiKey)
     expect(args).not.toContain('--key')
@@ -44,15 +207,25 @@ describe('Spotlight Ref dust chat argv', () => {
     try {
       const fakeKeytar = join(dir, 'node_modules', 'keytar')
       mkdirSync(fakeKeytar, { recursive: true })
-      writeFileSync(join(fakeKeytar, 'package.json'), JSON.stringify({ name: 'keytar', type: 'module', main: 'index.js' }))
-      writeFileSync(join(fakeKeytar, 'index.js'), 'export default { async setPassword(...args) { console.log(JSON.stringify(args)) } }')
+      writeFileSync(
+        join(fakeKeytar, 'package.json'),
+        JSON.stringify({ name: 'keytar', type: 'module', main: 'index.js' })
+      )
+      writeFileSync(
+        join(fakeKeytar, 'index.js'),
+        'export default { async setPassword(...args) { console.log(JSON.stringify(args)) } }'
+      )
       const script = writeDustKeytarSeedScript(dir)
       const token = 'qa-only-invalid-token'
       const result = spawnSync(process.execPath, [script, 'us-central1'], {
-        env: { ...process.env, DUST_API_KEY: token, DUST_WORKSPACE_ID: 'qa-workspace' }, encoding: 'utf8'
+        env: { ...process.env, DUST_API_KEY: token, DUST_WORKSPACE_ID: 'qa-workspace' },
+        encoding: 'utf8'
       })
       expect(result.status).toBe(0)
-      const calls = result.stdout.split('\n').filter((line) => line.startsWith('[')).map((line) => JSON.parse(line))
+      const calls = result.stdout
+        .split('\n')
+        .filter((line) => line.startsWith('['))
+        .map((line) => JSON.parse(line))
       expect(calls).toEqual([
         ['dust-cli', 'access_token', token],
         ['dust-cli', 'workspace_sid', 'qa-workspace'],

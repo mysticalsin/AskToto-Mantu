@@ -58,9 +58,7 @@ export function classifyDustCliChatFailure(text: string, opts?: { cliInstalled?:
   if (!opts?.cliInstalled || /cannot find|enoent|not installed|no such file.*dust|managed dust cli/i.test(text)) {
     if (/enoent|not installed|cannot find|no such file/i.test(blob)) return 'missing-cli'
   }
-  if (
-    /agent not found|no agent found matching|no agents available|agent with sid .* not found/i.test(blob)
-  ) {
+  if (/agent not found|no agent found matching|no agents available|agent with sid .* not found/i.test(blob)) {
     return 'missing-agent'
   }
   if (/authentication required|run `dust login`|re-log/i.test(blob)) return 'auth'
@@ -78,7 +76,8 @@ export function spotlightRefMissingAgentMessage(): string {
 export function messageForDustCliKind(kind: DustChatKind, fallback: string): string {
   if (kind === 'missing-cli') return spotlightRefMissingCliMessage()
   if (kind === 'missing-agent') return spotlightRefMissingAgentMessage()
-  if (kind === 'auth') return 'Dust is not signed in. Open Settings → AI and click Set up Dust to install the CLI and sign in.'
+  if (kind === 'auth')
+    return 'Dust is not signed in. Open Settings → AI and click Set up Dust to install the CLI and sign in.'
   return fallback
 }
 
@@ -109,10 +108,7 @@ export function parseDustChatStdout(stdout: string): { agentAnswer?: string; err
   return { raw: stdout, agentAnswer: trimmed }
 }
 
-export function projectNameForDataAndAiAsk(
-  prompt: string,
-  projectNames: readonly string[]
-): string | undefined {
+export function projectNameForDataAndAiAsk(prompt: string, projectNames: readonly string[]): string | undefined {
   if (!/\bdata\b.*\bai\b|\bai\b.*\bdata\b|data and ai/i.test(prompt)) return undefined
   const exact = projectNames.find((n) => n.trim().toLowerCase() === 'data and ai')
   if (exact) return exact
@@ -216,8 +212,11 @@ export async function runManagedDustChat(opts: {
   baseUrl?: string
   projectName?: string
   onProgress?: (p: CliInstallProgress) => void
+  signal?: AbortSignal
 }): Promise<{ ok: true; text: string } | { ok: false; kind: DustChatKind; error: string }> {
+  if (opts.signal?.aborted) return { ok: false, kind: 'error', error: 'Dust chat canceled.' }
   const ensured = await ensureManagedDustCli(opts.onProgress)
+  if (opts.signal?.aborted) return { ok: false, kind: 'error', error: 'Dust chat canceled.' }
   if (!ensured.ok) {
     return { ok: false, kind: 'missing-cli', error: messageForDustCliKind('missing-cli', ensured.error) }
   }
@@ -271,6 +270,7 @@ export async function runManagedDustChat(opts: {
     })
   }
 
+  if (opts.signal?.aborted) return { ok: false, kind: 'error', error: 'Dust chat canceled.' }
   return new Promise((resolve) => {
     const child = spawn(plan.command, plan.args, {
       env,

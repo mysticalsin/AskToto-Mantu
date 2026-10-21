@@ -273,7 +273,8 @@ export function streamDust(opts: StreamOptions): StreamHandle {
           apiKey: opts.apiKey,
           workspaceId: opts.workspaceId || '',
           baseUrl: opts.baseURL,
-          projectName
+          projectName,
+          signal: controller.signal
         })
         if (controller.signal.aborted || settled) return
         if (!r.ok) {
