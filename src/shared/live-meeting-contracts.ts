@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
+import { TRANSCRIPT_LINE_KEYS, TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -19,7 +19,6 @@ export const DiscardSavedTranscriptPayloadSchema = z
   .strict()
 
 // ─── Live meeting journal (WP03 / C09b): one durable record per committed cloud final ───────────────────────────
-const JOURNAL_LINE_KEYS = new Set(['speaker', 'text', 't', 'name', 'lang', 'provisional', 'speech'])
 const JOURNAL_LABEL_MAX = 256
 
 /**
@@ -32,7 +31,7 @@ export const JournalCloudFinalLineSchema = z
     try {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.getPrototypeOf(raw) !== Object.prototype)
         return false
-      if (Object.keys(raw).some((key) => !JOURNAL_LINE_KEYS.has(key))) return false
+      if (Object.keys(raw).some((key) => !TRANSCRIPT_LINE_KEYS.has(key))) return false
       const parsed = TranscriptLineSchema.safeParse(raw)
       if (!parsed.success) return false
       const line = parsed.data

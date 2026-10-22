@@ -8,6 +8,7 @@ import type { Capture } from '@shared/contracts/speech'
 import type { Track } from '@shared/contracts/speech'
 import type { CloudSpeechEngine } from '@shared/cloud-speech'
 import type { CloudSpeechFailure, CloudSpeechStartResult } from '@shared/cloud-speech'
+import { cloudUtteranceId, lineIdentityFromSpeech } from '@shared/transcript-line-identity'
 import type { CloudSpeechController, CloudSpeechControllerBridge } from './cloud-speech-controller'
 import { createCloudSpeechController } from './cloud-speech-controller'
 
@@ -143,10 +144,23 @@ export function cloudSpeechTranscriptSegment(event: CloudSpeechEvent): CloudSpee
   return {
     text: segment.text,
     speaker: segment.stream.track === 'microphone' ? 'you' : 'them',
-    segmentId: `${segment.stream.generation}:${segment.stream.track}:${segment.stream.epoch}:${segment.index}`,
+    segmentId: cloudUtteranceId(segment.stream, segment.index),
     ...(languages.size === 1 ? { providerLanguage: [...languages][0] } : {}),
     speech: event
   }
+}
+
+/**
+ * The line fields a committed cloud final carries beyond its text: the provider segment itself and the canonical
+ * utterance identity derived from it. Empty for a partial, or when the line's text was changed after the fact.
+ */
+export function cloudFinalLineFields(
+  speech: Extract<CloudSpeechEvent, { type: 'segment' }> | undefined,
+  text: string
+): { speech?: Extract<CloudSpeechEvent, { type: 'segment' }>; utteranceId?: string; revision?: number } {
+  return speech?.segment.final === true && speech.segment.text === text
+    ? { speech, ...lineIdentityFromSpeech(speech) }
+    : {}
 }
 
 export function cloudSpeechConsentMatches(

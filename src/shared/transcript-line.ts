@@ -1,5 +1,20 @@
 import { z } from 'zod'
 import { CloudSpeechSegmentEventSchema } from './cloud-speech'
+import { LEDGER_ID_PATTERN } from './kernel/transcript-ledger'
+import { lineIdentityIsConsistent } from './transcript-line-identity'
+
+/** Every key a persisted or journalled line may carry. Allow-lists that refuse unknown keys share this one list. */
+export const TRANSCRIPT_LINE_KEYS: ReadonlySet<string> = new Set([
+  'speaker',
+  'text',
+  't',
+  'name',
+  'lang',
+  'provisional',
+  'speech',
+  'utteranceId',
+  'revision'
+])
 
 export const TranscriptLineSchema = z
   .object({
@@ -21,9 +36,15 @@ export const TranscriptLineSchema = z
     lang: z.string().optional(),
     // Streaming first-caption placeholder (docs/asr/QUALITY.md). Never persisted; transcriptToText drops it.
     provisional: z.boolean().optional(),
-    speech: CloudSpeechSegmentEventSchema.refine((event) => event.segment.final).optional()
+    speech: CloudSpeechSegmentEventSchema.refine((event) => event.segment.final).optional(),
+    // Canonical transcript identity (2.12 G03, CAP-03): the stable utterance this line is a revision of. Additive
+    // and optional, only ever present as a pair, and absent on every line saved before it existed; a cloud-final
+    // line must agree with the provider segment it carries (shared/transcript-line-identity.ts).
+    utteranceId: z.string().regex(LEDGER_ID_PATTERN).optional(),
+    revision: z.number().int().positive().safe().optional()
   })
   .superRefine((line, context) => {
+    if (!lineIdentityIsConsistent(line)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['utteranceId'] })
     if (line.speech && (line.text !== line.speech.segment.text || line.provisional === true))
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['speech'] })
   })

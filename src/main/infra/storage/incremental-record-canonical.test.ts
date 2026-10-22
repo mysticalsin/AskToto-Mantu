@@ -100,4 +100,32 @@ describe('incremental record canonicalization', () => {
       reason: 'INVALID_RECORD'
     })
   })
+
+  it('keeps a record without the utterance identity byte-identical and appends the identity after the provenance', () => {
+    const legacy = canonicalizeIncrementalMeetingRecord(record, limits, maxInputBytes)
+    expect(legacy.ok).toBe(true)
+    if (!legacy.ok) return
+    // pinned digest of the pre-identity canonical bytes: an existing journal record must hash the same forever
+    expect(legacy.value.sha256).toBe('921d8164f9f326de439253f0593808f7f354d74025fd2164f07524b64d009fd7')
+    expect(Buffer.from(legacy.value.canonicalBytes).toString('utf8')).not.toContain('utteranceId')
+
+    const stamped = canonicalizeIncrementalMeetingRecord(
+      { ...record, line: { revision: 2, utteranceId: 'u1', ...record.line } },
+      limits,
+      maxInputBytes
+    )
+    expect(stamped.ok).toBe(true)
+    if (!stamped.ok) return
+    // schema order, not caller order, fixes the bytes
+    expect(Buffer.from(stamped.value.canonicalBytes).toString('utf8')).toBe(
+      '{"identity":{"kind":"local","recordId":"6370e1cc-43f4-4976-a912-04d0c3ca8f9f"},"source":"local-final","line":{"speaker":"you","text":"A \\u003csafe\\u003e & canonical line.","t":1700000000000,"utteranceId":"u1","revision":2}}'
+    )
+    expect(
+      canonicalizeIncrementalMeetingRecord(
+        { ...record, line: { ...record.line, utteranceId: 'u1' } },
+        limits,
+        maxInputBytes
+      )
+    ).toEqual({ ok: false, reason: 'INVALID_RECORD' })
+  })
 })

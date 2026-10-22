@@ -34,6 +34,7 @@ import type { CloudSpeechEvent } from '@shared/cloud-speech'
 import type { Capture, Track } from '@shared/contracts/speech'
 import type { BrokerSpeechSettingsLoaded } from '@shared/broker-speech-settings'
 import {
+  cloudFinalLineFields,
   cloudSpeechTranscriptSegment,
   cloudSpeechListenOwnerCallbacks,
   cloudSpeechConsentMatches,
@@ -680,9 +681,7 @@ export function useListen(
         t: existingSegmentAt ?? Date.now(),
         ...(name ? { name } : {}),
         ...(lang ? { lang } : {}),
-        ...(options?.speech?.segment.final === true && options.speech.segment.text === corrected
-          ? { speech: options.speech }
-          : {}),
+        ...cloudFinalLineFields(options?.speech, corrected),
         ...(provisional ? { provisional: true } : {})
       }
       // A final window replaces any streaming partial from the same speaker; a newer partial replaces

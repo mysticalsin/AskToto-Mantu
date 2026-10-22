@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
+import { TRANSCRIPT_LINE_KEYS, TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 
 export const INCREMENTAL_MEETING_PROTOCOL = 1 as const
 
@@ -7,7 +7,6 @@ const UuidSchema = z.string().uuid()
 const RevisionSchema = z.number().int().nonnegative().safe()
 const TimestampSchema = z.number().finite().int().min(-8.64e15).max(8.64e15)
 const TrackSchema = z.enum(['microphone', 'system'])
-const lineKeys = new Set(['speaker', 'text', 't', 'name', 'lang', 'provisional', 'speech'])
 const ExactTranscriptLineSchema = z
   .custom<TranscriptLine>((value) => {
     try {
@@ -18,7 +17,7 @@ const ExactTranscriptLineSchema = z
         Object.getPrototypeOf(value) !== Object.prototype
       )
         return false
-      if (Object.keys(value).some((key) => !lineKeys.has(key))) return false
+      if (Object.keys(value).some((key) => !TRANSCRIPT_LINE_KEYS.has(key))) return false
       return TranscriptLineSchema.safeParse(value).success
     } catch {
       return false

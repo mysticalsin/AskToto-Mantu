@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
-import { TranscriptLineSchema, type TranscriptLine } from '@shared/transcript-line'
+import { TRANSCRIPT_LINE_KEYS, TranscriptLineSchema, type TranscriptLine } from '@shared/transcript-line'
 import { formatTranscriptWithClocks, sanitizeSpeakerName } from './transcript-format'
 
 export type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
@@ -62,7 +62,6 @@ function preflight(value: unknown, limits: SpeechProvenanceLimits, depth = 0, no
   }
 }
 
-const lineKeys = new Set(['speaker', 'text', 't', 'name', 'lang', 'provisional', 'speech'])
 function canonicalLines(input: unknown, limits: SpeechProvenanceLimits): TranscriptLine[] {
   trustedLimits(limits)
   if (!Array.isArray(input) || input.length === 0 || input.length > limits.maxRecords) refuse()
@@ -72,7 +71,7 @@ function canonicalLines(input: unknown, limits: SpeechProvenanceLimits): Transcr
   let encodedBytes = 0
   for (const raw of input) {
     preflight(raw, limits)
-    if (!raw || typeof raw !== 'object' || Object.keys(raw).some((key) => !lineKeys.has(key))) refuse()
+    if (!raw || typeof raw !== 'object' || Object.keys(raw).some((key) => !TRANSCRIPT_LINE_KEYS.has(key))) refuse()
     const candidate = raw as TranscriptLine
     if (!Number.isFinite(candidate.t) || Math.abs(candidate.t) > 8.64e15 || candidate.provisional === true) refuse()
     if (candidate.speech) {
