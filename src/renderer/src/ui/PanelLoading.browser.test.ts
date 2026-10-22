@@ -299,18 +299,40 @@ describe('LazyPanel loading state (HIG Loading, Progress indicators)', () => {
       window.__h.open()
     })
     await page.waitForTimeout(300)
-    await page.evaluate(() => window.__h.close())
-    const sheet = page.locator('.lazy-panel--sheet')
-    await expect.poll(() => sheet.getAttribute('data-surface-exiting')).toBe('')
-    expect(await sheet.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
-    expect(await sheet.evaluate((el) => el.getAnimations().map((a) => (a as CSSAnimation).animationName))).toEqual([
-      'lazy-panel-sheet-out'
-    ])
-    await sheet.waitFor({ state: 'detached', timeout: 1000 })
+    // Read the exiting frame in the same task as the close, so a loaded machine cannot finish the short leg first.
+    const exiting = await page.evaluate(
+      () =>
+        new Promise<{ flag: string | null; pointerEvents: string; animations: string[] } | null>((resolve) => {
+          const el = document.querySelector<HTMLElement>('.lazy-panel--sheet')
+          if (!el) return resolve(null)
+          const read = (): void =>
+            resolve({
+              flag: el.getAttribute('data-surface-exiting'),
+              pointerEvents: getComputedStyle(el).pointerEvents,
+              animations: el.getAnimations().map((a) => (a as CSSAnimation).animationName)
+            })
+          // React commits the exiting flag asynchronously: read the frame the moment the flag lands.
+          const watch = new MutationObserver(() => {
+            if (!el.hasAttribute('data-surface-exiting')) return
+            watch.disconnect()
+            read()
+          })
+          watch.observe(el, { attributes: true, attributeFilter: ['data-surface-exiting'] })
+          window.__h.close()
+        })
+    )
+    expect(exiting).toEqual({ flag: '', pointerEvents: 'none', animations: ['lazy-panel-sheet-out'] })
+    await page.locator('.lazy-panel--sheet').waitFor({ state: 'detached', timeout: 5000 })
 
+    // Reduce Motion: the close runs no animation at all, so the surface leaves without an exit leg.
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.evaluate(() => window.__h.open())
-    await page.evaluate(() => window.__h.close())
-    await page.locator('.lazy-panel--sheet').waitFor({ state: 'detached', timeout: 100 })
+    const reduced = await page.evaluate(() => {
+      window.__h.close()
+      const el = document.querySelector<HTMLElement>('.lazy-panel--sheet')
+      return el ? el.getAnimations().filter((a) => a.playState === 'running').length : 0
+    })
+    expect(reduced).toBe(0)
+    await page.locator('.lazy-panel--sheet').waitFor({ state: 'detached', timeout: 5000 })
   })
 })
