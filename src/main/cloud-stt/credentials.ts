@@ -7,6 +7,7 @@
  * bare METIS_CF_AI_GATEWAY_ID required).
  */
 import { directTokenBlockedForManagedProfile, type CloudSttProviderId } from '../../shared/cloud-stt-provider'
+export { legacyDirectTokenGated } from '../../shared/cloud-stt-provider'
 import { sttResolvedIdentity, type SttResolvedIdentity } from '../../shared/contracts/stt-provider'
 import { CLOUD_STT_UNCONFIGURED } from './adapter'
 

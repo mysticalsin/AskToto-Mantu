@@ -71,3 +71,19 @@ export function shouldUseCloudSttEngine(profile: EnterpriseLiveProfile | unknown
 export function directTokenBlockedForManagedProfile(provider: string, managedProfile: boolean): boolean {
   return managedProfile && provider === 'cloudflare-nova3'
 }
+
+/**
+ * The direct token is closed only where the licensed route has taken over: a managed profile whose selected
+ * speech transport is `broker-v1`. While the transport is still `legacy` (the default, and today the only
+ * route a managed CLOUD_ONLY profile can use) the saved token keeps Listen working; CLOUD_ONLY forbids a local
+ * fallback, so refusing it there would leave a dead Listen start. The profile comes from trusted settings.
+ */
+export function legacyDirectTokenGated(settings: {
+  enterpriseLive?: unknown
+  brokerSpeech?: { transport?: string } | null
+}): boolean {
+  return (
+    resolveEnterpriseLiveProfile(settings.enterpriseLive).managed === true &&
+    settings.brokerSpeech?.transport === 'broker-v1'
+  )
+}

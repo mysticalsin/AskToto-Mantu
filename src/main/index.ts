@@ -775,7 +775,7 @@ import {
   updateCloudSttLiveLanguage
 } from './cloud-stt/live-session'
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
-import { readLegacyCloudflareToken, resolveCloudSttGatewayId } from './cloud-stt/credentials'
+import { legacyDirectTokenGated, readLegacyCloudflareToken, resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { assertCloudOnlyAllowsEngine, resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from '../shared/cloud-stt-start'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
@@ -7384,8 +7384,8 @@ function registerIpc(): void {
             profile: { name: settings.profile?.name, role: settings.profile?.role },
             meetingId: p.meetingId,
             captureId,
-            managedProfile: profile.managed === true,
-            cloudflareToken: readLegacyCloudflareToken(profile.managed === true, () => getApiKey('cloudflare')),
+            managedProfile: legacyDirectTokenGated(settings),
+            cloudflareToken: readLegacyCloudflareToken(legacyDirectTokenGated(settings), () => getApiKey('cloudflare')),
             cloudflareBaseUrl: settings.cloudflareBaseUrl,
             cloudflareAccountId: settings.cloudflareAccountId,
             gatewayId: resolveCloudSttGatewayId(settings.cfAiGatewayId),

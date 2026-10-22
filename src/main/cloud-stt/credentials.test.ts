@@ -13,6 +13,7 @@ import {
   SONIOX_DEFAULT_WS_URL
 } from './credentials'
 import { CLOUD_STT_UNCONFIGURED } from './adapter'
+import { legacyDirectTokenGated } from '../../shared/cloud-stt-provider'
 
 describe('parseCloudflareAccountId', () => {
   it('extracts 32-hex account id from Workers AI base URL', () => {
@@ -226,6 +227,41 @@ describe('legacy direct-token gate on managed profiles', () => {
       transport: 'direct-token',
       account: 'soniox-key',
       model: null
+    })
+  })
+
+  it('keeps a managed CLOUD_ONLY profile on the legacy transport starting with its saved token (no dead Listen)', () => {
+    const settings = {
+      enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const },
+      brokerSpeech: { transport: 'legacy' as const }
+    }
+    const gated = legacyDirectTokenGated(settings)
+    let reads = 0
+    const token = readLegacyCloudflareToken(gated, () => {
+      reads += 1
+      return 'synthetic-cf-token'
+    })
+    expect(reads).toBe(1)
+    expect(resolveCloudSttCredentials({ ...nova, cloudflareToken: token, managedProfile: gated })).toMatchObject({
+      ok: true,
+      provider: 'cloudflare-nova3'
+    })
+  })
+
+  it('refuses the saved token and never reads it once the licensed transport is selected', () => {
+    const gated = legacyDirectTokenGated({
+      enterpriseLive: { managed: true, inferenceMode: 'cloud-only' as const },
+      brokerSpeech: { transport: 'broker-v1' as const }
+    })
+    let reads = 0
+    const token = readLegacyCloudflareToken(gated, () => {
+      reads += 1
+      return 'synthetic-cf-token'
+    })
+    expect(reads).toBe(0)
+    expect(resolveCloudSttCredentials({ ...nova, cloudflareToken: token, managedProfile: gated })).toMatchObject({
+      ok: false,
+      code: 'MANAGED_DIRECT_TOKEN'
     })
   })
 })

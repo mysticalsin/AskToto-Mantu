@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { readModuleSource } from '../test-helpers/module-source'
 import { BrokerSpeechSettingsSchema } from './broker-speech-settings'
 import { CloudSpeechEngineSchema, CloudSpeechStartResultSchema } from './cloud-speech'
-import { CLOUD_STT_PROVIDERS, directTokenBlockedForManagedProfile } from './cloud-stt-provider'
+import { CLOUD_STT_PROVIDERS, directTokenBlockedForManagedProfile, legacyDirectTokenGated } from './cloud-stt-provider'
 import { SpeechEngineIdSchema } from './contracts/capability'
 import {
   BROKERED_STT_PROVIDER_IDS,
@@ -118,5 +118,23 @@ describe('legacy direct-token gate', () => {
   it('does not gate the provider key seat or an unconfigured provider (ASSUMED: Soniox has no brokered route)', () => {
     expect(directTokenBlockedForManagedProfile('soniox', true)).toBe(false)
     expect(directTokenBlockedForManagedProfile('unconfigured', true)).toBe(false)
+  })
+})
+
+describe('when the legacy direct token is gated', () => {
+  const managed = { managed: true, inferenceMode: 'cloud-only' as const }
+
+  it('stays open for a managed profile on the legacy transport, so Listen keeps working until the licensed route is selected', () => {
+    expect(legacyDirectTokenGated({ enterpriseLive: managed, brokerSpeech: { transport: 'legacy' } })).toBe(false)
+    expect(legacyDirectTokenGated({ enterpriseLive: managed })).toBe(false)
+  })
+
+  it('closes for a managed profile once the licensed broker transport is selected', () => {
+    expect(legacyDirectTokenGated({ enterpriseLive: managed, brokerSpeech: { transport: 'broker-v1' } })).toBe(true)
+  })
+
+  it('never gates an unmanaged profile or an invalid broker profile', () => {
+    expect(legacyDirectTokenGated({ enterpriseLive: {}, brokerSpeech: { transport: 'broker-v1' } })).toBe(false)
+    expect(legacyDirectTokenGated({ enterpriseLive: managed, brokerSpeech: { transport: 'refused' } })).toBe(false)
   })
 })

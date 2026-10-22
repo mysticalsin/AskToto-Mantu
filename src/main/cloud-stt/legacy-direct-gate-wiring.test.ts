@@ -17,13 +17,15 @@ function cloudSttStartHandler(): string {
 describe('legacy cloud STT start wiring', () => {
   it('derives the managed flag from the trusted enterprise profile, not from the renderer payload', () => {
     const handler = cloudSttStartHandler()
-    expect(handler).toMatch(/managedProfile:\s*profile\.managed\s*===\s*true/)
+    expect(handler).toMatch(/managedProfile:\s*legacyDirectTokenGated\(\s*settings\s*\)/)
     expect(handler).not.toMatch(/managedProfile:\s*p\./)
   })
 
   it('reads the stored Cloudflare token only through the managed-profile gate', () => {
     const handler = cloudSttStartHandler()
     expect(handler).not.toMatch(/cloudflareToken:\s*getApiKey\(/)
-    expect(handler).toMatch(/cloudflareToken:\s*readLegacyCloudflareToken\(\s*profile\.managed\s*===\s*true\s*,/)
+    expect(handler).toMatch(
+      /cloudflareToken:\s*readLegacyCloudflareToken\(\s*legacyDirectTokenGated\(\s*settings\s*\)\s*,/
+    )
   })
 })
