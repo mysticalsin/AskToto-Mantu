@@ -37,10 +37,12 @@ import { resolveMeetingsFolder } from './infra/storage/paths'
 import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
-import { recapStatusValidationError } from '@shared/recap-status'
 import { meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { atomicSavedWrite } from './infra/storage/atomic-saved-write'
+import { withMeetingMutation } from './infra/storage/meeting-mutation-lane'
+import { makeDisposableCopyReadOnly } from './infra/storage/readonly-copy'
+import { composeSavedMeeting } from './features/meetings/compose-saved-meeting'
 import {
   draftFilename,
   finalizeDraftMeeting,
@@ -52,7 +54,6 @@ import {
 import { unlinkDraftFiles } from './infra/storage/draft-file-unlink'
 import { createWriteAdmissionGuard } from './infra/storage/write-with-admission'
 import type { FileClass } from './infra/storage/gateway'
-import { speakerLabel } from './features/meetings/transcript-format'
 import {
   endLiveMeetingJournal,
   purgeLiveMeetingJournal,
@@ -84,7 +85,6 @@ import {
   meetingSpeechTailOffset,
   refuseReservedSpeechProse
 } from './features/meetings/speech-provenance'
-import { buildMeetingSaveDocument } from './features/meetings/meeting-save-document'
 import {
   applyDebriefSection,
   buildNoteDocument,
@@ -562,6 +562,7 @@ export async function decryptMeetingToTempAsync(path: string, bytes: Buffer): Pr
   )
   await writeSaved(tmp, content, false)
   lockPathToCurrentUserWin32(tmp)
+  await makeDisposableCopyReadOnly(tmp)
   trackDecryptedTemp(tmp)
   return tmp
 }
@@ -661,26 +662,8 @@ export function meetingDurationMin(m: { startedAt: number; durationMs?: number; 
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
 export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeReplace?: () => void): Promise<string> {
-  const statusError = recapStatusValidationError(m.recap, m.recapStatus)
-  if (statusError) throw new Error(statusError)
-  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
-  refuseIfDemoTagged('saveMeeting', m.title, m.mode)
+  const { started, title, durMin, document } = await composeSavedMeeting(settings, m)
   const folder = ensureMeetingsFolder(settings)
-
-  // Guard against non-finite/out-of-range values (e.g. Infinity), not just falsy ones: Date's valid
-  // range is +/-8.64e15ms from epoch, and anything outside it throws RangeError from toISOString()
-  // below with no surrounding try/catch, losing the whole meeting.
-  const started =
-    m.startedAt && Number.isFinite(m.startedAt) && Math.abs(m.startedAt) <= 8.64e15 ? m.startedAt : Date.now()
-  const heuristicTitle = cleanTitle(m.title) || `${m.mode} meeting`
-
-  // Main is the single source of truth for the final title: when a recap was generated, prefer its
-  // "## Title" (2-4 real words naming the topic) over the renderer's "first sentence of theirs" heuristic.
-  // Falls back to the renderer-provided title when there's no recap yet, or the model left Title empty.
-  const recapParsed = m.recap ? parseRecapMarkdown(m.recap) : null
-  const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
-  const tags = recapParsed?.tags || []
-  refuseReservedSpeechProse(title, m.mode, ...tags)
 
   // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
   const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
@@ -688,25 +671,6 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting, beforeRepl
   for (let n = 2; existsSync(file); n++) {
     file = join(folder, `${stamp(started)}-${namePart}-${n}.md`)
   }
-
-  const durMin = meetingDurationMin(m)
-  const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
-
-  // Enterprise-live SUMMARY_ONLY: omit fresh Full transcript section. Never rewrite/delete older files.
-  const summaryOnly = isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))
-  const transcript = summaryOnly ? '' : await renderMeetingTranscriptAsync(m.lines)
-
-  const document = buildMeetingSaveDocument({
-    meeting: m,
-    title,
-    mode: cleanTitle(m.mode),
-    started,
-    durationMin: durMin,
-    participants,
-    tags,
-    summaryOnly,
-    transcript
-  })
   await writeSaved(file, document, settings.encryptTranscripts, beforeReplace)
 
   if (!settings.encryptTranscripts) {
@@ -744,6 +708,15 @@ export async function appendDebrief(
   const safeName = safeMeetingBasename(file)
   if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
   const path = join(folder, safeName)
+  return withMeetingMutation(path, () => appendDebriefLocked(folder, safeName, path, text))
+}
+
+async function appendDebriefLocked(
+  folder: string,
+  safeName: string,
+  path: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
   const maxBytes = getMeetingSpeechReadLimitBytes()
   const read = await storageAt(folder).read(safeName, { ...(maxBytes ? { maxBytes } : {}) })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
@@ -851,8 +824,9 @@ export async function discardDraftTranscript(
     return { ok: false, error: 'Sign-in changed before draft cleanup could finish. Try Disregard again.' }
   }
   // The raw-speech journal is disregarded with the draft: sealed first so a crash between steps leaves a marked journal.
+  // The sealed 'discarded' journal is also the only durable tombstone: it is purged only once every draft is gone, so
+  // a draft that could not be unlinked is never promoted back into History by the next launch's recovery.
   await endLiveMeetingJournal(startedAt, 'discarded')
-  await purgeLiveMeetingJournal(startedAt)
   const { failed, pending } = await unlinkDraftFiles(files, isCurrent)
   if (pending.length || !isCurrent()) {
     failedDraftCleanupPaths.set(startedAt, new Set([...failed, ...pending]))
@@ -862,6 +836,7 @@ export async function discardDraftTranscript(
     failedDraftCleanupPaths.set(startedAt, new Set(failed))
     return { ok: false, error: 'Some autosaved draft files could not be removed. Try Disregard again.' }
   }
+  await purgeLiveMeetingJournal(startedAt)
   failedDraftCleanupPaths.delete(startedAt)
   return { ok: true }
 }
@@ -950,6 +925,13 @@ export async function recoverOrphanDrafts(
         const decoded = await decodeSavedMeetingAsync(read.bytes, false, draftPath)
         const text = decoded.ok ? decoded.text : ''
         if (!text) continue // undecryptable on this device — leave it alone
+        // A draft whose Disregard could not finish removing it: the user threw this speech away. Retry the
+        // removal, and drop the sealed journal only once the draft is really gone. Never promote it.
+        if (journal && (await journal.isDiscarded(text))) {
+          const { failed } = await unlinkDraftFiles([draftPath])
+          if (!failed.length) await journal.discardSettled(text)
+          continue
+        }
         // The draft stays authoritative; a live-journal tail the last autosave missed is merged in (none when off).
         const promoted = promoteDraftTranscript(journal ? await journal.merge(text) : text)
         let out = primaryOut

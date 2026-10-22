@@ -13,7 +13,8 @@ import {
   readVerifiedJournalStart,
   readJournal,
   type JournalIgnoreReason,
-  type JournalReaderDeps
+  type JournalReaderDeps,
+  type JournalState
 } from './journal-reader'
 import { mergeJournalIntoDraft } from './journal-merge'
 import { liveMeetingJournalId } from './live-meeting-journal'
@@ -154,6 +155,24 @@ export function createJournalRecovery(deps: JournalRecoveryDeps): LiveJournalLif
         if (startedAt === null || !covered.delete(startedAt)) return
         await end(startedAt, 'finalized')
         await purge(startedAt)
+      },
+      async isDiscarded(draftText) {
+        try {
+          const startedAt = startedAtOfDraft(draftText)
+          if (startedAt === null) return false
+          const read = await readJournalForMeeting(deps, startedAt, owners())
+          return read.status === 'ok' && read.state === 'discarded'
+        } catch {
+          return false
+        }
+      },
+      async discardSettled(draftText) {
+        try {
+          const startedAt = startedAtOfDraft(draftText)
+          if (startedAt !== null) await purge(startedAt)
+        } catch {
+          /* the retention sweep removes a sealed journal whose draft is gone */
+        }
       }
     }
   }
@@ -208,7 +227,8 @@ export function createJournalRecovery(deps: JournalRecoveryDeps): LiveJournalLif
 
   /**
    * Retention: a journal is removed when its meeting is sealed (finalized or discarded), older than 14 days, or beyond
-   * the newest 10. A journal that is live, or whose meeting still has a draft on disk, is never removed.
+   * the newest 10. A journal that is live, or whose meeting still has a draft on disk, is never removed, and the count
+   * rule never removes an active journal whose meeting was not saved or recovered (only the age rule does).
    */
   async function sweep(context: JournalRecoveryContext): Promise<void> {
     const userData = deps.userDataPath()
@@ -231,12 +251,21 @@ export function createJournalRecovery(deps: JournalRecoveryDeps): LiveJournalLif
         const hasDraft = !!start && context.draftNames.includes(draftFilename(start.startedAt, stamp(start.startedAt)))
         const tooOld = now() - entry.modified > LIVE_MEETING_JOURNAL_RETENTION.maxAgeMs
         // A journal with no verified start cannot be matched to a draft: it is kept for the count rule, not the age rule.
-        const overCount = index >= LIVE_MEETING_JOURNAL_RETENTION.maxJournals && !!start
-        let remove = !hasDraft && (tooOld || overCount)
-        if (!remove && !hasDraft && deps.readsAllowed()) {
-          const state = await readJournalState(deps, entry.id)
-          remove = state.status === 'ok' && state.state !== 'active'
+        let overCount = index >= LIVE_MEETING_JOURNAL_RETENTION.maxJournals && !!start
+        let sealedState: JournalState | null = null
+        if (!hasDraft && deps.readsAllowed()) {
+          try {
+            const state = await readJournalState(deps, entry.id)
+            if (state.status === 'ok') sealedState = state.state
+          } catch {
+            /* an unreadable state never blocks the age rule */
+          }
         }
+        // The count rule never removes the only copy of speech nobody has saved: a verified active journal whose
+        // meeting does not exist yet (promotion failed or is pending) waits for the age rule.
+        if (overCount && sealedState === 'active' && !(await context.meetingExists(start!.startedAt))) overCount = false
+        let remove = !hasDraft && (tooOld || overCount)
+        if (!remove && !hasDraft) remove = sealedState !== null && sealedState !== 'active'
         if (remove && (await purgeById(entry.id))) removed++
         else kept++
       } catch {

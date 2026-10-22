@@ -6,6 +6,7 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
+  readdirSync,
   renameSync,
   statSync
 } from 'node:fs'
@@ -32,6 +33,7 @@ import {
   HYDRATION_FAILED_MSG
 } from './recall'
 import { meetingOpenTarget } from './history-actions'
+import { publishMeetingCard, wikiDir } from './brain/publish'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 import type { RecallHydration } from '@shared/recall-hydration'
 import { useStorageForTests } from './infra/storage/meetings-storage'
@@ -430,6 +432,55 @@ describe('recall — sweepExpiredMeetings (retention)', () => {
     const remaining = await listMeetings()
     expect(remaining.length).toBe(1)
     expect(remaining[0].title).toBe('Recent one')
+  })
+
+  it('retention sweep removes the published note card of each expired meeting', async () => {
+    testSettings = { ...testSettings, publishBrainPages: true } as Settings
+    const old = await saveMeeting(testSettings, {
+      title: 'Old pricing call',
+      mode: 'meeting',
+      startedAt: Date.now() - 100 * 24 * 60 * 60 * 1000,
+      lines: [{ speaker: 'them', text: 'Quote the enterprise tier', t: Date.now() - 100 * 24 * 60 * 60 * 1000 }],
+      recap: '## Overview:\nPricing was discussed.'
+    })
+    const recent = await saveMeeting(testSettings, {
+      title: 'Recent pricing call',
+      mode: 'meeting',
+      startedAt: Date.now() - 24 * 60 * 60 * 1000,
+      lines: [{ speaker: 'them', text: 'Follow up on the quote', t: Date.now() - 24 * 60 * 60 * 1000 }],
+      recap: '## Overview:\nFollow up.'
+    })
+    await publishMeetingCard(testSettings, basename(old))
+    await publishMeetingCard(testSettings, basename(recent))
+    const cards = (): string[] => readdirSync(join(wikiDir(testSettings), 'meetings'))
+    expect(cards()).toHaveLength(2)
+
+    const purgeGraph = vi.fn(() => true)
+    const rebuildGraph = vi.fn(async () => {})
+    const r = await sweepExpiredMeetings(30, { purgeGraph, rebuildGraph })
+    expect(r.deleted).toBe(1)
+    expect(existsSync(old)).toBe(false)
+    // exactly the expired meeting's card is gone, the recent meeting's card stays
+    expect(cards()).toHaveLength(1)
+    expect(cards()[0]).toContain('recent')
+    // the derived graph still names the deleted meeting, so it is purged and rebuilt once
+    expect(purgeGraph).toHaveBeenCalledTimes(1)
+    expect(rebuildGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not touch the graph when nothing expired', async () => {
+    await saveMeeting(testSettings, {
+      title: 'Fresh',
+      mode: 'meeting',
+      startedAt: Date.now(),
+      lines: [],
+      recap: 'r'
+    })
+    const purgeGraph = vi.fn(() => true)
+    const rebuildGraph = vi.fn(async () => {})
+    expect((await sweepExpiredMeetings(30, { purgeGraph, rebuildGraph })).deleted).toBe(0)
+    expect(purgeGraph).not.toHaveBeenCalled()
+    expect(rebuildGraph).not.toHaveBeenCalled()
   })
 })
 
@@ -1220,6 +1271,40 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(false)
     expect(await setMeetingConfidential(testSettings, basename(file), true)).toEqual({ ok: true })
     await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(true)
+  })
+
+  it('concurrent setMeetingConfidential and updateMeetingRecap keep both changes', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    const recap = '## Overview:\nBoth writers must survive.'
+    const results = await Promise.all([
+      setMeetingConfidential(testSettings, name, true),
+      updateMeetingRecap(testSettings, name, recap)
+    ])
+    expect(results).toEqual([{ ok: true }, { ok: true }])
+    await expect(isMeetingConfidentialOnDisk(testSettings, name)).resolves.toBe(true)
+    const read = await recallRead(name)
+    expect(read.ok && read.recap).toBe(recap)
+  })
+
+  it('serialises a burst of writers on one file and releases the lock after a failure', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    const burst = await Promise.all([
+      renameMeeting(testSettings, name, 'Renamed once'),
+      setMeetingCrmPushed(testSettings, name, 'abc123'),
+      setMeetingConfidential(testSettings, name, true),
+      updateMeetingRecap(testSettings, name, 'Final recap.')
+    ])
+    expect(burst.every((r) => r.ok)).toBe(true)
+    const text = readFileSync(file, 'utf8')
+    expect(text).toContain('title: "Renamed once"')
+    expect(text).toContain('crm_pushed: abc123')
+    expect(text).toContain('confidential: true')
+    expect(text).toContain('Final recap.')
+    // a writer that cannot read its file fails alone and does not wedge the next one
+    expect((await renameMeeting(testSettings, 'missing.md', 'x')).ok).toBe(false)
+    expect(await setMeetingConfidential(testSettings, name, false)).toEqual({ ok: true })
   })
 
   it('fails closed when a duplicated confidential field has any true value', async () => {

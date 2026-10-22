@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
@@ -27,7 +27,9 @@ beforeEach(() => {
   // realpath: on Windows CI tmpdir is a short 8.3 name and the gateway compares resolved paths.
   folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'history-actions-')))
   tempDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'history-actions-temp-')))
-  ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => (name === 'temp' ? tempDir : join(tempDir, name)))
+  ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+    name === 'temp' ? tempDir : join(tempDir, name)
+  )
 })
 
 afterEach(() => {
@@ -71,6 +73,16 @@ describe('meetingOpenTarget (History "Open")', () => {
     expect(readFileSync(target.path, 'utf8')).toContain('ENCRYPTED-LINE')
   })
 
+  it.skipIf(process.platform === 'win32')('encrypted Open target is read-only on POSIX', async () => {
+    const file = await saveEncryptedMeeting()
+    const target = await meetingOpenTarget(folder, file.slice(folder.length + 1))
+    if (!target.ok) throw new Error('unreachable')
+    // the copy is not connected to the saved meeting: no write bit for anyone, so an editor warns before a save
+    expect(statSync(target.path).mode & 0o222).toBe(0)
+    expect(statSync(target.path).mode & 0o400).toBe(0o400)
+    expect(readFileSync(target.path, 'utf8')).toContain('ENCRYPTED-LINE')
+  })
+
   it('hands a missing meeting over unchanged, so the OS reports it', async () => {
     expect(await meetingOpenTarget(folder, NAME)).toEqual({ ok: true, path: join(folder, NAME), encrypted: false })
   })
@@ -92,7 +104,9 @@ describe('meetingOpenTarget (History "Open")', () => {
       notRegular = false
       presence = 'dataless'
       useStorageForTests({
-        detector: { classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, presence])) },
+        detector: {
+          classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, presence]))
+        },
         fs: {
           readdir: (p) => readdir(p),
           readFile: (p) => {
@@ -119,7 +133,11 @@ describe('meetingOpenTarget (History "Open")', () => {
     })
 
     it('an explicit open reads a cloud-only meeting exactly once and hands it over', async () => {
-      expect(await meetingOpenTarget(folder, NAME, { hydrate: true })).toEqual({ ok: true, path: join(folder, NAME), encrypted: false })
+      expect(await meetingOpenTarget(folder, NAME, { hydrate: true })).toEqual({
+        ok: true,
+        path: join(folder, NAME),
+        encrypted: false
+      })
       expect(reads).toHaveLength(1)
     })
   })
@@ -154,19 +172,23 @@ describe.skipIf(process.platform === 'win32')('a kernel-blocked meeting file nev
   it.each([
     ['Open', () => meetingOpenTarget(folder, NAME)],
     ['Export copy', () => readSavedMeeting(folder, NAME).catch((e: unknown) => e)]
-  ])('%s settles within the read deadline with the event loop free', async (action, run) => {
-    createFifo(join(folder, NAME))
-    const loop = monitorEventLoopDelay({ resolution: 10 })
-    loop.enable()
-    const started = performance.now()
-    try {
-      const result = await run()
-      expect(performance.now() - started).toBeLessThanOrEqual(5_500)
-      expect(loop.max / 1e6).toBeLessThan(250)
-      if (action === 'Open') expect(result).toEqual({ ok: false, error: MEETING_NOT_READABLE_MSG })
-      else expect(result).toBeInstanceOf(Error)
-    } finally {
-      loop.disable()
-    }
-  }, 15_000)
+  ])(
+    '%s settles within the read deadline with the event loop free',
+    async (action, run) => {
+      createFifo(join(folder, NAME))
+      const loop = monitorEventLoopDelay({ resolution: 10 })
+      loop.enable()
+      const started = performance.now()
+      try {
+        const result = await run()
+        expect(performance.now() - started).toBeLessThanOrEqual(5_500)
+        expect(loop.max / 1e6).toBeLessThan(250)
+        if (action === 'Open') expect(result).toEqual({ ok: false, error: MEETING_NOT_READABLE_MSG })
+        else expect(result).toBeInstanceOf(Error)
+      } finally {
+        loop.disable()
+      }
+    },
+    15_000
+  )
 })

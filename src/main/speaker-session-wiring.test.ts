@@ -483,7 +483,7 @@ function saveHandler(
   api: SessionApi,
   file = '/meetings/meeting-a.md',
   options: {
-    saveMeeting?: () => Promise<string>
+    saveMeeting?: (settings?: unknown, meeting?: unknown) => Promise<string>
     clearDraftTranscript?: (settings: unknown, startedAt: number, savedTranscriptPath?: string) => Promise<void>
     getSettings?: () => unknown
     recordMeetingSummarized?: (...args: any[]) => void
@@ -506,7 +506,10 @@ function saveHandler(
     authSessionGeneration: () => 7,
     transcriptSaveReceipts,
     stripProvisionalLines: (lines: unknown) => lines,
-    saveMeeting: options.saveMeeting ?? (async () => file),
+    // The handler's one write step (create, or rewrite the meeting's existing file) is exercised in
+    // save-identity.relaunch.test.ts; here it is the injected save so these tests keep asserting stage order.
+    writeMeetingOnce: (_receipt: unknown, settings: unknown, meeting: unknown) =>
+      (options.saveMeeting ?? (async () => file))(settings, meeting),
     getSettings: options.getSettings ?? (() => ({ brainConsolidation: { enabled: false }, encryptTranscripts: false })),
     recordMeetingSummarized: options.recordMeetingSummarized ?? vi.fn(),
     meetingDurationMin: () => 1,

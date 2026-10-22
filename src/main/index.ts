@@ -731,6 +731,7 @@ import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { bindRendererResets, createOwnerSessionWiring, ownerSessionLifecycle } from './lifecycle/owner-session-wiring'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
+import { writeMeetingOnce } from './features/meetings/save-identity'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -5536,10 +5537,9 @@ function setTrayRecording(on: boolean): void {
  * Speaker Intelligence (Phases A/B) — best-effort backfill of resolved human names onto a saved
  * meeting's transcript lines, from the Microsoft Teams transcript of the SAME online meeting (when one
  * exists — see graph-transcript.ts's own doc comment for the tenant prerequisites). Runs fire-and-forget
- * right after a live meeting's normal save (IPC.saveTranscript below), and is also reachable directly via
- * recall:backfillSpeakers so a past meeting can be retried manually from Review — the Teams transcript
- * can take a few minutes to finish processing after the meeting itself ends, so the very first attempt
- * often legitimately finds nothing yet.
+ * right after a live meeting's normal save (IPC.saveTranscript below); recall:backfillSpeakers has no screen yet, so a
+ * first attempt that finds nothing is NOT retried from Review. The Teams transcript can take a few minutes to finish
+ * processing after the meeting ends, so that first attempt often legitimately finds nothing yet.
  *
  * Every failure path degrades to a quiet, non-throwing result: a missing Graph permission, a meeting with
  * no Teams transcript, no text/time overlap, or being signed out must never surface as an error to the
@@ -8798,7 +8798,7 @@ function registerIpc(): void {
         const saveSettings = receipt.settings
 
         // Persist the saved receipt before effects; retries retain its exact file and stage history.
-        if (receipt.durablePath === undefined) receipt.durablePath = await saveMeeting(saveSettings, m)
+        receipt.durablePath ??= await writeMeetingOnce(receipt, saveSettings, m, transcriptSaveReceipts, saveOwner)
         await transcriptSaveReceipts.journalIdle()
         assertSaveAdmission()
         const savedTranscriptPath = receipt.durablePath

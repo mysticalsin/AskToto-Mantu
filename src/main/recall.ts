@@ -1,4 +1,4 @@
-import { exciseDeletedMeeting } from './brain/ingest'
+import { sweepExpired, type SweepDeps } from './meeting-retention'
 import { join, basename, resolve } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import {
@@ -28,10 +28,11 @@ import {
   refuseReservedSpeechProse
 } from './features/meetings/speech-provenance'
 import { storageAt } from './infra/storage/meetings-storage'
+import { withMeetingMutation } from './infra/storage/meeting-mutation-lane'
 import { writeWithAdmission } from './infra/storage/write-with-admission'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
-import { FILENAME_TIMESTAMP, isMeetingConfidentialOnDisk, isOwnedMeetingFile } from './meeting-privacy'
+import { isMeetingConfidentialOnDisk, isOwnedMeetingFile } from './meeting-privacy'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
 import { readLegacyTranscript } from './features/meetings/legacy-transcript'
@@ -263,6 +264,22 @@ export async function recallRead(
 }
 
 /**
+ * Saved-meeting read-modify-write is serialised per file (meeting-mutation-lane.ts): two writers on one meeting (a
+ * speaker backfill and a recap save, a flag and a rename) can no longer read the same bytes and drop each other's
+ * edit. The wrapped writers never call one another, so the non-reentrant lock cannot deadlock.
+ */
+function serialisedByMeeting<A extends unknown[], R extends { ok: boolean }>(
+  fileOf: (settings: Settings, ...args: A) => string,
+  write: (settings: Settings, ...args: A) => Promise<R>
+): (settings: Settings, ...args: A) => Promise<R> {
+  return (settings, ...args) => {
+    const safeName = safeMeetingBasename(fileOf(settings, ...args))
+    if (!safeName) return write(settings, ...args) // answers its own "Invalid meeting file name."
+    return withMeetingMutation(join(resolveMeetingsFolder(settings), safeName), () => write(settings, ...args))
+  }
+}
+
+/**
  * Delete a saved meeting: remove the .md file from disk and strip its row from index.md.
  * Constrains `file` to the meetings folder via basename() (mirrors the recallOpen guard — no traversal).
  */
@@ -285,7 +302,11 @@ export async function deleteMeetingAtPath(settings: Settings, path: string): Pro
   return deleteMeetingInFolder(folder, safeName)
 }
 
-async function deleteMeetingInFolder(folder: string, safeName: string): Promise<{ ok: boolean; error?: string }> {
+function deleteMeetingInFolder(folder: string, safeName: string): Promise<{ ok: boolean; error?: string }> {
+  return withMeetingMutation(join(folder, safeName), () => deleteMeetingUnlocked(folder, safeName))
+}
+
+async function deleteMeetingUnlocked(folder: string, safeName: string): Promise<{ ok: boolean; error?: string }> {
   try {
     await removeMeetingFile(folder, safeName)
   } catch (err) {
@@ -336,7 +357,7 @@ function yamlSafeRenameTitle(s: string): string {
  * toggle, which may have changed since this file was saved) decides whether to decrypt-edit-re-encrypt or
  * edit the plaintext in place, so a renamed encrypted meeting stays encrypted and still opens normally.
  */
-export async function renameMeeting(
+async function renameMeetingUnlocked(
   settings: Settings,
   file: string,
   newTitle: string
@@ -440,7 +461,7 @@ function sanitizeRecap(s: string): string {
  * an edited encrypted meeting stays encrypted and still opens. index.md is not touched: it carries only
  * title/date/duration/link, none of which the recap changes.
  */
-export async function updateMeetingRecap(
+async function updateMeetingRecapUnlocked(
   settings: Settings,
   file: string,
   newRecap: string,
@@ -530,7 +551,7 @@ export async function updateMeetingRecap(
  * untouched. Same basename guard + "preserve encryption exactly as found" convention as
  * renameMeeting/updateMeetingRecap/setMeetingConfidential.
  */
-export async function updateMeetingTranscript(
+async function updateMeetingTranscriptUnlocked(
   settings: Settings,
   file: string,
   lines: TranscriptLine[]
@@ -593,7 +614,7 @@ export async function updateMeetingTranscript(
  * could not express. Frontmatter, via the exact mechanism (and guards) `setMeetingConfidential` uses —
  * basename-constrained, encryption preserved as found, only the frontmatter block rewritten.
  */
-export async function setMeetingCrmPushed(
+async function setMeetingCrmPushedUnlocked(
   settings: Settings,
   file: string,
   key: string
@@ -633,7 +654,7 @@ export async function setMeetingCrmPushed(
  * frontmatter block in place — the H1, notes, and full transcript are untouched. Same basename guard,
  * and same "preserve encryption exactly as found" convention, as renameMeeting/updateMeetingRecap.
  */
-export async function setMeetingConfidential(
+async function setMeetingConfidentialUnlocked(
   settings: Settings,
   file: string,
   confidential: boolean
@@ -663,6 +684,31 @@ export async function setMeetingConfidential(
   }
   return { ok: true }
 }
+
+export const renameMeeting = serialisedByMeeting(
+  (_settings, file: string, _newTitle: string) => file,
+  renameMeetingUnlocked
+)
+
+export const updateMeetingRecap = serialisedByMeeting(
+  (_settings, file: string, _newRecap: string, _recapStatus?: RecapStatus, _beforeReplace?: () => void) => file,
+  updateMeetingRecapUnlocked
+)
+
+export const updateMeetingTranscript = serialisedByMeeting(
+  (_settings, file: string, _lines: TranscriptLine[]) => file,
+  updateMeetingTranscriptUnlocked
+)
+
+export const setMeetingCrmPushed = serialisedByMeeting(
+  (_settings, file: string, _key: string) => file,
+  setMeetingCrmPushedUnlocked
+)
+
+export const setMeetingConfidential = serialisedByMeeting(
+  (_settings, file: string, _confidential: boolean) => file,
+  setMeetingConfidentialUnlocked
+)
 
 /**
  * Delete every saved meeting + the index — a genuine "delete all my Métis data" action, for a
@@ -717,46 +763,9 @@ export async function deleteAllMeetings(): Promise<{
   return { ok: failed.length === 0, deleted, failed, skipped }
 }
 
-// Filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see transcripts.ts) — parsed here rather than
-// trusting file mtime, since mtime changes on copy/sync (this folder is often OneDrive-synced) and
-// would silently corrupt age-based retention.
-/** The saved meetings a `retentionDays` window would delete, by the age in their filename; none when off. */
-async function expiredMeetingFiles(retentionDays: number): Promise<string[]> {
-  if (!retentionDays || retentionDays <= 0) return []
-  const files = await meetingFiles(resolveMeetingsFolder(getSettings()))
-  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
-  return files.filter((file) => {
-    const m = file.match(FILENAME_TIMESTAMP)
-    if (!m) return false // unrecognized filename shape — never guess an age, skip rather than risk deleting the wrong file
-    const [, y, mo, d, h, mi, s] = m
-    const t = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime()
-    return Number.isFinite(t) && t < cutoff
-  })
-}
+export { countExpiredMeetings } from './meeting-retention'
 
-/** How many saved meetings a retention window would delete at its next sweep (Settings asks before shortening). */
-export async function countExpiredMeetings(retentionDays: number): Promise<number> {
-  return (await expiredMeetingFiles(retentionDays)).length
-}
-
-/**
- * Auto-delete meetings older than `retentionDays` (storage-limitation control for recorded third-party
- * speech). `retentionDays <= 0` means retention is off — keep everything, the historical default. Swept
- * once per app launch (see index.ts). Reuses deleteMeeting per file so index.md stays row-accurate,
- * unlike the wholesale deleteAllMeetings wipe.
- */
-export async function sweepExpiredMeetings(retentionDays: number): Promise<{ deleted: number }> {
-  let deleted = 0
-  for (const file of await expiredMeetingFiles(retentionDays)) {
-    const r = await deleteMeeting(file)
-    if (r.ok) {
-      deleted++
-      // MQA-230: same provider-free excise the interactive delete performs — the expired meeting's own
-      // extraction JSON + ledger row must not wait for a source refresh that needs a usable provider.
-      await exciseDeletedMeeting(getSettings(), file).catch(() => {
-        /* best-effort — the sweep's caller already requests the source refresh that re-derives */
-      })
-    }
-  }
-  return { deleted }
+/** Auto-delete meetings past the retention window; see meeting-retention.ts. Reuses deleteMeeting per file. */
+export function sweepExpiredMeetings(retentionDays: number, deps: SweepDeps = {}): Promise<{ deleted: number }> {
+  return sweepExpired(retentionDays, deleteMeeting, deps)
 }

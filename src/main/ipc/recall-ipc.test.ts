@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
   exciseDeletedMeeting: vi.fn(async () => ({ gone: true })),
   listMeetings: vi.fn(async () => [{}, {}]),
   purgeBrain: vi.fn(() => ({ ok: true })),
-  removeWiki: vi.fn(() => ({ ok: true }))
+  removeWiki: vi.fn(() => ({ ok: true })),
+  purgeGraphArtifacts: vi.fn(() => true),
+  scheduleRebuild: vi.fn(async () => {})
 }))
 
 vi.mock('../store', () => ({ getSettings: () => settings }))
@@ -46,7 +48,10 @@ vi.mock('../recall', () => ({
   setMeetingCrmPushed: vi.fn(),
   deleteAllMeetings: mocks.deleteAllMeetings
 }))
-vi.mock('../graphify', () => ({ purgeGraphArtifacts: vi.fn() }))
+vi.mock('../graphify', () => ({
+  purgeGraphArtifacts: mocks.purgeGraphArtifacts,
+  scheduleRebuild: mocks.scheduleRebuild
+}))
 
 import { registerRecallIpc } from './recall-ipc'
 
@@ -148,6 +153,23 @@ describe('recall IPC', () => {
     expect(mocks.auditLog).toHaveBeenCalledWith('transcript.deleted', { file: 'a.md' })
     expect(mocks.exciseDeletedMeeting).toHaveBeenCalledWith(settings, 'a.md')
     expect(mocks.requestSourceRefresh).toHaveBeenCalledWith(settings)
+  })
+
+  it('recallDelete purges graph artifacts and schedules a rebuild', async () => {
+    const { handler } = setup()
+    expect(await handler(IPC.recallDelete)(event, 'a.md', 'A')).toEqual({ ok: true })
+    expect(mocks.purgeGraphArtifacts).toHaveBeenCalledTimes(1)
+    expect(mocks.scheduleRebuild).toHaveBeenCalledTimes(1)
+  })
+
+  it('recallDelete leaves the graph alone when the delete failed or was declined', async () => {
+    mocks.deleteMeeting.mockResolvedValueOnce({ ok: false, error: 'Could not delete meeting file.' } as never)
+    const failed = setup()
+    await failed.handler(IPC.recallDelete)(event, 'a.md', 'A')
+    const declined = setup({ response: 1 })
+    await declined.handler(IPC.recallDelete)(event, 'a.md', 'A')
+    expect(mocks.purgeGraphArtifacts).not.toHaveBeenCalled()
+    expect(mocks.scheduleRebuild).not.toHaveBeenCalled()
   })
 
   it('exports the decrypted copy through the injected writer only after the save dialog', async () => {

@@ -26,6 +26,8 @@ export interface TranscriptSaveReceipt {
 export interface DurableTranscriptReceiptPath {
   path: string
   settings: Settings
+  /** Stages the save already completed (a rewrite of the same file inherits its credits). */
+  completed?: ReadonlySet<TranscriptSaveSideEffect>
 }
 
 interface ReceiptEntry {
@@ -192,7 +194,11 @@ export class TranscriptSaveReceiptStore {
         !receipt.settings
       )
         continue
-      paths.set(receipt.durablePath, { path: receipt.durablePath, settings: receipt.settings })
+      paths.set(receipt.durablePath, {
+        path: receipt.durablePath,
+        settings: receipt.settings,
+        completed: new Set(receipt.completed)
+      })
     }
     return [...paths.values()]
   }

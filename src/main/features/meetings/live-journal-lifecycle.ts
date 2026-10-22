@@ -17,6 +17,13 @@ export interface DraftJournalHooks {
   merge(draftText: string): Promise<string>
   /** Called after the draft was promoted to a recovered meeting: the journal's records now live in that file. */
   promoted(draftText: string): Promise<void>
+  /**
+   * True when the draft's journal is sealed 'discarded': the user disregarded this meeting but the draft could not be
+   * removed at the time. Such a draft must be deleted, never promoted. False when unknown or the journal cannot be read.
+   */
+  isDiscarded(draftText: string): Promise<boolean>
+  /** Called once a discarded draft is really gone: the sealed journal, its last tombstone, can now be removed. */
+  discardSettled(draftText: string): Promise<void>
 }
 
 export interface LiveJournalLifecycle {

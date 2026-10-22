@@ -37,7 +37,7 @@ import {
   setMeetingCrmPushed,
   deleteAllMeetings
 } from '../recall'
-import { purgeGraphArtifacts } from '../graphify'
+import { purgeGraphArtifacts, scheduleRebuild } from '../graphify'
 
 export interface RecallIpcDependencies {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -147,6 +147,13 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
           const detail = error instanceof Error ? error.message : String(error)
           mainLog.warn(`[brain] excise failed for a deleted meeting: ${detail}`)
         })
+      // D4-13: the dialog promises the extracted knowledge is gone, but graph.json (topics, notes, Connections) is
+      // built from the saved meetings. Drop it and re-derive it from what remains.
+      purgeGraphArtifacts()
+      void scheduleRebuild().catch((error) => {
+        const detail = error instanceof Error ? error.message : String(error)
+        mainLog.warn(`[graphify] rebuild after a meeting delete failed: ${detail}`)
+      })
       await requestSourceRefresh(getSettings())
     }
     return result

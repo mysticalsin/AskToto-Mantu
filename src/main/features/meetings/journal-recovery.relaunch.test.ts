@@ -36,6 +36,18 @@ import { stamp } from './transcript-document-format'
 
 vi.mock('electron')
 
+// Lets one test simulate a locked draft (Windows AV / OneDrive EPERM) without touching the real unlink retry
+// helper's behaviour for every other test in this file.
+const unlinkControl = vi.hoisted(() => ({ fail: false }))
+vi.mock('../../infra/storage/draft-file-unlink', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../infra/storage/draft-file-unlink')>()
+  return {
+    ...actual,
+    unlinkDraftFiles: async (files: readonly string[], isCurrent?: () => boolean) =>
+      unlinkControl.fail ? { failed: [...files], pending: [] } : actual.unlinkDraftFiles(files, isCurrent)
+  }
+})
+
 /** Unique per test: a cleared or discarded meeting identity stays sealed for the life of the module. */
 let STARTED_AT = Date.parse('2026-10-21T15:00:00.000Z')
 const mockGetPath = app.getPath as ReturnType<typeof vi.fn>
@@ -66,6 +78,7 @@ beforeEach(() => {
   owner = OWNER_A
   allowed = true
   audits = []
+  unlinkControl.fail = false
 })
 
 afterEach(() => {
@@ -453,6 +466,28 @@ describe('purge on clear and discard (T7)', () => {
     expect(drafts()).toEqual([])
   })
 
+  it('a Disregard whose draft unlink fails is not promoted on relaunch', async () => {
+    const name = await writeDraft(lines(1, 2))
+    await writeJournal({ userData, startedAt: STARTED_AT, ownerKey: OWNER_A, lines: lines(1, 4) })
+    bind()
+    unlinkControl.fail = true
+    await expect(discardDraftTranscript(settings, STARTED_AT)).resolves.toEqual({
+      ok: false,
+      error: 'Some autosaved draft files could not be removed. Try Disregard again.'
+    })
+    // the draft survived, so its journal must too: it is the only durable record that the meeting was discarded
+    expect(drafts()).toEqual([name])
+    expect(existsSync(journalDirectory())).toBe(true)
+    expect(existsSync(join(userData, 'meeting-journal'))).toBe(true)
+
+    // relaunch: the lock is gone, recovery must retry the unlink and never promote the discarded speech
+    unlinkControl.fail = false
+    await expect(recoverOrphanDrafts(settings)).resolves.toEqual({ recovered: 0 })
+    expect(recovered()).toEqual([])
+    expect(drafts()).toEqual([])
+    expect(existsSync(journalDirectory())).toBe(false)
+  })
+
   it('a failing purge never fails the save cleanup or a Disregard', async () => {
     await writeDraft(lines(1, 2))
     const real = bind()
@@ -554,6 +589,24 @@ describe('retention sweep (T7)', () => {
     expect(existsSync(sealed)).toBe(false)
     expect(existsSync(discarded)).toBe(false)
     expect(existsSync(open)).toBe(true)
+  })
+
+  it('never removes an unpromoted active journal by the count rule', async () => {
+    const directories: string[] = []
+    for (let n = 0; n < 12; n++) directories.push(await seed(n, 12 - n * 0.5))
+    bind({ now: () => NOW })
+    // no meeting exists for any of them and promotion keeps failing: the journal is the only copy of the speech
+    await lifecycle.recoverRemaining({ draftNames: [], meetingExists: async () => false, promote: async () => false })
+    expect(directories.map((d) => existsSync(d))).toEqual(Array.from({ length: 12 }, () => true))
+  })
+
+  it('still applies the 14-day age rule to an unpromoted active journal', async () => {
+    const old = await seed(1, 20)
+    const recent = await seed(2, 2)
+    bind({ now: () => NOW })
+    await lifecycle.recoverRemaining({ draftNames: [], meetingExists: async () => false, promote: async () => false })
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(recent)).toBe(true)
   })
 
   it('never follows a symbolic link planted as a journal directory', async () => {
