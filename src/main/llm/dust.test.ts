@@ -527,6 +527,32 @@ describe('isDustAuthError — 401 phrasing drift across Dust API versions', asyn
     expect(isDustAuthError({ status: 401, message: 'anything' })).toBe(true)
   })
 
+  it('a non-auth "expired" message does not refresh', () => {
+    // D9-14: the bare word "expired" took a refresh-and-replay for errors that have nothing to do with the
+    // token (a conversation link, an invitation, a trial). Free text only counts next to a credential noun.
+    for (const message of [
+      'The shared conversation link has expired',
+      'Your invitation expired yesterday',
+      'This trial has expired',
+      'File upload url expired, retry the upload'
+    ]) {
+      expect(isDustAuthError({ message }), message).toBe(false)
+      expect(isDustAuthError({ status: 500, message }), message).toBe(false)
+    }
+    // Real expiry wording still self-heals.
+    for (const message of [
+      'The access token has expired',
+      'token expired',
+      'Your session expired, sign in again',
+      'expired credentials',
+      'The credential has expired'
+    ]) {
+      expect(isDustAuthError({ message }), message).toBe(true)
+    }
+    expect(isDustAuthError({ code: 'expired_oauth_token_error', message: 'x' })).toBe(true)
+    expect(isDustAuthError({ status: 401, message: 'link expired' })).toBe(true)
+  })
+
   it('does not classify ordinary failures as auth errors', () => {
     expect(isDustAuthError(null)).toBe(false)
     expect(isDustAuthError({ message: 'agent not found' })).toBe(false)
@@ -554,6 +580,24 @@ describe('isDustAgentUnavailableError — stale/removed agent sId (distinct from
     ).toBe(false)
     expect(isDustAgentUnavailableError({ status: 401, message: 'Unauthorized' })).toBe(false)
     expect(isDustAgentUnavailableError({ message: 'rate limited, retry later' })).toBe(false)
+  })
+})
+
+describe('streamDust does not refresh and replay for a non-auth "expired" error', () => {
+  it('surfaces the error once and never calls refreshDustAuth', async () => {
+    resetDustConversation()
+    streamErrOnce = 'The shared conversation link has expired'
+    const refreshDustAuth = vi.fn().mockResolvedValue({ apiKey: 'fresh-key', workspaceId: 'ws-1' })
+    const opts = baseOpts({ refreshDustAuth })
+    const createsBefore = calls.create + calls.post
+    streamDust(opts)
+    for (let i = 0; i < 500 && !mockOf(opts.handlers.onError).mock.calls.length; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+    expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
+    expect(refreshDustAuth).not.toHaveBeenCalled()
+    // one run only: a replay would have created or posted a second time
+    expect(calls.create + calls.post - createsBefore).toBe(1)
   })
 })
 

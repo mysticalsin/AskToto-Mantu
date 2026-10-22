@@ -260,6 +260,21 @@ export function completeDustOAuthLogin(opts: {
   auditLog('dust.oauth.login', { workspaceId: opts.workspaceId })
 }
 
+/**
+ * Take the session OFF the OAuth refresh branch and delete its refresh token. Used when the user disconnects
+ * Dust AND when they paste a Dust key by hand (D9-1). refreshAndPersistDust only re-mints while
+ * dustSessionOrigin === 'oauth', so leaving the origin there lets a later 401 silently overwrite a pasted key
+ * with a token minted from the account the user just replaced or removed. Whichever way the user connects
+ * next sets the origin itself (OAuth at completeDustOAuthLogin, CLI at dustImportCli), so 'cli' is inert
+ * until then. Returns false when the refresh-token file could not be deleted, so the caller can say so
+ * instead of claiming a clean removal while the secret survives.
+ */
+export function retireDustOAuthSession(): boolean {
+  const removed = clearDustRefreshToken()
+  setSettings({ dustSessionOrigin: 'cli', dustTokenMintedAt: 0 })
+  return removed
+}
+
 // Single-flight + short result cache — same discipline as dustcli.ts's refreshDustCliSession, and for the
 // same reason: WorkOS refresh tokens are single-use and rotate on every call, so two concurrent refreshes
 // (e.g. a startup check racing a 401-triggered one) would burn one token and invalidate the session.

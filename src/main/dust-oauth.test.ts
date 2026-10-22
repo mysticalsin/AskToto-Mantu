@@ -22,10 +22,11 @@ import {
   pollDustDeviceLoginOnce,
   listDustWorkspacesForToken,
   completeDustOAuthLogin,
+  retireDustOAuthSession,
   refreshDustOAuthSession,
   resetDustOAuthRefreshCacheForTests
 } from './dust-oauth'
-import { getApiKey, getSettings, getDustRefreshToken } from './store'
+import { getApiKey, getSettings, getDustRefreshToken, setApiKey } from './store'
 
 const mockAppGetPath = app.getPath as ReturnType<typeof vi.fn>
 const mockOpenExternal = shell.openExternal as ReturnType<typeof vi.fn>
@@ -186,6 +187,27 @@ describe('dust-oauth', () => {
     it('defaults US region to dust.tt', () => {
       completeDustOAuthLogin({ accessToken: 'at-1', refreshToken: 'rt-1', region: 'us-central1', workspaceId: 'ws-1' })
       expect(getSettings().dustBaseUrl).toBe('https://dust.tt')
+    })
+  })
+
+  describe('retireDustOAuthSession', () => {
+    it('a hand-pasted key leaves the OAuth refresh branch and is never replaced by a re-minted token', async () => {
+      resetDustOAuthRefreshCacheForTests()
+      completeDustOAuthLogin({ accessToken: 'oauth-at', refreshToken: 'oauth-rt', region: 'us-central1', workspaceId: 'ws-1' })
+      setApiKey('dust', 'qa-only-pasted-key') // what the setApiKey IPC does with the pasted value
+      const fetchSpy = vi.fn(async () => jsonResponse({ access_token: 'should-not-win', refresh_token: 'x' }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      expect(retireDustOAuthSession()).toBe(true)
+
+      expect(getSettings().dustSessionOrigin).toBe('cli')
+      expect(getSettings().dustTokenMintedAt).toBe(0)
+      expect(getDustRefreshToken()).toBe('')
+      // Even a refresh that is still reached (a stale in-flight caller) has nothing to re-mint from.
+      const r = await refreshDustOAuthSession()
+      expect(r.ok).toBe(false)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(getApiKey('dust')).toBe('qa-only-pasted-key')
     })
   })
 

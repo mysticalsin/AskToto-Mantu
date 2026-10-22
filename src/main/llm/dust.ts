@@ -35,10 +35,16 @@ const DUST_BENIGN =
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function isDustAuthError(err: any): boolean {
   if (!err) return false
+  // Status and code first: they are what an auth failure actually carries.
+  if (err.status === 401) return true
   const blob = `${err.type ?? ''} ${err.code ?? ''} ${err.message ?? err}`.toLowerCase()
+  // Free text. "expired" alone is not auth (a conversation link, an invitation, a trial) and used to cost a
+  // refresh and a full replay of the run, so it only counts beside a token, session or credential word.
   return (
-    err.status === 401 ||
-    /oauth|unauthor|expired|invalid.*(token|credential)|authenticat\w*\s+credential|credential.*authenticat/.test(blob)
+    /oauth|unauthor|invalid.*(token|credential)|authenticat\w*\s+credential|credential.*authenticat/.test(blob) ||
+    /(token|session|credential|login)s?\s+(has\s+|have\s+|is\s+)?(been\s+)?expired|expired\s+(\w+\s+)?(token|session|credential|login)/.test(
+      blob
+    )
   )
 }
 

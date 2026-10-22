@@ -30,6 +30,7 @@ import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import {
   buildDustSpotlightChatArgv,
   classifyDustCliChatFailure,
+  clearSeededDustCliSession,
   dustChatArgvHasWithTools,
   dustChatEnv,
   messageForDustCliKind,
@@ -243,6 +244,83 @@ describe('Spotlight Ref dust chat argv', () => {
     }
   })
 
+  describe('D9-3 disconnect removes the seeded dust-cli items', () => {
+    const accounts = ['access_token', 'workspace_sid', 'region']
+    /** A keytar stand-in backed by a JSON file, so state survives the separate seeder processes. */
+    function fakeKeytarStore(dir: string, initial: Record<string, string>): { statePath: string } {
+      const fakeKeytar = join(dir, 'node_modules', 'keytar')
+      mkdirSync(fakeKeytar, { recursive: true })
+      writeFileSync(
+        join(fakeKeytar, 'package.json'),
+        JSON.stringify({ name: 'keytar', type: 'module', main: 'index.js' })
+      )
+      const statePath = join(dir, 'keychain.json')
+      writeFileSync(statePath, JSON.stringify(initial))
+      writeFileSync(
+        join(fakeKeytar, 'index.js'),
+        [
+          "import { readFileSync, writeFileSync } from 'node:fs'",
+          'const path = process.env.FAKE_KEYCHAIN',
+          'const load = () => JSON.parse(readFileSync(path, "utf8"))',
+          'const save = (s) => writeFileSync(path, JSON.stringify(s))',
+          'export default {',
+          '  async setPassword(svc, acct, v) { const s = load(); s[svc + "/" + acct] = v; save(s) },',
+          '  async getPassword(svc, acct) { return load()[svc + "/" + acct] ?? null },',
+          '  async deletePassword(svc, acct) { const s = load(); const had = (svc + "/" + acct) in s; delete s[svc + "/" + acct]; save(s); return had }',
+          '}'
+        ].join('\n')
+      )
+      return { statePath }
+    }
+
+    it("disconnect clears the seeded dust-cli items only when they hold Métis's token", () => {
+      const dir = mkdtempSync(join(tmpdir(), 'metis-dust-unseed-'))
+      try {
+        const metisToken = 'qa-only-metis-token'
+        const seeded = {
+          'dust-cli/access_token': metisToken,
+          'dust-cli/workspace_sid': 'qa-workspace',
+          'dust-cli/region': 'us-central1'
+        }
+        const { statePath } = fakeKeytarStore(dir, seeded)
+        const script = writeDustKeytarSeedScript(dir)
+        const run = (token: string): ReturnType<typeof spawnSync> =>
+          spawnSync(process.execPath, [script, '--clear-if-match'], {
+            env: { ...process.env, DUST_API_KEY: token, FAKE_KEYCHAIN: statePath },
+            encoding: 'utf8'
+          })
+
+        // A different token in the keychain is the user's own CLI session: it must survive.
+        const other = run('qa-only-some-other-token')
+        expect(other.status).toBe(0)
+        expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual(seeded)
+
+        // The stored token is Métis's: every seeded item goes.
+        const mine = run(metisToken)
+        expect(mine.status).toBe(0)
+        const after = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, string>
+        for (const account of accounts) expect(after[`dust-cli/${account}`]).toBeUndefined()
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('a token-less clear is a no-op and never deletes anything', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'metis-dust-unseed-'))
+      try {
+        const seeded = { 'dust-cli/access_token': 'qa-only-user-token', 'dust-cli/workspace_sid': 'qa-workspace' }
+        const { statePath } = fakeKeytarStore(dir, seeded)
+        const script = writeDustKeytarSeedScript(dir)
+        const env = { ...process.env, FAKE_KEYCHAIN: statePath } as Record<string, string | undefined>
+        delete env.DUST_API_KEY
+        spawnSync(process.execPath, [script, '--clear-if-match'], { env, encoding: 'utf8' })
+        expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual(seeded)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  })
+
   it('contains --sId GOr913Zr5V and -m and never --with-tools', () => {
     const args = buildDustSpotlightChatArgv({ message: 'Data and AI projects' })
     expect(args).toContain('chat')
@@ -305,5 +383,86 @@ describe('projectNameForDataAndAiAsk', () => {
     expect(projectNameForDataAndAiAsk('Data and AI projects', ['Sales', 'Data and AI'])).toBe('Data and AI')
     expect(projectNameForDataAndAiAsk('Data and AI projects', ['Sales wiki'])).toBeUndefined()
     expect(projectNameForDataAndAiAsk('hello', ['Data and AI'])).toBeUndefined()
+  })
+})
+
+describe('clearSeededDustCliSession — disconnect cleanup of the shared dust-cli keychain', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'metis-dust-unseed-fn-'))
+    vi.mocked(resolveManagedNode).mockReset().mockReturnValue(null)
+    vi.mocked(managedCliEntry).mockReset()
+    vi.mocked(spawn).mockReset()
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('tolerates a missing managed CLI: nothing to clean, nothing spawned, never throws', async () => {
+    vi.mocked(managedCliEntry).mockReturnValue(null)
+    await expect(clearSeededDustCliSession('qa-only-metis-token')).resolves.toEqual({ cleared: false })
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it('does nothing without a token to compare against', async () => {
+    vi.mocked(managedCliEntry).mockReturnValue({ entry: join(dir, 'index.js'), version: '0.4.5' })
+    await expect(clearSeededDustCliSession('')).resolves.toEqual({ cleared: false })
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it('runs the seeder in clear-if-match mode with the token in env only, never argv', async () => {
+    vi.mocked(managedCliEntry).mockReturnValue({ entry: join(dir, 'index.js'), version: '0.4.5' })
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: vi.fn()
+      }) as unknown as ChildProcess
+      setImmediate(() => {
+        child.stdout?.emit('data', Buffer.from('cleared\n'))
+        child.emit('close', 0)
+      })
+      return child
+    })
+    const token = 'qa-only-metis-token'
+    await expect(clearSeededDustCliSession(token)).resolves.toEqual({ cleared: true })
+    expect(spawn).toHaveBeenCalledTimes(1)
+    const [, args, options] = vi.mocked(spawn).mock.calls[0]
+    expect(args).toEqual([join(dir, '.metis-seed-session.mjs'), '--clear-if-match'])
+    expect(args).not.toContain(token)
+    expect(options?.env).toMatchObject({ DUST_API_KEY: token })
+  })
+
+  it("reports not cleared when the keychain holds someone else's token", async () => {
+    vi.mocked(managedCliEntry).mockReturnValue({ entry: join(dir, 'index.js'), version: '0.4.5' })
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: vi.fn()
+      }) as unknown as ChildProcess
+      setImmediate(() => {
+        child.stdout?.emit('data', Buffer.from('kept\n'))
+        child.emit('close', 0)
+      })
+      return child
+    })
+    await expect(clearSeededDustCliSession('qa-only-metis-token')).resolves.toEqual({ cleared: false })
+  })
+
+  it('a seeder that fails to start is reported as not cleared, never thrown', async () => {
+    vi.mocked(managedCliEntry).mockReturnValue({ entry: join(dir, 'index.js'), version: '0.4.5' })
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: vi.fn()
+      }) as unknown as ChildProcess
+      setImmediate(() => child.emit('error', new Error('spawn ENOENT')))
+      return child
+    })
+    await expect(clearSeededDustCliSession('qa-only-metis-token')).resolves.toEqual({ cleared: false })
   })
 })

@@ -139,7 +139,12 @@ export function planManagedDustSpawn(cliArgs: string[]): DustCliSpawnPlan | { er
   }
 }
 
-/** Write a tiny ESM seeder next to the installed CLI so keytar (same Node ABI) stores the Métis session. */
+/**
+ * Write a tiny ESM seeder next to the installed CLI so keytar (same Node ABI) stores the Métis session.
+ * `--clear-if-match` is the inverse (D9-3): it deletes the three dust-cli items, but only when the stored
+ * access_token is the very token Métis seeded (DUST_API_KEY). A different token is the user's own CLI
+ * session and is left alone; keytar failing to load simply exits non-zero.
+ */
 export function writeDustKeytarSeedScript(packageDir: string): string {
   const dest = join(packageDir, '.metis-seed-session.mjs')
   mkdirSync(dirname(dest), { recursive: true })
@@ -150,6 +155,14 @@ export function writeDustKeytarSeedScript(packageDir: string): string {
       'const token = process.env.DUST_API_KEY',
       'const workspace = process.env.DUST_WORKSPACE_ID',
       'const [region] = process.argv.slice(2)',
+      'if (region === "--clear-if-match") {',
+      '  const stored = token ? await keytar.getPassword("dust-cli", "access_token") : null',
+      '  if (stored && stored === token) {',
+      '    for (const account of ["access_token", "workspace_sid", "region"]) await keytar.deletePassword("dust-cli", account)',
+      '    console.log("cleared")',
+      '  } else console.log("kept")',
+      '  process.exit(0)',
+      '}',
       'if (!token || !workspace) { console.error("missing token or workspace"); process.exit(2) }',
       'await keytar.setPassword("dust-cli", "access_token", token)',
       'await keytar.setPassword("dust-cli", "workspace_sid", workspace)',
@@ -200,6 +213,50 @@ export async function ensureManagedDustCli(
     return { ok: true, entry: installed.entry, version: installed.version }
   } catch (e) {
     return { ok: false, error: humanizeNpmInstallError(e) }
+  }
+}
+
+/**
+ * Disconnect cleanup (D9-3): the Spotlight seed copies Métis's Dust token into the global `dust-cli`
+ * keychain service, which survives a disconnect. Remove those items, but only while they still hold
+ * `token` (Métis's token as it was before the key was cleared). Never throws and tolerates a missing CLI:
+ * nothing seeded means nothing to clean.
+ */
+export async function clearSeededDustCliSession(token: string): Promise<{ cleared: boolean }> {
+  if (!token) return { cleared: false }
+  const found = managedCliEntry('dust')
+  if (!found) return { cleared: false }
+  try {
+    const plan = planManagedDustSpawn([])
+    if ('error' in plan) return { cleared: false }
+    const seed = writeDustKeytarSeedScript(dirname(found.entry))
+    const nodeBin = plan.env.ELECTRON_RUN_AS_NODE ? process.execPath : plan.command
+    return await new Promise<{ cleared: boolean }>((resolve) => {
+      const child = spawn(nodeBin, [seed, '--clear-if-match'], {
+        env: { ...process.env, ...plan.env, ...dustChatEnv({ apiKey: token }) },
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      let out = ''
+      child.stdout?.on('data', (d: Buffer) => {
+        out += d.toString('utf8')
+      })
+      const t = setTimeout(() => {
+        killWindowsProcessTree(child.pid)
+        child.kill('SIGTERM')
+        resolve({ cleared: false })
+      }, 15_000)
+      child.once('close', (code) => {
+        clearTimeout(t)
+        resolve({ cleared: code === 0 && out.includes('cleared') })
+      })
+      child.once('error', () => {
+        clearTimeout(t)
+        resolve({ cleared: false })
+      })
+    })
+  } catch {
+    return { cleared: false }
   }
 }
 
