@@ -477,7 +477,7 @@ describe('the scenario registry', () => {
     expect(mac.variant).toBe('mac')
     expect(mac.artifact).toBe('candidate-mac')
     expect(VARIANTS.mac.promotable).toBe(true)
-    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0-arm64.dmg')
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
     expect(mac.installerSuffix).toBe('.dmg')
     expect(mac.script).toBe('scripts/qa/ex-suite.mjs')
     expect(existsSync(join(root, mac.script))).toBe(true)
@@ -579,12 +579,7 @@ describe('the scenario registry', () => {
     expect(SCENARIOS['stall-sampler'].qaOnlyHook).toBe(false)
     expect(mac.variant).toBe('mac')
     expect(mac.artifact).toBe('candidate-mac')
-    expect(VARIANTS.mac.assets('1.0.0')).toEqual([
-      'Metis-1.0.0-arm64.dmg',
-      'Metis-1.0.0-arm64.zip',
-      'Metis-1.0.0-x64.dmg',
-      'Metis-1.0.0-x64.zip'
-    ])
+    expect(VARIANTS.mac.assets('1.0.0')).toEqual(['Metis-1.0.0.dmg', 'Metis-1.0.0.zip'])
     expect(mac.script).toBe('scripts/qa/stall-sampler-hosted.mjs')
     expect(existsSync(join(root, mac.script))).toBe(true)
     expect(mac.args({ app: 'candidate-install/Metis.app', report: 'candidate-scenario/stall-sampler.json' })).toEqual([
@@ -606,7 +601,7 @@ describe('the scenario registry', () => {
     expect(mac.variant).toBe('mac')
     expect(mac.artifact).toBe('candidate-mac')
     expect(VARIANTS.mac.promotable).toBe(true)
-    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0-arm64.dmg')
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
     expect(mac.installerSuffix).toBe('.dmg')
     expect(installerKindForScenario('renderer-kill', 'mac')).toBe('mac-dmg')
     expect(mac.script).toBe('scripts/qa/renderer-kill.mjs')
@@ -707,7 +702,7 @@ describe('the scenario registry', () => {
     expect(win.outcomeFromReport).toBe(true)
     expect(existsSync(join(root, mac.script))).toBe(true)
     expect(existsSync(join(root, win.script))).toBe(true)
-    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0-arm64.dmg')
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
     expect(VARIANTS.win.assets('1.0.0')).toContain('Metis-Setup-1.0.0.exe')
     expect(mac.args({ app: 'candidate-install/Metis.app', report: 'candidate-scenario/idle-soak.json' })).toEqual([
       '--app',
@@ -821,7 +816,7 @@ describe('the scenario registry', () => {
       expect(target.script).toBe('scripts/qa/sidecar-boot-reaper.mjs')
       expect(existsSync(join(root, target.script))).toBe(true)
     }
-    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0-arm64.dmg')
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
     expect(VARIANTS.win.assets('1.0.0')).toContain('Metis-Setup-1.0.0.exe')
     expect('notCovered' in mac).toBe(false)
     expect(win.notCovered.map(({ row }) => row)).toEqual(['realLlama', 'legacyOrphan'])

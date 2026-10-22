@@ -34,24 +34,39 @@ describe('lean staging carries the Operator enrolment blob, guarded like every o
   })
 })
 
-describe('the release lane builds the lean profile (G11)', () => {
+describe('the release lane builds full by default and lean on request (G11)', () => {
   const workflow = read('.github/workflows/qa-candidate.yml')
 
-  it('builds every installer through the lean release plan and never through a full-profile dist chain', () => {
-    expect(workflow).toMatch(/node scripts\/lean-release\.mjs mac "\$arch" \$\{\{ matrix\.flags \}\}/)
-    expect(workflow).toMatch(/node scripts\/lean-release\.mjs win x64/)
-    expect(workflow).not.toMatch(/npm run (dist|\$\{\{ matrix\.script \}\})/)
+  it('has a profile dispatch input whose default is full', () => {
+    expect(workflow).toMatch(
+      /\n {6}profile:\r?\n(?: {8}.*\r?\n)*? {8}default: full\r?\n(?: {8}.*\r?\n)*? {8}type: choice\r?\n {8}options:\r?\n {10}- full\r?\n {10}- lean/
+    )
+    // A pull request self-test has no inputs, so the empty value must resolve to full.
+    expect(workflow).toContain("METIS_CANDIDATE_PROFILE: ${{ inputs.profile || 'full' }}")
+  })
+
+  it('keeps the full build steps for everything except an explicit lean dispatch', () => {
+    expect(workflow).toMatch(
+      /- name: Build the \$\{\{ matrix\.variant \}\} installers\r?\n {8}if: inputs\.profile != 'lean'\r?\n {8}run: npm run \$\{\{ matrix\.script \}\}/
+    )
+    expect(workflow).toMatch(
+      /- name: Build the win installers\r?\n {8}if: inputs\.profile != 'lean'\r?\n {8}run: npm run dist:win/
+    )
+    expect(workflow).toMatch(/if: inputs\.profile != 'lean'\r?\n {8}with:\r?\n {10}path: \|\r?\n {12}resources\/models/)
+    expect(workflow).toContain('script: dist\n')
+    expect(workflow).toContain('script: dist:qa-identity')
+  })
+
+  it('runs the lean plan only when lean is requested', () => {
+    expect(workflow).toMatch(
+      /if: inputs\.profile == 'lean'\r?\n {8}run: \|\r?\n {10}for arch in \$\{\{ matrix\.arches \}\}; do\r?\n {12}node scripts\/lean-release\.mjs mac "\$arch" \$\{\{ matrix\.flags \}\}/
+    )
+    expect(workflow).toMatch(/if: inputs\.profile == 'lean'\r?\n {8}run: node scripts\/lean-release\.mjs win x64/)
+    expect(workflow).toMatch(/- variant: mac\r?\n\s+script: dist\r?\n\s+arches: arm64 x64\r?\n\s+flags: ''/)
+    expect(workflow).toMatch(
+      /- variant: mac-qa-identity\r?\n\s+script: dist:qa-identity\r?\n\s+arches: arm64\r?\n\s+flags: --qa-identity/
+    )
     expect(workflow).not.toMatch(/METIS_PACKAGE_PROFILE:\s*full/)
-  })
-
-  it('no longer restores or fetches the model and runtime cache a full package needed', () => {
-    expect(workflow).not.toMatch(/runtime-assets-/)
-    expect(workflow).not.toMatch(/resources\/(models|asr|ort|llama|local-llm)/)
-  })
-
-  it('builds both macOS architectures for the promotable variant and arm64 only for the QA identity', () => {
-    expect(workflow).toMatch(/- variant: mac\r?\n\s+arches: arm64 x64\r?\n\s+flags: ''/)
-    expect(workflow).toMatch(/- variant: mac-qa-identity\r?\n\s+arches: arm64\r?\n\s+flags: --qa-identity/)
   })
 
   it('passes the QA enrolment token only as secret and variable references', () => {
@@ -59,26 +74,33 @@ describe('the release lane builds the lean profile (G11)', () => {
     expect(workflow).not.toMatch(/METIS-ENR-1\./)
   })
 
-  it('provenance expects one DMG and zip per macOS architecture and keeps the other asset names', () => {
-    expect(VARIANTS.mac.assets('2.12.0')).toEqual([
+  it('provenance defaults to the full asset names and expects one DMG and zip per architecture for lean', () => {
+    expect(VARIANTS.mac.assets('2.12.0')).toEqual(['Metis-2.12.0.dmg', 'Metis-2.12.0.zip'])
+    expect(VARIANTS.mac.assets('2.12.0', 'full')).toEqual(['Metis-2.12.0.dmg', 'Metis-2.12.0.zip'])
+    expect(VARIANTS.mac.assets('2.12.0', 'lean')).toEqual([
       'Metis-2.12.0-arm64.dmg',
       'Metis-2.12.0-arm64.zip',
       'Metis-2.12.0-x64.dmg',
       'Metis-2.12.0-x64.zip'
     ])
+    // Only the macOS variant depends on the profile; the other variants' names are profile-independent.
     expect(VARIANTS['mac-qa-identity'].assets('2.12.0')).toEqual(['Metis-QA-2.12.0.zip'])
     expect(VARIANTS.win.assets('2.12.0')).toEqual(['Metis-Setup-2.12.0.exe'])
     expect(VARIANTS['win-portable'].assets('2.12.0')).toEqual(['Metis-Portable-2.12.0.exe'])
   })
 
-  it('launches only the installer that matches the Apple Silicon runner and says why the Intel one is not', () => {
+  it('launches no Intel installer on the Apple Silicon runner; the skip cannot match a full asset name', () => {
     expect(workflow).toMatch(/\*-x64\.\*\) echo "::notice::\$name targets Intel/)
     expect(workflow).toMatch(/case "\$name" in \*-x64\.\*\) continue ;; esac/)
+    for (const name of ['Metis-2.12.0.dmg', 'Metis-2.12.0.zip', 'Metis-QA-2.12.0.zip'])
+      expect(name).not.toMatch(/-x64\./)
   })
 
-  it('selects the arm64 DMG wherever a single DMG was assumed', () => {
+  it('selects the arm64 DMG when there are two and the single DMG otherwise', () => {
     expect(workflow).toContain("find assets-mac -maxdepth 1 -name '*-arm64.dmg'")
+    expect(workflow).toContain('[ -n "$dmg" ] || dmg=$(find assets-mac -maxdepth 1 -name \'*.dmg\' -print -quit)')
     expect(workflow).toContain('dmgs=(assets/*-arm64.dmg)')
+    expect(workflow).toContain('[ -e "${dmgs[0]}" ] || dmgs=(assets/*.dmg)')
   })
 
   it('exposes the lean chain as an npm script that does not run from the full-profile chains', () => {

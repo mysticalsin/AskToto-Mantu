@@ -33,13 +33,17 @@ export const VARIANTS = Object.freeze({
     promotable: true,
     platform: 'mac',
     configs: ['electron-builder.yml'],
-    // Lean packages are single-architecture (G11): one DMG and zip per architecture, named by it.
-    assets: (version) => [
-      `Metis-${version}-arm64.dmg`,
-      `Metis-${version}-arm64.zip`,
-      `Metis-${version}-x64.dmg`,
-      `Metis-${version}-x64.zip`
-    ]
+    // A lean package is single-architecture (G11): one DMG and zip per architecture, named by it. The full
+    // package is one universal DMG and zip. The profile is recorded in the build record only when it is lean.
+    assets: (version, profile = 'full') =>
+      profile === 'lean'
+        ? [
+            `Metis-${version}-arm64.dmg`,
+            `Metis-${version}-arm64.zip`,
+            `Metis-${version}-x64.dmg`,
+            `Metis-${version}-x64.zip`
+          ]
+        : [`Metis-${version}.dmg`, `Metis-${version}.zip`]
   },
   'mac-qa-identity': {
     promotable: false,
@@ -60,6 +64,9 @@ export const VARIANTS = Object.freeze({
     assets: (version) => [`Metis-Portable-${version}.exe`]
   }
 })
+
+/** The package profiles a candidate may be built with. `full` is the default; `lean` is opt-in (G11). */
+export const CANDIDATE_PROFILES = Object.freeze(['full', 'lean'])
 
 export const PROMOTABLE_VARIANTS = Object.keys(VARIANTS).filter((variant) => VARIANTS[variant].promotable)
 
@@ -154,10 +161,14 @@ function readDependencyVersion(repoRoot, name, problems) {
 export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, nodeVersion }) {
   const config = VARIANTS[variant]
   if (!Object.hasOwn(VARIANTS, variant)) throw new Error(`unknown variant: ${variant}`)
+  const profile = env.METIS_CANDIDATE_PROFILE || 'full'
+  if (!CANDIDATE_PROFILES.includes(profile)) {
+    throw new Error(`METIS_CANDIDATE_PROFILE must be full or lean; got ${JSON.stringify(profile)}`)
+  }
 
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
   const version = pkg.version
-  const expectedAssets = config.assets(version)
+  const expectedAssets = config.assets(version, profile)
 
   const problems = []
 
@@ -221,6 +232,7 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     electron_builder: electronBuilder,
     builder_config: builderConfig,
     signing,
+    ...(profile === 'lean' ? { profile } : {}),
     assets
   }
 
@@ -283,7 +295,11 @@ export function assembleProvenance(records, env) {
     if (typeof record.version !== 'string' || record.version.length === 0) {
       problems.push(`${record.variant}: version is empty or invalid`)
     }
-    const expectedAssetNames = VARIANTS[record.variant].assets(record.version).sort()
+    const recordProfile = record.profile ?? 'full'
+    if (!CANDIDATE_PROFILES.includes(recordProfile)) {
+      problems.push(`${record.variant}: profile ${JSON.stringify(record.profile)} is not full or lean`)
+    }
+    const expectedAssetNames = VARIANTS[record.variant].assets(record.version, recordProfile).sort()
     const recordAssets = Array.isArray(record.assets) ? record.assets : []
     const actualAssetNames = recordAssets.map((asset) => asset?.name).sort()
     if (JSON.stringify(actualAssetNames) !== JSON.stringify(expectedAssetNames)) {
@@ -304,6 +320,10 @@ export function assembleProvenance(records, env) {
   const versions = new Set([...byVariant.values()].map((record) => record.version))
   if (versions.size > 1) {
     problems.push(`builds disagree on version: ${[...versions].join(', ')}`)
+  }
+  const profiles = new Set([...byVariant.values()].map((record) => record.profile ?? 'full'))
+  if (profiles.size > 1) {
+    problems.push(`builds disagree on package profile: ${[...profiles].join(', ')}`)
   }
   const ownerOfAsset = new Map()
   for (const record of byVariant.values()) {
@@ -396,7 +416,7 @@ export function provenanceProblems(provenance) {
       problems.push(`${variant}: platform ${build.platform} does not match expected ${config.platform}`)
     }
     const assets = Array.isArray(build.assets) ? build.assets : []
-    const expectedNames = config.assets(provenance.version).sort()
+    const expectedNames = config.assets(provenance.version, build.profile ?? 'full').sort()
     const actualNames = assets.map((asset) => asset?.name).sort()
     if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
       problems.push(`${variant}: provenance assets do not match the expected asset names`)
