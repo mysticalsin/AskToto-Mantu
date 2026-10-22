@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { keyEventToAccelerator } from '../features/settings/Shortcuts'
 
 /**
  * MQA-184 — Settings → Shortcuts key recorder was a keyboard trap (WCAG 2.1.2, No Keyboard Trap).
@@ -18,7 +19,10 @@ import { describe, expect, it } from 'vitest'
  * src/shared/accelerator.test.ts.
  */
 const settingsSrc = readFileSync(join(__dirname, '../features/settings/Shortcuts.tsx'), 'utf8')
-const recorder = settingsSrc.slice(settingsSrc.indexOf('function KeyRecorder('), settingsSrc.indexOf('function Shortcuts('))
+const recorder = settingsSrc.slice(
+  settingsSrc.indexOf('function KeyRecorder('),
+  settingsSrc.indexOf('function Shortcuts(')
+)
 const handler = recorder.slice(recorder.indexOf('const onKeyDown'), recorder.indexOf('const onBlur'))
 
 describe('the shortcut recorder does not trap keyboard focus (MQA-184)', () => {
@@ -34,7 +38,10 @@ describe('the shortcut recorder does not trap keyboard focus (MQA-184)', () => {
   })
 
   it('never turns Tab into a global accelerator (MQA-184)', () => {
-    const accel = settingsSrc.slice(settingsSrc.indexOf('function keyEventToAccelerator'), settingsSrc.indexOf('function KeyChips'))
+    const accel = settingsSrc.slice(
+      settingsSrc.indexOf('function keyEventToAccelerator'),
+      settingsSrc.indexOf('function KeyChips')
+    )
     expect(accel).not.toContain("'Tab'")
   })
 })
@@ -68,5 +75,28 @@ describe('the recorder advertises its exit and keeps the user in place (MQA-184)
     )
     expect(banner).not.toContain('Another app likely owns the key combo')
     expect(banner).toContain('navigation key')
+  })
+})
+
+/** The slice of a keydown the recorder reads. */
+function keydown(key: string, mods: { ctrl?: boolean; meta?: boolean; alt?: boolean; shift?: boolean }) {
+  return { key, ctrlKey: !!mods.ctrl, metaKey: !!mods.meta, altKey: !!mods.alt, shiftKey: !!mods.shift } as never
+}
+
+describe('the recorder keeps Control and Command apart (Q10, D6-2)', () => {
+  it('records Control and Command as distinct modifiers on macOS', () => {
+    expect(keyEventToAccelerator(keydown('k', { ctrl: true, alt: true }), false)).toBe('Control+Alt+K')
+    expect(keyEventToAccelerator(keydown('k', { meta: true, alt: true }), false)).toBe('CommandOrControl+Alt+K')
+    expect(keyEventToAccelerator(keydown('k', { ctrl: true, meta: true }), false)).toBe('CommandOrControl+Control+K')
+  })
+
+  it('records the Windows key as Super and Ctrl as CommandOrControl on Windows', () => {
+    expect(keyEventToAccelerator(keydown('s', { meta: true, shift: true }), true)).toBe('Super+Shift+S')
+    expect(keyEventToAccelerator(keydown('s', { ctrl: true, shift: true }), true)).toBe('CommandOrControl+Shift+S')
+  })
+
+  it('still refuses a lone modifier and a bare key', () => {
+    expect(keyEventToAccelerator(keydown('Control', { ctrl: true }), false)).toBeNull()
+    expect(keyEventToAccelerator(keydown('k', {}), false)).toBeNull()
   })
 })

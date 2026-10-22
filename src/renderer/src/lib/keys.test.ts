@@ -20,6 +20,12 @@ describe('keys — macOS', () => {
     expect(displayAccelerator('CommandOrControl+Shift+Return')).toBe('⌘+⇧+↵')
     expect(displayAccelerator('Alt+Left')).toBe('⌥+Left')
   })
+  it('shows Control as its own glyph, distinct from Command', async () => {
+    const { displayAccelerator } = await loadKeys('MacIntel')
+    expect(displayAccelerator('Control+Alt+K')).toBe('⌃+⌥+K')
+    expect(displayAccelerator('Ctrl+Alt+K')).toBe('⌃+⌥+K')
+    expect(displayAccelerator('CommandOrControl+Alt+K')).toBe('⌘+⌥+K')
+  })
   it('compact labels drop the "+" so glyphs run together', async () => {
     const { accelLabel } = await loadKeys('MacIntel')
     expect(accelLabel('CommandOrControl+Shift+S')).toBe('⌘⇧S')

@@ -1,8 +1,26 @@
-import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, AlignLeft, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, CircleCheck, Eye, FileSearch, Lightbulb, MessageSquare, MessageSquareQuote, Mic, RotateCcw, Settings2, type LucideIcon } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  AlignLeft,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  Camera,
+  CircleCheck,
+  Eye,
+  FileSearch,
+  Lightbulb,
+  MessageSquare,
+  MessageSquareQuote,
+  Mic,
+  RotateCcw,
+  Settings2,
+  type LucideIcon
+} from 'lucide-react'
 import type { HotkeyAction, PublicSettings, ShortcutFailure } from '@shared/ipc'
 import { DEFAULT_SHORTCUTS, HOTKEY_ACTIONS } from '@shared/ipc'
-import { displayAccelerator } from '../../lib/keys'
+import { displayAccelerator, isWindows } from '../../lib/keys'
 
 const SHORTCUT_LABELS: Record<HotkeyAction, string> = {
   ask: 'Ask (global)',
@@ -64,17 +82,30 @@ const SHORTCUT_ICONS: Partial<Record<HotkeyAction, LucideIcon>> = {
   'scroll-right': ArrowRight
 }
 
-
 // Maps a KeyboardEvent key value to the Electron accelerator token.
 // Lone modifiers, PrintScreen, etc. are not valid as the main key.
 const LONE_MODIFIERS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'OS', 'AltGraph', 'CapsLock'])
 
-export function keyEventToAccelerator(e: React.KeyboardEvent<HTMLInputElement>): string | null {
+/**
+ * Control and the Command/Windows key are different keys and stay different tokens (Electron accelerators):
+ * macOS Command is `CommandOrControl` and Control is `Control`; on Windows Ctrl is `CommandOrControl` and the
+ * Windows key is `Super`. Collapsing them recorded Ctrl+Option+K as Cmd+Option+K and Win+Shift+S as Ctrl+Shift+S.
+ */
+export function keyEventToAccelerator(
+  e: React.KeyboardEvent<HTMLInputElement>,
+  windows: boolean = isWindows
+): string | null {
   const key = e.key
   if (LONE_MODIFIERS.has(key)) return null // lone modifier — not a complete combo
 
   const parts: string[] = []
-  if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl')
+  if (windows) {
+    if (e.ctrlKey) parts.push('CommandOrControl')
+    if (e.metaKey) parts.push('Super')
+  } else {
+    if (e.metaKey) parts.push('CommandOrControl')
+    if (e.ctrlKey) parts.push('Control')
+  }
   if (e.altKey) parts.push('Alt')
   if (e.shiftKey) parts.push('Shift')
 
@@ -99,15 +130,22 @@ export function keyEventToAccelerator(e: React.KeyboardEvent<HTMLInputElement>):
   return parts.join('+')
 }
 
-function KeyChips({ accelerator }: { accelerator: string }): JSX.Element {
+function KeyChips({ accelerator, id }: { accelerator: string; id?: string }): JSX.Element {
   if (!accelerator) {
-    return <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Click to record</span>
+    return (
+      <span id={id} className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+        Click to record
+      </span>
+    )
   }
   const parts = displayAccelerator(accelerator).split('+')
   return (
-    <span className="flex flex-wrap items-center gap-0.5">
+    <span id={id} className="flex flex-wrap items-center gap-0.5">
       {parts.map((part, i) => (
-        <span key={i} className="inline-flex items-center rounded border border-[var(--cl-border)] bg-[var(--cl-card)] px-1.5 text-[11px] font-medium text-[color:var(--cl-foreground)]">
+        <span
+          key={i}
+          className="inline-flex items-center rounded border border-[var(--cl-border)] bg-[var(--cl-card)] px-1.5 text-[11px] font-medium text-[color:var(--cl-foreground)]"
+        >
           {part}
         </span>
       ))}
@@ -117,9 +155,13 @@ function KeyChips({ accelerator }: { accelerator: string }): JSX.Element {
 
 function KeyRecorder({
   value,
+  label,
   onChange
 }: {
   value: string
+  // The action's name; the recorder is named by it ("Ask (global) shortcut") so a screen reader does not
+  // announce only the key combination or the changing recording text.
+  label: string
   // Returns a conflict message to display inline (and block the change) or null once the accelerator
   // was accepted and committed.
   onChange: (v: string) => string | null
@@ -127,6 +169,7 @@ function KeyRecorder({
   const [recording, setRecording] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const [conflictMsg, setConflictMsg] = useState<string | null>(null)
+  const chipsId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   // True when recording ended by keypress (cancel or commit) rather than because focus had already moved
@@ -205,14 +248,16 @@ function KeyRecorder({
           onBlur={onBlur}
           onKeyDown={onKeyDown}
           title="Press your desired key combination"
+          aria-label={`${label} shortcut`}
           className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
         />
         <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
           Press Esc to cancel · Tab to move on
         </span>
-        {conflictMsg && (
-          <span className="text-[11px] text-[color:var(--cl-destructive)]">{conflictMsg}</span>
-        )}
+        {/* Always mounted so a collision message is announced when it appears. */}
+        <span aria-live="polite" className="text-[11px] text-[color:var(--cl-destructive)]">
+          {conflictMsg}
+        </span>
       </div>
     )
   }
@@ -223,9 +268,11 @@ function KeyRecorder({
       type="button"
       onClick={() => setRecording(true)}
       title="Click then press your desired key combination"
+      aria-label={`${label} shortcut`}
+      aria-describedby={chipsId}
       className="no-drag cl-focus cl-input min-w-0 flex-1 cursor-pointer px-2 py-1 text-left transition-colors hover:bg-white/[0.04]"
     >
-      <KeyChips accelerator={value} />
+      <KeyChips accelerator={value} id={chipsId} />
     </button>
   )
 }
@@ -253,11 +300,6 @@ export function Shortcuts({
       cancelled = true
     }
   }, [settings.shortcuts])
-  const reset = (action: HotkeyAction): void => {
-    const next = { ...user }
-    next[action] = DEFAULT_SHORTCUTS[action] ?? ''
-    patch({ shortcuts: next })
-  }
   // An action's currently-resolved binding — its own override, or the shipped default.
   const resolvedShortcut = (a: HotkeyAction): string => user[a] ?? DEFAULT_SHORTCUTS[a] ?? ''
   // Rebinding one action must never silently steal another's hotkey (Electron's registerShortcuts()
@@ -272,6 +314,13 @@ export function Shortcuts({
     patch({ shortcuts: { ...user, [action]: value } })
     return null
   }
+  // Reset is a rebind to the default, so it goes through the same collision check and says so in the row.
+  const [resetConflict, setResetConflict] = useState<{ action: HotkeyAction; message: string } | null>(null)
+  const reset = (action: HotkeyAction): void => {
+    setResetConflict(null)
+    const message = set(action, DEFAULT_SHORTCUTS[action] ?? '')
+    if (message) setResetConflict({ action, message })
+  }
 
   const groups: ShortcutGroup[] = ['General', 'Window']
 
@@ -282,13 +331,16 @@ export function Shortcuts({
           <div className="flex items-start gap-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
-              {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered. Either another app already owns the combo, or it is a navigation key Métis will
-              not take over globally. Rebind {failures.length === 1 ? 'it' : 'them'} below.
+              {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be registered. Either
+              another app already owns the combo, or it is a navigation key Métis will not take over globally. Rebind{' '}
+              {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>
           {failures.map((f) => (
-            <div key={f.action} className="flex items-center gap-2 pl-5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <div
+              key={f.action}
+              className="flex items-center gap-2 pl-5 text-[11px] text-[color:var(--cl-muted-foreground)]"
+            >
               <span className="min-w-[110px]">{SHORTCUT_LABELS[f.action as HotkeyAction] ?? f.action}</span>
               <KeyChips accelerator={f.accel} />
             </div>
@@ -308,30 +360,44 @@ export function Shortcuts({
               const isDefault = current === (DEFAULT_SHORTCUTS[action] ?? '')
               const Icon = SHORTCUT_ICONS[action]
               return (
-                <div key={action} className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
-                  <span className="flex min-w-[140px] items-center gap-1.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
-                    {Icon && <Icon size={14} className="shrink-0" />}
-                    {SHORTCUT_LABELS[action]}
-                  </span>
-                  <div className="flex flex-1 items-center gap-2">
-                    <KeyRecorder value={current} onChange={(v) => set(action, v)} />
-                    <button
-                      type="button"
-                      onClick={() => set(action, '')}
-                      className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
-                    >
-                      Clear
-                    </button>
-                    {!isDefault && (
+                <div key={action}>
+                  <div className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
+                    <span className="flex min-w-[140px] items-center gap-1.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                      {Icon && <Icon size={14} className="shrink-0" />}
+                      {SHORTCUT_LABELS[action]}
+                    </span>
+                    <div className="flex flex-1 items-center gap-2">
+                      <KeyRecorder
+                        value={current}
+                        label={SHORTCUT_LABELS[action]}
+                        onChange={(v) => {
+                          setResetConflict(null)
+                          return set(action, v)
+                        }}
+                      />
                       <button
                         type="button"
-                        onClick={() => reset(action)}
-                        className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
+                        onClick={() => set(action, '')}
+                        className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
                       >
-                        Reset
+                        Clear
                       </button>
-                    )}
+                      {!isDefault && (
+                        <button
+                          type="button"
+                          onClick={() => reset(action)}
+                          className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
                   </div>
+                  {resetConflict?.action === action && (
+                    <p role="alert" className="m-0 px-1 pb-1 text-[11px] text-[color:var(--cl-destructive)]">
+                      {resetConflict.message}
+                    </p>
+                  )}
                 </div>
               )
             })}
