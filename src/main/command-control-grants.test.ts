@@ -35,6 +35,7 @@ function make(
     permission: options.permission ?? { check: async () => ({ status: 'granted' }) }
   })
   const control = new CommandControl({
+    platform: 'darwin',
     execute: execute as never,
     policyAllows: options.policy ?? (() => true),
     audit,
@@ -112,7 +113,12 @@ describe('CommandControl: approving with a scope', () => {
     const audit = vi.fn()
     const execute = vi.fn(async (r: { id: DesktopActionResult['id'] }, c: CommandExecutionContext) => verified(r, c))
     const grants = createActionGrantService({ platform: 'darwin', audit, context: () => ({}) })
-    const control = new CommandControl({ execute: execute as never, policyAllows: () => true, grants })
+    const control = new CommandControl({
+      platform: 'darwin',
+      execute: execute as never,
+      policyAllows: () => true,
+      grants
+    })
     const proposal = control.propose(OWNER, NOTE)
     expect(await control.confirm({ ...proposal, webContentsId: 11, grantScope: 'conversation' })).toMatchObject({
       ok: true,
@@ -204,7 +210,7 @@ describe('CommandControl: grant revocation', () => {
   })
 
   it('without a grant service every decision is the confirm card', async () => {
-    const control = new CommandControl({ execute: vi.fn() as never, policyAllows: () => true })
+    const control = new CommandControl({ platform: 'darwin', execute: vi.fn() as never, policyAllows: () => true })
     expect(await control.grantDecision(11, NOTE, 'push-to-talk')).toMatchObject({ outcome: 'confirm' })
     expect(control.listGrants()).toEqual([])
     expect(control.useGrant('x')).toBe(false)

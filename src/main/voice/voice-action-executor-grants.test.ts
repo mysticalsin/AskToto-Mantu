@@ -63,6 +63,7 @@ function harness(options: { purchase?: PurchaseSeam; permission?: OsPermissionSe
     permission: options.permission ?? { check: async () => ({ status: 'granted' }) }
   })
   const control = new CommandControl({
+    platform: 'darwin',
     execute: ((request: DesktopActionRequest, context: ActionEnvelope) => adapter(request, context)) as never,
     policyAllows: () => true,
     grants

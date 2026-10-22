@@ -6,7 +6,7 @@
  * (grant-service.ts) and their own refusal copy (grant-copy.ts). A grant is bound to the action id class it was
  * approved for, so a grant for "create a note" never covers any other action. Pure: no I/O, no state.
  *
- * Lifetimes are ASSUMED defaults (no owner decision names them) and are injectable. Each is bounded.
+ * Lifetimes are owner-approved defaults (2026-10-22) and are injectable. Each is bounded.
  */
 import type { DesktopActionRequest, DesktopAdapterId } from '@shared/desktop-actions'
 import type { VoiceActionClass } from '@shared/voice/catalog'
@@ -86,7 +86,7 @@ export interface GrantSummary {
   readonly expiresAt: number
 }
 
-/** ASSUMED lifetimes (ms). An action grant is a pre-approval for one exact request and lapses quickly. */
+/** Owner-approved lifetimes (ms, 2026-10-22). An action grant is a pre-approval for one exact request and lapses quickly. */
 export const DEFAULT_GRANT_TTL_MS: Readonly<Record<GrantScopeKind, number>> = {
   action: 60_000,
   task: 30 * 60_000,

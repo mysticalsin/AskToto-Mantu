@@ -16,9 +16,21 @@ const flush = async (): Promise<void> => {
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
-const LIMITS: SchedulerLimits = { maxEffectPerOwner: 1, maxReadOnlyPerOwner: 3, maxQueuedPerOwner: 4, maxQueueWaitMs: 5_000 }
+const LIMITS: SchedulerLimits = {
+  maxEffectPerOwner: 1,
+  maxReadOnlyPerOwner: 3,
+  maxQueuedPerOwner: 4,
+  maxQueueWaitMs: 5_000
+}
 
-function job(key: string, owner: string, resources: string[], events: string[], hold: Gate, effect: 'effect' | 'read-only' = 'effect') {
+function job(
+  key: string,
+  owner: string,
+  resources: string[],
+  events: string[],
+  hold: Gate,
+  effect: 'effect' | 'read-only' = 'effect'
+) {
   return {
     key,
     owner,
@@ -234,9 +246,10 @@ describe('TaskScheduler (G32)', () => {
       status: 'rejected',
       reason: 'queue_full'
     })
-    await expect(
-      scheduler.submit({ ...job('d', 'o2', ['x'], events, gate()), resources: [''] })
-    ).resolves.toEqual({ status: 'rejected', reason: 'invalid_job' })
+    await expect(scheduler.submit({ ...job('d', 'o2', ['x'], events, gate()), resources: [''] })).resolves.toEqual({
+      status: 'rejected',
+      reason: 'invalid_job'
+    })
   })
 
   it('releases its locks and slot when a job throws, and rethrows to the submitter', async () => {

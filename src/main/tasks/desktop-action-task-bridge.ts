@@ -59,8 +59,8 @@ export const DESKTOP_ACTION_TASK_POLICY: TaskPolicy = {
 const GRANT_TTL_MS = 10_000
 
 /**
- * PROPOSED (ASSUMED until the owner confirms): one desktop-effect task per owner, a small read-only allowance,
- * and a wait no longer than a confirmation lives, so a confirmed action never fires long after it was approved.
+ * Owner-approved 2026-10-22: one desktop-effect task per owner, four read-only, and a 10 s queue wait (no longer
+ * than a confirmation lives), so a confirmed action never fires long after it was approved.
  */
 export const DESKTOP_ACTION_SCHEDULER_LIMITS: SchedulerLimits = {
   maxEffectPerOwner: 1,
