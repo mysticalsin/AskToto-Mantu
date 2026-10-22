@@ -97,7 +97,12 @@ async function pageProbe(probeMs) {
     String(stack ?? '')
       .split('\n')
       .slice(2, 4)
-      .map((line) => line.trim().replace(/^at /, '').replace(/\?[^:)]*/, ''))
+      .map((line) =>
+        line
+          .trim()
+          .replace(/^at /, '')
+          .replace(/\?[^:)]*/, '')
+      )
       .join(' < ')
   window.requestAnimationFrame = function countedRaf(callback) {
     rafCalls += 1
@@ -128,7 +133,14 @@ async function pageProbe(probeMs) {
   return out
 }
 
-const METRIC_KEYS = ['ProcessTime', 'TaskDuration', 'ScriptDuration', 'LayoutCount', 'RecalcStyleCount', 'LayoutDuration']
+const METRIC_KEYS = [
+  'ProcessTime',
+  'TaskDuration',
+  'ScriptDuration',
+  'LayoutCount',
+  'RecalcStyleCount',
+  'LayoutDuration'
+]
 
 async function metrics(cdp) {
   const { metrics: list } = await cdp.send('Performance.getMetrics')
@@ -195,7 +207,9 @@ function counters(action) {
 }
 
 async function readCounters(session, action = 'read') {
-  return session.withPage((page) => page.evaluate(counters, action)).catch((error) => ({ error: String(error?.message ?? error) }))
+  return session
+    .withPage((page) => page.evaluate(counters, action))
+    .catch((error) => ({ error: String(error?.message ?? error) }))
 }
 
 /** Per-second rates between two counter reads. */
@@ -285,7 +299,11 @@ export const MATRICES = Object.freeze({
     { label: 'orb-60fps', rafFps: 60, css: '' },
     { label: 'orb-30fps', rafFps: 30, css: '' },
     { label: 'breathe-paused', rafFps: null, css: BREATHE_PAUSED },
-    { label: 'breathe-steps24', rafFps: null, css: '.aw-hidden-rainbow::before{animation-timing-function:steps(24)!important}' },
+    {
+      label: 'breathe-steps24',
+      rafFps: null,
+      css: '.aw-hidden-rainbow::before{animation-timing-function:steps(24)!important}'
+    },
     { label: 'orb-30fps+breathe-paused', rafFps: 30, css: BREATHE_PAUSED },
     { label: 'restored', rafFps: null, css: '' }
   ],
@@ -305,7 +323,9 @@ const FREEZE = '*,*::before,*::after{animation-play-state:paused!important;trans
 /** Pixel difference of two PNG screenshots (RGBA). */
 async function pixelDiff(a, b) {
   const { default: sharp } = await import('sharp')
-  const [ra, rb] = await Promise.all([a, b].map((png) => sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true })))
+  const [ra, rb] = await Promise.all(
+    [a, b].map((png) => sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true }))
+  )
   if (ra.info.width !== rb.info.width || ra.info.height !== rb.info.height) return { sameSize: false }
   let differing = 0
   let maxDelta = 0
@@ -315,7 +335,13 @@ async function pixelDiff(a, b) {
     if (delta > 0) differing += 1
     maxDelta = Math.max(maxDelta, delta)
   }
-  return { sameSize: true, width: ra.info.width, height: ra.info.height, differingPixels: differing, maxChannelDelta: maxDelta }
+  return {
+    sameSize: true,
+    width: ra.info.width,
+    height: ra.info.height,
+    differingPixels: differing,
+    maxChannelDelta: maxDelta
+  }
 }
 
 /** Frozen screenshots: the control frame against each candidate css, so a cost cut is proven pixel-identical or not. */
@@ -333,7 +359,8 @@ async function screenshotDiffs(session, candidates, outDir) {
     const control = await shoot('', 'shot-control')
     const control2 = await shoot('', 'shot-control-repeat')
     const out = { controlRepeat: await pixelDiff(control, control2) }
-    for (const [name, css] of Object.entries(candidates)) out[name] = await pixelDiff(control, await shoot(css, `shot-${name}`))
+    for (const [name, css] of Object.entries(candidates))
+      out[name] = await pixelDiff(control, await shoot(css, `shot-${name}`))
     await page.evaluate(applyVariant, { rafFps: null, css: '' })
     return out
   })
@@ -370,7 +397,8 @@ async function main(argv) {
     return EXIT_CODES.PRECONDITION
   }
   const runId = values['run-id'] ?? newRunId()
-  if (!/^[A-Za-z0-9-]{1,16}$/.test(runId)) throw new CliError('--run-id must be 1-16 characters of letters, digits and -')
+  if (!/^[A-Za-z0-9-]{1,16}$/.test(runId))
+    throw new CliError('--run-id must be 1-16 characters of letters, digits and -')
   const layout = sandboxLayout({ sandboxRoot, runId })
   const appPath = values.app ?? join(layout.appsDir, 'Metis QA.app')
   const guards = guardReport({ layout, appPath, parentEnv: process.env })
@@ -390,7 +418,9 @@ async function main(argv) {
     log(`settling ${values['settle-seconds']} s with no CDP session`)
     await sleep(values['settle-seconds'] * 1000)
     report.probe = await probeAll(session, values['probe-seconds'] * 1000)
-    log(`probe: ${JSON.stringify(report.probe.map((page) => ({ raf: page.raf?.perSecond, timers: page.setTimeout?.perSecond, animations: page.animations?.map((a) => `${a.name}:${a.playState}`), vis: page.visibilityState, focus: page.hasFocus })))}`)
+    log(
+      `probe: ${JSON.stringify(report.probe.map((page) => ({ raf: page.raf?.perSecond, timers: page.setTimeout?.perSecond, animations: page.animations?.map((a) => `${a.name}:${a.playState}`), vis: page.visibilityState, focus: page.hasFocus })))}`
+    )
     await sleep(5_000)
     report.windows = []
     const measure = async (label, seconds = values['window-seconds'], action = 'read') => {

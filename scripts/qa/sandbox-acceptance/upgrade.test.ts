@@ -31,12 +31,23 @@ describe('meeting snapshots', () => {
       })
     )
     expect(Object.keys(snap.saved)).toEqual(['2026-10-21_1000-a.md'])
-    expect(snap.saved['2026-10-21_1000-a.md']).toEqual({ sha256: 'h:one', bytes: 3 })
-    expect(Object.keys(snap.others).sort()).toEqual(['.autosave-draft-x.md', '2026-10-21_1000-note-b.md', 'README.md', 'index.md'])
+    expect((snap.saved as Record<string, unknown>)['2026-10-21_1000-a.md']).toEqual({ sha256: 'h:one', bytes: 3 })
+    expect(Object.keys(snap.others).sort()).toEqual([
+      '.autosave-draft-x.md',
+      '2026-10-21_1000-note-b.md',
+      'README.md',
+      'index.md'
+    ])
   })
 
   it('returns empty maps for a missing folder and skips entries that cannot be read', () => {
-    expect(snapshotMeetings('/nope', { list: () => { throw new Error('ENOENT') } })).toEqual({ saved: {}, others: {} })
+    expect(
+      snapshotMeetings('/nope', {
+        list: () => {
+          throw new Error('ENOENT')
+        }
+      })
+    ).toEqual({ saved: {}, others: {} })
     const skipped = snapshotMeetings('/m', {
       list: () => ['a.md', 'dir.md'],
       hash: (path) => {
@@ -75,7 +86,13 @@ describe('reportedVersions and judgeVersion', () => {
     ).toEqual(['2.12.0'])
   })
 
-  const base = { expected: '2.12.0', plistVersion: '2.12.0', ipcVersion: '2.12.0', auditVersions: ['2.12.0'], previousVersion: '1.9.7' }
+  const base = {
+    expected: '2.12.0',
+    plistVersion: '2.12.0',
+    ipcVersion: '2.12.0',
+    auditVersions: ['2.12.0'],
+    previousVersion: '1.9.7'
+  }
   it('passes only when plist, IPC and audit all report the expected version and it differs from the previous build', () => {
     expect(judgeVersion(base)).toEqual({ ok: true, problems: [] })
   })
@@ -99,10 +116,16 @@ describe('judgeSingleInstance', () => {
     expect(judgeSingleInstance(good).ok).toBe(true)
   })
   it('fails for a lingering, signalled, non-zero or slow second instance', () => {
-    expect(judgeSingleInstance({ ...good, second: { exited: false, code: null, signal: null, ms: 30_000 } }).problems.join()).toMatch(/still running/)
-    expect(judgeSingleInstance({ ...good, second: { exited: true, code: null, signal: 'SIGSEGV', ms: 100 } }).problems.join()).toMatch(/SIGSEGV/)
+    expect(
+      judgeSingleInstance({ ...good, second: { exited: false, code: null, signal: null, ms: 30_000 } }).problems.join()
+    ).toMatch(/still running/)
+    expect(
+      judgeSingleInstance({ ...good, second: { exited: true, code: null, signal: 'SIGSEGV', ms: 100 } }).problems.join()
+    ).toMatch(/SIGSEGV/)
     expect(judgeSingleInstance({ ...good, second: { exited: true, code: 1, signal: null, ms: 100 } }).ok).toBe(false)
-    expect(judgeSingleInstance({ ...good, second: { exited: true, code: 0, signal: null, ms: 20_000 } }, 15_000).ok).toBe(false)
+    expect(
+      judgeSingleInstance({ ...good, second: { exited: true, code: 0, signal: null, ms: 20_000 } }, 15_000).ok
+    ).toBe(false)
   })
   it('fails when the first instance died, hung or recorded a crash', () => {
     expect(judgeSingleInstance({ ...good, firstAlive: false }).problems.join()).toMatch(/no longer running/)
@@ -112,18 +135,36 @@ describe('judgeSingleInstance', () => {
 })
 
 describe('judgeRollback', () => {
-  const clean = { launched: true, launchError: null, crashed: false, integrity: { missing: [], changed: [] }, listedAll: true, readableAll: true }
+  const clean = {
+    launched: true,
+    launchError: null,
+    crashed: false,
+    integrity: { missing: [], changed: [] },
+    listedAll: true,
+    readableAll: true
+  }
   it('passes when the older build starts and lists and reads every meeting', () => {
     expect(judgeRollback(clean)).toEqual({ status: 'PASS', outcome: 'starts-and-lists' })
   })
   it('records a safe refusal and a partial listing as gaps, never as a pass', () => {
-    expect(judgeRollback({ ...clean, launched: false, launchError: 'no app.renderer.ready' })).toMatchObject({ status: 'NOT_SUPPORTED', outcome: 'refused-safely' })
-    expect(judgeRollback({ ...clean, readableAll: false })).toMatchObject({ status: 'NOT_SUPPORTED', outcome: 'starts-lists-partly' })
+    expect(judgeRollback({ ...clean, launched: false, launchError: 'no app.renderer.ready' })).toMatchObject({
+      status: 'NOT_SUPPORTED',
+      outcome: 'refused-safely'
+    })
+    expect(judgeRollback({ ...clean, readableAll: false })).toMatchObject({
+      status: 'NOT_SUPPORTED',
+      outcome: 'starts-lists-partly'
+    })
   })
   it('fails on a crash, and on any changed or missing meeting even when the app started', () => {
     expect(judgeRollback({ ...clean, launched: false, crashed: true, launchError: 'app.crash' }).status).toBe('FAIL')
-    expect(judgeRollback({ ...clean, integrity: { missing: ['a.md'], changed: [] } })).toMatchObject({ status: 'FAIL', outcome: 'data-damaged' })
-    expect(judgeRollback({ ...clean, launched: false, integrity: { missing: [], changed: ['a.md'] } }).status).toBe('FAIL')
+    expect(judgeRollback({ ...clean, integrity: { missing: ['a.md'], changed: [] } })).toMatchObject({
+      status: 'FAIL',
+      outcome: 'data-damaged'
+    })
+    expect(judgeRollback({ ...clean, launched: false, integrity: { missing: [], changed: ['a.md'] } }).status).toBe(
+      'FAIL'
+    )
   })
 })
 

@@ -105,7 +105,10 @@ export function diffSnapshots(before, after) {
 export function reportedVersions(records) {
   const versions = new Set()
   for (const record of records) {
-    if ((record?.event === 'app.started' || record?.event === 'app.renderer.ready') && typeof record.version === 'string')
+    if (
+      (record?.event === 'app.started' || record?.event === 'app.renderer.ready') &&
+      typeof record.version === 'string'
+    )
       versions.add(record.version)
   }
   return [...versions].sort()
@@ -120,7 +123,8 @@ export function reportedVersions(records) {
 export function judgeVersion({ expected, plistVersion, ipcVersion, auditVersions, previousVersion }) {
   const problems = []
   if (plistVersion !== expected) problems.push(`Info.plist says ${plistVersion ?? 'nothing'}, expected ${expected}`)
-  if (ipcVersion !== expected) problems.push(`the running app reported ${ipcVersion ?? 'nothing'}, expected ${expected}`)
+  if (ipcVersion !== expected)
+    problems.push(`the running app reported ${ipcVersion ?? 'nothing'}, expected ${expected}`)
   if (!auditVersions.length) problems.push('no app.started/app.renderer.ready audit version was written')
   else if (auditVersions.some((version) => version !== expected))
     problems.push(`audit records report ${auditVersions.join(', ')}, expected only ${expected}`)
@@ -136,7 +140,10 @@ export function judgeVersion({ expected, plistVersion, ipcVersion, auditVersions
  *   firstAlive: boolean, firstResponsive: boolean, crashRecords: number }} observed
  * @param {number} [maxExitMs]
  */
-export function judgeSingleInstance({ second, firstAlive, firstResponsive, crashRecords }, maxExitMs = SECOND_INSTANCE_MAX_EXIT_MS) {
+export function judgeSingleInstance(
+  { second, firstAlive, firstResponsive, crashRecords },
+  maxExitMs = SECOND_INSTANCE_MAX_EXIT_MS
+) {
   const problems = []
   if (!second.exited) problems.push(`the second instance was still running after ${Math.round(second.ms / 1000)}s`)
   else {
@@ -166,13 +173,19 @@ export function judgeRollback({ launched, launchError, crashed, integrity, liste
       outcome: 'data-damaged',
       reason: `meeting data changed after the rollback launch (missing: ${integrity.missing.length}, changed: ${integrity.changed.length})`
     }
-  if (crashed) return { status: 'FAIL', outcome: 'crashed', reason: `the older build crashed on the newer profile: ${launchError ?? 'crash record'}` }
+  if (crashed)
+    return {
+      status: 'FAIL',
+      outcome: 'crashed',
+      reason: `the older build crashed on the newer profile: ${launchError ?? 'crash record'}`
+    }
   if (launched && listedAll && readableAll) return { status: 'PASS', outcome: 'starts-and-lists' }
   if (launched)
     return {
       status: 'NOT_SUPPORTED',
       outcome: 'starts-lists-partly',
-      reason: 'the older build starts on the newer profile but does not list/read every meeting; the data on disk is unchanged'
+      reason:
+        'the older build starts on the newer profile but does not list/read every meeting; the data on disk is unchanged'
     }
   return {
     status: 'NOT_SUPPORTED',
@@ -182,7 +195,8 @@ export function judgeRollback({ launched, launchError, crashed, integrity, liste
 }
 
 /** Normalise the names an install step should never touch: the install must not write into the profile. */
-export const profileUntouchedBy = (before, after) => diffSnapshots({ ...before.saved, ...before.others }, { ...after.saved, ...after.others }).identical
+export const profileUntouchedBy = (before, after) =>
+  diffSnapshots({ ...before.saved, ...before.others }, { ...after.saved, ...after.others }).identical
 
 // ---------------------------------------------------------------------------------------------------------------
 // Observation helpers (use a real launched app)
@@ -194,7 +208,11 @@ export async function readSettingsFacts(session, keys) {
       const settings = await window.toto.getSettings()
       const picked = {}
       for (const name of names) picked[name] = settings?.[name] ?? null
-      return { version: typeof settings?.version === 'string' ? settings.version : null, picked, onboardingDone: Boolean(settings?.onboardingDone) }
+      return {
+        version: typeof settings?.version === 'string' ? settings.version : null,
+        picked,
+        onboardingDone: Boolean(settings?.onboardingDone)
+      }
     }, keys)
   )
 }
@@ -207,7 +225,12 @@ export async function readSettingsFacts(session, keys) {
 export function settingsFileFacts(userData) {
   try {
     const bytes = readFileSync(join(userData, 'settings.json'))
-    return { present: true, bytes: bytes.length, sha256: sha256Buffer(bytes), encryptedAtRest: bytes.subarray(0, 6).toString('latin1') === 'ATKENC' }
+    return {
+      present: true,
+      bytes: bytes.length,
+      sha256: sha256Buffer(bytes),
+      encryptedAtRest: bytes.subarray(0, 6).toString('latin1') === 'ATKENC'
+    }
   } catch {
     return { present: false, bytes: 0, sha256: null, encryptedAtRest: false }
   }
@@ -257,7 +280,8 @@ export async function spawnSecondInstance({ layout, appPath, parentEnv, timeoutM
 /** Counts of audit events by name (names only), for what a window of the run wrote. */
 export function eventCounts(records) {
   const counts = {}
-  for (const record of records) if (typeof record?.event === 'string') counts[record.event] = (counts[record.event] ?? 0) + 1
+  for (const record of records)
+    if (typeof record?.event === 'string') counts[record.event] = (counts[record.event] ?? 0) + 1
   return counts
 }
 
@@ -345,7 +369,10 @@ export async function runUpgradeScenario({
 
   const meetingSteps = (prefix, requires) => {
     const holdMs = () =>
-      Math.max(0, meetingSeconds * 1000 - (report.steps.find((step) => step.id === `${prefix}-transcript-observed`)?.ms ?? 0))
+      Math.max(
+        0,
+        meetingSeconds * 1000 - (report.steps.find((step) => step.id === `${prefix}-transcript-observed`)?.ms ?? 0)
+      )
     return async () => {
       await runStep(report, `${prefix}-meeting-live`, () => startSyntheticMeeting(session), { requires })
       await runStep(
@@ -379,7 +406,9 @@ export async function runUpgradeScenario({
       await start()
       const facts = await readSettingsFacts(session, [])
       ctx.versions.previous = facts.version
-      return { evidence: { ...readyEvidence(), ipcVersion: facts.version, bundleVersion: ctx.installs.previous?.app.version } }
+      return {
+        evidence: { ...readyEvidence(), ipcVersion: facts.version, bundleVersion: ctx.installs.previous?.app.version }
+      }
     },
     { requires: ['install-previous'] }
   )
@@ -389,10 +418,13 @@ export async function runUpgradeScenario({
     async () => {
       const keys = Object.keys(UPGRADE_SETTINGS_PATCH)
       ctx.settingsFileBefore = settingsFileFacts(layout.userData)
-      await session.withPage((page) => page.evaluate((patch) => window.toto.setSettings(patch), { ...UPGRADE_SETTINGS_PATCH }))
+      await session.withPage((page) =>
+        page.evaluate((patch) => window.toto.setSettings(patch), { ...UPGRADE_SETTINGS_PATCH })
+      )
       const facts = await readSettingsFacts(session, keys)
       for (const [key, value] of Object.entries(UPGRADE_SETTINGS_PATCH)) {
-        if (facts.picked[key] !== value) throw new Error(`getSettings() did not return ${key}=${value} after setSettings`)
+        if (facts.picked[key] !== value)
+          throw new Error(`getSettings() did not return ${key}=${value} after setSettings`)
       }
       return { evidence: { keys, ipcReturnsValues: true, settingsFileBeforeWrite: ctx.settingsFileBefore } }
     },
@@ -413,7 +445,8 @@ export async function runUpgradeScenario({
     async () => {
       const before = ctx.installs.previous?.app.mainExecutableSha256
       const now = ctx.installs.candidate?.app.mainExecutableSha256
-      if (!before || !now || before === now) throw new Error('the candidate bundle has the same main executable as the previous build')
+      if (!before || !now || before === now)
+        throw new Error('the candidate bundle has the same main executable as the previous build')
       await start()
       return { evidence: { ...readyEvidence(), executableChangedFromPrevious: true } }
     },
@@ -451,7 +484,10 @@ export async function runUpgradeScenario({
       if (!previousSaved) throw new Error('no meeting was saved by the previous build to look for')
       const review = await reviewSavedMeeting(session, previousSaved, { speech: false })
       const diff = diffSnapshots(ctx.snapshots.afterPrevious.saved, snapshot().saved)
-      if (!diff.identical) throw new Error(`meeting files changed after the upgrade (missing ${diff.missing.length}, changed ${diff.changed.length})`)
+      if (!diff.identical)
+        throw new Error(
+          `meeting files changed after the upgrade (missing ${diff.missing.length}, changed ${diff.changed.length})`
+        )
       return {
         evidence: {
           ...review.evidence,
@@ -470,7 +506,8 @@ export async function runUpgradeScenario({
       const keys = Object.keys(UPGRADE_SETTINGS_PATCH)
       const facts = await readSettingsFacts(session, keys)
       for (const [key, value] of Object.entries(UPGRADE_SETTINGS_PATCH)) {
-        if (facts.picked[key] !== value) throw new Error(`${key} did not survive the upgrade (getSettings returned ${facts.picked[key]})`)
+        if (facts.picked[key] !== value)
+          throw new Error(`${key} did not survive the upgrade (getSettings returned ${facts.picked[key]})`)
       }
       if (!facts.onboardingDone) throw new Error('onboardingDone was lost in the upgrade')
       // A fresh 2.12 process just read the value back from the file the previous build wrote; also require that file to have
@@ -512,7 +549,9 @@ export async function runUpgradeScenario({
         firstResponsive = false
       }
       const written = readAudit(layout).slice(auditBefore)
-      const crashRecords = written.filter((record) => record.event === 'app.crash' || record.event === 'app.unresponsive').length
+      const crashRecords = written.filter(
+        (record) => record.event === 'app.crash' || record.event === 'app.unresponsive'
+      ).length
       const judged = judgeSingleInstance({ second, firstAlive, firstResponsive, crashRecords })
       const evidence = {
         secondExited: second.exited,
@@ -564,7 +603,11 @@ export async function runUpgradeScenario({
       ctx.rollbackJudgement = judgeRollback({ ...rollback, integrity, listedAll: true, readableAll: true })
       if (ctx.rollbackJudgement.status === 'FAIL') throw new Error(ctx.rollbackJudgement.reason)
       if (!rollback.launched)
-        return { status: 'NOT_SUPPORTED', reason: ctx.rollbackJudgement.reason, evidence: { ...evidence, outcome: 'refused-safely' } }
+        return {
+          status: 'NOT_SUPPORTED',
+          reason: ctx.rollbackJudgement.reason,
+          evidence: { ...evidence, outcome: 'refused-safely' }
+        }
       return { evidence: { ...evidence, outcome: 'started' } }
     },
     { requires: ['install-previous-again', 'candidate-clean-quit'] }
@@ -588,7 +631,8 @@ export async function runUpgradeScenario({
       if (!rollback.listedAll || !rollback.readableAll)
         return {
           status: 'NOT_SUPPORTED',
-          reason: 'the older build started on the newer profile but cannot list/read every meeting; data on disk is untouched',
+          reason:
+            'the older build started on the newer profile but cannot list/read every meeting; data on disk is untouched',
           evidence
         }
       return { evidence }
@@ -607,7 +651,9 @@ export async function runUpgradeScenario({
       if (judged.status === 'FAIL') throw new Error(judged.reason)
       const profileAfter = snapshotFiles(layout.userData)
       const profileDiff = diffSnapshots(profileBeforeRollback, profileAfter)
-      const vital = ['settings.json', 'secret-key.bin'].filter((name) => name in profileBeforeRollback && !(name in profileAfter))
+      const vital = ['settings.json', 'secret-key.bin'].filter(
+        (name) => name in profileBeforeRollback && !(name in profileAfter)
+      )
       if (vital.length) throw new Error(`the rollback launch deleted ${vital.join(', ')} from the profile`)
       return {
         evidence: {
@@ -648,14 +694,17 @@ export async function runUpgradeScenario({
         results.push({ listed: review.evidence.listed, readOk: review.evidence.readOk, lines: review.evidence.lines })
       }
       const diff = diffSnapshots(ctx.snapshots.afterCandidate.saved, snapshot().saved)
-      if (!diff.identical) throw new Error(`meeting files changed (missing ${diff.missing.length}, changed ${diff.changed.length})`)
+      if (!diff.identical)
+        throw new Error(`meeting files changed (missing ${diff.missing.length}, changed ${diff.changed.length})`)
       const facts = await readSettingsFacts(session, Object.keys(UPGRADE_SETTINGS_PATCH))
       return {
         evidence: {
           meetings: results.length,
           results,
           byteIdenticalToCandidateQuit: true,
-          settingValuesPreserved: Object.entries(UPGRADE_SETTINGS_PATCH).every(([key, value]) => facts.picked[key] === value),
+          settingValuesPreserved: Object.entries(UPGRADE_SETTINGS_PATCH).every(
+            ([key, value]) => facts.picked[key] === value
+          ),
           secondMeetingPresent: Boolean(candidateSaved) && expectedMeetings.includes(candidateSaved)
         }
       }
@@ -676,7 +725,14 @@ export async function runUpgradeScenario({
 
 /** name -> { sha256 } for every regular file directly inside the userData directory (excluding the live log and lock files). */
 export function snapshotFiles(userData) {
-  const volatile = new Set(['run-alive.json', 'run-state.json', 'DevToolsActivePort', 'SingletonLock', 'SingletonCookie', 'SingletonSocket'])
+  const volatile = new Set([
+    'run-alive.json',
+    'run-state.json',
+    'DevToolsActivePort',
+    'SingletonLock',
+    'SingletonCookie',
+    'SingletonSocket'
+  ])
   if (!existsSync(userData)) return {}
   const out = {}
   for (const name of readdirSync(userData)) {

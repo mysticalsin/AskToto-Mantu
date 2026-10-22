@@ -93,7 +93,8 @@ export function resolveConfig(argv, env = process.env) {
   }
   // The upgrade scenario installs both builds itself, into its own Applications directory inside the sandbox. It never uses
   // (or replaces) the shared <sandbox>/Applications install, which a soak or another run may have running.
-  if (values.app) throw new CliError('--app is not used by --scenario upgrade (it installs from --previous-zip/--candidate-zip)')
+  if (values.app)
+    throw new CliError('--app is not used by --scenario upgrade (it installs from --previous-zip/--candidate-zip)')
   for (const flag of ['previous-zip', 'candidate-zip']) {
     if (!values[flag]) throw new CliError(`--scenario upgrade needs --${flag} <Metis-QA-*.zip>`)
     if (!/Metis-QA-.*\.zip$/.test(basename(values[flag])))
@@ -103,7 +104,11 @@ export function resolveConfig(argv, env = process.env) {
   }
   const appsDir = join(sandboxRoot, 'upgrade', runId, 'Applications')
   return {
-    values: { ...values, 'previous-zip': resolve(values['previous-zip']), 'candidate-zip': resolve(values['candidate-zip']) },
+    values: {
+      ...values,
+      'previous-zip': resolve(values['previous-zip']),
+      'candidate-zip': resolve(values['candidate-zip'])
+    },
     layout: { ...layout, appsDir },
     appPath: join(appsDir, 'Metis QA.app')
   }
@@ -111,7 +116,14 @@ export function resolveConfig(argv, env = process.env) {
 
 /** Guards that do not need an installed bundle: sandbox root, child env, meetings folder, parent env, socket budget. */
 function upgradeGuardReport({ layout, env, platform }) {
-  const childEnv = planLaunch({ layout, appPath: layout.appsDir, parentEnv: env, captureFile: layout.captureWav, bundleId: null, platform }).childEnv
+  const childEnv = planLaunch({
+    layout,
+    appPath: layout.appsDir,
+    parentEnv: env,
+    captureFile: layout.captureWav,
+    bundleId: null,
+    platform
+  }).childEnv
   const result = evaluateGuards({
     sandboxRoot: layout.sandboxRoot,
     childEnv,
@@ -120,7 +132,11 @@ function upgradeGuardReport({ layout, env, platform }) {
   })
   const checks = [...result.checks, checkSocketBudget(layout.tmp)]
   if (layout.appsDir === join(layout.sandboxRoot, 'Applications'))
-    checks.push({ id: 'upgrade-apps-dir', ok: false, detail: 'the upgrade scenario must not use the shared sandbox Applications dir' })
+    checks.push({
+      id: 'upgrade-apps-dir',
+      ok: false,
+      detail: 'the upgrade scenario must not use the shared sandbox Applications dir'
+    })
   else checks.push({ id: 'upgrade-apps-dir', ok: true, detail: 'a per-run Applications dir inside the sandbox' })
   return { ok: checks.every((check) => check.ok), checks, childEnvKeys: Object.keys(childEnv).sort() }
 }
@@ -158,16 +174,16 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
           : values.scenario === 'settings-hig'
             ? [...SETTINGS_HIG_STEPS]
             : [
-              'launch-and-renderer-ready',
-              'meeting-live',
-              'transcript-observed',
-              'stop-and-save',
-              'review-opens-meeting',
-              'clean-quit',
-              'relaunch',
-              'meeting-preserved-after-relaunch',
-              'final-quit'
-            ],
+                'launch-and-renderer-ready',
+                'meeting-live',
+                'transcript-observed',
+                'stop-and-save',
+                'review-opens-meeting',
+                'clean-quit',
+                'relaunch',
+                'meeting-preserved-after-relaunch',
+                'final-quit'
+              ],
       childEnvKeys: guards.childEnvKeys
     }
   }

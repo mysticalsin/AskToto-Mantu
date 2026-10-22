@@ -137,16 +137,38 @@ describe('upgrade scenario configuration', () => {
   it('needs both zips, named as QA-identity artifacts, and rejects --app', () => {
     const { previous, candidate } = zips()
     expect(() => resolveConfig(['--scenario', 'upgrade'], isolatedEnv())).toThrow(/--previous-zip/)
-    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous], isolatedEnv())).toThrow(/--candidate-zip/)
-    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', join(base, 'x.zip')], isolatedEnv())).toThrow(/Metis-QA/)
-    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', join(base, 'Metis-QA-9.zip')], isolatedEnv())).toThrow(/no such file/)
-    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', candidate, '--app', '/x/Metis QA.app'], isolatedEnv())).toThrow(/--app is not used/)
-    expect(() => resolveConfig(['--previous-zip', previous], isolatedEnv())).toThrow(/only valid with --scenario upgrade/)
+    expect(() => resolveConfig(['--scenario', 'upgrade', '--previous-zip', previous], isolatedEnv())).toThrow(
+      /--candidate-zip/
+    )
+    expect(() =>
+      resolveConfig(
+        ['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', join(base, 'x.zip')],
+        isolatedEnv()
+      )
+    ).toThrow(/Metis-QA/)
+    expect(() =>
+      resolveConfig(
+        ['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', join(base, 'Metis-QA-9.zip')],
+        isolatedEnv()
+      )
+    ).toThrow(/no such file/)
+    expect(() =>
+      resolveConfig(
+        ['--scenario', 'upgrade', '--previous-zip', previous, '--candidate-zip', candidate, '--app', '/x/Metis QA.app'],
+        isolatedEnv()
+      )
+    ).toThrow(/--app is not used/)
+    expect(() => resolveConfig(['--previous-zip', previous], isolatedEnv())).toThrow(
+      /only valid with --scenario upgrade/
+    )
   })
 
   it('installs into a per-run Applications dir, never the shared sandbox install', () => {
     const { previous, candidate } = zips()
-    const config = resolveConfig(['--scenario', 'upgrade', '--run-id', 'upg-1', '--previous-zip', previous, '--candidate-zip', candidate], isolatedEnv())
+    const config = resolveConfig(
+      ['--scenario', 'upgrade', '--run-id', 'upg-1', '--previous-zip', previous, '--candidate-zip', candidate],
+      isolatedEnv()
+    )
     expect(config.layout.appsDir).toBe(join(sandboxRoot, 'upgrade', 'upg-1', 'Applications'))
     expect(config.appPath).toBe(join(config.layout.appsDir, 'Metis QA.app'))
     expect(config.appPath).not.toBe(join(sandboxRoot, 'Applications', 'Metis QA.app'))
@@ -157,7 +179,14 @@ describe('upgrade scenario configuration', () => {
   it('dry-runs with every guard before any bundle is installed, and plans the upgrade steps', () => {
     const { previous, candidate } = zips()
     const env = isolatedEnv()
-    const plan = dryRunPlan(resolveConfig(['--scenario', 'upgrade', '--run-id', 'upg-1', '--previous-zip', previous, '--candidate-zip', candidate], env), env, { platform: 'darwin' })
+    const plan = dryRunPlan(
+      resolveConfig(
+        ['--scenario', 'upgrade', '--run-id', 'upg-1', '--previous-zip', previous, '--candidate-zip', candidate],
+        env
+      ),
+      env,
+      { platform: 'darwin' }
+    )
     expect(plan.ok).toBe(true)
     expect(plan.checks.map((check) => check.id)).toContain('upgrade-apps-dir')
     expect(plan.plan.steps).toEqual([...UPGRADE_STEPS])
