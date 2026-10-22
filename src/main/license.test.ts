@@ -68,7 +68,9 @@ function signTestLease(overrides: Partial<Record<string, unknown>> = {}): string
   const now = Date.now()
   const payload = {
     licenseKey: 'ATK-TEST1234',
-    machineId: 'machine-1',
+    // D7-1: a lease is honoured only for the device it was issued to, so the fixture is bound to this
+    // test's real durable device id unless a case overrides it.
+    machineId: getDurableMachineId() ?? 'machine-1',
     companyName: 'Acme Corp',
     seatCap: 5,
     issuedAt: now,
@@ -481,6 +483,45 @@ describe('license.ts — phone-home activation', () => {
       expect(testSettings.licenseValid).toBe(false)
     })
 
+    it.each(['revoked', 'expired', 'not_activated', 'invalid'] as const)(
+      'a %s heartbeat clears the lease and the gate denies',
+      async (verdict) => {
+        // D7-1: the signed lease outranks the licenseValid check in checkLicenseGrace, so an un-licensed
+        // device that kept its lease stayed allowed for up to the lease TTL.
+        testSettings = baseSettings({
+          licenseGateEnabled: true,
+          licenseValid: true,
+          licenseServerUrl: 'https://license.acme.test',
+          licenseKey: 'ATK-TEST1234',
+          licenseLastValidatedAt: Date.now() - 45 * DAY,
+          licenseLease: signTestLease({ notAfter: Date.now() + 10 * DAY })
+        })
+        expect(checkLicenseGrace().allowed).toBe(true)
+        fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: verdict }))
+
+        await heartbeat()
+
+        expect(testSettings.licenseValid).toBe(false)
+        expect(testSettings.licenseLease).toBe('')
+        expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+      }
+    )
+
+    it('a network failure keeps the lease: connectivity noise never un-licenses a device', async () => {
+      const lease = signTestLease({ notAfter: Date.now() + 10 * DAY })
+      testSettings = baseSettings({
+        licenseValid: true,
+        licenseServerUrl: 'https://license.acme.test',
+        licenseKey: 'ATK-TEST1234',
+        licenseLease: lease
+      })
+      fetchMock.mockRejectedValue(new Error('offline'))
+
+      await heartbeat()
+
+      expect(testSettings.licenseLease).toBe(lease)
+    })
+
     it('an explicit expired response also flips licenseValid to false', async () => {
       testSettings = baseSettings({
         licenseValid: true,
@@ -551,6 +592,7 @@ describe('license.ts — phone-home activation', () => {
       testSettings = baseSettings({
         licenseGateEnabled: true,
         licenseValid: false,
+        licenseKey: 'ATK-TEST1234',
         licenseLease: signTestLease({ notAfter: Date.now() + 5 * DAY })
       })
 
@@ -568,6 +610,7 @@ describe('license.ts — phone-home activation', () => {
       testSettings = baseSettings({
         licenseGateEnabled: true,
         licenseValid: true,
+        licenseKey: 'ATK-TEST1234',
         licenseLastValidatedAt: Date.now() - 45 * DAY, // past HARD_CAP_MS
         licenseLease: signTestLease({ notAfter: Date.now() + 2 * DAY })
       })
@@ -576,6 +619,31 @@ describe('license.ts — phone-home activation', () => {
 
       expect(r).toEqual({ allowed: true, leaseExpiresAt: expect.any(Number) })
       expect(fetchMock).not.toHaveBeenCalled() // never falls through to the heartbeat-triggering branch
+    })
+
+    it('a lease for another machineId is ignored', () => {
+      // D7-1: a copied settings file (or a lease from a different seat) must not carry its validity along.
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseKey: 'ATK-TEST1234',
+        licenseLease: signTestLease({ machineId: 'some-other-device', notAfter: Date.now() + 5 * DAY })
+      })
+
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+      expect(licenseDisplayStatus().leaseExpiresAt).toBeNull()
+    })
+
+    it('a lease for another licenseKey is ignored', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseKey: 'ATK-OTHER-KEY',
+        licenseLease: signTestLease({ notAfter: Date.now() + 5 * DAY })
+      })
+
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+      expect(licenseDisplayStatus().leaseExpiresAt).toBeNull()
     })
 
     it('an EXPIRED lease is not preferred — falls through to the wall-clock logic below it', () => {
@@ -718,6 +786,7 @@ describe('license.ts — phone-home activation', () => {
     it('reports leaseExpiresAt from a valid lease, independent of licenseGateEnabled', () => {
       testSettings = baseSettings({
         licenseGateEnabled: false, // OFF — display status still works; it is not an enforcement check
+        licenseKey: 'ATK-TEST1234',
         licenseLease: signTestLease({ notAfter: Date.now() + 3 * DAY })
       })
 

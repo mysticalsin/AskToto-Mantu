@@ -293,6 +293,19 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
     expect(r.error).toMatch(/managed by your organisation/i)
   })
 
+  it('admin feed: check does not hit the public API', async () => {
+    // D7-6: a device with an org `updateFeedUrl` installs from THAT feed, so the About row must neither
+    // query the public GitHub API (it would show a version the device never installs) nor render the
+    // public release link.
+    vi.mocked(readTrustedAdminManaged).mockReturnValue('{"updateFeedUrl":"https://updates.corp.example/metis/"}')
+    const r = await checkForUpdateNow()
+    expect(net.fetch).not.toHaveBeenCalled()
+    expect(r.ok).toBe(false)
+    expect(r.error).toBe("Updates come from your organisation's update server.")
+    expect(r.url).toBeUndefined()
+    expect(r.available).toBeUndefined()
+  })
+
   it.each(['darwin', 'win32', 'linux'] as const)('still checks the feed on an ordinary %s build', async (platform) => {
     const restore = pinPlatform(platform)
     try {
@@ -377,6 +390,34 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
       expect(fake.checkForUpdates).toHaveBeenCalledTimes(1)
     } finally {
       restore()
+      if (previous) require.cache[moduleId] = previous
+      else delete require.cache[moduleId]
+      delete electronApp.isPackaged
+    }
+  })
+
+  it('admin feed: Update now does not gate on the public release', async () => {
+    // D7-6: with an org feed the public Latest gate is the wrong authority (it answered "No QA-approved
+    // update" or offered a version the org feed does not serve). The download goes straight to the org feed.
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    vi.mocked(readTrustedAdminManaged).mockReturnValue('{"updateFeedUrl":"https://updates.corp.example/metis/"}')
+    vi.mocked(net.fetch).mockClear()
+    const fake = new FakeAutoUpdater()
+    const setFeedURL = vi.fn()
+    ;(fake as unknown as { setFeedURL: unknown }).setFeedURL = setFeedURL
+    fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
+    const moduleId = require.resolve('electron-updater')
+    const previous = require.cache[moduleId]
+    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    try {
+      const r = await startUpdateDownload()
+      expect(r).toEqual({ started: true })
+      expect(net.fetch).not.toHaveBeenCalled()
+      expect(setFeedURL).toHaveBeenCalledWith({ provider: 'generic', url: 'https://updates.corp.example/metis/' })
+      expect(setFeedURL.mock.invocationCallOrder[0]).toBeLessThan(fake.checkForUpdates.mock.invocationCallOrder[0])
+      expect(fake.checkForUpdates).toHaveBeenCalledTimes(1)
+    } finally {
       if (previous) require.cache[moduleId] = previous
       else delete require.cache[moduleId]
       delete electronApp.isPackaged

@@ -289,7 +289,9 @@ export async function heartbeat(): Promise<LicenseActivateResult> {
     // (license-wide), not_activated (an admin freed this seat in the dashboard), or invalid (the license
     // was deleted). Only genuine connectivity noise — 'network', timeout, malformed response — leaves
     // licenseValid untouched, so a flaky connection alone can't brick a working install.
-    setSettings({ licenseValid: false })
+    // The signed lease outranks licenseValid in checkLicenseGrace, so it goes too: a revoked or freed seat
+    // must not keep working for the rest of the lease's 14 days (D7-1).
+    setSettings({ licenseValid: false, licenseLease: '' })
   }
   return r
 }
@@ -319,6 +321,14 @@ export function verifyLease(lease: string | null | undefined): LeasePayload | nu
   return verifyLeaseToken(lease, getLicenseLeasePublicKeyRaw())
 }
 
+/** The settings' lease, only when it verifies AND was issued for this licence key on this device. A lease
+ *  copied from another install, or issued for a key that is no longer the saved one, grants nothing (D7-1). */
+function leaseForThisInstall(s: { licenseLease: string; licenseKey: string }): LeasePayload | null {
+  const lease = verifyLease(s.licenseLease)
+  if (!lease || lease.licenseKey !== s.licenseKey.trim()) return null
+  return lease.machineId === getDurableMachineId() ? lease : null
+}
+
 /** Called by the license:gate IPC handler (main/index.ts), which backs the renderer's boot gate
  *  (App.tsx's <LicenseGate/>). Offline-first: a valid, recently-checked license never touches the network.
  *
@@ -333,7 +343,7 @@ export function checkLicenseGrace(): LicenseGraceResult {
   const s = getSettings()
   if (!s.licenseGateEnabled) return { allowed: true }
 
-  const lease = verifyLease(s.licenseLease)
+  const lease = leaseForThisInstall(s)
   if (isLeaseValidNow(lease)) {
     return { allowed: true, leaseExpiresAt: (lease as LeasePayload).notAfter }
   }
@@ -402,7 +412,7 @@ export interface LicenseDisplayStatus {
 }
 export function licenseDisplayStatus(): LicenseDisplayStatus {
   const s = getSettings()
-  const lease = verifyLease(s.licenseLease)
+  const lease = leaseForThisInstall(s)
   const leaseExpiresAt = isLeaseValidNow(lease) ? (lease as LeasePayload).notAfter : null
   const trial = s.licenseValid ? { state: 'none' as const, daysRemaining: 0 } : trialStatus(s.trialStartedAt)
   return {

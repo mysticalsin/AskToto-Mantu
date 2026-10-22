@@ -59,6 +59,12 @@ function applyAdminUpdateFeed(autoUpdater: { setFeedURL: (opts: { provider: stri
   }
 }
 
+/** The org's admin-policy update feed, or null. The manual check and Update now both follow it (D7-6). */
+function adminUpdateFeedUrl(): string | null {
+  const content = readTrustedAdminManaged()
+  return content ? configUpdateFeedUrl(content) : null
+}
+
 /** Which channel rule forbids this install from consuming the shared Métis release feed, or null. */
 export type BlockedUpdateChannel = 'store' | 'policy'
 
@@ -93,6 +99,8 @@ const BLOCKED_MESSAGE: Record<BlockedUpdateChannel, string> = {
   store: 'Updates for this package come from the Microsoft Store.',
   policy: 'Updates are managed by your organisation.'
 }
+
+const ORG_FEED_MESSAGE = "Updates come from your organisation's update server."
 
 // ── Manual "Check for updates" (Settings → About) ────────────────────────────────────────────────
 // electron-updater's silent flow above covers signed builds; this explicit check exists so EVERY build
@@ -202,6 +210,9 @@ export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
   // there is nothing on that feed this install is allowed to follow.
   const blocked = blockedUpdateChannel()
   if (blocked) return { ok: false, current, error: BLOCKED_MESSAGE[blocked] }
+  // A device with an org feed installs from THAT feed, so the public GitHub version and release link would
+  // be wrong on both counts. Say where updates come from instead of showing a version it never installs.
+  if (adminUpdateFeedUrl()) return { ok: false, current, error: ORG_FEED_MESSAGE }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), CHECK_TIMEOUT_MS)
   try {
@@ -260,10 +271,14 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
   // Same GitHub Latest gate as Settings → Check. electron-updater reads latest.yml; this call
   // refuses draft / prerelease / "not newer" so the button cannot start a download the feed
   // must not offer. Bob QA + Ultron stamp is what publishes Latest.
-  const feed = await checkForUpdateNow()
-  if (!feed.ok) return { started: false, reason: feed.error }
-  if (!feed.available) {
-    return { started: false, reason: 'No QA-approved update is available.' }
+  // With an org feed the public gate is the wrong authority; electron-updater compares versions against the
+  // org feed itself, and the download below only starts when that feed has something newer.
+  if (!adminUpdateFeedUrl()) {
+    const feed = await checkForUpdateNow()
+    if (!feed.ok) return { started: false, reason: feed.error }
+    if (!feed.available) {
+      return { started: false, reason: 'No QA-approved update is available.' }
+    }
   }
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
