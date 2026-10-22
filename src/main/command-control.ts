@@ -1,17 +1,22 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { isDesktopAdapterId, type DesktopActionRequest, type DesktopActionResult } from '@shared/desktop-actions'
+import { actionEnvelope, checkDependsOn, isArgsHash, isObservedVerified, type ActionEnvelope } from './action-guard'
 
 export const COMMAND_PROPOSAL_TTL_MS = 10_000
 
-export type CommandControlProposal = { proposalId: string; nonce: string }
+/** The approval is the proposal id, the nonce and the hash of the exact request it authorizes (ActionGuard). */
+export type CommandControlProposal = { proposalId: string; nonce: string; argsHash: string }
+/** Cancelling authorizes nothing, so the id and nonce are enough. */
+export type CommandControlCancellation = Omit<CommandControlProposal, 'argsHash'>
 export type CommandControlState =
   | { proposalId: null }
-  | { proposalId: string; nonce: string; expiresAt: number; revision: number }
+  | { proposalId: string; nonce: string; argsHash: string; expiresAt: number; revision: number }
 export type CommandControlReason =
   | 'proposal_missing'
   | 'owner_mismatch'
   | 'proposal_mismatch'
   | 'nonce_mismatch'
+  | 'args_mismatch'
   | 'expired'
   | 'policy_denied'
   | 'outcome_unverified'
@@ -22,6 +27,8 @@ type CurrentProposal = CommandControlProposal & {
   revision: number
   request: DesktopActionRequest
   expiresAt: number
+  idempotencyKey: string
+  dependsOn: readonly string[]
 }
 
 export type CommandConfirmationPolicyInput = {
@@ -47,9 +54,11 @@ export function commandConfirmationPolicyAllows(input: CommandConfirmationPolicy
 }
 
 /** What main knows about one confirmed proposal. The owner comes from the IPC sender, never the renderer payload. */
-export type CommandExecutionContext = {
+export type CommandExecutionContext = ActionEnvelope & {
   proposalId: string
   owner: { webContentsId: number; revision: number }
+  /** Proposal ids that must already be verified. The durable task bridge enforces it. */
+  dependsOn: readonly string[]
 }
 
 export type CommandExecutor = (
@@ -84,24 +93,34 @@ export class CommandControl {
     this.ttlMs = deps.ttlMs ?? COMMAND_PROPOSAL_TTL_MS
   }
 
-  propose(owner: { webContentsId: number; revision: number }, request: DesktopActionRequest): CommandControlProposal {
+  propose(
+    owner: { webContentsId: number; revision: number },
+    request: DesktopActionRequest,
+    options: { dependsOn?: readonly string[] } = {}
+  ): CommandControlProposal {
     this.clearCurrent()
+    const dependencies = checkDependsOn(options.dependsOn ?? [])
+    if (!dependencies.ok) {
+      this.emit()
+      throw new Error(dependencies.reason)
+    }
     // The proposal keeps a private snapshot. No caller that supplied the request can mutate what
     // the user later confirms, even if a future command source starts reusing request objects.
     const requestSnapshot = Object.freeze({
       ...request,
       args: Object.freeze({ ...request.args })
     }) as DesktopActionRequest
-    const proposal = {
-      proposalId: randomBytes(16).toString('hex'),
-      nonce: randomBytes(32).toString('hex')
-    }
+    const proposalId = randomBytes(16).toString('hex')
+    const { argsHash, idempotencyKey } = actionEnvelope(proposalId, requestSnapshot)
+    const proposal = { proposalId, nonce: randomBytes(32).toString('hex'), argsHash }
     this.current = {
       ...proposal,
       ownerWebContentsId: owner.webContentsId,
       revision: owner.revision,
       request: requestSnapshot,
-      expiresAt: this.now() + this.ttlMs
+      expiresAt: this.now() + this.ttlMs,
+      idempotencyKey,
+      dependsOn: dependencies.dependsOn
     }
     this.armExpiry(this.current)
     this.emit()
@@ -114,6 +133,7 @@ export class CommandControl {
     return {
       proposalId: proposal.proposalId,
       nonce: proposal.nonce,
+      argsHash: proposal.argsHash,
       expiresAt: proposal.expiresAt,
       revision: proposal.revision
     }
@@ -122,7 +142,7 @@ export class CommandControl {
   async confirm(
     input: CommandControlProposal & { webContentsId: number }
   ): Promise<{ ok: true; outcome: DesktopActionResult['outcome'] } | { ok: false; reason: CommandControlReason }> {
-    const proposal = this.validate(input)
+    const proposal = this.validate(input, { argsHash: input.argsHash })
     if ('reason' in proposal) return proposal
     // Consume before yielding to the adapter, so a double click or replay cannot execute twice.
     this.clearCurrent()
@@ -139,17 +159,27 @@ export class CommandControl {
       return { ok: false, reason: 'policy_denied' }
     }
     try {
+      const envelope = { argsHash: proposal.argsHash, idempotencyKey: proposal.idempotencyKey }
       const result = await this.deps.execute(proposal.request, {
         proposalId: proposal.proposalId,
-        owner: { webContentsId: proposal.ownerWebContentsId, revision: proposal.revision }
+        owner: { webContentsId: proposal.ownerWebContentsId, revision: proposal.revision },
+        ...envelope,
+        dependsOn: proposal.dependsOn
       })
       if (result.id !== proposal.request.id) {
         this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'failed' })
         return { ok: false, reason: 'adapter_failed' }
       }
-      this.audit('command.confirmed', { actionId: proposal.request.id, outcome: result.outcome })
-      if (result.outcome === 'unknown') return { ok: false, reason: 'outcome_unverified' }
-      if (result.ok && result.outcome === 'verified') return { ok: true, outcome: result.outcome }
+      // Observed-receipt rule: `verified` counts only with readback bound to this dispatch. A verified claim
+      // without it is not evidence, and the effect may have happened, so it is reported unverified.
+      const verified = result.ok && result.outcome === 'verified'
+      const observed = verified && isObservedVerified(proposal.request, result, envelope)
+      this.audit('command.confirmed', {
+        actionId: proposal.request.id,
+        outcome: verified && !observed ? 'unknown' : result.outcome
+      })
+      if (observed) return { ok: true, outcome: 'verified' }
+      if (result.outcome === 'unknown' || verified) return { ok: false, reason: 'outcome_unverified' }
       return { ok: false, reason: 'adapter_failed' }
     } catch {
       // The adapter was already invoked: a rejection does not prove the effect did not happen (the app may have
@@ -160,7 +190,7 @@ export class CommandControl {
   }
 
   async cancel(
-    input: CommandControlProposal & { webContentsId: number }
+    input: CommandControlCancellation & { webContentsId: number }
   ): Promise<{ ok: true } | { ok: false; reason: CommandControlReason }> {
     const proposal = this.validate(input)
     if ('reason' in proposal) return proposal
@@ -178,14 +208,19 @@ export class CommandControl {
     this.audit('command.revoked', { actionId: proposal.request.id, reason })
   }
 
+  /** A confirmation passes its claimed `argsHash` (even when absent): it must match the hash taken at propose time. */
   private validate(
-    input: CommandControlProposal & { webContentsId: number }
+    input: CommandControlCancellation & { webContentsId: number },
+    confirmation?: { argsHash: unknown }
   ): CurrentProposal | { ok: false; reason: CommandControlReason } {
     const proposal = this.current
     if (!proposal) return { ok: false, reason: 'proposal_missing' }
     if (input.webContentsId !== proposal.ownerWebContentsId) return { ok: false, reason: 'owner_mismatch' }
     if (input.proposalId !== proposal.proposalId) return { ok: false, reason: 'proposal_mismatch' }
     if (!secureEqual(input.nonce, proposal.nonce)) return { ok: false, reason: 'nonce_mismatch' }
+    if (confirmation && !(isArgsHash(confirmation.argsHash) && secureEqual(confirmation.argsHash, proposal.argsHash))) {
+      return { ok: false, reason: 'args_mismatch' }
+    }
     if (this.now() >= proposal.expiresAt) {
       this.clearCurrent()
       this.emit()

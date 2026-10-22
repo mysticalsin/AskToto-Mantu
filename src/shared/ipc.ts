@@ -1,4 +1,6 @@
 import { z } from 'zod'
+export { MetisCommandCancellationSchema, MetisCommandConfirmationSchema } from './metis-command-contract'
+export type { MetisCommandCancellation, MetisCommandConfirmation, MetisCommandState } from './metis-command-contract'
 import { McpConnectionSchema } from './mcp-connections'
 import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 import { CloudSpeechSettingsSchema, DEFAULT_CLOUD_SPEECH_SETTINGS } from './broker-speech-settings'
@@ -1810,16 +1812,6 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   // of HOTKEY_ACTIONS so it gets no global key / no Settings row, but typed so the tray can trigger it.
   agenda: ''
 }
-
-/** Renderer-safe command state. It intentionally excludes transcript text and action request data. */
-export type MetisCommandState =
-  | { proposalId: null }
-  | { proposalId: string; nonce: string; expiresAt: number; revision: number }
-
-export const MetisCommandConfirmationSchema = z
-  .object({ proposalId: z.string().regex(/^[a-f0-9]{32}$/), nonce: z.string().regex(/^[a-f0-9]{64}$/) })
-  .strict()
-export type MetisCommandConfirmation = z.infer<typeof MetisCommandConfirmationSchema>
 
 const CommandSpeechSessionIdSchema = z.string().regex(/^[a-f0-9]{48}$/)
 export const CommandSpeechStartSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()

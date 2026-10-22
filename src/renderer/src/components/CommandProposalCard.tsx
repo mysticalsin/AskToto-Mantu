@@ -1,6 +1,8 @@
 export type CommandProposalPreview = {
   proposalId: string
   nonce: string
+  /** Hash of the exact request main will run. Echoed back on confirmation so the approval is bound to it. */
+  argsHash: string
   expiresAt: number
   /** Main must generate this exact, allowlisted consequence. Raw transcript is never a preview. */
   preview: string
@@ -8,12 +10,8 @@ export type CommandProposalPreview = {
 
 export type CommandProposalCardProps = {
   proposal: CommandProposalPreview
-  onConfirm: (confirmation: { proposalId: string; nonce: string }) => void
-  onCancel: (confirmation: { proposalId: string; nonce: string }) => void
-}
-
-function confirmationFor(proposal: CommandProposalPreview): { proposalId: string; nonce: string } {
-  return { proposalId: proposal.proposalId, nonce: proposal.nonce }
+  onConfirm: (confirmation: { proposalId: string; nonce: string; argsHash: string }) => void
+  onCancel: (cancellation: { proposalId: string; nonce: string }) => void
 }
 
 /**
@@ -21,7 +19,8 @@ function confirmationFor(proposal: CommandProposalPreview): { proposalId: string
  * It deliberately cannot turn an opaque proposal ID into a misleading or model-authored consequence.
  */
 export function CommandProposalCard({ proposal, onConfirm, onCancel }: CommandProposalCardProps): JSX.Element | null {
-  const confirmation = confirmationFor(proposal)
+  const cancellation = { proposalId: proposal.proposalId, nonce: proposal.nonce }
+  const confirmation = { ...cancellation, argsHash: proposal.argsHash }
   const preview = proposal.preview.trim()
 
   if (!preview) return null
@@ -35,7 +34,7 @@ export function CommandProposalCard({ proposal, onConfirm, onCancel }: CommandPr
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return
         event.preventDefault()
-        onCancel(confirmation)
+        onCancel(cancellation)
       }}
     >
       <p className="right-edge-command-card__eyebrow">Ready to confirm</p>
@@ -46,7 +45,7 @@ export function CommandProposalCard({ proposal, onConfirm, onCancel }: CommandPr
           type="button"
           aria-label="Cancel action"
           className="no-drag focus-ring right-edge-command-card__cancel"
-          onClick={() => onCancel(confirmation)}
+          onClick={() => onCancel(cancellation)}
         >
           Cancel
         </button>

@@ -5721,7 +5721,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.metisCommandCancel, async (e, raw: unknown) => {
     assertMainWindow(e)
-    const parsed = MetisCommandConfirmationSchema.safeParse(raw)
+    const parsed = MetisCommandConfirmationSchema.omit({ argsHash: true }).safeParse(raw)
     if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
     return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
   })

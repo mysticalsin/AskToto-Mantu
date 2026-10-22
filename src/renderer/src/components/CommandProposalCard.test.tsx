@@ -21,11 +21,12 @@ function findByAriaLabel(node: unknown, label: string): ElementNode | undefined 
 }
 
 describe('CommandProposalCard', () => {
-  it('forwards only the opaque proposal pair when confirmation is chosen', () => {
+  it('forwards only the opaque proposal id, nonce and args hash when confirmation is chosen', () => {
     const confirm = vi.fn()
     const proposal = {
       proposalId: 'a'.repeat(32),
       nonce: 'b'.repeat(64),
+      argsHash: 'e'.repeat(64),
       preview: 'Open Notes',
       expiresAt: Date.now() + 10_000
     }
@@ -34,14 +35,19 @@ describe('CommandProposalCard', () => {
     const button = findByAriaLabel(tree, 'Confirm action')
     button?.props?.onClick?.()
 
-    expect(confirm).toHaveBeenCalledWith({ proposalId: proposal.proposalId, nonce: proposal.nonce })
+    expect(confirm).toHaveBeenCalledWith({
+      proposalId: proposal.proposalId,
+      nonce: proposal.nonce,
+      argsHash: proposal.argsHash
+    })
   })
 
-  it('forwards the same opaque pair when Escape cancels the reviewed action', () => {
+  it('forwards only the opaque id and nonce when Escape cancels the reviewed action', () => {
     const cancel = vi.fn()
     const proposal = {
       proposalId: 'c'.repeat(32),
       nonce: 'd'.repeat(64),
+      argsHash: 'f'.repeat(64),
       preview: 'Open Notes',
       expiresAt: Date.now() + 10_000
     }

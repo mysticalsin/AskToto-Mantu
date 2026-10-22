@@ -30,20 +30,29 @@ export type DesktopActionRequest = {
 
 export type DesktopActionOutcome = 'verified' | 'unknown' | 'failed' | 'cancelled' | 'unsupported'
 
+/**
+ * Readback evidence for a verified effect. The adapter echoes the idempotency key and args hash main derived for
+ * this dispatch and describes what it observed. A `verified` result without a matching receipt is not trusted.
+ */
+export interface DesktopActionReceipt {
+  idempotencyKey: string
+  argsHash: string
+  observation: string
+}
+
 export interface DesktopActionResult {
   id: DesktopAdapterId
   ok: boolean
   outcome: DesktopActionOutcome
   detail?: string
+  /** Required for `verified` (observed-receipt rule). Ignored for every other outcome. */
+  receipt?: DesktopActionReceipt
   /** True when the preferred app was missing and we refused a silent substitute. */
   preferredMissing?: boolean
 }
 
 /** Windows disclosure — never silent substitute for Mac preferred apps. */
-export const WINDOWS_DESKTOP_EQUIVALENTS: Record<
-  DesktopAdapterId,
-  { preferred: string; note: string }
-> = {
+export const WINDOWS_DESKTOP_EQUIVALENTS: Record<DesktopAdapterId, { preferred: string; note: string }> = {
   'desktop.open_notes': {
     preferred: 'Sticky Notes (or Notepad)',
     note: 'Mac Notes has no silent Win twin; fail visibly if Sticky Notes / Notepad unavailable.'

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
 import type { CommandExecutionContext } from '../command-control'
+import { actionEnvelope, type ActionEnvelope } from '../action-guard'
 import {
   DesktopActionTaskBridge,
   desktopActionArgumentsDigest,
@@ -10,14 +11,30 @@ import { TASK_STORE_DECRYPT_FAILED, type TaskStateStore } from './encrypted-task
 import type { TaskStateReadResult } from './task-persistence'
 
 const NOTES: DesktopActionRequest = { id: 'desktop.open_notes', args: {} }
-const verified = (id: DesktopActionRequest['id'] = 'desktop.open_notes'): DesktopActionResult => ({
+const envelopeFor = (proposalId: string, request: DesktopActionRequest = NOTES): ActionEnvelope =>
+  actionEnvelope(proposalId, request)
+/** The observed-receipt rule: a verified result carries readback bound to the dispatch it answers. */
+const verified = (
+  id: DesktopActionRequest['id'] = 'desktop.open_notes',
+  envelope?: ActionEnvelope
+): DesktopActionResult => ({
   id,
   ok: true,
-  outcome: 'verified'
+  outcome: 'verified',
+  ...(envelope ? { receipt: { ...envelope, observation: 'The action is visible in its app' } } : {})
 })
-const context = (proposalId: string, webContentsId = 7): CommandExecutionContext => ({
+const verifiedFor = (proposalId: string, request: DesktopActionRequest = NOTES): DesktopActionResult =>
+  verified(request.id, envelopeFor(proposalId, request))
+const context = (
+  proposalId: string,
+  webContentsId = 7,
+  request: DesktopActionRequest = NOTES,
+  dependsOn: string[] = []
+): CommandExecutionContext => ({
   proposalId,
-  owner: { webContentsId, revision: 3 }
+  owner: { webContentsId, revision: 3 },
+  ...envelopeFor(proposalId, request),
+  dependsOn
 })
 
 class MemoryStore implements TaskStateStore {
@@ -43,7 +60,9 @@ class MemoryStore implements TaskStateStore {
 
 function make(overrides: Partial<DesktopActionTaskBridgeDeps> = {}, store = new MemoryStore()) {
   let id = 0
-  const execute = vi.fn(async (_request: DesktopActionRequest) => verified())
+  const execute = vi.fn(async (request: DesktopActionRequest, envelope: ActionEnvelope) =>
+    verified(request.id, envelope)
+  )
   const audit = vi.fn()
   const bridge = new DesktopActionTaskBridge({
     execute,
@@ -62,7 +81,7 @@ describe('DesktopActionTaskBridge', () => {
     const { bridge, execute, store } = make()
     const result = await bridge.execute(NOTES, context('p1'))
 
-    expect(result).toEqual(verified())
+    expect(result).toEqual(verifiedFor('p1'))
     expect(execute).toHaveBeenCalledTimes(1)
     expect(bridge.snapshot()).toEqual([
       { taskId: 'desktop-action:p1', actionId: 'desktop.open_notes', status: 'completed', effectOutcome: 'applied' }
@@ -73,7 +92,7 @@ describe('DesktopActionTaskBridge', () => {
   it('makes progress visible only while the dispatch is in flight', async () => {
     let release: () => void = () => {}
     const pending = new Promise<DesktopActionResult>((resolve) => {
-      release = () => resolve(verified())
+      release = () => resolve(verifiedFor('p1'))
     })
     const { bridge } = make({ execute: () => pending })
     const run = bridge.execute(NOTES, context('p1'))
@@ -186,7 +205,8 @@ describe('DesktopActionTaskBridge', () => {
       throw new Error('boom')
     })
     const { bridge, audit } = make({ execute })
-    await bridge.execute({ id: 'desktop.create_note', args: { title: 'private board notes' } }, context('p1'))
+    const note: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'private board notes' } }
+    await bridge.execute(note, context('p1', 7, note))
 
     expect(JSON.stringify(audit.mock.calls)).not.toContain('private board notes')
   })
@@ -196,6 +216,137 @@ describe('DesktopActionTaskBridge', () => {
     const b = desktopActionArgumentsDigest(JSON.parse('{"args":{"title":"x"},"id":"desktop.create_note"}'))
     expect(a).toBe(b)
     expect(a).not.toBe(desktopActionArgumentsDigest({ id: 'desktop.create_note', args: { title: 'y' } }))
+  })
+})
+
+describe('DesktopActionTaskBridge ActionGuard (G04)', () => {
+  it('hands the adapter the same args hash and idempotency key the confirmation carried', async () => {
+    const { bridge, execute } = make()
+    await bridge.execute(NOTES, context('p1'))
+    expect(execute).toHaveBeenCalledWith(NOTES, envelopeFor('p1'))
+    expect(envelopeFor('p1').idempotencyKey).not.toBe(envelopeFor('p2').idempotencyKey)
+  })
+
+  it.each([
+    ['a changed args hash', (c: CommandExecutionContext) => ({ ...c, argsHash: 'e'.repeat(64) })],
+    ['a foreign idempotency key', (c: CommandExecutionContext) => ({ ...c, idempotencyKey: 'e'.repeat(64) })]
+  ])('denies a dispatch with %s before any task or effect exists', async (_name, tamper) => {
+    const { bridge, execute, audit } = make()
+    const result = await bridge.execute(NOTES, tamper(context('p1')))
+    expect(result).toMatchObject({ ok: false, outcome: 'failed', detail: 'task_denied:arguments_changed' })
+    expect(execute).not.toHaveBeenCalled()
+    expect(bridge.snapshot()).toEqual([])
+    expect(audit).toHaveBeenCalledWith('task.dispatch_denied', {
+      actionId: 'desktop.open_notes',
+      reason: 'arguments_changed'
+    })
+  })
+
+  it('denies an args hash computed for a different request than the one being dispatched', async () => {
+    const { bridge, execute } = make()
+    const other: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'x' } }
+    const result = await bridge.execute(NOTES, context('p1', 7, other))
+    expect(result).toMatchObject({ detail: 'task_denied:arguments_changed' })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps a verified result without a bound receipt uncertain, reports it unknown and never replays it', async () => {
+    const execute = vi.fn(async () => verified())
+    const { bridge, audit } = make({ execute })
+    const result = await bridge.execute(NOTES, context('p1'))
+
+    expect(result).toMatchObject({
+      id: 'desktop.open_notes',
+      ok: false,
+      outcome: 'unknown',
+      detail: 'outcome_unverified'
+    })
+    expect(bridge.snapshot()[0]).toMatchObject({ status: 'uncertain', effectOutcome: 'uncertain' })
+    expect(audit).toHaveBeenCalledWith('task.effect_uncertain', {
+      taskId: 'desktop-action:p1',
+      actionId: 'desktop.open_notes'
+    })
+    expect(await bridge.execute(NOTES, context('p1'))).toMatchObject({ detail: 'task_denied:duplicate_task' })
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['another dispatch key', (e: ActionEnvelope) => ({ ...e, idempotencyKey: 'f'.repeat(64) })],
+    ['other arguments', (e: ActionEnvelope) => ({ ...e, argsHash: 'f'.repeat(64) })]
+  ])('keeps a receipt bound to %s uncertain', async (_name, forge) => {
+    const { bridge } = make({ execute: async (request, envelope) => verified(request.id, forge(envelope)) })
+    expect(await bridge.execute(NOTES, context('p1'))).toMatchObject({ outcome: 'unknown' })
+    expect(bridge.snapshot()[0]).toMatchObject({ status: 'uncertain', effectOutcome: 'uncertain' })
+  })
+
+  it('keeps a verified result with an empty observation uncertain', async () => {
+    const { bridge } = make({
+      execute: async (request, envelope) => ({
+        ...verified(request.id, envelope),
+        receipt: { ...envelope, observation: ' ' }
+      })
+    })
+    expect(await bridge.execute(NOTES, context('p1'))).toMatchObject({ outcome: 'unknown' })
+    expect(bridge.snapshot()[0]).toMatchObject({ effectOutcome: 'uncertain' })
+  })
+
+  describe('dependsOn', () => {
+    it('refuses an action whose dependency was never run, without creating a task or dispatching', async () => {
+      const { bridge, execute, audit } = make()
+      const result = await bridge.execute(NOTES, context('child', 7, NOTES, ['parent']))
+      expect(result).toMatchObject({ ok: false, outcome: 'failed', detail: 'task_denied:dependency_not_verified' })
+      expect(execute).not.toHaveBeenCalled()
+      expect(bridge.snapshot()).toEqual([])
+      expect(audit).toHaveBeenCalledWith('task.dispatch_denied', {
+        actionId: 'desktop.open_notes',
+        reason: 'dependency_not_verified'
+      })
+    })
+
+    it('unlocks the dependent action once its dependency was verified by an observed receipt', async () => {
+      const { bridge, execute } = make()
+      await bridge.execute(NOTES, context('parent'))
+      expect(await bridge.execute(NOTES, context('child', 7, NOTES, ['parent']))).toEqual(verifiedFor('child'))
+      expect(execute).toHaveBeenCalledTimes(2)
+    })
+
+    it('stays blocked behind an uncertain dependency, and the dependency is never replayed', async () => {
+      let first = true
+      const execute = vi.fn(async (request: DesktopActionRequest, envelope: ActionEnvelope) => {
+        if (first) {
+          first = false
+          return { id: request.id, ok: false, outcome: 'unknown' as const }
+        }
+        return verified(request.id, envelope)
+      })
+      const { bridge } = make({ execute })
+      await bridge.execute(NOTES, context('parent'))
+      expect(await bridge.execute(NOTES, context('child', 7, NOTES, ['parent']))).toMatchObject({
+        detail: 'task_denied:dependency_not_verified'
+      })
+      expect(await bridge.execute(NOTES, context('parent'))).toMatchObject({ detail: 'task_denied:duplicate_task' })
+      expect(execute).toHaveBeenCalledTimes(1)
+    })
+
+    it('stays blocked behind a dependency that failed without effect', async () => {
+      const failing = make({ execute: async () => ({ id: 'desktop.open_notes', ok: false, outcome: 'failed' }) })
+      await failing.bridge.execute(NOTES, context('parent'))
+      expect(await failing.bridge.execute(NOTES, context('child', 7, NOTES, ['parent']))).toMatchObject({
+        detail: 'task_denied:dependency_not_verified'
+      })
+    })
+
+    it('requires every dependency, and a verified dependency survives a restart', async () => {
+      const store = new MemoryStore()
+      await make({}, store).bridge.execute(NOTES, context('a'))
+      let id = 100
+      const second = make({ newId: () => `later-${(id += 1)}` }, store)
+      expect(await second.bridge.execute(NOTES, context('c', 7, NOTES, ['a', 'b']))).toMatchObject({
+        detail: 'task_denied:dependency_not_verified'
+      })
+      await second.bridge.execute(NOTES, context('b'))
+      expect(await second.bridge.execute(NOTES, context('c', 7, NOTES, ['a', 'b']))).toEqual(verifiedFor('c'))
+    })
   })
 })
 
@@ -230,7 +381,7 @@ describe('DesktopActionTaskBridge restart recovery', () => {
       detail: 'task_denied:duplicate_task'
     })
     expect(second.execute).not.toHaveBeenCalled()
-    expect(await second.bridge.execute(NOTES, context('fresh'))).toEqual(verified())
+    expect(await second.bridge.execute(NOTES, context('fresh'))).toEqual(verifiedFor('fresh'))
     expect(second.execute).toHaveBeenCalledTimes(1)
     const statuses = Object.fromEntries(second.bridge.snapshot().map((task) => [task.taskId, task.status]))
     expect(statuses).toEqual({ 'desktop-action:crashed': 'uncertain', 'desktop-action:fresh': 'completed' })
@@ -257,7 +408,7 @@ describe('DesktopActionTaskBridge restart recovery', () => {
     expect(await bridge.recover()).toEqual({ available: true, uncertain: 0 })
     expect(store.quarantined).toBe(1)
     expect(audit).toHaveBeenCalledWith('task.recovered', { status: 'quarantined', reason: 'invalid-json' })
-    expect(await bridge.execute(NOTES, context('p1'))).toEqual(verified())
+    expect(await bridge.execute(NOTES, context('p1'))).toEqual(verifiedFor('p1'))
     expect(execute).toHaveBeenCalledTimes(1)
   })
 
@@ -284,7 +435,7 @@ describe('DesktopActionTaskBridge restart recovery', () => {
     expect(store.quarantined).toBe(0)
 
     store.readOverride = null
-    expect(await bridge.execute(NOTES, context('p2'))).toEqual(verified())
+    expect(await bridge.execute(NOTES, context('p2'))).toEqual(verifiedFor('p2'))
     expect(execute).toHaveBeenCalledTimes(1)
   })
 

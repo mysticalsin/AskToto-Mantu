@@ -667,8 +667,9 @@ const api = {
     confirmation: MetisCommandConfirmation
   ): Promise<{ ok: boolean; reason?: string; outcome?: string }> =>
     ipcRenderer.invoke(IPC.metisCommandConfirm, confirmation),
-  cancelMetisCommand: (confirmation: MetisCommandConfirmation): Promise<{ ok: boolean; reason?: string }> =>
-    ipcRenderer.invoke(IPC.metisCommandCancel, confirmation),
+  cancelMetisCommand: (
+    cancellation: Omit<MetisCommandConfirmation, 'argsHash'>
+  ): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke(IPC.metisCommandCancel, cancellation),
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),

@@ -1,6 +1,13 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
 import { DESKTOP_ADAPTER_IDS } from '@shared/desktop-actions'
+import {
+  ACTION_DEPENDENCY_LIMIT,
+  actionArgsHash,
+  actionIdempotencyKey,
+  isObservedVerified,
+  type ActionEnvelope
+} from '../action-guard'
 import type { CommandExecutionContext, CommandExecutor } from '../command-control'
 import type { EffectOutcome, TaskOwner, TaskPolicy, TaskRecord, TaskRuntimeState, TaskStatus } from './task-contract'
 import { TASK_STORE_DECRYPT_FAILED, type TaskStateStore } from './encrypted-task-file-store'
@@ -64,7 +71,8 @@ const PROGRESS_LIMITS: TaskProgressLimits = {
 export type DesktopActionTaskAuditEvent = 'task.recovered' | 'task.effect_uncertain' | 'task.dispatch_denied'
 
 export interface DesktopActionTaskBridgeDeps {
-  execute: (request: DesktopActionRequest) => Promise<DesktopActionResult>
+  /** The envelope is the args hash and idempotency key main derived. A verified result must echo both in its receipt. */
+  execute: (request: DesktopActionRequest, envelope: ActionEnvelope) => Promise<DesktopActionResult>
   store: TaskStateStore
   authSessionGeneration: () => number
   audit?: (event: DesktopActionTaskAuditEvent, metadata: Record<string, string>) => void
@@ -88,23 +96,17 @@ export interface DesktopActionTaskSnapshot {
   progress?: TaskProgressRecord
 }
 
-type Begun = { ok: true; taskId: string; attemptId: string; owner: TaskOwner } | { ok: false; reason: string }
+type Begun =
+  | { ok: true; taskId: string; attemptId: string; owner: TaskOwner; envelope: ActionEnvelope }
+  | { ok: false; reason: string }
 
-/** Stable text for hashing: key order must not change the identity of the same request. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'null'
+/** The task's arguments digest is the ActionGuard args hash: one identity for approval, task and receipt. */
+export function desktopActionArgumentsDigest(request: DesktopActionRequest): string {
+  return actionArgsHash(request)
 }
 
-export function desktopActionArgumentsDigest(request: DesktopActionRequest): string {
-  return createHash('sha256').update(canonicalJson(request)).digest('hex')
+function taskIdFor(proposalId: string): string {
+  return `${DESKTOP_ACTION_TASK_TYPE}:${proposalId}`
 }
 
 function failedResult(id: DesktopActionRequest['id'], detail: string): DesktopActionResult {
@@ -115,10 +117,17 @@ function unknownResult(id: DesktopActionRequest['id'], detail: string): DesktopA
   return { id, ok: false, outcome: 'unknown', detail }
 }
 
-/** Only a verified, matching result proves the effect. Anything that may have launched something stays uncertain. */
-function classifyEffect(request: DesktopActionRequest, result: DesktopActionResult): EffectOutcome {
+/**
+ * Only a verified result with an observed receipt bound to this dispatch proves the effect. A verified claim
+ * without one, and anything else that may have launched something, stays uncertain.
+ */
+function classifyEffect(
+  request: DesktopActionRequest,
+  result: DesktopActionResult,
+  envelope: ActionEnvelope
+): EffectOutcome {
   if (result.id !== request.id) return 'uncertain'
-  if (result.outcome === 'verified') return result.ok ? 'applied' : 'uncertain'
+  if (result.outcome === 'verified') return isObservedVerified(request, result, envelope) ? 'applied' : 'uncertain'
   if (result.outcome === 'failed' || result.outcome === 'cancelled' || result.outcome === 'unsupported') {
     return 'not-applied'
   }
@@ -210,8 +219,8 @@ export class DesktopActionTaskBridge {
     let result: DesktopActionResult | undefined
     let outcome: EffectOutcome
     try {
-      result = await this.deps.execute(request)
-      outcome = classifyEffect(request, result)
+      result = await this.deps.execute(request, begun.envelope)
+      outcome = classifyEffect(request, result, begun.envelope)
     } catch {
       // Thrown after dispatch began: the effect may have happened. Observe it, never retry it.
       outcome = 'uncertain'
@@ -323,20 +332,42 @@ export class DesktopActionTaskBridge {
     }
   }
 
+  /** Recomputed from the request about to run: the confirmation's hash and key must name exactly this dispatch. */
+  private bindEnvelope(request: DesktopActionRequest, context: CommandExecutionContext): ActionEnvelope | null {
+    const argsHash = actionArgsHash(request)
+    const idempotencyKey = actionIdempotencyKey(context.proposalId, argsHash)
+    return context.argsHash === argsHash && context.idempotencyKey === idempotencyKey
+      ? { argsHash, idempotencyKey }
+      : null
+  }
+
+  /** Only an action that was verified by an observed receipt unlocks the actions that depend on it. */
+  private dependenciesVerified(context: CommandExecutionContext): boolean {
+    const dependsOn = new Set(context.dependsOn)
+    if (dependsOn.size > ACTION_DEPENDENCY_LIMIT) return false
+    for (const proposalId of dependsOn) {
+      if (this.state.tasks.get(taskIdFor(proposalId))?.effectOutcome !== 'applied') return false
+    }
+    return true
+  }
+
   private async begin(request: DesktopActionRequest, context: CommandExecutionContext): Promise<Begun> {
+    const envelope = this.bindEnvelope(request, context)
+    if (!envelope) return { ok: false, reason: 'arguments_changed' }
     const recovery = await this.recoverState()
     if (!recovery.available) return { ok: false, reason: 'task_state_unavailable' }
     return this.locked(async (): Promise<Begun> => {
-      const taskId = `${DESKTOP_ACTION_TASK_TYPE}:${context.proposalId}`
+      const taskId = taskIdFor(context.proposalId)
       const attemptId = this.newId()
       const owner = this.ownerFor(context)
-      const argumentsDigest = desktopActionArgumentsDigest(request)
+      const argumentsDigest = envelope.argsHash
       const scope = { capabilities: [request.id], resources: { [ACTIONS_RESOURCE]: 1 } }
       const grantScope = { capability: request.id, resources: { [ACTIONS_RESOURCE]: 1 } }
       const issuedAt = this.now()
 
       this.state = pruneState(this.state, issuedAt, DESKTOP_ACTION_TASK_CODEC_LIMITS)
       if (!archiveHasRoom(this.state, DESKTOP_ACTION_TASK_CODEC_LIMITS)) return { ok: false, reason: 'task_state_full' }
+      if (!this.dependenciesVerified(context)) return { ok: false, reason: 'dependency_not_verified' }
       // The recovered owners belong to a previous process. Only a confirmation that already passed the main-process
       // policy gate (authenticated, entitled, focused top-frame owner) can re-establish ownership; recovered
       // uncertain tasks stay uncertain either way.
@@ -407,7 +438,7 @@ export class DesktopActionTaskBridge {
       }
 
       this.recordProgress(taskId, owner, 1, 0, 'dispatching')
-      return { ok: true, taskId, attemptId, owner }
+      return { ok: true, taskId, attemptId, owner, envelope }
     })
   }
 

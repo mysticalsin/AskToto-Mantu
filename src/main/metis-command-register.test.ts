@@ -32,7 +32,7 @@ async function createHarness() {
   const confirmation = () => {
     const state = controller.getState()
     if (!state.proposalId) throw new Error('Expected an active command proposal')
-    return { proposalId: state.proposalId, nonce: state.nonce, webContentsId: 11 }
+    return { proposalId: state.proposalId, nonce: state.nonce, argsHash: state.argsHash, webContentsId: 11 }
   }
   return {
     controller,
