@@ -162,7 +162,7 @@ import {
 } from '@shared/quick-actions'
 import { micSpeakerLabel } from '@shared/speaker-names'
 import { useRevokedMeetingSave } from './lib/revoked-meeting-save'
-import { initialSettingsTabFromLaunch, initialViewFromLaunch } from './lib/app-launch'
+import { initialSettingsTabFromLaunch, initialViewFromLaunch, type OpenTab } from './lib/app-launch'
 import { useRecoveredDraftCount } from './lib/recovered-draft-count'
 import { DEMO, DEMO_ANSWER, DEMO_LINES, DEMO_SUG } from './lib/app-demo'
 import {
@@ -507,9 +507,7 @@ export function App(): JSX.Element {
   // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
   const [recapSaveError, setRecapSaveError] = useState<string | null>(null)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
-  const [settingsInitialTab, setSettingsInitialTab] = useState<
-    'personalize' | 'calendar' | 'ai' | 'profile' | undefined
-  >(initialSettingsTabFromLaunch)
+  const [settingsInitialTab, setSettingsInitialTab] = useState<OpenTab | undefined>(initialSettingsTabFromLaunch)
   // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
   // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
@@ -1360,7 +1358,7 @@ export function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
   }, [listen.lines])
 
-  const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai' | 'profile', notice?: string): void => {
+  const openSettings = useCallback((tab?: OpenTab, notice?: string): void => {
     setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one
     setSettingsNotice(notice)
     setMinimized(false)
