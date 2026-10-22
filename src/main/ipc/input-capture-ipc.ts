@@ -1,6 +1,6 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC } from '@shared/ipc'
-import type { InputSessionContext, TrustedInputOwner } from '@shared/input-session'
+import { isSpeechCapturePurpose, type InputSessionContext, type TrustedInputOwner } from '@shared/input-session'
 import type { OwnerSessionRef } from '@shared/contracts/owner-session'
 import type { InputSessionAuthority } from '../input-session-authority'
 import type { OwnerSessionAuthority } from '../lifecycle/owner-session-authority'
@@ -24,8 +24,8 @@ type CommandMicAvailabilityLike = { ok: true } | { ok: false; reason: string }
 /** Deliberately no mint-from-hardware here: only main's voice session may mint a hardware activation. */
 interface ActivationAuthorityLike<Frame> {
   mint(frame: Frame): boolean
-  hasPending(frame: Frame, kind?: 'click' | 'hardware'): boolean
-  consume(frame: Frame, kind?: 'click' | 'hardware'): boolean
+  hasPending(frame: Frame, kind?: 'click' | 'hardware' | 'hardware-dictation'): boolean
+  consume(frame: Frame, kind?: 'click' | 'hardware' | 'hardware-dictation'): boolean
   revokeAll(): void
 }
 
@@ -95,15 +95,19 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
     },
     currentContext: deps.currentInputSessionContext,
     captureAuthBoundary: deps.captureAuthSessionBoundary,
-    authorizeCommandStart: (event, _owner, source) => {
+    authorizeCommandStart: (event, _owner, source, purpose) => {
       if (!deps.commandMicAvailability().ok) return false
+      // Dictation has no panel button: only the held dictation chord can start it (G22).
+      if (purpose === 'dictation' && source !== 'push-to-talk') return false
       const frame = deps.commandMicActivationFrameFromEvent(event)
-      // A voice turn (push-to-talk) consumes only a grant main minted from the held chord; the panel's
-      // Start click consumes only its own click grant. The two never substitute for each other.
+      // A voice turn (push-to-talk) consumes only a grant main minted from the held chord; a dictation consumes
+      // only the grant minted from the dictation chord; the panel's Start click consumes only its own click
+      // grant. The three never substitute for each other.
+      const kind = source !== 'push-to-talk' ? 'click' : purpose === 'dictation' ? 'hardware-dictation' : 'hardware'
       return (
         !!frame &&
         deps.commandMicOwner(frame, deps.currentInputSessionContext()) !== null &&
-        deps.commandMicActivationAuthority.consume(frame, source === 'push-to-talk' ? 'hardware' : 'click')
+        deps.commandMicActivationAuthority.consume(frame, kind)
       )
     }
   })
@@ -142,7 +146,7 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
       }
       if (ref) ownerRefs.set(result.lease.sessionId, ref)
     }
-    if (result.ok && result.lease.purpose === 'command') {
+    if (result.ok && isSpeechCapturePurpose(result.lease.purpose)) {
       deps.setCommandMicActivationLeaseId(result.lease.sessionId)
       deps.armCommandMicLeaseTimeout(result.lease.sessionId, 15_000)
     }
@@ -171,7 +175,12 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
     }
     const confirmed = inputSessionHandlers.confirm(event, request)
     const lease = deps.inputSessionAuthority.activeLease
-    if (confirmed && lease?.purpose === 'command' && lease.sessionId === deps.getCommandMicActivationLeaseId()) {
+    if (
+      confirmed &&
+      lease !== null &&
+      isSpeechCapturePurpose(lease.purpose) &&
+      lease.sessionId === deps.getCommandMicActivationLeaseId()
+    ) {
       deps.armCommandMicLeaseTimeout(lease.sessionId, 15_000)
     }
     return confirmed
@@ -230,7 +239,7 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
         : { ok: false, reason: availability.reason }
     if (
       deps.getCommandMicActivationLeaseId() !== parsed.data.sessionId ||
-      !deps.inputSessionAuthority.isEstablishedLease(owner, parsed.data.sessionId, 'command')
+      !deps.inputSessionAuthority.isEstablishedLease(owner, parsed.data.sessionId, 'speech')
     )
       return { ok: false, reason: 'stale' }
     const result = deps.getCommandSpeechCapture()?.start(owner, parsed.data.sessionId) ?? {

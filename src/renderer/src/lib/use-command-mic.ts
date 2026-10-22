@@ -20,7 +20,11 @@ export type CommandMicStopReason =
 export type CommandMicSnapshot = { status: CommandMicStatus; reason?: CommandMicStopReason }
 export type CommandMicOptions = { maxDurationMs?: number; finalizationMs?: number }
 /** `push-to-talk` is a voice turn whose activation main minted from the held chord; no click is involved. */
-export type CommandMicStartOptions = { source?: 'deliberate-talk' | 'push-to-talk' }
+export type CommandMicStartOptions = {
+  source?: 'deliberate-talk' | 'push-to-talk'
+  /** Main chooses `dictation` for a held dictation chord (G22); the panel and voice turns are `command`. */
+  purpose?: 'command' | 'dictation'
+}
 type ControllerOptions = CommandMicOptions & {
   onSnapshot?: (snapshot: CommandMicSnapshot) => void
   /**
@@ -103,6 +107,7 @@ export class CommandMicController {
 
   async start(startOptions: CommandMicStartOptions = {}): Promise<void> {
     const inputSource = startOptions.source ?? 'deliberate-talk'
+    const purpose = startOptions.purpose ?? 'command'
     if (this.disposed || this.active || this.snapshot.status === 'starting') return
     const generation = ++this.generation
     const abort = new AbortController()
@@ -127,7 +132,7 @@ export class CommandMicController {
         throw new Error(currentAvailability.ok ? 'activation_required' : currentAvailability.reason)
       }
       // A device change is not a revocation: speech already captured must still be recognized (G18).
-      capture = await acquireInteractiveMic(COMMAND_MIC_CONSTRAINTS, 'command', inputSource, abort.signal, {
+      capture = await acquireInteractiveMic(COMMAND_MIC_CONSTRAINTS, purpose, inputSource, abort.signal, {
         onDeviceChange: () => void this.deviceLost(generation)
       })
       sessionId = capture.admission.sessionId

@@ -2,8 +2,9 @@
  * Renderer side of a voice turn (V02). Headless: it renders nothing and opens no microphone on its own.
  *
  * Main owns the turn and pushes `begin` (after minting a hardware activation) and `end`. This module only turns
- * those into the ordinary command capture: a push-to-talk lease with the command purpose, the same worklet and
- * the same frame path as the Cmd+Shift+M panel, never the meeting pipeline. It reports only that the capture
+ * those into the ordinary command capture: a push-to-talk lease with the purpose main named (the command purpose
+ * unless main says otherwise), the same worklet and the same frame path as the Cmd+Shift+M panel, never the meeting
+ * pipeline. It reports only that the capture
  * started or failed to; a report can move the current turn toward failure and nothing else.
  */
 import {
@@ -122,7 +123,7 @@ export function installVoiceTurnCapture(deps: VoiceTurnCaptureDeps = defaultDeps
     })
     turn.controller = controller
     current = turn
-    void controller.start({ source: 'push-to-talk' }).catch(() => {})
+    void controller.start({ source: 'push-to-talk', purpose: payload.purpose ?? 'command' }).catch(() => {})
   })
   const offEnd = deps.onEnd((payload) => {
     const turn = current

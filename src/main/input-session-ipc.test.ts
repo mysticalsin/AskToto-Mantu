@@ -73,7 +73,7 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => true
     })
     const started = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+      input: { source: 'push-to-talk', purpose: 'conversation', activation: 'explicit' },
       context
     })
     if (!started.ok) throw new Error('expected test lease')
@@ -200,7 +200,7 @@ describe('input-session IPC owner binding', () => {
       captureAuthBoundary: () => () => true
     })
     const initial = handlers.start(event, {
-      input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+      input: { source: 'push-to-talk', purpose: 'conversation', activation: 'explicit' },
       context
     })
     expect(initial.ok).toBe(true)
@@ -214,7 +214,7 @@ describe('input-session IPC owner binding', () => {
     expect(authority.activeLease).toBeNull()
     expect(
       handlers.start(event, {
-        input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+        input: { source: 'push-to-talk', purpose: 'conversation', activation: 'explicit' },
         context: current
       }).ok
     ).toBe(true)
@@ -246,5 +246,45 @@ describe('input-session IPC owner binding', () => {
       })
     ).toEqual({ ok: false, reason: 'stale_session' })
     expect(authority.activeLease).toBeNull()
+  })
+})
+
+describe('input-session IPC dictation authorization (G22)', () => {
+  const base = () => ({
+    authority: new InputSessionAuthority({ token: () => 'e'.repeat(48), now: () => 1 }),
+    assertMainWindow: vi.fn(),
+    isWindowVisible: () => true,
+    requireAuth: () => true,
+    currentMainUrl: () => 'app://metis/index.html',
+    currentContext: () => context,
+    captureAuthBoundary: () => () => true
+  })
+  const request = { input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' }, context }
+
+  it('refuses a dictation lease unless main authorized that exact start, with the purpose', () => {
+    expect(createInputSessionHandlers<TestEvent>(base()).start(event, request)).toEqual({
+      ok: false,
+      reason: 'unauthorized'
+    })
+    const authorize = vi.fn(() => true)
+    const started = createInputSessionHandlers<TestEvent>({ ...base(), authorizeCommandStart: authorize }).start(
+      event,
+      request
+    )
+    expect(started.ok).toBe(true)
+    expect(authorize).toHaveBeenCalledWith(event, expect.anything(), 'push-to-talk', 'dictation')
+  })
+
+  it('a conversation lease still needs no command authorization', () => {
+    const authorize = vi.fn(() => false)
+    const started = createInputSessionHandlers<TestEvent>({ ...base(), authorizeCommandStart: authorize }).start(
+      event,
+      {
+        input: { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' },
+        context
+      }
+    )
+    expect(started.ok).toBe(true)
+    expect(authorize).not.toHaveBeenCalled()
   })
 })

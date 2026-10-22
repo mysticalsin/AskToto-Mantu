@@ -4,6 +4,7 @@ import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
 import type { InputSessionLease } from '@shared/input-session'
 import type { ChordWatcherEvent, ChordWatcherStatus } from './chord-watcher'
 import type { VoiceChordWiringDeps } from './chord-wiring'
+import type { DictationHostPorts } from '../features/dictation'
 import {
   createCommandMicAvailability,
   createVoiceActionsRuntime,
@@ -24,10 +25,21 @@ const chordFake = {
   status: (): ChordWatcherStatus => chordStatus
 }
 let chordStatus: ChordWatcherStatus = 'running'
+// The runtime builds two watchers: the voice hold first, then the dictation chord (G22). Only the first is under
+// test here; the dictation chord gets a separate fake so its calls never count toward the voice assertions.
+const dictationChordFake = {
+  start: vi.fn(),
+  refresh: vi.fn(),
+  onSignedIn: vi.fn(),
+  onInputSessionStop: vi.fn(),
+  stop: vi.fn(),
+  suspendedReason: () => null,
+  status: (): ChordWatcherStatus => 'running'
+}
 vi.mock('./chord-wiring', () => ({
   createVoiceChordWiring: (deps: VoiceChordWiringDeps) => {
     wiringCalls.push(deps)
-    return chordFake
+    return wiringCalls.length === 1 ? chordFake : dictationChordFake
   }
 }))
 
@@ -71,6 +83,11 @@ function setup(
   wiringCalls.length = 0
   chordStatus = 'running'
   for (const fn of [
+    dictationChordFake.start,
+    dictationChordFake.refresh,
+    dictationChordFake.onSignedIn,
+    dictationChordFake.onInputSessionStop,
+    dictationChordFake.stop,
     chordFake.start,
     chordFake.refresh,
     chordFake.onSignedIn,
@@ -525,12 +542,7 @@ describe("recognized text (V03): only a voice turn's text reaches the action pip
 
   it('text from any other capture (the panel, an ambient lease, no lease) is not a voice action', () => {
     const handle = vi.fn()
-    for (const other of [
-      null,
-      lease('deliberate-talk', 'command'),
-      lease('wake', 'conversation'),
-      lease('push-to-talk', 'dictation')
-    ]) {
+    for (const other of [null, lease('deliberate-talk', 'command'), lease('wake', 'conversation')]) {
       const h = setup({ turns: { handle } })
       h.runtime.refresh()
       h.state.lease = other
@@ -585,5 +597,114 @@ describe("recognized text (V03): only a voice turn's text reaches the action pip
     expect(claim.valid()).toBe(true)
     h.runtime.onHardStop('screen-locked')
     expect(claim.valid()).toBe(false)
+  })
+})
+
+describe('dictation inside the voice actions runtime (G22)', () => {
+  const synthetic = (over: Partial<DictationHostPorts['insertion']> = {}): DictationHostPorts => ({
+    target: {
+      captureTarget: vi.fn(async () => ({
+        kind: 'target' as const,
+        target: {
+          appId: 'com.example.synthetic-editor',
+          processInstanceId: 'pid:5',
+          windowId: 'window:1',
+          elementId: 'element:1',
+          focusRevision: 1,
+          selectionRevision: 0,
+          documentRevision: 'doc:1',
+          editable: true,
+          secure: false,
+          observedAtMs: Date.now()
+        }
+      }))
+    },
+    insertion: { insert: vi.fn(async () => ({ outcome: 'unsupported' as const })), ...over }
+  })
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 12; i++) await Promise.resolve()
+  }
+  const dictationWiring = (): VoiceChordWiringDeps => wiringCalls[1] as VoiceChordWiringDeps
+
+  it('builds a second watcher for the dictation chord, after the voice hold', () => {
+    setup()
+    expect(wiringCalls).toHaveLength(2)
+    expect(wiringCalls[1]?.chordMask?.()).not.toBe(wiringCalls[0]?.chordMask?.())
+  })
+
+  it('start, refresh, sign-in and dispose reach the dictation watcher too', () => {
+    const h = setup()
+    h.runtime.start()
+    expect(dictationChordFake.start).toHaveBeenCalledOnce()
+    h.runtime.onSignedIn()
+    expect(dictationChordFake.onSignedIn).toHaveBeenCalledOnce()
+    h.runtime.dispose()
+    expect(dictationChordFake.stop).toHaveBeenCalled()
+  })
+
+  it('a dictation hold mints a dictation-kind activation and asks the renderer for a dictation capture', async () => {
+    const h = setup({ dictation: { ports: synthetic() } } as never)
+    h.runtime.start()
+    dictationWiring().onChordEvent?.({ type: 'armed' })
+    await flush()
+    expect(h.activation.mintFromHardware).toHaveBeenCalledWith(frame, 'hardware-dictation')
+    const begin = h.sent.find((m) => m.channel === VOICE_ACTIONS_IPC.begin)
+    expect(begin?.payload).toMatchObject({ purpose: 'dictation', maxMs: 15_000 })
+  })
+
+  it('text from a dictation lease is owned by dictation: never the voice pipeline, never the command panel', async () => {
+    const handle = vi.fn()
+    const h = setup({ turns: { handle }, dictation: { ports: synthetic() } } as never)
+    h.runtime.start()
+    h.state.lease = lease('push-to-talk', 'dictation')
+    expect(h.runtime.onTranscript('synthetic words')).toBe(true)
+    expect(handle).not.toHaveBeenCalled()
+  })
+
+  it('a renderer report for the dictation turn is applied to dictation and not to the voice turn', async () => {
+    const h = setup({ dictation: { ports: synthetic() } } as never)
+    h.runtime.start()
+    dictationWiring().onChordEvent?.({ type: 'armed' })
+    await flush()
+    const begin = h.sent.find((m) => m.channel === VOICE_ACTIONS_IPC.begin)?.payload as { turnId: string }
+    expect(h.runtime.report({ turnId: begin.turnId, phase: 'failed', reason: 'microphone_unavailable' })).toEqual({
+      ok: true
+    })
+    expect(h.runtime.snapshot().state).not.toBe('failed') // the voice snapshot is untouched
+  })
+
+  it('while dictation owns the microphone, a voice hold is refused instead of racing it for the activation', async () => {
+    const h = setup({ dictation: { ports: synthetic() } } as never)
+    h.runtime.start()
+    dictationWiring().onChordEvent?.({ type: 'armed' })
+    await flush()
+    h.emit('armed')
+    expect(h.runtime.snapshot()).toMatchObject({ state: 'failed', reason: 'panel_active' })
+  })
+
+  it('a hard stop, a meeting and a renderer reset end a dictation turn', async () => {
+    for (const end of ['hard', 'meeting', 'reset'] as const) {
+      const h = setup({ dictation: { ports: synthetic() } } as never)
+      h.runtime.start()
+      dictationWiring().onChordEvent?.({ type: 'armed' })
+      await flush()
+      h.sent.length = 0
+      if (end === 'hard') h.runtime.onHardStop('sign-out')
+      else if (end === 'meeting') h.runtime.onMeetingReserved()
+      else h.runtime.onRendererReset()
+      expect(
+        h.sent.some((m) => m.channel === VOICE_ACTIONS_IPC.end),
+        end
+      ).toBe(true)
+    }
+  })
+
+  it('with no native port (production until G23) a dictation hold is refused as unsupported', async () => {
+    const h = setup()
+    h.runtime.start()
+    dictationWiring().onChordEvent?.({ type: 'armed' })
+    await flush()
+    expect(h.sent.find((m) => m.channel === VOICE_ACTIONS_IPC.begin)).toBeUndefined()
+    expect(h.activation.mintFromHardware).not.toHaveBeenCalled()
   })
 })

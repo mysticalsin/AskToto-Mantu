@@ -72,6 +72,18 @@ function rig() {
       status: () => 'running',
       suspendedReason: () => null
     },
+    // The dictation watcher is stubbed like the voice one: no helper process runs in this test.
+    dictation: {
+      chord: {
+        start: () => {},
+        refresh: () => {},
+        onSignedIn: () => {},
+        onInputSessionStop: () => {},
+        stop: () => {},
+        status: () => 'running',
+        suspendedReason: () => null
+      }
+    },
     audit: () => {}
   })
   runtime.refresh()

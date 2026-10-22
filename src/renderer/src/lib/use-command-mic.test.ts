@@ -22,7 +22,7 @@ type TrackFixture = MediaStreamTrack & {
   stop: ReturnType<typeof vi.fn>
 }
 type TestController = {
-  start(options?: { source?: 'push-to-talk' | 'deliberate-talk' }): Promise<void>
+  start(options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation' }): Promise<void>
   finish(expectedGeneration?: number): Promise<void>
   cancel(): Promise<void>
   dispose(): void
@@ -77,7 +77,10 @@ function deferred<T>(fallback: T): Deferred<T> {
   }
 }
 
-function start(controller: TestController, options?: { source?: 'push-to-talk' | 'deliberate-talk' }): Promise<void> {
+function start(
+  controller: TestController,
+  options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation' }
+): Promise<void> {
   return controller.start(options)
 }
 
@@ -878,6 +881,29 @@ describe('voice turn capture started from a main-pushed begin', () => {
       context
     )
     await controller.cancel()
+  })
+
+  it('a dictation turn asks main for a push-to-talk dictation lease, with no click pre-check (G22)', async () => {
+    const env = createHarness()
+    env.activationReady = false
+    const controller = await env.createController(15_000)
+    await start(controller, { source: 'push-to-talk', purpose: 'dictation' })
+
+    expect(controller.getSnapshot()).toEqual({ status: 'listening' })
+    expect(env.startInputSession).toHaveBeenCalledExactlyOnceWith(
+      { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' },
+      context
+    )
+    await controller.cancel()
+  })
+
+  it('a dictation purpose without the push-to-talk source still needs the Start click (G22)', async () => {
+    const env = createHarness()
+    env.activationReady = false
+    const controller = await env.createController()
+    await start(controller, { purpose: 'dictation' })
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'activation_required' })
+    expect(env.startInputSession).not.toHaveBeenCalled()
   })
 
   it('the default start is unchanged: a deliberate-talk lease that needs the Start click', async () => {

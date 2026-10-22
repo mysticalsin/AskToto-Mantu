@@ -25,15 +25,22 @@ describe('createCommandMicLeaseTimer', () => {
     expect(hardStop).toHaveBeenCalledExactlyOnceWith('cancelled')
   })
 
-  it('does nothing for a different lease or a non-command purpose', () => {
+  it('does nothing for a different lease or a purpose that never captures command speech', () => {
     const other = setup({ sessionId: 'b'.repeat(48), purpose: 'command' })
     other.timer.arm(id, 10)
     vi.advanceTimersByTime(10)
     expect(other.hardStop).not.toHaveBeenCalled()
+    const conversation = setup({ sessionId: id, purpose: 'conversation' })
+    conversation.timer.arm(id, 10)
+    vi.advanceTimersByTime(10)
+    expect(conversation.hardStop).not.toHaveBeenCalled()
+  })
+
+  it('also stops a dictation lease whose capture never started (G22: it shares the speech capture path)', () => {
     const dictation = setup({ sessionId: id, purpose: 'dictation' })
     dictation.timer.arm(id, 10)
     vi.advanceTimersByTime(10)
-    expect(dictation.hardStop).not.toHaveBeenCalled()
+    expect(dictation.hardStop).toHaveBeenCalledExactlyOnceWith('cancelled')
   })
 
   it('clear cancels the deadline, but only for the tracked lease when an id is given', () => {

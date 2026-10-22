@@ -11,7 +11,8 @@
  */
 import { z } from 'zod'
 import { defineSettingsFeature } from './settings-feature-module'
-import { MODIFIER_BITS } from './voice/modifier-mask'
+import { DEFAULT_DICTATION_SETTINGS, DictationSettingsSchema } from './dictation-options'
+import { VOICE_CHORD_TOKENS, type VoiceChordToken } from './voice/chord-tokens'
 
 /**
  * THE release flag. Flip this to `true` (one line) once the owner's physical checklist passes (the chord in
@@ -25,23 +26,7 @@ export const VOICE_ACTIONS_RELEASE_DEFAULT_ON = false
  */
 export const VOICE_WAKE_WORD_GATE_PASSED = false
 
-/**
- * Chord tokens are the hold watcher's own modifier names (`MODIFIER_BITS` in voice/modifier-mask.ts): one
- * vocabulary for the setting, the recognizer and the helpers. Modifier-only: a hold of letter keys would need key
- * identities, which the helper protocol deliberately never carries. `unsided` is a protocol value, never a chord.
- */
-export const VOICE_CHORD_TOKENS = [
-  'leftControl',
-  'rightControl',
-  'leftAlt',
-  'rightAlt',
-  'leftCommand',
-  'rightCommand',
-  'leftShift',
-  'rightShift',
-  'fn'
-] as const satisfies ReadonlyArray<Exclude<keyof typeof MODIFIER_BITS, 'unsided'>>
-export type VoiceChordToken = (typeof VOICE_CHORD_TOKENS)[number]
+export { VOICE_CHORD_TOKENS, voiceChordMask, type VoiceChordToken } from './voice/chord-tokens'
 
 const ChordSchema = z.array(z.enum(VOICE_CHORD_TOKENS)).min(1).max(4)
 
@@ -60,7 +45,9 @@ export const VoiceActionsSettingsSchema = z.object({
   /** Optional "Hey Métis" listening. Off by default; gated by the wake measurement in V07. */
   wakeWord: z.boolean().default(false),
   /** How many times the first-use hint has been shown (V05). */
-  firstUseHintsShown: z.number().int().min(0).max(1000).default(0)
+  firstUseHintsShown: z.number().int().min(0).max(1000).default(0),
+  /** Dictation (G22): its own switch and chord, a Preview feature like the hold itself. */
+  dictation: DictationSettingsSchema.default(DEFAULT_DICTATION_SETTINGS)
 })
 export type VoiceActionsSettings = z.infer<typeof VoiceActionsSettingsSchema>
 
@@ -69,7 +56,8 @@ export const DEFAULT_VOICE_ACTIONS_SETTINGS: VoiceActionsSettings = {
   holdChord: { mac: ['rightCommand'], win: ['rightControl'] },
   doublePressLatch: false,
   wakeWord: false,
-  firstUseHintsShown: 0
+  firstUseHintsShown: 0,
+  dictation: DEFAULT_DICTATION_SETTINGS
 }
 
 export const VOICE_ACTIONS_FEATURE = defineSettingsFeature({
@@ -93,9 +81,4 @@ export function resolveVoiceActionsChord(
 ): readonly VoiceChordToken[] {
   const chord = stored?.holdChord ?? DEFAULT_VOICE_ACTIONS_SETTINGS.holdChord
   return platform === 'darwin' ? chord.mac : platform === 'win32' ? chord.win : []
-}
-
-/** The chord as the watcher's modifier mask (the tokens or-ed together); 0 when the platform has no chord. */
-export function voiceChordMask(chord: readonly VoiceChordToken[]): number {
-  return chord.reduce((mask, token) => mask | MODIFIER_BITS[token], 0)
 }

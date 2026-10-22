@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import {
+  isSpeechCapturePurpose,
   InputSessionStartSchema,
   InputSessionStopSchema,
   type InputSessionLease,
@@ -226,13 +227,18 @@ export class InputSessionAuthority {
   ownsInteractiveOwner(webContentsId: number): boolean {
     return this.#active?.owner.webContentsId === webContentsId
   }
-  isEstablishedLease(owner: TrustedInputOwner, sessionId: string, purpose: 'command'): boolean {
+  /** `speech` matches either purpose whose PCM main recognizes: a voice command or a dictation (G22). */
+  isEstablishedLease(
+    owner: TrustedInputOwner,
+    sessionId: string,
+    purpose: 'command' | 'dictation' | 'speech'
+  ): boolean {
     const current = this.#active
     return (
       !!current &&
       current.captureState === 'established' &&
       current.lease.sessionId === sessionId &&
-      current.lease.purpose === purpose &&
+      (purpose === 'speech' ? isSpeechCapturePurpose(current.lease.purpose) : current.lease.purpose === purpose) &&
       this.#owns(current.owner, owner)
     )
   }

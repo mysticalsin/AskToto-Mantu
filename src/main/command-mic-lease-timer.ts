@@ -1,8 +1,9 @@
+import { isSpeechCapturePurpose } from '@shared/input-session'
 import type { InputSessionAuthority } from './input-session-authority'
 
 /**
  * The deadline for a command-mic lease that was admitted but whose capture never started: when it fires and the
- * lease is still the same command lease, main hard-stops it. Moved out of index.ts unchanged.
+ * lease is still the same speech lease (a voice command or, since G22, a dictation), main hard-stops it.
  */
 export function createCommandMicLeaseTimer(deps: {
   /** The command lease id main currently tracks. */
@@ -23,7 +24,7 @@ export function createCommandMicLeaseTimer(deps: {
         timer = null
         const authority = deps.authority()
         const lease = authority.activeLease
-        if (lease?.sessionId === sessionId && lease.purpose === 'command') authority.hardStop('cancelled')
+        if (lease?.sessionId === sessionId && isSpeechCapturePurpose(lease.purpose)) authority.hardStop('cancelled')
       }, delayMs)
     }
   }

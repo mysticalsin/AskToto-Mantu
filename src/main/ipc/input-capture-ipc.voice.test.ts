@@ -21,7 +21,8 @@ const frame = { webContentsId: 7, frameId: '12:3', isTopFrame: true, url: sender
 
 type Handler = (event: unknown, request?: unknown) => unknown
 
-function setup(grants: { click: boolean; hardware: boolean }) {
+type GrantKind = 'click' | 'hardware' | 'hardware-dictation'
+function setup(grants: { click: boolean; hardware: boolean; 'hardware-dictation'?: boolean }) {
   const handlers = new Map<string, Handler>()
   const revoked: string[] = []
   let token = 0
@@ -30,12 +31,14 @@ function setup(grants: { click: boolean; hardware: boolean }) {
     now: () => 1,
     onRevoked: (_owner, _lease, reason) => revoked.push(reason)
   })
-  const consume = vi.fn((_frame: unknown, kind: 'click' | 'hardware' = 'click') => {
-    const available = grants[kind]
+  const consume = vi.fn((_frame: unknown, kind: GrantKind = 'click') => {
+    const available = grants[kind] === true
     grants[kind] = false
     return available
   })
-  const hasPending = vi.fn((_frame: unknown, kind: 'click' | 'hardware' = 'click') => grants[kind])
+  const hasPending = vi.fn((_frame: unknown, kind: GrantKind = 'click') => grants[kind] === true)
+  const setCommandMicActivationLeaseId = vi.fn()
+  const armCommandMicLeaseTimeout = vi.fn()
   const never = { safeParse: () => ({ success: false as const }) }
   registerInputCaptureIpc<unknown, unknown>({
     ipcMain: { handle: (channel: string, fn: Handler) => void handlers.set(channel, fn) } as never,
@@ -49,7 +52,7 @@ function setup(grants: { click: boolean; hardware: boolean }) {
       webContents: { getURL: () => senderFrame.url }
     }),
     getCommandMicActivationLeaseId: () => null,
-    setCommandMicActivationLeaseId: vi.fn(),
+    setCommandMicActivationLeaseId,
     getCommandSpeechCapture: () => null,
     currentInputSessionContext: () => context,
     captureAuthSessionBoundary: () => () => true,
@@ -58,7 +61,7 @@ function setup(grants: { click: boolean; hardware: boolean }) {
     commandMicOwner: () => owner,
     commandSpeechOwnerFromEvent: () => null,
     commandLeaseCurrentAndAllowed: () => null,
-    armCommandMicLeaseTimeout: vi.fn(),
+    armCommandMicLeaseTimeout,
     clearCommandMicLeaseTimer: vi.fn(),
     schemas: {
       inputSessionStop: InputSessionStopRequestSchema,
@@ -73,7 +76,7 @@ function setup(grants: { click: boolean; hardware: boolean }) {
     if (!handler) throw new Error('missing handler')
     return handler(event, request)
   }
-  return { authority, call, consume, hasPending, revoked }
+  return { authority, call, consume, hasPending, revoked, setCommandMicActivationLeaseId, armCommandMicLeaseTimeout }
 }
 
 const ptt = { input: { source: 'push-to-talk', purpose: 'command', activation: 'explicit' }, context }
@@ -116,5 +119,48 @@ describe('input-capture IPC voice activation provenance', () => {
     expect(result.ok).toBe(true)
     expect(result.lease?.source).toBe('push-to-talk')
     expect(revoked).toEqual(['arbitration-preempted'])
+  })
+})
+
+const dictationPtt = { input: { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' }, context }
+const dictationPanel = { input: { source: 'deliberate-talk', purpose: 'dictation', activation: 'explicit' }, context }
+
+describe('input-capture IPC dictation activation provenance (G22)', () => {
+  it('a push-to-talk dictation start consumes only the dictation grant', () => {
+    const { call, consume } = setup({ click: true, hardware: true, 'hardware-dictation': true })
+    expect((call(IPC.inputSessionStart, dictationPtt) as { ok: boolean }).ok).toBe(true)
+    expect(consume).toHaveBeenCalledTimes(1)
+    expect(consume.mock.calls[0]?.[1]).toBe('hardware-dictation')
+  })
+
+  it('a voice-turn or click grant cannot start a dictation capture', () => {
+    const { call, authority } = setup({ click: true, hardware: true })
+    expect(call(IPC.inputSessionStart, dictationPtt)).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(authority.activeLease).toBeNull()
+  })
+
+  it('a dictation grant cannot start a voice turn', () => {
+    const { call, authority } = setup({ click: false, hardware: false, 'hardware-dictation': true })
+    expect(call(IPC.inputSessionStart, ptt)).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(authority.activeLease).toBeNull()
+  })
+
+  it('the renderer cannot self-activate dictation from the panel source, even with every grant', () => {
+    const { call, consume, authority } = setup({ click: true, hardware: true, 'hardware-dictation': true })
+    expect(call(IPC.inputSessionStart, dictationPanel)).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(consume).not.toHaveBeenCalled()
+    expect(authority.activeLease).toBeNull()
+  })
+
+  it('an admitted dictation lease is tracked and given the same start deadline as a command lease', () => {
+    const { call, setCommandMicActivationLeaseId, armCommandMicLeaseTimeout } = setup({
+      click: false,
+      hardware: false,
+      'hardware-dictation': true
+    })
+    const result = call(IPC.inputSessionStart, dictationPtt) as { ok: boolean; lease: { sessionId: string } }
+    expect(result.ok).toBe(true)
+    expect(setCommandMicActivationLeaseId).toHaveBeenCalledWith(result.lease.sessionId)
+    expect(armCommandMicLeaseTimeout).toHaveBeenCalledWith(result.lease.sessionId, 15_000)
   })
 })

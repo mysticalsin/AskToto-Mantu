@@ -41,6 +41,21 @@ describe('voice actions preload bridge', () => {
     expect(ends).toEqual([{ turnId: 't1', cancelled: false }])
   })
 
+  it('delivers a begin that names the dictation or command purpose and drops any other purpose (G22)', () => {
+    const { ipc, push } = fakeIpc()
+    const api = createVoiceActionsPreloadApi(ipc as never).voiceActions
+    const begins: unknown[] = []
+    api.onBegin((v) => begins.push(v))
+    push(VOICE_ACTIONS_IPC.begin, { turnId: 'd1', maxMs: 15_000, purpose: 'dictation' })
+    push(VOICE_ACTIONS_IPC.begin, { turnId: 'c1', maxMs: 15_000, purpose: 'command' })
+    push(VOICE_ACTIONS_IPC.begin, { turnId: 'x1', maxMs: 15_000, purpose: 'conversation' })
+    push(VOICE_ACTIONS_IPC.begin, { turnId: 'x2', maxMs: 15_000, purpose: 'meeting' })
+    expect(begins).toEqual([
+      { turnId: 'd1', maxMs: 15_000, purpose: 'dictation' },
+      { turnId: 'c1', maxMs: 15_000, purpose: 'command' }
+    ])
+  })
+
   it('delivers a valid recognized question and drops anything malformed or oversized (V03)', () => {
     const { ipc, push } = fakeIpc()
     const api = createVoiceActionsPreloadApi(ipc as never).voiceActions

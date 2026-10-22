@@ -272,3 +272,59 @@ describe('InputSessionAuthority observers for the voice session', () => {
     expect(sessions.hasMeetingReservation).toBe(true)
   })
 })
+
+describe('InputSessionAuthority speech leases (G22)', () => {
+  it.each([
+    'command',
+    'dictation'
+  ] as const)('an established %s lease is a speech lease for its owner only', (purpose) => {
+    const sessions = authority()
+    const started = sessions.start(owner, { source: 'push-to-talk', purpose, activation: 'explicit' })
+    if (!started.ok) throw new Error('expected a lease')
+    const id = started.lease.sessionId
+    expect(sessions.isEstablishedLease(owner, id, 'speech')).toBe(false)
+    expect(sessions.claimPermissionRequest(owner)).toBe(true)
+    expect(sessions.confirmCapture(owner, id)).toBe(true)
+    expect(sessions.isEstablishedLease(owner, id, 'speech')).toBe(true)
+    expect(sessions.isEstablishedLease(otherOwner, id, 'speech')).toBe(false)
+    expect(sessions.isEstablishedLease(owner, 'f'.repeat(48), 'speech')).toBe(false)
+    expect(sessions.isEstablishedLease(owner, id, purpose)).toBe(true)
+  })
+
+  it('a dictation lease is not a command lease, and a conversation lease is not a speech lease', () => {
+    const sessions = authority()
+    const dictation = sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })
+    if (!dictation.ok) throw new Error('expected a lease')
+    sessions.claimPermissionRequest(owner)
+    sessions.confirmCapture(owner, dictation.lease.sessionId)
+    expect(sessions.isEstablishedLease(owner, dictation.lease.sessionId, 'command')).toBe(false)
+    sessions.hardStop('cancelled')
+    const talk = sessions.start(owner, { source: 'deliberate-talk', purpose: 'conversation', activation: 'explicit' })
+    if (!talk.ok) throw new Error('expected a lease')
+    sessions.claimPermissionRequest(owner)
+    sessions.confirmCapture(owner, talk.lease.sessionId)
+    expect(sessions.isEstablishedLease(owner, talk.lease.sessionId, 'speech')).toBe(false)
+  })
+
+  it('a push-to-talk dictation lease cannot preempt an explicit lease, and nothing preempts it', () => {
+    const sessions = authority()
+    const first = sessions.start(owner, { source: 'deliberate-talk', purpose: 'command', activation: 'explicit' })
+    expect(first.ok).toBe(true)
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'busy'
+    })
+  })
+
+  it('a meeting reservation refuses a dictation lease and revokes one that is running', () => {
+    const sessions = authority()
+    const started = sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })
+    expect(started.ok).toBe(true)
+    expect(sessions.reserveMeeting(1_000)).toBe(true)
+    expect(sessions.activeLease).toBeNull()
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'meeting_reserved'
+    })
+  })
+})

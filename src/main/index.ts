@@ -61,7 +61,7 @@ import {
 } from './meeting-start-activation-authority'
 import { CommandMicActivationAuthority, commandMicOwner } from './command-mic-activation-authority'
 import { CommandSpeechCapture } from './command-speech-capture'
-import { InputSessionStopRequestSchema } from '@shared/input-session'
+import { InputSessionStopRequestSchema, isSpeechCapturePurpose } from '@shared/input-session'
 import {
   IPC,
   LiveMeetingStartedAtSchema,
@@ -1408,13 +1408,13 @@ function commandLeaseCurrentAndAllowed(sessionId: string): boolean {
   const availability = commandMicAvailability()
   if (!availability.ok) {
     const active = inputSessionAuthority.activeLease
-    if (active?.purpose === 'command' && active.sessionId === sessionId) {
+    if (isSpeechCapturePurpose(active?.purpose) && active?.sessionId === sessionId) {
       inputSessionAuthority.hardStop(availability.reason === 'unauthorized' ? 'sign-out' : 'cancelled')
     }
     return false
   }
   const active = inputSessionAuthority.activeLease
-  return active?.sessionId === sessionId && active.purpose === 'command'
+  return active?.sessionId === sessionId && isSpeechCapturePurpose(active.purpose)
 }
 function currentMainActivationFrame(): MeetingStartActivationFrame | null {
   if (!win || win.isDestroyed()) return null
@@ -1484,7 +1484,7 @@ commandSpeechCapture = new CommandSpeechCapture({
         owner.authSessionGeneration === currentInputSessionContext().authSessionGeneration &&
         owner.contextRevision === currentInputSessionContext().contextRevision &&
         commandMicActivationLeaseId === sessionId &&
-        inputSessionAuthority.isEstablishedLease(owner, sessionId, 'command')
+        inputSessionAuthority.isEstablishedLease(owner, sessionId, 'speech')
     ),
   transcribe: async (samples) => {
     const sessionId = commandMicActivationLeaseId

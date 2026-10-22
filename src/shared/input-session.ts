@@ -19,6 +19,14 @@ export type InteractiveInputSource = z.infer<typeof InteractiveInputSourceSchema
 export const InputPurposeSchema = z.enum(['conversation', 'dictation', 'command'])
 export type InputPurpose = z.infer<typeof InputPurposeSchema>
 
+/**
+ * Purposes whose captured PCM main recognizes through the one command speech path (Parakeet, capped, zeroed after
+ * use): a voice command (V02) and a dictation (G22). Both need a main-minted hardware activation to start.
+ */
+export const SPEECH_CAPTURE_PURPOSES = ['command', 'dictation'] as const satisfies readonly InputPurpose[]
+export const isSpeechCapturePurpose = (purpose: InputPurpose | undefined): purpose is 'command' | 'dictation' =>
+  purpose === 'command' || purpose === 'dictation'
+
 /** Source, purpose, and activation are separate so PTT can explicitly request command or dictation. */
 export const InputSessionStartSchema = z
   .object({

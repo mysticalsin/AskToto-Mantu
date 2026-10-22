@@ -15,7 +15,7 @@ function setup() {
   }) {
     const controller = {
       options,
-      start: vi.fn(async (_o?: { source?: string }) => {}),
+      start: vi.fn(async (_o?: { source?: string; purpose?: string }) => {}),
       finish: vi.fn(async () => {}),
       cancel: vi.fn(async () => {}),
       dispose: vi.fn(),
@@ -58,11 +58,25 @@ describe('voice turn capture in the renderer', () => {
     h.begin()
     expect(h.controllers).toHaveLength(1)
     expect(h.controllers[0]?.options.maxDurationMs).toBe(15_000)
-    expect(h.controllers[0]?.start).toHaveBeenCalledExactlyOnceWith({ source: 'push-to-talk' })
+    expect(h.controllers[0]?.start).toHaveBeenCalledExactlyOnceWith({ source: 'push-to-talk', purpose: 'command' })
     expect(h.reports).toEqual([])
     h.controllers[0]?.emit({ status: 'starting' })
     h.controllers[0]?.emit({ status: 'listening' })
     expect(h.reports).toEqual([{ turnId: 't1', phase: 'capturing' }])
+  })
+
+  it('a begin that names a dictation purpose starts a push-to-talk capture for that purpose (G22)', () => {
+    const h = setup()
+    h.begin({ turnId: 'd1', maxMs: 15_000, purpose: 'dictation' })
+    expect(h.controllers[0]?.start).toHaveBeenCalledExactlyOnceWith({ source: 'push-to-talk', purpose: 'dictation' })
+    h.controllers[0]?.emit({ status: 'listening' })
+    expect(h.reports).toEqual([{ turnId: 'd1', phase: 'capturing' }])
+  })
+
+  it('a begin that names a command purpose, or none, starts the unchanged voice-turn capture (G22)', () => {
+    const h = setup()
+    h.begin({ turnId: 'c1', maxMs: 15_000, purpose: 'command' })
+    expect(h.controllers[0]?.start).toHaveBeenCalledExactlyOnceWith({ source: 'push-to-talk', purpose: 'command' })
   })
 
   it('a release while listening finishes the capture', () => {

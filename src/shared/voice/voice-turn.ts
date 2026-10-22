@@ -160,8 +160,17 @@ export const VoiceStateSnapshotSchema = z
   .strict()
 export type VoiceStateSnapshot = z.infer<typeof VoiceStateSnapshotSchema>
 
+/**
+ * Which capture main wants the renderer to open for this turn. Absent means a voice command (V02). `dictation`
+ * (G22) asks for a dictation-purpose capture; main alone chooses it, and the lease is still authorized by main.
+ */
+export const VOICE_TURN_PURPOSES = ['command', 'dictation'] as const
 export const VoiceBeginSchema = z
-  .object({ turnId: z.string().min(1).max(64), maxMs: z.number().int().positive().max(60_000) })
+  .object({
+    turnId: z.string().min(1).max(64),
+    maxMs: z.number().int().positive().max(60_000),
+    purpose: z.enum(VOICE_TURN_PURPOSES).optional()
+  })
   .strict()
 /** The chord recorder flag: one boolean, nothing else. It can only pause a hold, never start a turn. */
 export const VoiceRecorderSchema = z.object({ active: z.boolean() }).strict()

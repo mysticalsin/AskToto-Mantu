@@ -208,6 +208,42 @@ describe('CommandMicActivationAuthority hardware activation (voice turn)', () =>
   })
 })
 
+describe('CommandMicActivationAuthority dictation activation (G22)', () => {
+  let s: CommandMicActivationState
+  beforeEach(() => {
+    s = baseState()
+  })
+  const make = () => new CommandMicActivationAuthority({ state: () => s, now: () => 1_000 })
+
+  it('a dictation grant is consumable only as a dictation grant, exactly once', () => {
+    const auth = make()
+    expect(auth.mintFromHardware(frame, 'hardware-dictation')).toBe(true)
+    expect(auth.hasPending(frame, 'hardware-dictation')).toBe(true)
+    expect(auth.hasPending(frame, 'hardware')).toBe(false)
+    expect(auth.hasPending(frame)).toBe(false)
+    expect(auth.consume(frame, 'hardware')).toBe(false)
+    expect(auth.consume(frame)).toBe(false)
+    expect(auth.consume(frame, 'hardware-dictation')).toBe(true)
+    expect(auth.consume(frame, 'hardware-dictation')).toBe(false)
+  })
+
+  it('a voice-turn grant can never start a dictation capture', () => {
+    const auth = make()
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    expect(auth.consume(frame, 'hardware-dictation')).toBe(false)
+    expect(auth.consume(frame, 'hardware')).toBe(true)
+  })
+
+  it('revokeHardware drops dictation grants too and leaves a click grant', () => {
+    const auth = make()
+    expect(auth.mint(frame)).toBe(true)
+    expect(auth.mintFromHardware(frame, 'hardware-dictation')).toBe(true)
+    auth.revokeHardware()
+    expect(auth.hasPending(frame, 'hardware-dictation')).toBe(false)
+    expect(auth.hasPending(frame)).toBe(true)
+  })
+})
+
 describe('commandMicOwner', () => {
   const context = { authSessionGeneration: 5, contextRevision: 11 }
 

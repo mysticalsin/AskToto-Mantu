@@ -19,8 +19,12 @@ export interface CommandMicActivationState {
   readonly context: InputSessionContext
 }
 
-/** `click` is minted from the preload's trusted button click; `hardware` only by main's voice session. */
-export type CommandMicActivationKind = 'click' | 'hardware'
+/**
+ * `click` is minted from the preload's trusted button click; `hardware` only by main's voice session and
+ * `hardware-dictation` only by main's dictation session (G22). The three never substitute for each other: a voice
+ * turn's grant can't start a dictation capture and a dictation grant can't start a voice turn.
+ */
+export type CommandMicActivationKind = 'click' | 'hardware' | 'hardware-dictation'
 
 interface Grant {
   readonly kind: CommandMicActivationKind
@@ -52,10 +56,11 @@ export class CommandMicActivationAuthority {
   /**
    * Main-only, never reachable from an IPC handler: a held hardware chord (voice actions) is the user's own
    * activation, observed by main. The frame is main's own window frame, never a renderer message. The grant
-   * is consumable only by a push-to-talk command start, so a click grant and a hardware grant never mix.
+   * is consumable only by a push-to-talk command start, so a click grant and a hardware grant never mix. A held
+   * dictation chord mints the `hardware-dictation` kind, consumable only by a push-to-talk dictation start.
    */
-  mintFromHardware(frame: CommandMicActivationFrame): boolean {
-    return this.#mint(frame, 'hardware')
+  mintFromHardware(frame: CommandMicActivationFrame, kind: 'hardware' | 'hardware-dictation' = 'hardware'): boolean {
+    return this.#mint(frame, kind)
   }
 
   hasPending(frame: CommandMicActivationFrame, kind: CommandMicActivationKind = 'click'): boolean {
@@ -75,9 +80,10 @@ export class CommandMicActivationAuthority {
     return false
   }
 
-  /** A voice turn ended: its activation must not outlive it. Click grants are untouched. */
-  revokeHardware(): void {
-    for (const [id, grant] of this.#grants) if (grant.kind === 'hardware') this.#grants.delete(id)
+  /** A voice or dictation turn ended: its activation must not outlive it. Click grants are untouched. */
+  revokeHardware(kind?: 'hardware' | 'hardware-dictation'): void {
+    for (const [id, grant] of this.#grants)
+      if (grant.kind !== 'click' && (kind === undefined || grant.kind === kind)) this.#grants.delete(id)
   }
 
   #mint(frame: CommandMicActivationFrame, kind: CommandMicActivationKind): boolean {

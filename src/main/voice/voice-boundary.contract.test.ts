@@ -52,9 +52,11 @@ describe('voice actions boundary: the activation is main-only and the meeting pi
     }
   })
 
-  it('a voice turn asks for its own lease: push-to-talk with the command purpose, never conversation or dictation', () => {
+  it('a voice turn asks for its own lease: push-to-talk, the command purpose unless main names another, never conversation', () => {
     const capture = readModuleSource(__dirname, '../../renderer/src/lib/voice-turn-capture').text
     expect(capture).toContain("source: 'push-to-talk'")
+    expect(capture).toContain("payload.purpose ?? 'command'")
+    // The purpose is main's choice (G22): the renderer module names no purpose of its own besides the default.
     expect(capture).not.toMatch(/'conversation'|'dictation'|deliberate-talk/)
   })
 

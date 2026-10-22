@@ -1,5 +1,6 @@
 import type { InputSessionAuthority } from './input-session-authority'
 import {
+  isSpeechCapturePurpose,
   InputSessionContextSchema,
   InputSessionConfirmRequestSchema,
   InputSessionStartRequestSchema,
@@ -31,7 +32,13 @@ interface Dependencies<Event extends EventLike> {
   currentMainUrl(): string
   currentContext(): InputSessionContext
   captureAuthBoundary(): () => boolean
-  authorizeCommandStart?(event: Event, owner: TrustedInputOwner, source: InputSessionStart['source']): boolean
+  /** Authorizes a speech-capture start (a voice command or a dictation) from a main-minted hardware activation. */
+  authorizeCommandStart?(
+    event: Event,
+    owner: TrustedInputOwner,
+    source: InputSessionStart['source'],
+    purpose: InputSessionStart['purpose']
+  ): boolean
 }
 
 function ownerFromEvent(
@@ -109,8 +116,8 @@ export function createInputSessionHandlers<Event extends EventLike>(dependencies
       const owner = ownerFromEvent(event, dependencies.currentMainUrl(), current)
       if (!owner) return { ok: false, reason: 'unauthorized' }
       if (
-        parsed.data.input.purpose === 'command' &&
-        !dependencies.authorizeCommandStart?.(event, owner, parsed.data.input.source)
+        isSpeechCapturePurpose(parsed.data.input.purpose) &&
+        !dependencies.authorizeCommandStart?.(event, owner, parsed.data.input.source, parsed.data.input.purpose)
       ) {
         return { ok: false, reason: 'unauthorized' }
       }

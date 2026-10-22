@@ -23,6 +23,7 @@ import {
   type VoiceStateSnapshot
 } from '@shared/voice/voice-turn'
 import type { CommandMicActivationAuthority, CommandMicActivationFrame } from '../command-mic-activation-authority'
+import { createDictationRuntime, type DictationHostPorts } from '../features/dictation'
 import type { InputSessionAuthority } from '../input-session-authority'
 import { auditLog } from '../logger'
 import type { ChordWatcherEvent } from './chord-watcher'
@@ -66,6 +67,12 @@ export interface VoiceActionsRuntimeDeps {
    * only in tests that do not exercise actions; the recognized text is then dropped, never given to anything else.
    */
   turns?: { handle(text: string, claim: VoiceTurnClaim): void }
+  /**
+   * Dictation (G22) shares this runtime's hooks. `ports` is where the operating system binds the focused field and
+   * inserts text (G23 on macOS, G24 on Windows). Absent in production until then: a dictation hold is refused as
+   * unsupported before the microphone opens.
+   */
+  dictation?: { ports?: DictationHostPorts; chord?: VoiceChordWiring }
   /** Defaults to the `voice.turn` audit event (phase and machine reason only). */
   audit?(phase: VoiceAuditPhase, detail?: { reason?: string }): void
   newTurnId?(): string
@@ -150,7 +157,9 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       },
       explicitLeaseActive: () => {
         const lease = deps.authority.activeLease
-        return lease !== null && lease.activation === 'explicit' && !isVoiceLease(lease)
+        // A dictation turn counts from its first moment, before its lease exists: two chords never race for one
+        // microphone.
+        return (lease !== null && lease.activation === 'explicit' && !isVoiceLease(lease)) || dictation.active()
       },
       availability: () => deps.availability()
     },
@@ -159,7 +168,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
         const frame = deps.mainFrame()
         return frame !== null && deps.activation.mintFromHardware(frame)
       },
-      revoke: () => deps.activation.revokeHardware()
+      revoke: () => deps.activation.revokeHardware('hardware')
     },
     stopVoiceLease: (reason) => {
       if (isVoiceLease(deps.authority.activeLease)) deps.authority.hardStop(reason)
@@ -174,16 +183,45 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     newTurnId: deps.newTurnId ?? randomUUID,
     audit: deps.audit ?? ((phase, detail) => auditLog('voice.turn', { phase, ...detail }))
   })
+  const dictation = createDictationRuntime({
+    platform,
+    qaIdentity: deps.qaIdentity,
+    getSettings: deps.getSettings,
+    requireAuth: deps.requireAuth,
+    authority: deps.authority,
+    activation: {
+      mint: () => {
+        const frame = deps.mainFrame()
+        return frame !== null && deps.activation.mintFromHardware(frame, 'hardware-dictation')
+      },
+      revoke: () => deps.activation.revokeHardware('hardware-dictation')
+    },
+    window: deps.window,
+    onboardingActive: deps.onboardingActive,
+    availability: deps.availability,
+    parakeet: deps.parakeet,
+    voiceChordMask: () => voiceChordMask(resolveVoiceActionsChord(voice(), platform)),
+    voiceTurnBusy: () => {
+      const state = session.snapshot().state
+      return state === 'listening' || state === 'thinking'
+    },
+    chordRecorderActive: () => Date.now() < recorderOpenUntil,
+    chord: deps.dictation?.chord,
+    ports: deps.dictation?.ports,
+    newTurnId: deps.newTurnId
+  })
   let presenceCheckedAt = Number.NEGATIVE_INFINITY
   // A renderer that went away cannot have its recorder open any more.
   const onRendererReset = (): void => {
     recorderOpenUntil = 0
     session.onRendererReset()
+    dictation.onRendererReset()
   }
   return {
     start() {
       chord.start()
       session.refresh()
+      dictation.start()
     },
     refresh() {
       // Settings polls call this often; the model-presence probe touches the disk, so it runs at most every 30 s.
@@ -192,21 +230,31 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
         void deps.parakeet.refreshPresence()
       }
       session.refresh()
+      dictation.refresh()
     },
     snapshot: () => session.snapshot(),
-    onSignedIn: () => chord.onSignedIn(),
+    onSignedIn() {
+      chord.onSignedIn()
+      dictation.onSignedIn()
+    },
     onChordEvent: (event) => session.onChordEvent(event),
     onHardStop(reason) {
       chord.onInputSessionStop(reason)
       session.onHardStop(reason)
+      dictation.onHardStop(reason)
     },
-    onMeetingReserved: () => session.onMeetingReserved(),
+    onMeetingReserved() {
+      session.onMeetingReserved()
+      dictation.onMeetingReserved()
+    },
     onSpeechFinished(sessionId, result) {
       const lease = deps.authority.activeLease
       if (isVoiceLease(lease) && lease.sessionId === sessionId) session.onSpeechFinished(result)
+      else dictation.onSpeechFinished(sessionId, result)
     },
     onTranscript(text) {
-      if (!isVoiceLease(deps.authority.activeLease)) return false
+      // A dictation lease's text belongs to dictation: never the voice pipeline, never the command panel.
+      if (!isVoiceLease(deps.authority.activeLease)) return dictation.onTranscript(text)
       const claim = session.claimTurn()
       if (claim) {
         try {
@@ -232,7 +280,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     report(raw) {
       const parsed = VoiceReportSchema.safeParse(raw)
       if (!parsed.success) return { ok: false }
-      session.report(parsed.data)
+      if (!dictation.report(parsed.data)) session.report(parsed.data)
       return { ok: true }
     },
     setChordRecorderActive(raw) {
@@ -244,6 +292,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     dispose() {
       chord.stop()
       session.dispose()
+      dictation.dispose()
     }
   }
 }
