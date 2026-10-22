@@ -82,7 +82,7 @@ const REASONS = [
   },
   {
     match: 'ffmpeg-decoder.test.ts',
-    why: "Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg. The cancel test's SIGTERM-immune stand-in is a POSIX shell script; Windows has no signals to ignore (kill is TerminateProcess), so it runs on linux and darwin only."
+    why: "Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg. The cancel test's SIGTERM-immune stand-in and (Q12, D9-9) the canned-stderr ffmpeg stand-in are POSIX shell scripts with no Windows shebang equivalent, so they run on linux and darwin only; the stderr-to-plain-copy mapping itself is unit-tested on every platform."
   },
   {
     match: 'win-security.test.ts',
@@ -171,7 +171,8 @@ const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'tr
 // Q09 (2.12) added three cases to the declared opt-in OnboardingExperience browser check (focus on scene change,
 // short-window scroll, managed-lock toggle): +3 on every platform.
 // Q06 added the POSIX read-only Open-copy case to history-actions.test.ts: +1 on win32 only.
-const BASELINE = { win32: 45, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
+// Q12 added the POSIX-only canned-stderr ffmpeg stand-in case: +1 on win32 only.
+const BASELINE = { win32: 46, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4
