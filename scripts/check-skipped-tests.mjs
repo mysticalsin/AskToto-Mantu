@@ -106,7 +106,7 @@ const REASONS = [
   },
   {
     match: 'history-actions.test.ts',
-    why: 'Opens and exports a meeting file that is a real FIFO, the kernel-blocking stand-in for a cloud-only read, to prove History settles within the read deadline with the event loop free. Windows has no FIFOs; the Open and Export copy decoding, missing-file and cloud-only paths run on every platform in the same file.'
+    why: 'Opens and exports a meeting file that is a real FIFO, the kernel-blocking stand-in for a cloud-only read, to prove History settles within the read deadline with the event loop free; and (Q06) asserts the decrypted Open copy is mode 0o444, a POSIX permission bit Windows does not have. Windows has no FIFOs or POSIX modes; the Open and Export copy decoding, missing-file and cloud-only paths run on every platform in the same file.'
   },
   {
     match: 'OnboardingExperience.browser.test.ts',
@@ -170,7 +170,8 @@ const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'tr
 // listed in REASONS. A provisioned local Mac keeps the stricter 6.
 // Q09 (2.12) added three cases to the declared opt-in OnboardingExperience browser check (focus on scene change,
 // short-window scroll, managed-lock toggle): +3 on every platform.
-const BASELINE = { win32: 44, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
+// Q06 added the POSIX read-only Open-copy case to history-actions.test.ts: +1 on win32 only.
+const BASELINE = { win32: 45, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4
