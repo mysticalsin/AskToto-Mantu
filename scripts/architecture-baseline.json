@@ -39,7 +39,7 @@
   "FF-04": {
     "src/main/auth.ts": 975,
     "src/main/brain/corrections.ts": 1637,
-    "src/main/brain/ingest.ts": 2744,
+    "src/main/brain/ingest.ts": 2743,
     "src/main/brain/publish.ts": 954,
     "src/main/brain/store.ts": 1127,
     "src/main/cli.ts": 1690,

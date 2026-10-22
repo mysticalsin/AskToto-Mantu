@@ -19,11 +19,12 @@ import {
   DEBRIEF_MAX_CHARS,
   type RecallSetConfidentialResult,
   RecallBackfillSpeakersPayloadSchema,
-  type RecallExportPlainResult
+  type RecallExportPlainResult,
+  type Settings
 } from '@shared/ipc'
 import { getSettings } from '../store'
 import { mainLog, auditLog } from '../logger'
-import { enqueueIngest, exciseDeletedMeeting, requestSourceRefresh } from '../brain/ingest'
+import { acknowledgeMetadataEdit, enqueueIngest, exciseDeletedMeeting, requestSourceRefresh } from '../brain/ingest'
 import { publishAll, publishMeetingCard, removeWiki } from '../brain/publish'
 import { purgeBrain } from '../brain/store'
 import { safeMeetingBasename } from '../meeting-path'
@@ -57,6 +58,17 @@ export interface RecallIpcDependencies {
   /** Writes the user-chosen plaintext export copy. */
   writeTextFile: (path: string, text: string) => void
   backfillSpeakerNames: (file: string) => Promise<{ ok: boolean; named?: number; error?: string }>
+}
+
+/** Records a metadata-only write as already ingested, so the drift tick never re-extracts it. Never throws. */
+async function acknowledgeEdit(s: Settings, file: string): Promise<void> {
+  try {
+    await acknowledgeMetadataEdit(s, join(resolveMeetingsFolder(s), basename(file)))
+  } catch (error) {
+    mainLog.warn(
+      `[brain] could not acknowledge a metadata edit: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
 }
 
 export function registerRecallIpc(deps: RecallIpcDependencies): void {
@@ -177,7 +189,10 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     const result = await renameMeeting(getSettings(), parsed.data.file, parsed.data.title)
     if (result.ok) {
       auditLog('transcript.renamed', { file: basename(parsed.data.file) })
-      await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), { force: true })
+      await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), {
+        force: true,
+        reingest: true
+      })
     }
     return result
   })
@@ -195,7 +210,10 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap, parsed.data.recapStatus)
     if (result.ok) {
       auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
-      await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), { force: true })
+      await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), {
+        force: true,
+        reingest: true
+      })
     }
     return result
   })
@@ -217,6 +235,8 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
         file: basename(parsed.data.file),
         confidential: parsed.data.confidential
       })
+      // Q04b / D8-1: a flag write changes the file's version but nothing the extraction read.
+      await acknowledgeEdit(s, parsed.data.file)
       // MQA-075: the republish IS the enforcement — the wiki is static markdown, so until it regenerates
       // the meeting's title/TL;DR/decisions/deal facts are still on every published page. Fired detached
       // it could fail (a locked wiki file, an EPERM mkdir) while this handler had already returned ok, so
@@ -249,7 +269,10 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = SetCrmPushedPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
-    return setMeetingCrmPushed(getSettings(), parsed.data.file, parsed.data.key)
+    const s = getSettings()
+    const result = await setMeetingCrmPushed(s, parsed.data.file, parsed.data.key)
+    if (result.ok) await acknowledgeEdit(s, parsed.data.file)
+    return result
   })
 
   // Q07 (D4-6): the generalised durable push marker (CRM, ClickUp, "Book next steps"). Same guard shape and
@@ -290,7 +313,7 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     const result = await appendDebrief(s, safeName, text)
     if (result.ok) {
       auditLog('transcript.debrief', { file: safeName })
-      await enqueueIngest(join(resolveMeetingsFolder(s), safeName), { force: true }) // fold the unsaid layer into the brain
+      await enqueueIngest(join(resolveMeetingsFolder(s), safeName), { force: true, reingest: true }) // fold the unsaid layer into this meeting only
     }
     return result
   })

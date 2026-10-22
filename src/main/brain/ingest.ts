@@ -54,7 +54,6 @@ import {
   retryStateAfterFailure,
   reviveExhausted,
   type HoldReason,
-  type SourceObservation,
   type WorkTrigger
 } from '../infra/scheduler/policy'
 import {
@@ -956,16 +955,8 @@ export function readMeetingSourceMode(md: string): string {
  * Cheap source identity for OneDrive-backed folders. mtime plus size detects normal edits without
  * re-reading every transcript on each background scan; a missing snapshot is treated as stale.
  */
-function meetingSourceVersionFromObservation(observation: SourceObservation): string | undefined {
-  return observation.version
-}
-
-async function observeSourceFile(file: string): Promise<SourceObservation> {
-  return sourceFileObservation(file)
-}
-
 async function meetingSourceVersion(file: string): Promise<string | undefined> {
-  return meetingSourceVersionFromObservation(await observeSourceFile(file))
+  return (await sourceFileObservation(file)).version
 }
 
 /**
@@ -1024,7 +1015,7 @@ export async function ingestExtraction(
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')
   if (!date) {
-    const source = await observeSourceFile(file)
+    const source = await sourceFileObservation(file)
     date = source.version ? new Date(Number(source.version.split(':')[0])).toISOString() : ''
     mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
   }
@@ -1261,7 +1252,7 @@ async function finishJob(result: JobResult): Promise<void> {
       completionError(
         e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete'
       )
-      const source = await observeSourceFile(job.file)
+      const source = await sourceFileObservation(job.file)
       await updateIndex(s, (idx) => {
         const key = jobKey(job)
         const previous = idx.ingested[key]
@@ -1583,6 +1574,8 @@ function pump(): void {
 
 onMaintenanceMayBegin(pump)
 
+type EnqueueIngestOptions = { force?: boolean; deferred?: boolean; reingest?: boolean }
+
 /**
  * Durable enqueue for a just-saved meeting. The lightweight index write happens before a network-bound
  * extraction is allowed to start, so a quit/restart replays the meeting instead of losing it in RAM.
@@ -1596,10 +1589,12 @@ onMaintenanceMayBegin(pump)
  * consolidation pass, or the user clicking "Index meetings" / rebuild) picks it up exactly like any other
  * not-yet-ingested transcript — startBackfill's readdir scan finds it by content, independent of whether
  * enqueueIngest ever ran for it at all.
+ *
+ * Q04b `reingest`: an in-app edit of one ok meeting re-extracts that meeting only, not a whole-brain refresh.
  */
 export async function enqueueIngest(
   file: string,
-  { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {},
+  { force = false, deferred = false, reingest = false }: EnqueueIngestOptions = {},
   assertAdmission?: () => void,
   onSettled?: () => void
 ): Promise<void> {
@@ -1656,7 +1651,8 @@ export async function enqueueIngest(
     }
     // A write that lands while the prior extraction is active cannot be safely folded into that job.
     // Keep the old job's result from clobbering the newer source by rebuilding from durable sources.
-    if (force || (sourceVersion && tracked.sourceVersion && sourceVersion !== tracked.sourceVersion)) {
+    // Q04b: `reingest` never rebuilds the whole brain; the drift tick re-ingests this key after the job.
+    if (!reingest && (force || (sourceVersion && tracked.sourceVersion && sourceVersion !== tracked.sourceVersion))) {
       await requestSourceRefresh(s, checkAdmission)
       checkAdmission()
     }
@@ -1668,10 +1664,13 @@ export async function enqueueIngest(
       settle()
       return
     }
-    await requestSourceRefresh(s, checkAdmission)
-    checkAdmission()
-    settle()
-    return
+    if (!reingest) {
+      await requestSourceRefresh(s, checkAdmission)
+      checkAdmission()
+      settle()
+      return
+    }
+    // Q04b: `reingest` falls through to the per-meeting pending record and single extraction below.
   }
   observeSource(key)
   if (backfillObserver) backfillObserver.published = false

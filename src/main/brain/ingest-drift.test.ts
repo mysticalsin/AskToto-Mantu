@@ -7,7 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { DealEntitySchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { acknowledgeMetadataEdit, brainBackfillProgress, reconcileMeetingsInBackground } from './ingest'
+import { acknowledgeMetadataEdit, brainBackfillProgress, enqueueIngest, reconcileMeetingsInBackground } from './ingest'
 import { scanMeetingSources, sourceVersions } from './inputs'
 import { readDeal, readIndex, writeDeal, writeIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
@@ -158,6 +158,31 @@ describe('source drift: per-meeting re-ingest and a budgeted rebuild (Q04 / D8-1
 
     expect(createStreamMock).not.toHaveBeenCalled()
     expect(readDeal(getSettings(), 'survivor')).not.toBeNull()
+  })
+
+  it('Q04b: a content edit on an ok meeting re-ingests that key only, never a whole-brain rebuild', async () => {
+    await seedIndex({ aStale: false })
+    writeFileSync(join(meetingsFolder, 'a.md'), '---\ndate: 2026-01-01\n---\nAlpha content, edited title.', 'utf8')
+
+    await enqueueIngest(join(meetingsFolder, 'a.md'), { force: true, reingest: true })
+    await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalled(), { timeout: 15_000 })
+    await waitForIdle()
+
+    expect(createStreamMock).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(createStreamMock.mock.calls[0][0])).toContain('edited title')
+    const idx = readIndex(getSettings())
+    expect(idx.sourceRefreshRequested).toBeFalsy()
+    expect(idx.ingested['a.md']?.ok).toBe(true)
+    // A whole-brain purge would have removed this entity file and re-extracted b.md too.
+    expect(readDeal(getSettings(), 'survivor')).not.toBeNull()
+  })
+
+  it('Q04b: without the reingest option a forced enqueue on an ok meeting still rebuilds (unchanged contract)', async () => {
+    await seedIndex({ aStale: false })
+    await enqueueIngest(join(meetingsFolder, 'a.md'), { force: true })
+    await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalled(), { timeout: 15_000 })
+    await waitForIdle()
+    expect(readDeal(getSettings(), 'survivor')).toBeNull()
   })
 
   it('acknowledging a meeting that is not ingested ok adds no record', async () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC, type Settings } from '@shared/ipc'
 
@@ -10,6 +11,14 @@ const mocks = vi.hoisted(() => ({
   deleteAllMeetings: vi.fn(async () => ({ ok: true, deleted: 2, failed: [] as string[] })),
   readSavedMeeting: vi.fn(async () => '# meeting'),
   requestSourceRefresh: vi.fn(async () => {}),
+  enqueueIngest: vi.fn(async () => {}),
+  acknowledgeMetadataEdit: vi.fn(async () => {}),
+  appendDebrief: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+  renameMeeting: vi.fn(async () => ({ ok: true })),
+  updateMeetingRecap: vi.fn(async () => ({ ok: true })),
+  setMeetingConfidential: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+  setMeetingCrmPushed: vi.fn(async () => ({ ok: true })),
+  publishAll: vi.fn(async () => {}),
   publishMeetingCard: vi.fn(async () => {}),
   exciseDeletedMeeting: vi.fn(async () => ({ gone: true })),
   listMeetings: vi.fn(async (): Promise<{ file?: string }[]> => [{}, {}]),
@@ -18,17 +27,14 @@ const mocks = vi.hoisted(() => ({
   removeWiki: vi.fn(() => ({ ok: true })),
   purgeGraphArtifacts: vi.fn(() => true),
   scheduleRebuild: vi.fn(async () => {}),
-  publishAll: vi.fn(async () => {}),
-  appendDebrief: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
-  setMeetingConfidential: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
-  setMeetingPushMarker: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
-  enqueueIngest: vi.fn(async () => {})
+  setMeetingPushMarker: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true }))
 }))
 
 vi.mock('../store', () => ({ getSettings: () => settings }))
 vi.mock('../logger', () => ({ auditLog: mocks.auditLog, mainLog: { warn: vi.fn(), error: vi.fn() } }))
 vi.mock('../brain/ingest', () => ({
   enqueueIngest: mocks.enqueueIngest,
+  acknowledgeMetadataEdit: mocks.acknowledgeMetadataEdit,
   exciseDeletedMeeting: mocks.exciseDeletedMeeting,
   requestSourceRefresh: mocks.requestSourceRefresh
 }))
@@ -48,10 +54,10 @@ vi.mock('../recall', () => ({
   recallRead: vi.fn(),
   openExplicitly: vi.fn(),
   deleteMeeting: mocks.deleteMeeting,
-  renameMeeting: vi.fn(),
-  updateMeetingRecap: vi.fn(),
+  renameMeeting: mocks.renameMeeting,
+  updateMeetingRecap: mocks.updateMeetingRecap,
   setMeetingConfidential: mocks.setMeetingConfidential,
-  setMeetingCrmPushed: vi.fn(),
+  setMeetingCrmPushed: mocks.setMeetingCrmPushed,
   setMeetingPushMarker: mocks.setMeetingPushMarker,
   deleteAllMeetings: mocks.deleteAllMeetings
 }))
@@ -218,6 +224,51 @@ describe('recall IPC', () => {
       failed: 0,
       brainPurged: true,
       wikiRemoved: true
+    })
+  })
+
+  describe('metadata-only edits never rebuild the whole brain (Q04b)', () => {
+    const MEETING = join('/meetings', 'a.md')
+
+    it('rename, recap and debrief re-ingest that meeting only, never a forced whole-brain refresh', async () => {
+      const { handler } = setup()
+      await handler(IPC.recallRename)(event, { file: 'a.md', title: 'New title' })
+      await handler(IPC.recallUpdateRecap)(event, { file: 'a.md', recap: 'Fixed a name.' })
+      await handler(IPC.debriefSave)(event, { file: 'a.md', text: 'Gut read.' })
+      expect(mocks.enqueueIngest).toHaveBeenCalledTimes(3)
+      for (const call of mocks.enqueueIngest.mock.calls) {
+        expect(call).toEqual([MEETING, { force: true, reingest: true }])
+      }
+      expect(mocks.requestSourceRefresh).not.toHaveBeenCalled()
+    })
+
+    it('a failed rename or recap write schedules no ingest', async () => {
+      mocks.renameMeeting.mockResolvedValueOnce({ ok: false } as never)
+      mocks.updateMeetingRecap.mockResolvedValueOnce({ ok: false } as never)
+      const { handler } = setup()
+      await handler(IPC.recallRename)(event, { file: 'a.md', title: 'New title' })
+      await handler(IPC.recallUpdateRecap)(event, { file: 'a.md', recap: 'x' })
+      expect(mocks.enqueueIngest).not.toHaveBeenCalled()
+    })
+
+    it('confidential and CRM-pushed writes acknowledge the new source version and schedule no ingest', async () => {
+      const { handler } = setup()
+      await handler(IPC.recallSetConfidential)(event, { file: 'a.md', confidential: true })
+      await handler(IPC.recallSetCrmPushed)(event, { file: 'a.md', key: 'abc123' })
+      expect(mocks.acknowledgeMetadataEdit).toHaveBeenCalledTimes(2)
+      expect(mocks.acknowledgeMetadataEdit).toHaveBeenNthCalledWith(1, settings, MEETING)
+      expect(mocks.acknowledgeMetadataEdit).toHaveBeenNthCalledWith(2, settings, MEETING)
+      expect(mocks.enqueueIngest).not.toHaveBeenCalled()
+      expect(mocks.requestSourceRefresh).not.toHaveBeenCalled()
+    })
+
+    it('does not acknowledge a write that failed, and an acknowledge failure never fails the edit', async () => {
+      mocks.setMeetingCrmPushed.mockResolvedValueOnce({ ok: false } as never)
+      const { handler } = setup()
+      await handler(IPC.recallSetCrmPushed)(event, { file: 'a.md', key: 'abc123' })
+      expect(mocks.acknowledgeMetadataEdit).not.toHaveBeenCalled()
+      mocks.acknowledgeMetadataEdit.mockRejectedValueOnce(new Error('index locked'))
+      expect(await handler(IPC.recallSetCrmPushed)(event, { file: 'a.md', key: 'abc123' })).toEqual({ ok: true })
     })
   })
 })
