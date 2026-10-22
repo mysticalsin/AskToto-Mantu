@@ -297,8 +297,7 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
 // --- Speaker session ownership (Task 7-P2b) ---
 
-// Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
-// until an identified and admitted live/import session needs it (never on the startup path).
+// Lazy Speaker Intelligence: building it probes sherpa + the embedding model, so defer until a session needs it.
 let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
   if (!speakerIdInstance) {
@@ -1019,8 +1018,7 @@ function makeRefreshDustAuth(current: {
 //
 // `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
 // in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
-// ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
-// Run before any display-name change and before the first session is initialized.
+// ENT-029: Métis branding without non-ASCII Chromium headers; run before any display-name change or session.
 freezeAsciiUserAgent(app)
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
