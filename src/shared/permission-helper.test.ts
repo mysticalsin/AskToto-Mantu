@@ -4,13 +4,14 @@ import {
   helperReducer,
   helperSupported,
   placeHelper,
+  type HelperKind,
   type HelperState,
   type Rect
 } from './permission-helper'
 
 /** C32 Part D — the guided grant helper's state machine, platform branches and placement. */
 describe('helperReducer', () => {
-  const open = (kind: 'screenRecording' | 'microphone', platform: 'darwin' | 'win32'): HelperState =>
+  const open = (kind: HelperKind, platform: 'darwin' | 'win32'): HelperState =>
     helperReducer(null, { type: 'open', kind, platform }) as HelperState
 
   it('open → waiting, with the drag item on macOS Screen Recording only', () => {
@@ -25,6 +26,28 @@ describe('helperReducer', () => {
       const win = open(kind, 'win32')
       expect(win.drag).toBe(false)
       expect(win.instruction).toMatch(/^Turn on /)
+    }
+  })
+
+  it('G10: macOS Accessibility and Input Monitoring carry the drag item; Automation has a list of toggles, no drag', () => {
+    for (const kind of ['accessibility', 'inputMonitoring'] as const) {
+      expect(open(kind, 'darwin')).toMatchObject({
+        phase: 'waiting',
+        drag: true,
+        instruction: 'Drag Métis into the list, then turn it on.'
+      })
+    }
+    const automation = open('automation', 'darwin')
+    expect(automation.drag).toBe(false)
+    expect(automation.instruction).toMatch(/^Turn on Métis/)
+    expect(open('accessibility', 'darwin').pane).toBe('Accessibility')
+    expect(open('inputMonitoring', 'darwin').pane).toBe('Input Monitoring')
+    expect(automation.pane).toBe('Automation')
+  })
+
+  it('G10: a kind with no Windows page never opens a helper there (the reducer ignores the open)', () => {
+    for (const kind of ['accessibility', 'inputMonitoring', 'automation'] as const) {
+      expect(helperReducer(null, { type: 'open', kind, platform: 'win32' })).toBeNull()
     }
   })
 
@@ -62,6 +85,14 @@ describe('helperSupported', () => {
     expect(helperSupported('screenRecording', 'win32')).toBe(true)
     expect(helperSupported('microphone', 'win32')).toBe(true)
     expect(helperSupported('screenRecording', 'linux')).toBe(false)
+  })
+
+  it('G10: macOS adds Accessibility, Input Monitoring and Automation; Windows and Linux have none of the three', () => {
+    for (const kind of ['accessibility', 'inputMonitoring', 'automation']) {
+      expect(helperSupported(kind, 'darwin')).toBe(true)
+      expect(helperSupported(kind, 'win32')).toBe(false)
+      expect(helperSupported(kind, 'linux')).toBe(false)
+    }
   })
 })
 

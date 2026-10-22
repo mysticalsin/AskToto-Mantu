@@ -14,7 +14,12 @@ function harness(platform: NodeJS.Platform, statuses: HelperStatus[]) {
   }
   const deps: PermissionHelperDeps = {
     platform,
-    paneUrl: (kind) => (kind === 'microphone' || kind === 'screenRecording' ? `pane:${kind}` : null),
+    paneUrl: (kind) =>
+      typeof kind === 'string' &&
+      (['microphone', 'screenRecording'].includes(kind) ||
+        (platform === 'darwin' && ['accessibility', 'inputMonitoring', 'automation'].includes(kind)))
+        ? `pane:${kind}`
+        : null,
     openPane: vi.fn(),
     readStatus: vi.fn(async () => statuses.shift() ?? { granted: false, needsRelaunch: false }),
     place: () => ({ x: 10, y: 20, towards: 'left' }),
@@ -79,6 +84,45 @@ describe('createPermissionHelper', () => {
     expect(h.helper.state()).toMatchObject({ phase: 'relaunch', drag: true })
     h.helper.relaunch()
     expect(h.deps.relaunch).toHaveBeenCalledTimes(1)
+  })
+
+  it('G10 macOS Accessibility: pane and drag helper, granted live with no relaunch', async () => {
+    const h = harness('darwin', [{ granted: true, needsRelaunch: false }])
+    expect(h.helper.open('accessibility')).toBe(true)
+    expect(h.deps.openPane).toHaveBeenCalledWith('pane:accessibility')
+    expect(h.deps.showWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'accessibility', drag: true, pane: 'Accessibility' }),
+      expect.anything()
+    )
+    await flush()
+    expect(h.helper.state()?.phase).toBe('granted')
+  })
+
+  it('G10 macOS Input Monitoring: a grant offers Relaunch (the running process only sees it next launch)', async () => {
+    const h = harness('darwin', [{ granted: true, needsRelaunch: true }])
+    h.helper.open('inputMonitoring')
+    await flush()
+    expect(h.helper.state()).toMatchObject({ phase: 'relaunch', kind: 'inputMonitoring' })
+    h.helper.relaunch()
+    expect(h.deps.relaunch).toHaveBeenCalledTimes(1)
+  })
+
+  it('G10 macOS Automation: pane and helper without a drag item', () => {
+    const h = harness('darwin', [])
+    expect(h.helper.open('automation')).toBe(true)
+    expect(h.deps.showWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'automation', drag: false }),
+      expect.anything()
+    )
+  })
+
+  it('G10 Windows has no Accessibility, Input Monitoring or Automation consent: nothing opens', () => {
+    for (const kind of ['accessibility', 'inputMonitoring', 'automation']) {
+      const h = harness('win32', [])
+      expect(h.helper.open(kind)).toBe(false)
+      expect(h.deps.openPane).not.toHaveBeenCalled()
+      expect(h.deps.showWindow).not.toHaveBeenCalled()
+    }
   })
 
   it('macOS microphone keeps its native prompt: the pane opens, no helper', () => {

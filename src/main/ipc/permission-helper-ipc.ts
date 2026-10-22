@@ -6,7 +6,16 @@
  * meeting first). Each channel checks its sender: the main window for `open`, the helper's own webContents for
  * the rest. The pane URL comes from the allowlisted permissionSettingsUrl, never from the renderer.
  */
-import { app, ipcMain, nativeImage, screen, shell, type NativeImage, type WebContents } from 'electron'
+import {
+  app,
+  ipcMain,
+  nativeImage,
+  screen,
+  shell,
+  systemPreferences,
+  type NativeImage,
+  type WebContents
+} from 'electron'
 import { join } from 'node:path'
 import {
   HELPER_SIZE,
@@ -20,6 +29,7 @@ import {
 import { appBundlePathFromExecPath } from '../capture-permissions/diagnose'
 import { devEnv } from '../dev-env'
 import { afterPermissionHelperDelay, startPermissionHelperPoll } from '../infra/scheduler/permission-helper-poll'
+import { createElectronNativeDeps, isNativeKind, nativeHelperStatus } from '../native-permissions'
 import { createPermissionHelper, type PermissionHelper } from '../permission-helper'
 import { getPlatformPermissions, probeScreenCapture } from '../platform-perms'
 import { getSettings } from '../store'
@@ -29,6 +39,8 @@ type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
 
 /** The live status behind a helper. macOS Screen Recording applies to the next process, hence needsRelaunch. */
 export async function readHelperStatus(kind: HelperKind, platform: NodeJS.Platform): Promise<HelperStatus> {
+  // G10: Accessibility, Input Monitoring and Automation are read-only probes (native-permissions.ts).
+  if (isNativeKind(kind)) return await nativeHelperStatus(kind, createElectronNativeDeps(platform, systemPreferences))
   const perms = getPlatformPermissions()
   if (platform === 'darwin') {
     const diagnosis = perms.screenDiagnosis?.state

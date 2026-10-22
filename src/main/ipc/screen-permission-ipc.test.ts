@@ -27,6 +27,25 @@ describe('permissionSettingsUrl', () => {
     expect(permissionSettingsUrl('win32', 'screenRecording')).toBe('ms-settings:privacy-graphicscaptureprogrammatic')
   })
 
+  it('G10: macOS opens the exact Accessibility, Input Monitoring and Automation anchors', () => {
+    expect(permissionSettingsUrl('darwin', 'accessibility')).toBe(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
+    )
+    expect(permissionSettingsUrl('darwin', 'inputMonitoring')).toBe(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent'
+    )
+    expect(permissionSettingsUrl('darwin', 'automation')).toBe(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation'
+    )
+  })
+
+  it('G10: Windows has no per-app page for these three (no consent exists there), so it opens nothing', () => {
+    for (const kind of ['accessibility', 'inputMonitoring', 'automation']) {
+      expect(permissionSettingsUrl('win32', kind)).toBeNull()
+      expect(permissionSettingsUrl('linux', kind)).toBeNull()
+    }
+  })
+
   it('any other kind or platform opens nothing (no renderer-chosen pane falls through to the microphone)', () => {
     for (const kind of [undefined, null, '', 'camera', 'Privacy_Microphone', 42, { kind: 'microphone' }]) {
       expect(permissionSettingsUrl('darwin', kind)).toBeNull()

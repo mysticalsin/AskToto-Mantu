@@ -139,6 +139,36 @@ export function macBundleCopiesSpawnSpec(bundleId: string): { command: string; a
   return { command: macHelperPath(), args: ['bundle-copies', bundleId] }
 }
 
+/** The read-only TCC preflights the helper can answer (G10). Neither can raise a system prompt. */
+export type TccProbe = 'listen-event' | 'automation'
+export type TccStatus = 'granted' | 'denied' | 'unknown'
+const TccStatusSchema = z.object({ status: z.enum(['granted', 'denied', 'unknown']) })
+const AUTOMATION_BUNDLE_ID = /^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$/
+const TCC_STATUS_TIMEOUT_MS = 3_000
+
+/** Spawn spec for `tcc-status`, or null when the helper is not available or an automation probe lacks a plausible
+ *  bundle id (the id is a single argv entry, never a shell string). */
+export function macTccStatusSpawnSpec(probe: TccProbe, bundleId?: string): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  if (probe === 'listen-event') return { command: macHelperPath(), args: ['tcc-status', 'listen-event'] }
+  if (!bundleId || !AUTOMATION_BUNDLE_ID.test(bundleId)) return null
+  return { command: macHelperPath(), args: ['tcc-status', 'automation', bundleId] }
+}
+
+/** Parse `tcc-status` stdout; null for anything that is not the documented shape. */
+export function parseTccStatus(stdout: string): TccStatus | null {
+  try {
+    return TccStatusSchema.parse(JSON.parse(stdout)).status
+  } catch {
+    return null
+  }
+}
+
+/** One Input Monitoring or Automation preflight; null without a helper or on any failure. */
+export function getTccStatus(probe: TccProbe, bundleId?: string): Promise<TccStatus | null> {
+  return runHelperOnce(macTccStatusSpawnSpec(probe, bundleId), parseTccStatus, TCC_STATUS_TIMEOUT_MS)
+}
+
 /** Flag `diagnostics.stall_sampler` (ARCHITECTURE C15). false restores the pre-M2-0192 boot exactly: no
  *  stall-watch helper, no capture sweep, no new audit events. */
 const STALL_SAMPLER_ENABLED = true

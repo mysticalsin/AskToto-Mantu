@@ -67,6 +67,14 @@
 //   bundle-copies <bundle-id>  One-shot, read-only. Asks LaunchServices for every installed app with that
 //                     bundle id and prints ONE JSON object {copies:[{path, version}]}. Several copies with one
 //                     bundle id compete for one Screen Recording entry.
+//
+//   tcc-status <listen-event|automation> [bundle-id]  One-shot, read-only. Preflights one privacy permission
+//                     WITHOUT raising a system prompt and prints ONE JSON object {status} where status is
+//                     "granted", "denied" or "unknown". listen-event is Input Monitoring
+//                     (CGPreflightListenEventAccess; there is no request call here). automation asks whether
+//                     this app may send Apple Events to <bundle-id> (AEDeterminePermissionToAutomateTarget with
+//                     askUserIfNeeded=false): "unknown" when the user has not been asked yet or the target is
+//                     not running. Accessibility is probed in-process by Electron, so it is not here.
 import AppKit
 import Darwin
 import Security
@@ -747,11 +755,46 @@ func runBundleCopies(bundleId: String) -> Never {
     emitJson(BundleCopiesResult(copies: copies), command: "bundle-copies")
 }
 
+struct TccStatusResult: Encodable {
+    let status: String
+}
+
+func runTccStatus(_ options: [String]) -> Never {
+    guard let probe = options.first else {
+        fail("usage: metis-mac-helper tcc-status <listen-event|automation> [bundle-id]")
+    }
+    switch probe {
+    case "listen-event":
+        // Read-only: CGRequestListenEventAccess is the prompting call and is deliberately never used.
+        emitJson(TccStatusResult(status: CGPreflightListenEventAccess() ? "granted" : "denied"), command: "tcc-status")
+    case "automation":
+        guard options.count >= 2 else {
+            fail("usage: metis-mac-helper tcc-status automation <bundle-id>")
+        }
+        let target = NSAppleEventDescriptor(bundleIdentifier: options[1])
+        guard let desc = target.aeDesc else {
+            fail("tcc-status: cannot address \(options[1])")
+        }
+        let result = AEDeterminePermissionToAutomateTarget(desc, AEEventClass(typeWildCard), AEEventID(typeWildCard), false)
+        switch result {
+        case noErr:
+            emitJson(TccStatusResult(status: "granted"), command: "tcc-status")
+        case OSStatus(errAEEventNotPermitted):
+            emitJson(TccStatusResult(status: "denied"), command: "tcc-status")
+        default:
+            // errAEEventWouldRequireUserConsent (not asked yet), procNotFound (target not running), anything else.
+            emitJson(TccStatusResult(status: "unknown"), command: "tcc-status")
+        }
+    default:
+        fail("tcc-status: unknown probe \(probe)")
+    }
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -786,6 +829,8 @@ case "bundle-copies":
         fail("usage: metis-mac-helper bundle-copies <bundle-id>")
     }
     runBundleCopies(bundleId: arguments[2])
+case "tcc-status":
+    runTccStatus(Array(arguments.dropFirst(2)))
 default:
     fail("unknown command: \(arguments[1])")
 }

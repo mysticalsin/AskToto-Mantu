@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createSpeechPackBridge } from './speech-pack'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
-import { PERMISSION_HELPER_IPC } from '../shared/permission-helper'
+import { PERMISSION_HELPER_IPC, type HelperKind } from '../shared/permission-helper'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import { OWNER_SESSION_IPC, type OwnerSessionStatus } from '../shared/contracts/owner-session'
 import {
@@ -218,12 +218,10 @@ const api = {
   dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
-  openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
-    ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
-  /** C32: open the exact pane plus the guided helper beside it (pane only where there is no helper). */
-  openPermissionHelper: (kind: 'microphone' | 'screenRecording'): Promise<boolean> =>
-    ipcRenderer.invoke(PERMISSION_HELPER_IPC.open, kind),
-  /** C26: pass the one permission a row's Continue asks for; no argument keeps the combined pass. */
+  openPermissionSettings: (kind: HelperKind): Promise<void> => ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
+  /** C32/G10: open the exact pane plus the guided helper beside it (pane only where there is no helper). */
+  openPermissionHelper: (kind: HelperKind): Promise<boolean> => ipcRenderer.invoke(PERMISSION_HELPER_IPC.open, kind),
+  /** C26: pass the one permission a row's Continue asks for; no argument asks for nothing (D1-12). */
   requestPermissionsUpfront: (kind?: 'microphone' | 'screenRecording'): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront, kind),
   /** HIG: Settings shows the OS login-item and notification state, and opens the pane when the OS refuses. */

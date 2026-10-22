@@ -21,6 +21,9 @@ import {
   getBundleCopies,
   parseCodeIdentity,
   parseBundleCopies,
+  macTccStatusSpawnSpec,
+  parseTccStatus,
+  getTccStatus,
   type OcrResult
 } from './mac-helper'
 import { formatCommand, releasePlans } from '../../scripts/release/orchestrate.mjs'
@@ -283,5 +286,57 @@ describe('packaging locks from the Sonnet audit (source-scan)', () => {
     expect(buildIdx).toBeGreaterThan(-1)
     expect(checkIdx).toBeGreaterThan(buildIdx)
     expect(ebIdx).toBeGreaterThan(checkIdx)
+  })
+})
+
+describe('tcc-status (G10 — read-only Input Monitoring and Automation probes)', () => {
+  it('spawn specs name the probe, and the bundle id only for automation', () => {
+    const listen = macTccStatusSpawnSpec('listen-event')
+    const automation = macTccStatusSpawnSpec('automation', 'com.apple.systemevents')
+    if (existsSync(macHelperPath())) {
+      expect(listen).toEqual({ command: macHelperPath(), args: ['tcc-status', 'listen-event'] })
+      expect(automation).toEqual({
+        command: macHelperPath(),
+        args: ['tcc-status', 'automation', 'com.apple.systemevents']
+      })
+    } else {
+      expect(listen).toBeNull()
+      expect(automation).toBeNull()
+    }
+  })
+
+  it('an automation probe without a plausible bundle id never spawns', () => {
+    for (const bad of [undefined, '', '-x', 'a b', 'com.apple.systemevents; rm', '../x']) {
+      expect(macTccStatusSpawnSpec('automation', bad)).toBeNull()
+    }
+  })
+
+  it('degrades to null (never throws) where the helper cannot exist', async () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macTccStatusSpawnSpec('listen-event')).toBeNull()
+      await expect(getTccStatus('listen-event')).resolves.toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
+
+  it('parses the documented JSON and rejects anything else', () => {
+    for (const status of ['granted', 'denied', 'unknown'] as const) {
+      expect(parseTccStatus(JSON.stringify({ status }))).toBe(status)
+    }
+    expect(parseTccStatus(JSON.stringify({ status: 'prompted' }))).toBeNull()
+    expect(parseTccStatus('garbage')).toBeNull()
+    expect(parseTccStatus('')).toBeNull()
+  })
+
+  it('the Swift side is a read-only preflight: it never calls a request or prompt API', () => {
+    const source = readFileSync(join(REPO_ROOT, 'native', 'mac-helper', 'main.swift'), 'utf8')
+    const swift = source.replace(/\/\/[^\r\n]*/g, '') // comments may name the calls they avoid
+    expect(swift).toMatch(/case "tcc-status":/)
+    expect(swift).toMatch(/CGPreflightListenEventAccess\(\)/)
+    expect(swift).toMatch(/AEDeterminePermissionToAutomateTarget\([^\r\n]*, false\)/)
+    expect(swift).not.toMatch(/CGRequestListenEventAccess|AXIsProcessTrustedWithOptions/)
   })
 })
