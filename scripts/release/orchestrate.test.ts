@@ -101,6 +101,18 @@ describe('release plan invariants', () => {
     expect(stepIndex(commands, 'scripts/verify-signing.mjs --require-notarized')).toBeGreaterThan(pack)
     expect(stepIndex(commands, 'ASKTOTO_MAC_LAUNCH_GATE=1')).toBeGreaterThan(pack)
     expect(stepIndex(commands, 'scripts/check-embedded-cloudflare-key.mjs release/mac-universal')).toBeGreaterThan(pack)
+    expect(stepIndex(commands, 'scripts/embed-operator-enroll-token.mjs')).toBeLessThan(pack)
+    expect(stepIndex(commands, 'scripts/check-release-secrets.mjs mac')).toBeLessThan(pack)
+    expect(stepIndex(commands, 'scripts/check-embedded-operator-enroll.mjs release/mac-universal')).toBeGreaterThan(
+      pack
+    )
+  })
+
+  it('embeds and checks the Operator enrolment token around Windows packaging', () => {
+    const commands = commandText('win')
+    const pack = stepIndex(commands, 'electron-builder --config electron-builder.win.yml --win nsis --x64')
+    expect(stepIndex(commands, 'scripts/embed-operator-enroll-token.mjs')).toBeLessThan(pack)
+    expect(stepIndex(commands, 'scripts/check-embedded-operator-enroll.mjs release')).toBeGreaterThan(pack)
   })
 
   it('keeps Windows host and credential gates before packaging', () => {

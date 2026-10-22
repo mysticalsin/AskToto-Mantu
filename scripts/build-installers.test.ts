@@ -46,12 +46,17 @@ describe('MQA-302 local installer verification parity', () => {
     }
     expect(commands).toContain('node scripts/check-sherpa-platform.mjs mac arm64')
     expect(commands).toContain('node scripts/check-sherpa-platform.mjs mac x64')
-    const bundleBuild = mocks.spawn.mock.calls.find((call) => call[0] === 'npm' && (call[1] as string[]).includes('build'))
+    const bundleBuild = mocks.spawn.mock.calls.find(
+      (call) => call[0] === 'npm' && (call[1] as string[]).includes('build')
+    )
     expect((bundleBuild?.[2] as { env: NodeJS.ProcessEnv }).env.ASKTOTO_MAC_UNIVERSAL).toBe('1')
     expect(commands[pack]).toContain('--universal')
     expect(commands).toContain('node scripts/verify-signing.mjs fixture-installers')
     expect(commands).toContain('node scripts/check-packaged-launch.mjs fixture-installers/mac-universal/Metis.app')
     expect(commands).toContain('node scripts/check-embedded-cloudflare-key.mjs fixture-installers')
+    expect(commands).toContain('node scripts/check-embedded-operator-enroll.mjs fixture-installers')
+    expect(commands.indexOf('node scripts/embed-operator-enroll-token.mjs')).toBeGreaterThanOrEqual(0)
+    expect(commands.indexOf('node scripts/embed-operator-enroll-token.mjs')).toBeLessThan(pack)
   })
 
   it('launches and transcribes through the actual Windows output before reporting success', async () => {

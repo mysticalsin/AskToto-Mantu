@@ -223,6 +223,10 @@ jobs:
       - name: Require Developer ID signing and notarization secrets before releasing
         run: node scripts/check-release-secrets.mjs mac
         env:
+          # Zero-config Operator reporting. The gate only warns while the token is absent; set the repository
+          # variable METIS_OPERATOR_ENROLL_REQUIRED=1 once the production token exists to fail closed.
+          METIS_OPERATOR_ENROLL_TOKEN: ${{ secrets.METIS_OPERATOR_ENROLL_TOKEN }}
+          METIS_OPERATOR_ENROLL_REQUIRED: ${{ vars.METIS_OPERATOR_ENROLL_REQUIRED }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -250,6 +254,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           METIS_FEEDBACK_EMAIL: ${{ vars.METIS_FEEDBACK_EMAIL }}
+          # Build-embedded Operator enrolment token (scripts/embed-operator-enroll-token.mjs): a `release`-channel
+          # token minted by the Operator. Unset, the build enrols through SSO only.
+          METIS_OPERATOR_ENROLL_TOKEN: ${{ secrets.METIS_OPERATOR_ENROLL_TOKEN }}
+          METIS_OPERATOR_ENROLL_URL: ${{ vars.METIS_OPERATOR_ENROLL_URL }}
+          METIS_OPERATOR_ENROLL_REQUIRED: ${{ vars.METIS_OPERATOR_ENROLL_REQUIRED }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -361,6 +370,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           METIS_FEEDBACK_EMAIL: ${{ vars.METIS_FEEDBACK_EMAIL }}
+          # Build-embedded Operator enrolment token (scripts/embed-operator-enroll-token.mjs): a `release`-channel
+          # token minted by the Operator. Unset, the build enrols through SSO only.
+          METIS_OPERATOR_ENROLL_TOKEN: ${{ secrets.METIS_OPERATOR_ENROLL_TOKEN }}
+          METIS_OPERATOR_ENROLL_URL: ${{ vars.METIS_OPERATOR_ENROLL_URL }}
+          METIS_OPERATOR_ENROLL_REQUIRED: ${{ vars.METIS_OPERATOR_ENROLL_REQUIRED }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}

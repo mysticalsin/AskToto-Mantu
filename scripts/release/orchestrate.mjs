@@ -52,6 +52,7 @@ function releasePrerequisites(platform) {
       : []),
     nodeScript('scripts/embed-cloudflare-key.mjs', [], { name: 'Embed Cloudflare key' }),
     nodeScript('scripts/check-cloudflare-key-valid.mjs', [], { name: 'Validate embedded Cloudflare key' }),
+    nodeScript('scripts/embed-operator-enroll-token.mjs', [], { name: 'Embed Operator enrolment token' }),
     ...(mac
       ? [
           nodeScript('scripts/check-ffmpeg-sidecar.mjs', ['mac', 'arm64'], { name: 'Check mac arm64 ffmpeg sidecar' }),
@@ -112,6 +113,9 @@ const releasePlans = {
     }),
     nodeScript('scripts/check-embedded-cloudflare-key.mjs', ['release/mac-universal'], {
       name: 'Check embedded key in mac package'
+    }),
+    nodeScript('scripts/check-embedded-operator-enroll.mjs', ['release/mac-universal'], {
+      name: 'Check Operator enrolment token in mac package'
     })
   ],
   win: [
@@ -131,6 +135,9 @@ const releasePlans = {
     nodeScript('scripts/check-packaged-asr.mjs', [], { name: 'Check Windows packaged ASR' }),
     nodeScript('scripts/check-embedded-cloudflare-key.mjs', ['release'], {
       name: 'Check embedded key in Windows package'
+    }),
+    nodeScript('scripts/check-embedded-operator-enroll.mjs', ['release'], {
+      name: 'Check Operator enrolment token in Windows package'
     })
   ],
   mas: [

@@ -158,6 +158,14 @@ extraResources:
   # into the package. The blob is OBFUSCATION, not secrecy — extractable with effort; see docs/CLOUDFLARE.md.
   - from: build/cloudflare-embed
     to: cloudflare-embed
+  # Build-embedded Operator enrolment token (src/main/embedded-operator-enroll.ts). Same shape as the
+  # cloudflare-embed directory above: tracked via .gitkeep, EMPTY on a build with no token (that build
+  # enrols through SSO only), and otherwise holding the AES-256-GCM blob enroll.json written by
+  # scripts/embed-operator-enroll-token.mjs. scripts/check-embedded-operator-enroll.mjs gates every chain.
+  # Obfuscated, not secret: the token is scoped to enrolment on the Worker, `reporting` tier, capped, revocable.
+  # The lean package profile stages its own resources and never carries it.
+  - from: build/operator-embed
+    to: operator-embed
   # Operator skill-pack signing public key (src/main/operator-skill-key.ts) and license-lease public key
   # (src/main/license-lease-key.ts) — both mandatory-in-release credential families, both real, always-
   # present directories (tracked via .gitkeep) that are EMPTY on a normal build, exactly like

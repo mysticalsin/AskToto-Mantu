@@ -220,6 +220,12 @@ jobs:
           echo "ASKTOTO_MAC_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
       - name: Build the ${{ matrix.variant }} installers
         run: npm run ${{ matrix.script }}
+        env:
+          # QA-identity builds embed a `staging`-channel enrolment token (dist:qa-identity runs
+          # embed-operator-enroll-token.mjs --qa). Unset, the QA build enrols through SSO only. The plain `dist`
+          # variant never embeds a token.
+          METIS_OPERATOR_ENROLL_TOKEN_QA: ${{ secrets.METIS_OPERATOR_ENROLL_TOKEN_QA }}
+          METIS_OPERATOR_ENROLL_URL_QA: ${{ vars.METIS_OPERATOR_ENROLL_URL_QA }}
       - name: Refuse any installer over GitHub's per-asset limit
         run: npm run check:release
         env:

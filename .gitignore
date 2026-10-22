@@ -25,6 +25,11 @@ release-appx/
 build/cloudflare-embed/*
 !build/cloudflare-embed/.gitkeep
 
+# Build-embedded Operator enrolment blob (scripts/embed-operator-enroll-token.mjs): ciphertext only, written at
+# build time from METIS_OPERATOR_ENROLL_TOKEN. Never tracked; only .gitkeep is.
+build/operator-embed/*
+!build/operator-embed/.gitkeep
+
 # Operator-local build inputs that may hold credentials are never tracked.
 build/*.local.json
 build/*.ps1

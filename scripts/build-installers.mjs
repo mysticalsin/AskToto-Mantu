@@ -105,6 +105,7 @@ if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true })
 run('node', ['scripts/check-no-dynamic-import.mjs'])
 run('node', ['scripts/embed-cloudflare-key.mjs'])
 run('node', ['scripts/check-cloudflare-key-valid.mjs'])
+run('node', ['scripts/embed-operator-enroll-token.mjs'])
 if (requestedTargets.includes('mac')) run('node', ['scripts/check-xcode-tools.mjs'])
 for (const target of requestedTargets) {
   for (const arch of target === 'mac' ? ['arm64', 'x64'] : ['x64']) {
@@ -201,5 +202,6 @@ for (const t of requestedTargets) {
 }
 
 run('node', ['scripts/check-embedded-cloudflare-key.mjs', outDir])
+run('node', ['scripts/check-embedded-operator-enroll.mjs', outDir])
 run('node', ['scripts/check-release.mjs'], { env: { ...process.env, ASKTOTO_ARTIFACTS_DIR: outDir } })
 printInstallHelp(artifactFiles())
