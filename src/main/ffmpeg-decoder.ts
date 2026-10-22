@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { Readable } from 'node:stream'
 import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
 import { IMPORT_NOT_MEDIA, sniffMediaFile } from './import-magic'
+import { mainLog } from './logger'
 
 export const FFMPEG_SAMPLE_RATE = 16_000
 export const FFMPEG_CHUNK_SECONDS = IMPORT_CHUNK_SECONDS
@@ -13,6 +14,17 @@ const FFMPEG_CHUNK_BYTES = FFMPEG_CHUNK_SAMPLES * Float32Array.BYTES_PER_ELEMENT
 const MAX_STDERR_BYTES = 16_384
 const DURATION_RE = /Duration:\s*(\d+):(\d{2}):(\d+(?:\.\d+)?)/i
 const DURATION_PROBE_TIMEOUT_MS = 5_000
+
+export const UNSUPPORTED_AUDIO_MESSAGE = "This recording's audio format isn't supported."
+export const UNREADABLE_AUDIO_MESSAGE = "Métis couldn't read the audio in this file."
+const UNSUPPORTED_AUDIO_RE =
+  /Invalid data found|does not contain any stream|Unsupported codec|moov atom not found|Decoder \(.*\) not found|could not find codec parameters/i
+
+/** The job-card text for a failed decode (D9-9). The raw stderr carries the full input path and the ffmpeg
+ *  banner, so it goes to the log only; the user sees one of two plain sentences. */
+export function describeDecoderFailure(stderr: string): string {
+  return UNSUPPORTED_AUDIO_RE.test(stderr) ? UNSUPPORTED_AUDIO_MESSAGE : UNREADABLE_AUDIO_MESSAGE
+}
 
 export interface FfmpegDecodeCallbacks {
   onChunk(seq: number, samples: Float32Array): Promise<void>
@@ -34,7 +46,11 @@ export interface FfmpegDecoder {
  * zero-length null output exits, so this adds a short bounded probe and gives the main process a real
  * denominator for progress instead of an indeterminate "Listening for speech" animation. A probe abandoned
  * at its deadline is SIGKILLed, so a probe stuck reading a cloud-only file never outlives the import. */
-async function probeDurationSeconds(executable: string, sourcePath: string, signal: AbortSignal): Promise<number | null> {
+async function probeDurationSeconds(
+  executable: string,
+  sourcePath: string,
+  signal: AbortSignal
+): Promise<number | null> {
   let child: ReturnType<typeof spawn>
   try {
     child = spawn(
@@ -84,7 +100,11 @@ function progressForSamples(decodedSamples: number, totalSamples: number): numbe
 }
 
 /** Resolve only a package-owned, vetted LGPL FFmpeg binary — never a PATH lookup. */
-export function bundledFfmpegPath(resourcesDir: string, platform = process.platform, arch = process.arch): string | null {
+export function bundledFfmpegPath(
+  resourcesDir: string,
+  platform = process.platform,
+  arch = process.arch
+): string | null {
   const platformDir = `${platform}-${arch}`
   const name = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
   const path = join(resourcesDir, 'ffmpeg', platformDir, name)
@@ -116,7 +136,22 @@ export function startFfmpegDecode(
   try {
     child = spawn(
       executable,
-      ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', sourcePath, '-vn', '-ac', '1', '-ar', String(FFMPEG_SAMPLE_RATE), '-f', 'f32le', 'pipe:1'],
+      [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        sourcePath,
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        String(FFMPEG_SAMPLE_RATE),
+        '-f',
+        'f32le',
+        'pipe:1'
+      ],
       { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal: abort.signal, killSignal: 'SIGKILL' }
     )
   } catch (error) {
@@ -140,6 +175,14 @@ export function startFfmpegDecode(
   // `await close` further down still sees the real rejection.
   close.catch(() => {})
 
+  // Capture stderr from the moment of the spawn, not after the duration probe: Node discards the unread output
+  // of a child that exits first, and a decoder that rejects a file dies within milliseconds, so the reason
+  // (and the friendly message mapped from it, D9-9) would otherwise be lost.
+  let stderr = ''
+  child.stderr.on('data', (chunk: Buffer) => {
+    if (stderr.length < MAX_STDERR_BYTES) stderr += chunk.toString('utf8').slice(0, MAX_STDERR_BYTES - stderr.length)
+  })
+
   const completed = (async (): Promise<void> => {
     const durationSeconds = await probeDurationSeconds(executable, sourcePath, abort.signal)
     if (abort.signal.aborted) return
@@ -148,10 +191,6 @@ export function startFfmpegDecode(
     if (totalSamples) {
       await callbacks.onProgress?.(progressForSamples(skipThrough * FFMPEG_CHUNK_SAMPLES, totalSamples))
     }
-    let stderr = ''
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < MAX_STDERR_BYTES) stderr += chunk.toString('utf8').slice(0, MAX_STDERR_BYTES - stderr.length)
-    })
     let pending = Buffer.alloc(0)
     let seq = 0
 
@@ -176,8 +215,12 @@ export function startFfmpegDecode(
     const [code, signal] = await close
     if (abort.signal.aborted) return
     if (spawnError) throw spawnError
-    if (code !== 0) throw new Error(stderr.trim() || `Audio decoder stopped (${signal || `exit ${code}`}).`)
-    if (pending.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) throw new Error('Audio decoder returned an incomplete PCM sample.')
+    if (code !== 0) {
+      mainLog.warn(`[import] audio decoder failed (${signal || `exit ${code}`}):`, stderr.trim())
+      throw new Error(describeDecoderFailure(stderr))
+    }
+    if (pending.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0)
+      throw new Error('Audio decoder returned an incomplete PCM sample.')
     if (pending.length) {
       const pcm = Buffer.from(pending)
       if (seq >= skipThrough) {

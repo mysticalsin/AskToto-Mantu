@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type DragEvent } from 'react'
 import type { ImportAssetsProgress, ImportJobView, ImportAudioPickResult } from '@shared/ipc'
-import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
+import { isImportDropFile, pickedFiles, skippedImportMessage, unstartedImportMessage } from './import-queue'
 
 const SUMMARY_ONLY_IMPORT_NOTICE =
   'Recording import currently requires retaining a full transcript. Your organization’s summary-only policy prevents import. Your original recording is unchanged.'
@@ -84,6 +84,8 @@ export function useImportQueue(refreshList: () => void) {
       try {
         const started = await window.toto.importAudioStartBatch(files.map((file) => file.token))
         for (const job of started) upsertJob(job)
+        const dropped = unstartedImportMessage(files.length, started.length)
+        if (dropped) setError(dropped)
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not start the imports.')
       }

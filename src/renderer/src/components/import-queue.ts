@@ -37,6 +37,18 @@ export function skippedImportMessage(result: ImportAudioPickResult): string | nu
   return lines.join(' ')
 }
 
+/**
+ * Main starts the picks whose tokens still consume and drops the rest (an expired or changed file) without
+ * saying so. Tell the user how many recordings did not start (D9-8).
+ */
+export function unstartedImportMessage(requested: number, started: number): string | null {
+  const dropped = requested - started
+  if (dropped <= 0) return null
+  return dropped === 1
+    ? '1 recording could not be started because the file changed. Pick it again.'
+    : `${dropped} recordings could not be started because the file changed. Pick them again.`
+}
+
 /** Cancelled jobs stay out of the queue. Done stays until the user dismisses it. */
 export function visibleImportJobs(jobs: ImportJobView[]): ImportJobView[] {
   return jobs

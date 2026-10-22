@@ -52,6 +52,7 @@ vi.mock('undici', () => ({
 }))
 
 import { installProxyAwareFetch, routeDispatcher } from './install-proxy'
+import { mainLog } from '../logger'
 
 const PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
 const SOCKS_PROXY_URLS = ['socks5://127.0.0.1:1080', 'socks://127.0.0.1:1080'] as const
@@ -123,7 +124,52 @@ describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
     resolveProxy.mockResolvedValue('PROXY fast-proxy.corp:3128')
     await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
-    expect((setGlobalDispatcher.mock.calls[0][0] as InstanceType<typeof FakeProxyAgent>).uri).toBe('http://fast-proxy.corp:3128')
+    expect((setGlobalDispatcher.mock.calls[0][0] as InstanceType<typeof FakeProxyAgent>).uri).toBe(
+      'http://fast-proxy.corp:3128'
+    )
+  })
+})
+
+describe('D9-13 — a SOCKS-only OS proxy is reported, not called "no proxy configured"', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    for (const k of PROXY_ENV_KEYS) delete process.env[k]
+    resolveProxy.mockReset()
+    setGlobalDispatcher.mockReset()
+    vi.mocked(mainLog.info).mockClear()
+    vi.mocked(mainLog.warn).mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const logged = (fn: typeof mainLog.info): string => vi.mocked(fn).mock.calls.flat().join('\n')
+
+  it('goes direct, warns that SOCKS cannot be used, and points at HTTPS_PROXY', async () => {
+    resolveProxy.mockResolvedValue('SOCKS5 corp-socks.internal:1080')
+    await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
+    expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeAgent)
+    expect(logged(mainLog.warn)).toContain(
+      "[net] system proxy is SOCKS-only, which Métis can't use; set HTTPS_PROXY to an HTTP proxy."
+    )
+    expect(logged(mainLog.info)).not.toContain('no proxy configured')
+  })
+
+  it('still says no proxy configured when the OS answers DIRECT', async () => {
+    resolveProxy.mockResolvedValue('DIRECT')
+    await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
+    expect(logged(mainLog.info)).toContain('no proxy configured')
+    expect(logged(mainLog.warn)).not.toContain('SOCKS')
+  })
+
+  it('warns for a SOCKS-only answer that lands after the boot deadline too', async () => {
+    let land: (v: string) => void = () => {}
+    resolveProxy.mockReturnValue(new Promise<string>((r) => void (land = r)))
+    await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(5_000)])
+    land('SOCKS5 corp-socks.internal:1080')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(logged(mainLog.warn)).toContain('SOCKS-only')
   })
 })
 
@@ -196,17 +242,16 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
   // to hold it to the address `lookup` resolved, so a pinned dispatcher must refuse it outright rather than
   // silently resolving through it unpinned. Boot itself is unaffected: the SHARED global dispatcher (no
   // `lookup`) still installs normally.
-  it.each(SOCKS_PROXY_CASES)(
-    'P5: %s %s proxy — boot still installs the global dispatcher, but a pinned session is refused',
-    async (proxyEnvKey, proxyUrl) => {
-      process.env[proxyEnvKey] = proxyUrl
-      await installProxyAwareFetch()
+  it.each(
+    SOCKS_PROXY_CASES
+  )('P5: %s %s proxy — boot still installs the global dispatcher, but a pinned session is refused', async (proxyEnvKey, proxyUrl) => {
+    process.env[proxyEnvKey] = proxyUrl
+    await installProxyAwareFetch()
 
-      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
-      expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
-      expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
-    }
-  )
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+    expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+    expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+  })
 
   it('P5: a later HTTP_PROXY SOCKS route is refused even when HTTPS_PROXY selected env boot mode', async () => {
     process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'

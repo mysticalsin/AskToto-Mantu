@@ -6,6 +6,7 @@ import {
   isImportDropFile,
   pickedFiles,
   skippedImportMessage,
+  unstartedImportMessage,
   visibleImportJobs
 } from './import-queue'
 import type { ImportAssetsProgress, ImportJobView } from '@shared/ipc'
@@ -25,6 +26,17 @@ function job(partial: Partial<ImportJobView> & Pick<ImportJobView, 'jobId' | 'st
 }
 
 describe('import queue helpers', () => {
+  it('unstartedImportMessage tells the user how many recordings were dropped (D9-8)', () => {
+    expect(unstartedImportMessage(3, 3)).toBeNull()
+    expect(unstartedImportMessage(3, 2)).toBe(
+      '1 recording could not be started because the file changed. Pick it again.'
+    )
+    expect(unstartedImportMessage(5, 2)).toBe(
+      '3 recordings could not be started because the file changed. Pick them again.'
+    )
+    expect(unstartedImportMessage(0, 0)).toBeNull()
+  })
+
   it('pickedFiles prefers the files array and falls back to the first token', () => {
     expect(
       pickedFiles({

@@ -8,13 +8,14 @@
  */
 import type { IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from 'electron'
 import { IPC, type PublicSettings } from '@shared/ipc'
-import type { MeetingsFolderPickResult } from '@shared/contracts/settings-os-state'
-import { getSettings, setSettings } from '../store'
+import type { MeetingsFolderPickResult, TeamFolderRefusal } from '@shared/contracts/settings-os-state'
+import { getLockedKeys, getSettings, setSettings } from '../store'
 import { readEvalMetrics, aggregateMetrics } from '../metrics'
 import { parseRecapMarkdown, resolveMeetingsFolder } from '../transcripts'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml } from '../graphify'
 import { wikiDir } from '../brain/publish'
 import { probeFolderWritable } from '../infra/storage/folder-writable'
+import { checkTeamFolder, teamFolderRefusal } from '../infra/storage/team-folder-check'
 
 export interface WorkspaceIpcDependencies {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -29,6 +30,8 @@ export interface WorkspaceIpcDependencies {
   pathExists: (path: string) => boolean
   /** Async write probe for a chosen meetings folder (defaults to a create-and-remove of one empty file). */
   probeWritable?: (dir: string) => Promise<boolean>
+  /** Async readability probe for a chosen team folder (defaults to listing it). */
+  canReadFolder?: (dir: string) => Promise<boolean>
 }
 
 export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
@@ -105,7 +108,7 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
   // Team transcripts: pick a shared folder whose meeting transcripts are ALSO ingested into this brain
   // (settings.teamTranscriptFolders). Appended (deduped) rather than replacing meetingsFolder — this
   // never touches where the user's OWN meetings are saved.
-  ipcMain.handle(IPC.addTeamTranscriptFolder, async (e) => {
+  ipcMain.handle(IPC.addTeamTranscriptFolder, async (e): Promise<PublicSettings | TeamFolderRefusal> => {
     assertMainWindow(e)
     if (!requireAuth()) return publicSettings() // adds a folder to the brain's ingestion set — gate it like every other settings write
     const openDialogOpts: Electron.OpenDialogOptions = {
@@ -116,7 +119,17 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
     if (!r.canceled && r.filePaths[0]) {
       const picked = r.filePaths[0]
       const current = getSettings().teamTranscriptFolders ?? []
-      if (!current.includes(picked)) setSettings({ teamTranscriptFolders: [...current, picked] })
+      if (!current.includes(picked)) {
+        // setSettings drops a locked key silently, which would read as success; say so instead (D9-10).
+        if (getLockedKeys().includes('teamTranscriptFolders')) return teamFolderRefusal('managed')
+        const refusal = await checkTeamFolder(picked, {
+          meetingsFolder: resolveMeetingsFolder(getSettings()),
+          teamFolders: current,
+          canRead: deps.canReadFolder
+        })
+        if (refusal) return refusal
+        setSettings({ teamTranscriptFolders: [...current, picked] })
+      }
     }
     return publicSettings()
   })

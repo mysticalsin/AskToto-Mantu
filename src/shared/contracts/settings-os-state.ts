@@ -48,3 +48,13 @@ export type RetentionPreviewResult = { ok: true; expired: number } | { ok: false
 export type MeetingsFolderPickResult<Settings = unknown> =
   | { ok: true; settings: Settings }
   | { ok: false; reason: 'cancelled' | 'signed-out' | 'not-writable' }
+
+/** Why "Add shared folder" refused a pick (D9-10). The settings stay as they were. */
+export type TeamFolderRefusalReason = 'overlaps-meetings' | 'overlaps-team' | 'not-readable' | 'managed'
+
+/** Returned instead of the settings snapshot when a picked team folder is refused; `message` is inline copy. */
+export interface TeamFolderRefusal {
+  ok: false
+  reason: TeamFolderRefusalReason
+  message: string
+}

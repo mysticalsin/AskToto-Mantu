@@ -10,7 +10,14 @@ export type ProxyEnv = Record<string, string | undefined>
  * Every env var that puts main-process fetch on the env route, in detectProxyFromEnv's precedence order.
  * EnvHttpProxyAgent itself reads only the HTTP(S) pairs, per request scheme and lowercase first.
  */
-export const PROXY_ENV_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'] as const
+export const PROXY_ENV_VARS = [
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'ALL_PROXY',
+  'all_proxy'
+] as const
 
 /** Return the effective proxy URL from the environment, or null when none is configured (direct). */
 export function detectProxyFromEnv(env: ProxyEnv): string | null {
@@ -55,4 +62,13 @@ export function parseElectronProxy(resolveResult: string): string | null {
     // SOCKS / unknown scheme — skip this hop and try the next fallback.
   }
   return null
+}
+
+/** What the OS proxy answer means for Métis: a hop undici can use, SOCKS only (it cannot), or nothing. */
+export type SystemProxyKind = 'http' | 'socks-unsupported' | 'none'
+
+export function classifyElectronProxy(resolveResult: string): SystemProxyKind {
+  if (parseElectronProxy(resolveResult)) return 'http'
+  const socks = resolveResult.split(';').some((entry) => /^SOCKS[45]?\s+\S+/i.test(entry.trim()))
+  return socks ? 'socks-unsupported' : 'none'
 }

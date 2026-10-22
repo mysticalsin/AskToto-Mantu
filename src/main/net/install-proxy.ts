@@ -11,7 +11,14 @@ import {
 } from 'undici'
 import { session } from 'electron'
 import { mainLog, auditLog } from '../logger'
-import { detectProxyFromEnv, parseElectronProxy, PROXY_ENV_VARS, redactProxyUrl } from './proxy-url'
+import {
+  classifyElectronProxy,
+  detectProxyFromEnv,
+  parseElectronProxy,
+  PROXY_ENV_VARS,
+  redactProxyUrl,
+  type SystemProxyKind
+} from './proxy-url'
 
 /**
  * Make the main process' built-in `fetch` reach providers through whatever proxy the machine is behind.
@@ -137,9 +144,13 @@ function useRoute(next: Route): void {
   setGlobalDispatcher(routeDispatcher())
 }
 
-function installSystemProxy(resolved: string, late: boolean): boolean {
-  const systemProxy = parseElectronProxy(resolved)
-  if (!systemProxy) return false
+function installSystemProxy(resolved: string, late: boolean): SystemProxyKind {
+  const kind = classifyElectronProxy(resolved)
+  if (kind === 'socks-unsupported') {
+    mainLog.warn("[net] system proxy is SOCKS-only, which Métis can't use; set HTTPS_PROXY to an HTTP proxy.")
+  }
+  const systemProxy = kind === 'http' ? parseElectronProxy(resolved) : null
+  if (!systemProxy) return kind
   useRoute({ kind: 'system', proxy: systemProxy })
   mainLog.info(
     `[net] proxy-aware fetch installed from system config${late ? ' (late — after the boot deadline)' : ''}`,
@@ -147,7 +158,7 @@ function installSystemProxy(resolved: string, late: boolean): boolean {
     `(resolved: ${resolved})`
   )
   auditLog('net.proxy', { source: late ? 'system-late' : 'system', proxy: systemProxy })
-  return true
+  return kind
 }
 
 export async function installProxyAwareFetch(): Promise<void> {
@@ -187,11 +198,16 @@ export async function installProxyAwareFetch(): Promise<void> {
       return
     }
 
-    if (installSystemProxy(resolved, false)) return
+    const kind = installSystemProxy(resolved, false)
+    if (kind === 'http') return
 
     // Direct connection.
     useRoute({ kind: 'direct' })
-    mainLog.info('[net] no proxy configured (direct); keep-alive fetch agent installed')
+    mainLog.info(
+      kind === 'none'
+        ? '[net] no proxy configured (direct); keep-alive fetch agent installed'
+        : '[net] direct connection; keep-alive fetch agent installed'
+    )
   } catch (e) {
     mainLog.warn('[net] could not install proxy-aware fetch; requests stay on the default path', e)
   }

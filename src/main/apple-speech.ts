@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { unlinkSync, writeFileSync } from 'node:fs'
+import { readdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { macHelperPath, macHelperPresent } from './mac-helper'
@@ -84,7 +85,8 @@ export async function appleSpeechTranscribe(samples: Float32Array, locale?: stri
 
   const tmpPath = join(tmpdir(), `metis-apple-speech-${randomUUID()}.wav`)
   try {
-    writeFileSync(tmpPath, encodeWav16kMono(samples))
+    // Meeting speech: owner-only, never the default umask (D9-12).
+    writeFileSync(tmpPath, encodeWav16kMono(samples), { mode: 0o600 })
   } catch (e) {
     mainLog.warn('[apple-speech] wav write failed', e instanceof Error ? e.message : String(e))
     return ''
@@ -140,5 +142,29 @@ export async function appleSpeechTranscribe(samples: Float32Array, locale?: stri
     } catch {
       /* best-effort cleanup */
     }
+  }
+}
+
+const TEMP_WAV = /^metis-apple-speech-[0-9a-f-]+\.wav$/i
+const STALE_TEMP_MS = 60_000
+
+/**
+ * Boot sweep (D9-12): a crash or kill between the write and the `finally` unlink leaves meeting speech in
+ * TMPDIR. Removes `metis-apple-speech-*.wav` older than a minute (an instance still decoding keeps its own
+ * fresh file). Async, best-effort, never throws.
+ */
+export async function sweepAppleSpeechTemp(dir: string = tmpdir()): Promise<void> {
+  try {
+    for (const name of await readdir(dir)) {
+      if (!TEMP_WAV.test(name)) continue
+      const path = join(dir, name)
+      try {
+        if (Date.now() - (await stat(path)).mtimeMs > STALE_TEMP_MS) await unlink(path)
+      } catch {
+        /* already gone, or not ours to remove */
+      }
+    }
+  } catch {
+    /* best-effort */
   }
 }

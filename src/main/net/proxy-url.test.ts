@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectProxyFromEnv, parseElectronProxy, redactProxyUrl } from './proxy-url'
+import { classifyElectronProxy, detectProxyFromEnv, parseElectronProxy, redactProxyUrl } from './proxy-url'
 
 describe('detectProxyFromEnv', () => {
   it('returns null when no proxy var is set (direct connection)', () => {
@@ -8,9 +8,9 @@ describe('detectProxyFromEnv', () => {
   })
 
   it('prefers HTTPS_PROXY over HTTP_PROXY', () => {
-    expect(
-      detectProxyFromEnv({ HTTPS_PROXY: 'http://secure:8080', HTTP_PROXY: 'http://plain:3128' })
-    ).toBe('http://secure:8080')
+    expect(detectProxyFromEnv({ HTTPS_PROXY: 'http://secure:8080', HTTP_PROXY: 'http://plain:3128' })).toBe(
+      'http://secure:8080'
+    )
   })
 
   it('falls back through http/all proxy variants (incl. lowercase)', () => {
@@ -58,5 +58,23 @@ describe('parseElectronProxy', () => {
   it('returns null when the only hops are SOCKS (undici ProxyAgent cannot use them)', () => {
     expect(parseElectronProxy('SOCKS5 s.corp:1080')).toBeNull()
     expect(parseElectronProxy('SOCKS s.corp:1080; DIRECT')).toBeNull()
+  })
+})
+
+describe('classifyElectronProxy (D9-13)', () => {
+  it('http when any hop is a usable HTTP(S) proxy, even after a SOCKS hop', () => {
+    expect(classifyElectronProxy('PROXY corp:8080')).toBe('http')
+    expect(classifyElectronProxy('SOCKS5 corp:1080; PROXY corp:8080')).toBe('http')
+  })
+
+  it('socks-unsupported when the OS configured only SOCKS', () => {
+    expect(classifyElectronProxy('SOCKS5 corp:1080')).toBe('socks-unsupported')
+    expect(classifyElectronProxy('SOCKS corp:1080; DIRECT')).toBe('socks-unsupported')
+    expect(classifyElectronProxy('socks4 corp:1080')).toBe('socks-unsupported')
+  })
+
+  it('none for DIRECT and for an empty answer', () => {
+    expect(classifyElectronProxy('DIRECT')).toBe('none')
+    expect(classifyElectronProxy('')).toBe('none')
   })
 })
