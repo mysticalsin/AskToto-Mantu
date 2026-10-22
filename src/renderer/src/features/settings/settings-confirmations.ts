@@ -43,7 +43,7 @@ export const DUST_REMOVE_KEY_CONFIRMATION: ConfirmActionInput = {
 export const SCREEN_REPAIR_CONFIRMATION: ConfirmActionInput = {
   title: 'Repair screen recording?',
   message:
-    'Métis resets its own Screen Recording permission and relaunches. Afterwards, Métis opens System Settings so you can turn it on again.',
+    'Métis saves any meeting in progress, resets its own Screen Recording permission and relaunches. Afterwards, Métis opens System Settings so you can turn it on again.',
   confirmLabel: 'Repair and Relaunch'
 }
 

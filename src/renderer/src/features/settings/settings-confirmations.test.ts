@@ -36,6 +36,11 @@ describe('Settings confirmations follow the HIG alert rules', () => {
     expect(c.confirmLabel).not.toMatch(/^(Yes|No|OK|Ok)$/)
   })
 
+  it('screen repair warns that a meeting in progress is saved before the relaunch', () => {
+    expect(SCREEN_REPAIR_CONFIRMATION.message).toContain('saves any meeting in progress')
+    expect(SCREEN_REPAIR_CONFIRMATION.message).toContain('relaunches')
+  })
+
   it('styles only the consequence the person did not choose as destructive', () => {
     const destructive = ALL.filter(([, c]) => c.destructive).map(([name]) => name)
     expect(destructive).toEqual(['retention (count)', 'retention (one)', 'retention (unknown)'])
