@@ -17,18 +17,23 @@ const mocks = vi.hoisted(() => ({
   purgeBrain: vi.fn(() => ({ ok: true })),
   removeWiki: vi.fn(() => ({ ok: true })),
   purgeGraphArtifacts: vi.fn(() => true),
-  scheduleRebuild: vi.fn(async () => {})
+  scheduleRebuild: vi.fn(async () => {}),
+  publishAll: vi.fn(async () => {}),
+  appendDebrief: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+  setMeetingConfidential: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+  setMeetingPushMarker: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+  enqueueIngest: vi.fn(async () => {})
 }))
 
 vi.mock('../store', () => ({ getSettings: () => settings }))
 vi.mock('../logger', () => ({ auditLog: mocks.auditLog, mainLog: { warn: vi.fn(), error: vi.fn() } }))
 vi.mock('../brain/ingest', () => ({
-  enqueueIngest: vi.fn(),
+  enqueueIngest: mocks.enqueueIngest,
   exciseDeletedMeeting: mocks.exciseDeletedMeeting,
   requestSourceRefresh: mocks.requestSourceRefresh
 }))
 vi.mock('../brain/publish', () => ({
-  publishAll: vi.fn(),
+  publishAll: mocks.publishAll,
   publishMeetingCard: mocks.publishMeetingCard,
   removeWiki: mocks.removeWiki
 }))
@@ -36,7 +41,7 @@ vi.mock('../brain/store', () => ({ purgeBrain: mocks.purgeBrain }))
 vi.mock('../meeting-path', () => ({
   safeMeetingBasename: (file: unknown) => (typeof file === 'string' && file.endsWith('.md') ? file : null)
 }))
-vi.mock('../transcripts', () => ({ resolveMeetingsFolder: () => '/meetings', appendDebrief: vi.fn() }))
+vi.mock('../transcripts', () => ({ resolveMeetingsFolder: () => '/meetings', appendDebrief: mocks.appendDebrief }))
 vi.mock('../history-actions', () => ({ readSavedMeeting: mocks.readSavedMeeting }))
 vi.mock('../history-read', () => ({ listMeetings: mocks.listMeetings }))
 vi.mock('../recall', () => ({
@@ -45,8 +50,9 @@ vi.mock('../recall', () => ({
   deleteMeeting: mocks.deleteMeeting,
   renameMeeting: vi.fn(),
   updateMeetingRecap: vi.fn(),
-  setMeetingConfidential: vi.fn(),
+  setMeetingConfidential: mocks.setMeetingConfidential,
   setMeetingCrmPushed: vi.fn(),
+  setMeetingPushMarker: mocks.setMeetingPushMarker,
   deleteAllMeetings: mocks.deleteAllMeetings
 }))
 vi.mock('../graphify', () => ({
@@ -67,6 +73,7 @@ const CHANNELS = [
   IPC.recallUpdateRecap,
   IPC.recallSetConfidential,
   IPC.recallSetCrmPushed,
+  IPC.recallSetPushMarker,
   IPC.recallBackfillSpeakers,
   IPC.debriefSave,
   IPC.recallDeleteAll
@@ -212,5 +219,57 @@ describe('recall IPC', () => {
       brainPurged: true,
       wikiRemoved: true
     })
+  })
+})
+
+describe('recall IPC — honest flags and bounded debriefs (Q07)', () => {
+  it('recallSetConfidential reports flagSaved with the reason when the republish fails (D4-1)', async () => {
+    mocks.publishAll.mockRejectedValueOnce(new Error('EPERM'))
+    const { handler } = setup()
+    const result = (await handler(IPC.recallSetConfidential)(event, { file: 'a.md', confidential: true })) as {
+      ok: boolean
+      flagSaved?: boolean
+      error?: string
+    }
+    expect(result.ok).toBe(false)
+    expect(result.flagSaved).toBe(true)
+    expect(result.error).toMatch(/Flag saved/)
+  })
+
+  it('recallSetConfidential does not claim a saved flag when the frontmatter write itself failed', async () => {
+    mocks.setMeetingConfidential.mockResolvedValueOnce({ ok: false, error: 'Could not save the confidential flag.' })
+    const { handler } = setup()
+    const result = (await handler(IPC.recallSetConfidential)(event, { file: 'a.md', confidential: true })) as {
+      flagSaved?: boolean
+    }
+    expect(result.flagSaved).toBeUndefined()
+    expect(mocks.publishAll).not.toHaveBeenCalled()
+  })
+
+  it('debriefSave refuses text over 8000 chars instead of cutting it (D4-5)', async () => {
+    const { handler } = setup()
+    expect(await handler(IPC.debriefSave)(event, { file: 'a.md', text: 'x'.repeat(8001) })).toEqual({
+      ok: false,
+      error: 'Debrief is too long (8,000 characters max).'
+    })
+    expect(mocks.appendDebrief).not.toHaveBeenCalled()
+    await handler(IPC.debriefSave)(event, { file: 'a.md', text: 'x'.repeat(8000) })
+    expect(mocks.appendDebrief).toHaveBeenCalledTimes(1)
+  })
+
+  it('recallSetPushMarker validates the payload and forwards a known field (D4-6)', async () => {
+    const { handler } = setup()
+    const marker = handler(IPC.recallSetPushMarker)
+    expect((await marker(event, { file: 'a.md', field: 'confidential', key: 'k1' })) as { ok: boolean }).toMatchObject({
+      ok: false
+    })
+    expect(
+      (await marker(event, { file: 'a.md', field: 'clickup_pushed', key: 'bad key' })) as { ok: boolean }
+    ).toMatchObject({
+      ok: false
+    })
+    expect(mocks.setMeetingPushMarker).not.toHaveBeenCalled()
+    expect(await marker(event, { file: 'a.md', field: 'clickup_pushed', key: 'k1' })).toEqual({ ok: true })
+    expect(mocks.setMeetingPushMarker).toHaveBeenCalledWith(settings, 'a.md', 'clickup_pushed', 'k1')
   })
 })

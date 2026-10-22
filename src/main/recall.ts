@@ -27,6 +27,13 @@ import {
   rewriteMeetingSpeechRecap,
   refuseReservedSpeechProse
 } from './features/meetings/speech-provenance'
+import {
+  PUSH_KEY_RE,
+  nextStepsMarkerValue,
+  parseKeyList,
+  recapBodyOf,
+  recapEditedAfterWrite
+} from './features/meetings/meeting-markers'
 import { storageAt } from './infra/storage/meetings-storage'
 import { withMeetingMutation } from './infra/storage/meeting-mutation-lane'
 import { writeWithAdmission } from './infra/storage/write-with-admission'
@@ -38,7 +45,13 @@ import { getSettings } from './store'
 import { readLegacyTranscript } from './features/meetings/legacy-transcript'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
-import type { RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
+import {
+  PUSH_MARKER_FIELDS,
+  type PushMarkerField,
+  type RecallReadResult,
+  type Settings,
+  type TranscriptLine
+} from '@shared/ipc'
 import type { RecallHydration } from '@shared/recall-hydration'
 
 // Independent meeting-history backend (own implementation, no third-party source): reading one saved
@@ -74,12 +87,7 @@ async function readMeetingText(
  *  replacing them requires the user's explicit Retry action, not a background pass. */
 export function meetingTextNeedsRecap(text: string): boolean {
   if (!text.trim()) return true
-  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
-  if (!startMatch) return true
-  const afterStart = text.slice(startMatch.index! + startMatch[0].length)
-  const endIdx = recapSectionEndIndex(afterStart, frontmatter(text).type)
-  const recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
-  return recap.length === 0
+  return recapBodyOf(text, frontmatter(text).type).length === 0
 }
 
 export async function listMeetingsNeedingRecap(): Promise<
@@ -259,7 +267,11 @@ export async function recallRead(
     ...(fm.status === 'recovered' ? { recovered: true } : {}),
     // MQA-092 — the CRM payload fingerprint of the last push that this meeting's CRM connection
     // accepted, so re-opening it after a relaunch does not re-arm "Push to CRM" and file a duplicate.
-    crmPushedKey: fm.crm_pushed || undefined
+    crmPushedKey: fm.crm_pushed || undefined,
+    // Q07 — the same durable push memory for ClickUp and "Book next steps", and the hand-edited-notes flag.
+    clickupPushedKey: fm.clickup_pushed || undefined,
+    ...(fm.next_steps_pushed ? { nextStepsPushedKeys: parseKeyList(fm.next_steps_pushed) } : {}),
+    ...(fm.recap_edited === 'true' ? { recapEdited: true } : {})
   }
 }
 
@@ -530,10 +542,16 @@ async function updateMeetingRecapUnlocked(
     }
   }
 
-  if (recapStatus !== undefined) {
-    const doc = parse(updated)
-    if (!doc) return { ok: false, error: 'Could not save the summary status: missing meeting frontmatter.' }
-    updated = serialize(setMeetingField(doc, 'recap_status', recapStatus))
+  const doc = parse(updated)
+  if (recapStatus !== undefined && !doc) {
+    return { ok: false, error: 'Could not save the summary status: missing meeting frontmatter.' }
+  }
+  if (doc) {
+    // Q07 (D4-3): the durable "a person wrote these notes" marker. Absent = never hand-edited, the same
+    // canonical no-flag shape as `confidential`.
+    let next = setMeetingField(doc, 'recap_edited', recapEditedAfterWrite(text, body, recapStatus) ? 'true' : null)
+    if (recapStatus !== undefined) next = setMeetingField(next, 'recap_status', recapStatus)
+    updated = serialize(next)
   }
 
   const write = await writeWithAdmission(beforeReplace, (guard) => writeSaved(fullPath, updated, wasEncrypted, guard))
@@ -613,10 +631,12 @@ async function updateMeetingTranscriptUnlocked(
  * recap is a genuinely different record and must re-arm the chip, which a bare `crmPushedAt: <date>`
  * could not express. Frontmatter, via the exact mechanism (and guards) `setMeetingConfidential` uses —
  * basename-constrained, encryption preserved as found, only the frontmatter block rewritten.
+ * Q07 (D4-6): generalised over `crm_pushed`, `clickup_pushed` (one fingerprint) and `next_steps_pushed` (a bounded list).
  */
-async function setMeetingCrmPushedUnlocked(
+async function setMeetingPushMarkerUnlocked(
   settings: Settings,
   file: string,
+  field: PushMarkerField,
   key: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
@@ -624,10 +644,12 @@ async function setMeetingCrmPushedUnlocked(
   if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
-  // The fingerprint is written into a YAML scalar, so it must not be able to carry a newline or a colon
-  // into the frontmatter block. Review generates it as a base-36 hash; anything else is refused rather
-  // than escaped, because the only caller has no reason to send another shape.
-  if (!/^[a-z0-9]{1,32}$/.test(key)) return { ok: false, error: 'Invalid CRM push key.' }
+  if (!PUSH_MARKER_FIELDS.includes(field)) return { ok: false, error: 'Unknown push marker.' }
+  // The fingerprint is written into a YAML scalar, so it must not be able to carry a newline, a colon or (for the
+  // next-steps list) a comma into the frontmatter block. Review generates it as a base-36 hash; anything else is
+  // refused rather than escaped, because the only caller has no reason to send another shape.
+  const label = field === 'crm_pushed' ? 'CRM push' : 'push'
+  if (!PUSH_KEY_RE.test(key)) return { ok: false, error: `Invalid ${label} key.` }
 
   const fullPath = join(folder, safeName)
   const read = await readMeetingText(folder, safeName)
@@ -636,13 +658,16 @@ async function setMeetingCrmPushedUnlocked(
 
   const doc = parse(text)
   if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
-  const updated = serialize(setMeetingField(doc, 'crm_pushed', key))
+  // `next_steps_pushed` is a bounded list of the tasks that landed; the other two hold one fingerprint.
+  const value = field === 'next_steps_pushed' ? nextStepsMarkerValue(frontmatter(text).next_steps_pushed, key) : key
+  if (value === null) return { ok: true } // already recorded
+  const updated = serialize(setMeetingField(doc, field, value))
   if (updated === text) return { ok: true } // already recorded against this exact payload
 
   try {
     await writeSaved(fullPath, updated, wasEncrypted)
   } catch {
-    return { ok: false, error: 'Could not record the CRM push.' }
+    return { ok: false, error: `Could not record the ${label}.` }
   }
   return { ok: true }
 }
@@ -700,10 +725,14 @@ export const updateMeetingTranscript = serialisedByMeeting(
   updateMeetingTranscriptUnlocked
 )
 
-export const setMeetingCrmPushed = serialisedByMeeting(
-  (_settings, file: string, _key: string) => file,
-  setMeetingCrmPushedUnlocked
+export const setMeetingPushMarker = serialisedByMeeting(
+  (_settings, file: string, _field: PushMarkerField, _key: string) => file,
+  setMeetingPushMarkerUnlocked
 )
+
+/** The CRM marker, under its original name for the existing handler and tests. */
+export const setMeetingCrmPushed = (settings: Settings, file: string, key: string) =>
+  setMeetingPushMarker(settings, file, 'crm_pushed', key)
 
 export const setMeetingConfidential = serialisedByMeeting(
   (_settings, file: string, _confidential: boolean) => file,

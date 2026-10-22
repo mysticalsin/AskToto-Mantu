@@ -25,6 +25,7 @@ import {
   updateMeetingRecap,
   renameMeeting,
   setMeetingCrmPushed,
+  setMeetingPushMarker,
   setMeetingConfidential,
   isMeetingConfidentialOnDisk,
   meetingTextNeedsRecap,
@@ -1246,6 +1247,139 @@ describe('setMeetingCrmPushed — the durable "already pushed to the CRM" marker
     expect(await setMeetingCrmPushed(testSettings, basename(file), 'enc1')).toEqual({ ok: true })
     expect(isEncryptedFile(file)).toBe(true) // still encrypted — never silently downgraded to cleartext
     expect((await recallRead(basename(file))).crmPushedKey).toBe('enc1')
+  })
+})
+
+// Q07 (D4-6): ClickUp and "Book next steps" pushes had only module memory, so a remount or relaunch re-armed
+// them and a second Confirm created a duplicate task in the team tracker. Same durable-marker shape as the CRM.
+describe('setMeetingPushMarker — durable markers for every outbound push (Q07, D4-6)', () => {
+  let folder: string
+  const meeting: SaveMeeting = {
+    title: 'Acme renewal',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Send the revised pricing', t: 1_700_000_000_000 }],
+    recap: 'Agreed to revise pricing.'
+  }
+
+  beforeEach(() => {
+    useStorageForTests()
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-push-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  it('push markers round-trip', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    const before = await recallRead(name)
+    expect(before.clickupPushedKey).toBeUndefined()
+    expect(before.nextStepsPushedKeys).toBeUndefined()
+
+    expect(await setMeetingPushMarker(testSettings, name, 'crm_pushed', 'crm1')).toEqual({ ok: true })
+    expect(await setMeetingPushMarker(testSettings, name, 'clickup_pushed', 'click1')).toEqual({ ok: true })
+    expect(await setMeetingPushMarker(testSettings, name, 'next_steps_pushed', 'step1')).toEqual({ ok: true })
+    expect(await setMeetingPushMarker(testSettings, name, 'next_steps_pushed', 'step2')).toEqual({ ok: true })
+    expect(await setMeetingPushMarker(testSettings, name, 'next_steps_pushed', 'step1')).toEqual({ ok: true })
+
+    const text = readFileSync(file, 'utf8')
+    expect(text).toMatch(/^clickup_pushed: click1$/m)
+    expect(text).toMatch(/^next_steps_pushed: step1,step2$/m)
+    const read = await recallRead(name)
+    expect(read.crmPushedKey).toBe('crm1')
+    expect(read.clickupPushedKey).toBe('click1')
+    expect(read.nextStepsPushedKeys).toEqual(['step1', 'step2'])
+  })
+
+  it('keeps the next-steps list within 2 KB, dropping the oldest keys first', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    for (let i = 0; i < 200; i++) {
+      await setMeetingPushMarker(
+        testSettings,
+        name,
+        'next_steps_pushed',
+        `k${String(i).padStart(3, '0')}${'a'.repeat(20)}`
+      )
+    }
+    const line = readFileSync(file, 'utf8').match(/^next_steps_pushed: (.*)$/m)?.[1] ?? ''
+    expect(line.length).toBeGreaterThan(0)
+    expect(line.length).toBeLessThanOrEqual(2048)
+    const read = await recallRead(name)
+    expect(read.nextStepsPushedKeys?.at(-1)).toMatch(/^k199/)
+    expect(read.nextStepsPushedKeys).not.toContain(`k000${'a'.repeat(20)}`)
+  })
+
+  it('refuses an unknown field and any key that could break out of the YAML scalar', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    expect((await setMeetingPushMarker(testSettings, name, 'confidential' as never, 'x1')).ok).toBe(false)
+    for (const bad of ['a\nconfidential: true', 'has: colon', 'UPPER', '', 'x'.repeat(33), 'a,b']) {
+      expect((await setMeetingPushMarker(testSettings, name, 'clickup_pushed', bad)).ok).toBe(false)
+      expect((await setMeetingPushMarker(testSettings, name, 'next_steps_pushed', bad)).ok).toBe(false)
+    }
+    const text = readFileSync(file, 'utf8')
+    expect(text).not.toMatch(/clickup_pushed|next_steps_pushed|confidential/)
+  })
+
+  it('concurrent markers on one meeting keep every one of them', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    await Promise.all([
+      setMeetingPushMarker(testSettings, name, 'next_steps_pushed', 'aa1'),
+      setMeetingPushMarker(testSettings, name, 'next_steps_pushed', 'bb2'),
+      setMeetingPushMarker(testSettings, name, 'clickup_pushed', 'cc3'),
+      setMeetingCrmPushed(testSettings, name, 'dd4')
+    ])
+    const read = await recallRead(name)
+    expect(read.nextStepsPushedKeys?.slice().sort()).toEqual(['aa1', 'bb2'])
+    expect(read.clickupPushedKey).toBe('cc3')
+    expect(read.crmPushedKey).toBe('dd4')
+  })
+})
+
+// Q07 (D4-3): Regenerate and Retry share one handler, so a regeneration silently replaced hand-edited notes.
+// A durable `recap_edited` marker lets Review ask first, across a relaunch.
+describe('updateMeetingRecap — the recap_edited marker (Q07, D4-3)', () => {
+  let folder: string
+  const meeting: SaveMeeting = {
+    title: 'Acme renewal',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Send the revised pricing', t: 1_700_000_000_000 }],
+    recap: 'Generated notes.'
+  }
+
+  beforeEach(() => {
+    useStorageForTests()
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-edited-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  it('human recap edit sets recap_edited; a generated write clears it', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    expect((await recallRead(name)).recapEdited).toBeUndefined()
+
+    expect(await updateMeetingRecap(testSettings, name, 'My own wording.')).toEqual({ ok: true })
+    expect(readFileSync(file, 'utf8')).toMatch(/^recap_edited: true$/m)
+    expect((await recallRead(name)).recapEdited).toBe(true)
+
+    expect(await updateMeetingRecap(testSettings, name, '## Overview:\nA fresh summary.', 'complete')).toEqual({
+      ok: true
+    })
+    expect(readFileSync(file, 'utf8')).not.toMatch(/recap_edited/)
+    expect((await recallRead(name)).recapEdited).toBeUndefined()
+  })
+
+  it('a failed regeneration that restores the edited text keeps the marker', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    await updateMeetingRecap(testSettings, name, 'My own wording.')
+    // recapPersistAction writes target.priorText back with an 'incomplete' status when the run produced nothing.
+    expect(await updateMeetingRecap(testSettings, name, 'My own wording.', 'incomplete')).toEqual({ ok: true })
+    expect((await recallRead(name)).recapEdited).toBe(true)
   })
 })
 

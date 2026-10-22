@@ -213,6 +213,8 @@ export const IPC = {
   // MQA-092: durable "this recap already reached the CRM" marker, so a relaunch cannot re-arm the push
   // and file a byte-identical duplicate record. See recall.ts's setMeetingCrmPushed.
   recallSetCrmPushed: 'recall:set-crm-pushed',
+  // Q07: the generalised durable push marker (crm, ClickUp, "Book next steps").
+  recallSetPushMarker: 'recall:set-push-marker',
   recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
   // Support diagnosability: copy the log trail (main + audit + crash dumps + boot sentinel) into a
@@ -1999,29 +2001,6 @@ export const RecallBackfillSpeakersPayloadSchema = z.object({
 })
 export type RecallBackfillSpeakersPayload = z.infer<typeof RecallBackfillSpeakersPayloadSchema>
 
-/** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
-export interface RecallReadResult {
-  ok: boolean
-  error?: string
-  title?: string
-  mode?: string
-  startedAt?: number
-  durationMs?: number
-  recap?: string
-  /** Absent on legacy/unspecified notes; text length is not proof of generation completion. */
-  recapStatus?: RecapStatus
-  lines?: TranscriptLine[]
-  /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
-   *  actual saved state instead of always starting unflagged. */
-  confidential?: boolean
-  /** True only when the saved meeting's frontmatter status is exactly `recovered`. */
-  recovered?: boolean
-  /** MQA-092 — frontmatter `crm_pushed: <payload fingerprint>`. Seeds Review's push state on mount so a
-   *  meeting pushed before the last relaunch does not offer to push itself again. Absent = never pushed;
-   *  a DIFFERENT fingerprint means the recap was edited since, which correctly re-arms the chip. */
-  crmPushedKey?: string
-}
-
 /** Result of update:check — the manual Settings-driven check against the public releases feed. Exists
  *  alongside electron-updater's silent flow because unsigned macOS builds can't auto-install; the user
  *  still deserves to SEE a newer version was published (Settings → About → Updates). */
@@ -2215,6 +2194,7 @@ export type OutlookEventPayload = z.infer<typeof OutlookEventPayloadSchema>
 
 export * from './local-model-ipc'
 export * from './license-ipc'
+export * from './recall-meeting'
 
 export {
   LICENSE_ACTIVATION_OPEN,

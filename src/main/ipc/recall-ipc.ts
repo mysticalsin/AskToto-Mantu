@@ -15,6 +15,9 @@ import {
   UpdateRecapPayloadSchema,
   SetConfidentialPayloadSchema,
   SetCrmPushedPayloadSchema,
+  SetPushMarkerPayloadSchema,
+  DEBRIEF_MAX_CHARS,
+  type RecallSetConfidentialResult,
   RecallBackfillSpeakersPayloadSchema,
   type RecallExportPlainResult
 } from '@shared/ipc'
@@ -36,6 +39,7 @@ import {
   updateMeetingRecap,
   setMeetingConfidential,
   setMeetingCrmPushed,
+  setMeetingPushMarker,
   deleteAllMeetings
 } from '../recall'
 import { purgeGraphArtifacts, scheduleRebuild } from '../graphify'
@@ -201,7 +205,7 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
   // recallUpdateRecap; audit-logged. A full republish is the simplest correct way to make the exclusion
   // (or its reversal) take effect everywhere at once — cheap at this app's single-exec scale, and it's
   // the exact same idempotent full regen rebuildAll already relies on.
-  ipcMain.handle(IPC.recallSetConfidential, async (e, raw) => {
+  ipcMain.handle(IPC.recallSetConfidential, async (e, raw): Promise<RecallSetConfidentialResult> => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = SetConfidentialPayloadSchema.safeParse(raw)
@@ -223,10 +227,13 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
         await publishAll(s)
       } catch (error) {
         mainLog.error(`[confidential] republish failed: ${error instanceof Error ? error.message : String(error)}`)
+        // `flagSaved` tells Review the frontmatter write is durable: it keeps the toggle where it is and shows the
+        // reason instead of reverting to a state the file no longer has (Q07, D4-1).
         return {
           ok: false,
           error:
-            'Flag saved, but the published pages could not be updated — this meeting may still appear in your published wiki. Try again.'
+            'Flag saved, but the published pages could not be updated — this meeting may still appear in your published wiki. Try again.',
+          flagSaved: true
         }
       }
     }
@@ -243,6 +250,16 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     const parsed = SetCrmPushedPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
     return setMeetingCrmPushed(getSettings(), parsed.data.file, parsed.data.key)
+  })
+
+  // Q07 (D4-6): the generalised durable push marker (CRM, ClickUp, "Book next steps"). Same guard shape and
+  // reasoning as the CRM handler above; `field` is an enum so the renderer cannot pick which line is rewritten.
+  ipcMain.handle(IPC.recallSetPushMarker, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = SetPushMarkerPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    return setMeetingPushMarker(getSettings(), parsed.data.file, parsed.data.field, parsed.data.key)
   })
 
   // Speaker Intelligence: manual (re)trigger of the Teams-transcript speaker-name backfill for a past
@@ -265,8 +282,10 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const p = raw as { file?: unknown; text?: unknown }
     const safeName = safeMeetingBasename(p?.file)
-    const text = String(p?.text ?? '').slice(0, 8000)
+    const text = String(p?.text ?? '')
     if (!safeName || !text.trim()) return { ok: false, error: 'Nothing to save.' }
+    // Refused, not cut: the old slice dropped the tail while Review reported "Saved with the meeting" (Q07, D4-5).
+    if (text.length > DEBRIEF_MAX_CHARS) return { ok: false, error: 'Debrief is too long (8,000 characters max).' }
     const s = getSettings()
     const result = await appendDebrief(s, safeName, text)
     if (result.ok) {

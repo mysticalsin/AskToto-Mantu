@@ -56,6 +56,8 @@ import {
   type SignInResult,
   type CalendarTodayResult,
   type RecallReadResult,
+  type RecallSetConfidentialResult,
+  type PushMarkerField,
   type RecallExportPlainResult,
   type DiagnosticsExportResult,
   type UpdateCheckResult,
@@ -509,12 +511,15 @@ const api = {
     ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap, recapStatus }),
   // Task MI-5: flag/unflag a saved meeting as confidential — excludes it from every published wiki
   // surface (main/brain/publish.ts). Rewrites only the frontmatter block; never renames the file.
-  recallSetConfidential: (file: string, confidential: boolean): Promise<{ ok: boolean; error?: string }> =>
+  recallSetConfidential: (file: string, confidential: boolean): Promise<RecallSetConfidentialResult> =>
     ipcRenderer.invoke(IPC.recallSetConfidential, { file, confidential }),
   // MQA-092: record that this exact recap payload already reached the CRM, in the meeting's own
   // frontmatter, so a relaunch cannot re-arm "Push to CRM" and file a duplicate record.
   recallSetCrmPushed: (file: string, key: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallSetCrmPushed, { file, key }),
+  // Q07: the same durable record for ClickUp and "Book next steps" pushes (an enum field, a base-36 key).
+  recallSetPushMarker: (file: string, field: PushMarkerField, key: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallSetPushMarker, { file, field, key }),
   // Speaker Intelligence: manually (re)trigger the Teams-transcript speaker-name backfill for a past
   // meeting (see main/graph-transcript.ts). `named` is how many lines got a resolved name; 0 is a normal
   // non-error outcome (no Teams transcript existed/matched yet).
