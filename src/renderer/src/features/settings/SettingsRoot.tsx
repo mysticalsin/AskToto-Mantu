@@ -50,6 +50,7 @@ import { OverlayChromePicker } from '../../components/OverlayChromePicker'
 import { OverlayPlacementPicker } from '../../components/OverlayPlacementPicker'
 import { OverlayOrbPicker } from '../../components/OverlayOrbPicker'
 import { persistOverlayPlacement } from '../../lib/overlay-placement-save'
+import { overlayOpacityStatus, reportingPatch } from '../../lib/report-settings-patch'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   type PublicSettings,
@@ -67,7 +68,7 @@ import {
   isDustReady,
   type ProviderId
 } from '@shared/providers'
-import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
+import { operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuMark } from '../../components/MantuMark'
 import { MetisMark } from '../../components/MetisMark'
@@ -78,6 +79,8 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { ctl } from '../../ui/ctl'
 import { primaryBtnStyle } from './ProductConnections'
 import { DustSetup } from './DustSetup'
+import { OperatorUrlField } from './OperatorUrlField'
+import { ReplayHint, SaveErrorLine } from './SettingsNotices'
 import { CalendarTab } from './CalendarTab'
 import { AboutTab } from './AboutTab'
 import { MeetingsTab } from './MeetingsTab'
@@ -389,6 +392,7 @@ export function Settings({
   notice,
   onQuit,
   onLogout,
+  listening = false,
   navigationGuard,
   onOpenIntelligence,
   onOpenHistory,
@@ -416,6 +420,8 @@ export function Settings({
   // Fall back to the raw IPC if a parent doesn't supply them (keeps the component standalone).
   onQuit?: () => void
   onLogout?: () => void
+  // True while Listen is live: Replay onboarding would swap the window and end the capture, so it is dimmed.
+  listening?: boolean
 }): JSX.Element {
   // HIG: Settings reopens on the most recently viewed pane unless a caller targets one.
   const [tab, setTab] = useState<TabId>(
@@ -425,6 +431,11 @@ export function Settings({
   // tab label plus its real card keywords (see TABS above), so a hit always points at something that
   // actually exists on that tab.
   const [query, setQuery] = useState('')
+  // Tabs get `reportedPatch`; fields that explain a failure themselves use the raw `patch`.
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const reportedPatch = useMemo(() => reportingPatch(patch, setSaveError), [patch])
+  const replayHintId = useId()
+  const opacityStatus = overlayOpacityStatus(settings.overlayOpacity)
   const [operatorSecretDraft, setOperatorSecretDraft] = useState('')
   const [operatorSecretSaving, setOperatorSecretSaving] = useState(false)
   const [operatorSecretError, setOperatorSecretError] = useState<string | null>(null)
@@ -452,7 +463,7 @@ export function Settings({
     setQuery('')
   }
   const replayOnboarding = async (): Promise<void> => {
-    if (replayState.busy) return
+    if (replayState.busy || listening) return
     // A deliberately chosen, reversible action: two buttons (Cancel, Replay), Replay is the default.
     const replay = await confirmAction(navigationGuard, REPLAY_ONBOARDING_CONFIRMATION)
     if (!replay) return
@@ -627,6 +638,8 @@ export function Settings({
         </div>
       )}
 
+      {saveError ? <SaveErrorLine message={saveError} /> : null}
+
       <main
         ref={contentRef}
         role="tabpanel"
@@ -639,7 +652,7 @@ export function Settings({
             {tab === 'ai' && (
               <AiSection
                 settings={settings}
-                patch={patch}
+                patch={reportedPatch}
                 saveKey={saveKey}
                 recoverEncryptedProfile={recoverEncryptedProfile}
                 clearKey={clearKey}
@@ -654,7 +667,7 @@ export function Settings({
                   desc="Edit each mode's prompt and the files it can see, then set the one you want active."
                   icon={Wand2}
                 >
-                  <PersonalizeModes settings={settings} patch={patch} />
+                  <PersonalizeModes settings={settings} patch={reportedPatch} />
                 </Section>
                 <Section
                   title="Appearance"
@@ -663,21 +676,19 @@ export function Settings({
                 >
                   <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
                     <span className="flex items-center gap-2">
-                      {settings.overlayOpacity < 0.9
-                        ? 'More transparent'
-                        : settings.overlayOpacity > 1.1
-                          ? 'Less transparent'
-                          : 'Default'}
+                      {opacityStatus}
                       <ManagedChip keys={settings.managedKeys} k="overlayOpacity" />
                     </span>
                     <input
                       type="range"
+                      aria-label="Overlay transparency"
+                      aria-valuetext={opacityStatus}
                       min={0.3}
                       max={1.5}
                       step={0.05}
                       value={settings.overlayOpacity}
                       disabled={settings.managedKeys.includes('overlayOpacity')}
-                      onChange={(e) => patch({ overlayOpacity: Number(e.target.value) })}
+                      onChange={(e) => reportedPatch({ overlayOpacity: Number(e.target.value) })}
                       className={[
                         'no-drag accent-[var(--cl-primary)]',
                         settings.managedKeys.includes('overlayOpacity') ? 'opacity-60' : ''
@@ -727,7 +738,7 @@ export function Settings({
                       copy={overlayLayoutCopy(settings.overlayPlacement)}
                       locked={settings.managedKeys.includes('overlayLayout')}
                       onChange={(id) =>
-                        patch({
+                        reportedPatch({
                           overlayLayout: id,
                           autoHideOverlay: autoHideOverlayForLayout(id)
                         })
@@ -747,7 +758,7 @@ export function Settings({
                         <OverlayOrbPicker
                           value={settings.overlayOrbStyle}
                           locked={settings.managedKeys.includes('overlayOrbStyle')}
-                          onChange={(id) => patch({ overlayOrbStyle: id })}
+                          onChange={(id) => reportedPatch({ overlayOrbStyle: id })}
                         />
                       </>
                     ) : null}
@@ -763,7 +774,7 @@ export function Settings({
                   </label>
                   <select
                     value={settings.outputLanguage}
-                    onChange={(e) => patch({ outputLanguage: e.target.value })}
+                    onChange={(e) => reportedPatch({ outputLanguage: e.target.value })}
                     disabled={settings.managedKeys.includes('outputLanguage')}
                     aria-label="Answers and live assist language"
                     className={'w-full ' + ctl}
@@ -780,7 +791,7 @@ export function Settings({
                   </label>
                   <select
                     value={settings.summaryLanguage}
-                    onChange={(e) => patch({ summaryLanguage: e.target.value })}
+                    onChange={(e) => reportedPatch({ summaryLanguage: e.target.value })}
                     disabled={settings.managedKeys.includes('summaryLanguage')}
                     aria-label="Summary and recap language"
                     className={'w-full ' + ctl}
@@ -800,7 +811,7 @@ export function Settings({
                 >
                   <LazyTextarea
                     value={settings.systemPrompt}
-                    onCommit={(v) => patch({ systemPrompt: v })}
+                    onCommit={(v) => reportedPatch({ systemPrompt: v })}
                     disabled={settings.managedKeys.includes('systemPrompt')}
                     rows={3}
                     spellCheck={false}
@@ -815,9 +826,9 @@ export function Settings({
             {tab === 'audio' && (
               <AudioTab
                 settings={settings}
-                patch={patch}
+                patch={reportedPatch}
                 refreshSettings={refreshSettings}
-                tapControl={<TapControlCard settings={settings} patch={patch} />}
+                tapControl={<TapControlCard settings={settings} patch={reportedPatch} />}
               />
             )}
 
@@ -832,7 +843,7 @@ export function Settings({
                     label="Hide from screen capture"
                     desc="Hide the Métis window from screen capture & sharing, so people you share with never see it. Doesn't affect screen questions."
                     on={settings.contentProtection}
-                    onChange={(v) => patch({ contentProtection: v })}
+                    onChange={(v) => reportedPatch({ contentProtection: v })}
                     disabled={settings.managedKeys.includes('contentProtection')}
                     icon={Camera}
                   />
@@ -843,7 +854,7 @@ export function Settings({
                     // the same switch is what made the eye button read as a privacy control.
                     desc="Métis won't look at or capture your screen while this is on. Screen questions answer from context only. Separate from the bar's eye button, which controls whether the Métis overlay is visible in a screen share."
                     on={settings.privateView}
-                    onChange={(v) => patch({ privateView: v })}
+                    onChange={(v) => reportedPatch({ privateView: v })}
                     disabled={settings.managedKeys.includes('privateView')}
                   />
                 </Section>
@@ -856,7 +867,7 @@ export function Settings({
                     label="Let Métis see your screen on request"
                     desc="Governs the explicit screen asks: the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
                     on={settings.screenAsk}
-                    onChange={(v) => patch({ screenAsk: v })}
+                    onChange={(v) => reportedPatch({ screenAsk: v })}
                     disabled={settings.managedKeys.includes('screenAsk')}
                     icon={Eye}
                   />
@@ -870,7 +881,7 @@ export function Settings({
                     label="Carry context into follow-up questions"
                     desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh. Nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
                     on={settings.askFollowUpMemory}
-                    onChange={(v) => patch({ askFollowUpMemory: v })}
+                    onChange={(v) => reportedPatch({ askFollowUpMemory: v })}
                     disabled={settings.managedKeys.includes('askFollowUpMemory')}
                   />
                 </Section>
@@ -883,14 +894,14 @@ export function Settings({
                     label="I will inform participants before recording"
                     desc="Your acknowledgement that you follow your company's policy and the law when recording. Revocable here."
                     on={settings.recordingConsent}
-                    onChange={(v) => patch({ recordingConsent: v })}
+                    onChange={(v) => reportedPatch({ recordingConsent: v })}
                     disabled={settings.managedKeys.includes('recordingConsent')}
                   />
                   <ToggleRow
                     label="Require consent reminder"
                     desc='Show the "other participants are being recorded" reminder every time Listen starts, instead of a one-time-per-day toast. On by default.'
                     on={settings.requireConsentIndicator}
-                    onChange={(v) => patch({ requireConsentIndicator: v })}
+                    onChange={(v) => reportedPatch({ requireConsentIndicator: v })}
                     disabled={settings.managedKeys.includes('requireConsentIndicator')}
                   >
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
@@ -905,7 +916,7 @@ export function Settings({
                     label="Redact secrets before sending to AI"
                     desc="Strips credit-card numbers, API keys, SSNs, and private keys from the captured transcript before it goes to a cloud model. Your typed questions and the saved transcript are never changed."
                     on={settings.redactSensitive}
-                    onChange={(v) => patch({ redactSensitive: v })}
+                    onChange={(v) => reportedPatch({ redactSensitive: v })}
                     disabled={settings.managedKeys.includes('redactSensitive')}
                   >
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--color-danger)]">
@@ -930,24 +941,11 @@ export function Settings({
                   desc="Your Métis licence securely connects this device to managed AI. You do not need a personal API key or a shared connection secret."
                   icon={Settings2}
                 >
-                  <label className="flex flex-col gap-1 px-1 py-2">
-                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                      Operator URL
-                    </span>
-                    <input
-                      value={settings.operatorUrl || ''}
-                      spellCheck={false}
-                      autoComplete="off"
-                      placeholder={DEFAULT_OPERATOR_URL}
-                      disabled={settings.managedKeys.includes('operatorUrl')}
-                      onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
-                      className={`${ctl} w-full`}
-                    />
-                    <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                      Leave empty to use {DEFAULT_OPERATOR_URL}. Changing this address disconnects your licence;
-                      activate it again for the new service. Only change it when instructed by your administrator.
-                    </span>
-                  </label>
+                  <OperatorUrlField
+                    value={settings.operatorUrl || ''}
+                    disabled={settings.managedKeys.includes('operatorUrl')}
+                    patch={reportedPatch}
+                  />
                   <details className="px-1 py-2">
                     <summary className="text-[11px] text-[color:var(--cl-muted-foreground)]">
                       Legacy administrator connection
@@ -1008,19 +1006,19 @@ export function Settings({
               </div>
             )}
 
-            {tab === 'meetings' && <MeetingsTab settings={settings} patch={patch} />}
+            {tab === 'meetings' && <MeetingsTab settings={settings} patch={reportedPatch} />}
 
             {tab === 'intelligence' && (
               <IntelligenceTab
                 settings={settings}
-                patch={patch}
+                patch={reportedPatch}
                 onOpenIntelligence={onOpenIntelligence}
                 onOpenHistory={onOpenHistory}
                 onOpenMeeting={onOpenMeeting}
               />
             )}
 
-            {tab === 'calendar' && <CalendarTab settings={settings} patch={patch} />}
+            {tab === 'calendar' && <CalendarTab settings={settings} patch={reportedPatch} onSignOut={onLogout} />}
 
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
@@ -1032,7 +1030,7 @@ export function Settings({
                 >
                   <ProfileEditor
                     profile={settings.profile}
-                    onChange={(p) => patch({ profile: p })}
+                    onChange={(p) => reportedPatch({ profile: p })}
                     disabled={settings.managedKeys.includes('profile')}
                   />
                 </Section>
@@ -1045,12 +1043,12 @@ export function Settings({
                     desc="Activate Métis against your organization's license server."
                     icon={ShieldCheck}
                   >
-                    <LicenseSection settings={settings} patch={patch} />
+                    <LicenseSection settings={settings} patch={reportedPatch} />
                   </Section>
                 )}
                 {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
                 <Section title="Keyboard shortcuts" desc="Click any keybind below to edit it." icon={Settings2}>
-                  <Shortcuts settings={settings} patch={patch} />
+                  <Shortcuts settings={settings} patch={reportedPatch} />
                 </Section>
               </div>
             )}
@@ -1062,6 +1060,7 @@ export function Settings({
 
       {/* Footer — secondary actions left, Done right */}
       <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
+        {listening ? <ReplayHint id={replayHintId} /> : null}
         {replayState.error ? (
           <p
             role="alert"
@@ -1078,7 +1077,8 @@ export function Settings({
           // The invoke must settle before main replaces this transparent BrowserWindow with the opaque
           // onboarding stage. `onboardingEnter` is deliberately a one-way IPC after that durable write.
           onClick={() => void replayOnboarding()}
-          disabled={replayState.busy}
+          disabled={replayState.busy || listening}
+          aria-describedby={listening ? replayHintId : undefined}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08] disabled:opacity-60"
         >
           <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />

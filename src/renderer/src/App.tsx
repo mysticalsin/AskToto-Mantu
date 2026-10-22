@@ -3544,17 +3544,15 @@ export function App(): JSX.Element {
     }
   }, [approveReviewNav, capturing, minimizeForIntelligence])
 
-  // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
-  // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
-  // render. Without this, `body` was a fresh JSX literal every single render, which defeated memo(Bar)'s
-  // shallow prop comparison for its `body` prop no matter how stable every OTHER prop was. Must sit above
-  // the early-return gates below — every hook in this component runs unconditionally before them (see
-  // onQuickAction's own comment above for why: rendered-fewer-hooks-than-expected otherwise).
-  // One useMemo PER view branch, not one shared memo over all seven: a single memo's dep array unioned
-  // every branch's dependencies, so a streaming suggest.answer flush (60/sec) rebuilt the element for
-  // whatever panel was open — a fresh <Settings> element per frame fully re-rendered its ~5000 lines even
-  // though nothing it reads changed. Per-branch memos keep each element's identity stable unless ITS OWN
-  // inputs change, so React bails out of the untouched subtree entirely.
+  // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input, the
+  // elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App render.
+  // Without this, `body` was a fresh JSX literal every render, which defeated memo(Bar)'s shallow prop
+  // comparison for its `body` prop no matter how stable every OTHER prop was. Must sit above the early-return
+  // gates below — every hook here runs unconditionally before them (see onQuickAction's comment above).
+  // One useMemo PER view branch, not one shared memo over all seven: a single memo's dep array unioned every
+  // branch's dependencies, so a streaming suggest.answer flush (60/sec) rebuilt whatever panel was open (a fresh
+  // <Settings> per frame re-rendered ~5000 lines). Per-branch memos keep each element's identity stable unless
+  // ITS OWN inputs change, so React bails out of the untouched subtree entirely.
   const settingsBody = useMemo(() => {
     if (!settings) return null
     // Settings is self-contained (its own rounded panel) — rendered below the bar, NOT inside <Panel>.
@@ -3572,6 +3570,7 @@ export function App(): JSX.Element {
         onClose={() => setView('answer')}
         onQuit={quitApp}
         onLogout={logOut}
+        listening={listen.listening}
         navigationGuard={navigationGuard}
         onOpenIntelligence={() => {
           brainReturnViewRef.current = 'settings'
@@ -3593,6 +3592,7 @@ export function App(): JSX.Element {
     settingsNotice,
     quitApp,
     logOut,
+    listen.listening,
     navigationGuard,
     openPastMeeting
   ])

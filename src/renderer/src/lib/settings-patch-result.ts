@@ -6,6 +6,7 @@
  * invalid input is validated next to the field) asks through this helper instead of trusting the call to succeed.
  */
 import type { PublicSettings } from '@shared/ipc'
+import { unreportedPatch } from './report-settings-patch'
 
 export type SettingsPatchResult = { ok: true } | { ok: false; reason: 'refused' | 'failed'; message: string }
 
@@ -16,7 +17,8 @@ export async function patchSettingsChecked<K extends keyof PublicSettings>(
 ): Promise<SettingsPatchResult> {
   let saved: PublicSettings | void
   try {
-    saved = await patch(next)
+    // A field that explains its own failure must not also trip the pane-level save-error line.
+    saved = await unreportedPatch(patch)(next)
   } catch {
     // Main's own messages can carry file paths; the field shows a plain sentence instead.
     return { ok: false, reason: 'failed', message: "Métis couldn't save this change. Try again." }

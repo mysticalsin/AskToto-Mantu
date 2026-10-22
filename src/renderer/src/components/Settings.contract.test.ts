@@ -199,7 +199,11 @@ describe('disconnectDust() clears dustTokenMintedAt (finding 4)', () => {
   const block = blockAfter('const disconnectDust = async ()', '\n  // Remove just the saved Dust API key')
 
   it('resets dustTokenMintedAt to 0 in the same patch as the rest of the disconnect reset', () => {
-    expect(block).toMatch(/dustTokenMintedAt:\s*0/)
+    // The patch is built by dustDisconnectPatch (moved out of DustSetup.tsx unchanged) and written as one patch.
+    expect(block).toMatch(/const next = dustDisconnectPatch\(settings\)/)
+    expect(block).toMatch(/await patch\(next\)/)
+    const builder = source.slice(source.indexOf('export function dustDisconnectPatch'))
+    expect(builder.slice(0, builder.indexOf('\n}\n'))).toMatch(/dustTokenMintedAt:\s*0/)
   })
 })
 
@@ -670,7 +674,10 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).toMatch(/operatorUrlConfigured/)
     expect(source).toMatch(/operatorUrlConfigured\(settings\) && <OperatorLicenseCard/)
     expect(source).toMatch(/Leave empty to use \{DEFAULT_OPERATOR_URL\}/)
-    expect(source).toMatch(/Changing this address disconnects your licence;\s+activate it again for the new service/)
+    // The sentence now lives in OperatorUrlField, so its line breaks differ; only whitespace is tolerant here.
+    expect(source).toMatch(
+      /Changing this address disconnects your licence;\s+activate it again\s+for\s+the new service/
+    )
     expect(source).not.toMatch(/Empty means no fleet heartbeat/)
     expect(source).not.toMatch(/metis-operator\.example\.workers\.dev/)
   })
