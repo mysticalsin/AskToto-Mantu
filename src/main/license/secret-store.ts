@@ -8,6 +8,7 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
+import { clearCredentialReadRefusal, noteCredentialReadDenied } from '../credential-read-denial'
 import { decryptSecret, encryptSecret, useFileBackend } from '../secrets'
 import type { LicenseEdition, LicenseSource } from '@shared/license-types'
 
@@ -44,14 +45,20 @@ function wrap(plain: string): Buffer {
 function unwrap(buf: Buffer): string | null {
   try {
     if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-      return safeStorage.decryptString(buf)
+      const plain = safeStorage.decryptString(buf)
+      clearCredentialReadRefusal('member-licence-cache')
+      return plain
     }
   } catch {
     /* try file backend */
   }
   try {
-    return decryptSecret(buf)
-  } catch {
+    const plain = decryptSecret(buf)
+    clearCredentialReadRefusal('member-licence-cache')
+    return plain
+  } catch (error) {
+    // A cache that cannot be opened is no licence, never a thrown error; the refusal carries no value or error text.
+    noteCredentialReadDenied('member-licence-cache', error)
     return null
   }
 }
@@ -76,6 +83,7 @@ export function writeLicenseCache(cache: LicenseCache, userData?: string): void 
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const buf = wrap(JSON.stringify(cache))
   writeFileSync(path, buf, { mode: 0o600 })
+  clearCredentialReadRefusal('member-licence-cache')
 }
 
 export function clearLicenseCache(userData?: string): void {

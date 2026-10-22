@@ -8,6 +8,7 @@ import { calendarToday } from './calendar'
 import { getGraphToken } from './auth'
 import { auditLog } from './logger'
 import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
+import { readModuleSource } from '../test-helpers/module-source'
 
 vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'synthetic-calendar-security-token') }))
 vi.mock('./logger', () => ({ auditLog: vi.fn() }))
@@ -680,10 +681,14 @@ describe('Q11 — account and credential hygiene in index.ts', () => {
   })
 
   it("D9-3: Disconnect removes the seeded dust-cli items, reading Métis's token before it is cleared", () => {
-    const body = sliceBetween('ipcMain.handle(IPC.clearApiKey', 'ipcMain.handle(IPC.testApiKey')
+    // G20: the handler delegates to disconnectProvider (credential-clearers.ts), which the account-switch cleanup shares.
+    const handler = sliceBetween('ipcMain.handle(IPC.clearApiKey', 'ipcMain.handle(IPC.testApiKey')
+    expect(handler).toMatch(/disconnectProvider\(parsed\.provider\)/)
+    const { text: clearers } = readModuleSource(__dirname, './credential-clearers')
+    const body = clearers.slice(clearers.indexOf('export async function disconnectProvider'))
     const read = body.indexOf("getApiKey('dust')")
     expect(read).toBeGreaterThan(-1)
-    expect(read).toBeLessThan(body.indexOf('clearApiKey(parsed.provider)'))
+    expect(read).toBeLessThan(body.indexOf('clearApiKey(provider)'))
     expect(body).toMatch(/seededDustTokenForDisconnect\(getSettings\(\)\.dustSessionOrigin, getApiKey\('dust'\)\)/)
     expect(body).toMatch(/clearSeededDustCliSession\(/)
     expect(body).toMatch(/retireDustOAuthSession\(\)/)

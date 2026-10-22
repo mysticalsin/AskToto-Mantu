@@ -35,7 +35,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { isDemoTagged } from '@shared/demo-guard'
 import { getSettings, setSettings } from './store'
-import type { AskMode, LicenseActivateResult, LicenseConfigResult } from '@shared/ipc'
+import type { AskMode, LicenseActivateReply, LicenseActivateResult, LicenseConfigResult } from '@shared/ipc'
 import { getLicenseLeasePublicKeyRaw } from './license-lease-key'
 import { isLeaseValidNow, verifyLeaseToken, type LeasePayload } from './license-lease-verify'
 import { shouldStartTrial, trialStatus } from './license-trial'
@@ -277,6 +277,12 @@ export async function activateLicense(serverUrl: string, licenseKey: string): Pr
     })
   }
   return r
+}
+
+/** `activateLicense` for the renderer-facing IPC reply: the signed lease holds the licence key, so it never leaves main. */
+export async function activateLicenseForRenderer(serverUrl: string, licenseKey: string): Promise<LicenseActivateReply> {
+  const { lease: _lease, ...reply } = await activateLicense(serverUrl, licenseKey)
+  return reply
 }
 
 /** Bare remote servers use HTTPS; only loopback development servers default to HTTP. */

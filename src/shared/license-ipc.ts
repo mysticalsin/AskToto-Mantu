@@ -27,6 +27,10 @@ export interface LicenseActivateResult {
   lease?: string
 }
 
+/** What the renderer receives from license:activate: the result without the signed offline lease. The lease payload
+ *  carries the licence key in base64, so it stays in main and only licenseLease (never sent to the renderer) holds it. */
+export type LicenseActivateReply = Omit<LicenseActivateResult, 'lease'>
+
 /** Cached license state for display — read straight from settings, no network call (see the
  *  license:status handler). Deliberately excludes seatsUsed: that's only a point-in-time snapshot from
  *  the last activate/heartbeat response, not a live count, so the UI shows seatCap only. */

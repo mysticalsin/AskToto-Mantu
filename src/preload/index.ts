@@ -73,7 +73,7 @@ import {
   type OutlookDraftPayload,
   type OutlookEventPayload,
   type LicenseActivatePayload,
-  type LicenseActivateResult,
+  type LicenseActivateReply,
   type LicenseStatusResult,
   type LicenseGateVerdict,
   type IdentitySnapshot,
@@ -771,7 +771,7 @@ const api = {
     origin: 'admin' | 'sso' | 'token' | null
     state: 'unenrolled' | 'enrolled' | 'revoked'
   }> => ipcRenderer.invoke(IPC.operatorReportingStatus),
-  licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
+  licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateReply> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,

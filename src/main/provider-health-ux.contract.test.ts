@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * Source contract for the "your API key stopped working" path — MQA-003, MQA-004, MQA-005
@@ -28,7 +29,9 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
     expect(indexSrc).toMatch(
       /const isCredentialRejection =\s*\n?\s*!exhaustion &&\s*\n?\s*provider !== 'local' &&\s*\n?\s*\(provider === 'dust' \? isDustAuthError\(\{ message \}\) : isAuthFailure\(message\)\)/
     )
-    expect(indexSrc).toMatch(/if \(!gotToken && isCredentialRejection\) recordAuthFailure\(provider, String\(message\)\)/)
+    expect(indexSrc).toMatch(
+      /if \(!gotToken && isCredentialRejection\) recordAuthFailure\(provider, String\(message\)\)/
+    )
   })
 
   it('clears the verdict the moment a provider produces a token', () => {
@@ -37,8 +40,13 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
   })
 
   it('clears the verdict when the key changes, so pasting a working key visibly fixes it', () => {
-    expect(indexSrc).toMatch(/setApiKey\(parsed\.provider, parsed\.key\)[\s\S]{0,600}?resetProviderHealth\(parsed\.provider\)/)
-    expect(indexSrc).toMatch(/clearApiKey\(parsed\.provider\)\s*\n\s*resetProviderHealth\(parsed\.provider\)/)
+    expect(indexSrc).toMatch(
+      /setApiKey\(parsed\.provider, parsed\.key\)[\s\S]{0,600}?resetProviderHealth\(parsed\.provider\)/
+    )
+    // G20: removal goes through disconnectProvider, which clears the key and then the verdict in one place.
+    expect(indexSrc).toMatch(/disconnectProvider\(parsed\.provider\)/)
+    const clearers = readModuleSource(__dirname, './credential-clearers').text
+    expect(clearers).toMatch(/clearApiKey\(provider\)\s*\n\s*resetProviderHealth\(provider\)/)
   })
 
   // MQA-059 is this half's reason to exist: a pre-token 401 on the active provider is non-transient, so

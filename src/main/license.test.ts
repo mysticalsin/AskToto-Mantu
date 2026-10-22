@@ -27,6 +27,7 @@ vi.mock('./store', () => ({
 
 import {
   activateLicense,
+  activateLicenseForRenderer,
   heartbeat,
   checkLicenseGrace,
   getMachineId,
@@ -311,6 +312,20 @@ describe('license.ts — phone-home activation', () => {
       const body = JSON.parse((init as RequestInit).body as string)
       expect(body.licenseKey).toBe('KEY-123')
       expect(body.machineId).toBe(getMachineId())
+    })
+
+    it('G20: the renderer-facing reply never carries the signed lease (its payload holds the licence key), main still keeps it', async () => {
+      const lease = signTestLease({ notAfter: Date.now() + 10 * DAY })
+      fetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 2, expiresAt: null, lease })
+      )
+
+      const reply = await activateLicenseForRenderer('https://license.acme.test', 'KEY-123')
+
+      expect(reply).toEqual({ ok: true, companyName: 'Acme', seatCap: 5, expiresAt: null })
+      expect(Object.keys(reply)).not.toContain('lease')
+      expect(JSON.stringify(reply)).not.toContain(lease)
+      expect(testSettings.licenseLease).toBe(lease)
     })
 
     it('failure does not clear existing valid state', async () => {

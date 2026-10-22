@@ -167,10 +167,14 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.clearApiKey')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 1600)
-    expect(body).toMatch(/parsed\.provider === 'dust'/)
-    // The pair-removal now lives in dust-oauth's retireDustOAuthSession (shared with the paste path, D9-1):
-    // the handler must call it, and it must still delete the refresh token and leave the OAuth branch.
-    expect(body).toMatch(/dustRefreshRemoved = retireDustOAuthSession\(\)/)
+    // G20: the handler delegates to disconnectProvider (credential-clearers.ts), the same function the account-switch
+    // cleanup uses, so Disconnect and cleanup cannot drift apart.
+    expect(body).toMatch(/disconnectProvider\(parsed\.provider\)/)
+    const { text: clearers } = readModuleSource(__dirname, './credential-clearers')
+    expect(clearers).toMatch(/provider === 'dust'/)
+    // The pair-removal lives in dust-oauth's retireDustOAuthSession (shared with the paste path, D9-1):
+    // disconnectProvider must call it, and it must still delete the refresh token and leave the OAuth branch.
+    expect(clearers).toMatch(/dustRefreshRemoved = retireDustOAuthSession\(\)/)
     const { text: oauth } = readModuleSource(__dirname, './dust-oauth')
     const retire = oauth.slice(oauth.indexOf('export function retireDustOAuthSession'))
     expect(retire).toMatch(/clearDustRefreshToken\(\)/)

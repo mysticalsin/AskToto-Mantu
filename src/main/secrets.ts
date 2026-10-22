@@ -96,6 +96,14 @@ export class KeychainKeyRecoveryError extends Error {
   }
 }
 
+/** A decrypt on a profile that has no file key: typed so a denied read can say why without parsing a message. */
+export class ProfileKeyMissingError extends Error {
+  constructor() {
+    super('secrets: this profile has no file key to decrypt with')
+    this.name = 'ProfileKeyMissingError'
+  }
+}
+
 /** Cached per-install key — module-level singleton, never re-read after first load. */
 let _key: Buffer | null = null
 
@@ -279,7 +287,7 @@ function loadKey({
   const dir = app.getPath('userData')
   const orphaned = encryptedProfileFilesExist(dir)
   if (orphaned && zeroByteKeyFile) throw new KeychainKeyRecoveryError()
-  if (!createIfMissing) throw new Error('secrets: this profile has no file key to decrypt with')
+  if (!createIfMissing) throw new ProfileKeyMissingError()
   // Minting beside encrypted files would silently orphan every secret already written under the lost key.
   if (orphaned) throw new KeychainKeyRecoveryError()
 

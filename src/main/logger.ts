@@ -163,6 +163,10 @@ export type AuditEvent =
   | 'dust.oauth.login'
   | 'key.set'
   | 'key.removed'
+  // Metadata-only (G20): credential id, identifier-shaped scope and a closed refusal code, never a value or error text.
+  | 'credential.read.denied'
+  | 'credential.cleanup'
+  | 'credential.account_switch'
   | 'capture.screen'
   | 'capture.display_mismatch'
   | 'capture.blocked'

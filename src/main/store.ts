@@ -43,6 +43,8 @@ import {
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
+import { clearCredentialReadRefusal as forgetRefusal, lastCredentialReadRefusal } from './credential-read-denial'
+import { openSealedCredential } from './sealed-credential'
 import {
   adminManagedConfigPath,
   readManagedPolicyAuthorityFile,
@@ -927,11 +929,13 @@ export function setApiKey(provider: ProviderId, key: string): void {
     )
   }
   _apiKeyCache.delete(provider)
+  forgetRefusal('provider-api-key', provider)
   _settingsCache = null
 }
 
 export function clearApiKey(provider: ProviderId): void {
   const p = keyPath(provider)
+  forgetRefusal('provider-api-key', provider)
   if (!existsSync(p)) return
   try {
     rmSync(p)
@@ -958,7 +962,11 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
   // pasted key, never the one actually in use — the exact key an "is it still valid?" check is about.
   // getApiKey resolves the same value the ask path uses (an env var, else the encrypted store).
   const trimmed = key.trim() || getApiKey(provider)
-  if (!trimmed) return { ok: false, error: 'No API key provided.' }
+  if (!trimmed)
+    return {
+      ok: false,
+      error: lastCredentialReadRefusal('provider-api-key', provider)?.message ?? 'No API key provided.'
+    }
 
   const def = PROVIDERS[provider]
   // Org allowlist (data-residency / governance policy) — the SAME gate attempt() enforces at ask time
@@ -1125,39 +1133,30 @@ export function getApiKey(provider: ProviderId): string {
   let key = ''
   try {
     const buf = readFileSync(keyPath(provider))
-
-    // ── Legacy plaintext (oldest format) ──────────────────────────────────────
     if (buf.subarray(0, 6).toString('utf8') === 'plain:') {
-      const plain = buf.subarray(6).toString('utf8')
-      // Migrate to current backend on first read (defense-in-depth for disk backups).
-      // setApiKey will delete _apiKeyCache[provider]; we re-set it below.
+      // Legacy plaintext (oldest format): migrate to the current backend on first read (defense-in-depth for disk backups).
+      key = buf.subarray(6).toString('utf8')
       try {
-        setApiKey(provider, plain)
+        setApiKey(provider, key)
       } catch {
         /* keep the plaintext file; key still works */
       }
-      key = plain
-    } else if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
-      try {
-        key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-      } catch (e) {
-        mainLog.warn('[store] key file undecryptable for', provider, e)
-        key = '' // Corrupt or key rotated
-      }
-    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      // ── Legacy safeStorage blob (no marker) — migrate to current backend ────
-      try {
-        const plain = safeStorage.decryptString(buf)
-        // Best-effort migration: re-save with the current backend so future reads don't need keychain.
+    } else {
+      // ATKAES1 envelope, or a legacy keystore-only blob. A denied read is recorded as a typed refusal
+      // (credential-read-denial.ts) that testApiKey and callers can surface; it never carries the secret.
+      const opened = openSealedCredential(buf, {
+        marker: AES_KEY_MARKER,
+        credential: 'provider-api-key',
+        scope: provider
+      })
+      key = opened.value
+      if (opened.legacy && key) {
+        // Best-effort migration: re-save with the current backend so future reads don't need the keystore.
         try {
-          setApiKey(provider, plain)
+          setApiKey(provider, key)
         } catch {
           /* keep the old blob; key still works */
         }
-        key = plain
-      } catch {
-        /* not a safeStorage blob for this OS user — unreadable */
       }
     }
   } catch {
@@ -1215,24 +1214,17 @@ export function setDustRefreshToken(token: string): void {
       }.`
     )
   }
+  forgetRefusal('dust-oauth-refresh')
 }
 
 export function getDustRefreshToken(): string {
   try {
-    const buf = readFileSync(dustRefreshTokenPath())
-    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      return decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    }
-    if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try {
-        return safeStorage.decryptString(buf)
-      } catch {
-        return ''
-      }
-    }
-    return ''
+    return openSealedCredential(readFileSync(dustRefreshTokenPath()), {
+      marker: AES_KEY_MARKER,
+      credential: 'dust-oauth-refresh'
+    }).value
   } catch {
-    return ''
+    return '' // no file
   }
 }
 
@@ -1241,6 +1233,7 @@ export function getDustRefreshToken(): string {
  *  reporting a clean removal — same contract as mcpSecrets.ts's clearMcpRefreshToken. */
 export function clearDustRefreshToken(): boolean {
   const p = dustRefreshTokenPath()
+  forgetRefusal('dust-oauth-refresh')
   if (!existsSync(p)) return true
   try {
     rmSync(p)
@@ -1287,6 +1280,7 @@ export function setSonioxApiKey(key: string): void {
   writeFileSync(tmp, blob, { mode: 0o600 })
   renameSync(tmp, path)
   _sonioxKeyCache = trimmed
+  forgetRefusal('soniox-api-key')
 }
 
 export function clearSonioxApiKey(): void {
@@ -1315,6 +1309,7 @@ export function clearSonioxApiKey(): void {
     )
   }
   _sonioxKeyCache = ''
+  forgetRefusal('soniox-api-key')
 }
 
 export function getSonioxApiKeyStored(): string {
@@ -1322,19 +1317,11 @@ export function getSonioxApiKeyStored(): string {
   let key = ''
   try {
     const path = sonioxKeyPath()
-    if (!existsSync(path)) {
-      _sonioxKeyCache = ''
-      return ''
-    }
-    const buf = readFileSync(path)
-    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    } else if (safeStorage.isEncryptionAvailable()) {
-      key = safeStorage.decryptString(buf)
+    if (existsSync(path)) {
+      key = openSealedCredential(readFileSync(path), { marker: AES_KEY_MARKER, credential: 'soniox-api-key' }).value
     }
   } catch (e) {
-    mainLog.warn('[store] soniox key undecryptable', e)
-    key = ''
+    mainLog.warn('[store] soniox key file unreadable', (e as NodeJS.ErrnoException | undefined)?.code)
   }
   _sonioxKeyCache = key
   return key

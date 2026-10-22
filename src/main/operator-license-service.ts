@@ -232,3 +232,16 @@ export function revokeAutoSeat(now: number = Date.now()): void {
 export function noteRevokedChecked(now: number = Date.now()): void {
   setSettings({ operatorEnrollCheckedAt: now })
 }
+
+/**
+ * Credential cleanup (G20): forget the seat on this device, administrator licence included, because a different
+ * person is now signed in (or the profile is being reset). Unlike `dropAutoLicense` this removes every Operator
+ * credential slot, discards the previous owner's queued events, and restarts the heartbeat on no credential.
+ * `reset` is the settings patch the credential inventory builds for the three Operator entries.
+ */
+export function clearOperatorSeat(reset: Parameters<typeof setSettings>[0]): void {
+  setSettings({ ...reset, ...NO_GRANT })
+  purge()
+  deps.restartRuntime()
+  deps.notifyChanged()
+}

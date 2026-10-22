@@ -121,7 +121,6 @@ import {
   getEnvKeyProviders,
   getApiKey,
   setApiKey,
-  clearApiKey,
   testApiKey,
   hasApiKey,
   hasKeysMap,
@@ -876,7 +875,9 @@ import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './update
 import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
-import { clearSeededDustCliSession, ensureManagedDustCli, seededDustTokenForDisconnect } from './dust-cli-chat'
+import { ensureManagedDustCli } from './dust-cli-chat'
+import { credentialLifecycle, disconnectProvider } from './lifecycle/credential-lifecycle-wiring'
+import { redactCredentialSettings } from '@shared/credential-inventory'
 import { abortAllAskStreams, askTiming, boundedAnswerAskId } from './ask-stream-registry'
 import {
   beginDustDeviceLogin,
@@ -911,7 +912,7 @@ import {
 import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
 import { outboundActionId, pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
 import {
-  activateLicense,
+  activateLicenseForRenderer,
   activateMemberLicense,
   checkLicenseGrace,
   deactivateMemberLicense,
@@ -2465,9 +2466,7 @@ function publicSettings(): PublicSettings {
   // this one flag is what tells the renderer not to demand an API key it does not need (MQA-242).
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
-    ...s,
-    operatorLicenseToken: '',
-    operatorIngestSecret: '',
+    ...redactCredentialSettings(s), // every secret in the inventory is blanked; presence flags follow below
     operatorConfigured: operatorManaged(s),
     operatorReporting: operatorReportingSnapshot().status,
     operatorLegacyCredentialConfigured: !!s.operatorIngestSecret.trim(),
@@ -4852,6 +4851,7 @@ function revokePrivilegedSurface(): void {
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   closeIntelligenceWindow() // account-scoped state belongs to the session being cleared or replaced
   abortAllAskStreams(streams) // askCancel is auth-gated, so a running answer would outlive the sign-out
+  credentialLifecycle.onSessionCleared() // G20: the inventory's sign-out cleanup, on every way a session ends
 }
 setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
 
@@ -6003,6 +6003,7 @@ function registerIpc(): void {
     try {
       speechDesktop?.invalidate('profile-recovery')
       resetSpeechAuthProfile()
+      await credentialLifecycle.onProfileReset() // copies outside the profile files (Dust CLI seed) go before the archive
       const archive = archiveEncryptedProfile()
       completeSpeechAuthProfileReset()
       recoveredDraftCount.resetForProfileRecovery()
@@ -6090,7 +6091,7 @@ function registerIpc(): void {
     // With the key unlocked (the default / single-operator case) the supplied URL is used as before.
     const urlLocked = getLockedKeys().includes('licenseServerUrl')
     const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
-    return activateLicense(serverUrl, parsed.data.licenseKey)
+    return activateLicenseForRenderer(serverUrl, parsed.data.licenseKey)
   })
   ipcMain.handle(IPC.cloudflareConnect, (e) => {
     assertMainWindow(e)
@@ -6245,26 +6246,12 @@ function registerIpc(): void {
     return { ...result, hasKeys: hasKeysMap() }
   })
 
-  ipcMain.handle(IPC.clearApiKey, (e, payload: unknown) => {
+  ipcMain.handle(IPC.clearApiKey, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
-    const seededDustToken =
-      parsed.provider === 'dust' ? seededDustTokenForDisconnect(getSettings().dustSessionOrigin, getApiKey('dust')) : '' // read before the clear
-    clearApiKey(parsed.provider)
-    resetProviderHealth(parsed.provider) // same reason as setApiKey above
-    resetHeadroom(parsed.provider)
-    // Dust's credential is a PAIR (key + refresh token) and Spotlight seeds the key into the shared dust-cli
-    // keychain: Disconnect must remove them all (see retireDustOAuthSession and clearSeededDustCliSession).
-    let dustRefreshRemoved = true
-    if (parsed.provider === 'dust') {
-      dustRefreshRemoved = retireDustOAuthSession()
-      void clearSeededDustCliSession(seededDustToken)
-    }
-    auditLog('key.removed', {
-      provider: parsed.provider,
-      ...(parsed.provider === 'dust' ? { dustRefreshRemoved } : {})
-    })
+    // Removes the key, its health and budget memory, and for Dust the whole pair (see disconnectProvider).
+    const { dustRefreshRemoved } = await disconnectProvider(parsed.provider)
     return {
       hasKeys: hasKeysMap(),
       ...(dustRefreshRemoved
@@ -6967,7 +6954,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.authSignIn, async (e) => {
     assertMainWindow(e)
     const status = await authSignIn()
-    if (status.ok && status.configured) enrollmentOnSignedIn()
+    if (status.ok && status.configured) await credentialLifecycle.onSignedIn(enrollmentOnSignedIn) // account-switch check first
     // MQA-236: no prewarmCapture() here anymore — it takes a REAL frame, and signing in is not screen
     // intent. The warm rides hovering the Capture button (Bar.tsx), the moment intent is signalled.
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup

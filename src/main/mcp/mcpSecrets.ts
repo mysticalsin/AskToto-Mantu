@@ -27,8 +27,11 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { useFileBackend, encryptSecret, decryptSecret, prepareFileKeyForWrite } from '../secrets'
+import { useFileBackend, encryptSecret, prepareFileKeyForWrite } from '../secrets'
 import { mainLog } from '../logger'
+import type { CredentialId } from '@shared/credential-inventory'
+import { clearCredentialReadRefusal } from '../credential-read-denial'
+import { openSealedCredential } from '../sealed-credential'
 
 // Same marker convention as store.ts's AES_KEY_MARKER, distinct value so the two families never collide.
 // A single marker works for every connectionId — AES-GCM encryption is already keyed to the file itself.
@@ -118,6 +121,7 @@ export function setMcpApiKey(connectionId: string, key: string): void {
     return
   }
   writeSecretFile(keyPath(connectionId), trimmed, 'API key')
+  clearCredentialReadRefusal('mcp-api-key', connectionId)
   cache.set(connectionId, trimmed)
 }
 
@@ -131,41 +135,32 @@ export function setMcpRefreshToken(connectionId: string, token: string): void {
     return
   }
   writeSecretFile(refreshPath(connectionId), trimmed, 'refresh token')
+  clearCredentialReadRefusal('mcp-oauth-refresh', connectionId)
   refreshCache.set(connectionId, trimmed)
 }
 
-function readKeyFile(p: string, marker: Buffer): string {
-  let key = ''
+function readKeyFile(p: string, marker: Buffer, credential: CredentialId, scope: string): string {
   try {
-    const buf = readFileSync(p)
-    if (buf.length > marker.length && buf.subarray(0, marker.length).equals(marker)) {
-      try {
-        key = decryptSecret(buf.subarray(marker.length))
-      } catch {
-        key = '' // corrupt or key rotated
-      }
-    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try {
-        key = safeStorage.decryptString(buf)
-      } catch {
-        /* not a safeStorage blob for this OS user — unreadable */
-      }
-    }
+    return openSealedCredential(readFileSync(p), { marker, credential, scope }).value
   } catch {
-    /* file missing or unreadable */
+    return '' // file missing or unreadable
   }
-  return key
 }
 
 export function getMcpApiKey(connectionId: string): string {
   const cached = cache.get(connectionId)
   if (cached !== undefined) return cached
-  let key = readKeyFile(keyPath(connectionId), AES_KEY_MARKER)
+  let key = readKeyFile(keyPath(connectionId), AES_KEY_MARKER, 'mcp-api-key', connectionId)
   // Legacy fallback: an existing BidStack connection whose key still lives at the pre-generalization
   // path. Only consulted when the new-path file has nothing readable — a real key-mcp-bidstack.bin
   // always wins.
   if (!key && connectionId === 'bidstack') {
-    key = readKeyFile(join(app.getPath('userData'), LEGACY_BIDSTACK_KEY_FILE), LEGACY_BIDSTACK_MARKER)
+    key = readKeyFile(
+      join(app.getPath('userData'), LEGACY_BIDSTACK_KEY_FILE),
+      LEGACY_BIDSTACK_MARKER,
+      'mcp-api-key',
+      connectionId
+    )
   }
   cache.set(connectionId, key)
   return key
@@ -216,7 +211,7 @@ export function clearMcpApiKey(connectionId: string): boolean {
 export function getMcpRefreshToken(connectionId: string): string {
   const cached = refreshCache.get(connectionId)
   if (cached !== undefined) return cached
-  const token = readKeyFile(refreshPath(connectionId), AES_KEY_MARKER)
+  const token = readKeyFile(refreshPath(connectionId), AES_KEY_MARKER, 'mcp-oauth-refresh', connectionId)
   refreshCache.set(connectionId, token)
   return token
 }
@@ -247,13 +242,14 @@ export function setMcpClientSecret(connectionId: string, secret: string): void {
     return
   }
   writeSecretFile(clientSecretPath(connectionId), trimmed, 'OAuth client secret')
+  clearCredentialReadRefusal('mcp-oauth-client-secret', connectionId)
   clientSecretCache.set(connectionId, trimmed)
 }
 
 export function getMcpClientSecret(connectionId: string): string {
   const cached = clientSecretCache.get(connectionId)
   if (cached !== undefined) return cached
-  const secret = readKeyFile(clientSecretPath(connectionId), AES_KEY_MARKER)
+  const secret = readKeyFile(clientSecretPath(connectionId), AES_KEY_MARKER, 'mcp-oauth-client-secret', connectionId)
   clientSecretCache.set(connectionId, secret)
   return secret
 }

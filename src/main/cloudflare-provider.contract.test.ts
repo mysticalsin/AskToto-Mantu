@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import ts from 'typescript'
+import { readModuleSource } from '../test-helpers/module-source'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { PROVIDERS } from '@shared/providers'
 import { providerEnvironmentVariable } from './secrets'
@@ -38,11 +39,15 @@ const indexSource = read('index.ts')
 const ingestSource = read('brain', 'ingest.ts')
 const storeSource = read('store.ts')
 const secretsSource = read('secrets.ts')
+// G20: the marker/keystore decrypt branches moved out of store.ts into one shared opener.
+const sealedSource = readModuleSource(__dirname, './sealed-credential').text
 const openaiSource = read('llm', 'openai.ts')
 const settingsSource = read('..', 'renderer', 'src', 'features', 'settings', 'AiSection.tsx')
 const indexHtml = read('..', 'renderer', 'index.html')
 
 /** Follow the moved map through the actual reader and both encrypted writer branches. */
+const compactText = (text: string): string => text.replace(/\s/g, '')
+
 function encryptedProxyKeyRoute(store: string, secrets: string): boolean {
   // This parser label is synthetic; keep real source-read paths literal above.
   const fixtureExtension = '.' + 'ts'
@@ -85,7 +90,6 @@ function encryptedProxyKeyRoute(store: string, secrets: string): boolean {
     !lookup ||
     !imported('providerEnvironmentVariable', './secrets') ||
     !imported('encryptSecret', './secrets') ||
-    !imported('decryptSecret', './secrets') ||
     !imported('safeStorage', 'electron')
   )
     return false
@@ -126,8 +130,9 @@ function encryptedProxyKeyRoute(store: string, secrets: string): boolean {
     env.pos >= liveEnv.pos ||
     liveEnv.pos >= cached.pos ||
     !readerHas('readFileSync(keyPath(provider))') ||
-    !readerHas('decryptSecret(buf.subarray(AES_KEY_MARKER.length))') ||
-    !readerHas('safeStorage.decryptString(buf)')
+    !readerHas("openSealedCredential(buf,{marker:AES_KEY_MARKER,credential:'provider-api-key',scope:provider})") ||
+    !compactText(sealedSource).includes('decryptSecret(buf.subarray(marker.length))') ||
+    !compactText(sealedSource).includes('safeStorage.decryptString(buf)')
   )
     return false
   const path = source.statements
