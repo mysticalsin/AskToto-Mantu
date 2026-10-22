@@ -280,9 +280,21 @@ export function registerBrainIpc(deps: BrainIpcDependencies): void {
   // clears the sentinel so corrections resume (the quarantined corrections.corrupt-*.json copy is left
   // for inspection). Privileged (mutates correction-engine state) — main-window only + requireAuth, same
   // guards as brainSetDealOutcome. Takes no payload, so there is nothing to zod-validate beyond the guards.
-  ipcMain.handle(IPC.brainClearJournalCorruption, (e) => {
+  ipcMain.handle(IPC.brainClearJournalCorruption, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    // D8-3: clearing starts a new corrections history, so ask first and say what it costs. Cancel is the default.
+    const { response } = await showMessageBox({
+      type: 'warning' as const,
+      title: 'Resume corrections',
+      message: 'Start a new corrections history?',
+      detail:
+        "Earlier merges, renames and pins in the damaged file won't be applied again. A copy of the damaged file stays on this device.",
+      buttons: ['Resume Corrections', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    })
+    if (response !== 0) return { ok: false, error: 'cancelled' }
     const cleared = clearJournalCorruptionLock(getSettings())
     auditLog('brain.corrections.lock_cleared', { cleared })
     return { ok: true, cleared }

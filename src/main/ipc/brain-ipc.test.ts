@@ -114,7 +114,9 @@ const MAIN_WINDOW_CHANNELS = [
   IPC.brainCommitmentSettle
 ]
 
-function setup(overrides: { requireAuth?: () => boolean; showMessageBox?: () => Promise<{ response: number }> } = {}) {
+function setup(
+  overrides: { requireAuth?: () => boolean; showMessageBox?: (options: unknown) => Promise<{ response: number }> } = {}
+) {
   const handlers = new Map<string, Handler>()
   const assertMainWindow = vi.fn()
   const assertBrainReader = vi.fn()
@@ -246,6 +248,29 @@ describe('brain IPC behaviour kept from the entry point', () => {
     expect(await handler(IPC.brainPreservedIndexDelete)(event, { id: 'copy-1' })).toEqual({ ok: true })
     expect(mocks.deletePreservedBrainIndex).toHaveBeenCalledWith(settings, 'copy-1')
     expect(mocks.auditLog).toHaveBeenCalledWith('brain.index.preserved_delete', { ok: true, error: undefined })
+  })
+
+  it('clear corruption lock asks first and cancel keeps the lock', async () => {
+    const showMessageBox = vi.fn(async () => ({ response: 1 }))
+    const { handler } = setup({ showMessageBox })
+    expect(await handler(IPC.brainClearJournalCorruption)(event)).toEqual({ ok: false, error: 'cancelled' })
+    expect(mocks.clearJournalCorruptionLock).not.toHaveBeenCalled()
+    expect(showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Resume corrections',
+        message: 'Start a new corrections history?',
+        buttons: ['Resume Corrections', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      })
+    )
+  })
+
+  it('clears the corruption lock once the user confirms', async () => {
+    const { handler } = setup()
+    expect(await handler(IPC.brainClearJournalCorruption)(event)).toEqual({ ok: true, cleared: true })
+    expect(mocks.clearJournalCorruptionLock).toHaveBeenCalledWith(settings)
+    expect(mocks.auditLog).toHaveBeenCalledWith('brain.corrections.lock_cleared', { cleared: true })
   })
 
   it('opens the dashboard with no avoid rectangle when the overlay is gone', async () => {
