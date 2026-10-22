@@ -274,8 +274,15 @@ describe('Log out refreshes auth.status (finding 8)', () => {
 describe('Fact-check leftover-transcript fallthrough (finding 2)', () => {
   const factCheckBlock = blockBetween('const factCheck = useCallback(', 'const answerNow = useCallback(')
 
-  it('the transcript-fed branch also fires when not listening but a transcript is present with no typed claim', () => {
-    expect(factCheckBlock).toMatch(/if \(listen\.listening \|\| \(!claim && transcript\.trim\(\)\)\) \{/)
+  it('the transcript-fed fact-check also fires when not listening but a transcript is present with no typed claim', () => {
+    // Q01 / D5-2: the old first branch shadowed the bounded, redacted fallback and sent the whole transcript
+    // unredacted. One pure builder (lib/fact-check-request.ts, unit-tested for a leftover transcript with
+    // listening:false) now owns every text fact-check, so the call must pass the live flag and transcript.
+    expect(factCheckBlock).toMatch(
+      /buildFactCheckRequest\(\{ claim, lastThem, transcript, listening: listen\.listening \}\)/
+    )
+    expect(factCheckBlock).not.toMatch(/if \(listen\.listening \|\| \(!claim && transcript\.trim\(\)\)\) \{/)
+    expect(factCheckBlock).not.toMatch(/buildFactCheckClaimPrompt\(/)
   })
 })
 

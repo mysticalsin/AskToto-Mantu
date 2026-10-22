@@ -2,6 +2,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { transcriptStateKey } from '@shared/hash'
+import { transcriptTail } from './lib/ask-context'
 import { readModuleSource } from '../../test-helpers/module-source'
 
 const appModule = readModuleSource(__dirname, './App')
@@ -220,6 +221,7 @@ function makeHarness() {
     },
     Copilot: 'Copilot',
     transcriptStateKey,
+    transcriptTail,
     ...updates,
     settings: {
       instantSuggestions: true,
