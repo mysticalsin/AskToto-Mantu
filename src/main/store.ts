@@ -65,6 +65,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
+import { migrateLegacyBidstackConnection } from '@shared/settings-migrations'
+import { migrateSettingsFile, rejectUnsupportedSettingsVersion, settingsCodec } from './settings-migration-runner'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import type { LocalSpeechPackPolicy } from '@shared/model-policy'
 import { assertBrokerSpeechSettingsPatch, BrokerSpeechSettingsLoadSchema } from '@shared/broker-speech-settings'
@@ -333,7 +335,7 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
  * not there — means "no overrides". Callers must handle `null` explicitly: getSettings degrades to
  * DEFAULT+managed without memoising a fresh-profile snapshot, and setSettings refuses to write.
  */
-function readUserRaw(): Record<string, unknown> | null {
+function readUserRawDecoded(): Record<string, unknown> | null {
   let buf: Buffer
   try {
     buf = readFileSync(settingsPath())
@@ -416,6 +418,10 @@ function readUserRaw(): Record<string, unknown> | null {
   return null
 }
 
+/** A file from a newer build (or with a malformed version) reads as unreadable: defaults, no writes, original kept. */
+const readUserRaw = (): Record<string, unknown> | null =>
+  rejectUnsupportedSettingsVersion(readUserRawDecoded(), mainLog)
+
 /** Serialize user overrides, encrypted at rest. */
 function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   const json = JSON.stringify(obj, null, 2)
@@ -434,30 +440,16 @@ function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   throw new Error('Encryption unavailable — refusing to write settings as plaintext')
 }
 
-/**
- * Synthesize a `mcpConnections: [{ id: 'bidstack', ... }]` entry from the pre-generalization
- * bidstackEndpointUrl/bidstackConnected/bidstackTools fields, IN PLACE on `raw` — mutating the object
- * getSettings() is about to merge/validate, exactly like the retired-model-map migration above it. A
- * no-op whenever the `mcpConnections` KEY IS PRESENT AT ALL in raw — including an explicit empty array —
- * see the caller's comment for why that guard matters (checking `.length > 0` instead would treat a
- * deliberate disconnect's `[]` the same as "never migrated" and keep resurrecting the cleared connection).
- */
-function migrateLegacyBidstackConnection(raw: Record<string, unknown>): void {
-  if ('mcpConnections' in raw) return
-  const legacyUrl = raw.bidstackEndpointUrl
-  if (typeof legacyUrl !== 'string' || !legacyUrl.trim()) return
-  raw.mcpConnections = [
-    {
-      id: 'bidstack',
-      kind: 'bidstack',
-      label: 'Polo Pre-Sales',
-      endpointUrl: legacyUrl,
-      connected: Boolean(raw.bidstackConnected),
-      tools: Array.isArray(raw.bidstackTools) ? raw.bidstackTools : [],
-      extraHeaders: {}
+/** Boot step (index.ts, after first show): versioned migration of settings.json with a backup. Async fs only. */
+export const migrateSettingsFileOnBoot = () =>
+  migrateSettingsFile({
+    path: settingsPath(),
+    ...settingsCodec(tryParseSettingsBuffer, [ENC_MARKER_V1, ENC_MARKER_V2], serializeUserRaw),
+    log: mainLog,
+    onWritten: () => {
+      _settingsCache = null
     }
-  ]
-}
+  })
 
 // ─── Settings memoisation ────────────────────────────────────────────────────────
 // getSettings() is called on every IPC handler and every /ask. The full parse path includes an AES

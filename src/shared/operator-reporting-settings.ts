@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
+import { defineSettingsFeature } from './settings-feature-module'
 
 export const OperatorReportingSettingsShape = {
   /** Licence minted by auto-enrolment (SSO or embedded token). Encrypted at rest with the whole settings
@@ -31,5 +32,11 @@ export const OPERATOR_REPORTING_SETTINGS_DEFAULTS = {
   operatorEnrollCheckedAt: 0
 }
 
+export const OPERATOR_REPORTING_FEATURE = defineSettingsFeature({
+  id: 'operator-reporting',
+  shape: OperatorReportingSettingsShape,
+  mainOnlyKeys: Object.keys(OperatorReportingSettingsShape) as (keyof typeof OperatorReportingSettingsShape)[]
+})
+
 /** Keys only main may write. settingsSet strips them from renderer patches. */
-export const OPERATOR_REPORTING_MAIN_KEYS = Object.keys(OperatorReportingSettingsShape)
+export const OPERATOR_REPORTING_MAIN_KEYS: string[] = [...OPERATOR_REPORTING_FEATURE.mainOnlyKeys]

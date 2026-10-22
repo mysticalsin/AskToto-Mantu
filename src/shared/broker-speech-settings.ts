@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { BROKERED_STT_PROVIDER_IDS, DIRECT_STT_PROVIDER_IDS } from './contracts/stt-provider'
+import { defineSettingsFeature } from './settings-feature-module'
 
 /** Independent transport selector. Legacy settings keep using today's existing speech facade. */
 export const BrokerSpeechSettingsSchema = z
@@ -66,6 +67,11 @@ export const CloudSpeechSettingsSchema = z.object({
 })
 
 export type CloudSpeechSettings = z.infer<typeof CloudSpeechSettingsSchema>
+
+export const CLOUD_SPEECH_FEATURE = defineSettingsFeature({
+  id: 'cloud-speech',
+  shape: CloudSpeechSettingsSchema.shape
+})
 
 export const DEFAULT_CLOUD_SPEECH_SETTINGS: CloudSpeechSettings = {
   enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },

@@ -138,7 +138,8 @@ import {
   readSettingsAtAuthorityBoundary,
   getSonioxApiKey,
   setSonioxApiKey,
-  clearSonioxApiKey
+  clearSonioxApiKey,
+  migrateSettingsFileOnBoot
 } from './store'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
@@ -9327,6 +9328,7 @@ if (!app.requestSingleInstanceLock()) {
       installInputPowerLifecycleHooks()
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
+      bootWork.run('migrateSettingsFile', migrateSettingsFileOnBoot) // G09: versioned settings migration, backup first
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
       // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
       bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
