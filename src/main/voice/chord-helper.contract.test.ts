@@ -5,7 +5,8 @@ import { MODIFIER_BITS } from '@shared/voice/modifier-mask'
 import { readModuleSource } from '../../test-helpers/module-source'
 
 const REPO_ROOT = process.cwd()
-const swiftSource = readFileSync(join(REPO_ROOT, 'native', 'mac-helper', 'main.swift'), 'utf8')
+// A Windows checkout may carry CRLF; the body scan below looks for LF boundaries.
+const swiftSource = readFileSync(join(REPO_ROOT, 'native', 'mac-helper', 'main.swift'), 'utf8').replace(/\r\n/g, '\n')
 // Comments may name the calls the helper avoids.
 const swift = swiftSource.replace(/\/\/[^\r\n]*/g, '')
 

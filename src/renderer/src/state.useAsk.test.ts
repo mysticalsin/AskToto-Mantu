@@ -157,9 +157,8 @@ type TotoStub = {
 // state.ts batches every delta after the first via requestAnimationFrame, which node doesn't provide.
 // Its own settle() only needs the flush to eventually run and land its setState in a microtask, so a
 // setTimeout(0) stand-in is faithful enough here (this test isn't asserting anything about frame timing).
-;(globalThis as unknown as { requestAnimationFrame: (cb: () => void) => number }).requestAnimationFrame = (
-  cb
-) => setTimeout(cb, 0) as unknown as number
+;(globalThis as unknown as { requestAnimationFrame: (cb: () => void) => number }).requestAnimationFrame = (cb) =>
+  setTimeout(cb, 0) as unknown as number
 ;(globalThis as unknown as { cancelAnimationFrame: (id: number) => void }).cancelAnimationFrame = (id) =>
   clearTimeout(id)
 
@@ -278,7 +277,6 @@ describe('useAsk follow-up turns replace, never concatenate', () => {
   })
 })
 
-
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 // MQA-180 / MQA-182 — the "Viewed screen" trust badge must never outrun the data behind it.
 //
@@ -356,7 +354,9 @@ describe('live incomplete responses preserve buffered partial text', () => {
     toto.__fireError({ id, message: 'Response incomplete. Try again.' })
     await host.__settle()
     expect(view.result.answer).toMatchObject({
-      id, text: 'Current partial notes still buffered', streaming: false,
+      id,
+      text: 'Current partial notes still buffered',
+      streaming: false,
       error: 'Response incomplete. Try again.'
     })
   })
@@ -380,15 +380,25 @@ describe('useAsk completion and cancellation ownership', () => {
     toto.__fireDelta({ id, text: 'notes' }) // drain the pending frame too, not only the first token
     await host.__settle()
     expect(view.result.answer).toMatchObject({
-      id, text: 'Current partial notes', completion: 'incomplete', streaming: false,
+      id,
+      text: 'Current partial notes',
+      completion: 'incomplete',
+      streaming: false,
       error: 'Could not start the response. Please try again.'
     })
     expect(JSON.stringify(view.result.answer)).not.toContain('private transport detail')
   })
 
-  it.each(['replace', 'clear', 'cancel', 'done'] as const)('ignores a late start rejection after %s', async (action) => {
+  it.each([
+    'replace',
+    'clear',
+    'cancel',
+    'done'
+  ] as const)('ignores a late start rejection after %s', async (action) => {
     let reject!: (reason: Error) => void
-    const pending = new Promise<void>((_resolve, fail) => { reject = fail })
+    const pending = new Promise<void>((_resolve, fail) => {
+      reject = fail
+    })
     void pending.catch(() => undefined)
     toto.ask.mockReturnValueOnce(pending)
     const view = renderAsk()
@@ -428,7 +438,10 @@ describe('useAsk completion and cancellation ownership', () => {
     toto.__fireError({ id, message: 'The remote host aborted the response.' })
     await host.__settle()
     expect(view.result.answer).toMatchObject({
-      id, text: 'Partial buffered notes', completion: 'incomplete', streaming: false,
+      id,
+      text: 'Partial buffered notes',
+      completion: 'incomplete',
+      streaming: false,
       error: 'The remote host aborted the response.'
     })
   })
@@ -460,7 +473,13 @@ describe('useAsk completion and cancellation ownership', () => {
       return Promise.resolve()
     })
     const snapshot = view.result.cancel()
-    expect(snapshot).toMatchObject({ id, text: 'Current unpainted tail', completion: 'incomplete', streaming: false, error: null })
+    expect(snapshot).toMatchObject({
+      id,
+      text: 'Current unpainted tail',
+      completion: 'incomplete',
+      streaming: false,
+      error: null
+    })
     await host.__settle()
     expect(view.result.answer).toEqual(snapshot)
     expect(view.result.answer?.provider).toBeUndefined()
@@ -472,7 +491,10 @@ describe('useAsk completion and cancellation ownership', () => {
     expect(view.result.answer).toEqual(snapshot)
   })
 
-  it.each(['recap', 'summary'] as const)('does not return carried previous-answer text when %s is cancelled before output', async (mode) => {
+  it.each([
+    'recap',
+    'summary'
+  ] as const)('does not return carried previous-answer text when %s is cancelled before output', async (mode) => {
     const view = renderAsk()
     const previous = view.result.run({ mode: 'answer' })
     await host.__settle()
@@ -500,7 +522,11 @@ describe('useAsk completion and cancellation ownership', () => {
     expect(view.result.answer).toEqual(snapshot)
   })
 
-  it.each(['done', 'error', 'cancel'] as const)('preserves fast first-mount tokens when %s arrives before the first paint', async (terminal) => {
+  it.each([
+    'done',
+    'error',
+    'cancel'
+  ] as const)('preserves fast first-mount tokens when %s arrives before the first paint', async (terminal) => {
     const view = renderAsk()
     const id = view.result.run({ mode: 'recap' })
     toto.__fireDelta({ id, text: 'Fast ' })
@@ -510,7 +536,9 @@ describe('useAsk completion and cancellation ownership', () => {
     else expect(view.result.cancel()).toMatchObject({ id, text: 'Fast current notes', completion: 'incomplete' })
     await host.__settle()
     expect(view.result.answer).toMatchObject({
-      id, text: 'Fast current notes', streaming: false,
+      id,
+      text: 'Fast current notes',
+      streaming: false,
       completion: terminal === 'done' ? 'complete' : 'incomplete'
     })
   })
@@ -536,7 +564,13 @@ describe('useAsk completion and cancellation ownership', () => {
     const view = renderAsk()
     const id = view.result.run({ mode: 'recap', prompt: 'current meeting' })
     const snapshot = view.result.cancel()
-    expect(snapshot).toMatchObject({ id, text: '', completion: 'incomplete', streaming: false, prompt: 'current meeting' })
+    expect(snapshot).toMatchObject({
+      id,
+      text: '',
+      completion: 'incomplete',
+      streaming: false,
+      prompt: 'current meeting'
+    })
     view.result.clear()
     expect(view.result.cancel()).toBeNull()
     toto.__fireDelta({ id, text: 'Late text' })
@@ -565,7 +599,10 @@ describe('useAsk completion and cancellation ownership', () => {
     expect(view.result.answer?.provider).toBeUndefined()
   })
 
-  it.each(['done', 'error'] as const)('does not change a settled %s outcome on later cancel or duplicate callbacks', async (terminal) => {
+  it.each([
+    'done',
+    'error'
+  ] as const)('does not change a settled %s outcome on later cancel or duplicate callbacks', async (terminal) => {
     const view = renderAsk()
     const id = view.result.run({ mode: 'recap' })
     await host.__settle()

@@ -121,9 +121,16 @@ function UsageMetrics(): JSX.Element {
           <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">By provider</div>
           <div className="flex flex-wrap gap-2">
             {byProviderEntries.map(([provider, count]) => (
-              <div key={provider} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2 min-w-[80px]">
-                <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">{provider}</span>
-                <span className="text-[16px] font-semibold tabular-nums text-[color:var(--cl-foreground)]">{count}</span>
+              <div
+                key={provider}
+                className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2 min-w-[80px]"
+              >
+                <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">
+                  {provider}
+                </span>
+                <span className="text-[16px] font-semibold tabular-nums text-[color:var(--cl-foreground)]">
+                  {count}
+                </span>
               </div>
             ))}
           </div>
