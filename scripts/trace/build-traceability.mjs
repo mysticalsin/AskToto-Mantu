@@ -11,9 +11,11 @@ const DEFAULT_OUT = 'out/m2-0018-targeted-review'
 const SOURCE_REFERENCE_HASH_POLICY = 'sha256-utf8-crlf-to-lf'
 const SOURCE_REFERENCE_EXPECTATIONS = Object.freeze([
   {
-    reference_commit: 'bf38b0bc74c91a7cf35b22829a0aac85746034e8',
+    // Re-pinned after Q05 (2.12): alias-map cache, unmerge guard and accept re-check added; the journal-first
+    // order and the strict write gate the M2-0018 evidence below cites are unchanged (Opus review of d292ed59).
+    reference_commit: 'd292ed59e2a06f270dc7635dd498aa38d332d8e2',
     reference_path: 'src/main/brain/corrections.ts',
-    expected_sha256: 'c8a7100d88e65c1d61cc053bd13cf55a4d852589977ede648f534034017e7041',
+    expected_sha256: '7795ebeb7f6b4257317c88be30f032168d3f2aa9c7d1d978296bc5f94bcd792d',
     hash_policy: SOURCE_REFERENCE_HASH_POLICY
   },
   {
@@ -104,9 +106,9 @@ const ticketActions = [
       text: 'Record that corrections.ts was read in full and no additional public-ticketed defect was found beyond existing correction-journal safeguards.'
     },
     evidence: [
-      'src/main/brain/corrections.ts:338 readCorrectionsJournalSafe gates write paths before mutation.',
-      'src/main/brain/corrections.ts:925 renameEntity appends the correction before applyRename.',
-      'src/main/brain/corrections.ts:1549 replayCorrections reuses apply functions under the entity lock.'
+      'src/main/brain/corrections.ts:353 readCorrectionsJournalSafe gates write paths before mutation.',
+      'src/main/brain/corrections.ts:970 renameEntity appends the correction before applyRename.',
+      'src/main/brain/corrections.ts:1550 replayCorrections reuses apply functions under the entity lock.'
     ]
   },
   {
