@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NavigationGuardService, unsavedRecapRequest } from './navigation-guard'
+import { NavigationGuardService, resolveReviewGuardChoice, unsavedRecapRequest } from './navigation-guard'
+import { MEETING_START_GRANT_TTL_MS } from '@shared/meeting-start-grant'
 
 describe('NavigationGuardService', () => {
   it('reveals before publishing a pending decision and resolves Save / Discard / Cancel asynchronously', async () => {
@@ -77,5 +78,44 @@ describe('unsavedRecapRequest', () => {
       startsMeeting: false
     })
     expect(unsavedRecapRequest(true).startsMeeting).toBe(true)
+  })
+})
+
+describe('resolveReviewGuardChoice', () => {
+  const ttl = MEETING_START_GRANT_TTL_MS
+
+  it('Cancel never proceeds, Discard proceeds', async () => {
+    expect(await resolveReviewGuardChoice('cancel', undefined, true)).toEqual({ proceed: false })
+    expect(await resolveReviewGuardChoice('discard', undefined, true)).toEqual({ proceed: true })
+  })
+
+  it('a quick Save proceeds, and a failed Save stays put without a notice', async () => {
+    let t = 1_000
+    const now = (): number => t
+    expect(await resolveReviewGuardChoice('save', async () => true, true, now)).toEqual({ proceed: true })
+    expect(await resolveReviewGuardChoice('save', async () => false, true, now)).toEqual({ proceed: false })
+    expect(await resolveReviewGuardChoice('save', undefined, true, now)).toEqual({ proceed: false })
+  })
+
+  it('a slow Save that outlives the start grant does not start the meeting, and says so', async () => {
+    let t = 0
+    const now = (): number => t
+    const slowSave = async (): Promise<boolean> => {
+      t += ttl + 200
+      return true
+    }
+    expect(await resolveReviewGuardChoice('save', slowSave, true, now)).toEqual({
+      proceed: false,
+      notice: 'Saved. Press Listen to start the new meeting.'
+    })
+  })
+
+  it('a slow Save for an ordinary navigation still proceeds', async () => {
+    let t = 0
+    const slowSave = async (): Promise<boolean> => {
+      t += ttl * 3
+      return true
+    }
+    expect(await resolveReviewGuardChoice('save', slowSave, false, () => t)).toEqual({ proceed: true })
   })
 })

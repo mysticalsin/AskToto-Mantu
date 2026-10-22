@@ -373,6 +373,14 @@ describe("Q08 — toggleListen guards Review's unsaved recap before starting", (
     )
     expect(guard).toMatch(/startsMeeting/)
   })
+
+  it('a Save slower than the start grant shows the notice instead of a failed start', () => {
+    const guard = code(
+      blockBetween('const confirmReviewNavigation = useCallback(', 'const approveReviewNav = useCallback(')
+    )
+    expect(guard).toMatch(/askReviewGuard\(/)
+    expect(guard).toMatch(/setOperatorGateNotice\(outcome\.notice\)/)
+  })
 })
 
 // Q08 (D4-9, D4-21, D8-12).

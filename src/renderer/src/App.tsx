@@ -39,7 +39,7 @@ import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from '.
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
 import { useTransitionView } from './lib/history-transition'
-import { NavigationGuardService, unsavedRecapRequest, type NavigationGuardRequest } from './lib/navigation-guard'
+import { NavigationGuardService, askReviewGuard, type NavigationGuardRequest } from './lib/navigation-guard'
 import { createLatestGate } from './lib/latest-request'
 import { useBrainEntityNames } from './lib/entity-names'
 import {
@@ -1002,10 +1002,9 @@ export function App(): JSX.Element {
   const confirmReviewNavigation = useCallback(
     async (startsMeeting = false): Promise<boolean> => {
       if (viewRef.current !== 'review' || !reviewDirtyRef.current.dirty) return true
-      const choice = await navigationGuard.request(unsavedRecapRequest(startsMeeting))
-      if (choice === 'cancel') return false
-      if (choice === 'save') return reviewDirtyRef.current.save ? reviewDirtyRef.current.save() : false
-      return true
+      const outcome = await askReviewGuard(navigationGuard, startsMeeting, () => reviewDirtyRef.current.save)
+      if (outcome.notice) setOperatorGateNotice(outcome.notice) // the Save outlived the start grant
+      return outcome.proceed
     },
     [navigationGuard]
   )

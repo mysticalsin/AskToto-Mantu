@@ -1,3 +1,5 @@
+import { startGrantLikelyExpired } from '@shared/meeting-start-grant'
+
 export type NavigationGuardChoice = 'save' | 'discard' | 'cancel'
 
 export type NavigationGuardRequest = {
@@ -127,4 +129,38 @@ export function unsavedRecapRequest(startsMeeting = false): Omit<NavigationGuard
     cancelLabel: 'Cancel',
     destructive: true
   }
+}
+
+/** Said when a Save took so long that the start grant behind the click ran out: the meeting is not started. */
+export const SAVED_PRESS_LISTEN_NOTICE = 'Saved. Press Listen to start the new meeting.'
+
+/**
+ * What the review guard's choice means: whether to go on, and a notice to show. A Save that leads into a new
+ * meeting but finished after the start grant minted by its click had expired does not start it (the start would
+ * be refused): the recap is saved, the person is told, and the Listen button stays ready.
+ */
+export async function resolveReviewGuardChoice(
+  choice: NavigationGuardChoice,
+  save: (() => Promise<boolean>) | undefined,
+  startsMeeting: boolean,
+  now: () => number = Date.now
+): Promise<{ proceed: boolean; notice?: string }> {
+  if (choice === 'cancel') return { proceed: false }
+  if (choice === 'discard') return { proceed: true }
+  const clickedAt = now()
+  if (!save || !(await save())) return { proceed: false }
+  if (startsMeeting && startGrantLikelyExpired(clickedAt, now())) {
+    return { proceed: false, notice: SAVED_PRESS_LISTEN_NOTICE }
+  }
+  return { proceed: true }
+}
+
+/** Asks the unsaved-recap sheet and resolves the choice; `getSave` is read when Save is chosen, not before. */
+export async function askReviewGuard(
+  service: NavigationGuardService,
+  startsMeeting: boolean,
+  getSave: () => (() => Promise<boolean>) | undefined
+): Promise<{ proceed: boolean; notice?: string }> {
+  const choice = await service.request(unsavedRecapRequest(startsMeeting))
+  return resolveReviewGuardChoice(choice, choice === 'save' ? getSave() : undefined, startsMeeting)
 }

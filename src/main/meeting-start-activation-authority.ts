@@ -1,5 +1,6 @@
 import type { InputSessionContext } from '@shared/input-session'
 import { randomUUID } from 'node:crypto'
+import { MEETING_START_GRANT_TTL_MS } from '@shared/meeting-start-grant'
 
 export const MEETING_START_ACTION = 'meeting.start' as const
 export type MeetingStartAction = typeof MEETING_START_ACTION
@@ -41,7 +42,7 @@ export class MeetingStartActivationAuthority {
   constructor(options: { state: () => MeetingStartActivationState; now?: () => number; ttlMs?: number }) {
     this.#state = options.state
     this.#now = options.now ?? Date.now
-    this.#ttlMs = options.ttlMs ?? 5_000
+    this.#ttlMs = options.ttlMs ?? MEETING_START_GRANT_TTL_MS
   }
 
   /** Mints from a trusted main/preload event. The grant ID never leaves this object. */
