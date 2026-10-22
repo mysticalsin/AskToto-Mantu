@@ -5806,8 +5806,8 @@ function registerIpc(): void {
     if (!isMainWindowSender(e)) return
     // This channel is exposed to the trusted renderer, but it must not be able to force a completed
     // session back into an opaque full-screen constructor swap. A real replay has already persisted
-    // onboardingDone:false before it sends this event.
-    if (!onboardingExclusiveLive()) return
+    // onboardingDone:false before it sends this event. Never while recording: the swap would end the capture.
+    if (!onboardingExclusiveLive() || recordingPowerSaveBlockerId !== null) return
     // The persisted setting already says onboarding is live, so it cannot identify whether this is a
     // replay from a transparent overlay or a freshly-created opaque onboarding window. The constructor
     // state can: only the former needs a replacement.

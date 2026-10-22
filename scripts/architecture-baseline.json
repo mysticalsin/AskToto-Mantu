@@ -56,8 +56,8 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1670,
     "src/renderer/src/components/RecallView.tsx": 1109,
     "src/renderer/src/components/Review.tsx": 1895,
-    "src/renderer/src/features/settings/AiSection.tsx": 2299,
-    "src/renderer/src/features/settings/DustSetup.tsx": 938,
+    "src/renderer/src/features/settings/AiSection.tsx": 2278,
+    "src/renderer/src/features/settings/DustSetup.tsx": 928,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1119,
     "src/renderer/src/lib/listen.ts": 2993,
     "src/shared/ipc.ts": 2251

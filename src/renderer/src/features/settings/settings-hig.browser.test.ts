@@ -26,6 +26,10 @@ import { DangerZoneSection } from ${modulePath('features/settings/DangerZoneSect
 import { MeetingsTab } from ${modulePath('features/settings/MeetingsTab.tsx')}
 import { CustomEndpointField } from ${modulePath('features/settings/CustomEndpointField.tsx')}
 import { ScreenPermissionRow } from ${modulePath('components/ScreenPermissionRow.tsx')}
+import { Settings } from ${modulePath('features/settings/SettingsRoot.tsx')}
+import { Shortcuts } from ${modulePath('features/settings/Shortcuts.tsx')}
+import { OperatorUrlField } from ${modulePath('features/settings/OperatorUrlField.tsx')}
+import { DEFAULT_SETTINGS, PublicSettingsSchema } from ${modulePath('../../shared/ipc.ts')}
 
 const config = window.__higConfig
 const calls = []
@@ -34,13 +38,14 @@ const record = (name, value) => (...args) => {
   return Promise.resolve(typeof value === 'function' ? value(...args) : value)
 }
 const base = {
-  authStatus: { configured: true, signedIn: true, email: 'person@example.invalid', domain: 'example.invalid' },
+  authStatus: config.authStatus ?? { configured: true, signedIn: true, email: 'person@example.invalid', domain: 'example.invalid' },
   settingsOsState: config.osState ?? { loginItem: { supported: true, enabled: false, requiresApproval: false }, notifications: { supported: true } },
   retentionPreview: config.retentionPreview ?? { ok: true, expired: 0 },
   pickFolder: config.pickFolder ?? { ok: false, reason: 'cancelled' },
   repairScreenPermission: { ok: false, reason: 'tccutil-failed', exitCode: 1, guidance: 'Remove Métis, then add it again.' },
   preservedBrainIndexesList: { copies: [] },
   calendarToday: { ok: true, events: [] },
+  getShortcutFailures: [],
   openMeetingsFolder: ''
 }
 window.toto = new Proxy({}, {
@@ -52,13 +57,21 @@ window.toto = new Proxy({}, {
 })
 
 const guard = new NavigationGuardService()
-let settings = { ...config.settings }
+let settings = config.section === 'root'
+  ? PublicSettingsSchema.parse({ ...DEFAULT_SETTINGS, hasApiKey: false, providerReady: false, visionReady: false, hasKeys: {}, hasEncryption: true, resolvedMeetingsFolder: '', ...config.settings })
+  : { ...config.settings }
 const patches = []
+let rejectPatch = !!config.rejectPatch
 const patch = (next) => {
   patches.push(next)
+  if (rejectPatch) return Promise.reject(new Error('EACCES: cannot write /sandbox/settings.json'))
   if (!config.refusePatch) settings = { ...settings, ...next }
   rerender()
   return Promise.resolve(settings)
+}
+const appLogout = () => {
+  calls.push({ name: 'appLogout', args: [] })
+  return Promise.resolve()
 }
 
 function Host() {
@@ -66,6 +79,14 @@ function Host() {
   useEffect(() => guard.subscribe(() => setRequest(guard.current())), [])
   let section = null
   if (config.section === 'calendar') section = createElement(CalendarTab, { settings, patch })
+  if (config.section === 'calendar-logout') section = createElement(CalendarTab, { settings, patch, onSignOut: appLogout })
+  if (config.section === 'shortcuts') section = createElement(Shortcuts, { settings, patch })
+  if (config.section === 'operator') section = createElement(OperatorUrlField, { value: settings.operatorUrl, disabled: false, patch })
+  if (config.section === 'root') section = createElement(Settings, {
+    settings, patch, refreshSettings: () => Promise.resolve(), saveKey: () => Promise.resolve(), clearKey: () => Promise.resolve(),
+    recoverEncryptedProfile: () => Promise.resolve({ ok: true }), testKey: () => Promise.resolve({ ok: true }),
+    navigationGuard: guard, initialTab: config.tab ?? 'personalize', listening: !!config.listening, onLogout: appLogout
+  })
   if (config.section === 'danger') section = createElement(DangerZoneSection, { settings, patch })
   if (config.section === 'meetings') section = createElement(MeetingsTab, { settings, patch })
   if (config.section === 'endpoint') section = createElement(CustomEndpointField, { value: settings.customBaseUrl, required: true, disabled: false, patch })
@@ -79,7 +100,10 @@ function Host() {
 const root = createRoot(document.getElementById('root'))
 const rerender = () => flushSync(() => root.render(createElement(Host)))
 rerender()
-window.__hig = { inspect: () => ({ calls: calls.map((c) => c.name), callArgs: calls, patches, settings }) }
+window.__hig = {
+  inspect: () => ({ calls: calls.map((c) => c.name), callArgs: calls, patches, settings, unhandled: window.__unhandled ?? [] }),
+  acceptWrites: () => { rejectPatch = false }
+}
 `
 
 async function bundleHarness(): Promise<string> {
@@ -97,6 +121,16 @@ async function bundleHarness(): Promise<string> {
         enforce: 'pre',
         resolveId: (id: string) => (id === HARNESS_ID ? id : null),
         load: (id: string) => (id === HARNESS_ID ? HARNESS : null)
+      },
+      {
+        // onboarding-music resolves its audio file with `new URL(..., import.meta.url)` at import time, which the
+        // harness's single-script bundle cannot. Settings only halts and unlocks that audio, so those two stand in.
+        name: 'settings-hig-onboarding-music-stub',
+        enforce: 'pre',
+        load: (id: string) =>
+          /lib[\\/]onboarding-music\.ts$/.test(id)
+            ? 'export const haltAllOnboardingAudio = () => {}\nexport const unlockOnboardingAudio = () => {}'
+            : null
       }
     ],
     build: {
@@ -118,12 +152,14 @@ type Inspect = {
   callArgs: { name: string; args: unknown[] }[]
   patches: Record<string, unknown>[]
   settings: Record<string, unknown>
+  unhandled: string[]
 }
 
 declare global {
   interface Window {
     __higConfig: Record<string, unknown>
-    __hig: { inspect(): Inspect }
+    __hig: { inspect(): Inspect; acceptWrites(): void }
+    __unhandled?: string[]
   }
 }
 
@@ -166,9 +202,12 @@ describe('Settings HIG behaviour (C25)', () => {
   })
 
   async function mount(config: Record<string, unknown>): Promise<void> {
+    page.on('pageerror', (error) => console.error('PAGEERROR', error.message))
     await page.setContent('<!doctype html><html><body><div id="root"></div></body></html>')
     await page.evaluate((value) => {
       window.__higConfig = value
+      window.__unhandled = []
+      window.addEventListener('unhandledrejection', (e) => window.__unhandled?.push(String(e.reason)))
     }, config)
     await page.addScriptTag({ content: bundle })
   }
@@ -333,5 +372,141 @@ describe('Settings HIG behaviour (C25)', () => {
       .poll(async () => (await inspect()).callArgs.find((c) => c.name === 'openPermissionHelper')?.args)
       .toEqual(['screenRecording'])
     expect((await inspect()).calls).not.toContain('requestPermissionsUpfront')
+  })
+
+  it('a rejected settings write shows an inline error and no unhandled rejection (Q10, D6-6)', async () => {
+    await mount({ section: 'root', tab: 'personalize', rejectPatch: true, settings: {} })
+    const language = page.getByLabel('Answers and live assist language')
+    await language.selectOption({ index: 1 }) // `onChange={(e) => patch(...)}`: a call that nobody awaits
+    const alert = page.getByRole('alert').filter({ hasText: "couldn't save this change" })
+    await alert.waitFor()
+    expect(await alert.textContent()).toBe("Métis couldn't save this change. Try again.")
+    expect(await alert.textContent()).not.toContain('settings.json') // main's message carries a path; the line does not
+    expect((await inspect()).unhandled).toEqual([])
+    // The next write that goes through clears the line.
+    await page.evaluate(() => window.__hig.acceptWrites())
+    await language.selectOption({ index: 2 })
+    await alert.waitFor({ state: 'detached' })
+    expect((await inspect()).unhandled).toEqual([])
+  })
+
+  it('Operator URL accepts typing and validates on blur (Q10, NEW-1)', async () => {
+    await mount({ section: 'operator', settings: { operatorUrl: '' } })
+    const field = page.getByLabel('Operator URL')
+    // Typing one character at a time passes through values the https-only schema refuses: none is saved or flagged.
+    await field.pressSequentially('http')
+    expect(await field.inputValue()).toBe('http')
+    expect(await page.getByRole('alert').count()).toBe(0)
+    expect((await inspect()).patches).toEqual([])
+    await field.press('Tab')
+    const alert = page.getByRole('alert')
+    await alert.waitFor()
+    expect(await alert.textContent()).toBe('Enter an https:// address, or leave it empty.')
+    expect(await field.getAttribute('aria-invalid')).toBe('true')
+    expect(await field.getAttribute('aria-describedby')).toBe(await alert.getAttribute('id'))
+    expect((await inspect()).patches).toEqual([])
+    await field.fill('https://operator.example.invalid')
+    await field.press('Enter')
+    await expect
+      .poll(async () => (await inspect()).patches)
+      .toEqual([{ operatorUrl: 'https://operator.example.invalid' }])
+    expect(await page.getByRole('alert').count()).toBe(0)
+    // Empty means "use the default" and is saved as such.
+    await field.fill('')
+    await field.press('Tab')
+    await expect.poll(async () => (await inspect()).patches.length).toBe(2)
+    expect((await inspect()).patches[1]).toEqual({ operatorUrl: '' })
+  })
+
+  it('the shortcut recorder and the opacity slider have stable accessible names (Q10, D6-9)', async () => {
+    await mount({ section: 'shortcuts', settings: { shortcuts: {} } })
+    const trigger = page.getByRole('button', { name: 'Ask (global) shortcut' })
+    expect(await trigger.count()).toBe(1)
+    await trigger.click()
+    const recorder = page.getByRole('textbox', { name: 'Ask (global) shortcut' })
+    expect(await recorder.count()).toBe(1)
+    await page.keyboard.press('Escape')
+
+    await mount({ section: 'root', tab: 'personalize', settings: {} })
+    const slider = page.getByRole('slider', { name: 'Overlay transparency' })
+    expect(await slider.count()).toBe(1)
+    expect(await slider.getAttribute('aria-valuetext')).toBe('Default')
+    await slider.fill('0.5')
+    await expect.poll(async () => await slider.getAttribute('aria-valuetext')).toBe('More transparent')
+  })
+
+  it('refuses a Reset that would give two actions the same binding (Q10, D6-3)', async () => {
+    // Ask was rebound; New / reset now holds Ask's default. Resetting Ask would give both the same keys.
+    await mount({
+      section: 'shortcuts',
+      settings: { shortcuts: { ask: 'CommandOrControl+Alt+A', reset: 'CommandOrControl+Shift+Return' } }
+    })
+    const row = page.getByRole('button', { name: 'Ask (global) shortcut' }).locator('xpath=..')
+    await row.getByRole('button', { name: 'Reset', exact: true }).click()
+    const alert = page.getByRole('alert').filter({ hasText: 'Already used by New / reset.' })
+    await alert.waitFor()
+    expect((await inspect()).patches).toEqual([])
+  })
+
+  it('Calendar Sign out routes through the app logout, not the bare IPC (Q10, D7-2)', async () => {
+    await mount({ section: 'calendar-logout', settings: SETTINGS })
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+    const sheet = page.getByRole('alertdialog', { name: 'Sign out of your Microsoft account?' })
+    await sheet.waitFor()
+    await sheet.getByRole('button', { name: 'Sign Out' }).click()
+    await expect.poll(async () => (await inspect()).calls).toContain('appLogout')
+    expect((await inspect()).calls).not.toContain('signOut')
+    await expect.poll(async () => (await inspect()).calls.filter((c) => c === 'authStatus').length).toBeGreaterThan(1)
+  })
+
+  it('a failed Save IDs ends its busy state and says why instead of sticking (Q10, D6-7)', async () => {
+    await mount({
+      section: 'calendar',
+      settings: SETTINGS,
+      rejectPatch: true,
+      authStatus: { configured: false, signedIn: false, email: '', domain: '' }
+    })
+    await page.getByLabel('Application (client) ID').fill('00000000-0000-0000-0000-000000000001')
+    await page.getByLabel('Directory (tenant) ID').fill('00000000-0000-0000-0000-000000000002')
+    await page.getByLabel('Allowed email domain').fill('example.invalid')
+    const save = page.getByRole('button', { name: 'Save IDs' })
+    await save.click()
+    await page.getByRole('alert').filter({ hasText: "couldn't save" }).first().waitFor()
+    expect(await save.isDisabled()).toBe(false)
+    expect((await inspect()).unhandled).toEqual([])
+  })
+
+  it('Replay onboarding is dimmed, with the reason, while a meeting is being listened to (Q10, D1-1)', async () => {
+    await mount({ section: 'root', tab: 'personalize', listening: true, settings: {} })
+    const replay = page.getByRole('button', { name: /Replay onboarding/ })
+    expect(await replay.isDisabled()).toBe(true)
+    const hint = page.getByText('Available after you stop listening.')
+    await hint.waitFor()
+    expect(await replay.getAttribute('aria-describedby')).toBe(await hint.getAttribute('id'))
+    await replay.click({ force: true })
+    expect((await inspect()).calls).not.toContain('onboardingEnter')
+    expect(await page.getByRole('alertdialog').count()).toBe(0)
+
+    await mount({ section: 'root', tab: 'personalize', listening: false, settings: {} })
+    expect(await page.getByRole('button', { name: /Replay onboarding/ }).isDisabled()).toBe(false)
+    expect(await page.getByText('Available after you stop listening.').count()).toBe(0)
+  })
+
+  it('after a folder change, says the previous folder is no longer managed (Q10, D3-5)', async () => {
+    await mount({ section: 'meetings', settings: SETTINGS, pickFolder: { ok: true, settings: {} } })
+    await page.getByRole('button', { name: 'Change folder' }).click()
+    await page
+      .getByText(
+        'Meetings already in the previous folder stay there. Métis now saves, lists and cleans up only this folder.'
+      )
+      .waitFor()
+  })
+
+  it('states honestly what encryption covers (Q10, D3-9)', async () => {
+    await mount({ section: 'meetings', settings: SETTINGS })
+    await page
+      .getByText('New meetings are encrypted at rest. Meetings saved before you turned this on stay as they were.')
+      .waitFor()
+    expect(await page.getByText(/contents stay locked/).count()).toBe(0)
   })
 })

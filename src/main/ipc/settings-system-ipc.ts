@@ -1,7 +1,9 @@
 /**
  * settings-system-ipc.ts — what Settings needs from the operating system (Apple HIG, Settings and Privacy):
  *
- * - the real login-item and notification state, so a toggle shows what macOS will do rather than a cached wish;
+ * - the real login-item state, so a toggle shows what macOS will do rather than a cached wish. Notifications are
+ *   read only as far as Electron allows: `Notification.isSupported()`. Electron exposes no macOS notification
+ *   authorization, so a denial in System Settings is NOT read here (deferred to 2.13: it needs a native helper);
  * - one allowlisted System Settings pane to open when the OS refuses (never an arbitrary renderer URL);
  * - how many saved meetings a shorter retention window would delete, so Settings can ask first.
  *

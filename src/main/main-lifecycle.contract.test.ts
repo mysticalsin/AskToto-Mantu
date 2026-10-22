@@ -180,12 +180,22 @@ describe('MQA-340 — onboarding durable saves reply before opaque-window replac
     const replayEvent = sliceBetween('ipcMain.on(IPC.onboardingEnter', 'ipcMain.on(IPC.onboardingExit')
     expect(replayEvent).toMatch(/if \(!isMainWindowSender\(e\)\) return/)
     expect(replayEvent).not.toMatch(/assertMainWindow\(e\)/)
-    expect(replayEvent).toMatch(/if \(!onboardingExclusiveLive\(\)\) return/)
+    expect(replayEvent).toMatch(/if \(!onboardingExclusiveLive\(\) \|\| recordingPowerSaveBlockerId !== null\) return/)
     // The persisted false value makes onboardingExclusiveLive() true before the opaque replacement;
     // `overlayWindowTransparent` is the actual stage-state guard for a replay request.
     expect(replayEvent).toMatch(/!overlayWindowTransparent/)
     expect(replayEvent).toMatch(/replaceTransparentOverlayWithExclusiveOnboarding\(\)/)
     expect(replayEvent).not.toMatch(/showForExclusiveOnboarding\(win\)/)
+  })
+
+  it('refuses an onboarding replay while a meeting is being recorded, before the window swap (Q10, D1-1)', () => {
+    const replayEvent = sliceBetween('ipcMain.on(IPC.onboardingEnter', 'ipcMain.on(IPC.onboardingExit')
+    // The Settings button is dimmed while listening; this is the main-side backstop for a race. The swap would
+    // otherwise hard-stop input capture ('owner-replaced') with no check that a meeting is live.
+    const guard = replayEvent.indexOf('recordingPowerSaveBlockerId !== null')
+    expect(guard).toBeGreaterThan(-1)
+    expect(replayEvent.slice(guard, guard + 80)).toContain('return')
+    expect(guard).toBeLessThan(replayEvent.indexOf('replaceTransparentOverlayWithExclusiveOnboarding()'))
   })
 
   it('recovers a completed opaque onboarding window only when its renderer misses the normal exit handoff', () => {
