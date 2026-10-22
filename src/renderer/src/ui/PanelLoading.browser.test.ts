@@ -159,15 +159,21 @@ describe('LazyPanel loading state (HIG Loading, Progress indicators)', () => {
     browser = await chromium.launch({ headless: true })
   }, 120_000)
 
-  const openPage = async (): Promise<void> => {
+  const openPage = async (options: { pauseClock?: boolean } = {}): Promise<void> => {
     await page?.close()
     page = await browser.newPage()
+    let clockBase: Date | null = null
+    if (options.pauseClock) {
+      clockBase = new Date()
+      await page.clock.install({ time: clockBase })
+    }
     await page.setContent('<!doctype html><html><body style="margin:0"><div id="root"></div></body></html>')
     await page.addStyleTag({ content: TOKENS + bundle.css })
     await page.addScriptTag({ content: bundle.js })
+    if (clockBase) await page.clock.pauseAt(new Date(clockBase.getTime() + 60 * 60 * 1000))
   }
 
-  beforeEach(openPage)
+  beforeEach(() => openPage())
 
   afterEach(async () => {
     await page?.close()
@@ -201,14 +207,24 @@ describe('LazyPanel loading state (HIG Loading, Progress indicators)', () => {
 
   it('waits before showing the indicator, then centers it in the box the content will fill', async () => {
     for (const frame of ['sheet', 'panel', 'reader'] as const) {
-      await openPage()
+      await openPage({ pauseClock: true })
       await page.evaluate((f) => {
         window.__h.mount(f)
         window.__h.open()
       }, frame)
-      await page.waitForTimeout(100)
+      await expect
+        .poll(() => page.locator('[data-lazy-panel]').getAttribute('data-lazy-phase'), { interval: 10, timeout: 1000 })
+        .toBe('pending')
+      const delay = await page.evaluate(() => window.__h.delay)
+      await page.clock.runFor(delay - 1)
       expect(await loader().count(), `${frame}: no indicator inside the delay`).toBe(0)
-      await loader().waitFor()
+      await page.clock.runFor(1)
+      await expect
+        .poll(() => page.locator('[data-lazy-panel]').getAttribute('data-lazy-phase'), { interval: 10, timeout: 1000 })
+        .toBe('loading')
+      await expect.poll(() => loader().count(), { interval: 10, timeout: 1000 }).toBe(1)
+      await page.clock.resume()
+      await loader().waitFor({ state: 'visible' })
       const placeholder = await box('.lazy-panel__placeholder')
       const orb = center(await box('.lazy-panel__loader .agent-status__orb'))
       expect(Math.abs(orb.x - center(placeholder).x), `${frame} x`).toBeLessThanOrEqual(1)
