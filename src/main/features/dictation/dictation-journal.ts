@@ -58,6 +58,8 @@ export interface DictationJournalDeps {
    * Without one nothing is recorded, offered or resolved. Records of another partition are never touched.
    */
   partition(): string | null
+  /** Lifecycle generation supplied by memory; changes when the owner is revoked or memory is disposed. */
+  ownerEpoch?(): number
   /** Whether the journal may record or offer right now. Deleting never needs it. */
   enabled(): boolean
   now(): number
@@ -140,6 +142,13 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
       return fallback
     }
   }
+  const ownerEpochOf = (): number | null => {
+    if (!deps.ownerEpoch) return 0
+    const epoch = safe(deps.ownerEpoch, null)
+    return epoch !== null && Number.isSafeInteger(epoch) && epoch >= 0 ? epoch : null
+  }
+  const ownerIsCurrent = (partition: string, epoch: number): boolean =>
+    safe(deps.partition, null) === partition && ownerEpochOf() === epoch
 
   /** One lane per file: its operations run in order and a failure never poisons the next. */
   function lane<T>(id: string, work: () => Promise<T>): Promise<T> {
@@ -342,16 +351,26 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
     async resolve(id) {
       if (!/^[0-9a-f]{32}$/.test(id) || live.has(id)) return { status: 'unknown' }
       const partition = safe(deps.partition, null)
-      if (partition === null) return { status: 'unknown' }
-      return lane(id, async (): Promise<JournalResolve> => {
+      const epoch = ownerEpochOf()
+      if (partition === null || epoch === null) return { status: 'unknown' }
+      const resolved = await lane(id, async (): Promise<JournalResolve> => {
+        if (!ownerIsCurrent(partition, epoch)) return { status: 'unknown' }
         const current = await read(id)
-        if (current.status !== 'ok' || current.entry.partition !== partition || !current.entry.offered) {
+        if (
+          current.status !== 'ok' ||
+          current.entry.partition !== partition ||
+          !current.entry.offered ||
+          !ownerIsCurrent(partition, epoch)
+        ) {
           return { status: 'unknown' }
         }
         const text = recoveredText(current.entry)
-        if (!(await remove(id))) return { status: 'unknown' }
+        if (!ownerIsCurrent(partition, epoch)) return { status: 'unknown' }
+        const removed = await remove(id)
+        if (!removed || !ownerIsCurrent(partition, epoch)) return { status: 'unknown' }
         return { status: 'resolved', text, span: mintOwnedSpan(text, 'recovered-draft') }
       })
+      return resolved.status === 'resolved' && ownerIsCurrent(partition, epoch) ? resolved : { status: 'unknown' }
     },
 
     async purge() {

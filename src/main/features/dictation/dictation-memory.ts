@@ -110,15 +110,25 @@ const REFUSED: DictationMemoryAck = { ok: false, count: 0 }
 
 export function createDictationMemory(deps: DictationMemoryDeps): DictationMemory {
   const keyring = createMemoryKeyring({ keyPath: join(deps.rootDir(), 'key.v1'), keys: deps.keys })
+  let ownerEpoch = 0
+  let disposed = false
+  const currentPartition = (): string | null => {
+    try {
+      return deps.partition()
+    } catch {
+      return null
+    }
+  }
+  const ownerIsCurrent = (partition: string, epoch: number): boolean =>
+    !disposed && currentPartition() === partition && ownerEpoch === epoch
   const journal: DictationJournal = createDictationJournal({
     rootDir: () => join(deps.rootDir(), 'journal'),
     keyring,
     partition: deps.partition,
+    ownerEpoch: () => ownerEpoch,
     enabled: deps.enabled,
     now: deps.now
   })
-  let ownerEpoch = 0
-  let disposed = false
   const dictionary: DictationDictionary = createDictationDictionary({
     rootDir: () => join(deps.rootDir(), 'dictionary'),
     keyring,
@@ -243,10 +253,15 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     },
 
     async recoveryResolve(input) {
+      const partition = currentPartition()
+      const epoch = ownerEpoch
+      if (disposed || partition === null) return REFUSED
       const resolved = await journal.resolve(input.id)
-      if (resolved.status !== 'resolved') return REFUSED
+      if (resolved.status !== 'resolved' || !ownerIsCurrent(partition, epoch)) return REFUSED
       audit({ phase: 'recovery_resolved', count: 1 })
+      if (!ownerIsCurrent(partition, epoch)) return REFUSED
       const learned = input.correctedText === undefined ? 0 : await learn(resolved.span, input.correctedText)
+      if (!ownerIsCurrent(partition, epoch)) return REFUSED
       return { ok: true, count: learned }
     },
 
