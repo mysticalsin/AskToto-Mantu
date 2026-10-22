@@ -133,6 +133,7 @@ import { allowsAutomaticAsrSetup, type OnboardingPackageMode } from '../lib/prod
 import { cloudSpeechRowStatus } from '../lib/cloud-speech-readiness'
 import { MiniToggle } from './OnboardingMiniToggle'
 import { useSceneHeadingFocus } from '../lib/use-scene-heading-focus'
+import { OperatorReportingCaption } from '../features/settings/OperatorReportingSection'
 import { useCloudSpeechCapability } from '../lib/use-cloud-speech-capability'
 import {
   IDLE_ASR_STATUS,
@@ -1439,15 +1440,14 @@ export function OnboardingExperience({
                   Everything’s ready. Nothing to configure.
                 </p>
               )}
-              {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
-              act) — but placed HERE, first, rather than saved for the final act, and reinforced again at
-              Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
-              Métis is actually allowed to listen. */}
+              {/* Honest caveats, true once scanning settles regardless of allReady; the second is the owner's reporting
+              disclosure (informational, no checkbox: reporting has no user opt-out). */}
               {scanDone && (
                 <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
                   Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
                 </p>
               )}
+              <OperatorReportingCaption settings={settings} visible={scanDone} />
               {asrBlocksContinue && scanDone && (
                 <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
                   Transcription files are still finishing in the background. You can Continue now and finish them in
