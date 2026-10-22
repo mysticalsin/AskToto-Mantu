@@ -5,11 +5,19 @@ import type { VoiceImmediateRunInput } from '@shared/voice/voice-action-policy'
 import {
   CommandControl,
   commandConfirmationPolicyAllows,
+  type CommandAuditEvent,
   type CommandCardLifecycle,
   type CommandExecutor,
   type CommandPreflightResult,
   type CommandPreflightStage
 } from './command-control'
+import {
+  createActionGrantService,
+  type ActionGrantService,
+  type GrantScopeContext,
+  type OsPermissionSeam,
+  type PurchaseSeam
+} from './features/grants'
 
 type CommandOwner = {
   isDestroyed(): boolean
@@ -52,7 +60,17 @@ export type CommandConfirmationDeps = {
   platform?: NodeJS.Platform
   /** Earliest a confirmation can land after its card appeared. Defaults to the 300 ms Return guard. */
   minConfirmDelayMs?: number
-  audit: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
+  audit: (event: CommandAuditEvent, metadata: Record<string, string>) => void
+  /** G31: a ready-made grant service (tests). Production leaves it out and the seams below build one. */
+  grants?: ActionGrantService
+  /** G31 OS permission decision, read through the G10 probes. Absent means a grant can never skip the card. */
+  osPermissions?: OsPermissionSeam
+  /** G31 purchase decision (G79/G80 seam). Absent means not metered. */
+  purchase?: PurchaseSeam
+  /** G31 main-owned task lineage and conversation ids (G06, G28). Absent until those tickets supply them. */
+  grantContext?: () => GrantScopeContext
+  /** The live sign-in generation: a grant never outlives the session that gave it. */
+  authGeneration?: () => number
 }
 
 export interface CommandPowerMonitor {
@@ -94,6 +112,15 @@ export class CommandConfirmation extends CommandControl {
       card: deps.card,
       minConfirmDelayMs: deps.minConfirmDelayMs ?? COMMAND_RETURN_GUARD_MS,
       platform: deps.platform,
+      grants:
+        deps.grants ??
+        createActionGrantService({
+          audit: deps.audit,
+          authGeneration: deps.authGeneration,
+          context: deps.grantContext,
+          purchase: deps.purchase,
+          permission: deps.osPermissions
+        }),
       onState: (state) => {
         const owner = deps.getOwner()
         if (owner && !owner.isDestroyed()) owner.webContents.send(IPC.metisCommandState, state)

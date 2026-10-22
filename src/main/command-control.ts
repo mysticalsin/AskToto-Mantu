@@ -7,7 +7,16 @@ import {
   type MetisCommandNotice,
   type MetisCommandState
 } from '@shared/metis-command-contract'
+import type { VoiceTurnSource } from '@shared/voice/voice-action-policy'
 import { actionEnvelope, checkDependsOn, isArgsHash, isObservedVerified, type ActionEnvelope } from './action-guard'
+import {
+  refusalFor,
+  type ActionGrantService,
+  type GrantAuditEvent,
+  type GrantedRunDecision,
+  type GrantScopeKind,
+  type GrantSummary
+} from './features/grants'
 
 export { COMMAND_PROPOSAL_TTL_MS }
 
@@ -29,6 +38,18 @@ export type CommandControlReason =
   | 'interrupted'
   | 'outcome_unverified'
   | 'adapter_failed'
+  /** G31: the plan or quota said no after the user approved. Nothing ran. */
+  | 'purchase_denied'
+  /** G31: the operating system has not allowed Métis to do it. Nothing ran. */
+  | 'permission_denied'
+
+/** The scopes an approval can ask for. One action is the default and needs no request: it is the approval itself. */
+export type CommandGrantScope = Exclude<GrantScopeKind, 'action'>
+/** What the approval's grant request came to. Never carries the grant id or any request data. */
+export type CommandGrantOutcome =
+  | { ok: true; scope: GrantScopeKind }
+  | { ok: false; reason: 'not_grantable' | 'scope_unavailable' | 'limit' }
+export type CommandAuditEvent = 'command.confirmed' | 'command.revoked' | GrantAuditEvent
 
 type CurrentProposal = CommandControlProposal & {
   ownerWebContentsId: number
@@ -93,7 +114,9 @@ export type CommandControlDeps = {
   execute: CommandExecutor
   /** Main-process policy is required: omitting it must never turn confirmation into permission. */
   policyAllows: (request: DesktopActionRequest) => boolean
-  audit?: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
+  audit?: (event: CommandAuditEvent, metadata: Record<string, string>) => void
+  /** G31: scoped grants and the separate purchase and permission decisions. Absent means every action asks. */
+  grants?: ActionGrantService
   onState?: (state: CommandControlState) => void
   now?: () => number
   /** Fixed lifetime override (tests). Without it the lifetime is 12 s, or 30 s with assistive technology on. */
@@ -258,8 +281,11 @@ export class CommandControl {
   }
 
   async confirm(
-    input: CommandControlProposal & { webContentsId: number }
-  ): Promise<{ ok: true; outcome: DesktopActionResult['outcome'] } | { ok: false; reason: CommandControlReason }> {
+    input: CommandControlProposal & { webContentsId: number; grantScope?: CommandGrantScope }
+  ): Promise<
+    | { ok: true; outcome: DesktopActionResult['outcome']; grant?: CommandGrantOutcome }
+    | { ok: false; reason: CommandControlReason }
+  > {
     const proposal = this.validate(input, { argsHash: input.argsHash })
     if ('reason' in proposal) return proposal
     // A confirmation that lands inside the guard window is a held or auto-repeated key, not a decision. It is
@@ -271,7 +297,7 @@ export class CommandControl {
     const flight: { interruptedBy: string | null } = { interruptedBy: null }
     this.confirming = flight
     try {
-      return await this.dispatchConfirmed(proposal, flight)
+      return await this.dispatchConfirmed(proposal, flight, input)
     } finally {
       if (this.confirming === flight) this.confirming = null
     }
@@ -279,8 +305,12 @@ export class CommandControl {
 
   private async dispatchConfirmed(
     proposal: CurrentProposal,
-    flight: { interruptedBy: string | null }
-  ): Promise<{ ok: true; outcome: DesktopActionResult['outcome'] } | { ok: false; reason: CommandControlReason }> {
+    flight: { interruptedBy: string | null },
+    input: { webContentsId: number; grantScope?: CommandGrantScope }
+  ): Promise<
+    | { ok: true; outcome: DesktopActionResult['outcome']; grant?: CommandGrantOutcome }
+    | { ok: false; reason: CommandControlReason }
+  > {
     let allowed = false
     try {
       allowed = isDesktopAdapterId(proposal.request.id) && this.deps.policyAllows(proposal.request) === true
@@ -304,6 +334,13 @@ export class CommandControl {
         return { ok: false, reason: 'preflight_failed' }
       }
     }
+    // Purchase and permission are decided on their own: an approval is neither a payment nor an OS consent.
+    const effects = this.deps.grants ? await this.checkEffects(proposal.request) : null
+    if (effects) {
+      this.audit('command.revoked', { actionId: proposal.request.id, reason: effects })
+      await this.release('policy_denied')
+      return { ok: false, reason: effects }
+    }
     // The Mac locked, slept or the window went away while the check ran: the person is no longer behind this
     // decision, so nothing is dispatched.
     if (flight.interruptedBy) return this.interrupted(proposal, flight.interruptedBy)
@@ -311,6 +348,7 @@ export class CommandControl {
     // instead of being pulled back to where the person was.
     if (this.deps.card) await this.release('confirmed')
     if (flight.interruptedBy) return this.interrupted(proposal, flight.interruptedBy)
+    const grant = this.issueGrant(input.webContentsId, proposal.request, input.grantScope)
     try {
       const envelope = { argsHash: proposal.argsHash, idempotencyKey: proposal.idempotencyKey }
       const result = await this.deps.execute(proposal.request, {
@@ -331,7 +369,7 @@ export class CommandControl {
         actionId: proposal.request.id,
         outcome: verified && !observed ? 'unknown' : result.outcome
       })
-      if (observed) return { ok: true, outcome: 'verified' }
+      if (observed) return { ok: true, outcome: 'verified', ...(grant ? { grant } : {}) }
       if (result.outcome === 'unknown' || verified) return { ok: false, reason: 'outcome_unverified' }
       return { ok: false, reason: 'adapter_failed' }
     } catch {
@@ -360,8 +398,52 @@ export class CommandControl {
     return { ok: false, reason: 'interrupted' }
   }
 
+  /** G31: the live grants as the renderer may see them. */
+  listGrants(): GrantSummary[] {
+    return this.deps.grants?.list() ?? []
+  }
+
+  /**
+   * Whether a standing grant lets this request skip the confirm card, and if not, which of the three decisions says
+   * so. Without a grant service every action asks.
+   */
+  async grantDecision(
+    ownerWebContentsId: number,
+    request: DesktopActionRequest,
+    source: VoiceTurnSource
+  ): Promise<GrantedRunDecision> {
+    const grants = this.deps.grants
+    if (!grants) return { outcome: 'confirm', refusal: refusalFor('no_grant') }
+    return grants.decide(grants.ownerFor(ownerWebContentsId), request, source)
+  }
+
+  /** Take the grant for one dispatch. False means it ended since the decision, so nothing may dispatch. */
+  useGrant(grantId: string): boolean {
+    return this.deps.grants?.use(grantId) ?? false
+  }
+
+  revokeGrant(grantId: string): boolean {
+    return this.deps.grants?.revokeGrant(grantId) ?? false
+  }
+
+  /** A task (G06 lineage root) ended: its grants end with it. */
+  endTaskGrants(taskLineageId: string): number {
+    return this.deps.grants?.endTask(taskLineageId) ?? 0
+  }
+
+  endConversationGrants(conversationId: string): number {
+    return this.deps.grants?.endConversation(conversationId) ?? 0
+  }
+
+  /** The input session hard-stopped. Stop, shutdown, sign-out and owner replacement end grants; routine ends do not. */
+  onInputSessionStop(reason: string): void {
+    this.deps.grants?.onHardStop(reason)
+  }
+
   revokeForLifecycleEvent(reason: string): void {
     if (this.confirming && INTERRUPTS_CONFIRM.has(reason)) this.confirming.interruptedBy ??= reason
+    // Blur, hide and expiry end the pending card only. Sign-out, a window swap, lock and suspend end standing grants too.
+    this.deps.grants?.onLifecycleEvent(reason)
     const proposal = this.current
     if (!proposal) return
     this.clearCurrent()
@@ -424,7 +506,29 @@ export class CommandControl {
     this.deps.onState?.(this.getState())
   }
 
-  private audit(event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>): void {
+  private async checkEffects(request: DesktopActionRequest): Promise<'purchase_denied' | 'permission_denied' | null> {
+    try {
+      const refusal = await this.deps.grants?.checkEffects(request)
+      if (!refusal) return null
+      return refusal.decision === 'purchase' ? 'purchase_denied' : 'permission_denied'
+    } catch {
+      // The decision seams never throw by contract; a broken one must not turn an explicit approval into a silent run.
+      return 'permission_denied'
+    }
+  }
+
+  private issueGrant(
+    webContentsId: number,
+    request: DesktopActionRequest,
+    scope: CommandGrantScope | undefined
+  ): CommandGrantOutcome | null {
+    const grants = this.deps.grants
+    if (!scope || !grants) return null
+    const issued = grants.issueFromApproval(grants.ownerFor(webContentsId), request, scope)
+    return issued.ok ? { ok: true, scope: issued.grant.binding.kind } : { ok: false, reason: issued.reason }
+  }
+
+  private audit(event: CommandAuditEvent, metadata: Record<string, string>): void {
     this.deps.audit?.(event, metadata)
   }
 }

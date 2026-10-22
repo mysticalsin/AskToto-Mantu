@@ -38,6 +38,7 @@ import {
 } from '@shared/voice/voice-action-policy'
 import { actionEnvelope, isObservedVerified } from '../action-guard'
 import type { CommandControlProposal, CommandExecutor } from '../command-control'
+import type { GrantedRunDecision } from '../features/grants'
 import type { VoiceTurnClaim } from './voice-session'
 
 export type VoiceFailureReason =
@@ -55,6 +56,11 @@ export type VoiceRefusalReason =
   | 'meeting_recording'
   | 'turn_ended'
   | 'not_allowed'
+  /** G31: the purchase decision said no. Nothing ran. */
+  | 'quota_exhausted'
+  | 'quota_unavailable'
+  /** G31: the operating system permission decision said no. Nothing ran. */
+  | 'permission_needed'
 
 export type VoiceActionResult =
   | {
@@ -79,7 +85,14 @@ export type VoiceActionResult =
       actionClass: VoiceActionClass
       reason: VoiceFailureReason
     }
-  | { status: 'refused'; reason: VoiceRefusalReason; actionId?: DesktopActionRequest['id'] }
+  | {
+      status: 'refused'
+      reason: VoiceRefusalReason
+      actionId?: DesktopActionRequest['id']
+      /** G31: which separate decision refused, with its fixed copy. Absent for gate and platform refusals. */
+      decision?: 'purchase' | 'permission'
+      copy?: string
+    }
 
 export interface VoiceActionExecutorDeps {
   platform: NodeJS.Platform | string
@@ -97,6 +110,15 @@ export interface VoiceActionExecutorDeps {
   gate(): Omit<VoiceImmediateRunInput, 'turnCurrent'>
   audit?(event: 'voice.action', data: Record<string, string>): void
   newProposalId?(): string
+  /**
+   * G31 standing grants. Only a request the user's own spoken or typed command produced reaches the executor (the
+   * voice router refuses content-origin records, G36), and a grant can only skip the card for a grantable class from
+   * a trusted source. Absent means every confirm-class action asks, as before.
+   */
+  grants?: {
+    decide(request: DesktopActionRequest, source: VoiceTurnSource): Promise<GrantedRunDecision>
+    use(grantId: string): boolean
+  }
 }
 
 export interface VoiceActionExecutor {
@@ -144,11 +166,14 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
   async function runImmediate(
     request: DesktopActionRequest,
     claim: VoiceTurnClaim,
-    actionClass: VoiceActionClass
+    actionClass: VoiceActionClass,
+    grantId?: string
   ): Promise<VoiceActionResult> {
     const owner = deps.owner()
     const refusal = owner ? gateRefusal(claim) : 'not_allowed'
     if (refusal) return { status: 'refused', reason: refusal, actionId: request.id }
+    // A grant is taken only after the gate passed and just before the turn: no await between the three.
+    if (grantId !== undefined && !deps.grants?.use(grantId)) return needConfirmation(request, claim, actionClass)
     // Single use, taken synchronously with the check above: no await between them.
     if (!claim.consume()) return { status: 'refused', reason: 'turn_ended', actionId: request.id }
     const proposalId = newProposalId()
@@ -211,6 +236,25 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
     }
   }
 
+  const REFUSAL_REASON = {
+    quota_exhausted: 'quota_exhausted',
+    quota_unavailable: 'quota_unavailable',
+    permission_denied: 'permission_needed'
+  } as const
+
+  /** Ask the grant service; any failure of it means the card, never a silent run. */
+  async function grantDecision(
+    request: DesktopActionRequest,
+    source: VoiceTurnSource
+  ): Promise<GrantedRunDecision | null> {
+    if (!deps.grants) return null
+    try {
+      return await deps.grants.decide(request, source)
+    } catch {
+      return null
+    }
+  }
+
   return {
     async handle(rawRequest, claim, source) {
       const request = validateDesktopRequest(rawRequest)
@@ -218,10 +262,28 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
       const actionClass = classifyDesktopRequest(request, platform)
       const decision = decideVoiceAction(actionClass, source)
       let result: VoiceActionResult
+      let grantedRun = false
       if (decision === 'refuse' || actionClass === null) {
         result = { status: 'refused', reason: 'unsupported_platform', actionId: request.id }
       } else if (decision === 'confirm') {
-        result = await needConfirmation(request, claim, actionClass)
+        let granted: GrantedRunDecision | null = null
+        // The gate is read first so a recording meeting or an ended turn never probes purchase or permission.
+        if (deps.grants && deps.owner() && !gateRefusal(claim)) granted = await grantDecision(request, source)
+        if (granted?.outcome === 'run') {
+          grantedRun = true
+          result = await runImmediate(request, claim, actionClass, granted.grant.grantId)
+        } else if (granted?.outcome === 'refuse') {
+          const reason = REFUSAL_REASON[granted.refusal.reason as keyof typeof REFUSAL_REASON] ?? 'not_allowed'
+          result = {
+            status: 'refused',
+            reason,
+            actionId: request.id,
+            decision: granted.refusal.decision === 'purchase' ? 'purchase' : 'permission',
+            copy: granted.refusal.copy
+          }
+        } else {
+          result = await needConfirmation(request, claim, actionClass)
+        }
       } else {
         result = await runImmediate(request, claim, actionClass)
       }
@@ -232,6 +294,7 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
         source,
         decision,
         status: result.status,
+        ...(grantedRun ? { via: 'grant' } : {}),
         ...(result.status === 'refused' || result.status === 'failed' ? { reason: result.reason } : {})
       })
       return result

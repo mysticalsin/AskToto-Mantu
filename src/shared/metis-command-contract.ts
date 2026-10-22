@@ -81,6 +81,17 @@ export const MetisCommandConfirmationSchema = z
   .strict()
 export type MetisCommandConfirmation = z.infer<typeof MetisCommandConfirmationSchema>
 
+/**
+ * A confirmation may also ask that the approval cover more than this one action (G31): `task` or `conversation`.
+ * Omitted means one action only. Main supplies the task and conversation ids and decides whether the action's
+ * class may be granted at all; the renderer names a scope, never an id.
+ */
+export const MetisCommandGrantScopeSchema = z.enum(['task', 'conversation'])
+export const MetisCommandApprovalSchema = MetisCommandConfirmationSchema.extend({
+  grantScope: MetisCommandGrantScopeSchema.optional()
+}).strict()
+export type MetisCommandApproval = z.infer<typeof MetisCommandApprovalSchema>
+
 /** Cancelling authorizes nothing, so the opaque id and nonce are enough. */
 export const MetisCommandCancellationSchema = MetisCommandConfirmationSchema.omit({ argsHash: true })
 export type MetisCommandCancellation = z.infer<typeof MetisCommandCancellationSchema>

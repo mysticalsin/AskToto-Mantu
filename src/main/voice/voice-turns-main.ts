@@ -26,7 +26,8 @@ interface WindowLike {
 }
 
 export interface MainVoiceTurnsDeps {
-  commandControl: Pick<CommandConfirmation, 'immediateRunGate' | 'proposeChecked'>
+  commandControl: Pick<CommandConfirmation, 'immediateRunGate' | 'proposeChecked'> &
+    Partial<Pick<CommandConfirmation, 'grantDecision' | 'useGrant'>>
   authority: Pick<InputSessionAuthority, 'hasMeetingReservation'>
   window(): WindowLike | null | undefined
   platform?: NodeJS.Platform
@@ -61,6 +62,14 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
       owner() {
         const id = live()?.ownerWebContentsId
         return typeof id === 'number' ? { webContentsId: id, revision } : null
+      },
+      grants: {
+        async decide(request, source) {
+          const id = live()?.ownerWebContentsId
+          if (typeof id !== 'number' || !deps.commandControl.grantDecision) throw new Error('no_grants')
+          return deps.commandControl.grantDecision(id, request, source)
+        },
+        use: (grantId) => deps.commandControl.useGrant?.(grantId) ?? false
       },
       gate() {
         const gate = live()
