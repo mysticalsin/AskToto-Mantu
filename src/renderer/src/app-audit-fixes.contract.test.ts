@@ -363,9 +363,10 @@ describe("Q08 — toggleListen guards Review's unsaved recap before starting", (
   const body = code(blockBetween('const toggleListen = useCallback(', 'const saveMeetingNow = useCallback('))
 
   it('starts a meeting only through guardReviewNav, and still stops through endReview', () => {
-    expect(body).toMatch(/guardReviewNav\(\s*startListen\s*,\s*true\s*\)/)
+    // Q14: the start now runs inside the guard's proceed callback (so the Start watchdog arms only when it runs).
+    expect(body).toMatch(/guardReviewNav\(\s*\(\)\s*=>\s*\{\s*startListen\(\)[\s\S]*?\}\s*,\s*true\s*\)/)
     expect(body).not.toMatch(/else startListen\(\)/)
-    expect(body).toMatch(/endReview\(\)/)
+    expect(body).toMatch(/\bendReview\b/)
   })
 
   it('tells the confirm sheet it starts a meeting, so its buttons mint a fresh start activation', () => {
