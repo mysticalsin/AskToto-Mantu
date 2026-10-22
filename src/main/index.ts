@@ -7364,11 +7364,7 @@ function registerIpc(): void {
     // An opaque capture id scopes delayed force-stops to its session; keep the bound modest (renderer IPC input).
     const captureId =
       typeof p.captureId === 'string' && p.captureId.length > 0 && p.captureId.length <= 128 ? p.captureId : undefined
-    const owner: CloudSttIpcOwner = {
-      webContentsId: e.sender.id,
-      generation: ++cloudSttIpcGeneration,
-      captureId
-    }
+    const owner: CloudSttIpcOwner = { webContentsId: e.sender.id, generation: ++cloudSttIpcGeneration, captureId }
     setCloudSttIpcOwner(owner)
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
