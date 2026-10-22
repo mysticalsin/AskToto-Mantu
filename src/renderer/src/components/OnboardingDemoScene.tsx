@@ -400,7 +400,7 @@ export function OnboardingDemoScene({
 
         {/* Illustrative only: the real Bar and QuickActions run with no-op handlers, so the whole preview is
       inert (no focus, no pointer, hidden from assistive tech). Playback and Continue stay outside it.
-      React 18 does not know `inert`; an empty string renders the boolean attribute. */}
+      React 18 does not know `inert`; a blank string renders the boolean attribute. */}
         <div id={previewId} className="w-full max-w-[880px]" {...({ inert: '' } as Record<string, string>)}>
           <OnboardingDemoPreviewBoundary key={`${beat}:${replayKey}`}>
             {!frame.meetingEnded ? (

@@ -14,8 +14,8 @@ import {
 
 const fakeFs = (files: Record<string, string>) => ({
   list: () => Object.keys(files),
-  hash: (path: string) => `h:${files[path.split('/').pop() as string]}`,
-  size: (path: string) => files[path.split('/').pop() as string].length
+  hash: (path: string) => `h:${files[path.split(/[\\/]/).pop() as string]}`,
+  size: (path: string) => files[path.split(/[\\/]/).pop() as string].length
 })
 
 describe('meeting snapshots', () => {

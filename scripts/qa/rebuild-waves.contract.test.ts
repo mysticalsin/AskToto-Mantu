@@ -700,7 +700,7 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
       './features/meetings/save-identity'
     ).text
     expect(saveIdentity).toMatch(/rewriteSavedMeeting\(prior\.settings, prior\.path, meeting\)/)
-    expect(saveIdentity).toMatch(/return saveMeeting\(settings, meeting\)\n\}/)
+    expect(saveIdentity).toMatch(/return saveMeeting\(settings, meeting\)\r?\n\}/)
 
     const receiptFlow = receiptRun(saveHandler)
     expect(receiptFlow, 'saveTranscript must return the receipt flow').toBeDefined()

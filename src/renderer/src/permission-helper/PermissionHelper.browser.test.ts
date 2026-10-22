@@ -151,6 +151,8 @@ describe('permission helper window (HIG Privacy, Accessibility, Motion)', () => 
     await page.keyboard.press('Enter')
     expect(await calls()).toEqual(['relaunch'])
     await page.evaluate(() => window.__helper.push('closed'))
+    // React renders the closed state on its next commit; wait for it rather than racing the push.
+    await page.locator('main').waitFor({ state: 'detached', timeout: 5_000 })
     expect(await page.locator('main').count()).toBe(0)
   })
 

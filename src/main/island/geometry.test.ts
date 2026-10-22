@@ -818,7 +818,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
     expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(
-      finish.indexOf('onDone({ mode, recordingConsent: true, destination })')
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
     )
     expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) \{\s*applyExclusiveOnboardingStage\(win\)/)
     expect(index).not.toMatch(/Math\.min\(680/)
